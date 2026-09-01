@@ -69,11 +69,9 @@ from .interactive_terminal import (
     InteractiveTerminal,
     build_stream_terminal,
 )
-from .models import DebateStatus
 from .orchestrator import StoryRuntime
 from .provider_auth import ProviderAuthService, ProviderAuthSnapshot
 from .provider_catalog import ProviderCatalogService
-from .run_inputs import read_draft_file
 from .session_lifecycle import (
     SessionAccessState,
     SessionDurableState,
@@ -154,56 +152,6 @@ def build_parser() -> argparse.ArgumentParser:
     directive.add_argument("--workspace", help=_WORKSPACE_HELP)
     directive.add_argument("--session", help=_SESSION_HELP)
     directive.add_argument("text")
-
-    run = subcommands.add_parser(
-        "run",
-        help="run a prompt or draft through the configured agent backends",
-    )
-    run.add_argument("--workspace", help=_WORKSPACE_HELP)
-    run.add_argument("--session", help=_SESSION_HELP)
-    run.add_argument(
-        "--backend",
-        action="append",
-        default=[],
-        metavar="AGENT=BACKEND",
-        help="override one canonical agent backend for this run (repeatable)",
-    )
-    run.add_argument("--codex-model", metavar="MODEL")
-    run.add_argument(
-        "--antigravity-executable",
-        metavar="EXECUTABLE",
-        default="agy",
-    )
-    run.add_argument("--antigravity-model", metavar="MODEL")
-    run.add_argument("--antigravity-effort", metavar="EFFORT")
-    run.add_argument(
-        "--codex-timeout",
-        metavar="SECONDS",
-        type=float,
-        default=300,
-    )
-    run.add_argument(
-        "positional_prompt",
-        nargs="?",
-        metavar="PROMPT",
-        help="story prompt; mutually exclusive with the other input options",
-    )
-    payload = run.add_mutually_exclusive_group()
-    payload.add_argument("--prompt", help="inline story prompt")
-    payload.add_argument("--draft", help="inline complete draft")
-    payload.add_argument(
-        "--draft-file",
-        metavar="PATH",
-        help="strict-UTF-8 draft file relative to the current directory",
-    )
-    run.add_argument(
-        "--output",
-        required=True,
-        metavar="PART/PATH.md",
-        help="required create-only manuscript path beneath manuscript/PART/",
-    )
-    run.add_argument("--debate-id")
-    run.add_argument("--max-debate-rounds", type=int)
 
     inspect = subcommands.add_parser(
         "inspect",
@@ -358,35 +306,6 @@ def _validate_antigravity_executable(value: object) -> str:
             "Antigravity executable must be non-empty NUL-free text"
         )
     return value
-
-
-def _resolve_run_input(arguments: argparse.Namespace) -> tuple[str, str]:
-    """Resolve exactly one established prompt/draft source without mutation.
-
-    Inline values are returned unchanged. Draft files are read as strict UTF-8;
-    ambiguous, missing, unreadable, or invalid input raises
-    ``ConfigurationError`` before backend construction.
-    """
-
-    sources = (
-        ("prompt", arguments.positional_prompt),
-        ("prompt", arguments.prompt),
-        ("draft", arguments.draft),
-        ("draft_file", arguments.draft_file),
-    )
-    supplied = [(kind, value) for kind, value in sources if value is not None]
-    if len(supplied) != 1:
-        raise ConfigurationError(
-            "exactly one run input is required: positional prompt, --prompt, "
-            "--draft, or --draft-file"
-        )
-    input_kind, value = supplied[0]
-    if not isinstance(value, str):
-        raise ConfigurationError("run input must be text")
-    if input_kind != "draft_file":
-        return input_kind, value
-
-    return "draft", read_draft_file(value)
 
 
 def _require_session_command_state(
@@ -1426,61 +1345,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             _trace_cli_completion(debug_log, session_id=session_id)
             return 0
 
-        input_kind, input_payload = _resolve_run_input(arguments)
-        backend_overrides = _parse_backend_overrides(arguments.backend)
-        backend = AgentBackend(
-            workspace,
-            model=arguments.codex_model,
-            timeout_seconds=arguments.codex_timeout,
-            backend_overrides=backend_overrides,
-            antigravity_executable=arguments.antigravity_executable,
-            antigravity_model=arguments.antigravity_model,
-            antigravity_effort=arguments.antigravity_effort,
-        )
-        runtime = StoryRuntime(workspace, backend)
-        options = {
-            "output_path": arguments.output,
-            "max_debate_rounds": arguments.max_debate_rounds,
-            "debate_id": arguments.debate_id,
-        }
-        try:
-            result = asyncio.run(
-                runtime.run_prompt(session_id, input_payload, **options)
-                if input_kind == "prompt"
-                else runtime.run_draft(session_id, input_payload, **options)
-            )
-        finally:
-            backend.close()
-        print(
-            json.dumps(
-                result.to_dict(),
-                ensure_ascii=False,
-                indent=2,
-                sort_keys=True,
-            )
-        )
-        if result.status is DebateStatus.CONSENSUS:
-            _trace_cli_completion(
-                debug_log,
-                session_id=session_id,
-                outcome=DebugOutcome.CONSENSUS,
-            )
-            return 0
-        if result.status is DebateStatus.DEADLOCK:
-            _trace_cli_completion(
-                debug_log,
-                session_id=session_id,
-                outcome=DebugOutcome.DEADLOCK,
-            )
-            return 3
-        _trace_cli(
-            debug_log,
-            DebugOperation.CLI_COMMAND,
-            DebugPhase.FAILED,
-            session_id=session_id,
-            outcome=DebugOutcome.FAILED,
-        )
-        return 4
+        raise ConfigurationError(f"unsupported command: {arguments.command}")
     except Exception as exc:
         if debug_log is not None:
             _record_cli_error(

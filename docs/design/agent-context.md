@@ -1,9 +1,10 @@
 # Agent-context design
 
-This document is the maintainer model for bounded agent-directed context. It
-describes the current implementation, not the historical #381 baseline or a
-future semantic-retrieval system. The user-facing scenarios are in
-[Bounded agent context](../guides/agent-context.md).
+This document is the maintainer model for the retained bounded agent-context
+component. The current public runtime has no provider-bound story entry that
+invokes it. References below to provider calls describe low-level component
+behavior and future integration, not a callable `StoryRuntime` or shell path.
+See [Agent-context progress](../guides/agent-context-progress.md).
 
 <a id="package-boundary-and-owners"></a>
 ## Package boundary and owners
@@ -22,10 +23,11 @@ cycle:
 | `agent_context.sources` | Bounded current capture of canonical artifacts, focused conversation, active debate, and invoking-agent state; lexical search/read and drift checks. |
 | `agent_context.service` | Provider-neutral wire-v5 call loop, reference prelude, lifecycle authority, source/action orchestration, checkpoint commit, usage aggregation, and optional progress observer. |
 
-Public application entry points remain on `StoryRuntime`, `RuntimeSession`, and
-the existing backend/provider interfaces. The progress observer types are
+The retained execution entry points are backend/provider component interfaces.
+`StoryRuntime` and `RuntimeSession` are management/inspection facades and do not
+accept context-execution requests. Progress observer types are
 direct-module-only imports from `agent_context.service`; the root and
-`agent_context` facades do not grow.
+`agent_context` facades do not export them.
 
 <a id="end-to-end-invocation-flow"></a>
 ## End-to-end invocation flow
@@ -225,10 +227,9 @@ earlier agent or invocation read it.
 
 `ContextExecutionEvent`, `ContextExecutionEventKind`, and
 `ContextExecutionEventSink` are available only from
-`story_writing_agents.agent_context.service`. `StoryRuntime` and
-`RuntimeSession` accept the optional keyword-only `context_event_sink` on
-`converse`, `converse_with_retrieval`, `run_prompt`, and `run_draft`. The
-callback is synchronous, inline, and must return exactly `None`.
+`story_writing_agents.agent_context.service`. A low-level contextual executor
+can accept the synchronous callback; it must return exactly `None`. Neither
+public runtime facade currently exposes an observer-bearing provider method.
 
 Noncallable, declared async/async-generator, asynchronously callable, or
 noncontextual observers fail before contextual effects. A callback exception,
@@ -238,10 +239,9 @@ cannot be rolled back, though the outer operation reports observer failure. If
 an independent runtime failure is primary, terminal-observer failure is
 suppressed. No observer preserves calls, results, schemas, and persistence.
 
-The shell validates each correlated event stream and renders compact
-content-free lines. It preserves established retrieval SEARCH/READ wording and
-suppresses matching generic duplicates. It has no lifecycle replay or durable
-observer store.
+A later shell integration can validate each correlated event stream and render
+compact content-free lines. The current management-only shell emits none. The
+component has no lifecycle replay or durable observer store.
 
 <a id="provider-usage-cache-and-limits"></a>
 ## Provider usage, cache, and limits

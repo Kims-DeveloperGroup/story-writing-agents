@@ -17,9 +17,6 @@ from unittest import mock
 from story_writing_agents import (
     AgentReply,
     BackendProtocolError,
-    DebateResult,
-    DebateStatus,
-    InputKind,
     Phase,
     SessionAccessState,
     SessionDurableState,
@@ -46,16 +43,12 @@ from story_writing_agents.errors import (
 )
 from story_writing_agents.run_inputs import read_draft_file
 
-from tests.helpers import ScriptedBackend, phase_requests
+from tests.helpers import ScriptedBackend
 
 
 CLI_CONTEXT_PATH = "agent_states/orchestrator_state/cli_context.json"
-CONVERSATION_DEFAULT_DIRECTORY = (
-    "agent_states/orchestrator_state/conversation_defaults"
-)
-V1_CONVERSATION_DIRECTORY = (
-    "agent_states/orchestrator_state/conversation_selections"
-)
+CONVERSATION_DEFAULT_DIRECTORY = "agent_states/orchestrator_state/conversation_defaults"
+V1_CONVERSATION_DIRECTORY = "agent_states/orchestrator_state/conversation_selections"
 _CREATED = "2026-01-01T00:00:00+00:00"
 _UPDATED = "2026-01-02T00:00:00+00:00"
 
@@ -156,19 +149,33 @@ class LifecycleCommandBackend:
 
     def create_session_with_access(self, session_id: str) -> SessionLifecycleState:
         self._record("create", session_id)
-        state = self.state(session_id, durable=SessionDurableState.READY, access=SessionAccessState.HELD_HERE)
+        state = self.state(
+            session_id,
+            durable=SessionDurableState.READY,
+            access=SessionAccessState.HELD_HERE,
+        )
         self._states[session_id] = state
         return state
 
     def reopen_session_with_access(self, session_id: str) -> SessionLifecycleState:
         self._record("reopen", session_id)
-        state = self.state(session_id, durable=SessionDurableState.READY, access=SessionAccessState.HELD_HERE)
+        state = self.state(
+            session_id,
+            durable=SessionDurableState.READY,
+            access=SessionAccessState.HELD_HERE,
+        )
         self._states[session_id] = state
         return state
 
-    def pause_session_and_release_access(self, session_id: str) -> SessionLifecycleState:
+    def pause_session_and_release_access(
+        self, session_id: str
+    ) -> SessionLifecycleState:
         self._record("pause", session_id)
-        state = self.state(session_id, durable=SessionDurableState.PAUSED, access=SessionAccessState.CLAIMABLE)
+        state = self.state(
+            session_id,
+            durable=SessionDurableState.PAUSED,
+            access=SessionAccessState.CLAIMABLE,
+        )
         self._states[session_id] = state
         return state
 
@@ -179,7 +186,9 @@ class LifecycleCommandBackend:
     def release_session_access(self, session_id: str) -> SessionLifecycleState:
         self._record("release", session_id)
         durable = self._states[session_id].durable_state
-        state = self.state(session_id, durable=durable, access=SessionAccessState.CLAIMABLE)
+        state = self.state(
+            session_id, durable=durable, access=SessionAccessState.CLAIMABLE
+        )
         self._states[session_id] = state
         return state
 
@@ -201,14 +210,18 @@ class WorkspaceDiscoveryTests(unittest.TestCase):
         nested = inner.root / "one" / "two"
         nested.mkdir(parents=True)
         self.assertEqual(resolve_workspace(None, start=nested).root, inner.root)
-        self.assertEqual(resolve_workspace(str(outer.root), start=nested).root, outer.root)
+        self.assertEqual(
+            resolve_workspace(str(outer.root), start=nested).root, outer.root
+        )
 
     def test_uninitialized_and_absent_discovery_are_actionable(self) -> None:
         uninitialized = self.base / "plain"
         uninitialized.mkdir()
         with self.assertRaisesRegex(ConfigurationError, "workspace is not initialized"):
             resolve_workspace(str(uninitialized), start=uninitialized)
-        with self.assertRaisesRegex(ConfigurationError, "no initialized story workspace"):
+        with self.assertRaisesRegex(
+            ConfigurationError, "no initialized story workspace"
+        ):
             resolve_workspace(None, start=uninitialized)
 
 
@@ -221,8 +234,13 @@ class CliDefaultPersistenceTests(unittest.TestCase):
         self.workspace = initialize_workspace(Path(temporary.name) / "workspace")
 
     def test_default_session_missing_save_load_and_resolve_are_exact(self) -> None:
-        self.assertEqual(tuple(inspect.signature(CliContext).parameters), ("default_session_id",))
-        self.assertEqual(tuple(inspect.signature(save_default_session).parameters), ("workspace", "session_id"))
+        self.assertEqual(
+            tuple(inspect.signature(CliContext).parameters), ("default_session_id",)
+        )
+        self.assertEqual(
+            tuple(inspect.signature(save_default_session).parameters),
+            ("workspace", "session_id"),
+        )
         self.assertEqual(
             tuple(inspect.signature(resolve_session).parameters),
             ("workspace", "context", "option_session"),
@@ -247,16 +265,22 @@ class CliDefaultPersistenceTests(unittest.TestCase):
         )
         context = load_cli_context(self.workspace)
         self.assertEqual(
-            resolve_session(workspace=self.workspace, context=context, option_session=None),
+            resolve_session(
+                workspace=self.workspace, context=context, option_session=None
+            ),
             "story_session",
         )
         self.assertEqual(
-            resolve_session(workspace=self.workspace, context=context, option_session="explicit"),
+            resolve_session(
+                workspace=self.workspace, context=context, option_session="explicit"
+            ),
             "explicit",
         )
         self.assertEqual(load_cli_context(self.workspace), context)
         with self.assertRaisesRegex(ConfigurationError, "no default session"):
-            resolve_session(workspace=self.workspace, context=CliContext(), option_session=None)
+            resolve_session(
+                workspace=self.workspace, context=CliContext(), option_session=None
+            )
 
     def test_read_time_disappearance_is_absent_but_other_io_propagates(self) -> None:
         save_default_conversation(self.workspace, "chapter", "conversation")
@@ -319,7 +343,9 @@ class CliDefaultPersistenceTests(unittest.TestCase):
                 before = (target.read_bytes(), target.stat().st_mtime_ns)
                 with self.assertRaises(exception):
                     load_cli_context(self.workspace)
-                self.assertEqual((target.read_bytes(), target.stat().st_mtime_ns), before)
+                self.assertEqual(
+                    (target.read_bytes(), target.stat().st_mtime_ns), before
+                )
         self.workspace.write_text(
             CLI_CONTEXT_PATH,
             '{"schema_version":2,"schema_version":2,"default_session_id":"story"}',
@@ -328,7 +354,10 @@ class CliDefaultPersistenceTests(unittest.TestCase):
             load_cli_context(self.workspace)
 
     def test_conversation_defaults_are_independent_exact_v2_records(self) -> None:
-        self.assertEqual(tuple(inspect.signature(load_default_conversation).parameters), ("workspace", "session_id"))
+        self.assertEqual(
+            tuple(inspect.signature(load_default_conversation).parameters),
+            ("workspace", "session_id"),
+        )
         self.assertEqual(
             tuple(inspect.signature(save_default_conversation).parameters),
             ("workspace", "session_id", "default_conversation_id"),
@@ -341,9 +370,13 @@ class CliDefaultPersistenceTests(unittest.TestCase):
         values = {"chapter_one": "conversation_one", "chapter_two": "conversation_two"}
         for session, conversation in values.items():
             save_default_conversation(self.workspace, session, conversation)
-            self.assertEqual(load_default_conversation(self.workspace, session), conversation)
             self.assertEqual(
-                self.workspace.read_json(f"{CONVERSATION_DEFAULT_DIRECTORY}/{session}.json"),
+                load_default_conversation(self.workspace, session), conversation
+            )
+            self.assertEqual(
+                self.workspace.read_json(
+                    f"{CONVERSATION_DEFAULT_DIRECTORY}/{session}.json"
+                ),
                 {
                     "schema_version": 2,
                     "session_id": session,
@@ -352,8 +385,12 @@ class CliDefaultPersistenceTests(unittest.TestCase):
             )
         save_default_conversation(self.workspace, "chapter_one", None)
         self.assertIsNone(load_default_conversation(self.workspace, "chapter_one"))
-        self.assertEqual(load_default_conversation(self.workspace, "chapter_two"), "conversation_two")
-        self.assertEqual(self.workspace.path(CLI_CONTEXT_PATH).read_bytes(), context_before)
+        self.assertEqual(
+            load_default_conversation(self.workspace, "chapter_two"), "conversation_two"
+        )
+        self.assertEqual(
+            self.workspace.path(CLI_CONTEXT_PATH).read_bytes(), context_before
+        )
 
     def test_conversation_default_schema_and_v1_artifact_fail_unchanged(self) -> None:
         valid = {
@@ -423,7 +460,9 @@ class CliDefaultPersistenceTests(unittest.TestCase):
         for operation in (
             lambda: save_default_session(self.workspace, "../session"),
             lambda: load_default_conversation(self.workspace, "../session"),
-            lambda: save_default_conversation(self.workspace, "session", "../conversation"),
+            lambda: save_default_conversation(
+                self.workspace, "session", "../conversation"
+            ),
         ):
             with self.assertRaises(SessionIdError):
                 operation()
@@ -474,8 +513,9 @@ class CliDefaultPersistenceTests(unittest.TestCase):
                 "conversation",
             ),
         ):
-            with self.subTest(kind="directory"), self.assertRaises(
-                WorkspaceSecurityError
+            with (
+                self.subTest(kind="directory"),
+                self.assertRaises(WorkspaceSecurityError),
             ):
                 operation()
 
@@ -489,11 +529,58 @@ class CliDefaultPersistenceTests(unittest.TestCase):
             lambda: load_default_conversation(second, "chapter"),
             lambda: save_default_conversation(second, "chapter", "conversation"),
         ):
-            with self.subTest(kind="file"), self.assertRaises(
-                WorkspaceSecurityError
-            ):
+            with self.subTest(kind="file"), self.assertRaises(WorkspaceSecurityError):
                 operation()
         self.assertEqual(external_file.read_text(encoding="utf-8"), "{}\n")
+
+
+class RunInputModuleTests(unittest.TestCase):
+    """Preserve the direct draft loader independently of retired CLI execution."""
+
+    def test_shared_draft_loader_preserves_full_path_semantics(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            caller = Path(temporary)
+            exact = "\ufefffirst\r\nsecond\x00  \n"
+            relative = caller / "neutral.md"
+            relative.write_bytes(exact.encode("utf-8"))
+            absolute = caller / "absolute.md"
+            absolute.write_text("absolute draft", encoding="utf-8")
+            metachar = caller / 'literal ;$(touch marker) [*] "quoted".md'
+            metachar.write_text("literal metacharacters", encoding="utf-8")
+            empty = caller / "empty.md"
+            empty.write_bytes(b"")
+            linked = caller / "linked.md"
+            try:
+                linked.symlink_to(absolute)
+            except (OSError, NotImplementedError):
+                linked = None
+
+            before = tree_snapshot(caller)
+            with working_directory(caller):
+                self.assertEqual(read_draft_file("neutral.md"), exact)
+                self.assertEqual(read_draft_file(absolute), "absolute draft")
+                self.assertEqual(
+                    read_draft_file(metachar.name),
+                    "literal metacharacters",
+                )
+                self.assertEqual(read_draft_file(empty), "")
+                if linked is not None:
+                    self.assertEqual(read_draft_file(linked.name), "absolute draft")
+            self.assertEqual(tree_snapshot(caller), before)
+            self.assertFalse((caller / "marker").exists())
+
+    def test_draft_loader_errors_are_typed_and_provider_free(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            invalid = root / "invalid.md"
+            invalid.write_bytes(b"\xff")
+            missing = root / "missing.md"
+            with mock.patch.object(cli_module, "AgentBackend") as backend_class:
+                with self.assertRaisesRegex(ConfigurationError, "not valid UTF-8"):
+                    read_draft_file(invalid)
+                with self.assertRaisesRegex(ConfigurationError, "cannot read draft"):
+                    read_draft_file(missing)
+            backend_class.assert_not_called()
 
 
 class LifecycleAutomationTests(unittest.TestCase):
@@ -504,13 +591,19 @@ class LifecycleAutomationTests(unittest.TestCase):
         self.addCleanup(temporary.cleanup)
         self.workspace = initialize_workspace(Path(temporary.name) / "workspace")
 
-    def invoke_with(self, backend: LifecycleCommandBackend, *arguments: str) -> tuple[int, str, str]:
+    def invoke_with(
+        self, backend: LifecycleCommandBackend, *arguments: str
+    ) -> tuple[int, str, str]:
         """Invoke one lifecycle command with a deterministic backend."""
 
         with mock.patch.object(cli_module, "AgentBackend", return_value=backend):
-            return invoke_cli(["session", *arguments, "--workspace", str(self.workspace.root)])
+            return invoke_cli(
+                ["session", *arguments, "--workspace", str(self.workspace.root)]
+            )
 
-    def test_create_requires_target_saves_default_after_success_and_formats_json(self) -> None:
+    def test_create_requires_target_saves_default_after_success_and_formats_json(
+        self,
+    ) -> None:
         backend = LifecycleCommandBackend()
         code, stdout, stderr = self.invoke_with(backend, "create", "created")
         self.assertEqual((code, stderr), (0, ""))
@@ -520,7 +613,13 @@ class LifecycleAutomationTests(unittest.TestCase):
         )
         self.assertEqual(
             backend.calls,
-            [("validate", "created"), ("create", "created"), ("get", "created"), ("release", "created"), ("close", None)],
+            [
+                ("validate", "created"),
+                ("create", "created"),
+                ("get", "created"),
+                ("release", "created"),
+                ("close", None),
+            ],
         )
         self.assertEqual(load_cli_context(self.workspace).default_session_id, "created")
 
@@ -529,21 +628,34 @@ class LifecycleAutomationTests(unittest.TestCase):
         backend = LifecycleCommandBackend()
         code, stdout, stderr = self.invoke_with(backend, "reopen", "replacement")
         self.assertEqual((code, stderr), (0, ""))
-        self.assertEqual(json.loads(stdout), {"access_state": "claimable", "durable_state": "ready", "session_id": "replacement"})
-        self.assertEqual(load_cli_context(self.workspace).default_session_id, "replacement")
+        self.assertEqual(
+            json.loads(stdout),
+            {
+                "access_state": "claimable",
+                "durable_state": "ready",
+                "session_id": "replacement",
+            },
+        )
+        self.assertEqual(
+            load_cli_context(self.workspace).default_session_id, "replacement"
+        )
 
         backend = LifecycleCommandBackend()
         code, stdout, stderr = self.invoke_with(backend, "reopen")
         self.assertEqual((code, stderr), (0, ""))
         self.assertEqual(json.loads(stdout)["session_id"], "replacement")
-        self.assertEqual(backend.calls[0:2], [("validate", "replacement"), ("reopen", "replacement")])
+        self.assertEqual(
+            backend.calls[0:2], [("validate", "replacement"), ("reopen", "replacement")]
+        )
 
         save_default_session(self.workspace, "retained")
         failing = LifecycleCommandBackend(fail_at="reopen")
         code, stdout, stderr = self.invoke_with(failing, "reopen", "failed")
         self.assertEqual((code, stdout), (2, ""))
         self.assertIn("BackendProtocolError", stderr)
-        self.assertEqual(load_cli_context(self.workspace).default_session_id, "retained")
+        self.assertEqual(
+            load_cli_context(self.workspace).default_session_id, "retained"
+        )
 
     def test_pause_uses_optional_default_and_always_retains_it(self) -> None:
         save_default_session(self.workspace, "default_session")
@@ -554,21 +666,40 @@ class LifecycleAutomationTests(unittest.TestCase):
             stdout,
             '{\n  "access_state": "claimable",\n  "durable_state": "paused",\n  "session_id": "other_session"\n}\n',
         )
-        self.assertEqual(load_cli_context(self.workspace).default_session_id, "default_session")
+        self.assertEqual(
+            load_cli_context(self.workspace).default_session_id, "default_session"
+        )
         self.assertEqual(backend.calls, [("pause", "other_session"), ("close", None)])
 
         backend = LifecycleCommandBackend()
         code, stdout, stderr = self.invoke_with(backend, "pause")
         self.assertEqual((code, stderr), (0, ""))
         self.assertEqual(json.loads(stdout)["session_id"], "default_session")
-        self.assertEqual(load_cli_context(self.workspace).default_session_id, "default_session")
+        self.assertEqual(
+            load_cli_context(self.workspace).default_session_id, "default_session"
+        )
 
     def test_lifecycle_grammar_has_no_session_option_or_legacy_actions(self) -> None:
         invalid = (
             ["session", "create", "--workspace", str(self.workspace.root)],
-            ["session", "reopen", "one", "two", "--workspace", str(self.workspace.root)],
+            [
+                "session",
+                "reopen",
+                "one",
+                "two",
+                "--workspace",
+                str(self.workspace.root),
+            ],
             ["session", "pause", "one", "two", "--workspace", str(self.workspace.root)],
-            ["session", "create", "one", "--session", "two", "--workspace", str(self.workspace.root)],
+            [
+                "session",
+                "create",
+                "one",
+                "--session",
+                "two",
+                "--workspace",
+                str(self.workspace.root),
+            ],
             ["session", "start", "one", "--workspace", str(self.workspace.root)],
         )
         for arguments in invalid:
@@ -583,298 +714,20 @@ class LifecycleAutomationTests(unittest.TestCase):
                 cli_module.main(arguments)
             self.assertEqual(caught.exception.code, 2)
 
-        code, stdout, stderr = invoke_cli(["session", "reopen", "--workspace", str(self.workspace.root)])
+        code, stdout, stderr = invoke_cli(
+            ["session", "reopen", "--workspace", str(self.workspace.root)]
+        )
         self.assertEqual((code, stdout), (2, ""))
         self.assertIn("no default session", stderr)
 
 
-class RunInputTests(unittest.TestCase):
-    """Verify shared input selection and default-session run routing."""
+class DirectiveAndInspectDefaultTests(unittest.TestCase):
+    """Verify retained management commands resolve the saved session."""
 
     def setUp(self) -> None:
         temporary = tempfile.TemporaryDirectory()
         self.addCleanup(temporary.cleanup)
-        self.base = Path(temporary.name)
-        self.workspace = initialize_workspace(self.base / "workspace")
-
-    def run_with(self, arguments: list[str], backend: ScriptedBackend) -> tuple[int, str, str]:
-        """Invoke a run command with one provider-free backend."""
-
-        with mock.patch.object(cli_module, "AgentBackend", return_value=backend):
-            return invoke_cli(arguments)
-
-    def test_prompt_draft_and_draft_file_are_exact(self) -> None:
-        draft_path = self.base / "draft.md"
-        exact = "\ufefffirst\r\nsecond\x00  \n"
-        draft_path.write_bytes(exact.encode("utf-8"))
-        rows = (
-            (["positional prompt"], "prompt", "positional prompt"),
-            (["--prompt", "option prompt"], "prompt", "option prompt"),
-            (["--draft", "option draft"], "draft", "option draft"),
-            (["--draft-file", str(draft_path)], "draft", exact),
-        )
-        for index, (input_args, kind, payload) in enumerate(rows):
-            backend = successful_backend()
-            code, stdout, stderr = self.run_with(
-                [
-                    "run",
-                    "--workspace",
-                    str(self.workspace.root),
-                    "--session",
-                    f"session_{index}",
-                    *input_args,
-                    "--debate-id",
-                    f"debate_{index}",
-                    "--output",
-                    f"part-01/result-{index}.md",
-                ],
-                backend,
-            )
-            self.assertEqual((code, stderr), (0, ""))
-            report = json.loads(stdout)
-            self.assertEqual((report["status"], report["input_kind"]), (DebateStatus.CONSENSUS.value, kind))
-            requests = phase_requests(backend, Phase.DRAFT if kind == "prompt" else Phase.AUDIT)
-            self.assertTrue(requests)
-            self.assertTrue(all(request.user_payload == payload for request in requests))
-
-    def test_noninteractive_automation_forwards_reference_text_unchanged(self) -> None:
-        backend = successful_backend()
-        prompt = (
-            "Draft from ${core_documents/global_outline.md} and "
-            "${manuscript/part-01/seed.md}#L1-L2."
-        )
-        result = DebateResult(
-            session_id="reference_cli",
-            debate_id="reference_cli_debate",
-            input_kind=InputKind.PROMPT,
-            status=DebateStatus.CONSENSUS,
-            revision_id="r0",
-            rounds_completed=0,
-            final_candidate="candidate",
-            latest_candidate="candidate",
-            manuscript_path="manuscript/part-01/reference-cli.md",
-            reference_operation_id=(
-                "rr_0d_reference_cli_" + "a" * 32
-            ),
-        )
-        with (
-            mock.patch.object(cli_module, "AgentBackend", return_value=backend),
-            mock.patch.object(
-                cli_module.StoryRuntime,
-                "run_prompt",
-                new_callable=mock.AsyncMock,
-                return_value=result,
-            ) as run_prompt,
-        ):
-            code, stdout, stderr = invoke_cli(
-                [
-                    "run",
-                    "--workspace",
-                    str(self.workspace.root),
-                    "--session",
-                    "reference_cli",
-                    "--prompt",
-                    prompt,
-                    "--debate-id",
-                    "reference_cli_debate",
-                    "--output",
-                    "part-01/reference-cli.md",
-                ]
-            )
-        self.assertEqual((code, stderr), (0, ""))
-        self.assertEqual(
-            json.loads(stdout)["reference_operation_id"],
-            result.reference_operation_id,
-        )
-        run_prompt.assert_awaited_once_with(
-            "reference_cli",
-            prompt,
-            output_path="part-01/reference-cli.md",
-            max_debate_rounds=None,
-            debate_id="reference_cli_debate",
-        )
-
-    def test_shared_draft_loader_preserves_full_path_semantics(self) -> None:
-        caller = self.base / "caller"
-        caller.mkdir()
-        exact = "\ufefffirst\r\nsecond\x00  \n"
-        relative = caller / "neutral.md"
-        relative.write_bytes(exact.encode("utf-8"))
-        absolute = caller / "absolute.md"
-        absolute.write_text("absolute draft", encoding="utf-8")
-        metachar = caller / 'literal ;$(touch marker) [*] "quoted".md'
-        metachar.write_text("literal metacharacters", encoding="utf-8")
-        empty = caller / "empty.md"
-        empty.write_bytes(b"")
-        linked = caller / "linked.md"
-        try:
-            linked.symlink_to(absolute)
-        except (OSError, NotImplementedError):
-            linked = None
-
-        with working_directory(caller):
-            self.assertEqual(read_draft_file("neutral.md"), exact)
-            self.assertEqual(read_draft_file(absolute), "absolute draft")
-            self.assertEqual(
-                read_draft_file(metachar.name),
-                "literal metacharacters",
-            )
-            self.assertEqual(read_draft_file(empty), "")
-            if linked is not None:
-                self.assertEqual(read_draft_file(linked.name), "absolute draft")
-        self.assertFalse((caller / "marker").exists())
-
-        backend = successful_backend()
-        with (
-            working_directory(caller),
-            mock.patch.object(
-                cli_module,
-                "read_draft_file",
-                wraps=read_draft_file,
-            ) as shared_loader,
-        ):
-            code, stdout, stderr = self.run_with(
-                [
-                    "run",
-                    "--workspace",
-                    str(self.workspace.root),
-                    "--session",
-                    "relative_file",
-                    "--draft-file",
-                    "neutral.md",
-                    "--debate-id",
-                    "relative_file",
-                    "--output",
-                    "part-01/relative-file.md",
-                ],
-                backend,
-            )
-        self.assertEqual((code, stderr), (0, ""))
-        self.assertEqual(json.loads(stdout)["input_kind"], "draft")
-        shared_loader.assert_called_once_with("neutral.md")
-
-    def test_draft_loader_errors_precede_backend_and_input_is_exclusive(self) -> None:
-        invalid = self.base / "invalid.md"
-        invalid.write_bytes(b"\xff")
-        with self.assertRaisesRegex(ConfigurationError, "not valid UTF-8"):
-            read_draft_file(invalid)
-        with mock.patch.object(cli_module, "AgentBackend") as backend_class:
-            code, stdout, stderr = invoke_cli(
-                [
-                    "run",
-                    "--workspace",
-                    str(self.workspace.root),
-                    "--session",
-                    "invalid_file",
-                    "--draft-file",
-                    str(invalid),
-                    "--output",
-                    "part-01/invalid.md",
-                ]
-            )
-        self.assertEqual((code, stdout), (2, ""))
-        self.assertIn("not valid UTF-8", stderr)
-        backend_class.assert_not_called()
-
-        for suffix in (
-            ["run", "--output", "part-01/missing-input.md"],
-            [
-                "run",
-                "positional",
-                "--prompt",
-                "option",
-                "--output",
-                "part-01/exclusive.md",
-            ],
-        ):
-            with mock.patch.object(cli_module, "AgentBackend") as backend_class:
-                code, stdout, stderr = invoke_cli(
-                    [*suffix, "--workspace", str(self.workspace.root), "--session", "invalid"]
-                )
-            self.assertEqual((code, stdout), (2, ""))
-            self.assertIn("exactly one run input", stderr)
-            backend_class.assert_not_called()
-
-    def test_nested_cwd_uses_saved_default_without_changing_it(self) -> None:
-        save_default_session(self.workspace, "default_session")
-        nested = self.workspace.root / "caller" / "nested"
-        nested.mkdir(parents=True)
-        backend = successful_backend()
-        with working_directory(nested), mock.patch.object(cli_module, "AgentBackend", return_value=backend):
-            code, stdout, stderr = invoke_cli(
-                ["run", "inferred prompt", "--debate-id", "inferred", "--output", "part-01/inferred.md"]
-            )
-        self.assertEqual((code, stderr), (0, ""))
-        self.assertEqual(json.loads(stdout)["session_id"], "default_session")
-        self.assertEqual(load_cli_context(self.workspace).default_session_id, "default_session")
-
-    def test_explicit_non_lifecycle_session_never_changes_default_or_falls_back(
-        self,
-    ) -> None:
-        save_default_session(self.workspace, "default_session")
-        for arguments in (
-            [
-                "directive",
-                "--workspace",
-                str(self.workspace.root),
-                "--session",
-                "other_session",
-                "[SYS: LANG=EN]",
-            ],
-            [
-                "inspect",
-                "--workspace",
-                str(self.workspace.root),
-                "--session",
-                "other_session",
-            ],
-        ):
-            with self.subTest(command=arguments[0]):
-                code, _stdout, stderr = invoke_cli(arguments)
-                self.assertEqual((code, stderr), (0, ""))
-                self.assertEqual(
-                    load_cli_context(self.workspace).default_session_id,
-                    "default_session",
-                )
-
-        backend = successful_backend()
-        code, stdout, stderr = self.run_with(
-            [
-                "run",
-                "--workspace",
-                str(self.workspace.root),
-                "--session",
-                "other_session",
-                "explicit prompt",
-                "--debate-id",
-                "other_debate",
-                "--output",
-                "part-01/other.md",
-            ],
-            backend,
-        )
-        self.assertEqual((code, stderr), (0, ""))
-        self.assertEqual(json.loads(stdout)["session_id"], "other_session")
-        self.assertEqual(
-            load_cli_context(self.workspace).default_session_id,
-            "default_session",
-        )
-
-        code, stdout, stderr = invoke_cli(
-            [
-                "inspect",
-                "--workspace",
-                str(self.workspace.root),
-                "--session",
-                "",
-            ]
-        )
-        self.assertEqual((code, stdout), (2, ""))
-        self.assertIn("SessionIdError", stderr)
-        self.assertEqual(
-            load_cli_context(self.workspace).default_session_id,
-            "default_session",
-        )
+        self.workspace = initialize_workspace(Path(temporary.name) / "workspace")
 
     def test_nested_cwd_infers_default_for_directive_and_inspect(self) -> None:
         save_default_session(self.workspace, "default_session")

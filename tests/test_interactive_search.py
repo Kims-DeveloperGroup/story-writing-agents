@@ -226,11 +226,6 @@ class InteractiveSearchFilesystemTests(unittest.TestCase):
                 "save_default_conversation",
             ) as persist_conversation,
             mock.patch.object(
-                controller._runtime,
-                "converse",
-                wraps=controller._runtime.converse,
-            ) as converse,
-            mock.patch.object(
                 controller._conversation_event_store,
                 "append",
                 wraps=controller._conversation_event_store.append,
@@ -245,14 +240,12 @@ class InteractiveSearchFilesystemTests(unittest.TestCase):
         bind.assert_not_called()
         persist_session.assert_not_called()
         persist_conversation.assert_not_called()
-        converse.assert_not_called()
         append.assert_not_called()
         self.assertEqual(_persistent_file_snapshot(workspace.root), before)
         self.assertEqual(core_snapshot(workspace), core_before)
         self.assertFalse(
             workspace.path(
-                "agent_states/orchestrator_state/conversation_defaults/"
-                f"{_SESSION}.json"
+                f"agent_states/orchestrator_state/conversation_defaults/{_SESSION}.json"
             ).exists()
         )
         self.assertEqual(
@@ -262,9 +255,7 @@ class InteractiveSearchFilesystemTests(unittest.TestCase):
 
         rendered = "".join(callbacks.records)
         self.assertIn(
-            "[context] Search request\n"
-            "  Query: council vessel\n"
-            "  Scope: active\n",
+            "[context] Search request\n  Query: council vessel\n  Scope: active\n",
             rendered,
         )
         self.assertIn(
@@ -479,7 +470,7 @@ class InteractiveSearchFilesystemTests(unittest.TestCase):
         def append_new_turn_then_continue(prompt: str) -> str:
             """Append a turn between commands and request its fresh range."""
 
-            self.assertEqual(prompt, f"story[{_SESSION}:lead]> ")
+            self.assertEqual(prompt, f"story[{_SESSION}]> ")
             append_turn(
                 store,
                 session_id=_SESSION,
@@ -509,7 +500,7 @@ class InteractiveSearchFilesystemTests(unittest.TestCase):
         events = store.read(_SESSION, metadata.conversation_id)
         self.assertEqual(tuple(event.sequence for event in events), (1, 2, 3, 4))
         rendered = "".join(callbacks.records)
-        handle = metadata.conversation_id[:12]
+        metadata.conversation_id[:12]
         self.assertIn(
             "Transcript (1/2)\n"
             "  You → Plot & Structure Architect\n"

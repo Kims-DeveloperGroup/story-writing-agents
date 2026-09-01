@@ -11,13 +11,15 @@
 > available through direct Python modules and as an explicitly selected
 > next-shell bundle. Provider-free storage commands can select desired storage
 > or transfer and verify two already-ready stores in one workspace.
-> Optional conversation RAG has a separate disposable generation store, an
-> injectable runtime authorization/projection path, persisted default-disabled
-> local provider/automatic values, and noninteractive lifecycle/search
-> commands. Interactive `/settings` persists next-shell selection, while the
-> controller retains any armed one-turn query only in process memory.
-> `StoryRuntime` creates and finalizes reference evidence for inline referenced
-> operations; Python callers can inspect it by operation ID. Separately, the
+> Optional conversation RAG has a separate disposable generation store, direct
+> authorization/projection services, persisted default-disabled local
+> provider/automatic values, and noninteractive lifecycle/search commands.
+> Interactive `/settings` persists next-shell selection, but there is no current
+> one-turn provider preflight.
+> Direct repository components create and finalize reference evidence for
+> authorized operations; Python callers can inspect it by operation ID. The
+> current `StoryRuntime` has no provider-bound consumer for that evidence.
+> Separately, the
 > pure schema-v2 collaboration-history values and store port are available from
 > `story_writing_agents.conversations`. Direct Python callers can persist that
 > port with uncomposed filesystem or SQLite adapters. Canonical archive and
@@ -48,11 +50,10 @@ provisioning nor transfer alone selects runtime authority.
 | Desired storage, readiness, and startup activation | Configuration owns desired value; `conversation_storage.selection` owns preparation/parity and next-shell marker CAS |
 | Disposable conversation RAG generations | `conversation_rag_store`; derived per-session state only, never conversation authority; the local composition or an injected runtime service schedules and verifies use through an explicit state port |
 | Conversation RAG opt-in defaults and CLI reports | Configuration owns nullable provider/exact automatic values; `conversation_rag_cli` owns complete noninteractive CAS workflows and ephemeral schema-v1 reports; interactive Settings reuses its guarded configuration transaction |
-| Pending one-turn RAG query | Controller memory only; exact session/conversation scope, never configuration or transcript persistence |
 | Bounded runtime diagnostics | Internal `debug_log` writer |
 | Bounded agent request/response/outcome records | `AgentBackend` capture projects each physical structured call; `agent_exchanges` independently owns storage |
 | Retrieval actions, observations, progress, sources | Process/terminal only |
-| Current conversation and agent focus | Controller memory only |
+| Current conversation focus | Controller memory only |
 | Canonical writing artifacts and provenance | `WritingArtifactRepository` |
 | Explicit-reference operation and invocation evidence | `WritingArtifactRepository`; content-free create-only records |
 | Explicit-reference selected content | Transient repository/backend carriers and one immediate provider payload; no workspace evidence field |
@@ -137,7 +138,8 @@ hidden reasoning, provider diagnostics, credentials, or reference bytes.
 This direct store does not advance the v1 lexical generation, feed FTS, join
 the composed bundle, or change search. FTS remains a non-authoritative v1
 literal-search hint. Archive and transfer now consume canonical v2 history;
-active service integration remains deferred to #478/#479. See the
+Issue #478 removed the public direct-execution consumers; active service
+integration remains deferred to #479. See the
 [direct SQLite scenario](../reference/collaboration-history.md#direct-sqlite-storage-and-retry).
 
 Stored confirmation and projected next-action values remain evidence. They

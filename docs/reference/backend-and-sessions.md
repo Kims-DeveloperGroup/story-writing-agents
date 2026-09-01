@@ -4,6 +4,9 @@
 > pure lifecycle contracts are implemented for Codex and Antigravity. The
 > workspace default precedes the final Codex fallback. Backend physical
 > structured calls are automatically offered to bounded agent-exchange capture.
+> This is a low-level provider API: the current shell and `StoryRuntime` do not
+> expose a public consumer for `invoke()`, `converse()`, or
+> `converse_with_retrieval()`.
 
 Key terms: **binding**—agent/provider pairing; **manifest**—durable session and
 thread state; **access claim**—temporary exclusive process ownership;
@@ -112,9 +115,9 @@ coordinator with a content-free outcome. After provider state has advanced,
 the compatible thread is tainted where required so a later call cannot assume
 clean continuation. An explicit retry or replacement needs a new top-level
 operation with a fresh capture, correlation, coordinator, capability, and
-ordinal sequence. `StoryRuntime` owns those values and allocates each
-invocation with attempt `1`; another agent, phase, replacement, or operation
-cannot reuse prior evidence.
+ordinal sequence. A caller that composes this low-level boundary owns those
+values and allocates each invocation with attempt `1`; another agent, phase,
+replacement, or operation cannot reuse prior evidence.
 
 Construction first validates the complete twelve-field
 `config/system_defaults.json` object and closed per-agent objects in

@@ -1,6 +1,6 @@
 # Package API and exports
 
-> **Availability:** the 120-name inventory below is exported from the
+> **Availability:** the 118-name inventory below is exported from the
 > implemented `story_writing_agents` package facade. Separate sections document
 > archive additions to the supported `story_writing_agents.conversation_storage`
 > subpackage, pure literal-search mechanics, and the optional SQLite owning
@@ -13,8 +13,9 @@
 > context projections. Twelve additive v2 search/citation/page/document-ID
 > names are direct-only from `story_writing_agents.conversation_search`.
 > Collaboration names are deliberately omitted from the package root and are
-> not active in current runtime or storage paths. Context and progress types are Python
-> APIs; an export does not imply a CLI command.
+> not active in the selected runtime service until #479. Context, progress,
+> backend, and debate types are Python component APIs; an export does not imply
+> a current CLI execution command.
 
 Key terms: **package facade**—the names re-exported at the package root;
 **public import**—a supported symbol imported from its documented owning
@@ -27,7 +28,7 @@ Import public contracts from the package root:
 from story_writing_agents import StoryRuntime, Workspace
 ```
 
-The exact 120-name export inventory is:
+The exact 118-name export inventory is:
 
 - roster: `AGENT_SPECS`, `ROSTER`, `SPECIALIST_IDS`, `LEAD_ORCHESTRATOR`,
   `PLOT_ARCHITECT`, `CHARACTER_CUSTODIAN`, `EXECUTION_SPECIALIST`;
@@ -41,7 +42,7 @@ The exact 120-name export inventory is:
   `DebateStatus`, `DebateContextMode`, `DebateContextRequest`,
   `DebateFailureKind`, `DebateProgressPhase`, `DebateProgressEvent`, and
   `DebateProgressSink`;
-- runtime: `StoryRuntime`, `RuntimeSession`, `Runtime`, `Session`;
+- runtime: `StoryRuntime`, `RuntimeSession`;
 - directives: `DirectiveKind`, `RuntimeDirective`, `parse_directive`,
   `apply_directive`;
 - workspace facade: `Workspace`, `initialize_workspace`, and the supported
@@ -86,8 +87,8 @@ The exact 120-name export inventory is:
   `ConversationRetrievalError`, `ConversationRetrievalSemanticError`,
   `ConversationRetrievalBudgetError`, and `ConversationRetrievalObserverError`.
 
-`Runtime` is exactly an alias of `StoryRuntime`; `Session` is exactly an alias
-of `RuntimeSession`. They do not provide different behavior.
+The package root does not export `Runtime` or `Session`. Import the explicit
+`StoryRuntime` and `RuntimeSession` names.
 
 `FilesystemConversationCatalog` and `FilesystemConversationEventStore` are
 identical class objects through the package root, the supported static
@@ -98,24 +99,24 @@ identical class objects through the package root, the supported static
 not export either class; its direct `filesystem` module is the internal or
 advanced import when ownership clarity matters.
 
-Users keep every established root/workspace import, constructor, operation,
-path, persisted byte, error, and workflow. No data rewrite, conversion, or other
-action is required. Only reflection, debugging, or similar implementation
-inspection sees the new canonical module. Private conversation implementation
-globals—including serializers, path helpers, and the weak transcript-lock
-registry—are not exposed through the workspace facade.
+The removal of the two broad runtime aliases and the direct-execution methods is
+intentional. There are no forwarding aliases or alternate entry points.
+Management, configuration, directive, and inspection callers use the explicit
+runtime names. Private conversation implementation globals—including
+serializers, path helpers, and the weak transcript-lock registry—are not
+exposed through the workspace facade.
 
 Canonical artifact value contracts live in
 `story_writing_agents.writing_artifacts`, but are intentionally absent from the
-120-name package-root facade. In addition to immutable path, catalog, kind,
+118-name package-root facade. In addition to immutable path, catalog, kind,
 reference, and filesystem `ArtifactSourceIdentity` values, the subpackage
 exports content-free authorization, operation
 history/state, read-request/action, `ReferenceOperationFailure`, and parser
 contracts. Filesystem-backed `WritingArtifactRepository`, content-bearing read
 results, private capabilities, runtime coordinators, the ranged viewer, and
-interactive activation values remain internal. The installed controller uses
-that private UI boundary for `$`/`$$` prompt editing without adding a public
-selection API or standalone artifact command. See
+interactive activation values remain internal. The current controller does not
+activate that private UI boundary from main input, and the package adds no
+public selection API or standalone artifact command. See
 [Canonical writing artifacts](writing-artifacts.md).
 
 <a id="structured-collaboration-history-boundary"></a>
@@ -155,7 +156,7 @@ Every facade binding is the same object as its owning-leaf
 binding. All collaboration classes and functions report
 `story_writing_agents.conversations` as their canonical public module.
 
-No schema-v2 conversation value is exported by the exact 120-name
+No schema-v2 conversation value is exported by the exact 118-name
 `story_writing_agents` root or by `story_writing_agents.conversation_storage`.
 There is no dynamic forwarding. The current runtime, selected
 filesystem/SQLite transcript adapters, and UI use only the established
@@ -245,7 +246,7 @@ explicit integrated consumers.
 ## Conversation literal-search mechanics
 
 Provider-neutral literal-search mechanics are a supported direct-module API,
-not part of the 120-name package-root or 63-name conversation-storage facades.
+not part of the 118-name package-root or 63-name conversation-storage facades.
 The module is pure, owns no resource, performs no I/O, and exports exactly:
 
 ```python
@@ -302,12 +303,12 @@ See [Conversation search](conversation-search.md#search-contract).
 > **Availability:** these are direct Python APIs. Issues #262/#283 provide the
 > contracts, deterministic local provider, disposable generation store, generic
 > adapter, and explicit local composition. Issue #263 adds the direct
-> provider/store-neutral runtime service and its additive `StoryRuntime`
-> integration. Issue #348 adds concrete local runtime composition, persisted
-> default-disabled provider/automatic fields, and six noninteractive lifecycle
-> and authorized-search workflows. Issue #349 adds `/settings` RAG editors,
-> next-shell local/automatic composition, private one-turn `/rag QUERY`, and
-> exact RAG-source provenance; existing literal `/search` is unchanged.
+> provider/store-neutral runtime service. Its former direct `StoryRuntime`
+> consumer is unavailable. Issue #348 adds concrete local composition, persisted
+> default-disabled provider/automatic fields and six noninteractive lifecycle
+> and authorized-search workflows. `/settings` RAG editors and next-shell local
+> composition remain; the former one-turn provider preflight is not a current
+> command. Existing literal `/search` is unchanged.
 
 Provider-neutral story contracts live in
 `story_writing_agents.conversation_rag`. The module imports only the standard
@@ -707,7 +708,7 @@ dataclass representations omit it. `ConversationRetrievalRequest.rag_context`
 and `ConversationRetrievalResult.rag_outcome` are additive and default to
 `None`; `ConversationRetrievalResult.rag_sources` is an additive empty-tuple
 default and exact ordered subset of result sources. None of these direct-module
-RAG values joins the unchanged 120-name package-root facade.
+RAG values joins the unchanged 118-name package-root facade.
 
 The command-domain boundary is direct-module-only and exports exactly seven
 names:
@@ -758,7 +759,7 @@ interactive flow are in
 
 Canonical conversation archive values, deterministic serialization, and the
 privileged filesystem archive adapter are supported from
-`story_writing_agents.conversation_storage`, not from the 120-name package-root
+`story_writing_agents.conversation_storage`, not from the 118-name package-root
 facade. The subpackage has an exact 63-name `__all__`; the archive surface is
 the archive module's 21 names plus the filesystem adapter's two-name
 surface:
@@ -814,7 +815,7 @@ and [Privacy](../operations/privacy-and-provider.md#workspace-debug-log-privacy)
 ## Conversation-storage composition
 
 The conversation-storage composition APIs are supported direct-subpackage
-imports; they are not re-exported by the 120-name project facade:
+imports; they are not re-exported by the 118-name project facade:
 
 ```python
 from story_writing_agents.conversation_storage import (
@@ -874,7 +875,7 @@ for the operational boundary.
 ## Conversation storage transfer
 
 Provider-free transfer and exact parity verification are supported from one
-direct-only module. Its seven names are absent from both the 120-name package
+direct-only module. Its seven names are absent from both the 118-name package
 root and 63-name conversation-storage facade:
 
 ```python
@@ -970,7 +971,7 @@ and [checkpoint recovery](../operations/recovery-and-limitations.md#conversation
 
 Host/database preparation and desired-selection/startup coordination are two
 separate supported direct-module surfaces. Neither is re-exported by the
-120-name root or 63-name conversation-storage facade, and importing either
+118-name root or 63-name conversation-storage facade, and importing either
 module performs no I/O, launches no process, or loads `sqlite3`.
 
 Provisioning exports exactly four names:
@@ -1489,8 +1490,8 @@ activation workflow; direct runtime construction remains filesystem by
 default. The direct collaboration store is not included. The adapter module
 itself adds no automatic installation, configuration selection, activation,
 RAG, MySQL, or new citation behavior. Archive and backend transfer now use
-canonical v2 collaboration history; #478/#479 still own active service and
-runtime cutover. The private local FTS5 companion supplies
+canonical v2 collaboration history; #478 removed the public direct consumers
+and #479 owns the remaining active-service cutover. The private local FTS5 companion supplies
 non-authoritative v1 literal-search hints only and is not v2 authority, a
 backend, readiness requirement, transfer input, or FTS-only search mode.
 
@@ -1557,14 +1558,14 @@ names and are not re-exported by the package-root or conversation-storage
 facade.
 
 `story_writing_agents.agent_context` is an 11-name accounting-only facade. It
-is absent from the 120-name package-root facade and does not export manifest,
+is absent from the 118-name package-root facade and does not export manifest,
 planning, source, action, ledger, service, or observer contracts. The additive
 observer types are supported only from
 `story_writing_agents.agent_context.service`; see
 [Runtime API](runtime-api.md#context-lifecycle-observer) and
 [Agent-context design](../design/agent-context.md#package-boundary-and-owners).
 
-The exact current inventories are package root `120`, conversations `83`
+The exact current inventories are package root `118`, conversations `83`
 (`55` events owner / `21` context owner), conversation storage `63`,
 conversation search `25` (13 established root-supported names plus 12
 direct-only v2 names), SQLite database owner `12`, SQLite adapter `15`,
@@ -1572,5 +1573,5 @@ literal-search mechanics `6`, SQLite companion owner `5`, conversation
 transfer `7`, provisioning `4`, selection `8`, conversation RAG contracts
 `35`, generic RAG adapter `3`, local RAG provider `5`, RAG generation store `8`,
 RAG composition `10`, RAG runtime `10`, and RAG CLI `7`. The production module
-inventory is `97`, with 385 dependency edges, zero cycles, and the established
-facade counts 120/11/31 (root / agent-context accounting / writing artifacts).
+inventory is `97`, with 360 dependency edges, zero cycles, and the established
+facade counts 118/11/31 (root / agent-context accounting / writing artifacts).

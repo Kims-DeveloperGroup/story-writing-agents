@@ -74,9 +74,7 @@ from story_writing_agents.conversation_rag import (
 )
 from story_writing_agents.conversation_search import (
     ConversationCitation,
-    ConversationMemoryService,
     ConversationSearchMatchKind,
-    ConversationSearchScope,
 )
 from story_writing_agents.cli import _parse_backend_overrides, build_parser, main
 from story_writing_agents.backend import backend_configuration_snapshot
@@ -360,7 +358,9 @@ def _conversation_pair(
         )
 
     user = event(0, ConversationEventKind.USER_MESSAGE, "user", recipient, user_content)
-    sender = recipient if outcome_kind is ConversationEventKind.AGENT_REPLY else "runtime"
+    sender = (
+        recipient if outcome_kind is ConversationEventKind.AGENT_REPLY else "runtime"
+    )
     return user, event(1, outcome_kind, sender, "user", outcome_content)
 
 
@@ -408,10 +408,7 @@ def _workspace_debug_records(workspace: Any) -> list[dict[str, object]]:
     path = workspace.path(DEBUG_LOG_RELATIVE_PATH)
     if not path.exists():
         return []
-    return [
-        json.loads(line)
-        for line in path.read_text(encoding="utf-8").splitlines()
-    ]
+    return [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines()]
 
 
 def _provider_error_records(workspace: Any) -> list[dict[str, object]]:
@@ -735,7 +732,9 @@ class ConversationModelContractTests(unittest.TestCase):
     def test_exact_frozen_slotted_no_default_models_and_converse_signature(
         self,
     ) -> None:
-        reply = ConversationReply("story_session", "conversation_a", "turn_current", "reply")
+        reply = ConversationReply(
+            "story_session", "conversation_a", "turn_current", "reply"
+        )
         cases = (
             (
                 ConversationRequest,
@@ -761,14 +760,11 @@ class ConversationModelContractTests(unittest.TestCase):
                 model_fields = fields(model)
                 self.assertEqual(tuple(field.name for field in model_fields), names)
                 required_fields = (
-                    model_fields[:-1]
-                    if model is ConversationRequest
-                    else model_fields
+                    model_fields[:-1] if model is ConversationRequest else model_fields
                 )
                 self.assertTrue(
                     all(
-                        field.default is MISSING
-                        and field.default_factory is MISSING
+                        field.default is MISSING and field.default_factory is MISSING
                         for field in required_fields
                     )
                 )
@@ -957,7 +953,9 @@ class ConversationModelContractTests(unittest.TestCase):
                 ):
                     request_type(**common)
 
-    def test_retrieval_bound_signature_and_sync_handler_protocol_are_exact(self) -> None:
+    def test_retrieval_bound_signature_and_sync_handler_protocol_are_exact(
+        self,
+    ) -> None:
         signature = inspect.signature(BoundAgent.converse_with_retrieval)
         self.assertEqual(
             tuple(signature.parameters),
@@ -1063,7 +1061,9 @@ class ConversationModelContractTests(unittest.TestCase):
             ("duplicate sequence", _context_window((user, replace(reply, sequence=1)))),
             (
                 "decreasing sequence",
-                _context_window((replace(user, sequence=2), replace(reply, sequence=1))),
+                _context_window(
+                    (replace(user, sequence=2), replace(reply, sequence=1))
+                ),
             ),
             ("unmatched user", _context_window((user,))),
             (
@@ -1081,8 +1081,7 @@ class ConversationModelContractTests(unittest.TestCase):
                 _context_window(
                     _conversation_pair(
                         "byte_over",
-                        user_content="x"
-                        * CONVERSATION_CONTEXT_POLICY.max_utf8_bytes,
+                        user_content="x" * CONVERSATION_CONTEXT_POLICY.max_utf8_bytes,
                         outcome_content="y",
                     )
                 ),
@@ -1144,8 +1143,7 @@ class CodexBackendDefaultsTests(unittest.TestCase):
 
         self.workspace.write_text(
             "config/system_defaults.json",
-            '{"language":"KO","persona":"default_kim_eun_hee",'
-            '"max_debate_rounds":1}\n',
+            '{"language":"KO","persona":"default_kim_eun_hee","max_debate_rounds":1}\n',
         )
         backend = AgentBackend(self.workspace)
         try:
@@ -1446,12 +1444,29 @@ class CodexBackendDefaultsTests(unittest.TestCase):
                     [_debug_signature(record) for record in records],
                     [
                         (
-                            1, "trace", "backend", "configuration", "started",
-                            None, None, None, None, None, None,
+                            1,
+                            "trace",
+                            "backend",
+                            "configuration",
+                            "started",
+                            None,
+                            None,
+                            None,
+                            None,
+                            None,
+                            None,
                         ),
                         (
-                            1, "error", "backend", "configuration", "failed",
-                            "failed", None, None, None, None,
+                            1,
+                            "error",
+                            "backend",
+                            "configuration",
+                            "failed",
+                            "failed",
+                            None,
+                            None,
+                            None,
+                            None,
                             "builtins.ValueError",
                         ),
                     ],
@@ -1465,8 +1480,7 @@ class CodexBackendDefaultsTests(unittest.TestCase):
 
     def test_full_persisted_schema_precedes_explicit_model_validation(self) -> None:
         expected_effort = (
-            "codex_reasoning_effort must be null or match "
-            "[a-z][a-z0-9_-]{0,31}"
+            "codex_reasoning_effort must be null or match [a-z][a-z0-9_-]{0,31}"
         )
         cases = (
             (
@@ -1535,8 +1549,7 @@ class CodexBackendDefaultsTests(unittest.TestCase):
 
         replacement_persona = "next_lifecycle_persona"
         self.workspace.write_text(
-            "config/persona_templates/alternative_templates/"
-            f"{replacement_persona}.md",
+            f"config/persona_templates/alternative_templates/{replacement_persona}.md",
             "next",
         )
         defaults = self.workspace.read_json("config/system_defaults.json")
@@ -1586,16 +1599,16 @@ class CodexBackendDefaultsTests(unittest.TestCase):
             agent_id=PLOT_ARCHITECT,
         )
         self.assertEqual(live_override.language, "ES")
-        self.assertEqual(live_override.persona_file.path.name, "next_lifecycle_persona.md")
+        self.assertEqual(
+            live_override.persona_file.path.name, "next_lifecycle_persona.md"
+        )
 
         next_backend = AgentBackend(self.workspace, executable=sys.executable)
         self.addCleanup(next_backend.close)
         self.assertEqual(next_backend.model, "next-model")
         self.assertEqual(next_backend._codex_reasoning_effort, "high")
         self.assertEqual(
-            next_backend._antigravity_adapter.invocation_settings(
-                PLOT_ARCHITECT
-            ),
+            next_backend._antigravity_adapter.invocation_settings(PLOT_ARCHITECT),
             ("agent-antigravity-model", "high"),
         )
         with (
@@ -1611,9 +1624,7 @@ class CodexBackendDefaultsTests(unittest.TestCase):
             ) as headless_capabilities_available,
         ):
             self.assertTrue(
-                next_backend.validate_provider_configuration(
-                    "snapshot_session"
-                )
+                next_backend.validate_provider_configuration("snapshot_session")
             )
         executable_available.assert_called_once_with()
         headless_capabilities_available.assert_called_once_with()
@@ -1742,7 +1753,11 @@ class CodexBackendDefaultsTests(unittest.TestCase):
             )
             self.assertEqual(command.count("--model"), 1)
             self.assertEqual(
-                tuple(value for value in command if value.startswith("model_reasoning_effort=")),
+                tuple(
+                    value
+                    for value in command
+                    if value.startswith("model_reasoning_effort=")
+                ),
                 ('model_reasoning_effort="xhigh"',),
             )
         finally:
@@ -1886,9 +1901,17 @@ class CodexBackendTestCase(unittest.IsolatedAsyncioTestCase):
             [_debug_signature(record) for record in records],
             [
                 (
-                    1, "trace", "backend", "provider_invocation", "started",
-                    None, session_id, debate_id, conversation_id,
-                    PLOT_ARCHITECT, None,
+                    1,
+                    "trace",
+                    "backend",
+                    "provider_invocation",
+                    "started",
+                    None,
+                    session_id,
+                    debate_id,
+                    conversation_id,
+                    PLOT_ARCHITECT,
+                    None,
                 ),
                 (
                     1,
@@ -1932,11 +1955,7 @@ class CodexBackendTestCase(unittest.IsolatedAsyncioTestCase):
             "agent_id": PLOT_ARCHITECT,
         }
         self.assertEqual(
-            {
-                key: value
-                for key, value in records[0].items()
-                if key != "timestamp"
-            },
+            {key: value for key, value in records[0].items() if key != "timestamp"},
             {
                 **expected_common,
                 "level": "trace",
@@ -1969,8 +1988,7 @@ class CodexBackendTestCase(unittest.IsolatedAsyncioTestCase):
 
     def thread(self, session_id: str) -> dict[str, object]:
         manifest = self.workspace.read_json(
-            "agent_states/orchestrator_state/provider_sessions/"
-            f"{session_id}.json"
+            f"agent_states/orchestrator_state/provider_sessions/{session_id}.json"
         )
         return manifest["provider_threads"][f"codex:{PLOT_ARCHITECT}"]
 
@@ -2055,9 +2073,7 @@ class CodexBackendTestCase(unittest.IsolatedAsyncioTestCase):
     def reference_cases() -> dict[str, tuple[ArtifactReference, ...]]:
         """Return whole, one-line range, and ordered mixed request shapes."""
 
-        whole = ArtifactReference(
-            "manuscript/part-01/provider-reference.md"
-        )
+        whole = ArtifactReference("manuscript/part-01/provider-reference.md")
         ranged = ArtifactReference(
             "manuscript/part-01/provider-range.md",
             ArtifactLineRange(2, 2),
@@ -2130,9 +2146,9 @@ class CodexBackendTestCase(unittest.IsolatedAsyncioTestCase):
                 requests[case] = request
                 schema = AgentBackend._reference_read_action_schema(request)
                 _assert_provider_supported_schema(self, schema)
-                reference_schema = schema["properties"]["action"][
-                    "properties"
-                ]["references"]
+                reference_schema = schema["properties"]["action"]["properties"][
+                    "references"
+                ]
                 self.assertEqual(
                     set(reference_schema),
                     {"type", "items", "minItems", "maxItems"},
@@ -2180,12 +2196,10 @@ class CodexBackendTestCase(unittest.IsolatedAsyncioTestCase):
             invocation_id="unsupported_schema_invocation",
             references=self.reference_cases()["mixed"],
         )
-        invalid_schema = AgentBackend._reference_read_action_schema(
-            invocation.request
-        )
-        reference_schema = invalid_schema["properties"]["action"][
-            "properties"
-        ]["references"]
+        invalid_schema = AgentBackend._reference_read_action_schema(invocation.request)
+        reference_schema = invalid_schema["properties"]["action"]["properties"][
+            "references"
+        ]
         branches = reference_schema["items"]["anyOf"]
         reference_schema["items"] = branches
         reference_schema["additionalItems"] = False
@@ -2207,9 +2221,9 @@ class CodexBackendTestCase(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(str(raised.exception), "Codex CLI exited with status 86")
         calls = self.provider_invocations()
         self.assertEqual(len(calls), 1)
-        submitted_items = calls[0]["schema"]["properties"]["action"][
-            "properties"
-        ]["references"]["items"]
+        submitted_items = calls[0]["schema"]["properties"]["action"]["properties"][
+            "references"
+        ]["items"]
         self.assertIsInstance(submitted_items, list)
         history = repository.inspect_reference_operation(operation_id)
         assert history is not None
@@ -2255,8 +2269,7 @@ class CodexBackendTestCase(unittest.IsolatedAsyncioTestCase):
         role = definition.system_prompt_file.read_text()
         persona = definition.persona_file.read_text()
         contexts = [
-            reference.read_text()
-            for reference in definition.context_document_files
+            reference.read_text() for reference in definition.context_document_files
         ]
         backend = AgentBackend(self.workspace, executable=str(self.executable))
         self.addCleanup(backend.close)
@@ -2267,9 +2280,7 @@ class CodexBackendTestCase(unittest.IsolatedAsyncioTestCase):
         bound = await backend.bind(definition)
         self.assertIsInstance(bound, BoundAgent)
         self.assertEqual(bound.vendor, "codex")
-        staged = (bound.staging_directory / "AGENTS.md").read_text(
-            encoding="utf-8"
-        )
+        staged = (bound.staging_directory / "AGENTS.md").read_text(encoding="utf-8")
         binding_components = bound._provider_binding.binding_components
         self.assertEqual(
             sum(component.serialized_utf8_bytes for component in binding_components),
@@ -2305,8 +2316,7 @@ class CodexBackendTestCase(unittest.IsolatedAsyncioTestCase):
         self.assertNotIn("--model", argv)
         self.assertFalse(
             any(
-                isinstance(value, str)
-                and value.startswith("model_reasoning_effort=")
+                isinstance(value, str) and value.startswith("model_reasoning_effort=")
                 for value in argv
             )
         )
@@ -2317,8 +2327,7 @@ class CodexBackendTestCase(unittest.IsolatedAsyncioTestCase):
         self.assertIn("web_search", argv)
         self.assertTrue(
             any(
-                isinstance(value, str)
-                and value.startswith("project_doc_max_bytes=")
+                isinstance(value, str) and value.startswith("project_doc_max_bytes=")
                 for value in argv
             )
         )
@@ -2618,7 +2627,9 @@ class CodexBackendTestCase(unittest.IsolatedAsyncioTestCase):
             request = json.loads(exchange[0]["content"])
             response = json.loads(exchange[1]["content"])
             outcome = json.loads(exchange[2]["content"])
-            self.assertEqual(set(request), {"call_kind", "payload", "prior_thread_id", "schema"})
+            self.assertEqual(
+                set(request), {"call_kind", "payload", "prior_thread_id", "schema"}
+            )
             self.assertEqual(request["call_kind"], call_kind)
             self.assertEqual(
                 set(response),
@@ -2685,7 +2696,9 @@ class CodexBackendTestCase(unittest.IsolatedAsyncioTestCase):
             "accounting"
         )
         with (
-            mock.patch.object(backend, "_begin_legacy_agent_exchange", side_effect=begin),
+            mock.patch.object(
+                backend, "_begin_legacy_agent_exchange", side_effect=begin
+            ),
             mock.patch.object(backend._codex_adapter, "invoke", side_effect=invoke),
             mock.patch.object(backend, "_store_thread", side_effect=store_thread),
         ):
@@ -2721,7 +2734,9 @@ class CodexBackendTestCase(unittest.IsolatedAsyncioTestCase):
             events.append("artifact")
 
         with (
-            mock.patch.object(backend, "_begin_legacy_agent_exchange", side_effect=begin),
+            mock.patch.object(
+                backend, "_begin_legacy_agent_exchange", side_effect=begin
+            ),
             mock.patch.object(backend._codex_adapter, "invoke", side_effect=invoke),
             mock.patch.object(
                 backend,
@@ -2824,11 +2839,7 @@ class CodexBackendTestCase(unittest.IsolatedAsyncioTestCase):
                             ],
                             "o": ["r", [[1, "c", "bounded"]]],
                         },
-                        {
-                            ("o",): (
-                                ContextComponentKind.RETRIEVED_OBSERVATION
-                            )
-                        },
+                        {("o",): (ContextComponentKind.RETRIEVED_OBSERVATION)},
                         expected_thread_id=first.thread_id,
                     )
                 )
@@ -2840,9 +2851,7 @@ class CodexBackendTestCase(unittest.IsolatedAsyncioTestCase):
                     expected_thread_id=second.thread_id,
                     schema=schema,
                     payload={
-                        "references": [
-                            {"path": "core_documents/global_outline.md"}
-                        ]
+                        "references": [{"path": "core_documents/global_outline.md"}]
                     },
                     call_kind=ProviderCallKind.WRITING_ARTIFACT_REFERENCE_READ,
                     component_paths={
@@ -2923,10 +2932,7 @@ class CodexBackendTestCase(unittest.IsolatedAsyncioTestCase):
             [record["request_type"] for record in records],
             ["request", "response", "outcome"] * 7,
         )
-        exchanges = {
-            record["exchange_id"]: []
-            for record in records
-        }
+        exchanges = {record["exchange_id"]: [] for record in records}
         for record in records:
             exchanges[record["exchange_id"]].append(record)
         self.assertEqual(len(exchanges), 7)
@@ -2982,8 +2988,7 @@ class CodexBackendTestCase(unittest.IsolatedAsyncioTestCase):
             ],
         )
         manifest = self.workspace.read_json(
-            "agent_states/orchestrator_state/provider_sessions/"
-            f"{session_id}.json"
+            f"agent_states/orchestrator_state/provider_sessions/{session_id}.json"
         )
         self.assertEqual(manifest["provider_threads"], {})
         context_records = tuple(
@@ -3069,8 +3074,7 @@ class CodexBackendTestCase(unittest.IsolatedAsyncioTestCase):
                 self.assertIsNone(provider.inspect_context_thread(scope, policy))
         self.assertEqual(
             self.workspace.read_json(
-                "agent_states/orchestrator_state/provider_sessions/"
-                f"{session_id}.json"
+                f"agent_states/orchestrator_state/provider_sessions/{session_id}.json"
             )["provider_threads"],
             {},
         )
@@ -3246,15 +3250,31 @@ class CodexBackendTestCase(unittest.IsolatedAsyncioTestCase):
                     ]
                     if outcome == "success":
                         terminal = (
-                            1, "trace", "backend", "backend_lifecycle",
-                            "succeeded", "ready", None, None, None,
-                            PLOT_ARCHITECT, None,
+                            1,
+                            "trace",
+                            "backend",
+                            "backend_lifecycle",
+                            "succeeded",
+                            "ready",
+                            None,
+                            None,
+                            None,
+                            PLOT_ARCHITECT,
+                            None,
                         )
                     else:
                         terminal = (
-                            1, "error", "backend", "backend_lifecycle",
-                            "failed", "failed", None, None, None,
-                            PLOT_ARCHITECT, "builtins.ValueError",
+                            1,
+                            "error",
+                            "backend",
+                            "backend_lifecycle",
+                            "failed",
+                            "failed",
+                            None,
+                            None,
+                            None,
+                            PLOT_ARCHITECT,
+                            "builtins.ValueError",
                         )
                         self.assertNotIn(
                             private,
@@ -3266,9 +3286,17 @@ class CodexBackendTestCase(unittest.IsolatedAsyncioTestCase):
                         [_debug_signature(record) for record in records],
                         [
                             (
-                                1, "trace", "backend", "backend_lifecycle",
-                                "started", None, None, None, None,
-                                PLOT_ARCHITECT, None,
+                                1,
+                                "trace",
+                                "backend",
+                                "backend_lifecycle",
+                                "started",
+                                None,
+                                None,
+                                None,
+                                None,
+                                PLOT_ARCHITECT,
+                                None,
                             ),
                             terminal,
                         ],
@@ -3623,8 +3651,7 @@ class CodexBackendTestCase(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(captured_stderr.getvalue(), "")
         self.assertTrue(debug_error.called)
         manifest = self.workspace.read_json(
-            "agent_states/orchestrator_state/provider_sessions/"
-            f"{session_id}.json"
+            f"agent_states/orchestrator_state/provider_sessions/{session_id}.json"
         )
         self.assertEqual(manifest["provider_threads"], {})
 
@@ -3968,9 +3995,9 @@ class CodexBackendTestCase(unittest.IsolatedAsyncioTestCase):
                     correlation_id=conversation_id,
                     exception_type=exception_type,
                 )
-                raw_debug_log = self.workspace.path(
-                    DEBUG_LOG_RELATIVE_PATH
-                ).read_text(encoding="utf-8")
+                raw_debug_log = self.workspace.path(DEBUG_LOG_RELATIVE_PATH).read_text(
+                    encoding="utf-8"
+                )
                 for private in (
                     story_marker,
                     failure_marker,
@@ -4153,9 +4180,9 @@ class CodexBackendTestCase(unittest.IsolatedAsyncioTestCase):
                         f"{session_id}.json"
                     )
                     self.assertEqual(manifest["provider_threads"], {})
-                raw_debug_log = self.workspace.path(
-                    DEBUG_LOG_RELATIVE_PATH
-                ).read_text(encoding="utf-8")
+                raw_debug_log = self.workspace.path(DEBUG_LOG_RELATIVE_PATH).read_text(
+                    encoding="utf-8"
+                )
                 for private in (
                     story_marker,
                     application_marker,
@@ -4263,8 +4290,7 @@ class CodexBackendTestCase(unittest.IsolatedAsyncioTestCase):
         )
         self.assertTrue(
             all(
-                set(event)
-                == {"turn_id", "sender", "recipient", "kind", "content"}
+                set(event) == {"turn_id", "sender", "recipient", "kind", "content"}
                 for event in projected
             )
         )
@@ -4322,8 +4348,7 @@ class CodexBackendTestCase(unittest.IsolatedAsyncioTestCase):
 
         definition = self.definition()
         static_content = [
-            reference.read_text()
-            for reference in definition.file_references()
+            reference.read_text() for reference in definition.file_references()
         ]
         backend = AgentBackend(self.workspace, executable=str(self.executable))
         self.addCleanup(backend.close)
@@ -4344,9 +4369,7 @@ class CodexBackendTestCase(unittest.IsolatedAsyncioTestCase):
                 "content": visible_reply,
             }
         )
-        discussion_before = _tree_snapshot(
-            self.workspace.path("discussion_logs")
-        )
+        discussion_before = _tree_snapshot(self.workspace.path("discussion_logs"))
         core_before = core_snapshot(self.workspace)
         manuscripts_before = all_manuscripts(self.workspace)
         output_directory = self.fake_directory / "conversation-output"
@@ -4615,8 +4638,7 @@ class CodexBackendTestCase(unittest.IsolatedAsyncioTestCase):
             invocations[1]["argv"],
         )
         manifest = self.workspace.read_json(
-            "agent_states/orchestrator_state/provider_sessions/"
-            "story_session.json"
+            "agent_states/orchestrator_state/provider_sessions/story_session.json"
         )
         self.assertEqual(
             manifest["provider_threads"]["codex:plot_architect"]["thread_id"],
@@ -4899,8 +4921,7 @@ class CodexBackendTestCase(unittest.IsolatedAsyncioTestCase):
         definition = self.definition()
         bound = await backend.bind(definition)
         manifest_path = (
-            "agent_states/orchestrator_state/provider_sessions/"
-            "routing_session.json"
+            "agent_states/orchestrator_state/provider_sessions/routing_session.json"
         )
         manifest_before = self.workspace.read_json(manifest_path)
 
@@ -5400,15 +5421,11 @@ class CodexBackendTestCase(unittest.IsolatedAsyncioTestCase):
             contextlib.redirect_stderr(captured_stderr),
             self.assertRaises(BackendProtocolError) as caught,
         ):
-            await bound.converse(
-                self.conversation_request(session_id=session_id)
-            )
+            await bound.converse(self.conversation_request(session_id=session_id))
 
         self.assertEqual(str(caught.exception), "Codex CLI exited with status 7")
         self.assertEqual(captured_stderr.getvalue(), "")
-        raw_debug_log = self.workspace.path(
-            DEBUG_LOG_RELATIVE_PATH
-        ).read_bytes()
+        raw_debug_log = self.workspace.path(DEBUG_LOG_RELATIVE_PATH).read_bytes()
         self.assertNotIn(marker, raw_debug_log)
         self.assertNotIn(b"\xff", raw_debug_log)
 
@@ -5493,8 +5510,8 @@ class CodexBackendTestCase(unittest.IsolatedAsyncioTestCase):
                     f'"session_id":"{session_id}",'
                     '"conversation_id":"conversation_a",'
                     '"turn_id":"turn_duplicate","content":"reply",'
-                    f"{quoted_duplicate_key}:\"one\","
-                    f"{quoted_duplicate_key}:\"two\"}}"
+                    f'{quoted_duplicate_key}:"one",'
+                    f'{quoted_duplicate_key}:"two"}}'
                 ),
                 "Codex conversation response duplicates a field",
                 "PRIVATE_DUPLICATE_KEY",
@@ -5609,9 +5626,7 @@ class CodexBackendTestCase(unittest.IsolatedAsyncioTestCase):
                 )
                 self.assertIs(accounting_records[0].state, expected_state)
                 if expected_state is ProviderCallState.PREPARED:
-                    self.assertIsNone(
-                        accounting_records[0].actual_transport_utf8_bytes
-                    )
+                    self.assertIsNone(accounting_records[0].actual_transport_utf8_bytes)
                 else:
                     self.assertGreater(
                         accounting_records[0].actual_transport_utf8_bytes or 0,
@@ -5642,12 +5657,15 @@ class CodexBackendTestCase(unittest.IsolatedAsyncioTestCase):
                 return await real_wait_for(communication, timeout=0)
             return await real_wait_for(awaitable, timeout=timeout)
 
-        with mock.patch.dict(
-            os.environ,
-            {"STORY_FAKE_CODEX_MODE": "sleep"},
-        ), mock.patch(
-            "story_writing_agents.backend.asyncio.wait_for",
-            new=wait_for_after_provider_ready,
+        with (
+            mock.patch.dict(
+                os.environ,
+                {"STORY_FAKE_CODEX_MODE": "sleep"},
+            ),
+            mock.patch(
+                "story_writing_agents.backend.asyncio.wait_for",
+                new=wait_for_after_provider_ready,
+            ),
         ):
             with self.assertRaisesRegex(BackendProtocolError, "timed out"):
                 await bound.invoke(self.request(session_id="timeout_session"))
@@ -5874,17 +5892,18 @@ class CodexBackendTestCase(unittest.IsolatedAsyncioTestCase):
             lambda: backend.pause_session_and_release_access("closed_session"),
         )
         for operation in lifecycle_calls:
-            with self.subTest(operation=operation), self.assertRaisesRegex(
-                BackendProtocolError,
-                "closed",
+            with (
+                self.subTest(operation=operation),
+                self.assertRaisesRegex(
+                    BackendProtocolError,
+                    "closed",
+                ),
             ):
                 operation()
         with self.assertRaisesRegex(BackendProtocolError, "closed"):
             await bound.invoke(self.request(session_id="closed_session"))
         with self.assertRaisesRegex(BackendProtocolError, "closed"):
-            await bound.converse(
-                self.conversation_request(session_id="closed_session")
-            )
+            await bound.converse(self.conversation_request(session_id="closed_session"))
 
     def test_retrieval_rag_context_is_first_call_only_and_reference_authoritative(
         self,
@@ -5978,9 +5997,7 @@ class CodexBackendTestCase(unittest.IsolatedAsyncioTestCase):
         self,
     ) -> None:
         definition = self.definition()
-        story_context = PromptAssembler(
-            self.workspace
-        ).build_story_session_context(
+        story_context = PromptAssembler(self.workspace).build_story_session_context(
             definition=definition,
             session_id="story_session",
             agent_id=PLOT_ARCHITECT,
@@ -6297,7 +6314,9 @@ class CodexBackendTestCase(unittest.IsolatedAsyncioTestCase):
 
         assert_supported(schema)
 
-    def test_retrieval_decoder_rejects_malformed_duplicate_and_schema_errors(self) -> None:
+    def test_retrieval_decoder_rejects_malformed_duplicate_and_schema_errors(
+        self,
+    ) -> None:
         request = _retrieval_request()
         valid_search = _retrieval_action_json(
             request,
@@ -6405,7 +6424,9 @@ class CodexBackendTestCase(unittest.IsolatedAsyncioTestCase):
                 json.dumps(duplicate_citations)
             )
 
-    async def test_retrieval_handler_declaration_and_exact_outcome_protocol(self) -> None:
+    async def test_retrieval_handler_declaration_and_exact_outcome_protocol(
+        self,
+    ) -> None:
         session_id = "retrieval_handler_session"
         backend = AgentBackend(self.workspace, executable=str(self.executable))
         self.addCleanup(backend.close)
@@ -6682,7 +6703,9 @@ class CodexBackendTestCase(unittest.IsolatedAsyncioTestCase):
                 self.assertEqual(invalid_handler.calls, 1)
                 self.assertIs(self.thread(session_id)["tainted"], True)
 
-    async def test_retrieval_whole_loop_serializes_with_legacy_converse_and_invoke(self) -> None:
+    async def test_retrieval_whole_loop_serializes_with_legacy_converse_and_invoke(
+        self,
+    ) -> None:
         session_id = "retrieval_lock_session"
         backend = AgentBackend(self.workspace, executable=str(self.executable))
         self.addCleanup(backend.close)
@@ -6787,7 +6810,9 @@ class CodexBackendTestCase(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(trace[0:2], ["retrieval_enter", "retrieval_exit"])
         self.assertEqual(set(trace[2:]), {"conversation_enter", "invoke_enter"})
 
-    async def test_pending_search_taints_for_each_failure_and_restarts_fresh(self) -> None:
+    async def test_pending_search_taints_for_each_failure_and_restarts_fresh(
+        self,
+    ) -> None:
         failures: tuple[BaseException, ...] = (
             ConversationRetrievalSemanticError(),
             ConversationRetrievalBudgetError(),
@@ -6892,20 +6917,24 @@ class CodexBackendTestCase(unittest.IsolatedAsyncioTestCase):
 
                 if label == "invoke":
                     provider_name = "_invoke_codex"
-                    call = lambda: bound.invoke(
-                        self.request(session_id=session_id)
-                    )
+
+                    def call():
+                        return bound.invoke(self.request(session_id=session_id))
                 elif label == "converse":
                     provider_name = "_converse_codex"
-                    call = lambda: bound.converse(
-                        self.conversation_request(session_id=session_id)
-                    )
+
+                    def call():
+                        return bound.converse(
+                            self.conversation_request(session_id=session_id)
+                        )
                 else:
                     provider_name = "_converse_with_retrieval_codex"
-                    call = lambda: bound.converse_with_retrieval(
-                        self.retrieval_request(session_id=session_id),
-                        _RecordingRetrievalHandler(),
-                    )
+
+                    def call():
+                        return bound.converse_with_retrieval(
+                            self.retrieval_request(session_id=session_id),
+                            _RecordingRetrievalHandler(),
+                        )
 
                 with (
                     mock.patch.object(backend, provider_name, side_effect=provider),
@@ -6962,20 +6991,24 @@ class CodexBackendTestCase(unittest.IsolatedAsyncioTestCase):
 
                     if operation == "invoke":
                         provider_name = "_invoke_codex"
-                        call = lambda: bound.invoke(
-                            self.request(session_id=session_id)
-                        )
+
+                        def call():
+                            return bound.invoke(self.request(session_id=session_id))
                     elif operation == "converse":
                         provider_name = "_converse_codex"
-                        call = lambda: bound.converse(
-                            self.conversation_request(session_id=session_id)
-                        )
+
+                        def call():
+                            return bound.converse(
+                                self.conversation_request(session_id=session_id)
+                            )
                     else:
                         provider_name = "_converse_with_retrieval_codex"
-                        call = lambda: bound.converse_with_retrieval(
-                            self.retrieval_request(session_id=session_id),
-                            _RecordingRetrievalHandler(),
-                        )
+
+                        def call():
+                            return bound.converse_with_retrieval(
+                                self.retrieval_request(session_id=session_id),
+                                _RecordingRetrievalHandler(),
+                            )
 
                     with (
                         mock.patch.object(
@@ -7176,140 +7209,6 @@ class CodexBackendTestCase(unittest.IsolatedAsyncioTestCase):
                 self.assertFalse(staged[0].exists())
                 self.assertEqual(backend._staging_directories, set())
                 self.assertEqual(backend._bound_agents, set())
-
-    async def test_repeated_core_publications_bound_idle_resources_per_agent(
-        self,
-    ) -> None:
-        backend = AgentBackend(self.workspace, executable=str(self.executable))
-        self.addCleanup(backend.close)
-        runtime = StoryRuntime(self.workspace, backend)
-        repository = WritingArtifactRepository(self.workspace.root)
-        core_filenames = tuple(core_snapshot(self.workspace))
-
-        async def approve(
-            _bound: BoundAgent,
-            request: AgentRequest,
-            *,
-            reference_read: object | None = None,
-        ) -> AgentReply:
-            self.assertIsNone(reference_read)
-            return AgentReply.approval(request.revision_id)
-
-        with mock.patch.object(backend, "_invoke_codex", side_effect=approve):
-            for generation in range(3):
-                repository.commit_consensus(
-                    output_path=f"part-01/resources-{generation}.md",
-                    candidate=f"manuscript generation {generation}",
-                    core_updates={
-                        filename: f"{filename} generation {generation}"
-                        for filename in core_filenames
-                    },
-                    session_id=f"resource_session_{generation}",
-                    debate_id=f"resource_debate_{generation}",
-                    revision_id="r0",
-                    candidate_author_agent_id=EXECUTION_SPECIALIST,
-                )
-                for agent_id in ROSTER:
-                    await runtime._invoke(
-                        self.request(
-                            session_id="resource_provider_session",
-                            debate_id=f"resource_debate_{generation}_{agent_id}",
-                            agent_id=agent_id,
-                            phase=Phase.AUDIT,
-                        )
-                    )
-
-                self.assertEqual(len(runtime._bound_agents), len(ROSTER))
-                self.assertEqual(
-                    {key[0] for key in runtime._bound_agents},
-                    set(ROSTER),
-                )
-                self.assertEqual(runtime._retiring_bound_agents, {})
-                self.assertEqual(runtime._bound_agent_uses, {})
-                self.assertEqual(len(backend._bound_agents), len(ROSTER))
-                self.assertEqual(
-                    len(backend._staging_directories),
-                    len(ROSTER),
-                )
-
-    async def test_reply_append_failure_leaves_completed_provider_thread_untainted(self) -> None:
-        session_id = "retrieval_reply_append"
-        catalog = FilesystemConversationCatalog(self.workspace)
-        selected = catalog.create(session_id, "Selected")
-        store = FilesystemConversationEventStore(self.workspace, catalog=catalog)
-        memory = ConversationMemoryService(
-            ConversationSearchScope(session_id),
-            catalog,
-            store,
-        )
-
-        class ReplyFailingStore:
-            """Delegate context and user append but fail the terminal reply append."""
-
-            def read_context(
-                self,
-                requested_session: str,
-                conversation_id: str,
-            ) -> ConversationContextWindow:
-                """Delegate one exact context read."""
-
-                return store.read_context(requested_session, conversation_id)
-
-            def append(self, event: ConversationEventAppend) -> ConversationEvent:
-                """Reject only the reply append after provider completion."""
-
-                if event.kind is ConversationEventKind.AGENT_REPLY:
-                    raise OSError("reply append failed")
-                return store.append(event)
-
-        backend = AgentBackend(self.workspace, executable=str(self.executable))
-        self.addCleanup(backend.close)
-        backend.create_session_with_access(session_id)
-        runtime = StoryRuntime(
-            self.workspace,
-            backend,
-            conversation_event_store=ReplyFailingStore(),
-        )
-        request = self.retrieval_request(
-            session_id=session_id,
-            conversation_id=selected.conversation_id,
-            turn_id="turn_reply_append",
-        )
-        answer = _retrieval_action_json(
-            request,
-            kind=ConversationRetrievalActionKind.ANSWER,
-            action_index=1,
-            content="answer",
-            citation_ids=[],
-        )
-        with (
-            mock.patch.object(
-                StoryRuntime,
-                "_new_conversation_turn_id",
-                return_value=request.turn_id,
-            ),
-            mock.patch.dict(
-                os.environ,
-                {"STORY_FAKE_CODEX_OUTPUTS": json.dumps((answer,))},
-            ),
-        ):
-            with self.assertRaisesRegex(OSError, "reply append failed"):
-                await runtime.converse_with_retrieval(
-                    session_id,
-                    selected.conversation_id,
-                    PLOT_ARCHITECT,
-                    "question",
-                    memory_service=memory,
-                )
-
-        self.assertIs(self.thread(session_id)["tainted"], False)
-        self.assertEqual(
-            tuple(
-                event.kind
-                for event in store.read(session_id, selected.conversation_id)
-            ),
-            (ConversationEventKind.USER_MESSAGE,),
-        )
 
     async def test_reference_read_invoke_isolated_for_all_roles_and_rounds(
         self,
@@ -7662,7 +7561,10 @@ class CodexBackendTestCase(unittest.IsolatedAsyncioTestCase):
                 )
                 retrieval_calls = calls[1:]
                 self.assertEqual(
-                    [call["payload"]["retrieval"]["action_index"] for call in retrieval_calls],
+                    [
+                        call["payload"]["retrieval"]["action_index"]
+                        for call in retrieval_calls
+                    ],
                     list(range(1, action_count + 1)),
                 )
                 self.assertIn(
@@ -7670,16 +7572,11 @@ class CodexBackendTestCase(unittest.IsolatedAsyncioTestCase):
                     retrieval_calls[0]["payload"],
                 )
                 self.assertEqual(
-                    retrieval_calls[0]["payload"][
-                        "untrusted_writing_artifact_context"
-                    ],
+                    retrieval_calls[0]["payload"]["untrusted_writing_artifact_context"],
                     [
                         {
                             "reference": {
-                                "path": (
-                                    "manuscript/part-01/"
-                                    "provider-reference.md"
-                                ),
+                                "path": ("manuscript/part-01/provider-reference.md"),
                                 "line_range": None,
                             },
                             "content": "REFERENCE-PROVIDER-MARKER\n",
@@ -7802,9 +7699,7 @@ class CodexBackendTestCase(unittest.IsolatedAsyncioTestCase):
                             "core_documents/global_outline.md"
                         )
                     else:
-                        action["correlation"]["invocation_id"] = (
-                            "foreign_invocation"
-                        )
+                        action["correlation"]["invocation_id"] = "foreign_invocation"
                     environment["STORY_FAKE_CODEX_REFERENCE_ACTION"] = json.dumps(
                         envelope
                     )
@@ -7897,8 +7792,7 @@ class CodexBackendTestCase(unittest.IsolatedAsyncioTestCase):
                 terminal_events = tuple(
                     event
                     for event in history.invocation_events[0]
-                    if event.invocation_state
-                    is ReferenceInvocationState.TERMINATED
+                    if event.invocation_state is ReferenceInvocationState.TERMINATED
                 )
                 self.assertEqual(len(terminal_events), 1)
                 self.assertIs(
@@ -7994,7 +7888,9 @@ class CodexBackendTestCase(unittest.IsolatedAsyncioTestCase):
                 history = repository.inspect_reference_operation(operation_id)
                 assert history is not None
                 terminal = history.invocation_events[0][-1]
-                self.assertIs(terminal.invocation_state, ReferenceInvocationState.TERMINATED)
+                self.assertIs(
+                    terminal.invocation_state, ReferenceInvocationState.TERMINATED
+                )
                 self.assertIs(terminal.outcome, outcome)
                 self.assertIs(self.thread(session_id)["tainted"], True)
                 authorization.close()
@@ -8135,7 +8031,9 @@ class CodexBackendTestCase(unittest.IsolatedAsyncioTestCase):
                 history = repository.inspect_reference_operation(operation_id)
                 assert history is not None
                 terminal = history.invocation_events[0][-1]
-                self.assertIs(terminal.invocation_state, ReferenceInvocationState.TERMINATED)
+                self.assertIs(
+                    terminal.invocation_state, ReferenceInvocationState.TERMINATED
+                )
                 self.assertIs(terminal.outcome, expected)
                 authorization.close()
                 backend.close()
@@ -8170,15 +8068,11 @@ class CodexBackendTestCase(unittest.IsolatedAsyncioTestCase):
                             replace(self.definition(), backend=vendor),
                             bound.staging_directory,
                         )
-                    repository, authorization, invocation = (
-                        self.reference_invocation(
-                            operation_id=operation_id,
-                            invocation_id=(
-                                f"adapter_invocation_{operation}_{resolution}"
-                            ),
-                            phase=phase,
-                            round_number=None,
-                        )
+                    repository, authorization, invocation = self.reference_invocation(
+                        operation_id=operation_id,
+                        invocation_id=(f"adapter_invocation_{operation}_{resolution}"),
+                        phase=phase,
+                        round_number=None,
                     )
                     handler = _RecordingRetrievalHandler()
                     removed_adapter = None
@@ -8965,17 +8859,11 @@ class ConcreteBackendCliTests(unittest.TestCase):
         parser = build_parser()
         arguments = parser.parse_args(
             [
-                "run",
-                "--session",
-                "story_session",
+                "chat",
                 "--backend",
                 "plot_architect=codex",
                 "--backend",
                 "character_custodian=antigravity",
-                "--draft",
-                "draft",
-                "--output",
-                "part-01/draft.md",
             ]
         )
         self.assertEqual(
@@ -8997,9 +8885,7 @@ class ConcreteBackendCliTests(unittest.TestCase):
             "backend 'gemini' is no longer supported; use 'antigravity'",
         )
         with self.assertRaisesRegex(ConfigurationError, "duplicate"):
-            _parse_backend_overrides(
-                ["plot_architect=codex", "plot_architect=codex"]
-            )
+            _parse_backend_overrides(["plot_architect=codex", "plot_architect=codex"])
         with self.assertRaisesRegex(ConfigurationError, "unknown"):
             _parse_backend_overrides(["unknown=codex"])
 

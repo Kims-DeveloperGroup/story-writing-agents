@@ -2217,7 +2217,8 @@ def _reference_input_error(kind: ReferenceInputFailureKind) -> InteractiveError:
     }[kind]
     code = (
         InteractiveErrorCode.COMMAND_INVALID
-        if kind in {
+        if kind
+        in {
             ReferenceInputFailureKind.EMPTY_SOURCES,
             ReferenceInputFailureKind.INVALID,
         }
@@ -2633,13 +2634,15 @@ def _validated_input_line(value: object) -> str:
 
 
 def _main_prompt(*, session_id: str | None, agent_id: str | None) -> str:
-    """Build the exact lobby or attached main prompt."""
+    """Build the exact lobby, session-only, or agent-scoped main prompt."""
 
     if session_id is None and agent_id is None:
         return "story[lobby]> "
-    if session_id is None or agent_id is None:
-        raise ValueError("attached prompts require both session_id and agent_id")
+    if session_id is None:
+        raise ValueError("agent-scoped prompts require a session_id")
     safe_session = _safe_identifier("session_id", session_id)
+    if agent_id is None:
+        return f"story[{safe_session}]> "
     return f"story[{safe_session}:{_agent_alias(agent_id)}]> "
 
 

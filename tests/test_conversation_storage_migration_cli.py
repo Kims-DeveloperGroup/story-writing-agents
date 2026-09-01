@@ -160,11 +160,6 @@ class ConversationStorageTransferCliTests(unittest.TestCase):
                 "InteractiveController",
                 side_effect=AssertionError("session controller created"),
             ) as controller,
-            mock.patch.object(
-                cli_module,
-                "read_draft_file",
-                side_effect=AssertionError("artifact input read"),
-            ) as artifact_input,
             contextlib.redirect_stdout(stdout),
             contextlib.redirect_stderr(stderr),
         ):
@@ -188,7 +183,6 @@ class ConversationStorageTransferCliTests(unittest.TestCase):
         runtime.assert_not_called()
         configuration.assert_not_called()
         controller.assert_not_called()
-        artifact_input.assert_not_called()
         self.assertEqual(stderr.getvalue(), "")
         self.assertEqual(stdout.getvalue().count("\n"), 1)
         raw = stdout.getvalue().removesuffix("\n")
