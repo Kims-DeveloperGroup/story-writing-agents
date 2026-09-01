@@ -24,11 +24,17 @@ from story_writing_agents.agents import (
     LEAD_ORCHESTRATOR,
     PLOT_ARCHITECT,
 )
+from story_writing_agents.artifact_proposals import artifact_review_specialists
 from story_writing_agents.conversations import (
     COLLABORATION_EVENT_SCHEMA_VERSION,
     COLLABORATION_PHYSICAL_CALL_LIMIT,
     COLLABORATION_ROUND_LIMIT,
     COLLABORATION_VISIBLE_TEXT_MAX_UTF8_BYTES,
+    ArtifactProposalState,
+    ArtifactReviewDecision,
+    ArtifactReviewFailureCode,
+    ArtifactReviewReply,
+    ArtifactReviewedProposal,
     CollaborationActorKind,
     CollaborationAppendError,
     CollaborationAppendFailure,
@@ -43,6 +49,7 @@ from story_writing_agents.conversations import (
     CollaborationDirection,
     CollaborationEvidenceAcquisition,
     CollaborationEventKind,
+    CollaborationExecutionResult,
     CollaborationExecutionOutcomeKind,
     CollaborationInputKind,
     CollaborationInputState,
@@ -75,11 +82,13 @@ from story_writing_agents.conversations import (
     LeadProviderOutcome,
     collaboration_batch_digest,
     collaboration_proposal_digest,
+    decode_artifact_reviewed_proposal,
     decode_collaboration_batch,
     decode_collaboration_event,
     decode_collaboration_event_draft,
     decode_collaboration_proposal,
     encode_collaboration_batch,
+    encode_artifact_reviewed_proposal,
     encode_collaboration_event,
     encode_collaboration_event_draft,
     encode_collaboration_proposal,
@@ -110,6 +119,7 @@ from tests.collaboration_contract_fixture import (
     result_batch,
     running_history,
 )
+from tests.test_artifact_proposals import _combined_candidate
 
 
 def _canonical_json(value: object) -> bytes:
@@ -120,6 +130,60 @@ def _canonical_json(value: object) -> bytes:
         separators=(",", ":"),
         sort_keys=True,
     ).encode("utf-8")
+
+
+def _exception_graph(exception: BaseException) -> tuple[BaseException, ...]:
+    pending = [exception]
+    observed: list[BaseException] = []
+    identities: set[int] = set()
+    while pending:
+        current = pending.pop()
+        if id(current) in identities:
+            continue
+        identities.add(id(current))
+        observed.append(current)
+        for linked in (current.__cause__, current.__context__):
+            if linked is not None:
+                pending.append(linked)
+    return tuple(observed)
+
+
+def _reviewed_artifact_proposal() -> ArtifactReviewedProposal:
+    _base, candidate, _projected = _combined_candidate()
+    mandatory = artifact_review_specialists(candidate.mandatory_review_domains)
+    disclosed = artifact_review_specialists(candidate.disclosed_review_domains)
+    return ArtifactReviewedProposal.create(
+        proposal_id="reviewed_artifact",
+        proposal_revision=1,
+        candidate=candidate,
+        session_id="session_a",
+        conversation_id="conversation_a",
+        turn_id="turn_a",
+        step_id="step_a",
+        base_tail_sequence=1,
+        reviewed_tail_sequence=2,
+        lead_judgment_event_id="artifact_judgment",
+        synthesis_event_id="artifact_synthesis",
+        consultation_proposal_id="artifact_consultation",
+        consultation_proposal_revision=1,
+        consultation_proposal_digest=DIGEST_A,
+        mandatory_specialist_ids=mandatory,
+        disclosed_specialist_ids=disclosed,
+        reviews=tuple(
+            ArtifactReviewReply(
+                specialist_id=specialist_id,
+                assignment_id=f"assignment_{ordinal}",
+                reply_event_id=f"artifact_reply_{ordinal}",
+                assessment=CollaborationSpecialistAssessment.SUPPORTS,
+            )
+            for ordinal, specialist_id in enumerate(disclosed, start=1)
+        ),
+        unresolved_input_ids=(),
+        rationale="The exact specialist set supports the candidate.",
+        user_impact="The proposal remains review-only.",
+        limitations="No Apply, artifact-write, or Git authority is granted.",
+        grounding_evidence_ids=candidate.grounding_evidence_ids,
+    )
 
 
 class CollaborationValueContractTests(unittest.TestCase):
@@ -141,6 +205,11 @@ class CollaborationValueContractTests(unittest.TestCase):
                 "terminal_outcome",
                 "provider_call_accounting",
                 "lead_outcome_failure",
+                "artifact_review_candidate",
+                "artifact_review_synthesis",
+                "artifact_reviewed_proposal",
+                "artifact_proposal_state",
+                "artifact_review_failure",
             ),
             CollaborationActorKind: (
                 "user",
@@ -186,6 +255,7 @@ class CollaborationValueContractTests(unittest.TestCase):
                 "manuscript",
                 "agent_state",
                 "writing_artifact",
+                "artifact_candidate",
             ),
             CollaborationInputState: ("present", "absent"),
             CollaborationStepState: (
@@ -253,7 +323,29 @@ class CollaborationValueContractTests(unittest.TestCase):
                 "zero_hit_search",
                 "read",
             ),
-            CollaborationLeadOutcomeFailureCode: ("evidence_validation_rejected",),
+            CollaborationLeadOutcomeFailureCode: (
+                "evidence_validation_rejected",
+                "artifact_intent_rejected",
+            ),
+            ArtifactProposalState: (
+                "awaiting_consultation_confirmation",
+                "reviewing",
+                "revision_required",
+                "rejected",
+                "reviewed",
+                "superseded",
+                "stale",
+                "failed",
+                "recovery_required",
+            ),
+            ArtifactReviewDecision: ("propose", "revise", "reject"),
+            ArtifactReviewFailureCode: (
+                "intent_rejected",
+                "evidence_stale",
+                "candidate_stale",
+                "review_incomplete",
+                "synthesis_rejected",
+            ),
             LeadProposalRelation: (
                 "new_step",
                 "revise_pending",
@@ -511,6 +603,7 @@ class CollaborationValueContractTests(unittest.TestCase):
                     "evidence_status",
                     "evidence_ids",
                     "proposal",
+                    "artifact_intent",
                 ),
             ),
             (
@@ -916,6 +1009,107 @@ class CollaborationWireContractTests(unittest.TestCase):
         )
         self.assertEqual(collaboration_batch_digest(batch), batch.batch_digest)
 
+    def test_artifact_public_decoders_clear_content_from_exception_graphs(
+        self,
+    ) -> None:
+        reviewed = _reviewed_artifact_proposal()
+        reviewed_value = json.loads(encode_artifact_reviewed_proposal(reviewed))
+        private_assessment = "PRIVATE_REVIEW_달빛"
+        reviewed_value["reviews"][0]["assessment"] = private_assessment
+
+        base_event = awaiting_history()[0][0]
+        artifact_event = replace(
+            base_event,
+            kind=CollaborationEventKind.ARTIFACT_REVIEWED_PROPOSAL,
+            sender=RUNTIME,
+            recipient=USER,
+            payload=reviewed,
+        )
+        event_value = json.loads(encode_collaboration_event(artifact_event))
+        private_event_assessment = "PRIVATE_EVENT_REVIEW_별빛"
+        event_value["payload"]["proposal"]["reviews"][0]["assessment"] = (
+            private_event_assessment
+        )
+        private_timestamp = "PRIVATE_TIMESTAMP_은하"
+        timestamp_value = json.loads(encode_collaboration_event(artifact_event))
+        timestamp_value["timestamp"] = private_timestamp
+
+        cases = (
+            (
+                decode_artifact_reviewed_proposal,
+                b"\xffPRIVATE_REVIEW_UTF8_BYTES",
+                "collaboration payload is not strict UTF-8 JSON",
+                "PRIVATE_REVIEW_UTF8_BYTES",
+            ),
+            (
+                decode_artifact_reviewed_proposal,
+                b'{"PRIVATE_REVIEW_JSON_TEXT":',
+                "collaboration payload is not strict UTF-8 JSON",
+                "PRIVATE_REVIEW_JSON_TEXT",
+            ),
+            (
+                decode_artifact_reviewed_proposal,
+                _canonical_json(reviewed_value),
+                "artifact review assessment is not supported",
+                private_assessment,
+            ),
+            (
+                decode_collaboration_event,
+                b"\xffPRIVATE_EVENT_UTF8_BYTES",
+                "collaboration payload is not strict UTF-8 JSON",
+                "PRIVATE_EVENT_UTF8_BYTES",
+            ),
+            (
+                decode_collaboration_event,
+                b'{"PRIVATE_EVENT_JSON_TEXT":',
+                "collaboration payload is not strict UTF-8 JSON",
+                "PRIVATE_EVENT_JSON_TEXT",
+            ),
+            (
+                decode_collaboration_event,
+                _canonical_json(event_value),
+                "artifact review assessment is not supported",
+                private_event_assessment,
+            ),
+            (
+                decode_collaboration_event,
+                _canonical_json(timestamp_value),
+                "collaboration timestamp must be an ISO-8601 timestamp",
+                private_timestamp,
+            ),
+        )
+        for decoder, payload, expected_message, private_content in cases:
+            with self.subTest(
+                decoder=decoder.__name__,
+                expected_message=expected_message,
+            ):
+                with self.assertRaises(ValueError) as raised:
+                    decoder(payload)
+                failure = raised.exception
+                self.assertIs(type(failure), ValueError)
+                self.assertEqual(failure.args, (expected_message,))
+                self.assertEqual(str(failure), expected_message)
+                graph = _exception_graph(failure)
+                self.assertEqual(graph, (failure,))
+                for linked in graph:
+                    self.assertIsNone(linked.__cause__)
+                    self.assertIsNone(linked.__context__)
+                    self.assertNotIn(private_content, str(linked))
+                    self.assertNotIn(private_content, repr(linked))
+                    self.assertNotIn(private_content, repr(linked.args))
+
+    def test_generic_execution_result_event_still_decodes_exactly(self) -> None:
+        history, _proposal, expected = executed_history()
+        event = next(
+            item
+            for item in history
+            if item.kind is CollaborationEventKind.EXECUTION_RESULT
+        )
+        decoded = decode_collaboration_event(encode_collaboration_event(event))
+        self.assertEqual(decoded, event)
+        self.assertIs(type(decoded.payload), CollaborationExecutionResult)
+        self.assertEqual(decoded.payload, expected)
+
     def test_every_proposal_dimension_and_order_changes_the_digest(self) -> None:
         base = make_proposal(
             side_effects=(
@@ -1116,7 +1310,7 @@ class CollaborationPackageBoundaryTests(unittest.TestCase):
     ) -> None:
         self.assertEqual(tuple(events_owner.__all__), COLLABORATION_EVENT_EXPORTS)
         self.assertEqual(tuple(context_owner.__all__), COLLABORATION_CONTEXT_EXPORTS)
-        self.assertEqual(len(conversations.__all__), 103)
+        self.assertEqual(len(conversations.__all__), 117)
         self.assertNotIn("__getattr__", vars(events_owner))
         self.assertNotIn("__getattr__", vars(context_owner))
         self.assertNotIn("__getattr__", vars(conversations))
@@ -1235,9 +1429,9 @@ import story_writing_agents
 import story_writing_agents.conversations as facade
 import story_writing_agents.conversations.context as context
 import story_writing_agents.conversations.events as events
-assert len(facade.__all__) == 103
-assert len(events.__all__) == 73
-assert len(context.__all__) == 23
+assert len(facade.__all__) == 117
+assert len(events.__all__) == 86
+assert len(context.__all__) == 24
 assert facade.CollaborationProposal is events.CollaborationProposal
 assert facade.CollaborationEventStore is context.CollaborationEventStore
 assert not hasattr(story_writing_agents, "CollaborationProposal")

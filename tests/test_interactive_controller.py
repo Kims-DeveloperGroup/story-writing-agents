@@ -1521,10 +1521,11 @@ class ControllerContractTests(ControllerTestCase):
 
         for module_name in graph:
             visit(module_name)
-        self.assertEqual(len(modules), 99)
-        self.assertEqual(sum(len(dependencies) for dependencies in graph.values()), 375)
+        self.assertEqual(len(modules), 100)
+        self.assertEqual(sum(len(dependencies) for dependencies in graph.values()), 379)
         self.assertTrue(
             {
+                "story_writing_agents.artifact_proposals",
                 "story_writing_agents.conversations",
                 "story_writing_agents.conversations.catalog",
                 "story_writing_agents.conversations.context",

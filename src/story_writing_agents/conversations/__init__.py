@@ -15,6 +15,7 @@ from .context import (
     CollaborationContextBootstrap,
     CollaborationEventStore,
     CollaborationHistoryProjection,
+    ArtifactProposalResult,
     LeadDecisionResult,
     LeadStepDecision,
     LeadTurnResult,
@@ -35,6 +36,7 @@ from .context import (
     validate_conversation_context_window,
 )
 from .events import (
+    ARTIFACT_REVIEW_SCHEMA_VERSION,
     COLLABORATION_EVENT_SCHEMA_VERSION,
     COLLABORATION_PHYSICAL_CALL_LIMIT,
     COLLABORATION_ROUND_LIMIT,
@@ -89,6 +91,15 @@ from .events import (
     CollaborationSynthesisOutcomeKind,
     CollaborationTerminalOutcomePayload,
     CollaborationTerminalScope,
+    ArtifactProposalState,
+    ArtifactProposalStatePayload,
+    ArtifactReviewCandidatePayload,
+    ArtifactReviewDecision,
+    ArtifactReviewFailureCode,
+    ArtifactReviewFailurePayload,
+    ArtifactReviewReply,
+    ArtifactReviewSynthesisPayload,
+    ArtifactReviewedProposal,
     ConversationEvent,
     ConversationEventKind,
     LeadAssignmentIntent,
@@ -99,12 +110,15 @@ from .events import (
     LeadProposalRelation,
     LeadProviderOutcome,
     collaboration_batch_digest,
+    artifact_reviewed_proposal_digest,
     collaboration_proposal_digest,
     decode_collaboration_batch,
+    decode_artifact_reviewed_proposal,
     decode_collaboration_event,
     decode_collaboration_event_draft,
     decode_collaboration_proposal,
     encode_collaboration_batch,
+    encode_artifact_reviewed_proposal,
     encode_collaboration_event,
     encode_collaboration_event_draft,
     encode_collaboration_proposal,
@@ -112,6 +126,16 @@ from .events import (
 
 
 _PUBLIC_TYPES = (
+    ArtifactProposalResult,
+    ArtifactProposalState,
+    ArtifactProposalStatePayload,
+    ArtifactReviewCandidatePayload,
+    ArtifactReviewDecision,
+    ArtifactReviewFailureCode,
+    ArtifactReviewFailurePayload,
+    ArtifactReviewReply,
+    ArtifactReviewSynthesisPayload,
+    ArtifactReviewedProposal,
     CollaborationActor,
     CollaborationActorKind,
     CollaborationAgentProfile,
@@ -193,12 +217,15 @@ normalize_conversation_subject.__module__ = __name__
 select_bounded_conversation_context.__module__ = __name__
 validate_conversation_context_window.__module__ = __name__
 collaboration_batch_digest.__module__ = __name__
+artifact_reviewed_proposal_digest.__module__ = __name__
 collaboration_proposal_digest.__module__ = __name__
 decode_collaboration_batch.__module__ = __name__
+decode_artifact_reviewed_proposal.__module__ = __name__
 decode_collaboration_event.__module__ = __name__
 decode_collaboration_event_draft.__module__ = __name__
 decode_collaboration_proposal.__module__ = __name__
 encode_collaboration_batch.__module__ = __name__
+encode_artifact_reviewed_proposal.__module__ = __name__
 encode_collaboration_event.__module__ = __name__
 encode_collaboration_event_draft.__module__ = __name__
 encode_collaboration_proposal.__module__ = __name__
@@ -211,6 +238,7 @@ del _public_type
 
 
 __all__ = [
+    "ARTIFACT_REVIEW_SCHEMA_VERSION",
     "COLLABORATION_EVENT_SCHEMA_VERSION",
     "COLLABORATION_PHYSICAL_CALL_LIMIT",
     "COLLABORATION_ROUND_LIMIT",
@@ -221,6 +249,16 @@ __all__ = [
     "CONVERSATION_METADATA_SCHEMA_VERSION",
     "CONVERSATION_SUBJECT_NORMALIZATION_VERSION",
     "MAX_CONVERSATION_SUBJECT_LENGTH",
+    "ArtifactProposalResult",
+    "ArtifactProposalState",
+    "ArtifactProposalStatePayload",
+    "ArtifactReviewCandidatePayload",
+    "ArtifactReviewDecision",
+    "ArtifactReviewFailureCode",
+    "ArtifactReviewFailurePayload",
+    "ArtifactReviewReply",
+    "ArtifactReviewSynthesisPayload",
+    "ArtifactReviewedProposal",
     "CollaborationActor",
     "CollaborationActorKind",
     "CollaborationAgentProfile",
@@ -297,12 +335,15 @@ __all__ = [
     "LeadStepDecision",
     "LeadTurnResult",
     "collaboration_batch_digest",
+    "artifact_reviewed_proposal_digest",
     "collaboration_proposal_digest",
     "decode_collaboration_batch",
+    "decode_artifact_reviewed_proposal",
     "decode_collaboration_event",
     "decode_collaboration_event_draft",
     "decode_collaboration_proposal",
     "encode_collaboration_batch",
+    "encode_artifact_reviewed_proposal",
     "encode_collaboration_event",
     "encode_collaboration_event_draft",
     "encode_collaboration_proposal",

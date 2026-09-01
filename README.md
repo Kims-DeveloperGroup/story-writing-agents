@@ -20,6 +20,7 @@ inspection and the Python lead front channel.
 | Apply directives and edit workspace settings. | Open `$`/`$$` artifact pickers from shell input. |
 | Inspect session, debate, history, transcript, status, and recorded exchanges. | Start a debate through the runtime facade. |
 | Call the Python lead API with ordered artifact references; confirm a one-to-three-specialist consultation; receive typed replies and lead synthesis. | Treat consultation confirmation as artifact, consensus, or Git execution. |
+| Ask the lead to form an exact create/patch/replace/rename/delete candidate; confirm its disclosed specialist review; inspect an immutable reviewed proposal. | Apply that candidate, grant write authority, stage files, or commit through this stage. |
 | Propose one provider-free direct specialist advisory and confirm its execution. | Apply a core-document/manuscript change or create a Git commit. |
 | Use schema-v2 collaboration contracts, stores, archive/transfer, readable projection, search, and paging APIs. | Bypass the runtime with a removed direct-run method. |
 | Run a provider-free management/storage smoke check. | Use smoke as evidence of provider behavior or story quality. |
@@ -30,7 +31,11 @@ recommendation, or disclose a bounded consultation proposal. Confirming that
 proposal records authority, atomically records `running` plus every dispatch
 before provider work, executes one to three specialists concurrently, and
 returns an authoritative terminal or round-two turn. Specialist advice is
-read-only.
+read-only. A lead artifact intent is resolved by runtime against the complete
+canonical artifact state. Runtime derives its reviewers and, after exact
+confirmation, sends every reviewer the same immutable candidate. A successful
+lead `propose` synthesis records a reviewed proposal whose Apply/write/Git
+flags are all false.
 
 When ordinary text, routed text, or a retired execution command is submitted in
 the shell, Story reports:
@@ -47,9 +52,9 @@ storage, archive/transfer, and the sole active storage/inspection service.
 adds specialist execution, typed synthesis, results, and restart-safe local
 finalization. #454 owns whole-workspace rejection of unsupported history.
 
-See [Lead agent: conversation and specialist consultation](docs/guides/lead-agent.md)
-for responsibilities, authority limits, current scenarios, provider-call
-examples, and recovery behavior.
+See [Lead agent: story workflows and reviewed artifact proposals](docs/guides/lead-agent.md)
+for responsibilities, authority limits, four concrete story workflows,
+provider-call examples, visible states, and recovery behavior.
 
 ## Install
 
@@ -244,7 +249,7 @@ provider-text span, so `$` and `$$` do not open a picker there. See
 - [Documentation index](docs/INDEX.md)
 - [Getting started](docs/getting-started.md)
 - [Story sessions and conversations](docs/guides/story-sessions.md)
-- [Lead agent and collaboration status](docs/guides/lead-agent.md)
+- [Lead story workflows and reviewed artifact proposals](docs/guides/lead-agent.md)
 - [Provider-free smoke](docs/guides/smoke-test.md)
 - [CLI reference](docs/reference/cli.md)
 - [Runtime API](docs/reference/runtime-api.md)

@@ -3,8 +3,10 @@
 `StoryRuntime` is the public management, configuration, inspection, and lead
 front-channel facade. `RuntimeSession` binds those operations to one session
 ID. The runtime can obtain one strict lead outcome, disclose a consultation,
-and execute its one-to-three specialist assignments after an exact structured
-confirmation. It does not start a debate, mutate an artifact, or perform Git
+construct an exact complete-state-bound artifact candidate, and execute its
+one-to-three specialist assignments after an exact structured confirmation.
+Artifact review can produce an immutable reviewed proposal. It does not start
+a debate, apply or mutate an artifact, grant Apply authority, or perform Git
 work.
 
 The installed shell does not call the lead methods. Ordinary shell input still
@@ -105,6 +107,10 @@ from story_writing_agents.conversations import (
     CollaborationEvidenceAcquisition,
     CollaborationLeadEvidence,
     CollaborationNextAction,
+    ArtifactProposalResult,
+    ArtifactProposalState,
+    ArtifactReviewCandidatePayload,
+    ArtifactReviewedProposal,
     CollaborationStepState,
     LeadDecisionResult,
     LeadEvidenceStatus,
@@ -132,6 +138,7 @@ LeadTurnResult(
     confirmation_request_id: str | None,
     next_action: CollaborationNextAction,
     evidence: CollaborationLeadEvidence | None = None,
+    artifact_proposal: ArtifactProposalResult | None = None,
 )
 ```
 
@@ -146,6 +153,15 @@ A proposal result contains the complete runtime-built
 `CollaborationProposal`, state `awaiting_confirmation`, a fresh confirmation
 request ID, and next action `submit_confirmation`.
 
+When the lead supplies a valid artifact intent, `artifact_proposal` additionally
+contains the runtime-built `ArtifactReviewCandidatePayload`. Before review its
+state is `awaiting_consultation_confirmation`. After confirmed review it may be
+`reviewing`, `reviewed`, `revision_required`, `rejected`, `superseded`, `stale`,
+`failed`, or `recovery_required`. Only `reviewed` carries
+`ArtifactReviewedProposal`; that immutable proposal has
+`artifact_write_occurred`, `apply_authority_granted`, and
+`git_action_occurred` fixed to false.
+
 A fresh provider judgment also returns exact durable `evidence`. It contains
 the provider-declared `scope` (`story_specific` or `workflow_meta`), declared
 status (`not_applicable`, `verified`, `missing`, `empty`, `incomplete`, or
@@ -154,7 +170,8 @@ identical to `proposal.basis.evidence`. Runtime-generated recovery and evidence-
 rejection notices use `evidence=None`.
 
 The provider must return one strict JSON object with exactly `scope`,
-`evidence_status`, `evidence_ids`, `kind`, `message`, and `proposal`:
+`evidence_status`, `evidence_ids`, `kind`, `message`, `proposal`, and
+`artifact_intent`:
 
 ```json
 {
@@ -163,9 +180,18 @@ The provider must return one strict JSON object with exactly `scope`,
   "evidence_ids": ["reference_1"],
   "kind": "recommendation",
   "message": "The referenced outline supports the existing sequence.",
-  "proposal": null
+  "proposal": null,
+  "artifact_intent": null
 }
 ```
+
+For `kind=proposal`, exactly one of `proposal` or `artifact_intent` is non-null.
+Artifact intent contains `operations` and `additional_review_domains`.
+Operations are strict provider-neutral `create`, `patch`, `replace`, `rename`,
+or `delete` requests. Patch/replace/rename/delete target current runtime-issued
+artifact evidence IDs; create suggests a canonical path. The provider cannot
+supply candidate identity, reviewer identity, digests, authority flags, or
+side-effect claims.
 
 Runtime inventories content-free statuses for the four canonical core
 documents and issues evidence IDs for explicit references, complete zero-hit
@@ -188,9 +214,18 @@ was not READ, a READ omitted from final `used_handles`, a truncated or non-
 writing zero-hit search, a prior-invocation ID, or an invented ID is invalid.
 
 Duplicate/unknown/private fields, a nonobject, an unknown kind, a non-null
-proposal on a direct outcome, or malformed proposal intent also fails closed.
+proposal or artifact intent on a direct outcome, both proposal forms at once,
+or malformed intent also fails closed.
 Runtime—not the provider—creates authoritative IDs, revision, digest, input
 facts, impact, effects, profiles, and budgets.
+
+For artifact intent, runtime also captures the complete canonical artifact
+state, resolves evidence-bound operations, builds the exact change set,
+validates projected relationships, derives mandatory review domains, adds only
+the canonically ordered requested domains, and maps them to specialists. An
+invalid non-null artifact intent produces both an
+`artifact_intent_rejected` lead failure and `intent_rejected` artifact-review
+failure, then returns `retry_lead_turn` with no candidate.
 
 If semantic evidence validation rejects a submitted response, runtime appends
 one typed `lead_outcome_failure`, returns a recommendation with
@@ -257,6 +292,14 @@ successful round-one synthesis may likewise return revision 2 on the same
 step; it includes the original inputs plus round-one reply-event inputs and
 requires fresh confirmation. Follow `result.turn.next_action`.
 
+An artifact candidate follows the same exact structured decision. Reject marks
+the artifact candidate `rejected` without a provider call. Revise marks the old
+candidate `superseded`; the replacement lead turn may return no candidate or a
+new candidate with fresh identity, digest, and request. Confirm first
+revalidates the candidate's evidence and complete base state. Drift returns a
+superseded collaboration turn containing artifact state `stale`, makes zero
+reviewer calls, and changes no artifact.
+
 ### `propose_specialist_advisory`
 
 This method constructs a provider-free proposal for exactly one specialist:
@@ -292,6 +335,29 @@ evidence. One to three assignments run concurrently with isolated reference/cont
 authority and disjoint call reservations. If one fails, siblings finish and
 known replies are preserved, but synthesis is not attempted. Cancellation
 cancels and joins siblings, persists knowable results, and re-raises.
+
+For artifact review, runtime derives the canonically ordered reviewers from the
+candidate's mandatory and additional domains. Every reviewer receives the
+same strict serialized candidate and the same disclosed evidence; no reviewer
+can rewrite it. After every reviewer succeeds, the lead synthesis must preserve
+all reply attribution and unresolved non-supporting inputs and must add:
+
+```text
+decision: propose | revise | reject
+rationale: nonempty visible text
+user_impact: nonempty visible text
+limitations: nonempty visible text
+next_intent: null
+```
+
+`propose` produces `ArtifactReviewedProposal` and artifact state `reviewed`.
+`revise` produces `revision_required`; `reject` produces `rejected`. Partial
+review or invalid synthesis produces `failed`. Before successful `propose`
+finalization, runtime projects the exact candidate over a fresh complete-state
+capture; drift produces `stale`. None of these paths writes an artifact or
+grants later execution authority. Specialist assessments are evidence, not a
+vote, and synthesis cannot discard a concern because more peers returned
+`supports`.
 
 ### Free text and recovery
 

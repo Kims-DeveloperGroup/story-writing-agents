@@ -6,7 +6,9 @@
 > remain available at the direct repository/backend boundary. Python
 > `StoryRuntime.lead_turn()` constructs them for lead references; confirmed
 > consultations construct a fresh read contract for each specialist and lead
-> synthesis invocation.
+> synthesis invocation. A lead artifact intent is resolved by runtime into one
+> exact immutable candidate; confirmed reviewers receive that same candidate,
+> and the resulting reviewed proposal grants no write or Git authority.
 
 Key terms: **definition**—stable context bound to one agent; **request**—dynamic
 data for one provider call; **blackboard**—public debate messages;
@@ -190,6 +192,68 @@ must be `continue_lineage`, cover the original and reply-event inputs exactly,
 and is accepted only after round one. Round two cannot continue again.
 Synthesis also preserves the proposal's exact story-specific evidence; reply
 events are attribution and cannot replace story evidence.
+
+## Reviewed artifact proposal contracts
+
+Provider-neutral construction values are a direct-module API:
+
+```python
+from story_writing_agents.artifact_proposals import (
+    ArtifactCreateIntent,
+    ArtifactDeleteIntent,
+    ArtifactIntentEvidence,
+    ArtifactPatchIntent,
+    ArtifactProposalIntent,
+    ArtifactRenameIntent,
+    ArtifactReplaceIntent,
+    ArtifactReviewCandidate,
+    artifact_review_specialists,
+    build_artifact_review_candidate,
+    deserialize_artifact_review_candidate,
+    serialize_artifact_review_candidate,
+)
+```
+
+An intent requests one or more `create`, evidence-bound `patch`, whole-source
+`replace`, whole-source `rename`, or whole-source `delete` operations plus an
+optional canonical tuple of added review domains. Runtime-issued
+`ArtifactIntentEvidence` binds an evidence ID to the current canonical path,
+full-source digest, selected-boundary digest, and optional line range. These
+values are semantic input only; they contain no capability or authority.
+
+`build_artifact_review_candidate()` resolves that intent against one complete
+canonical `base_state`, builds the exact change set, validates projected
+artifact relationships, derives mandatory review domains, and unions added
+domains in canonical order. The frozen result binds candidate identity and
+revision, the content-bearing change set, relationship facts, grounding
+evidence IDs, mandatory/disclosed domains, and digest. Its canonical codec is
+strict and intentionally content-bearing. Every disclosed reviewer receives
+the same serialized candidate.
+
+The public durable/review values are exported by
+`story_writing_agents.conversations`:
+
+```python
+ArtifactReviewCandidatePayload
+ArtifactProposalState
+ArtifactProposalStatePayload
+ArtifactReviewDecision          # propose | revise | reject
+ArtifactReviewSynthesisPayload
+ArtifactReviewReply
+ArtifactReviewedProposal
+ArtifactReviewFailureCode
+ArtifactReviewFailurePayload
+ArtifactProposalResult
+```
+
+The artifact synthesis repeats exact candidate/consultation/attempt identity,
+preserves every reply event and unresolved non-supporting input, and adds
+visible `rationale`, `user_impact`, and `limitations`. Only `decision=propose`
+creates `ArtifactReviewedProposal`. That immutable value closes over the exact
+candidate, every disclosed review, evidence and synthesis identities, and the
+review tail, while requiring `artifact_write_occurred=false`,
+`apply_authority_granted=false`, and `git_action_occurred=false`. It is review
+evidence, not a filesystem or Git capability.
 
 ## Debate request
 
