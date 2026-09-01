@@ -31,9 +31,13 @@ from story_writing_agents.conversations import (
     CollaborationInputRevision,
     CollaborationInputState,
     CollaborationInterruptionPayload,
+    CollaborationInvocationKind,
     CollaborationMessagePayload,
     CollaborationProposal,
     CollaborationProposalBasis,
+    CollaborationProviderCallKind,
+    CollaborationProviderCallPayload,
+    CollaborationProviderCallState,
     CollaborationSideEffect,
     CollaborationSpecialistReplyPayload,
     CollaborationStepKind,
@@ -89,10 +93,14 @@ COLLABORATION_EVENT_EXPORTS = (
     "CollaborationInputRevision",
     "CollaborationInputState",
     "CollaborationInterruptionPayload",
+    "CollaborationInvocationKind",
     "CollaborationMessagePayload",
     "CollaborationPayload",
     "CollaborationProposal",
     "CollaborationProposalBasis",
+    "CollaborationProviderCallKind",
+    "CollaborationProviderCallPayload",
+    "CollaborationProviderCallState",
     "CollaborationSideEffect",
     "CollaborationSpecialistReplyPayload",
     "CollaborationStepKind",
@@ -103,6 +111,11 @@ COLLABORATION_EVENT_EXPORTS = (
     "CollaborationTerminalScope",
     "ConversationEvent",
     "ConversationEventKind",
+    "LeadAssignmentIntent",
+    "LeadOutcomeKind",
+    "LeadProposalIntent",
+    "LeadProposalRelation",
+    "LeadProviderOutcome",
     "collaboration_batch_digest",
     "collaboration_proposal_digest",
     "decode_collaboration_batch",
@@ -127,6 +140,9 @@ COLLABORATION_CONTEXT_EXPORTS = (
     "CollaborationReadableField",
     "CollaborationReadableFieldKey",
     "CollaborationReadableRecord",
+    "LeadDecisionResult",
+    "LeadStepDecision",
+    "LeadTurnResult",
     "ConversationContextPolicy",
     "ConversationContextWindow",
     "project_collaboration_history",
@@ -177,11 +193,15 @@ CONVERSATION_FACADE_EXPORTS = (
     "CollaborationInputRevision",
     "CollaborationInputState",
     "CollaborationInterruptionPayload",
+    "CollaborationInvocationKind",
     "CollaborationMessagePayload",
     "CollaborationNextAction",
     "CollaborationPayload",
     "CollaborationProposal",
     "CollaborationProposalBasis",
+    "CollaborationProviderCallKind",
+    "CollaborationProviderCallPayload",
+    "CollaborationProviderCallState",
     "CollaborationReadableContext",
     "CollaborationReadableContextPolicy",
     "CollaborationReadableField",
@@ -202,6 +222,14 @@ CONVERSATION_FACADE_EXPORTS = (
     "ConversationEventKind",
     "ConversationMetadata",
     "ConversationStatus",
+    "LeadAssignmentIntent",
+    "LeadDecisionResult",
+    "LeadOutcomeKind",
+    "LeadProposalIntent",
+    "LeadProposalRelation",
+    "LeadProviderOutcome",
+    "LeadStepDecision",
+    "LeadTurnResult",
     "collaboration_batch_digest",
     "collaboration_proposal_digest",
     "decode_collaboration_batch",
@@ -434,6 +462,50 @@ def make_batch(
     )
 
 
+def provider_call_drafts(
+    *,
+    invocation_id: str,
+    call_id: str,
+    role: str,
+    recipient: CollaborationActor,
+    invocation_kind: CollaborationInvocationKind,
+    ordinal: int = 1,
+    call_kind: CollaborationProviderCallKind = (CollaborationProviderCallKind.INITIAL),
+) -> tuple[CollaborationEventDraft, CollaborationEventDraft]:
+    """Return exact durable preparation/submission facts for one physical call."""
+
+    common = {
+        "invocation_id": invocation_id,
+        "call_id": call_id,
+        "ordinal": ordinal,
+        "role": role,
+        "invocation_kind": invocation_kind,
+        "call_kind": call_kind,
+    }
+    return (
+        make_draft(
+            f"prepared_{call_id}",
+            CollaborationEventKind.PROVIDER_CALL_ACCOUNTING,
+            RUNTIME,
+            recipient,
+            CollaborationProviderCallPayload(
+                **common,
+                state=CollaborationProviderCallState.PREPARED,
+            ),
+        ),
+        make_draft(
+            f"submitted_{call_id}",
+            CollaborationEventKind.PROVIDER_CALL_ACCOUNTING,
+            RUNTIME,
+            recipient,
+            CollaborationProviderCallPayload(
+                **common,
+                state=CollaborationProviderCallState.SUBMITTED,
+            ),
+        ),
+    )
+
+
 def store_batch(
     history: tuple[CollaborationEvent, ...],
     batch: CollaborationEventBatch,
@@ -539,8 +611,10 @@ def confirmed_history(
 
 def running_history(
     proposal: CollaborationProposal | None = None,
+    *,
+    include_synthesis_call: bool = True,
 ) -> tuple[tuple[CollaborationEvent, ...], CollaborationProposal]:
-    """Return history through atomic running plus ordered dispatches."""
+    """Return atomic running, dispatch, and submitted physical-call facts."""
 
     history, proposal = confirmed_history(proposal)
     drafts: list[CollaborationEventDraft] = [
@@ -574,6 +648,25 @@ def running_history(
                     ATTEMPT_ID,
                     assignment,
                 ),
+            )
+        )
+        drafts.extend(
+            provider_call_drafts(
+                invocation_id=f"invocation_{assignment.assignment_id}",
+                call_id=f"call_{assignment.assignment_id}",
+                role=assignment.specialist_id,
+                recipient=actors[assignment.specialist_id],
+                invocation_kind=CollaborationInvocationKind.SPECIALIST,
+            )
+        )
+    if include_synthesis_call and proposal.budget.synthesis_max_physical_calls:
+        drafts.extend(
+            provider_call_drafts(
+                invocation_id="invocation_synthesis",
+                call_id="call_synthesis",
+                role=LEAD_ORCHESTRATOR,
+                recipient=LEAD,
+                invocation_kind=CollaborationInvocationKind.SYNTHESIS,
             )
         )
     return store_batch(history, make_batch(history, "batch_running", *drafts)), proposal
@@ -716,7 +809,10 @@ def executed_history(
 ]:
     """Return history through one authoritative execution result."""
 
-    history, proposal = running_history(proposal)
+    history, proposal = running_history(
+        proposal,
+        include_synthesis_call=failed_assignment_id is None,
+    )
     batch, result = result_batch(
         history,
         proposal,

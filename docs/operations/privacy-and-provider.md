@@ -13,9 +13,9 @@
 > and the separate bounded store for eligible rejected provider responses.
 > They do not make either provider, its executable, the workspace, or the
 > terminal trusted.
-> The current shell and `StoryRuntime` expose no provider-bound story span.
-> Inline references and `$`/`$$` main-input activation are therefore inactive;
-> direct components retain the data boundaries documented below.
+> `StoryRuntime.lead_turn()` is a provider-bound Python story span. The shell,
+> inline-reference parsing in main input, and `$`/`$$` activation remain
+> inactive. Python lead references follow the data boundaries documented below.
 > Settings Model/Effort catalog discovery is also bounded and local; only a
 > user's selected opaque value can be persisted, never provider catalog data.
 
@@ -358,7 +358,7 @@ activity is not sent to a provider and creates no durable reference-operation
 evidence. Current main input does not activate that viewer or submit the
 indicator to a provider. Component error output is fixed and content-free.
 
-For a caller-composed referenced backend call, the first provider payload contains
+For a Python lead referenced call, the first provider payload contains
 only fixed rules, exact operation/invocation correlation, and the complete
 ordered canonical path/range indicators. The capability object is never
 serialized, and its repository-private identifier is absent from provider
@@ -379,15 +379,14 @@ Baseline core context cannot satisfy explicit-reference evidence.
 Closing local authorization, delivery, and result carriers drops their Python
 references but offers neither secure memory erasure nor provider erasure. Once
 the substantive request is sent, provider-private or remote systems may retain
-its context under their own policy. The current `StoryRuntime` and interactive
-controller do not construct this path; a future structured collaboration
-consumer must integrate it explicitly.
+its context under their own policy. `StoryRuntime.lead_turn()` constructs this
+path; the interactive controller does not.
 
 <a id="agent-context-progress-privacy"></a>
 
 ## Agent-context progress privacy
 
-The optional context lifecycle observer and a future shell projection contain
+The optional context lifecycle observer and any caller projection contain
 only validated scope and operation identities, fixed lifecycle kinds,
 nonnegative counters, and an optional truncation boolean. They have no field
 for prompts, search queries, candidates, excerpts, mandatory-reference bodies,

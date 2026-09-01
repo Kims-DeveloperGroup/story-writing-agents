@@ -333,7 +333,7 @@ class RagModuleBoundaryTests(unittest.TestCase):
         modules = _module_inventory()
         edges = _internal_edges(modules)
         self.assertEqual(len(modules), 97)
-        self.assertEqual(len(edges), 362)
+        self.assertEqual(len(edges), 369)
         self.assertIsNone(_cycle_witness(modules, edges))
         conversation_dependencies = {
             "story_writing_agents.conversations": {
@@ -1036,9 +1036,9 @@ class RagPackagingBoundaryTests(unittest.TestCase):
                 import story_writing_agents.workspace.core as workspace_core
                 from story_writing_agents.agent_exchanges import AgentExchangeScopeKind
                 assert len(story_writing_agents.__all__) == 104
-                assert len(conversations.__all__) == 81
-                assert len(conversation_events.__all__) == 54
-                assert len(conversation_context.__all__) == 20
+                assert len(conversations.__all__) == 93
+                assert len(conversation_events.__all__) == 63
+                assert len(conversation_context.__all__) == 23
                 assert conversations.CollaborationProposal is conversation_events.CollaborationProposal
                 assert conversations.CollaborationEventStore is conversation_context.CollaborationEventStore
                 assert conversations.CollaborationProposal.__module__ == "story_writing_agents.conversations"
@@ -1282,9 +1282,9 @@ class RagPackagingBoundaryTests(unittest.TestCase):
                 import story_writing_agents.conversations.context as context
                 import story_writing_agents.conversations.events as events
                 assert len(story_writing_agents.__all__) == 104
-                assert len(conversations.__all__) == 81
-                assert len(events.__all__) == 54
-                assert len(context.__all__) == 20
+                assert len(conversations.__all__) == 93
+                assert len(events.__all__) == 63
+                assert len(context.__all__) == 23
                 assert catalog.ConversationCatalog is conversations.ConversationCatalog
                 assert events.ConversationEvent is conversations.ConversationEvent
                 assert not hasattr(context, "ConversationEventStore")

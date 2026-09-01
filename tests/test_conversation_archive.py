@@ -62,14 +62,14 @@ EMPTY_GOLDEN = (
     b'"value":"d5820aa0c81591e89e32ab06f83181f74e5d6bb68a450e0d255d26227c848e68"}}\n'
 )
 NONEMPTY_WIRE_SHA256 = (
-    "2be9d5c4da6b4cc4eb120d3819de11fd270a71652d2e05855fde205f8af3460d"
+    "1cf9a30e8ed9c45bc7695b0059267d421f5bb16ba4ae36f02a0c846a96664f73"
 )
-NONEMPTY_DIGEST = "61a215736205af6e6848d8501934902263b763c23119eb2624c8c3746645116d"
+NONEMPTY_DIGEST = "bda9e5753ff1e46d71f039bc58303e27f6d3730e905c3fb65e79853fd65b7c63"
 REPRESENTATIVE_WIRE_SHA256 = (
-    "379b70dda9c5dd9b0360d8fb58c68acd36b81d0ab5dabffffad0e774afd44c26"
+    "fe7388ea67ed20fdc6f72488f0ff5ce637aa214e2d21e6ad42bf31ca405c4439"
 )
 REPRESENTATIVE_DIGEST = (
-    "fd191502088704bdc08539628da67723912c8ad17aaf52bf864728114a42c8fb"
+    "df17c262d0e657c3b90a2ffbdba2ce1f141dabe23590e53114c4f622affb274b"
 )
 
 
@@ -227,14 +227,14 @@ class ConversationArchiveValueTests(unittest.TestCase):
             {item.schema_version for item in conversations.values()},
             {CONVERSATION_METADATA_SCHEMA_VERSION},
         )
-        self.assertEqual(len(conversations["conversation_completed"].events), 16)
-        self.assertEqual(len(conversations["conversation_unknown"].events), 9)
+        self.assertEqual(len(conversations["conversation_completed"].events), 22)
+        self.assertEqual(len(conversations["conversation_unknown"].events), 15)
         self.assertEqual(conversations["conversation_empty"].events, ())
         self.assertIs(
             conversations["conversation_unknown"].status,
             ConversationStatus.ARCHIVED,
         )
-        self.assertEqual(len(event_images(archive)), 25)
+        self.assertEqual(len(event_images(archive)), 37)
         self.assertEqual(
             {
                 event.batch_id

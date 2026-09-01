@@ -18,13 +18,14 @@
 > one-turn provider preflight.
 > Direct repository components create and finalize reference evidence for
 > authorized operations; Python callers can inspect it by operation ID. The
-> current `StoryRuntime` has no provider-bound consumer for that evidence.
+> Python lead workflow consumes it for ordered `${path}` and ranged indicators.
 > Separately, the
 > pure schema-v2 collaboration-history values and store port are available from
 > `story_writing_agents.conversations`. Direct Python callers can persist that
 > port with uncomposed filesystem or SQLite adapters. Canonical archive and
-> backend transfer now use those v2 histories, but no current runtime, selected
-> filesystem/SQLite bundle, transcript view, or shell path activates them.
+> backend transfer use those v2 histories, and the Python lead workflow appends
+> through the selected filesystem/SQLite bundle. The shell remains read-only
+> with respect to lead turns.
 
 Key terms: **blackboard**—public debate JSONL; **sidecar**—context stored apart
 from established debate records; **create-only**—never replaces an existing
@@ -52,7 +53,7 @@ provisioning nor transfer alone selects runtime authority.
 | Conversation RAG opt-in defaults and CLI reports | Configuration owns nullable provider/exact automatic values; `conversation_rag_cli` owns complete noninteractive CAS workflows and ephemeral schema-v1 reports; interactive Settings reuses its guarded configuration transaction |
 | Bounded runtime diagnostics | Internal `debug_log` writer |
 | Bounded agent request/response/outcome records | `AgentBackend` capture projects each physical structured call; `agent_exchanges` independently owns storage |
-| Retrieval actions, observations, progress, sources | Process/terminal only |
+| Retrieval actions, observations, progress, sources | Context service and caller callback; not durable authority |
 | Current conversation focus | Controller memory only |
 | Canonical writing artifacts and provenance | `WritingArtifactRepository` |
 | Explicit-reference operation and invocation evidence | `WritingArtifactRepository`; content-free create-only records |
@@ -137,8 +138,8 @@ consume canonical v2 history. See the
 
 Stored confirmation and projected next-action values remain evidence. They
 cannot preserve, serialize, or reconstruct a provider capability, workspace
-lease, Git authority, credential, or any other executor. After restart, a
-future runtime must reacquire live authority. A confirmed proposal requires a
+lease, Git authority, credential, or any other executor. After restart, the
+runtime must reacquire live authority. A confirmed proposal requires a
 fresh `reconfirmation_required` request when that authority was lost; a running
 attempt without an authoritative result becomes `outcome_unknown` and is never
 replayed. No call-bearing work is valid after that state. See

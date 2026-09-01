@@ -1,8 +1,9 @@
 # Documentation
 
-The runtime has one active schema-v2 storage/inspection path. Management,
-structured history/search/transcript reads, and provider-free smoke are
-available; public story execution is not. Start with the page that matches
+The runtime has one active schema-v2 collaboration-history path. Management,
+structured history/search/transcript reads, provider-free smoke, and the Python
+lead proposal/confirmation API are available. The interactive shell and
+specialist execution are not connected yet. Start with the page that matches
 your task.
 
 ## Start here
@@ -20,8 +21,8 @@ your task.
 | --- | --- |
 | Initialize and inspect a workspace | [Workspaces](guides/workspaces.md) |
 | Manage sessions and conversations | [Story sessions](guides/story-sessions.md) |
-| Understand why story instructions are unavailable | [Collaboration transition](guides/consensus-runs.md) |
-| Understand the lead's responsibilities and confirmation boundary | [Lead agent](guides/lead-agent.md) |
+| Understand why shell story instructions are unavailable | [Collaboration transition](guides/consensus-runs.md) |
+| Converse with the Python lead and decide a proposal | [Lead agent](guides/lead-agent.md) |
 | Run the local management/storage check | [Provider-free smoke](guides/smoke-test.md) |
 | Apply session directives | [Directives](guides/directives.md) |
 | Inspect and recover local state | [Inspection and recovery](guides/inspection-and-recovery.md) |
@@ -35,7 +36,7 @@ your task.
 - [CLI](reference/cli.md)
 - [Interactive command parser](reference/interactive-command-parser.md)
 - [Interactive terminal](reference/interactive-terminal.md)
-- [Runtime management API](reference/runtime-api.md)
+- [Runtime and lead-orchestration API](reference/runtime-api.md)
 - [Package API and exports](reference/package-api.md)
 - [Schema-v2 collaboration history](reference/collaboration-history.md)
 - [Conversation catalog](reference/conversation-catalog.md)

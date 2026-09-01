@@ -42,8 +42,10 @@ from story_writing_agents.agent_context.planning import (
 )
 from story_writing_agents.agent_context.service import (
     ContextInvocationBinding,
+    ContextInvocationKind,
     ContextInvocationSession,
     ContextInvocationState,
+    ContextJsonObjectResultContract,
 )
 from story_writing_agents.agent_context.sources import (
     CONTEXT_SOURCE_POLICY,
@@ -290,10 +292,12 @@ class ServiceSurfaceAndBindingTests(unittest.TestCase):
                 "ContextExecutionEventKind",
                 "ContextExecutionEventSink",
                 "ContextInvocationBinding",
+                "ContextInvocationKind",
                 "ContextInvocationRequest",
                 "ContextInvocationResult",
                 "ContextInvocationSession",
                 "ContextInvocationState",
+                "ContextJsonObjectResultContract",
                 "ContextProvider",
                 "ContextProviderCallFinalizer",
                 "ContextProviderCallRequest",
@@ -353,6 +357,12 @@ class ServiceSurfaceAndBindingTests(unittest.TestCase):
             tuple(item.value for item in ContextInvocationState),
             ("open", "searching", "reading", "answer_authorized", "failed"),
         )
+        self.assertEqual(tuple(item.value for item in ContextInvocationKind), ("lead",))
+        result_contract = ContextJsonObjectResultContract("outcome-v1")
+        self.assertEqual(result_contract.contract_id, "outcome-v1")
+        self.assertFalse(hasattr(result_contract, "__dict__"))
+        with self.assertRaises((FrozenInstanceError, TypeError)):
+            result_contract.contract_id = "changed"  # type: ignore[misc]
         self.assertEqual(
             tuple(item.value for item in service_module.ContextProviderTerminalCode),
             (
@@ -368,6 +378,8 @@ class ServiceSurfaceAndBindingTests(unittest.TestCase):
         for facade in (story_writing_agents, agent_context_package):
             self.assertFalse(hasattr(facade, "ContextProviderCallFinalizer"))
             self.assertFalse(hasattr(facade, "ContextProviderTerminalCode"))
+            self.assertFalse(hasattr(facade, "ContextInvocationKind"))
+            self.assertFalse(hasattr(facade, "ContextJsonObjectResultContract"))
         self.assertEqual(
             tuple(
                 field.name for field in fields(service_module.ContextProviderCallResult)
@@ -616,6 +628,31 @@ class CompactWireDecoderTests(unittest.TestCase):
                 self.assertEqual(
                     decoded.used_handles,
                     (answer_handle,) if contract == "text" else (),
+                )
+
+        object_contract = ContextJsonObjectResultContract("outcome-v1")
+        structured = self.decode(
+            {
+                "a": "a",
+                "c": self.token,
+                "d": [{"proposal": None, "message": "Visible.", "kind": "answer"}],
+                "u": [],
+            },
+            allowed=("answer",),
+            contract=object_contract,
+        )
+        self.assertIsInstance(structured, ContextAnswerAction)
+        assert isinstance(structured, ContextAnswerAction)
+        self.assertEqual(
+            structured.answer,
+            '{"kind":"answer","message":"Visible.","proposal":null}',
+        )
+        for invalid in ([], "text", 1, None, True):
+            with self.subTest(json_object_invalid=invalid):
+                self.assert_malformed(
+                    {"a": "a", "c": self.token, "d": [invalid], "u": []},
+                    allowed=("answer",),
+                    contract=object_contract,
                 )
 
     def test_search_wire_supports_shared_artifact_prefix_and_kind_matrix(self) -> None:

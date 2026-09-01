@@ -25,8 +25,12 @@ from story_writing_agents.conversations import (
     CollaborationExecutionOutcomeKind,
     CollaborationHistoryProjection,
     CollaborationInterruptionPayload,
+    CollaborationInvocationKind,
     CollaborationMessagePayload,
     CollaborationNextAction,
+    CollaborationProviderCallKind,
+    CollaborationProviderCallPayload,
+    CollaborationProviderCallState,
     CollaborationReadableContextPolicy,
     CollaborationReadableFieldKey,
     CollaborationStepKind,
@@ -62,6 +66,7 @@ from tests.collaboration_contract_fixture import (
     make_draft,
     make_proposal,
     proposal_state,
+    provider_call_drafts,
     result_batch,
     running_history,
     store_batch,
@@ -192,12 +197,18 @@ class CollaborationTransitionTests(unittest.TestCase):
         self.assertEqual(first.execution_result_event_id, "execution_result")
         self.assertEqual(first.execution_result, result)
         self.assertIs(first.next_safe_action, CollaborationNextAction.FINALIZE_RESULT)
+        self.assertEqual(first.rounds_spent, 1)
+        self.assertEqual(first.physical_calls_spent, 3)
         self.assertEqual(
             tuple(event.sequence for event in history),
             tuple(range(1, len(history) + 1)),
         )
         self.assertEqual(
-            tuple(event.event_id for event in history if event.kind is CollaborationEventKind.SPECIALIST_REPLY),
+            tuple(
+                event.event_id
+                for event in history
+                if event.kind is CollaborationEventKind.SPECIALIST_REPLY
+            ),
             ("reply_assignment_plot", "reply_assignment_character"),
         )
         self.assertFalse(
@@ -225,6 +236,8 @@ class CollaborationTransitionTests(unittest.TestCase):
                 "execution_result_event_id",
                 "execution_result",
                 "next_safe_action",
+                "rounds_spent",
+                "physical_calls_spent",
             ),
         )
 
@@ -310,7 +323,9 @@ class CollaborationBudgetAndOutcomeTests(unittest.TestCase):
         )
         _assert_invalid(self, history, drift_batch)
 
-    def test_twelve_calls_are_accepted_and_possible_thirteenth_is_rejected(self) -> None:
+    def test_twelve_calls_are_accepted_and_possible_thirteenth_is_rejected(
+        self,
+    ) -> None:
         inputs = make_proposal().basis.inputs
         twelve = make_proposal(
             assignments=(
@@ -346,7 +361,93 @@ class CollaborationBudgetAndOutcomeTests(unittest.TestCase):
                 synthesis_max_physical_calls=1,
             )
 
-    def test_assignment_synthesis_step_and_lineage_usage_caps_are_enforced(self) -> None:
+        history = store_batch(
+            (),
+            make_batch(
+                (),
+                "batch_user_for_calls",
+                make_draft(
+                    "user_for_calls",
+                    CollaborationEventKind.MESSAGE,
+                    USER,
+                    LEAD,
+                    CollaborationMessagePayload("Start a bounded lead turn."),
+                ),
+            ),
+        )
+        call_drafts = []
+        for ordinal in range(1, 13):
+            call_drafts.extend(
+                provider_call_drafts(
+                    invocation_id="invocation_lead_limit",
+                    call_id=f"call_lead_{ordinal}",
+                    role="lead_orchestrator",
+                    recipient=LEAD,
+                    invocation_kind=CollaborationInvocationKind.LEAD,
+                    ordinal=ordinal,
+                    call_kind=(
+                        CollaborationProviderCallKind.INITIAL
+                        if ordinal == 1
+                        else CollaborationProviderCallKind.CONTINUATION
+                    ),
+                )
+            )
+        history = store_batch(
+            history,
+            make_batch(history, "batch_twelve_calls", *call_drafts),
+        )
+        projection = project_collaboration_history(history)
+        self.assertEqual(projection.physical_calls_spent, 12)
+        prepared_thirteen = CollaborationProviderCallPayload(
+            "invocation_lead_limit",
+            "call_lead_13",
+            13,
+            "lead_orchestrator",
+            CollaborationInvocationKind.LEAD,
+            CollaborationProviderCallKind.CONTINUATION,
+            CollaborationProviderCallState.PREPARED,
+        )
+        prepared_history = store_batch(
+            history,
+            make_batch(
+                history,
+                "batch_prepared_thirteen",
+                make_draft(
+                    "prepared_call_lead_13",
+                    CollaborationEventKind.PROVIDER_CALL_ACCOUNTING,
+                    RUNTIME,
+                    LEAD,
+                    prepared_thirteen,
+                ),
+            ),
+        )
+        self.assertEqual(
+            project_collaboration_history(prepared_history).physical_calls_spent,
+            12,
+        )
+        submitted_thirteen = replace(
+            prepared_thirteen,
+            state=CollaborationProviderCallState.SUBMITTED,
+        )
+        _assert_invalid(
+            self,
+            prepared_history,
+            make_batch(
+                prepared_history,
+                "batch_submitted_thirteen",
+                make_draft(
+                    "submitted_call_lead_13",
+                    CollaborationEventKind.PROVIDER_CALL_ACCOUNTING,
+                    RUNTIME,
+                    LEAD,
+                    submitted_thirteen,
+                ),
+            ),
+        )
+
+    def test_assignment_synthesis_step_and_lineage_usage_caps_are_enforced(
+        self,
+    ) -> None:
         history, proposal = running_history()
         batch, result = result_batch(history, proposal)
         drafts = list(batch.events)
@@ -522,7 +623,9 @@ class CollaborationConfirmationAndRecoveryTests(unittest.TestCase):
         )
         _assert_invalid(self, awaiting, wrong_batch)
 
-    def test_confirmed_restart_requires_fresh_reconfirmation_without_authority(self) -> None:
+    def test_confirmed_restart_requires_fresh_reconfirmation_without_authority(
+        self,
+    ) -> None:
         history, proposal = confirmed_history()
         batch = make_batch(
             history,
@@ -728,15 +831,34 @@ class CollaborationAtomicBatchTests(unittest.TestCase):
             (CollaborationEventKind.CONFIRMATION, CollaborationEventKind.STEP_STATE),
         )
         running, _ = running_history(proposal)
-        self.assertEqual(running[4].kind, CollaborationEventKind.STEP_STATE)
-        self.assertTrue(
-            all(
+        running_group = tuple(
+            event for event in running if event.batch_id == "batch_running"
+        )
+        self.assertEqual(running_group[0].kind, CollaborationEventKind.STEP_STATE)
+        self.assertEqual(
+            sum(
                 event.kind is CollaborationEventKind.ASSIGNMENT_DISPATCH
-                for event in running[5:]
+                for event in running_group
+            ),
+            len(proposal.assignments),
+        )
+        call_states = tuple(
+            event.payload.state
+            for event in running_group
+            if type(event.payload) is CollaborationProviderCallPayload
+        )
+        self.assertEqual(
+            call_states,
+            (
+                CollaborationProviderCallState.PREPARED,
+                CollaborationProviderCallState.SUBMITTED,
             )
+            * 3,
         )
         executed, _, _ = executed_history(proposal)
-        result_group = tuple(event for event in executed if event.batch_id == "batch_result")
+        result_group = tuple(
+            event for event in executed if event.batch_id == "batch_result"
+        )
         self.assertIs(result_group[-1].kind, CollaborationEventKind.EXECUTION_RESULT)
         self.assertTrue(
             all(
@@ -802,7 +924,11 @@ class CollaborationAtomicBatchTests(unittest.TestCase):
         missing_dispatch = CollaborationEventBatch(
             "batch_missing_dispatch",
             len(confirmed),
-            tuple(event.to_draft() for event in running[4:-1]),
+            tuple(
+                event.to_draft()
+                for event in running[len(confirmed) :]
+                if event.event_id != "dispatch_assignment_character"
+            ),
         )
         _assert_invalid(self, confirmed, missing_dispatch)
         split_result = CollaborationEventBatch(

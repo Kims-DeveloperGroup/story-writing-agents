@@ -5,8 +5,8 @@
 > one `CollaborationEventStore`; `/history`, `/search`, `/transcript`, and
 > `/status` use its provider-free readable projections. Concrete store adapters
 > are direct-module-only, while contracts and pure context/event projections
-> are available from their documented facades. Public lead/specialist provider
-> execution remains unavailable.
+> are available from their documented facades. Python lead turns and structured
+> decisions write the same contract. Specialist execution remains unavailable.
 
 Key terms: **proposal**—the complete disclosure for one possible step;
 **decision**—one structured `confirm`, `reject`, or `revise` response to the
@@ -16,8 +16,8 @@ including a retry; **batch**—one all-or-nothing ordered append candidate;
 
 ## What changes for a user
 
-The contract can represent a future lead-led conversation without losing which
-actor said or did what. It can record typed user, lead, specialist, runtime,
+The contract represents the active Python lead conversation without losing
+which actor said or did what. It records typed user, lead, specialist, runtime,
 artifact, and Git actors; disclose the exact proposed work before it starts;
 bind a structured decision to that proposal; retain successful sibling results
 when another assignment fails; and expose a deterministic recovery state after
@@ -29,8 +29,10 @@ closed public field set, resolve a hit to the exact original Unicode substring,
 page one unchanged snapshot, derive a stable lookup-document ID, and explicitly
 select bounded records for possible later provider context.
 
-It cannot yet run a lead or specialist, change a story artifact, or mutate
-Git. The active filesystem and SQLite compositions persist exact batches and
+The contract itself runs nothing. `StoryRuntime.lead_turn()` now uses it while
+binding the lead, and `decide_lead_step()` records exact decisions. Neither
+path runs a specialist, changes a story artifact, or mutates Git. The active
+filesystem and SQLite compositions persist exact batches and
 read them after restart. They do not reinterpret free text as permission or
 turn a stored confirmation or projected `next_safe_action` into executable
 authority. Archive and backend transfer carry the same canonical events.
@@ -49,7 +51,7 @@ never be separated are appended as one atomic batch.
 
 ## Explicit readable-history scenario
 
-Suppose a future application has already obtained a complete canonical v2
+Suppose a Python application has obtained a complete canonical v2
 history and the user asks, “Where did we discuss the outline range?” The
 application can, without invoking a provider:
 
@@ -73,10 +75,10 @@ input. These pure readable operations do not persist history, authorize
 retrieval, or start a provider call. The selected filesystem or SQLite bundle
 supplies the canonical history; archive/transfer uses the same event contract.
 
-## Illustrative future interaction
+## Current Python lead interaction
 
-The following is a presentation example only. No such UI, buttons, provider
-calls, or lead workflow are active yet.
+The following is a human-readable projection of a current Python lead result.
+It is not an installed shell UI or set of buttons.
 
 ```text
 Lead proposal
@@ -90,11 +92,11 @@ Budget: round 1 of 2; at most 2 additional calls; 12-call lineage ceiling
 [Confirm]  [Reject]  [Revise]
 ```
 
-A future application must submit an exact structured decision, not the visible
-button label or conversational text. For example, this input:
+A Python application must submit an exact `LeadStepDecision`, not the visible
+label or conversational text. For example:
 
 ```json
-{"confirmation_request_event_id":"request_event","confirmation_request_id":"request_a","decision":"confirm","proposal_digest":"sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","proposal_id":"proposal_a","proposal_revision":1}
+{"confirmation_request_id":"request_a","session_id":"novel","conversation_id":"conversation_a","step_id":"step_a","proposal_id":"proposal_a","proposal_revision":1,"proposal_digest":"sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","kind":"confirm","revision_request":null}
 ```
 
 must identify the authoritative request at the current history tail and the
@@ -198,14 +200,23 @@ Actors have one of the exact kinds `user`, `lead`, `specialist`, `runtime`,
 ID; other actor kinds cannot. Sender/recipient pairs derive one of the closed
 directions, so direction is not a second stored claim.
 
-The eight event kinds are `message`, `assignment_dispatch`,
+The nine event kinds are `message`, `assignment_dispatch`,
 `specialist_reply`, `step_state`, `confirmation`, `execution_result`,
-`interruption`, and `terminal_outcome`. Each stored event carries schema,
+`interruption`, `terminal_outcome`, and `provider_call_accounting`. Each stored
+event carries schema,
 event/session/conversation/turn/step identity, contiguous sequence, canonical
 UTC timestamp, atomic-batch metadata, typed actors, and its kind-specific
 payload. Visible message and reply content is capped at 32,768 strict-UTF-8
 bytes and cannot contain surrogate code points. Payloads contain visible facts,
 not hidden reasoning.
+
+`provider_call_accounting` contains no request or response content. It records
+one invocation/call identity, contiguous ordinal, canonical agent role,
+invocation kind (`lead`, `specialist`, or `synthesis`), physical-call position
+(`reference_prelude`, `initial`, or `continuation`), and state (`prepared` or
+`submitted`). PREPARED records intent before a provider boundary; only the
+matching unique SUBMITTED record spends one of the twelve lineage calls.
+Submitted failures, timeouts, and cancellations still count.
 
 A running attempt dispatches assignments in proposal order. Every reply binds
 the exact proposal ID/revision/digest, execution attempt, assignment, and
@@ -342,7 +353,7 @@ authorization to reread or execute anything.
 See [Conversation search](conversation-search.md#schema-v2-readable-collaboration-history)
 for signatures, page/search limits, and focused examples.
 
-## State projection versus possible provider context
+## State projection versus bounded provider context
 
 These similarly named values have different jobs:
 
@@ -350,7 +361,7 @@ These similarly named values have different jobs:
 | --- | --- | --- | --- |
 | `CollaborationHistoryProjection` from `project_collaboration_history()` or a direct `CollaborationEventStore.read_context()` | What proposal/state/decision/attempt/result is current, and what action is safe to consider? | State and recovery summary | Evidence only |
 | `tuple[CollaborationReadableRecord, ...]` from `project_collaboration_readable_history()` | What complete typed public events and closed searchable fields exist? | Every validated event record | Evidence only |
-| `CollaborationReadableContext` from `select_bounded_collaboration_context()` | Which explicitly named records fit a possible later provider-context budget? | Content-free `CollaborationContextBootstrap`; zero records | Evidence only |
+| `CollaborationReadableContext` from `select_bounded_collaboration_context()` | Which explicitly named records fit a bounded provider-context budget? | Content-free `CollaborationContextBootstrap`; zero records | Evidence only |
 
 The bootstrap contains schema version, optional history identity, record count,
 last sequence, and tail batch digest. Only unique, known `event_ids` explicitly
@@ -361,9 +372,11 @@ Requested/retained/omitted counts and `truncated` report the result.
 
 The selector has no `current_input` parameter. The current user input remains
 separate, and the selected value still does not invoke a provider or establish
-retrieval authorization. #452 later owns lead proposal/confirmation writes,
-#453 owns specialist execution/results, and #454 owns whole-workspace
-unsupported-history rejection.
+retrieval authorization. The lead runtime explicitly opts its focused source
+adapter into a bounded searchable-history snapshot over active same-session
+conversations; it still sends zero eager history records and adds bodies only
+after SEARCH and READ. #453 owns specialist execution/results, and #454 owns
+whole-workspace unsupported-history rejection.
 
 ## Atomic batch flow
 
@@ -374,13 +387,18 @@ Storage assigns contiguous sequences, canonical UTC timestamps, ordinal/size,
 and the digest of the exact caller-owned batch.
 
 ```text
-proposal + awaiting_confirmation (request is last)
+user message
+    -> provider_call_accounting PREPARED/SUBMITTED pairs
+    -> lead message + proposal + awaiting_confirmation (request is last)
     -> structured decision + confirmed/rejected/superseded
     -> running + every assignment_dispatch in proposal order
     -> replies/messages + every terminal_outcome + execution_result (last)
     -> visible terminal notice + completed/failed/interrupted
 
 running + interruption + outcome_unknown
+
+pending proposal + ordinary user message + superseded (one batch)
+    -> next lead provider call on a new step
 ```
 
 The paired facts above must be co-batched. An interrupted finalization also
@@ -927,11 +945,11 @@ not belong in any payload.
 
 The direct filesystem and SQLite adapters define their v2 persistence and
 durability boundaries above. Archive schema 2 and backend transfer consume
-their canonical histories, but this contract still defines no provider call,
-lead-agent behavior, artifact/Git executor, credential model, complete
+their canonical histories, but this contract still defines no provider call or
+artifact/Git executor, credential model, complete
 workspace backup, or recovery tool. The installed shell wires only
-provider-free readable records, search, pages, and state inspection. Open #452
-owns the lead-facing proposal/confirmation workflow, open #453 owns specialist
+provider-free readable records, search, pages, and state inspection. The Python
+runtime owns lead proposal/confirmation behavior; #453 owns specialist
 execution/results, and #454 owns whole-workspace rejection. See the dedicated
 [lead-agent guide](../guides/lead-agent.md),
 [conversation transcripts](conversation-transcripts.md) for the active readable

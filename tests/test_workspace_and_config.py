@@ -270,6 +270,25 @@ class AgentRosterTests(unittest.TestCase):
 
 
 class WorkspaceTests(unittest.TestCase):
+    def test_lead_default_prompt_is_checked_in_byte_identical_for_fresh_workspace(
+        self,
+    ) -> None:
+        repository_root = Path(__file__).resolve().parents[1]
+        checked_in = (
+            repository_root / "config/agents/lead_orchestrator/AGENTS.md"
+        ).read_text(encoding="utf-8")
+        self.assertTrue(checked_in.endswith("\n"))
+        self.assertEqual(DEFAULT_AGENT_PROMPTS[LEAD_ORCHESTRATOR], checked_in)
+        with tempfile.TemporaryDirectory(prefix="lead-default-prompt-") as temporary:
+            workspace = Workspace(temporary).initialize()
+            relative = AGENT_SPECS[LEAD_ORCHESTRATOR].system_prompt_file
+            self.assertEqual(workspace.read_text(relative), checked_in)
+            workspace.write_text(relative, "custom lead prompt\n")
+            workspace.initialize()
+            self.assertEqual(workspace.read_text(relative), "custom lead prompt\n")
+            workspace.initialize(overwrite_prompts=True)
+            self.assertEqual(workspace.read_text(relative), checked_in)
+
     def test_facade_core_and_root_contract_is_exact_and_identity_stable(
         self,
     ) -> None:

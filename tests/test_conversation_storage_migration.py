@@ -581,7 +581,7 @@ class ConversationStorageTransferPlanningTests(unittest.TestCase):
                 self.assertEqual(
                     create.outcome, ConversationStorageTransferOutcome.WORK_REQUIRED
                 )
-                self.assertEqual(create.source_events, 25)
+                self.assertEqual(create.source_events, 37)
                 self.assertFalse(checkpoint_path(workspace, source).exists())
 
                 import_backend(workspace, _other_backend(source), payload)
@@ -660,7 +660,7 @@ class ConversationStorageTransferExecutionTests(unittest.TestCase):
                 self.assertEqual(report.parity, ConversationStorageParity.VERIFIED)
                 self.assertEqual(report.checkpoint, "completed")
                 self.assertEqual(report.create, 3)
-                self.assertEqual(report.source_events, 25)
+                self.assertEqual(report.source_events, 37)
                 self.assertEqual(
                     export_backend(workspace, _other_backend(source)), payload
                 )
@@ -682,7 +682,7 @@ class ConversationStorageTransferExecutionTests(unittest.TestCase):
                     value["direction"],
                     f"{source.value}-to-{_other_backend(source).value}",
                 )
-                self.assertEqual(value["source"], {"conversations": 3, "events": 25})
+                self.assertEqual(value["source"], {"conversations": 3, "events": 37})
                 self.assertEqual(
                     value["progress"],
                     {"completed_conversations": 3, "total_conversations": 3},

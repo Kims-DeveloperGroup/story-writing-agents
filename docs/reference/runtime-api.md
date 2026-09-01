@@ -1,8 +1,13 @@
-# Runtime management API
+# Runtime and lead-orchestration API
 
-`StoryRuntime` is the public management, configuration, directive, and
-inspection facade. `RuntimeSession` binds those operations to one session ID.
-Neither class exposes a public advisory-turn or debate-start method.
+`StoryRuntime` is the public management, configuration, inspection, and lead
+front-channel facade. `RuntimeSession` binds those operations to one session
+ID. The runtime can obtain one strict lead outcome and record an exact decision
+about a proposed consultation. It does not yet execute specialist assignments,
+start a debate, mutate an artifact, or perform Git work.
+
+The installed shell does not call the lead methods. Ordinary shell input still
+receives the direct-execution-unavailable guidance.
 
 ## Construction
 
@@ -19,13 +24,15 @@ StoryRuntime(
 With no conversation arguments, construction composes the filesystem storage
 bundle. An injected `ConversationStorageServices` must be complete and carries
 the one catalog, schema-v2 event store, search, mutation, and provenance
-boundary. A RAG service is an optional separate collaborator. Construction
-does not invoke a provider.
+boundary. A RAG service is an optional separate collaborator; `lead_turn` does
+not consume it.
 
-`backend` remains available for quiescent configuration activation used by the
-interactive settings workflow. Its presence does not add execution methods.
+Construction performs no provider call. Lead conversation requires a backend
+whose configured session/provider lifecycle is ready when binding occurs.
+`backend=None` remains valid for provider-free management and inspection, but
+`lead_turn` then raises `BackendProtocolError`.
 
-## Public methods
+## Management and inspection methods
 
 ```python
 StoryRuntime.session(session_id: str) -> RuntimeSession
@@ -59,7 +66,161 @@ not a package-root export. Prepare requires a backend and complete quiescence;
 commit rechecks candidate ownership and quiescence before swapping the backend
 and prompt snapshot. Discard owns no resource.
 
-`RuntimeSession` exposes the bound equivalents:
+## Lead front-channel methods
+
+```python
+await StoryRuntime.lead_turn(
+    session_id: str,
+    conversation_id: str,
+    text: str,
+    context_event_sink: Callable[[ContextExecutionEvent], None] | None = None,
+) -> LeadTurnResult
+
+await StoryRuntime.decide_lead_step(
+    decision: LeadStepDecision,
+) -> LeadDecisionResult
+```
+
+Neither method accepts `agent_id`. `lead_turn` always addresses
+`lead_orchestrator`. The session and conversation must identify the same active
+catalog record. Input is nonempty visible strict UTF-8 and is capped by the
+collaboration text limit.
+
+Import the lead values and decision enum from the conversations facade:
+
+```python
+from story_writing_agents.conversations import (
+    CollaborationConfirmationDecision,
+    CollaborationNextAction,
+    CollaborationStepState,
+    LeadDecisionResult,
+    LeadOutcomeKind,
+    LeadStepDecision,
+    LeadTurnResult,
+)
+```
+
+They are deliberately not package-root exports.
+
+### `LeadTurnResult`
+
+```python
+LeadTurnResult(
+    session_id: str,
+    conversation_id: str,
+    turn_id: str,
+    step_id: str,
+    kind: LeadOutcomeKind,
+    message: str,
+    proposal: CollaborationProposal | None,
+    state: CollaborationStepState | None,
+    confirmation_request_id: str | None,
+    next_action: CollaborationNextAction,
+)
+```
+
+The five `kind` values are `answer`, `question`, `critique`,
+`recommendation`, and `proposal`. For a fresh provider outcome, answer,
+critique, and recommendation return `continue_with_lead`; question returns
+`reply_to_lead`. Those four fresh direct outcomes have no proposal,
+confirmation request, or durable step state. Recovery normalization may return
+`recommendation` with an existing proposal, state, and state-specific action.
+
+A proposal result contains the complete runtime-built
+`CollaborationProposal`, state `awaiting_confirmation`, a fresh confirmation
+request ID, and next action `submit_confirmation`.
+
+The provider must return one strict JSON object with exactly `kind`, `message`,
+and `proposal`. Duplicate/unknown/private fields, a nonobject, an unknown kind,
+a non-null proposal on a direct outcome, or malformed proposal intent fails
+closed. Runtime—not the provider—creates authoritative IDs, revision, digest,
+input facts, impact, effects, profiles, and budgets.
+
+### `LeadStepDecision`
+
+```python
+LeadStepDecision(
+    confirmation_request_id: str,
+    session_id: str,
+    conversation_id: str,
+    step_id: str,
+    proposal_id: str,
+    proposal_revision: int,
+    proposal_digest: str,
+    kind: CollaborationConfirmationDecision,
+    revision_request: str | None = None,
+)
+```
+
+`kind` is `confirm`, `reject`, or `revise`. Revise requires a nonempty visible
+`revision_request`; Confirm and Reject reject that field. Runtime loads the
+authoritative request event and requires the decision to match its exact tail,
+request, proposal identity, revision, and digest. Callers never supply sequence
+authority.
+
+Confirm also rederives current references, required reviewers, route, profile,
+context-policy, and budget facts. Drift rejects the decision before proposed
+work. The durable confirmation evidence can produce only a private,
+nonserializable, process-local start capability. No public property exposes it,
+and #452 does not consume it to start execution.
+
+### `LeadDecisionResult`
+
+```python
+LeadDecisionResult(
+    session_id: str,
+    conversation_id: str,
+    step_id: str,
+    decision: CollaborationConfirmationDecision,
+    proposal: CollaborationProposal,
+    state: CollaborationStepState,
+    next_action: CollaborationNextAction,
+    revised_turn: LeadTurnResult | None = None,
+)
+```
+
+| Decision | State | Next action | Replacement turn |
+| --- | --- | --- | --- |
+| `confirm` | `confirmed` | `start_or_reconfirm` | None |
+| `reject` | `rejected` | `continue_with_lead` | None |
+| `revise` | `superseded` | `continue_with_lead` | Required |
+
+The revise replacement retains the step ID, increments the proposal revision,
+and has fresh proposal/digest/request identities. Follow the replacement
+turn's own `next_action`.
+
+### Free text and recovery
+
+Calling `lead_turn(..., "Yes")` is ordinary conversation, never confirmation.
+When a proposal is pending, runtime atomically appends the user message and
+`superseded` state before any next provider call. Idle application exit makes
+no call and leaves the pending request unchanged.
+
+Before accepting new text, `lead_turn` normalizes authoritative state:
+
+- confirmed without its process-local capability becomes
+  `reconfirmation_required` with the unchanged proposal/digest and a fresh
+  request;
+- unresolved running without a live owner or authoritative result becomes
+  `outcome_unknown` and is never replayed;
+- running with a known result requests deterministic local finalization;
+- corrupt history or uncertain call-boundary facts returns a blocking
+  `recovery_required` result without invoking the provider.
+
+#452 recognizes running/result histories defined by the schema but never
+creates RUNNING, assignment dispatch, specialist reply, synthesis, execution
+result, or terminal execution state.
+
+### Context event sink
+
+`context_event_sink` is an optional synchronous callback for content-free
+`ContextExecutionEvent` values. It must return exactly `None`. Coroutine,
+async-generator, asynchronously callable, awaitable-returning, non-`None`, or
+exception-raising observers fail under the agent-context lifecycle rules. The
+events contain fixed identities, states, and bounded counts—not prompts,
+queries, paths, excerpts, provider responses, or credentials.
+
+## Bound session methods
 
 ```python
 RuntimeSession.apply_directive(text: str) -> dict[str, object]
@@ -70,13 +231,21 @@ RuntimeSession.inspect_debate_context(debate_id: str) -> dict[str, Any] | None
 RuntimeSession.inspect_reference_operation(
     operation_id: str,
 ) -> ReferenceOperationHistory | None
+await RuntimeSession.lead_turn(
+    conversation_id: str,
+    text: str,
+    context_event_sink: Callable[[ContextExecutionEvent], None] | None = None,
+) -> LeadTurnResult
+await RuntimeSession.decide_lead_step(
+    decision: LeadStepDecision,
+) -> LeadDecisionResult
 ```
 
-The bound reference inspection rejects an operation ID that does not belong to
-its session. Inspection returns `None` only where the underlying strict sidecar
-or reference history is absent; other validation/storage failures raise.
+The bound decision method rejects a decision for another session. Bound
+reference inspection likewise rejects an operation ID that does not belong to
+its session.
 
-## Example
+## Management example
 
 ```python
 from story_writing_agents import StoryRuntime, Workspace
@@ -86,7 +255,6 @@ runtime = StoryRuntime(workspace)
 
 runtime.apply_directive("novel", "[SYS: LANG=EN]")
 session = runtime.session("novel")
-session.set_overrides({"language": "EN", "persona": None, "agents": {}})
 snapshot = session.inspect()
 print(snapshot["session_id"])
 ```
@@ -94,39 +262,40 @@ print(snapshot["session_id"])
 There is no package-root `Runtime` or `Session` alias. Import the explicit
 `StoryRuntime` and `RuntimeSession` names.
 
-## Removed execution surface
+## Removed and unavailable execution surfaces
 
-No alternate or forwarding entry point is provided for public direct story
-execution. Code must not expect a method that sends an advisory prompt,
-performs retrieval for a turn, starts a prompt debate, or starts a draft debate
-on either runtime class.
+No alternate or forwarding entry point restores `converse`,
+`converse_with_retrieval`, `run_prompt`, or `run_draft` on the runtime classes.
+There is no runtime debate-start, specialist-dispatch, artifact-application,
+consensus, commit, push, merge, or one-turn bypass method in this stage.
 
-The generic backend/provider/model/prompt/context/lifecycle components and
-schema-v2 collaboration contracts remain available through their own modules.
-Applications can create, validate, project, search, page, archive, and transfer
-structured collaboration history without treating this management facade as
-an execution engine. Active lead/specialist orchestration will be connected by
-the dedicated schema-v2 integration, not by restoring a removed method.
+Confirmation of a consultation cannot authorize one of those later effects. A
+future artifact or Git action—including a commit—must be a separately
+disclosed and separately confirmed step.
 
 <a id="runtime-diagnostic-side-effect"></a>
 
 ## Diagnostics and side effects
 
-Runtime construction creates no diagnostic file. Later directive,
-configuration, and inspection calls best-effort append bounded operational
-facts to `debug_logs/runtime.jsonl`. Diagnostic failure is swallowed and cannot
-replace the method's result or exception.
+Runtime construction creates no diagnostic file. Directive, configuration,
+and inspection calls best-effort append bounded operational facts to
+`debug_logs/runtime.jsonl`. Diagnostic failure is swallowed and cannot replace
+the method's result or exception.
 
-Session/debate inspection does not mutate domain state, but this diagnostic
-append means it is not filesystem-byte-pure. Reference-operation inspection
-reads validated content-free history only. None of these methods appends a
-conversation event, invokes RAG, calls a provider, or publishes an artifact.
+Lead turns additionally append authoritative schema-v2 user, lead,
+provider-call-accounting, proposal, and state events as applicable. Attached
+references can create content-free reference-operation evidence and send
+authorized selected bytes to the configured provider. Lead turns never publish
+an artifact or mutate Git in #452.
 
 <a id="context-lifecycle-observer"></a>
 
-## Related direct APIs
+## Related APIs
 
+- [Lead-agent guide](../guides/lead-agent.md)
 - [Schema-v2 collaboration history](collaboration-history.md)
+- [Agent-context design](../design/agent-context.md)
+- [Artifact references](../guides/artifact-references.md)
 - [Conversation search](conversation-search.md)
 - [Conversation archives and transfer](conversation-archives.md)
 - [Package API](package-api.md)

@@ -1,26 +1,33 @@
 # story-writing-agents
 
 A Python 3.11+ runtime for building a lead-led, multi-agent novel-writing
-workflow. The repository currently exposes the workspace, configuration,
-session, conversation, collaboration-history, storage, search, and inspection
-foundations. Active lead/specialist story collaboration is the next integration
-step; it is not callable in this revision.
+workflow. The Python API now supports ordinary conversation with the Lead
+Orchestrator, strict lead outcomes, runtime-built specialist proposals, and
+exact Confirm/Reject/Revise decisions. Specialist execution and the interactive
+lead UI remain later integration steps.
 
 ## Current integration stage
 
-Public direct-execution paths are absent. The selected runtime now has one
-authoritative schema-v2 collaboration-history service for storage and
-provider-free inspection.
+Public direct-run paths remain absent. The selected runtime uses one
+authoritative schema-v2 collaboration-history service for both provider-free
+inspection and the Python lead front channel.
 
 | You can do now | You cannot do in this stage |
 | --- | --- |
 | Initialize a writing workspace. | Send an ordinary shell line to an agent. |
 | Create, resume, list, and pause story sessions. | Route a line to an agent or select a sticky target. |
 | Create, list, focus, rename, archive, search, and read conversations. | Start a debate or publish a manuscript from the installed CLI. |
-| Apply directives and edit workspace settings. | Attach canonical artifact references to an agent call. |
-| Inspect session, debate, history, transcript, status, and recorded exchanges. | Call a direct-execution method on `StoryRuntime` or `RuntimeSession`. |
-| Use schema-v2 collaboration contracts, stores, archive/transfer, readable projection, search, and paging APIs. | Treat the active inspection path as an active lead/provider workflow. |
+| Apply directives and edit workspace settings. | Open `$`/`$$` artifact pickers from shell input. |
+| Inspect session, debate, history, transcript, status, and recorded exchanges. | Dispatch a specialist or start a debate through the runtime facade. |
+| Call the Python lead API with ordered artifact references and decide a proposal. | Treat confirmation as specialist, artifact, consensus, or Git execution. |
+| Use schema-v2 collaboration contracts, stores, archive/transfer, readable projection, search, and paging APIs. | Bypass the runtime with a removed direct-run method. |
 | Run a provider-free management/storage smoke check. | Use smoke as evidence of provider behavior or story quality. |
+
+Python callers can call `lead_turn()` and `decide_lead_step()` without an agent
+selector. A lead turn can return a direct
+answer, question, critique, or recommendation, or disclose a bounded
+consultation proposal. Confirming that proposal records authority evidence but
+does not dispatch a specialist in this stage.
 
 When ordinary text, routed text, or a retired execution command is submitted in
 the shell, Story reports:
@@ -33,13 +40,13 @@ The rejection happens before provider binding, transcript append, RAG,
 artifact-reference reads, progress reporting, or artifact publication. #466
 delivered the pure schema-v2 values; #474-#479 added readable projections,
 storage, archive/transfer, and the sole active storage/inspection service.
-Open issue #452 owns the later lead proposal/confirmation workflow, #453 owns
-specialist execution/results, and #454 owns whole-workspace rejection of
-unsupported history. None is implied by the current inspection service.
+#452 adds lead proposal/confirmation writes through that same service. #453
+owns specialist execution/results, and #454 owns whole-workspace rejection of
+unsupported history.
 
-See [Lead agent and collaboration status](docs/guides/lead-agent.md) for the
-lead's responsibilities, confirmation boundary, and current versus target
-examples.
+See [Lead agent: conversation, proposals, and confirmation](docs/guides/lead-agent.md)
+for responsibilities, authority limits, current scenarios, provider-call
+examples, and recovery behavior.
 
 ## Install
 
@@ -160,10 +167,11 @@ The exact grammar is in the [CLI reference](docs/reference/cli.md) and
 
 ## Python integration
 
-`StoryRuntime` is now a management, configuration, directive, and inspection
-facade. It can bind a `RuntimeSession`, but neither class has a public method
-for a provider turn or debate. The package root no longer exports the broad
-`Runtime` or `Session` aliases.
+`StoryRuntime` is a management, configuration, directive, inspection, and lead-
+orchestration facade. It can bind a `RuntimeSession`; both expose async
+`lead_turn()` and `decide_lead_step()` methods. Neither exposes a debate-start,
+specialist-execution, artifact-publication, consensus, or Git method. The
+package root no longer exports the broad `Runtime` or `Session` aliases.
 
 ```python
 from story_writing_agents import StoryRuntime, Workspace
@@ -175,6 +183,22 @@ session = runtime.session("novel")
 print(session.inspect())
 ```
 
+With a configured ready backend and active conversation, address the lead
+without an `agent_id`:
+
+```python
+result = await runtime.lead_turn(
+    "novel",
+    conversation_id,
+    "Check ${core_documents/global_outline.md} before recommending a change.",
+)
+print(result.kind, result.next_action)
+```
+
+Lead result, proposal-intent, structured-decision, and provider-call-accounting
+values are exported from `story_writing_agents.conversations`, not the package
+root. Exact decision code is in the [runtime API](docs/reference/runtime-api.md).
+
 Direct schema-v2 collaboration-history values and pure projections are
 available through `story_writing_agents.conversations`; direct search, paging,
 and citation values are in `story_writing_agents.conversation_search`.
@@ -185,17 +209,21 @@ infrastructure boundaries. Start with the [runtime API](docs/reference/runtime-a
 
 ## Canonical writing artifacts
 
-The canonical reference-source paths remain `core_documents/...` and
-lowercase-`.md` files below `manuscript/`. `${path}` and
-`${path}#Lx-Ly` remain the content-free reference indicators that future
-collaboration requests will carry. This revision has no public provider-bound
-input span, so `$`, `$$`, and those indicators do not trigger a picker, read,
-or agent requirement. See [artifact-reference status](docs/guides/artifact-references.md).
+The canonical reference-source paths are the four exact core-document paths and
+eligible lowercase-`.md` files below `manuscript/`. Python `lead_turn()` accepts
+ordered `${path}` and `${path}#Lx-Ly` content-free indicators. Runtime performs
+a separate mandatory read before the substantive lead call and retains only
+the indicator/range/revision facts in the proposal. The shell still has no
+provider-text span, so `$` and `$$` do not open a picker there. See
+[artifact references](docs/guides/artifact-references.md).
 
 ## Important limits
 
-- No public story generation, advisory turn, debate, or artifact modification
-  is active in this integration stage.
+- Python lead conversation and proposal decisions are active; specialist
+  execution, story generation, debate, artifact modification, consensus, and
+  Git operations are not.
+- Confirming a consultation does not start it in #452 and never confirms an
+  artifact change or Git commit.
 - Smoke is intentionally provider-free and story-free.
 - Workspace configuration, histories, diagnostics, and artifacts are local
   plaintext unless the surrounding environment protects them.

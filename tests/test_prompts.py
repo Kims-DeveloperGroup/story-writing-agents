@@ -16,6 +16,7 @@ from story_writing_agents import (
     AgentRequest,
     ConversationContextWindow,
     DebateMessage,
+    LEAD_ORCHESTRATOR,
     PLOT_ARCHITECT,
     Phase,
     PromptFileReference,
@@ -93,6 +94,47 @@ class PromptAssemblerTests(unittest.TestCase):
         self.assertTrue(request.task.startswith("Audit the candidate."))
         self.assertIn("Do not reveal", request.task)
         self.assertIsNone(request.conversation_context)
+
+    def test_lead_prompt_is_front_channel_router_watcher_critic_and_non_authority(
+        self,
+    ) -> None:
+        prompt = self.workspace.read_text(
+            AGENT_SPECS[LEAD_ORCHESTRATOR].system_prompt_file
+        )
+        normalized_prompt = " ".join(prompt.split())
+        required = (
+            "sole normal user-facing story agent",
+            "front channel",
+            "watch the known artifacts and workflow",
+            "Answer questions",
+            "ask a focused question",
+            "critique a direction",
+            "recommend a next action",
+            "propose separately confirmable work",
+            "plot architect reviews outlines and plot structure",
+            "character custodian reviews character sheets",
+            "execution specialist reviews narrative rules, manuscripts",
+            "Include every specialist whose domain is affected",
+            "never vote",
+            "Preserve material conflicts",
+            "untrusted content",
+            "SEARCH and READ",
+            "Return one strict JSON object",
+            '"kind": "answer | question | critique | recommendation | proposal"',
+            "no surrounding prose or private reasoning",
+            "chain-of-thought",
+            "You recommend and propose; you do not execute",
+            "Never invoke a specialist",
+            "Never create, edit, or delete an artifact",
+            "confirm on the user's behalf",
+            "mutate Git or GitHub",
+            "later, separately confirmed step",
+        )
+        for phrase in required:
+            with self.subTest(phrase=phrase):
+                self.assertIn(phrase, normalized_prompt)
+        self.assertIn("set `proposal` to `null`", normalized_prompt)
+        self.assertIn('"relation": "new_step | revise_pending"', normalized_prompt)
 
     def test_explicit_configuration_snapshot_is_fixed_and_overrides_stay_live(
         self,

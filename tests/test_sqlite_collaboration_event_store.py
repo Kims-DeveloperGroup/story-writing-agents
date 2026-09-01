@@ -500,10 +500,17 @@ class SQLiteCollaborationEventStoreFirstSliceTests(unittest.TestCase):
                     self.assertIs(receipt.status, CollaborationAppendStatus.APPENDED)
                 before = self.database_state(workspace)
                 source = batches[name]
+                partial_events = source.events[selected]
+                if name == "running":
+                    partial_events = tuple(
+                        event
+                        for event in source.events
+                        if event.event_id != "dispatch_assignment_character"
+                    )
                 partial = CollaborationEventBatch(
                     batch_id=f"partial_{name}",
                     expected_last_sequence=source.expected_last_sequence,
-                    events=source.events[selected],
+                    events=partial_events,
                 )
 
                 with self.assertRaises(CollaborationAppendError) as raised:

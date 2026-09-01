@@ -2,9 +2,9 @@
 
 > **Availability:** the `writing_artifacts` subpackage retains canonical path,
 > source discovery/read, reference authorization/evidence, provenance,
-> publication, and recovery components. The current CLI and management runtime
-> do not start a consensus publication or attach a reference to an agent call.
-> Main-input `$`/`$$` activation is unavailable. Existing artifacts and
+> publication, and recovery components. The Python lead runtime attaches
+> `${path}` references but does not publish or mutate artifacts. Main-input
+> `$`/`$$` activation is unavailable. Existing artifacts and
 > reference-operation evidence remain inspectable through direct components.
 
 This reference uses **writing artifact path** for the canonical story-output
@@ -55,9 +55,9 @@ directory; the second is the user-selected part ID.
 ## Reference directive parser
 
 > **Availability:** the pure parser remains I/O-free. Parsing alone is not proof
-> of an eligible read. The current public runtime has no provider-bound
-> operation that consumes the result; terminal picker/viewer components are not
-> active from main input.
+> of an eligible read. `StoryRuntime.lead_turn()` consumes the result and adds
+> repository authorization/provider steps; terminal picker/viewer components
+> are not active from main input.
 
 One directive is a content-free indicator containing either an eligible source
 path or that path followed by a one-based inclusive line range:
@@ -142,20 +142,19 @@ artifact bytes. Invalid directive input raises
 messages do not echo a rejected path or artifact content. Parsing performs no
 filesystem, repository, provider, controller, terminal, or network I/O.
 
-At this stage, Python callers can validate directive grammar, preserve the
-original input, compute the provider-text escape projection, and inspect
-ordered canonical path/range indicators. This parser API alone does not
+The parser API lets callers validate directive grammar, preserve the original
+input, compute the provider-text escape projection, and inspect ordered
+canonical path/range indicators. This parser alone does not
 establish artifact eligibility, read content, supply it to a provider, or
-require an agent read. A future structured collaboration consumer must add
-those authorization and provider steps for `${...}`. Current main input does
-not activate `$`/`$$` before parser submission.
+require an agent read. `lead_turn()` adds those steps for `${...}`. Shell main
+input does not activate `$`/`$$` before parser submission.
 
 ## Authorized reads and lifecycle evidence
 
 > **Availability:** repository authorization, transient delivery, durable
-> content-free evidence, and exact provider-read enforcement remain direct
-> components. `StoryRuntime` has no current provider-bound consumer for them,
-> and main input does not activate `$` completion or `$$` ranged viewing.
+> content-free evidence, and exact provider-read enforcement are used by
+> Python lead turns. Main input does not activate `$` completion or `$$`
+> ranged viewing.
 
 The `${canonical/path.md}` and `${canonical/path.md}#Lx-Ly` values remain
 content-free indicators. A caller holding `WritingArtifactRepository` can use
@@ -288,11 +287,13 @@ evidence namespace are safe.
 
 ## What a user can change
 
-No current public command asks story agents to change an artifact. Users can
-prepare or inspect safe canonical files directly while no workspace process is
-active, but a manual file has no agent-produced provenance.
+No current public command changes an artifact. Users can ask the Python lead to
+critique, recommend, or propose a consultation about a change, and can prepare
+or inspect safe canonical files directly while no workspace process is active.
+A lead decision does not apply the change, and a manual file has no
+agent-produced provenance.
 
-The later confirmed lead/specialist workflow is expected to support:
+The later execution/publication workflow is expected to support:
 
 - an outline request can lead the lead orchestrator to publish full replacements
   for `global_outline.md` or `part_outlines.md`;
@@ -317,9 +318,10 @@ currently executable shell input:
 - A manuscript revision can read the earlier manuscript and the relevant Part
   outline, then propose a distinct create-only publication path.
 
-After the structured workflow is integrated, each addressed invocation must
-complete its own independently correlated ordered read. The current shell
-instead rejects the surrounding story instruction before parsing references.
+The current lead invocation completes its independently correlated ordered
+read. Each later addressed specialist must do the same; the lead's receipt
+cannot be reused. The shell rejects the surrounding story instruction before
+parsing references.
 
 See the [artifact-reference guide](../guides/artifact-references.md) for exact
 syntax, limits, work-history inspection, and complete user scenarios.

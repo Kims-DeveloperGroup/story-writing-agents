@@ -739,7 +739,7 @@ class SQLiteArchiveTests(unittest.TestCase):
         self.assertEqual(first, payload)
         self.assertEqual(second, payload)
         self.assertEqual(event_images(first), event_images(payload))
-        self.assertEqual(len(event_images(first)), 25)
+        self.assertEqual(len(event_images(first)), 37)
 
         target = initialized_workspace(self)
         provision(target)
