@@ -49,9 +49,9 @@ The file is not opened and its bytes are not sent anywhere.
 
 The writing-artifact repository, authorization types, content-free operation
 history, and terminal viewer components remain available to the forthcoming
-collaboration integration. #479 activates the sole schema-v2
-storage/inspection service; it does not own lead/specialist triggering or
-artifact reads. After parent #467 completes, the #452/#453 workflows must make
+collaboration integration. The sole schema-v2 storage/inspection service is
+active; it does not own lead/specialist triggering or artifact reads. The
+#452/#453 workflows must make
 the addressed lead or specialist read the attached ordered reference batch
 before its answer is accepted. A path-plus-range remains an instruction to read
 exactly that source range, not prompt content copied by the UI.

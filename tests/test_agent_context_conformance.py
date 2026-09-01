@@ -111,10 +111,23 @@ class AgentContextConformanceTests(unittest.TestCase):
 
     def test_current_integration_ownership_is_explicit(self) -> None:
         overview = (_ROOT / "docs/design/overview.md").read_text(encoding="utf-8")
-        self.assertIn("#479 activates the sole v2", overview)
-        self.assertIn("#452 owns the lead proposal/confirmation", overview)
-        self.assertIn("#453", overview)
-        self.assertIn("specialist execution/result/finalization", overview)
+        self.assertIn(
+            "Conversation management uses one startup-selected complete service bundle:",
+            overview,
+        )
+        self.assertIn("The controller uses that schema-v2 service for", overview)
+        self.assertIn(
+            "#452 owns the later lead proposal/confirmation/reconfirmation workflow",
+            overview,
+        )
+        self.assertIn(
+            "#453 owns specialist execution/result/finalization/outcome-unknown",
+            overview,
+        )
+        self.assertIn(
+            "#454 owns whole-workspace rejection of unsupported history",
+            overview,
+        )
 
     def test_production_has_no_benchmark_fixture_import_or_switch(self) -> None:
         forbidden_fragments = (

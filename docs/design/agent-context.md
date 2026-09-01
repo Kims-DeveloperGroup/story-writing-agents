@@ -140,6 +140,13 @@ Canonical artifact inventory covers every eligible canonical directory
 descendant and excludes transcripts, discussion logs, agent states, ledgers,
 symlink escapes, and other internal files.
 
+`FocusedConversationSourceAdapter` reads canonical v2 events from the active
+store and applies `select_bounded_collaboration_context()`. With no explicit
+event IDs, the source is a content-free bootstrap with no provider-readable
+record body. Explicit selections preserve whole readable records under the
+24-record/32,768-byte bound and use `ContextSourceBoundaryKind.RECORDS`.
+Private payload fields and automatic full-history injection are excluded.
+
 The default action policy permits four nonterminal actions and five provider
 calls: at most two SEARCH, two READ, four queries per SEARCH/eight cumulative,
 eight handles per READ/16 cumulative, ten hits per query, 20 per SEARCH and

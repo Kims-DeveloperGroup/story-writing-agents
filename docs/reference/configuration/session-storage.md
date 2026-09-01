@@ -83,7 +83,7 @@ workspace/
 │           ├── metadata.json
 │           ├── collaboration-history.jsonl                     [lazy canonical v2 history]
 │           ├── .collaboration-history.lock                     [lazy excluded safe lock]
-│           └── transcript.jsonl                                [legacy active-v1 residue; rejected by archive/transfer]
+│           └── transcript.jsonl                                [unsupported sentinel; active v2 owner rejects it]
 └── manuscript/<part-id>/<safe-relative-markdown-path>           [lazy create-only output]
 ```
 
@@ -162,12 +162,10 @@ automatic synchronization or shared authority. Explicit
 already-ready store, and `story storage verify` can compare them; neither
 command changes desired or active state.
 
-The main schema-v2 database contains catalog metadata, the still-active v1
-`conversation_events` channel, and canonical v2 `collaboration_events`. For
-archive/transfer, only catalog metadata plus `collaboration_events` is
-authoritative; any schema-v1 event row fails closed before mutation. Issue #478
-removed the public execution consumers, while the selected shell service still
-uses the v1 channel until #479. The fixed private
+The main schema-v2 database contains catalog metadata and canonical v2
+`collaboration_events`. Any row in the unsupported `conversation_events` table
+fails the owning boundary before mutation. The selected shell reads/searches
+the v2 authority. The fixed private
 `discussion_logs/.conversation_storage_fts5.sqlite3` companion is a derived,
 owner-only FTS5 hint resource. It can appear after provisioning or an effective
 SQLite mutation, but absence, staleness, an unavailable FTS5 capability, or an
@@ -203,8 +201,9 @@ and [recovery guidance](../../operations/recovery-and-limitations.md#sqlite-conv
 Canonical archive wire schema is exactly `2`, while embedded catalog metadata
 and transfer reports/checkpoints each retain their own schema version `1`.
 These values describe different records. Archive schema 1, filesystem
-`transcript.jsonl`, and SQLite `conversation_events` rows are not upgrade
-inputs: transfer rejects them without rewriting either store.
+`transcript.jsonl`, and SQLite `conversation_events` rows are unsupported
+owning-boundary inputs: active storage and transfer reject them without
+rewriting either store.
 
 <a id="conversation-transfer-checkpoints"></a>
 

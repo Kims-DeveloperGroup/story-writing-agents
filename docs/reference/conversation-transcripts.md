@@ -1,227 +1,149 @@
-# Conversation transcripts
+# Conversation transcripts and history
 
-> **Availability:** the current shell uses the startup-selected filesystem or
-> SQLite event store for management reads. `/transcript` reads bounded pages;
-> focused `/history` shows one full snapshot with context accounting; `/search`
-> cites active stored events. Ordinary input no longer appends a transcript.
-> Both adapters and their append operations remain
-> available through their documented Python imports; direct runtime
-> construction defaults to filesystem unless supplied a complete bundle.
-> A separate schema-v2 structured-collaboration contract and direct stores are
-> available, but they are not selected by the current runtime, `/transcript`,
-> `/history`, search, or context selection until #479.
-
-Key terms: **event**—one visible stored record; **complete turn**—one user event
-plus one outcome; **unmatched turn**—a user event without an outcome;
-**transcript**—the authoritative local event history; **context window**—a
-bounded complete-turn projection for provider input.
-
-The transcript is authoritative. `read()` returns its complete stored history;
-`read_context()` derives provider context without changing it. The
-[memory service](conversation-search.md) supplies bounded search and read
-projections over the same events.
-
-## Separate structured collaboration history
-
-The contracts on this page remain schema version `1`: a user message followed
-by one agent reply or runtime error. Schema-v2 `CollaborationEvent` values model
-future ordered user/lead/specialist/runtime/artifact/Git exchanges, exact
-proposal decisions, execution facts, and recovery states. They share the
-`story_writing_agents.conversations` facade for public imports but do not share
-a storage protocol, stored path, context selector, or current runtime authority.
-
-`project_collaboration_history()` accepts only canonical v2 events and rejects
-the schema-v1 `ConversationEvent` defined below. Conversely, the current
-filesystem and SQLite transcript stores accept only this page's schema-v1
-values. There is no conversion workflow and no current user action. See
-[Structured collaboration history](collaboration-history.md) for the direct v2
-contract/stores and
-[persistence ownership](../design/persistence.md#structured-collaboration-history-persistence)
-for the selected-service boundary.
-
-## Public contract
-
-The package-root facade exports these frozen, slotted contracts and filesystem
-adapter:
+The active transcript is the readable projection of one authoritative
+schema-v2 collaboration-event stream. Filesystem and SQLite storage implement
+the same `CollaborationEventStore` port:
 
 ```python
-ConversationEventAppend(session_id, conversation_id, turn_id,
-                        sender, recipient, kind, content)
-ConversationEvent(schema_version, session_id, conversation_id, turn_id,
-                  sequence, timestamp, sender, recipient, kind, content)
-ConversationContextPolicy(max_complete_turns, max_utf8_bytes)
-ConversationContextWindow(events, total_complete_turns, retained_turns,
-                          omitted_turns, retained_utf8_bytes, truncated)
-
-CONVERSATION_EVENT_SCHEMA_VERSION = 1
-CONVERSATION_CONTEXT_POLICY = ConversationContextPolicy(24, 32_768)
-FilesystemConversationEventStore(workspace, *, catalog=None)
+append_batch(batch: CollaborationEventBatch) -> CollaborationAppendReceipt
+read(session_id: str, conversation_id: str) -> tuple[CollaborationEvent, ...]
+read_context(session_id: str,
+             conversation_id: str) -> CollaborationHistoryProjection
 ```
 
-The established
-`story_writing_agents.FilesystemConversationEventStore` and
-`story_writing_agents.workspace.FilesystemConversationEventStore` imports are
-aliases of the same class defined by
-`story_writing_agents.conversation_storage.filesystem`. Direct owner-module
-imports are available for internal or advanced ownership clarity. The
-`story_writing_agents.conversation_storage` package facade deliberately does
-not export the class.
+`append_batch()` is atomic and validates a complete contiguous canonical batch
+before mutation. `read()` returns the complete canonical stream.
+`read_context()` returns the validated state projection. The separate pure
+`select_bounded_collaboration_context()` function requires explicit event IDs
+for content-bearing readable context; its default contains no record text.
 
-`ConversationEventStore` defines:
+## What users see
 
-```python
-append(event: ConversationEventAppend) -> ConversationEvent
-read(session_id: str, conversation_id: str) -> tuple[ConversationEvent, ...]
-read_context(session_id: str, conversation_id: str) -> ConversationContextWindow
+`/history [COUNT]` reads the focused active conversation. `/transcript ID
+[COUNT] [--from SEQUENCE]` reads a bounded active or archived conversation
+without changing focus. Each row exposes semantic identity before readable
+fields:
+
+```text
+History (1/2)
+  [event proposal_event]
+    Sequence: 1
+    Turn: turn_a
+    Step: step_a
+    Kind: message
+    Direction: lead_to_user
+    Actors: lead_orchestrator → user
+    proposal.purpose: Consult specialists before recommending the next action.
 ```
 
-`select_bounded_conversation_context(events)` is supported from
-`story_writing_agents.conversations`, not the package facade. It validates/selects
-from one exact tuple; the store protocol, facade exports, and schemas are unchanged.
+Exact decoration varies by terminal. Private event payload fields, provider
+instructions, route fingerprints, credentials, and arbitrary workspace bytes
+are not part of the readable record.
 
-The optional adapter implements the same event-store contract:
+After the rows, `/history` explains durable workflow state:
 
-```python
-from story_writing_agents.conversation_storage.sqlite import (
-    SQLiteConversationEventStore,
-)
-
-store = SQLiteConversationEventStore(
-    workspace,
-    mutation_coordinator=None,
-    mutation_timeout_seconds=5.0,
-)
+```text
+[context]
+  History displayed: 2/2 records
+  Last sequence: 2
+  Current state: awaiting_confirmation
+  User meaning: A proposal is waiting for your confirmation.
+  Next safe action: submit_confirmation
+  Next action meaning: Review the proposal and submit a confirmation decision.
 ```
 
-Construction does not provision the database. Use the explicit flow in the
-[package API](package-api.md#optional-sqlite-conversation-storage) before an
-operation, or the [next-shell selection workflow](cli.md#conversation-storage-selection)
-for the installed shell.
+For a new conversation the exact semantic values are:
 
-`append()` assigns schema version, a one-based contiguous `sequence`, and a
-canonical UTC timestamp. Sequence is authoritative ordering; wall-clock
-timestamps may be equal or move backward.
-
-## Event meaning
-
-In the filesystem adapter, each `transcript.jsonl` line is one JSON object with
-exactly ten keys:
-
-```json
-{"schema_version":1,"session_id":"novel","conversation_id":"c_opening","turn_id":"turn_1","sequence":1,"timestamp":"2026-08-15T10:00:00+00:00","sender":"user","recipient":"plot_architect","kind":"user_message","content":"Should the reveal happen here?"}
+```text
+History displayed: 0/0 records
+Last sequence: 0
+Current state: empty
+User meaning: No collaboration event has been recorded yet.
+Next safe action: none
+Next action meaning: No history-derived action is pending.
 ```
 
-No key may be missing, extra, or duplicated. IDs must match the owning path.
-Content is a nonempty strict-UTF-8 string preserved without trimming or
-rewriting; whitespace-only, multiline, and trailing-LF content are valid.
+`/status` reports the same current state and next-safe-action meanings for the
+focus. These are observations, not executable buttons or proof that the
+provider-bound lead workflow is installed.
 
-| Kind | Sender | Recipient | Pairing rule |
-| --- | --- | --- | --- |
-| `user_message` | `user` | one canonical agent | Starts a unique turn ID |
-| `agent_reply` | addressed agent | `user` | Completes that agent's user turn |
-| `runtime_error` | `runtime` | `user` | Completes an existing user turn |
+## State and next-action meanings
 
-An outcome cannot precede its user event, and one turn cannot have two
-outcomes. Runtime-error text is visible content. Direct callers must sanitize
-their own values. The current `StoryRuntime` has no public turn method that
-appends either event.
+| State | User meaning | Next safe action |
+| --- | --- | --- |
+| `empty` | No collaboration event has been recorded yet. | `none` |
+| `awaiting_confirmation` | A proposal is waiting for your confirmation. | `submit_confirmation` |
+| `reconfirmation_required` | The earlier confirmation is no longer sufficient; review and confirm the updated proposal. | `submit_confirmation` |
+| `confirmed` | You confirmed the proposal; execution has not started yet. | `start_or_reconfirm` |
+| `running` | The confirmed work is currently being executed. | `finalize_result` when a result awaits finalization; otherwise `none` |
+| `completed` | The confirmed work completed and its result is recorded. | `none` |
+| `rejected` | You rejected the proposal; that work will not execute. | `continue_with_lead` |
+| `superseded` | A newer proposal replaced this proposal. | `continue_with_lead` |
+| `interrupted` | Execution stopped before a complete outcome was recorded. | `continue_with_lead` |
+| `failed` | Execution failed and the failure outcome is recorded. | `continue_with_lead` |
+| `outcome_unknown` | Execution may have occurred, but its outcome cannot be proven. | `inspect_and_resolve_outcome` |
+| `recovery_required` | History requires operator inspection before any safe continuation. | `repair_authoritative_history` |
 
-The SQLite adapter stores those same ten public values as normalized event
-rows. Required canonical `searchable_content` supports exact literal search;
-private `turn_slot` and database constraints enforce one user event and at most
-one outcome for a turn, contiguous sequence, addressed reply ownership, and the
-catalog foreign key. Neither derived value is a public event field. Reads
-reconstruct the exact `ConversationEvent` values and ordering and reject a
-stored lexical projection that differs from the public content. Stored `TEXT`
-is decoded as strict UTF-8; malformed bytes fail closed through a content-free
-`WorkspaceFormatError`.
+Next-action labels mean:
 
-## Interactive read bridge
+| Action | User meaning |
+| --- | --- |
+| `none` | No history-derived action is pending. |
+| `submit_confirmation` | Review the proposal and submit a confirmation decision. |
+| `start_or_reconfirm` | Start confirmed work, or reconfirm if its basis changed. |
+| `finalize_result` | Record the terminal result for the running work. |
+| `continue_with_lead` | Continue the conversation with the lead agent. |
+| `inspect_and_resolve_outcome` | Inspect durable evidence and resolve the uncertain outcome. |
+| `repair_authoritative_history` | Repair authoritative history before continuing. |
 
-`/transcript` reads a fresh bounded page from an attached active or archived
-identity without focusing it. `/history [COUNT]` requires current focus on an
-active conversation and reads the store once. Omission displays all; a positive count
-displays newest `min(count,total)` chronologically. Every kind, unmatched user,
-and whitespace stays visible; empty is normal. Its same-tuple summary reports
-displayed/total events, canonical turns/bytes/truncation, and fixed caps. It has
-no cursor, pager, search, provider, or write.
+## Transition flow
 
-Each event renders once as a speaker-aware chat block while storage stays exact.
-The surrounding ListView supplies its position/total, and the block uses a human
-direction header: `You → Agent`, `Agent → You`, or `Runtime → You`. Sequence is
-always present. With Message details On, the same metadata line also includes
-Turn, Kind, and the canonical sender-to-recipient IDs. The full body is visible
-in both modes; Off is compact presentation, not content deletion. The header is
-directly contiguous with its railed body, and the block owns one unrailed
-trailing separator so adjacent transcript owners cannot visually merge.
+The projector validates the whole stream before exposing a state:
 
-For presentation, an `agent_reply` event attempts strict complete-object/array
-JSON formatting with two-space indentation, preserved key order, and Unicode
-output; malformed, scalar, duplicate-key, non-finite, embedded-prose, or
-otherwise unserializable content is displayed unchanged. User messages and
-runtime errors are never JSON-projected. This projection is not persisted and
-does not alter search or context data. Ctrl-C during history stops after
-completed message blocks, emits its fixed cancellation instead of the summary,
-and performs no second read or write. See
-[terminal presentation](interactive-terminal.md) and [page/search limits](conversation-search.md).
+```mermaid
+flowchart LR
+    E[empty] --> A[awaiting_confirmation]
+    A --> C[confirmed]
+    A --> J[rejected]
+    A --> S[superseded]
+    C --> R[running]
+    C --> RC[reconfirmation_required]
+    RC --> C
+    RC --> J
+    RC --> S
+    RC --> X[recovery_required]
+    R --> D[completed]
+    R --> I[interrupted]
+    R --> F[failed]
+    R --> U[outcome_unknown]
+    D --> A
+    J --> A
+    S --> A
+    A --> X
+    C --> X
+    R --> X
+    D --> X
+    J --> X
+    S --> X
+    I --> X
+    F --> X
+    U --> X
+```
 
-## Context-window derivation and failure evidence
+`recovery_required` is terminal. An illegal transition, identity mismatch,
+noncanonical field, partial batch, corrupt byte stream, or inconsistent
+sequence fails closed rather than producing a plausible state.
 
-A complete turn is one `user_message` plus one `agent_reply` or
-`runtime_error`. The pure selector and filesystem store walk complete turns
-newest to oldest and retain at most 24 turns and 32,768 combined content bytes.
-The SQLite store returns the identical projection from one read transaction:
-it obtains the exact complete-turn total, materializes at most the newest 25
-indexed outcomes and their addressed users—50 events—and uses the extra pair
-to detect the 24-turn boundary. Derivation stops at the first turn that would
-exceed either cap, never splits a turn, and restores retained events to storage
-order. Its count, ordered-limit, and addressed lookup queries remain compatible
-with the documented SQLite 3.7.16 minimum and require no window functions.
+## Unsupported owning-boundary history
 
-The retired schema-v1 direct-turn consumer used this failure boundary: after an
-advisory user append, `asyncio` cancellation best-effort added
-`runtime_error` content `CancelledError: conversation turn was cancelled`;
-ordinary failures attempt a `runtime_error` through the safe diagnostic policy.
-A provider `KeyboardInterrupt` or `SystemExit` appends no transcript outcome.
-That consumer attempted a separate content-safe `cancelled`/`interrupted`
-operational record and re-raises the identical exception without automatic
-retry. Failed outcome storage or that process-control path leaves the user
-unmatched. Full reads expose it; context excludes it without retry or repair.
-The window reports
-total/retained/omitted complete turns, bytes, and truncation. Current ordinary
-input creates none of these records. The store never compacts,
-rewrites, or deletes events.
+The active filesystem owner rejects a conversation directory containing
+`transcript.jsonl`. The SQLite owner rejects any row in the unsupported
+`conversation_events` table (an empty table is only a recognized sentinel).
+The check happens before append/read mutation. The runtime neither selects that
+data nor combines it with v2 history. #454 separately owns rejection at the
+whole-workspace boundary.
 
-## Storage and validation boundary
-
-The `story_writing_agents.conversation_storage.filesystem` owner holds the weak
-process-wide per-conversation lock across filesystem catalog validation,
-transcript parsing, complete-file replacement, and context selection. It owns
-the exact JSONL serialization and path
-`discussion_logs/<session_id>/interactive/conversations/<conversation_id>/transcript.jsonl`.
-The catalog identity must exist but may be archived. A missing transcript reads
-as empty without creating a file. A present empty, malformed,
-noncontiguous-sequence, invalidly paired, or path-mismatched file fails closed
-with `WorkspaceFormatError`.
-
-The SQLite adapter stores all sessions and conversations in the fixed optional
-`discussion_logs/conversation_storage.sqlite3` database. A conversation with
-no event rows reads as empty. Each ordinary read uses one explicit stable
-read-only transaction; each append uses one coordinator-first write
-transaction. These guarantees cover one adapter operation, not multiple service
-calls as one database-wide snapshot.
-
-Both adapters validate the addressed complete history for a full `read()`.
-Filesystem context derivation also validates that complete tuple. SQLite
-`read_context()` instead uses its exact aggregate count and addressed indexed
-queries described above; it never materializes more than 25 complete pairs.
-SQLite append likewise remains history-bounded inside its write transaction: it
-obtains one plus the indexed maximum sequence and reads at most the addressed
-turn's user/outcome pair through the unique turn-slot index. Constraints and
-triggers enforce the stored sequence, pairing, addressed reply, and catalog
-ownership without a full-transcript scan. Explicit SQLite preflight and archive
-boundaries retain their documented global validation. Neither adapter invokes
-a provider, changes defaults/focus, searches, migrates old data, or deletes
-events. See
-[Filesystem safety](../operations/filesystem-safety.md) for mutation and
-locking and [Privacy](../operations/privacy-and-provider.md) for exposure.
+See [Conversation search](conversation-search.md) for exact citations and
+snapshot-safe pages, [Collaboration history](collaboration-history.md) for the
+complete event contract, and [Session storage](configuration/session-storage.md)
+for physical paths.

@@ -91,6 +91,32 @@ sentence is the stable output contract. No user/agent chat block, provider
 progress, reference picker, transcript append, or artifact output follows.
 
 <a id="exact-search-and-transcript-records"></a>
+
+## Structured history, search, and transcript records
+
+`/history`, `/search`, `/transcript`, and the focused-history section of
+`/status` render the active schema-v2 service without a provider call.
+History/transcript rows identify sequence, turn, step, kind, direction, actors,
+and closed readable fields. Search rows identify:
+
+```text
+Status: active
+Subject (display only): Focused collaboration
+Citation: conversation c_12ab34cd56, event proposal_event, sequence 1, field proposal.purpose, range 0:19
+Snippet: consult specialists before recommending the next action.
+```
+
+The subject is orientation only. `/search` matches event fields, and its exact
+result notice is `Search returned N of M matching readable fields.` A
+transcript reports `Transcript page returned N records.` and, when more are
+available, `Continue with /transcript HANDLE COUNT --from SEQUENCE.`
+
+History/status state fields are `Last sequence`, `Current state`, `User
+meaning`, `Next safe action`, and `Next action meaning`. See
+[Conversation transcripts](conversation-transcripts.md) for every exact state
+meaning. Rendering never turns a projected next action into executable
+authority.
+
 <a id="generic-internal-picker-foundation"></a>
 <a id="independent-ranged-text-viewer"></a>
 <a id="hosted-external-jsonl-viewer"></a>

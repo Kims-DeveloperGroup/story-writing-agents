@@ -70,26 +70,23 @@ acyclic.
 
 ## Structured collaboration history persistence boundary
 
-Schema-v2 collaboration history is a storage-neutral contract, not another
-active transcript backend. `story_writing_agents.conversations` owns immutable
+Schema-v2 collaboration history is the sole active transcript/history
+contract. `story_writing_agents.conversations` owns immutable
 events, proposal and result values, canonical JSON encoders/decoders, atomic
 batch validation, and pure history projection. `CollaborationEventStore` is a
 three-method protocol for `append_batch()`, `read()`, and `read_context()`.
 
 `conversation_storage.filesystem.FilesystemCollaborationEventStore` and
 `conversation_storage.sqlite.SQLiteCollaborationEventStore` implement that
-port for direct Python callers. Both are intentionally absent from the
-`conversation_storage`, `workspace`, and project-root facades and from active
-storage composition. The current filesystem and SQLite
-`ConversationEventStore` members continue to own only schema-v1 transcript
-events. A schema-v1 event is rejected when presented as v2 history; neither
-channel is a converter or fallback for the other.
+port. Both are intentionally absent from the `conversation_storage`,
+`workspace`, and project-root facades; active filesystem/SQLite composition
+places one behind the storage-neutral service bundle.
 
 ```text
 discussion_logs/<session>/interactive/conversations/<conversation>/
 ├── metadata.json
-├── transcript.jsonl                # active-v1 residue; archive/transfer rejects it
-├── collaboration-history.jsonl
+├── transcript.jsonl                # unsupported owning-boundary sentinel
+├── collaboration-history.jsonl     # active v2 authority
 └── .collaboration-history.lock
 ```
 
@@ -115,13 +112,11 @@ for operator response and
 [Structured collaboration history](../reference/collaboration-history.md#direct-filesystem-storage-and-retry)
 for the direct API scenario.
 
-The SQLite implementation uses the existing
-`discussion_logs/conversation_storage.sqlite3` authority but requires exact
-database schema version `2`. Its 14-object manifest retains all v1
-catalog/transcript resources and adds one collaboration table, two uniqueness
-indexes, and a contiguous-sequence trigger. A schema-v1 database is rejected
-unchanged; there is no `ALTER`, converter, compatibility, or automatic
-upgrade. Fresh provisioning owns the existing UTF-8/DELETE/FULL,
+The SQLite implementation uses
+`discussion_logs/conversation_storage.sqlite3` with exact database schema
+version `2`. Its manifest includes catalog and collaboration resources. Any
+row in the unsupported `conversation_events` table is rejected before
+mutation. Fresh provisioning owns the existing UTF-8/DELETE/FULL,
 five-second-busy-timeout, contained-path, synchronization, and owner-only file
 boundary.
 
@@ -135,11 +130,9 @@ The coordinator and transaction serialize threads and processes. Canonical
 public payloads are plaintext BLOBs with redundant validated facts, never
 hidden reasoning, provider diagnostics, credentials, or reference bytes.
 
-This direct store does not advance the v1 lexical generation, feed FTS, join
-the composed bundle, or change search. FTS remains a non-authoritative v1
-literal-search hint. Archive and transfer now consume canonical v2 history;
-Issue #478 removed the public direct-execution consumers; active service
-integration remains deferred to #479. See the
+The store can refresh a non-authoritative FTS candidate index after canonical
+commit; search still reauthorizes exact v2 event fields. Archive and transfer
+consume canonical v2 history. See the
 [direct SQLite scenario](../reference/collaboration-history.md#direct-sqlite-storage-and-retry).
 
 Stored confirmation and projected next-action values remain evidence. They
@@ -350,18 +343,18 @@ objects never enter this authoritative database.
 Every ordinary adapter read owns a read-only `mode=ro` connection and explicit
 `BEGIN`/`COMMIT` transaction. Bounded identity verification and the requested
 row validation observe one stable snapshot; the connection is then closed.
-That boundary is one catalog, event-store, or search operation.
-`SQLiteConversationSearch` performs its complete bounded literal search in one
-main-database read transaction. It preserves the public normalization, ranking,
-citations, snippets, counters, limits, and result order of
-`ReferenceConversationSearch` while reading authoritative rows directly.
+That boundary is one catalog, collaboration-event-store, or search operation.
+`SQLiteCollaborationHistorySearch` performs its complete bounded event-field
+search in one main-database read transaction. It preserves the v2 readable
+field, exact citation, snippet, count, limit, and result-order contracts while
+reading authoritative rows directly. Catalog subjects never create hits.
 
 Every supported mutation acquires the workspace conversation-storage
 coordinator before opening its `mode=rw` connection. It verifies the database
 and active workspace/owner-thread lease, uses `BEGIN IMMEDIATE`, performs the
 operation with operation-local row validation and database constraints, and
-advances the required lexical generation for an effective v1 change. Direct v2
-collaboration append leaves lexical generation and FTS unchanged. It then
+advances the required lexical generation for an effective searchable change.
+It then
 reverifies schema identity plus the lease, commits, checks the named database
 identity, and closes. A required lexical-state failure rolls back the
 authoritative mutation; an already-effective archive or unarchive is a no-op
@@ -375,11 +368,10 @@ caller-originated `UnicodeDecodeError` is not silently reclassified as stored
 corruption.
 
 The fixed private `discussion_logs/.conversation_storage_fts5.sqlite3`
-companion is derived and disposable. It stores normalized non-runtime visible
-event text and stable event coordinates, and records the committed source
-generation plus exact normalization, schema, tokenizer, and SQLite-runtime
-identities. Authoritative normalized subjects remain in the main database and
-retain subject-match precedence.
+companion is derived and disposable. It stores normalized closed readable
+event fields and stable event/field coordinates, and records the committed
+source generation plus exact normalization, schema, tokenizer, and
+SQLite-runtime identities. Catalog subjects remain display-only.
 
 After an effective main mutation commits, the adapter may refresh the
 companion under the same workspace lease. A refresh failure cannot roll back
@@ -415,12 +407,9 @@ mutation and again after mutation in the same transaction, so an orphan,
 malformed row, or divergent existing identity cannot be silently adopted or
 dropped; failure rolls back the whole import.
 
-Provisioning creates schema v2 only. A recognized schema-v1 database is an
-unsupported version and is preserved byte-for-byte; provisioning, preflight,
-and ordinary adapters do not upgrade it. There is no schema conversion,
-compatibility read, converter, or dual-write path. Archive and same-workspace
-transfer now cover catalog metadata plus exact v2 collaboration rows only;
-they reject legacy database events instead of importing them.
+Provisioning creates schema v2 only. Unsupported databases and owning-boundary
+event rows are preserved and rejected. Archive and same-workspace transfer
+cover catalog metadata plus exact v2 collaboration rows only.
 
 Without POSIX `fcntl`, a valid existing database can still be preflighted and
 read observationally. Supported coordinator acquisition, installation through
@@ -433,10 +422,9 @@ and save SQLite as desired storage, but neither activates or transfers it. The
 explicit transfer coordinator can copy canonical conversations between an
 already-ready database and the filesystem, but it does not install, provision,
 or activate SQLite. Shell startup never installs or provisions. The composed
-SQLite service remains v1-shaped and does not include
-`SQLiteCollaborationEventStore`; active cutover is deferred to #479. There is
-no live switch, dual write, source deletion, RAG coupling, MySQL, or
-FTS-dependent search behavior in this adapter. The separate disposable RAG
+SQLite service includes the v2 collaboration store and aggregate search. There
+is no live switch, source deletion, RAG coupling, MySQL, or FTS-dependent
+search authority. The separate disposable RAG
 store is neither a SQLite table nor a conversation backend. See the
 [direct API](../reference/package-api.md#optional-sqlite-conversation-storage),
 [filesystem boundary](../operations/filesystem-safety.md#sqlite-conversation-storage-safety),

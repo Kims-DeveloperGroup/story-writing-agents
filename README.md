@@ -8,8 +8,9 @@ step; it is not callable in this revision.
 
 ## Current integration stage
 
-The public schema-v1 direct-execution paths have been removed so there is only
-one collaboration path to complete and maintain.
+Public direct-execution paths are absent. The selected runtime now has one
+authoritative schema-v2 collaboration-history service for storage and
+provider-free inspection.
 
 | You can do now | You cannot do in this stage |
 | --- | --- |
@@ -18,7 +19,7 @@ one collaboration path to complete and maintain.
 | Create, list, focus, rename, archive, search, and read conversations. | Start a debate or publish a manuscript from the installed CLI. |
 | Apply directives and edit workspace settings. | Attach canonical artifact references to an agent call. |
 | Inspect session, debate, history, transcript, status, and recorded exchanges. | Call a direct-execution method on `StoryRuntime` or `RuntimeSession`. |
-| Use schema-v2 collaboration contracts, stores, archive/transfer, readable projection, search, and paging APIs. | Treat schema-v2 history as already wired to the shell or a provider. |
+| Use schema-v2 collaboration contracts, stores, archive/transfer, readable projection, search, and paging APIs. | Treat the active inspection path as an active lead/provider workflow. |
 | Run a provider-free management/storage smoke check. | Use smoke as evidence of provider behavior or story quality. |
 
 When ordinary text, routed text, or a retired execution command is submitted in
@@ -30,11 +31,11 @@ Direct story execution is unavailable in this integration stage. Session, conver
 
 The rejection happens before provider binding, transcript append, RAG,
 artifact-reference reads, progress reporting, or artifact publication. #466
-delivered the pure schema-v2 values; #474-#477 added readable projections and
-the storage/archive/transfer pieces on the integration branch. #479 activates
-the sole schema-v2 storage/inspection service and removes the last active-v1
-service path. After parent #467 completes, open issues #452/#453 wire the
-lead-facing and specialist workflows to that store.
+delivered the pure schema-v2 values; #474-#479 added readable projections,
+storage, archive/transfer, and the sole active storage/inspection service.
+Open issue #452 owns the later lead proposal/confirmation workflow, #453 owns
+specialist execution/results, and #454 owns whole-workspace rejection of
+unsupported history. None is implied by the current inspection service.
 
 See [Lead agent and collaboration status](docs/guides/lead-agent.md) for the
 lead's responsibilities, confirmation boundary, and current versus target
@@ -84,10 +85,10 @@ At `story[lobby]>`, manage and inspect local state:
 /quit
 ```
 
-A newly created conversation has no collaboration events, so `/history` is
-empty until a future collaboration integration appends schema-v2 events. The
-management actions themselves remain useful for preparing and checking a
-workspace.
+A newly created conversation has no collaboration events. `/history` reports
+state `empty`, its user meaning, and `none` as the next safe action. `/search`
+does not match the conversation subject: it searches readable event fields
+only, while the subject is display metadata on a hit.
 
 An attempted story instruction is rejected without side effects:
 

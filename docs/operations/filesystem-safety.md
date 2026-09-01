@@ -436,47 +436,31 @@ sibling owners toward exchange retention. Their sizes do not consume the
 the [exact topology](../reference/configuration/session-storage.md#agent-exchange-storage),
 and [privacy](privacy-and-provider.md#agent-exchange-privacy).
 
-## Conversation transcript safety
+## Unsupported transcript sentinel
 
-`story_writing_agents.conversation_storage.filesystem` is the physical owner
-of filesystem conversation metadata and transcript paths, parsing,
-serialization, and the transcript lock registry. `Workspace` supplies the
-generic secure path and atomic-replacement primitives; `workspace.core` does
-not own conversation catalog or transcript persistence.
-
-Transcript reads and appends for the same workspace, session, and conversation
-share a weakly retained process-wide lock. Different conversations are not
-serialized together. An append validates the complete old transcript, then
-atomically replaces the complete file; readers observe the old or complete new
-version, not a partial appended line.
-
-The event-store adapter does not acquire or verify story-session access. A
-caller that permits multiple processes must acquire the session's V2 access
-claim before same-session writes. The persisted claim and claim guard provide
-cross-process exclusion; the in-process transcript lock alone is insufficient.
-
-After catalog identity succeeds, a missing transcript is valid empty history.
-An existing empty file, malformed JSONL, invalid sequence or pairing, or
-path-mismatched record raises `WorkspaceFormatError`. Symlinks raise
-`WorkspaceSecurityError`. Exact event rules are in
-[Conversation transcripts](../reference/conversation-transcripts.md).
+The active filesystem schema-v2 owner treats any `transcript.jsonl` below an
+addressed catalog conversation as an unsupported sentinel. It detects that
+file before append/read mutation and preserves it unchanged. A symlink or
+unsafe owning path also fails closed. #454 separately owns a future
+whole-workspace rejection; this boundary checks only the conversation being
+opened.
 
 <a id="schema-v2-collaboration-history-safety"></a>
 
 ## Schema-v2 collaboration-history safety
 
-`FilesystemCollaborationEventStore` is a separate direct-module adapter. It is
-not the active schema-v1 event store, is not exported through a package facade,
-and is not selected by the shell. It owns only these siblings below an existing
-catalog conversation:
+`FilesystemCollaborationEventStore` is a direct-module-only concrete adapter
+placed behind the selected filesystem service bundle. It is not exported
+through a package facade. It owns these siblings below an existing catalog
+conversation:
 
 ```text
 collaboration-history.jsonl
 .collaboration-history.lock
 ```
 
-`transcript.jsonl` remains the independent schema-v1 owner. Construction and
-an absent-history read create no v2 storage. Present reads and appends verify
+`transcript.jsonl` is rejected as described above. Construction and an
+absent-history read create no v2 storage. Present reads and appends verify
 catalog identity, use the workspace's contained no-symlink path checks, and
 hold both a weak per-history process lock and a blocking POSIX exclusive
 advisory lock. A present guard must remain the same regular non-symlink file
@@ -530,9 +514,8 @@ Use failures as follows:
 | `WorkspaceFormatError` or `corrupt_history` | Stop normal appends, preserve the exact bytes, and restore only a trusted complete schema-v2 history through an owning future recovery/transfer workflow. |
 | Unsafe lock/history path | Stop writers and inspect the containing workspace with trusted local tools. Do not follow, replace, or repair an alias in place. |
 
-Do not hand-edit, pretty-print, truncate, combine, or copy schema-v1 transcript
-bytes into this file. This adapter supplies no conversion, rollback, repair,
-archive, or workspace-transfer workflow. Durable confirmation and projected
+Do not hand-edit, pretty-print, truncate, combine, or copy unsupported
+transcript bytes into this file. Durable confirmation and projected
 next action remain evidence only; reading them never recreates a provider,
 workspace lease, Git capability, credential, or permission to repeat work. See
 [Structured collaboration history](../reference/collaboration-history.md#direct-filesystem-storage-and-retry)
@@ -924,18 +907,18 @@ An ordinary read opens one read-only connection, verifies connection policy,
 executes `BEGIN`, verifies bounded database/schema identity, validates the rows
 requested by one adapter operation, commits, closes, then rechecks the sidecar
 and database identity. This gives one stable snapshot for that operation. It
-does not run the exhaustive preflight scan. `SQLiteConversationSearch` uses one
+does not run the exhaustive preflight scan. `SQLiteCollaborationHistorySearch` uses one
 such main-database transaction for its complete bounded search rather than
 composing several catalog and event-store operations.
 
 ### Derived FTS companion
 
-The direct SQLite search adapter may consult the fixed private
+The SQLite collaboration-history search adapter may consult the fixed private
 `discussion_logs/.conversation_storage_fts5.sqlite3` companion while its main
 snapshot is open. The companion is a derived candidate source, not authority:
-all subject matches come from authoritative normalized subjects, and every
-scanned event is checked by exact normalized literal comparison against the
-main database regardless of its hint. False, missing, or reordered hints
+every candidate is checked by exact normalized literal comparison against a
+closed readable event field in the main database. Subjects never create hits.
+False, missing, or reordered hints
 therefore cannot change hits, citations, snippets, counts, truncation, or
 result order.
 

@@ -30,7 +30,6 @@ from story_writing_agents import (
     CHARACTER_CUSTODIAN,
     ConversationContextWindow,
     ConversationEvent,
-    ConversationEventAppend,
     ConversationEventKind,
     ConversationReply,
     ConversationRequest,
@@ -48,8 +47,6 @@ from story_writing_agents import (
     ConversationRetrievalSearchObservation,
     ConversationRetrievalSource,
     EXECUTION_SPECIALIST,
-    FilesystemConversationCatalog,
-    FilesystemConversationEventStore,
     PLOT_ARCHITECT,
     Phase,
     PromptFileReference,
@@ -72,9 +69,10 @@ from story_writing_agents.conversation_rag import (
     ConversationRagReason,
     ConversationRagSourceReference,
 )
-from story_writing_agents.conversation_search import (
-    ConversationCitation,
-    ConversationSearchMatchKind,
+from story_writing_agents.conversation_search import CollaborationHistoryCitation
+from story_writing_agents.conversations import (
+    CollaborationReadableFieldKey,
+    select_bounded_collaboration_context,
 )
 from story_writing_agents.cli import _parse_backend_overrides, build_parser, main
 from story_writing_agents.backend import backend_configuration_snapshot
@@ -475,6 +473,12 @@ def _conversation_request(
     )
 
 
+def _readable_context():  # type: ignore[no-untyped-def]
+    """Return the canonical content-free active-v2 retrieval context."""
+
+    return select_bounded_collaboration_context(())
+
+
 def _retrieval_request(
     *,
     session_id: str = "story_session",
@@ -482,7 +486,7 @@ def _retrieval_request(
     turn_id: str = "turn_current",
     agent_id: str = PLOT_ARCHITECT,
     content: str = "visible retrieval request",
-    context: ConversationContextWindow | None = None,
+    context: object | None = None,
     rag_context: ConversationRagContext | None = None,
 ) -> ConversationRetrievalRequest:
     """Build one exact bounded-retrieval provider request."""
@@ -493,7 +497,7 @@ def _retrieval_request(
         turn_id=turn_id,
         agent_id=agent_id,
         content=content,
-        context=_context_window() if context is None else context,
+        context=_readable_context() if context is None else context,
         rag_context=rag_context,
     )
 
@@ -517,13 +521,14 @@ def _provider_rag_context() -> ConversationRagContext:
     excerpt = ConversationRagExcerpt(
         citation_id="g1",
         source=ConversationRetrievalSource(
-            subject="Authoritative subject",
-            citation=ConversationCitation(
-                "story_session",
-                "source_conversation",
-                "source_turn",
-                2,
-                ConversationEventKind.AGENT_REPLY,
+            citation=CollaborationHistoryCitation(
+                session_id="story_session",
+                conversation_id="source_conversation",
+                event_id="source_event",
+                sequence=2,
+                field_key=CollaborationReadableFieldKey.SPECIALIST_REPLY_CONTENT,
+                start_codepoint=0,
+                end_codepoint=len(content),
             ),
         ),
         reference=ConversationRagSourceReference(
@@ -564,13 +569,14 @@ class _RecordingRetrievalHandler:
         self.actions.append(action)
         if type(action) is ConversationRetrievalSearchAction:
             self.source = ConversationRetrievalSource(
-                subject="Needle source",
-                citation=ConversationCitation(
-                    action.session_id,
-                    "source_conversation",
-                    None,
-                    None,
-                    None,
+                citation=CollaborationHistoryCitation(
+                    session_id=action.session_id,
+                    conversation_id="source_conversation",
+                    event_id="source_event",
+                    sequence=1,
+                    field_key=CollaborationReadableFieldKey.PROPOSAL_PURPOSE,
+                    start_codepoint=0,
+                    end_codepoint=len("Needle source"),
                 ),
             )
             outcome: ConversationRetrievalObservation | ConversationRetrievalReply = (
@@ -583,7 +589,6 @@ class _RecordingRetrievalHandler:
                         ConversationRetrievalSearchItem(
                             citation_id=f"s{action.action_index}h1",
                             source=self.source,
-                            match_kind=ConversationSearchMatchKind.EXACT_SUBJECT,
                             snippet='Needle "source" 한🙂',
                         ),
                     ),
@@ -599,7 +604,7 @@ class _RecordingRetrievalHandler:
                 action_index=action.action_index,
                 source_citation_id=action.citation_id,
                 source=self.source,
-                events=(),
+                records=(),
                 truncated=False,
             )
         else:
@@ -945,13 +950,20 @@ class ConversationModelContractTests(unittest.TestCase):
             "story_session_context": story_context,
         }
 
-        for request_type in (ConversationRequest, ConversationRetrievalRequest):
+        cases = (
+            (ConversationRequest, common),
+            (
+                ConversationRetrievalRequest,
+                {**common, "context": _readable_context()},
+            ),
+        )
+        for request_type, values in cases:
             with self.subTest(request_type=request_type.__name__):
                 with self.assertRaisesRegex(
                     ValueError,
                     "story-session context request identity mismatch",
                 ):
-                    request_type(**common)
+                    request_type(**values)
 
     def test_retrieval_bound_signature_and_sync_handler_protocol_are_exact(
         self,
@@ -1841,7 +1853,7 @@ class CodexBackendTestCase(unittest.IsolatedAsyncioTestCase):
             "turn_id": "turn_current",
             "agent_id": PLOT_ARCHITECT,
             "content": "visible retrieval request",
-            "context": _context_window(),
+            "context": _readable_context(),
         }
         values.update(overrides)
         return ConversationRetrievalRequest(**values)  # type: ignore[arg-type]
@@ -4309,42 +4321,23 @@ class CodexBackendTestCase(unittest.IsolatedAsyncioTestCase):
         self,
     ) -> None:
         session_id = "conversation_session"
-        catalog = FilesystemConversationCatalog(self.workspace)
-        metadata = catalog.create(session_id, "Provider boundary")
-        store = FilesystemConversationEventStore(
-            self.workspace,
-            catalog=catalog,
+        conversation_id = "conversation_a"
+        prior_user, prior_reply = _conversation_pair(
+            "turn_prior",
+            session_id=session_id,
+            conversation_id=conversation_id,
+            user_content="prior visible question",
+            outcome_content="prior visible answer",
         )
-        source_events = (
-            *_conversation_pair(
-                "turn_prior",
-                session_id=session_id,
-                conversation_id=metadata.conversation_id,
-                user_content="prior visible question",
-                outcome_content="prior visible answer",
-            ),
-            _conversation_pair(
-                "turn_current",
-                session_id=session_id,
-                conversation_id=metadata.conversation_id,
-                user_content="current visible question",
-            )[0],
+        current_user = _conversation_pair(
+            "turn_current",
+            session_id=session_id,
+            conversation_id=conversation_id,
+            user_content="current visible question",
+        )[0]
+        context = _context_window(
+            (prior_user, prior_reply),
         )
-        prior_user, prior_reply, current_user = (
-            store.append(
-                ConversationEventAppend(
-                    session_id=event.session_id,
-                    conversation_id=event.conversation_id,
-                    turn_id=event.turn_id,
-                    sender=event.sender,
-                    recipient=event.recipient,
-                    kind=event.kind,
-                    content=event.content,
-                )
-            )
-            for event in source_events
-        )
-        context = store.read_context(session_id, metadata.conversation_id)
 
         definition = self.definition()
         static_content = [
@@ -4356,7 +4349,7 @@ class CodexBackendTestCase(unittest.IsolatedAsyncioTestCase):
         bound = await backend.bind(definition)
         request = self.conversation_request(
             session_id=session_id,
-            conversation_id=metadata.conversation_id,
+            conversation_id=conversation_id,
             content=current_user.content,
             context=context,
         )
@@ -4364,7 +4357,7 @@ class CodexBackendTestCase(unittest.IsolatedAsyncioTestCase):
         raw_reply = json.dumps(
             {
                 "session_id": session_id,
-                "conversation_id": metadata.conversation_id,
+                "conversation_id": conversation_id,
                 "turn_id": "turn_current",
                 "content": visible_reply,
             }
@@ -4390,7 +4383,7 @@ class CodexBackendTestCase(unittest.IsolatedAsyncioTestCase):
             reply,
             ConversationReply(
                 session_id=session_id,
-                conversation_id=metadata.conversation_id,
+                conversation_id=conversation_id,
                 turn_id="turn_current",
                 content=visible_reply,
             ),
@@ -4412,7 +4405,7 @@ class CodexBackendTestCase(unittest.IsolatedAsyncioTestCase):
             tuple(payload[field] for field in tuple(payload)[:5]),
             (
                 session_id,
-                metadata.conversation_id,
+                conversation_id,
                 "turn_current",
                 PLOT_ARCHITECT,
                 current_user.content,
@@ -4464,8 +4457,8 @@ class CodexBackendTestCase(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(core_snapshot(self.workspace), core_before)
         self.assertEqual(all_manuscripts(self.workspace), manuscripts_before)
         self.assertEqual(
-            store.read(session_id, metadata.conversation_id),
-            (prior_user, prior_reply, current_user),
+            request.context.events,
+            (prior_user, prior_reply),
         )
         self.assertEqual(self.workspace.inspect_session(session_id)["debates"], [])
 
@@ -6068,7 +6061,7 @@ class CodexBackendTestCase(unittest.IsolatedAsyncioTestCase):
         )
         request = self.retrieval_request(
             session_id=session_id,
-            context=context,
+            context=_readable_context(),
             story_session_context=story_session_context,
         )
         outputs = (
@@ -6080,7 +6073,7 @@ class CodexBackendTestCase(unittest.IsolatedAsyncioTestCase):
             ),
             _retrieval_action_json(
                 request,
-                kind=ConversationRetrievalActionKind.READ_TRANSCRIPT,
+                kind=ConversationRetrievalActionKind.READ_HISTORY,
                 action_index=2,
                 citation_id="s1h1",
                 start_sequence=1,
@@ -6120,8 +6113,8 @@ class CodexBackendTestCase(unittest.IsolatedAsyncioTestCase):
         rules = [
             "Return exactly one structured retrieval action with the supplied "
             "session_id, conversation_id, turn_id, and action_index.",
-            "Use search_conversations before read_transcript; after the first "
-            "read_transcript, use only read_transcript or answer; answer may be "
+            "Use search_conversations before read_history; after the first "
+            "read_history, use only read_history or answer; answer may be "
             "the first action.",
             "Use only citation_id values supplied in observations from this turn; "
             "do not invent or alter citations.",
@@ -6170,8 +6163,8 @@ class CodexBackendTestCase(unittest.IsolatedAsyncioTestCase):
             [control["allowed_actions"] for control in controls],
             [
                 ["search_conversations", "answer"],
-                ["search_conversations", "read_transcript", "answer"],
-                ["read_transcript", "answer"],
+                ["search_conversations", "read_history", "answer"],
+                ["read_history", "answer"],
             ],
         )
         for control in controls:
@@ -6243,7 +6236,7 @@ class CodexBackendTestCase(unittest.IsolatedAsyncioTestCase):
                     {"query": {"type": "string"}},
                 ),
                 branch(
-                    "read_transcript",
+                    "read_history",
                     {
                         "citation_id": {"type": "string"},
                         "start_sequence": {"type": "integer", "minimum": 1},
@@ -6326,7 +6319,7 @@ class CodexBackendTestCase(unittest.IsolatedAsyncioTestCase):
         )
         valid_read = _retrieval_action_json(
             request,
-            kind=ConversationRetrievalActionKind.READ_TRANSCRIPT,
+            kind=ConversationRetrievalActionKind.READ_HISTORY,
             action_index=2,
             citation_id="s1h1",
             start_sequence=1,
@@ -7515,7 +7508,7 @@ class CodexBackendTestCase(unittest.IsolatedAsyncioTestCase):
                         ),
                         _retrieval_action_json(
                             request,
-                            kind=ConversationRetrievalActionKind.READ_TRANSCRIPT,
+                            kind=ConversationRetrievalActionKind.READ_HISTORY,
                             action_index=2,
                             citation_id="s1h1",
                             start_sequence=1,

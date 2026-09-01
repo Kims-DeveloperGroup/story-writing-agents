@@ -20,15 +20,15 @@ except ImportError:  # pragma: no cover - non-POSIX hosts fail closed on borrow.
     _fcntl = None
 
 from ..conversation_search import (
-    ConversationSearchQuery,
-    ConversationSearchResult,
-    ConversationSearchScope,
-    ReferenceConversationSearch,
+    CollaborationHistorySearchQuery,
+    CollaborationHistorySearchResult,
+    CollaborationHistorySearchScope,
+    ReferenceCollaborationHistorySearch,
 )
 from ..workspace.core import Workspace
 from .filesystem import (
+    FilesystemCollaborationEventStore,
     FilesystemConversationCatalog,
-    FilesystemConversationEventStore,
 )
 from .contracts import (
     CONVERSATION_STORAGE_ACTIVATION_SCHEMA_VERSION,
@@ -154,8 +154,8 @@ class _PinnedFilesystemConversationCatalog(FilesystemConversationCatalog):
             return super().unarchive(session_id, conversation_id)
 
 
-class _PinnedFilesystemConversationEventStore(FilesystemConversationEventStore):
-    """Concrete event store pinned to one topology and catalog collaborator."""
+class _PinnedFilesystemCollaborationEventStore(FilesystemCollaborationEventStore):
+    """Schema-v2 event store pinned to one topology and catalog collaborator."""
 
     __slots__ = ("_coordinator", "_pinned_catalog", "_topology")
 
@@ -192,14 +192,14 @@ class _PinnedFilesystemConversationEventStore(FilesystemConversationEventStore):
     def catalog(self, _catalog: object) -> None:
         """Ignore mutable catalog rebinding in favor of the pinned collaborator."""
 
-    def append(self, event: Any) -> Any:
+    def append_batch(self, batch: Any) -> Any:
         with self._coordinator.borrow(
             timeout_seconds=_FILESYSTEM_MUTATION_TIMEOUT_SECONDS
         ):
-            return super().append(event)
+            return super().append_batch(batch)
 
 
-class _PinnedReferenceConversationSearch(ReferenceConversationSearch):
+class _PinnedReferenceCollaborationHistorySearch(ReferenceCollaborationHistorySearch):
     """Concrete search that ignores mutable inherited collaborator bindings."""
 
     __slots__ = ("_pinned_catalog", "_pinned_event_store")
@@ -207,7 +207,7 @@ class _PinnedReferenceConversationSearch(ReferenceConversationSearch):
     def __init__(
         self,
         catalog: FilesystemConversationCatalog,
-        event_store: FilesystemConversationEventStore,
+        event_store: FilesystemCollaborationEventStore,
     ) -> None:
         self._pinned_catalog = catalog
         self._pinned_event_store = event_store
@@ -215,12 +215,12 @@ class _PinnedReferenceConversationSearch(ReferenceConversationSearch):
 
     def search(
         self,
-        scope: ConversationSearchScope,
-        query: ConversationSearchQuery,
-    ) -> ConversationSearchResult:
+        scope: CollaborationHistorySearchScope,
+        query: CollaborationHistorySearchQuery,
+    ) -> CollaborationHistorySearchResult:
         """Search through only the construction-pinned concrete collaborators."""
 
-        return ReferenceConversationSearch(
+        return ReferenceCollaborationHistorySearch(
             self._pinned_catalog,
             self._pinned_event_store,
         ).search(scope, query)
@@ -525,7 +525,7 @@ class WorkspaceConversationStorageMutationCoordinator:
 def compose_filesystem_conversation_storage(
     workspace: Workspace | str | os.PathLike[str],
 ) -> ConversationStorageServices:
-    """Bind the unchanged filesystem catalog, event store, and search ports."""
+    """Bind the filesystem catalog and sole schema-v2 history/search ports."""
 
     resolved = workspace if isinstance(workspace, Workspace) else Workspace(workspace)
     topology = _WorkspaceTopology.capture(resolved)
@@ -541,13 +541,13 @@ def compose_filesystem_conversation_storage(
         resolved,
         coordinator,
     )
-    event_store = _PinnedFilesystemConversationEventStore(
+    event_store = _PinnedFilesystemCollaborationEventStore(
         topology,
         resolved,
         catalog=catalog,
         coordinator=coordinator,
     )
-    search = _PinnedReferenceConversationSearch(catalog, event_store)
+    search = _PinnedReferenceCollaborationHistorySearch(catalog, event_store)
     return ConversationStorageServices(
         catalog_binding=ConversationStorageComponentBinding(
             provenance=provenance,

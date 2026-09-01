@@ -11,17 +11,16 @@ StoryRuntime(
     workspace: Workspace | str | pathlib.Path,
     backend: AgentBackend | None = None,
     *,
-    conversation_event_store: ConversationEventStore | None = None,
     conversation_storage_services: ConversationStorageServices | None = None,
     conversation_rag_service: ConversationRagRuntimeService | None = None,
 )
 ```
 
 With no conversation arguments, construction composes the filesystem storage
-bundle. A complete `ConversationStorageServices` bundle and a raw
-`conversation_event_store` are mutually exclusive. A RAG service requires the
-complete storage-services boundary and cannot be paired with only the raw event
-store. Construction does not invoke a provider.
+bundle. An injected `ConversationStorageServices` must be complete and carries
+the one catalog, schema-v2 event store, search, mutation, and provenance
+boundary. A RAG service is an optional separate collaborator. Construction
+does not invoke a provider.
 
 `backend` remains available for quiescent configuration activation used by the
 interactive settings workflow. Its presence does not add execution methods.

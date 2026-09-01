@@ -2434,7 +2434,6 @@ __all__ = [
     "CollaborationTerminalOutcomePayload",
     "CollaborationTerminalScope",
     "ConversationEvent",
-    "ConversationEventAppend",
     "ConversationEventKind",
     "collaboration_batch_digest",
     "collaboration_proposal_digest",

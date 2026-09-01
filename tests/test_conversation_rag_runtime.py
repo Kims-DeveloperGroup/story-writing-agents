@@ -1,41 +1,17 @@
-"""Authorized conversation-RAG runtime contracts and integration tests."""
+"""Authorized schema-v2 collaboration-RAG runtime tests."""
 
 from __future__ import annotations
 
-import contextlib
-import hashlib
 import inspect
 import unittest
-from collections.abc import Callable, Iterator
 from dataclasses import FrozenInstanceError, fields, replace
-from unittest import mock
 
-from story_writing_agents import (
-    ConversationReply,
-    SessionAccessState,
-    SessionDurableState,
-    SessionLifecycleState,
-)
-from story_writing_agents import conversation_rag_composition as rag_composition
-from story_writing_agents import conversation_rag_local as rag_local
-from story_writing_agents import conversation_rag_store as rag_store
-from story_writing_agents.agents import PLOT_ARCHITECT
 from story_writing_agents.conversation_rag import (
-    CONVERSATION_RAG_POLICY,
     ConversationRagEmbeddingIdentity,
     ConversationRagOutcome,
-    ConversationRagProjectionCheckpoint,
-    ConversationRagProjectionCheckpointEntry,
-    ConversationRagProjectionOutcome,
-    ConversationRagProjectionRequest,
-    ConversationRagProjectionResult,
     ConversationRagProjectionState,
     ConversationRagProjectionStateAvailability,
-    ConversationRagProjectionStatus,
     ConversationRagReason,
-    ConversationRagRetrievalRequest,
-    ConversationRagRetrievalResult,
-    ConversationRagSourceReference,
 )
 from story_writing_agents.conversation_rag_runtime import (
     CONVERSATION_RAG_RUNTIME_POLICY,
@@ -49,93 +25,35 @@ from story_writing_agents.conversation_rag_runtime import (
     ConversationRagRuntimeStateSnapshot,
     inspect_authorized_conversation_rag,
 )
-from story_writing_agents.conversation_retrieval import (
-    ConversationRagContext,
-    ConversationRetrievalActionHandler,
-    ConversationRetrievalActionKind,
-    ConversationRetrievalAnswerAction,
-    ConversationRetrievalReply,
-    ConversationRetrievalRequest,
-    ConversationRetrievalSearchAction,
-)
 from story_writing_agents.conversation_storage import (
-    ConversationStorageComponentBinding,
-    ConversationStorageServices,
     compose_filesystem_conversation_storage,
 )
-from story_writing_agents.conversations import (
-    ConversationEvent,
-    ConversationEventAppend,
-    ConversationEventKind,
-)
-from story_writing_agents.models import AgentDefinition, ConversationRequest
+from story_writing_agents.conversations import CollaborationEventBatch
+
+from tests.collaboration_contract_fixture import contract_batches
 from tests.helpers import initialized_workspace
 
-_SESSION = "rag_runtime_session"
-_DOCUMENT_ID_DOMAIN = "story-conversation-rag-visible-turn-document-id-v1"
-_REVISION_ID_DOMAIN = "story-conversation-rag-visible-turn-revision-v1"
-_DEFAULT = object()
 
-
-def _framed_sha256(domain: str, *values: str) -> str:
-    """Independent golden oracle for the accepted length-framed identifiers."""
-
-    digest = hashlib.sha256()
-    for value in (domain, *values):
-        encoded = value.encode("utf-8")
-        digest.update(len(encoded).to_bytes(8, "big"))
-        digest.update(encoded)
-    return digest.hexdigest()
-
-
-def _event_fields(event: ConversationEvent) -> tuple[str, ...]:
-    row = event.to_dict()
-    return tuple(
-        str(row[name])
-        for name in (
-            "schema_version",
-            "session_id",
-            "conversation_id",
-            "turn_id",
-            "sequence",
-            "timestamp",
-            "sender",
-            "recipient",
-            "kind",
-            "content",
-        )
-    )
-
-
-def _missing_state() -> ConversationRagProjectionState:
-    return ConversationRagProjectionState(
-        availability=ConversationRagProjectionStateAvailability.MISSING,
-        checkpoint=None,
-    )
+SESSION_ID = "rag_runtime_session"
 
 
 class _StatePort:
-    """Small restart-persistent runtime-state double."""
-
     def __init__(self, workspace_key: str) -> None:
-        self._workspace_key = workspace_key
-        self._embedding = ConversationRagEmbeddingIdentity(
-            model_id="test-embedding-v1",
+        self.workspace_key = workspace_key
+        self.embedding = ConversationRagEmbeddingIdentity(
+            model_id="test-embedding-v2",
             dimensions=3,
         )
-        self.state = _missing_state()
-        self.reason = ConversationRagReason.UNAVAILABLE
+        self.snapshot = ConversationRagRuntimeStateSnapshot(
+            session_id=SESSION_ID,
+            state=ConversationRagProjectionState(
+                availability=ConversationRagProjectionStateAvailability.MISSING,
+                checkpoint=None,
+            ),
+            reason=ConversationRagReason.UNAVAILABLE,
+        )
         self.inspections: list[str] = []
         self.stale_calls: list[str] = []
-        self.stale_failure: BaseException | None = None
-
-    @property
-    def workspace_key(self) -> str:
-        return self._workspace_key
-
-    @property
-    def embedding(self) -> ConversationRagEmbeddingIdentity:
-        return self._embedding
 
     def inspect_projection_state(
         self,
@@ -143,843 +61,190 @@ class _StatePort:
         /,
     ) -> ConversationRagRuntimeStateSnapshot:
         self.inspections.append(session_id)
-        return ConversationRagRuntimeStateSnapshot(
-            session_id=session_id,
-            state=self.state,
-            reason=self.reason,
-        )
+        return self.snapshot
 
     def mark_projection_stale(self, session_id: str, /) -> None:
         self.stale_calls.append(session_id)
-        if self.stale_failure is not None:
-            raise self.stale_failure
-        self.reason = ConversationRagReason.STALE
-
-    def publish(self, checkpoint: ConversationRagProjectionCheckpoint) -> None:
-        self.state = ConversationRagProjectionState(
-            availability=ConversationRagProjectionStateAvailability.PRESENT,
-            checkpoint=checkpoint,
-        )
-        self.reason = ConversationRagReason.NONE
 
 
-class _LowLevelService:
-    """Provider-neutral service double that publishes exact checkpoints."""
+class _UnusedLowLevelService:
+    def __init__(self) -> None:
+        self.calls: list[str] = []
 
-    def __init__(self, state: _StatePort) -> None:
-        self.state = state
-        self.project_calls: list[
-            tuple[ConversationRagProjectionRequest, ConversationRagProjectionState]
-        ] = []
-        self.rebuild_calls: list[
-            tuple[ConversationRagProjectionRequest, ConversationRagProjectionState]
-        ] = []
-        self.semantic_calls: list[
-            tuple[ConversationRagRetrievalRequest, ConversationRagProjectionState]
-        ] = []
-        self.hybrid_calls: list[object] = []
-        self.semantic_value: object = _DEFAULT
-        self.projection_value: object = _DEFAULT
-        self.on_projection: (
-            Callable[[ConversationRagProjectionRequest], None] | None
-        ) = None
-        self.active_probe: Callable[[], bool] | None = None
-        self.provider_active_states: list[bool] = []
+    def project_documents(self, request, state):  # type: ignore[no-untyped-def]
+        self.calls.append("project")
+        raise AssertionError("projection was not requested")
 
-    def _projection(
-        self,
-        request: ConversationRagProjectionRequest,
-        state: ConversationRagProjectionState,
-    ) -> object:
-        del state
-        if self.active_probe is not None:
-            self.provider_active_states.append(self.active_probe())
-        if isinstance(self.projection_value, BaseException):
-            raise self.projection_value
-        if self.projection_value is not _DEFAULT:
-            return self.projection_value
-        entries = tuple(
-            ConversationRagProjectionCheckpointEntry(
-                document=document.identity,
-                source_digest="sha256:"
-                + hashlib.sha256(document.text.encode("utf-8")).hexdigest(),
-                fragment_count=1,
-            )
-            for document in request.documents
-        )
-        checkpoint = ConversationRagProjectionCheckpoint(
-            session_id=request.session_id,
-            schema_id=request.schema_id,
-            embedding=request.embedding,
-            max_fragment_codepoints=CONVERSATION_RAG_POLICY.max_fragment_codepoints,
-            fragment_overlap_codepoints=(
-                CONVERSATION_RAG_POLICY.fragment_overlap_codepoints
-            ),
-            entries=entries,
-            token="checkpoint-token",
-        )
-        result = ConversationRagProjectionResult(
-            status_before=ConversationRagProjectionStatus.MISSING,
-            outcome=ConversationRagProjectionOutcome.COMPLETED,
-            attempted_documents=len(request.documents),
-            completed_documents=len(request.documents),
-            checkpoint=checkpoint,
-        )
-        self.state.publish(checkpoint)
-        if self.on_projection is not None:
-            self.on_projection(request)
-        return result
+    def rebuild_projection(self, request, state):  # type: ignore[no-untyped-def]
+        self.calls.append("rebuild")
+        raise AssertionError("projection was not requested")
 
-    def project_documents(
-        self,
-        request: ConversationRagProjectionRequest,
-        state: ConversationRagProjectionState,
-        /,
-    ) -> ConversationRagProjectionResult:
-        self.project_calls.append((request, state))
-        return self._projection(request, state)  # type: ignore[return-value]
+    def retrieve_semantic(self, request, state):  # type: ignore[no-untyped-def]
+        self.calls.append("semantic")
+        raise AssertionError("missing state must not run semantic retrieval")
 
-    def rebuild_projection(
-        self,
-        request: ConversationRagProjectionRequest,
-        state: ConversationRagProjectionState,
-        /,
-    ) -> ConversationRagProjectionResult:
-        self.rebuild_calls.append((request, state))
-        return self._projection(request, state)  # type: ignore[return-value]
-
-    def retrieve_semantic(
-        self,
-        request: ConversationRagRetrievalRequest,
-        state: ConversationRagProjectionState,
-        /,
-    ) -> ConversationRagRetrievalResult:
-        self.semantic_calls.append((request, state))
-        if self.active_probe is not None:
-            self.provider_active_states.append(self.active_probe())
-        value = self.semantic_value
-        if callable(value):
-            value = value(request, state)
-        if isinstance(value, BaseException):
-            raise value
-        if value is not _DEFAULT:
-            return value  # type: ignore[return-value]
-        return ConversationRagRetrievalResult(
-            request=request,
-            outcome=ConversationRagOutcome.COMPLETE,
-            reason=ConversationRagReason.NONE,
-            candidates=(),
-            truncated=False,
-        )
-
-    def retrieve_hybrid(
-        self,
-        request: ConversationRagRetrievalRequest,
-        state: ConversationRagProjectionState,
-        /,
-    ) -> ConversationRagRetrievalResult:
-        self.hybrid_calls.append((request, state))
-        raise AssertionError("the runtime must not recurse into hybrid retrieval")
+    def retrieve_hybrid(self, request, state, lexical):  # type: ignore[no-untyped-def]
+        self.calls.append("hybrid")
+        raise AssertionError("hybrid retrieval was not requested")
 
 
-class _TracingCoordinator:
-    """Observe the fixed lease timeout and provider/lease separation."""
-
-    def __init__(self, delegate: object) -> None:
-        self.delegate = delegate
-        self.timeouts: list[float] = []
-        self.active_count = 0
-
-    @property
-    def workspace_key(self) -> str:
-        return self.delegate.workspace_key  # type: ignore[no-any-return]
-
-    def borrow(self, *, timeout_seconds: float) -> contextlib.AbstractContextManager:
-        self.timeouts.append(timeout_seconds)
-
-        @contextlib.contextmanager
-        def manager() -> Iterator[object]:
-            with self.delegate.borrow(timeout_seconds=timeout_seconds) as lease:  # type: ignore[attr-defined]
-                self.active_count += 1
-                try:
-                    yield lease
-                finally:
-                    self.active_count -= 1
-
-        return manager()
-
-
-def _with_coordinator(
-    services: ConversationStorageServices,
-    coordinator: object,
-) -> ConversationStorageServices:
-    return ConversationStorageServices(
-        catalog_binding=ConversationStorageComponentBinding(
-            services.provenance,
-            services.catalog,
-        ),
-        event_store_binding=ConversationStorageComponentBinding(
-            services.provenance,
-            services.event_store,
-        ),
-        search_binding=ConversationStorageComponentBinding(
-            services.provenance,
-            services.search,
-        ),
-        mutation_coordinator=coordinator,  # type: ignore[arg-type]
+def _services(test_case: unittest.TestCase):  # type: ignore[no-untyped-def]
+    workspace = initialized_workspace(test_case)
+    services = compose_filesystem_conversation_storage(workspace)
+    metadata = services.catalog.create(SESSION_ID, "Subject-only search decoy")
+    batch = contract_batches(metadata.conversation_id)["proposal"]
+    batch = CollaborationEventBatch(
+        batch_id=batch.batch_id,
+        expected_last_sequence=batch.expected_last_sequence,
+        events=tuple(replace(event, session_id=SESSION_ID) for event in batch.events),
     )
-
-
-class _RuntimeBound:
-    """Return deterministic advisory replies and one terminal retrieval action."""
-
-    def __init__(self, backend: _RuntimeBackend, definition: AgentDefinition) -> None:
-        self.backend = backend
-        self.definition = definition
-
-    async def invoke(self, _request: object) -> object:
-        raise AssertionError("debate invocation is outside conversation RAG tests")
-
-    async def converse(self, request: ConversationRequest) -> ConversationReply:
-        self.backend.conversation_requests.append(request)
-        return ConversationReply(
-            request.session_id,
-            request.conversation_id,
-            request.turn_id,
-            "ordinary reply",
-        )
-
-    async def converse_with_retrieval(
-        self,
-        request: ConversationRetrievalRequest,
-        handler: ConversationRetrievalActionHandler,
-    ) -> ConversationRetrievalReply:
-        self.backend.retrieval_requests.append(request)
-        action_index = 1
-        if self.backend.search_query is not None:
-            handler.handle_conversation_retrieval_action(
-                ConversationRetrievalSearchAction(
-                    kind=ConversationRetrievalActionKind.SEARCH_CONVERSATIONS,
-                    session_id=request.session_id,
-                    conversation_id=request.conversation_id,
-                    turn_id=request.turn_id,
-                    action_index=action_index,
-                    query=self.backend.search_query,
-                )
-            )
-            action_index += 1
-        citation_ids = self.backend.citation_ids
-        reply = handler.handle_conversation_retrieval_action(
-            ConversationRetrievalAnswerAction(
-                kind=ConversationRetrievalActionKind.ANSWER,
-                session_id=request.session_id,
-                conversation_id=request.conversation_id,
-                turn_id=request.turn_id,
-                action_index=action_index,
-                content="retrieval reply",
-                citation_ids=citation_ids,
-            )
-        )
-        assert type(reply) is ConversationRetrievalReply
-        return reply
-
-
-class _RuntimeBackend:
-    """Minimal provider-free backend for StoryRuntime RAG orchestration."""
-
-    def __init__(
-        self,
-        citation_ids: tuple[str, ...] = (),
-        *,
-        search_query: str | None = None,
-    ) -> None:
-        self.citation_ids = citation_ids
-        self.search_query = search_query
-        self.conversation_requests: list[ConversationRequest] = []
-        self.retrieval_requests: list[ConversationRetrievalRequest] = []
-        self.access_held: set[str] = set()
-
-    def validate_provider_configuration(self, _session_id: str) -> bool:
-        return True
-
-    def _lifecycle(self, session_id: str) -> SessionLifecycleState:
-        held = session_id in self.access_held
-        return SessionLifecycleState(
-            session_id=session_id,
-            durable_state=SessionDurableState.READY,
-            access_state=(
-                SessionAccessState.HELD_HERE if held else SessionAccessState.CLAIMABLE
-            ),
-            owner_hostname="rag-test" if held else None,
-            owner_pid=1 if held else None,
-            created_at="2026-01-01T00:00:00+00:00",
-            updated_at="2026-01-01T00:00:00+00:00",
-        )
-
-    def get_session_lifecycle(self, session_id: str) -> SessionLifecycleState:
-        return self._lifecycle(session_id)
-
-    def acquire_session_access(self, session_id: str) -> SessionLifecycleState:
-        self.access_held.add(session_id)
-        return self._lifecycle(session_id)
-
-    def release_session_access(self, session_id: str) -> SessionLifecycleState:
-        self.access_held.discard(session_id)
-        return self._lifecycle(session_id)
-
-    async def bind(self, definition: AgentDefinition) -> _RuntimeBound:
-        return _RuntimeBound(self, definition)
-
-
-class _EmptyLexicalRetriever:
-    def search(
-        self,
-        _request: ConversationRagRetrievalRequest,
-        /,
-    ) -> tuple[object, ...]:
-        return ()
-
-
-class _LocalStoreState:
-    """Adapt the real local generation store to the accepted runtime state port."""
-
-    def __init__(self, workspace_key: str, store: object) -> None:
-        self._workspace_key = workspace_key
-        self.store = store
-        self._embedding = rag_local.LocalConversationRagEmbedder().identity
-
-    @property
-    def workspace_key(self) -> str:
-        return self._workspace_key
-
-    @property
-    def embedding(self) -> ConversationRagEmbeddingIdentity:
-        return self._embedding
-
-    def inspect_projection_state(
-        self,
-        session_id: str,
-        /,
-    ) -> ConversationRagRuntimeStateSnapshot:
-        snapshot = self.store.inspect(  # type: ignore[attr-defined]
-            session_id,
-            rag_local.LOCAL_CONVERSATION_RAG_PROVIDER_ID,
-            self.embedding,
-            expected_projection_schema_id=CONVERSATION_RAG_RUNTIME_SCHEMA_ID,
-        )
-        reasons = {
-            rag_store.ConversationRagStoreStatus.MISSING: ConversationRagReason.UNAVAILABLE,
-            rag_store.ConversationRagStoreStatus.READY: ConversationRagReason.NONE,
-            rag_store.ConversationRagStoreStatus.STALE: ConversationRagReason.STALE,
-            rag_store.ConversationRagStoreStatus.CORRUPT: ConversationRagReason.CORRUPT,
-            rag_store.ConversationRagStoreStatus.INCOMPATIBLE: ConversationRagReason.INCOMPATIBLE,
-            rag_store.ConversationRagStoreStatus.PROVIDER_FAILED: ConversationRagReason.FAILED,
-        }
-        return ConversationRagRuntimeStateSnapshot(
-            session_id=session_id,
-            state=snapshot.state,
-            reason=reasons[snapshot.status],
-        )
-
-    def mark_projection_stale(self, session_id: str, /) -> None:
-        self.store.set_status(  # type: ignore[attr-defined]
-            session_id,
-            rag_store.ConversationRagStoreStatus.STALE,
-        )
+    services.event_store.append_batch(batch)
+    return workspace, services, metadata
 
 
 class ConversationRagRuntimeTests(unittest.TestCase):
-    """Verify contracts, authorization, projection state, and failure policy."""
+    def test_contract_exports_policy_signatures_and_state_port_are_exact(self) -> None:
+        import story_writing_agents.conversation_rag_runtime as runtime
 
-    def setUp(self) -> None:
-        self.workspace = initialized_workspace(self)
-        raw = compose_filesystem_conversation_storage(self.workspace)
-        self.coordinator = _TracingCoordinator(raw.mutation_coordinator)
-        self.services = _with_coordinator(raw, self.coordinator)
-        self.state = _StatePort(self.services.provenance.workspace_key)
-        self.low_level = _LowLevelService(self.state)
-        self.low_level.active_probe = lambda: self.coordinator.active_count > 0
-        self.runtime = ConversationRagRuntimeService(self.low_level, self.state)
-
-    def _conversation(self, subject: str) -> str:
-        return self.services.catalog.create(_SESSION, subject).conversation_id
-
-    def _append(
-        self,
-        conversation_id: str,
-        turn_id: str,
-        *,
-        user: str,
-        reply: str | None,
-        runtime_error: bool = False,
-    ) -> tuple[ConversationEvent, ...]:
-        stored = [
-            self.services.event_store.append(
-                ConversationEventAppend(
-                    session_id=_SESSION,
-                    conversation_id=conversation_id,
-                    turn_id=turn_id,
-                    sender="user",
-                    recipient=PLOT_ARCHITECT,
-                    kind=ConversationEventKind.USER_MESSAGE,
-                    content=user,
-                )
-            )
-        ]
-        if reply is not None:
-            stored.append(
-                self.services.event_store.append(
-                    ConversationEventAppend(
-                        session_id=_SESSION,
-                        conversation_id=conversation_id,
-                        turn_id=turn_id,
-                        sender="runtime" if runtime_error else PLOT_ARCHITECT,
-                        recipient="user",
-                        kind=(
-                            ConversationEventKind.RUNTIME_ERROR
-                            if runtime_error
-                            else ConversationEventKind.AGENT_REPLY
-                        ),
-                        content=reply,
-                    )
-                )
-            )
-        return tuple(stored)
-
-    def _project(self) -> ConversationRagProjectionRequest:
-        self.runtime.project_authorized(self.services, _SESSION, rebuild=True)
-        return self.low_level.rebuild_calls[-1][0]
-
-    @staticmethod
-    def _reference(
-        document: object,
-        start: int,
-        end: int,
-        fragment: str,
-    ) -> ConversationRagSourceReference:
-        return ConversationRagSourceReference(
-            document=document.identity,  # type: ignore[attr-defined]
-            fragment_id=fragment,
-            start_codepoint=start,
-            end_codepoint=end,
-        )
-
-    def test_contract_exports_policy_signatures_state_and_sync_ports_are_exact(
-        self,
-    ) -> None:
         self.assertEqual(
-            CONVERSATION_RAG_RUNTIME_SCHEMA_ID, "story-conversation-rag-visible-turn-v1"
-        )
-        self.assertEqual(
-            tuple(field.name for field in fields(ConversationRagRuntimePolicy)),
+            tuple(runtime.__all__),
             (
-                "max_query_codepoints",
-                "max_literal_candidates",
-                "max_semantic_candidates",
-                "max_excerpts",
-                "max_excerpt_codepoints",
-                "max_context_utf8_bytes",
-                "max_projected_source_utf8_bytes",
+                "CONVERSATION_RAG_RUNTIME_POLICY",
+                "CONVERSATION_RAG_RUNTIME_SCHEMA_ID",
+                "ConversationRagRuntimeInspection",
+                "ConversationRagRuntimeInspectionStatus",
+                "ConversationRagRuntimeError",
+                "ConversationRagRuntimePolicy",
+                "ConversationRagRuntimeService",
+                "ConversationRagRuntimeState",
+                "ConversationRagRuntimeStateSnapshot",
+                "inspect_authorized_conversation_rag",
             ),
         )
         self.assertEqual(
-            tuple(
-                getattr(CONVERSATION_RAG_RUNTIME_POLICY, field.name)
-                for field in fields(ConversationRagRuntimePolicy)
-            ),
-            (200, 20, 20, 20, 800, 32_768, 33_554_432),
-        )
-        with self.assertRaises((FrozenInstanceError, AttributeError)):
-            CONVERSATION_RAG_RUNTIME_POLICY.max_query_codepoints = 1  # type: ignore[misc]
-        with self.assertRaises(ValueError):
-            ConversationRagRuntimePolicy(max_query_codepoints=199)
-        self.assertEqual(
-            str(ConversationRagRuntimeError()),
-            "conversation RAG runtime operation failed",
-        )
-        self.assertIsInstance(self.state, ConversationRagRuntimeState)
-        self.assertEqual(
-            tuple(inspect.signature(ConversationRagRuntimeService).parameters),
-            ("low_level_service", "state_port", "automatic_enabled"),
+            CONVERSATION_RAG_RUNTIME_SCHEMA_ID,
+            "story-collaboration-rag-readable-event-v2",
         )
         self.assertEqual(
-            tuple(
-                inspect.signature(ConversationRagRuntimeService.preflight).parameters
-            ),
-            (
-                "self",
-                "conversation_storage_services",
-                "session_id",
-                "turn_text",
-                "forced_query",
+            CONVERSATION_RAG_RUNTIME_POLICY,
+            ConversationRagRuntimePolicy(
+                200, 20, 20, 20, 800, 32_768, 32 * 1_024 * 1_024
             ),
         )
-        self.assertEqual(
-            tuple(
-                inspect.signature(
-                    ConversationRagRuntimeService.project_authorized
-                ).parameters
-            ),
-            (
-                "self",
-                "conversation_storage_services",
-                "session_id",
-                "rebuild",
-            ),
-        )
-        self.assertEqual(
-            tuple(
-                inspect.signature(
-                    ConversationRagRuntimeService.search_authorized
-                ).parameters
-            ),
-            ("self", "conversation_storage_services", "session_id", "query"),
-        )
+        self.assertTrue(getattr(ConversationRagRuntimeState, "_is_protocol", False))
         self.assertEqual(
             tuple(inspect.signature(inspect_authorized_conversation_rag).parameters),
             ("conversation_storage_services", "state_port", "session_id"),
         )
-        self.assertFalse(self.runtime.automatic_enabled)
 
-        missing = ConversationRagRuntimeStateSnapshot(
-            session_id=_SESSION,
-            state=_missing_state(),
-            reason=ConversationRagReason.UNAVAILABLE,
-        )
-        self.assertFalse(hasattr(missing, "__dict__"))
-        with self.assertRaises(ValueError):
-            replace(missing, reason=ConversationRagReason.NONE)
-
-        class AsyncService(_LowLevelService):
-            async def retrieve_semantic(self, request, state, /):  # type: ignore[no-untyped-def, override]
-                return await super().retrieve_semantic(request, state)
-
-        with self.assertRaisesRegex(TypeError, "low-level"):
-            ConversationRagRuntimeService(AsyncService(self.state), self.state)
-
-        class AsyncState(_StatePort):
-            async def mark_projection_stale(self, session_id, /):  # type: ignore[no-untyped-def, override]
-                del session_id
-
-        with self.assertRaisesRegex(TypeError, "state port"):
-            ConversationRagRuntimeService(
-                self.low_level,
-                AsyncState(self.services.provenance.workspace_key),
-            )
-
-    def test_projection_enumerates_only_active_complete_replies_with_golden_ids(
+    def test_inspection_counts_one_document_per_readable_event_without_mutation(
         self,
     ) -> None:
-        active = self._conversation("Café 🙂")
-        user, reply = self._append(
-            active,
-            "turn_visible",
-            user="Question 한🙂",
-            reply="Authoritative answer",
-        )
-        incomplete = self._conversation("Incomplete")
-        self._append(incomplete, "turn_incomplete", user="pending", reply=None)
-        errored = self._conversation("Errored")
-        self._append(
-            errored,
-            "turn_error",
-            user="not visible",
-            reply="safe error",
-            runtime_error=True,
-        )
-        archived = self._conversation("Archived")
-        self._append(archived, "turn_archived", user="old", reply="old reply")
-        self.services.catalog.archive(_SESSION, archived)
-
-        result = self.runtime.project_authorized(
-            self.services,
-            _SESSION,
-            rebuild=True,
-        )
-        self.assertEqual(len(self.low_level.rebuild_calls), 1)
-        self.assertEqual(len(self.low_level.project_calls), 0)
-        request = self.low_level.rebuild_calls[0][0]
-        self.assertEqual(request.session_id, _SESSION)
-        self.assertEqual(request.schema_id, CONVERSATION_RAG_RUNTIME_SCHEMA_ID)
-        self.assertEqual(len(request.documents), 1)
-        document = request.documents[0]
-        source_text = (
-            "Subject: Café 🙂\nUser: Question 한🙂\n"
-            f"Agent[{PLOT_ARCHITECT}]: Authoritative answer"
-        )
-        self.assertEqual(document.text, source_text)
-        expected_document_id = _framed_sha256(
-            _DOCUMENT_ID_DOMAIN,
-            CONVERSATION_RAG_RUNTIME_SCHEMA_ID,
-            _SESSION,
-            active,
-            "turn_visible",
-        )
-        self.assertEqual(document.identity.key.document_id, expected_document_id)
-        metadata = self.services.catalog.get(_SESSION, active)
-        revision_fields = (
-            CONVERSATION_RAG_RUNTIME_SCHEMA_ID,
-            str(metadata.schema_version),
-            metadata.session_id,
-            metadata.conversation_id,
-            metadata.subject,
-            str(metadata.subject_revision),
-            *_event_fields(user),
-            *_event_fields(reply),
-            source_text,
-        )
-        self.assertEqual(
-            document.identity.revision_id,
-            "sha256:" + _framed_sha256(_REVISION_ID_DOMAIN, *revision_fields),
-        )
-        self.assertEqual(result.checkpoint.entries[0].document, document.identity)
-        self.assertEqual(self.state.reason, ConversationRagReason.NONE)
-        self.assertEqual(self.coordinator.timeouts, [3600.0])
-        self.assertEqual(self.coordinator.active_count, 0)
-        self.assertEqual(self.low_level.provider_active_states, [True])
-
-        restarted = ConversationRagRuntimeService(self.low_level, self.state)
-        context = restarted.search_authorized(
-            self.services,
-            _SESSION,
-            "Café",
-        )
-        self.assertIsInstance(context, ConversationRagContext)
-        assert context is not None
-        self.assertEqual(context.outcome.outcome, ConversationRagOutcome.COMPLETE)
-        self.assertEqual(tuple(item.citation_id for item in context.excerpts), ("g1",))
-        self.assertEqual(context.excerpts[0].content, "Café 🙂")
-        self.assertEqual(len(self.low_level.semantic_calls), 1)
-        self.assertEqual(self.coordinator.timeouts, [3600.0, 30.0])
-        self.assertEqual(self.low_level.provider_active_states, [True, False])
-
-    def test_read_only_inspection_is_namespace_byte_and_coordinator_free(self) -> None:
-        workspace = initialized_workspace(self)
-        raw = compose_filesystem_conversation_storage(workspace)
-
-        class ForbiddenCoordinator:
-            workspace_key = raw.provenance.workspace_key
-
-            def borrow(self, *, timeout_seconds: float):
-                del timeout_seconds
-                raise AssertionError("read-only inspection borrowed the coordinator")
-
-        services = _with_coordinator(raw, ForbiddenCoordinator())
-        store = rag_store.ConversationRagGenerationStore(workspace)
-        state = rag_composition.LocalConversationRagRuntimeState(store)
-        lock = workspace.root / "config/.conversation_storage.lock"
-        rag_root = workspace.root / "agent_states/orchestrator_state/conversation_rag"
-
-        def snapshot() -> tuple[tuple[str, str, bytes | None], ...]:
-            observed: list[tuple[str, str, bytes | None]] = []
-            for path in sorted(workspace.root.rglob("*")):
-                relative = path.relative_to(workspace.root).as_posix()
-                observed.append(
-                    (relative, "directory", None)
-                    if path.is_dir()
-                    else (relative, "file", path.read_bytes())
-                )
-            return tuple(observed)
-
-        self.assertFalse(lock.exists())
-        self.assertFalse(rag_root.exists())
-        before = snapshot()
-        first = inspect_authorized_conversation_rag(services, state, _SESSION)
-        second = inspect_authorized_conversation_rag(services, state, _SESSION)
-        self.assertIsInstance(first, ConversationRagRuntimeInspection)
+        workspace, services, metadata = _services(self)
+        state = _StatePort(services.provenance.workspace_key)
+        before = {
+            path.relative_to(workspace.root).as_posix(): path.read_bytes()
+            for path in workspace.root.rglob("*")
+            if path.is_file()
+        }
+        first = inspect_authorized_conversation_rag(services, state, SESSION_ID)
+        second = inspect_authorized_conversation_rag(services, state, SESSION_ID)
         self.assertEqual(first, second)
         self.assertIs(first.status, ConversationRagRuntimeInspectionStatus.MISSING)
+        self.assertEqual(first.authoritative_conversations, 1)
+        history = services.event_store.read(SESSION_ID, metadata.conversation_id)
+        self.assertEqual(first.authoritative_events, len(history))
+        self.assertEqual(first.authoritative_documents, len(history))
+        self.assertGreater(first.authoritative_source_utf8_bytes, 0)
+        self.assertEqual(first.indexed_documents, 0)
+        self.assertTrue(first.rebuild_required)
+        after = {
+            path.relative_to(workspace.root).as_posix(): path.read_bytes()
+            for path in workspace.root.rglob("*")
+            if path.is_file()
+        }
+        self.assertEqual(after, before)
+
+    def test_literal_preflight_returns_exact_event_field_citation_provider_free(
+        self,
+    ) -> None:
+        _workspace, services, metadata = _services(self)
+        state = _StatePort(services.provenance.workspace_key)
+        low_level = _UnusedLowLevelService()
+        runtime = ConversationRagRuntimeService(low_level, state)
+        context = runtime.search_authorized(
+            services,
+            SESSION_ID,
+            "Consult specialists",
+        )
+        self.assertIs(context.outcome.outcome, ConversationRagOutcome.LITERAL_FALLBACK)
+        self.assertIs(context.outcome.reason, ConversationRagReason.UNAVAILABLE)
+        self.assertEqual(len(context.excerpts), 1)
+        excerpt = context.excerpts[0]
+        citation = excerpt.source.citation
+        self.assertEqual(citation.conversation_id, metadata.conversation_id)
+        self.assertEqual(citation.event_id, "proposal_event")
+        self.assertEqual(excerpt.reference.document.start_sequence, citation.sequence)
+        self.assertEqual(excerpt.reference.document.end_sequence, citation.sequence)
+        self.assertEqual(excerpt.content, "Consult specialists")
+        self.assertEqual(low_level.calls, [])
+
+    def test_disabled_automatic_preflight_is_io_free_and_returns_none(self) -> None:
+        _workspace, services, _metadata = _services(self)
+        state = _StatePort(services.provenance.workspace_key)
+        low_level = _UnusedLowLevelService()
+        runtime = ConversationRagRuntimeService(low_level, state)
+        self.assertFalse(runtime.automatic_enabled)
+        self.assertIsNone(runtime.preflight(services, SESSION_ID, "turn text"))
+        self.assertEqual(state.inspections, [])
+        self.assertEqual(low_level.calls, [])
+
+    def test_invalid_or_failing_state_is_sanitized_without_content(self) -> None:
+        _workspace, services, _metadata = _services(self)
+        state = _StatePort(services.provenance.workspace_key)
+
+        def fail(_session: str):
+            raise RuntimeError("PRIVATE_STATE_FAILURE")
+
+        state.inspect_projection_state = fail  # type: ignore[method-assign]
+        with self.assertRaises(ConversationRagRuntimeError) as caught:
+            inspect_authorized_conversation_rag(services, state, SESSION_ID)
         self.assertEqual(
-            (
-                first.authoritative_conversations,
-                first.authoritative_events,
-                first.authoritative_documents,
-                first.authoritative_source_utf8_bytes,
-                first.indexed_documents,
-                first.rebuild_required,
-            ),
-            (0, 0, 0, 0, 0, True),
+            str(caught.exception), "conversation RAG runtime operation failed"
         )
-        self.assertEqual(snapshot(), before)
-        self.assertFalse(lock.exists())
-        self.assertFalse(rag_root.exists())
-        for secret in ("PRIVATE_SOURCE", str(workspace.root)):
-            self.assertNotIn(secret, repr(first))
+        self.assertNotIn("PRIVATE", repr(caught.exception))
+        self.assertIsNone(caught.exception.__cause__)
 
-    def test_read_only_inspection_status_matrix_and_complete_turn_counts(self) -> None:
-        active = self._conversation("Counted subject")
-        self._append(active, "turn_complete", user="question", reply="answer")
-        self._append(active, "turn_incomplete", user="pending", reply=None)
-        archived = self._conversation("Archived subject")
-        self._append(archived, "turn_archived", user="hidden", reply="hidden reply")
-        self.services.catalog.archive(_SESSION, archived)
-        corrupt = ConversationRagProjectionState(
-            ConversationRagProjectionStateAvailability.CORRUPT,
-            None,
+    def test_inspection_values_are_frozen_slotted_and_strict(self) -> None:
+        value = ConversationRagRuntimeInspection(
+            session_id=SESSION_ID,
+            status=ConversationRagRuntimeInspectionStatus.MISSING,
+            authoritative_checkpoint="sha256:" + "1" * 64,
+            indexed_checkpoint=None,
+            authoritative_conversations=0,
+            authoritative_events=0,
+            authoritative_documents=0,
+            authoritative_source_utf8_bytes=0,
+            indexed_documents=0,
+            rebuild_required=True,
         )
-        cases = (
+        self.assertEqual(
+            tuple(field.name for field in fields(value)),
             (
-                ConversationRagReason.UNAVAILABLE,
-                _missing_state(),
-                ConversationRagRuntimeInspectionStatus.MISSING,
-            ),
-            (
-                ConversationRagReason.STALE,
-                _missing_state(),
-                ConversationRagRuntimeInspectionStatus.STALE,
-            ),
-            (
-                ConversationRagReason.FAILED,
-                _missing_state(),
-                ConversationRagRuntimeInspectionStatus.FAILED,
-            ),
-            (
-                ConversationRagReason.CORRUPT,
-                corrupt,
-                ConversationRagRuntimeInspectionStatus.CORRUPT,
-            ),
-            (
-                ConversationRagReason.INCOMPATIBLE,
-                corrupt,
-                ConversationRagRuntimeInspectionStatus.INCOMPATIBLE,
+                "session_id",
+                "status",
+                "authoritative_checkpoint",
+                "indexed_checkpoint",
+                "authoritative_conversations",
+                "authoritative_events",
+                "authoritative_documents",
+                "authoritative_source_utf8_bytes",
+                "indexed_documents",
+                "rebuild_required",
             ),
         )
-        for reason, state, expected in cases:
-            with self.subTest(reason=reason):
-                self.state.reason = reason
-                self.state.state = state
-                observed = inspect_authorized_conversation_rag(
-                    self.services, self.state, _SESSION
-                )
-                self.assertIs(observed.status, expected)
-                self.assertTrue(observed.rebuild_required)
-                self.assertEqual(
-                    (
-                        observed.authoritative_conversations,
-                        observed.authoritative_events,
-                        observed.authoritative_documents,
-                    ),
-                    (1, 3, 1),
-                )
-        self.runtime.project_authorized(self.services, _SESSION, rebuild=True)
-        ready = inspect_authorized_conversation_rag(self.services, self.state, _SESSION)
-        self.assertIs(ready.status, ConversationRagRuntimeInspectionStatus.READY)
-        self.assertFalse(ready.rebuild_required)
-        self.assertEqual(ready.indexed_documents, 1)
-
-    def test_read_only_inspection_detects_catalog_event_and_state_drift(self) -> None:
-        conversation = self._conversation("Drift sentinel")
-        self._append(conversation, "turn_one", user="question", reply="answer")
-
-        class CatalogProxy:
-            def __init__(proxy, mutate: Callable[[], None]) -> None:
-                proxy.calls = 0
-                proxy.mutate = mutate
-
-            def list(proxy, *args, **kwargs):  # type: ignore[no-untyped-def]
-                value = self.services.catalog.list(*args, **kwargs)
-                proxy.calls += 1
-                if proxy.calls == 1:
-                    proxy.mutate()
-                return value
-
-            def __getattr__(proxy, name: str) -> object:
-                return getattr(self.services.catalog, name)
-
-        class EventProxy:
-            def __init__(proxy) -> None:
-                proxy.calls = 0
-
-            def read(proxy, *args, **kwargs):  # type: ignore[no-untyped-def]
-                value = self.services.event_store.read(*args, **kwargs)
-                proxy.calls += 1
-                if proxy.calls == 1:
-                    self.services.event_store.append(
-                        ConversationEventAppend(
-                            session_id=_SESSION,
-                            conversation_id=conversation,
-                            turn_id="turn_drift",
-                            sender="user",
-                            recipient=PLOT_ARCHITECT,
-                            kind=ConversationEventKind.USER_MESSAGE,
-                            content="PRIVATE_EVENT_DRIFT",
-                        )
-                    )
-                return value
-
-            def __getattr__(proxy, name: str) -> object:
-                return getattr(self.services.event_store, name)
-
-        def replaced(*, catalog: object | None = None, events: object | None = None):
-            return ConversationStorageServices(
-                catalog_binding=ConversationStorageComponentBinding(
-                    self.services.provenance,
-                    self.services.catalog if catalog is None else catalog,
-                ),
-                event_store_binding=ConversationStorageComponentBinding(
-                    self.services.provenance,
-                    self.services.event_store if events is None else events,
-                ),
-                search_binding=self.services.search_binding,
-                mutation_coordinator=self.services.mutation_coordinator,
-            )
-
-        drifts = (
-            (
-                "rename",
-                replaced(
-                    catalog=CatalogProxy(
-                        lambda: self.services.catalog.rename(
-                            _SESSION, conversation, "Renamed during inspection"
-                        )
-                    )
-                ),
-            ),
-            ("event", replaced(events=EventProxy())),
-            (
-                "archive",
-                replaced(
-                    catalog=CatalogProxy(
-                        lambda: self.services.catalog.archive(_SESSION, conversation)
-                    )
-                ),
-            ),
-        )
-        for label, services in drifts:
-            with (
-                self.subTest(label=label),
-                self.assertRaises(ConversationRagRuntimeError) as caught,
-            ):
-                inspect_authorized_conversation_rag(services, self.state, _SESSION)
-            self.assertEqual(
-                str(caught.exception), "conversation RAG runtime operation failed"
-            )
-            self.assertNotIn("PRIVATE", repr(caught.exception))
-
-        class DriftingState(_StatePort):
-            def inspect_projection_state(
-                drifting, session_id: str, /
-            ) -> ConversationRagRuntimeStateSnapshot:
-                observed = super().inspect_projection_state(session_id)
-                if len(drifting.inspections) == 1:
-                    drifting.reason = ConversationRagReason.STALE
-                return observed
-
-        drifting_state = DriftingState(self.services.provenance.workspace_key)
-        with self.assertRaises(ConversationRagRuntimeError):
-            inspect_authorized_conversation_rag(self.services, drifting_state, _SESSION)
-        for control in (KeyboardInterrupt(), SystemExit("inspection control")):
-            with (
-                self.subTest(control=type(control).__name__),
-                mock.patch.object(
-                    self.state,
-                    "inspect_projection_state",
-                    side_effect=control,
-                ),
-                self.assertRaises(type(control)),
-            ):
-                inspect_authorized_conversation_rag(self.services, self.state, _SESSION)
-        self.assertEqual(self.coordinator.active_count, 0)
+        with self.assertRaises((FrozenInstanceError, AttributeError)):
+            value.status = ConversationRagRuntimeInspectionStatus.READY  # type: ignore[misc]
 
 
 if __name__ == "__main__":

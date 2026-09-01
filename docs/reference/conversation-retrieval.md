@@ -30,18 +30,71 @@ action index.
 | Action | Additional fields | Rule |
 | --- | --- | --- |
 | `search_conversations` | Query | First, or again before the first read. |
-| `read_transcript` | Citation and sequence range | Uses a hit from this same logical turn. |
+| `read_history` | Citation and sequence range | Uses a hit from this same logical turn. |
 | `answer` | Content and ordered unique citation IDs | Terminal. |
 
 After the first read, only another read or answer is accepted. The fifth call
 must answer. Search is active-only; a read is bounded to the cited source and
-returns complete visible user/reply pairs. Runtime errors, unmatched turns,
-prompts, credentials, private provider state, and arbitrary files are excluded.
+returns structured `ConversationRetrievalHistoryRecord` values. Every closed
+field receives a deterministic citation ID such as `r2e1f1`. Private event
+payload, prompts, credentials, private provider state, and arbitrary files are
+excluded.
 
 Observations are framed as canonical JSON between fixed untrusted-story-data
 markers. They are story data, never instructions. Fixed budgets bound calls,
 queries, hits, pages, events, bytes, and citations; exact values are defined by
 `ConversationRetrievalPolicy`.
+
+## Provider-call input and output
+
+The first low-level call receives the current request once. Its JSON object has
+this shape (nested contracts are abbreviated here):
+
+```json
+{
+  "operation": "conversation_retrieval",
+  "session_id": "novel",
+  "conversation_id": "c_123",
+  "turn_id": "turn_7",
+  "agent_id": "lead_orchestrator",
+  "content": "What did we decide about the opening?",
+  "context": {
+    "bootstrap": {
+      "schema_version": 2,
+      "session_id": "novel",
+      "conversation_id": "c_123",
+      "total_records": 0,
+      "last_sequence": 0,
+      "tail_batch_digest": null
+    },
+    "records": [],
+    "requested_records": 0,
+    "retained_records": 0,
+    "omitted_records": 0,
+    "retained_utf8_bytes": 0,
+    "truncated": false
+  },
+  "retrieval": {
+    "action_index": 1,
+    "allowed_actions": ["search_conversations", "answer"],
+    "policy": {"...": "fixed bounds"},
+    "rules": ["..."]
+  }
+}
+```
+
+An invocation may use `story_session_context` instead of `context`, and may
+include an authorized `rag_context`. A search action returns an untrusted
+observation with `s1`, `s2`, ... citation IDs. A later `read_history` action
+returns canonical record identity and `rAeRfF` field-citation IDs. Continuation
+calls deliberately omit `content` and initial context; they carry only the
+correlation fields, updated retrieval control, and one framed observation.
+After a read, `allowed_actions` contains only `read_history` and `answer`; call
+five permits only `answer`.
+
+This provider sequence is a direct `BoundAgent` component API. The installed
+lead workflow does not call it, and provider-free `/search`, `/transcript`, and
+`/history` never construct this payload.
 
 ## Optional local RAG
 

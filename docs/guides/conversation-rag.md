@@ -21,9 +21,12 @@ direct-execution-unavailable guidance. No pending query is created.
 
 ## Mental model
 
-The selected filesystem or SQLite conversation store is authoritative. The RAG
-generation contains derived fragments and vectors that can suggest candidate
-ranges. Before a direct authorized search returns an excerpt, the service
+The selected filesystem or SQLite schema-v2 event store is authoritative. The
+RAG generation contains derived fragments and vectors that can suggest
+candidate ranges. It creates exactly one compact JSON document per canonical
+event, containing only its ordered closed readable fields and their keys and
+ordinals. Conversation subject is not document text. Before a direct
+authorized search returns an excerpt, the service
 reauthorizes the stable source identity and rereads the exact current range
 from authoritative storage. Missing, changed, out-of-scope, corrupt, or
 incompatible derived state falls back or fails with a content-free reason.
@@ -78,7 +81,7 @@ Status, rebuild, search, and purge accept `--workspace` and optional
 and disable are workspace-scoped. Rebuild and purge require exact confirmation
 for mutation.
 
-Every valid command emits one compact schema-v1 JSON report. Successful
+Every valid command emits one compact command-report JSON object. Successful
 operations exit 0; semantic/precondition failures and argparse errors exit 2.
 Search is intentionally content-bearing: protect stdout, pipes, redirects, and
 terminal scrollback as conversation data. Other reports contain checkpoints,
@@ -139,7 +142,7 @@ for exact types and composition signatures.
 
 | Data | Authority and exposure |
 | --- | --- |
-| Active conversations | Sole source of transcript truth in selected filesystem/SQLite storage. |
+| Active conversations | Sole source of schema-v2 event truth in selected filesystem/SQLite storage. |
 | RAG configuration | Provider/Automatic policy only; contains no query or excerpt. |
 | Source map | Disposable plaintext conversation fragments; protect as conversation data. |
 | Vectors | Derived numeric data tied to fragments; protect the whole generation. |
@@ -160,8 +163,6 @@ semantic-quality guarantee.
 
 ## Relationship to collaboration cutover
 
-#479 activates the sole schema-v2 storage/inspection service and removes the
-last active-v1 service path. It does not itself make interactive RAG a provider
-turn. After parent #467 completes, open #452/#453 integrate lead/specialist
-workflows with that service; any future RAG preflight must be authorized within
-those workflows rather than restoring an earlier shell command.
+The sole schema-v2 storage/inspection service is active. This does not make
+interactive RAG a provider turn. Open #452/#453 own later lead/specialist
+workflows; any future RAG preflight must be authorized within those workflows.

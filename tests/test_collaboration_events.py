@@ -669,7 +669,9 @@ class CollaborationWireContractTests(unittest.TestCase):
                 self.assertFalse(wire.startswith(b"\xef\xbb\xbf"))
                 self.assertFalse(wire.endswith(b"\n"))
                 self.assertEqual(_canonical_json(json.loads(wire)), wire)
-        self.assertEqual(collaboration_proposal_digest(proposal), proposal.proposal_digest)
+        self.assertEqual(
+            collaboration_proposal_digest(proposal), proposal.proposal_digest
+        )
         self.assertEqual(collaboration_batch_digest(batch), batch.batch_digest)
 
     def test_every_proposal_dimension_and_order_changes_the_digest(self) -> None:
@@ -718,7 +720,9 @@ class CollaborationWireContractTests(unittest.TestCase):
                 physical_calls_spent=1,
                 side_effects=base.side_effects,
             ),
-            "route": make_proposal(route="different_route", side_effects=base.side_effects),
+            "route": make_proposal(
+                route="different_route", side_effects=base.side_effects
+            ),
             "route_fingerprint": make_proposal(
                 route_fingerprint=DIGEST_B,
                 side_effects=base.side_effects,
@@ -728,7 +732,9 @@ class CollaborationWireContractTests(unittest.TestCase):
                 basis=replace(
                     base.basis,
                     agent_profiles=(
-                        replace(base.basis.agent_profiles[0], profile_fingerprint=DIGEST_B),
+                        replace(
+                            base.basis.agent_profiles[0], profile_fingerprint=DIGEST_B
+                        ),
                         *base.basis.agent_profiles[1:],
                     ),
                 ),
@@ -750,7 +756,9 @@ class CollaborationWireContractTests(unittest.TestCase):
                 basis=replace(
                     base.basis,
                     inputs=(
-                        replace(inputs[0], locator="$${core_documents/outline.md}:4-12"),
+                        replace(
+                            inputs[0], locator="$${core_documents/outline.md}:4-12"
+                        ),
                         inputs[1],
                     ),
                 ),
@@ -852,7 +860,7 @@ class CollaborationPackageBoundaryTests(unittest.TestCase):
     ) -> None:
         self.assertEqual(tuple(events_owner.__all__), COLLABORATION_EVENT_EXPORTS)
         self.assertEqual(tuple(context_owner.__all__), COLLABORATION_CONTEXT_EXPORTS)
-        self.assertEqual(len(conversations.__all__), 83)
+        self.assertEqual(len(conversations.__all__), 81)
         self.assertNotIn("__getattr__", vars(events_owner))
         self.assertNotIn("__getattr__", vars(context_owner))
         self.assertNotIn("__getattr__", vars(conversations))
@@ -868,7 +876,9 @@ class CollaborationPackageBoundaryTests(unittest.TestCase):
                     "COLLABORATION_"
                 ):
                     with self.subTest(owner=owner.__name__, name=name):
-                        self.assertIs(getattr(owner, name), getattr(conversations, name))
+                        self.assertIs(
+                            getattr(owner, name), getattr(conversations, name)
+                        )
         callable_names = {
             name
             for name in conversations.__all__
@@ -938,7 +948,9 @@ class CollaborationPackageBoundaryTests(unittest.TestCase):
         }
         for function, parameters in expected_signatures.items():
             with self.subTest(function=function.__name__):
-                self.assertEqual(tuple(inspect.signature(function).parameters), parameters)
+                self.assertEqual(
+                    tuple(inspect.signature(function).parameters), parameters
+                )
 
     def test_clean_import_orders_have_no_cwd_io_or_dynamic_forwarding(self) -> None:
         source = Path(__file__).resolve().parents[1] / "src"
@@ -967,9 +979,9 @@ import story_writing_agents
 import story_writing_agents.conversations as facade
 import story_writing_agents.conversations.context as context
 import story_writing_agents.conversations.events as events
-assert len(facade.__all__) == 83
-assert len(events.__all__) == 55
-assert len(context.__all__) == 21
+assert len(facade.__all__) == 81
+assert len(events.__all__) == 54
+assert len(context.__all__) == 20
 assert facade.CollaborationProposal is events.CollaborationProposal
 assert facade.CollaborationEventStore is context.CollaborationEventStore
 assert not hasattr(story_writing_agents, "CollaborationProposal")

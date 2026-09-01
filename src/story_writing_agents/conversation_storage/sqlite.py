@@ -17,12 +17,17 @@ from ..conversation_literal_search import (
 )
 from ..conversation_search import (
     CONVERSATION_MEMORY_POLICY,
+    CollaborationHistorySearchHit,
+    CollaborationHistorySearchQuery,
+    CollaborationHistorySearchResult,
+    CollaborationHistorySearchScope,
     ConversationCitation,
     ConversationSearchHit,
     ConversationSearchMatchKind,
     ConversationSearchQuery,
     ConversationSearchResult,
     ConversationSearchScope,
+    search_collaboration_history,
 )
 from ..conversations import (
     CONVERSATION_CONTEXT_POLICY,
@@ -36,9 +41,9 @@ from ..conversations import (
     CollaborationEvent as CollaborationEventV2,
     CollaborationEventBatch,
     CollaborationHistoryProjection,
+    CollaborationReadableFieldKey,
     ConversationContextWindow,
     ConversationEvent,
-    ConversationEventAppend,
     ConversationEventKind,
     ConversationMetadata,
     ConversationStatus,
@@ -47,9 +52,11 @@ from ..conversations import (
     encode_collaboration_event,
     normalize_conversation_subject,
     project_collaboration_history,
+    project_collaboration_readable_history,
     select_bounded_conversation_context,
     validate_collaboration_candidate_batch,
 )
+from ..conversations.events import ConversationEventAppend
 from ..errors import (
     ConversationExistsError,
     ConversationNotFoundError,
@@ -191,9 +198,13 @@ class _SQLiteAdapter:
         return instance
 
     def _read(self, operation: Callable[[object], ResultT]) -> ResultT:
+        def read_validated(connection: object) -> ResultT:
+            _validate_database_snapshot(connection)
+            return operation(connection)
+
         return _database_call(
             lambda: self._database.read(
-                operation,
+                read_validated,
                 validate_snapshot=_validate_database_snapshot,
             )
         )
@@ -226,10 +237,18 @@ class _SQLiteAdapter:
         *,
         validate_lease: Callable[[], None],
         changed: Callable[[ResultT], bool] | None = None,
+        validate_snapshot: Callable[[object], None] | None = None,
     ) -> ResultT:
         """Commit required lexical state, then best-effort refresh derived FTS."""
 
+        snapshot_validator = (
+            _validate_database_snapshot
+            if validate_snapshot is None
+            else validate_snapshot
+        )
+
         def mutate(connection: object) -> tuple[ResultT, int | None]:
+            snapshot_validator(connection)
             result = operation(connection)
             effective = True if changed is None else changed(result)
             if type(effective) is not bool:
@@ -240,7 +259,7 @@ class _SQLiteAdapter:
         result, generation = _database_call(
             lambda: self._database.write(
                 mutate,
-                validate_snapshot=_validate_database_snapshot,
+                validate_snapshot=snapshot_validator,
                 validate_lease=validate_lease,
             )
         )
@@ -460,7 +479,7 @@ class SQLiteConversationCatalog(_SQLiteAdapter):
         )
 
 
-class SQLiteConversationEventStore(_SQLiteAdapter):
+class _SchemaV1SQLiteConversationEventStore(_SQLiteAdapter):
     """Transactional SQLite implementation of the visible event-store port."""
 
     def append(self, event: ConversationEventAppend) -> ConversationEvent:
@@ -658,12 +677,19 @@ class SQLiteCollaborationEventStore(_SQLiteAdapter):
                     timestamps=tuple(event.timestamp for event in stored),
                 )
 
-            return _database_call(
-                lambda: self._database.write(
-                    append_in_transaction,
-                    validate_snapshot=_validate_database_snapshot,
-                    validate_lease=validate_lease,
+            def validate_append_snapshot(connection: object) -> None:
+                _validate_database_snapshot(
+                    connection,
+                    excluded_history_identity=(session, conversation),
                 )
+
+            return self._write_under_lease(
+                append_in_transaction,
+                validate_lease=validate_lease,
+                changed=lambda receipt: (
+                    receipt.status is CollaborationAppendStatus.APPENDED
+                ),
+                validate_snapshot=validate_append_snapshot,
             )
 
     def read(
@@ -711,7 +737,7 @@ class SQLiteCollaborationEventStore(_SQLiteAdapter):
         return self._read(read_context_from_connection)
 
 
-class SQLiteConversationSearch(_SQLiteAdapter):
+class _SchemaV1SQLiteConversationSearch(_SQLiteAdapter):
     """One-snapshot exact SQLite implementation of conversation search."""
 
     def search(
@@ -738,6 +764,36 @@ class SQLiteConversationSearch(_SQLiteAdapter):
             return _search_sqlite_snapshot(
                 connection,
                 search_index=self._search_index,
+                scope=scope,
+                query=query,
+                normalized_query=normalized_query,
+            )
+
+        return self._read(search_snapshot)
+
+
+class SQLiteCollaborationHistorySearch(_SQLiteAdapter):
+    """One-snapshot aggregate search over canonical v2 readable fields."""
+
+    def search(
+        self,
+        scope: CollaborationHistorySearchScope,
+        query: CollaborationHistorySearchQuery,
+    ) -> CollaborationHistorySearchResult:
+        """Search authoritative event fields; catalog subjects never create hits."""
+
+        if type(scope) is not CollaborationHistorySearchScope:
+            raise TypeError("collaboration search scope is invalid")
+        if type(query) is not CollaborationHistorySearchQuery:
+            raise TypeError("collaboration search query is invalid")
+        normalized_query = normalize_conversation_literal_query(
+            query.text,
+            max_characters=CONVERSATION_MEMORY_POLICY.max_query_characters,
+        )
+
+        def search_snapshot(connection: object) -> CollaborationHistorySearchResult:
+            return _search_collaboration_sqlite_snapshot(
+                connection,
                 scope=scope,
                 query=query,
                 normalized_query=normalized_query,
@@ -931,13 +987,13 @@ def compose_sqlite_conversation_storage(
         timeout,
         search_index,
     )
-    event_store = SQLiteConversationEventStore._from_components(
+    event_store = SQLiteCollaborationEventStore._from_components(
         database,
         coordinator,
         timeout,
         search_index,
     )
-    search = SQLiteConversationSearch._from_components(
+    search = SQLiteCollaborationHistorySearch._from_components(
         database,
         coordinator,
         timeout,
@@ -1195,10 +1251,30 @@ def _collaboration_event_from_row(row: object) -> CollaborationEventV2:
     return event
 
 
-def _validate_database_snapshot(connection: object) -> None:
-    """Reconstruct and validate every authoritative v1 and v2 domain row."""
+def _validate_database_snapshot(
+    connection: object,
+    *,
+    excluded_history_identity: tuple[str, str] | None = None,
+) -> None:
+    """Validate catalog and v2 histories, rejecting every schema-v1 row."""
 
-    _read_validated_database_snapshot(connection)
+    _require_no_legacy_conversation_events(connection)
+    metadata_rows = connection.execute(  # type: ignore[attr-defined]
+        _METADATA_SELECT + " ORDER BY session_id, created_at, conversation_id"
+    ).fetchall()
+    metadata = tuple(_metadata_from_row(row) for row in metadata_rows)
+    identities = {(item.session_id, item.conversation_id) for item in metadata}
+    if len(identities) != len(metadata):
+        raise SQLiteDatabaseFormatError()
+    _validate_all_collaboration_histories(
+        connection,
+        identities=identities,
+        excluded_identity=(
+            excluded_history_identity
+            if excluded_history_identity in identities
+            else None
+        ),
+    )
 
 
 def _lexical_generation(connection: object) -> int:
@@ -1249,20 +1325,36 @@ def _refresh_search_index_after_commit(
         if _lexical_generation(connection) != source_generation:
             return
         rows = connection.execute(  # type: ignore[attr-defined]
-            _EVENT_SELECT
-            + " WHERE kind != ? ORDER BY session_id, conversation_id, sequence",
-            (ConversationEventKind.RUNTIME_ERROR.value,),
-        )
+            "SELECT session_id, conversation_id FROM conversations "
+            "ORDER BY session_id, created_at, conversation_id"
+        ).fetchall()
 
         def documents() -> Iterator[SQLiteConversationSearchIndexDocument]:
             for row in rows:
-                event, searchable = _event_and_searchable_from_row(row)
-                yield SQLiteConversationSearchIndexDocument(
-                    session_id=event.session_id,
-                    conversation_id=event.conversation_id,
-                    sequence=event.sequence,
-                    searchable_content=searchable,
+                if (
+                    type(row) is not tuple
+                    or len(row) != 2
+                    or type(row[0]) is not str
+                    or type(row[1]) is not str
+                ):
+                    raise SQLiteDatabaseFormatError()
+                records = project_collaboration_readable_history(
+                    _select_collaboration_events(connection, row[0], row[1])
                 )
+                for record in records:
+                    for field in record.fields:
+                        yield SQLiteConversationSearchIndexDocument(
+                            session_id=record.session_id,
+                            conversation_id=record.conversation_id,
+                            event_id=record.event_id,
+                            sequence=record.sequence,
+                            field_key=field.key.value,
+                            assignment_ordinal=field.assignment_ordinal,
+                            input_ordinal=field.input_ordinal,
+                            searchable_content=(
+                                normalize_conversation_literal_text(field.text)
+                            ),
+                        )
 
         document_stream = documents()
         try:
@@ -1274,8 +1366,8 @@ def _refresh_search_index_after_commit(
         finally:
             try:
                 document_stream.close()
-            finally:
-                rows.close()
+            except RuntimeError:
+                pass
 
     try:
         validate_lease()
@@ -1401,13 +1493,28 @@ def _validate_all_collaboration_histories(
     connection: object,
     *,
     identities: set[tuple[str, str]],
+    excluded_identity: tuple[str, str] | None = None,
 ) -> None:
     """Validate every stored collaboration row under an existing catalog row."""
 
     rows = connection.execute(  # type: ignore[attr-defined]
         _COLLABORATION_EVENT_SELECT + " ORDER BY session_id, conversation_id, sequence"
     ).fetchall()
-    events = tuple(_collaboration_event_from_row(row) for row in rows)
+    events: list[CollaborationEventV2] = []
+    for row in rows:
+        if excluded_identity is not None and type(row) is tuple and len(row) == 13:
+            if (row[2], row[3]) == excluded_identity:
+                continue
+            try:
+                decoded = decode_collaboration_event(row[12])
+            except (AssertionError, KeyError, SessionIdError, TypeError, ValueError):
+                pass
+            else:
+                if (decoded.session_id, decoded.conversation_id) == excluded_identity:
+                    raise CollaborationAppendError(
+                        CollaborationAppendFailure.CORRUPT_HISTORY
+                    )
+        events.append(_collaboration_event_from_row(row))
     grouped: dict[tuple[str, str], list[CollaborationEventV2]] = {}
     for event in events:
         identity = (event.session_id, event.conversation_id)
@@ -1637,6 +1744,92 @@ def _select_recent_context(
         omitted_turns=omitted_turns,
         retained_utf8_bytes=retained_utf8_bytes,
         truncated=omitted_turns > 0,
+    )
+
+
+def _search_collaboration_sqlite_snapshot(
+    connection: object,
+    *,
+    scope: CollaborationHistorySearchScope,
+    query: CollaborationHistorySearchQuery,
+    normalized_query: str,
+) -> CollaborationHistorySearchResult:
+    """Search complete v2 histories inside one validated database snapshot."""
+
+    metadata_sql = _METADATA_SELECT + " WHERE session_id = ?"
+    parameters: tuple[object, ...] = (scope.session_id,)
+    if not scope.include_archived:
+        metadata_sql += " AND status = ?"
+        parameters += (ConversationStatus.ACTIVE.value,)
+    metadata_sql += " ORDER BY created_at, conversation_id LIMIT ?"
+    parameters += (CONVERSATION_MEMORY_POLICY.max_scan_conversations + 1,)
+    rows = connection.execute(  # type: ignore[attr-defined]
+        metadata_sql,
+        parameters,
+    ).fetchall()
+    metadata = tuple(_metadata_from_row(row) for row in rows)
+    if len({item.conversation_id for item in metadata}) != len(metadata) or any(
+        item.session_id != scope.session_id for item in metadata
+    ):
+        raise SQLiteDatabaseFormatError()
+    if not scope.include_archived and any(
+        item.status is ConversationStatus.ARCHIVED for item in metadata
+    ):
+        raise SQLiteDatabaseFormatError()
+
+    selected = metadata[: CONVERSATION_MEMORY_POLICY.max_scan_conversations]
+    scan_truncated = len(selected) != len(metadata)
+    remaining_records = CONVERSATION_MEMORY_POLICY.max_scan_events
+    hits: list[CollaborationHistorySearchHit] = []
+    matched_fields = 0
+    scanned_records = 0
+    scanned_fields = 0
+    exhaustive_query = CollaborationHistorySearchQuery(
+        query.text,
+        limit=CONVERSATION_MEMORY_POLICY.max_search_hits,
+    )
+    for metadata_index, item in enumerate(selected):
+        events = _select_collaboration_events(
+            connection,
+            item.session_id,
+            item.conversation_id,
+        )
+        if len(events) > remaining_records:
+            scan_truncated = True
+            break
+        result = search_collaboration_history(events, exhaustive_query)
+        hits.extend(result.hits)
+        matched_fields += result.matched_fields
+        scanned_records += result.scanned_records
+        scanned_fields += result.scanned_fields
+        remaining_records -= len(events)
+        if remaining_records == 0:
+            if metadata_index + 1 < len(selected):
+                scan_truncated = True
+            break
+
+    hits.sort(
+        key=lambda hit: (
+            hit.citation.session_id,
+            hit.citation.conversation_id,
+            hit.citation.sequence,
+            tuple(CollaborationReadableFieldKey).index(hit.citation.field_key),
+            -1
+            if hit.citation.assignment_ordinal is None
+            else hit.citation.assignment_ordinal,
+            -1 if hit.citation.input_ordinal is None else hit.citation.input_ordinal,
+        )
+    )
+    retained = tuple(hits[: query.limit])
+    return CollaborationHistorySearchResult(
+        query=query,
+        normalized_query=normalized_query,
+        hits=retained,
+        matched_fields=matched_fields,
+        scanned_records=scanned_records,
+        scanned_fields=scanned_fields,
+        scan_truncated=scan_truncated,
+        truncated=scan_truncated or matched_fields > len(retained),
     )
 
 
@@ -2179,8 +2372,7 @@ __all__ = [
     "SQLiteConversationArchiveAdapter",
     "SQLiteConversationCatalog",
     "SQLiteCollaborationEventStore",
-    "SQLiteConversationEventStore",
-    "SQLiteConversationSearch",
+    "SQLiteCollaborationHistorySearch",
     "compose_sqlite_conversation_archive",
     "compose_sqlite_conversation_storage",
     "preflight_sqlite_conversation_storage",

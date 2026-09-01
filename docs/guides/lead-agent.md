@@ -56,8 +56,9 @@ remain explicit in the proposal.
 
 ## Target provider-call shape
 
-The following illustrates the later #452/#453 workflow after parent #467 and
-the #479 storage cutover complete; it is not callable today.
+The following illustrates the later #452/#453 workflow. The #479 storage and
+inspection path is active, but this provider-bound workflow is not callable
+today.
 
 User input:
 
@@ -116,9 +117,9 @@ Users can still prepare the lead's future scope:
 /history
 ```
 
-#479 activates the sole schema-v2 storage/inspection service and removes the
-last active-v1 service path. After parent #467 completes, #452 owns the
-lead-facing proposal/confirmation/reconfirmation workflow and #453 owns
-specialist execution/result/finalization/outcome-unknown behavior, both wired
-to that store. Until those integrations complete, lead delegation is target
-behavior, not an installed command promise.
+The sole schema-v2 storage/inspection service is active now. #452 owns the
+later lead-facing proposal/confirmation/reconfirmation workflow and #453 owns
+later specialist execution/result/finalization/outcome-unknown behavior. #454
+owns whole-workspace rejection of unsupported history. Until those
+integrations complete, lead delegation is target behavior, not an installed
+command promise.

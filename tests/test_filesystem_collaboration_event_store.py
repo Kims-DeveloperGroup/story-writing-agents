@@ -27,7 +27,6 @@ from story_writing_agents.conversation_storage.composition import (
 from story_writing_agents.conversation_storage.filesystem import (
     FilesystemCollaborationEventStore,
     FilesystemConversationCatalog,
-    FilesystemConversationEventStore,
 )
 from story_writing_agents.conversations import (
     COLLABORATION_EVENT_SCHEMA_VERSION,
@@ -757,12 +756,11 @@ class FilesystemCollaborationEventStoreFailureTests(unittest.TestCase):
 
 
 class FilesystemCollaborationEventStoreBoundaryTests(unittest.TestCase):
-    def test_direct_module_export_only_and_v1_composition_remain_exact(self) -> None:
+    def test_direct_module_export_only_and_v2_composition_are_exact(self) -> None:
         self.assertEqual(
             filesystem_module.__all__,
             [
                 "FilesystemConversationCatalog",
-                "FilesystemConversationEventStore",
                 "FilesystemCollaborationEventStore",
             ],
         )
@@ -777,21 +775,19 @@ class FilesystemCollaborationEventStoreBoundaryTests(unittest.TestCase):
         self.assertFalse(
             hasattr(conversation_storage, "FilesystemCollaborationEventStore")
         )
-        self.assertIs(
-            story_writing_agents.FilesystemConversationEventStore,
-            FilesystemConversationEventStore,
+        self.assertFalse(
+            hasattr(story_writing_agents, "FilesystemConversationEventStore")
         )
+        self.assertFalse(hasattr(workspace_facade, "FilesystemConversationEventStore"))
 
         with _harness() as value:
             services = compose_filesystem_conversation_storage(value.workspace)
             self.assertIsInstance(
                 services.event_store,
-                FilesystemConversationEventStore,
-            )
-            self.assertNotIsInstance(
-                services.event_store,
                 FilesystemCollaborationEventStore,
             )
+            self.assertTrue(callable(services.event_store.append_batch))
+            self.assertFalse(hasattr(services.event_store, "append"))
 
     def test_schema_version_and_module_have_no_dynamic_forwarder(self) -> None:
         self.assertEqual(COLLABORATION_EVENT_SCHEMA_VERSION, 2)

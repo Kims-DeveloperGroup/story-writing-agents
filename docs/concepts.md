@@ -25,10 +25,9 @@ flowchart TD
     R -->|unanimous approval and commit| M[Consensus manuscript]
     S -. separate conversation scope .-> C[Conversation identity]
     C --> CM[Catalog metadata]
-    C --> CT[Visible event transcript]
-    CM --> Q[Read-only bounded search]
-    CT -->|user and reply text| Q
-    Q --> P[Citation and transcript page]
+    C --> CT[Authoritative v2 event history]
+    CT --> Q[Read-only event-field search]
+    Q --> P[Exact event/field citation and page]
 ```
 
 In the target workflow, work narrows from workspace to session to collaboration
@@ -36,9 +35,10 @@ steps and a debate, then moves through candidate revisions toward at most one
 committed manuscript. The current public runtime stops at management and
 inspection. Conversation identity is scoped by the same story session but
 remains separate from debate execution. Its catalog owns subject/archive
-status. The current selected service still supplies schema-v1 transcript
-history/search, while direct schema-v2 history owns future structured events
-and its pure readable/search/page projections. See
+status. The selected service stores schema-v2 collaboration events and derives
+readable records, event-field search hits, exact citations, state, and bounded
+pages from that same authority. Subject metadata is displayed with a hit but is
+not searched. See
 [Runtime API](reference/runtime-api.md) and
 [Conversation search and cited transcript pages](reference/conversation-search.md).
 

@@ -19,7 +19,6 @@ import story_writing_agents
 import story_writing_agents.conversation_storage as storage_package
 from story_writing_agents import (
     FilesystemConversationCatalog,
-    FilesystemConversationEventStore,
     Workspace,
 )
 from story_writing_agents.conversation_storage import (
@@ -66,7 +65,7 @@ from tests.conversation_storage_migration_fixture import (
     namespace_snapshot,
     representative_archive,
 )
-from tests.sqlite_conversation_storage_fixture import make_append, raw_connection
+from tests.sqlite_conversation_storage_fixture import raw_connection
 
 
 def _other_backend(backend: ConversationStorageBackend) -> ConversationStorageBackend:
@@ -88,6 +87,51 @@ def _transfer(
         source_backend=source,
         destination_backend=_other_backend(source),
         dry_run=dry_run,
+    )
+
+
+def _write_frozen_legacy_transcript(
+    workspace: Workspace,
+    *,
+    session_id: str,
+    conversation_id: str,
+) -> None:
+    workspace.write_text(
+        Path("discussion_logs")
+        / session_id
+        / "interactive"
+        / "conversations"
+        / conversation_id
+        / "transcript.jsonl",
+        '{"schema_version":1,"legacy":"transcript sentinel"}\n',
+    )
+
+
+def _insert_frozen_legacy_event(
+    connection: object,
+    *,
+    session_id: str,
+    conversation_id: str,
+) -> None:
+    connection.execute(  # type: ignore[attr-defined]
+        "INSERT INTO conversation_events "
+        "(session_id, conversation_id, sequence, schema_version, turn_id, "
+        "turn_slot, timestamp, sender, recipient, kind, content, "
+        "searchable_content) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        (
+            session_id,
+            conversation_id,
+            1,
+            1,
+            "legacy_turn",
+            0,
+            "2026-08-25T00:00:00+00:00",
+            "user",
+            "lead_orchestrator",
+            "user_message",
+            "legacy transcript row",
+            "legacy transcript row",
+        ),
     )
 
 
@@ -142,7 +186,7 @@ class ConversationStorageTransferSurfaceTests(unittest.TestCase):
             self.assertFalse(hasattr(storage_package, old_name))
             self.assertFalse(hasattr(story_writing_agents, old_name))
         self.assertEqual(len(storage_package.__all__), 63)
-        self.assertEqual(len(story_writing_agents.__all__), 118)
+        self.assertEqual(len(story_writing_agents.__all__), 104)
 
         report = ConversationStorageTransferReport(
             operation=ConversationStorageTransferOperation.TRANSFER,
@@ -259,16 +303,10 @@ class ConversationStorageTransferPlanningTests(unittest.TestCase):
         filesystem_source = transfer_workspace(self)
         catalog = FilesystemConversationCatalog(filesystem_source)
         metadata = catalog.create("legacy_session", "Legacy filesystem source")
-        FilesystemConversationEventStore(
+        _write_frozen_legacy_transcript(
             filesystem_source,
-            catalog=catalog,
-        ).append(
-            make_append(
-                session_id=metadata.session_id,
-                conversation_id=metadata.conversation_id,
-                turn_id="legacy_turn",
-                content="legacy source transcript",
-            )
+            session_id=metadata.session_id,
+            conversation_id=metadata.conversation_id,
         )
         with raw_connection(filesystem_source) as connection:
             sqlite_before = (
@@ -307,14 +345,12 @@ class ConversationStorageTransferPlanningTests(unittest.TestCase):
         )
         services = compose_sqlite_conversation_storage(sqlite_destination)
         legacy = services.catalog.create("legacy_target", "Legacy SQLite target")
-        services.event_store.append(
-            make_append(
+        with raw_connection(sqlite_destination) as connection:
+            _insert_frozen_legacy_event(
+                connection,
                 session_id=legacy.session_id,
                 conversation_id=legacy.conversation_id,
-                turn_id="legacy_turn",
-                content="legacy destination transcript",
             )
-        )
         with raw_connection(sqlite_destination) as connection:
             destination_before = (
                 tuple(connection.execute("SELECT * FROM conversations").fetchall()),

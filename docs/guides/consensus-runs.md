@@ -34,13 +34,11 @@ side effect.
 
 ## Replacement path
 
-Issue #466 delivered pure schema-v2 values, and #474-#477 added
-projection/storage/archive/transfer pieces on the integration branch. Issue
-#478 removes the old public consumers. Issue #479 activates the sole schema-v2
-storage/inspection service and removes the last active-v1 service path. After
-parent #467 completes, open issue #452 wires lead-facing
-proposal/confirmation/reconfirmation behavior to that store and #453 wires
-specialist execution/result/finalization/outcome-unknown behavior to it.
+Issues #466 and #474-#479 delivered the schema-v2 values, projections,
+storage/archive/transfer, and sole active storage/inspection service. Open
+#452 owns later lead-facing proposal/confirmation/reconfirmation behavior,
+#453 owns specialist execution/result/finalization/outcome-unknown behavior,
+and #454 owns whole-workspace rejection of unsupported history.
 
 Do not restore or wrap an earlier direct path. During this transition, use
 [story-session management](story-sessions.md), the

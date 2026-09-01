@@ -1,1577 +1,218 @@
 # Package API and exports
 
-> **Availability:** the 118-name inventory below is exported from the
-> implemented `story_writing_agents` package facade. Separate sections document
-> archive additions to the supported `story_writing_agents.conversation_storage`
-> subpackage, pure literal-search mechanics, and the optional SQLite owning
-> modules plus direct-only conversation transfer, provisioning, and selection;
-> optional conversation RAG also uses seven supported direct modules, with the
-> generic adapter available only through its pinned extra. None is a
-> package-root facade export. The 83-name
-> `story_writing_agents.conversations` facade also supplies a pure schema-v2
-> structured-collaboration contract, including readable record and bounded
-> context projections. Twelve additive v2 search/citation/page/document-ID
-> names are direct-only from `story_writing_agents.conversation_search`.
-> Collaboration names are deliberately omitted from the package root and are
-> not active in the selected runtime service until #479. Context, progress,
-> backend, and debate types are Python component APIs; an export does not imply
-> a current CLI execution command.
+The package exposes management, generic backend/model contracts, and direct
+schema-v2 collaboration components. An exported provider or debate component
+does not create an installed story-execution command.
 
-Key terms: **package facade**—the names re-exported at the package root;
-**public import**—a supported symbol imported from its documented owning
-package; **alias**—a second name for the same object; **enum**—a type with a
-fixed value set.
+## Facade inventory
 
-Import public contracts from the package root:
+The stable inventories in this revision are:
+
+| Import boundary | Exports | Purpose |
+| --- | ---: | --- |
+| `story_writing_agents` | 104 | Management runtime, workspace/catalog, backend/session, generic models, retrieval contracts, parser, and errors |
+| `story_writing_agents.conversations` | 81 | Catalog plus schema-v2 events, projection, readable context, and pure validation |
+| `story_writing_agents.conversation_search` | 18 | Schema-v2 search, exact citations, paging, and history service |
+| `story_writing_agents.conversation_retrieval` | 24 | Low-level provider search/read-history/answer contracts |
+| `story_writing_agents.conversation_storage` | 63 | Storage composition, provenance, activation, archive, and transfer contracts |
+| `story_writing_agents.workspace` | 3 | `Workspace`, `initialize_workspace`, and `FilesystemConversationCatalog` |
+
+The production graph has 97 modules, 362 dependency edges, no cycles, and 104
+package-root exports. The conversations owners contribute 54 event exports and
+20 context exports; their facade bindings are identical to their owner
+bindings.
+
+Import the management facade explicitly:
 
 ```python
-from story_writing_agents import StoryRuntime, Workspace
+from story_writing_agents import StoryRuntime, RuntimeSession, Workspace
 ```
 
-The exact 118-name export inventory is:
+There is no package-root `Runtime` or `Session` alias. `StoryRuntime` and
+`RuntimeSession` expose no direct provider turn or debate-start method.
 
-- roster: `AGENT_SPECS`, `ROSTER`, `SPECIALIST_IDS`, `LEAD_ORCHESTRATOR`,
-  `PLOT_ARCHITECT`, `CHARACTER_CUSTODIAN`, `EXECUTION_SPECIALIST`;
-- backend: `AgentBackend`, `BoundAgent`;
-- session lifecycle: `SessionDurableState`, `SessionAccessState`,
-  `SessionLifecycleState`, and `provider_work_is_ready`;
-- agent, conversation-turn, and debate models: `PromptFileReference`,
-  `AgentDefinition`, `AgentRequest`, `AgentReply`, `ConversationRequest`,
-  `ConversationReply`, `ConversationResult`, `AgentStateEntry`,
-  `DebateMessage`, `DebateResult`, `InputKind`, `Phase`, `Verdict`,
-  `DebateStatus`, `DebateContextMode`, `DebateContextRequest`,
-  `DebateFailureKind`, `DebateProgressPhase`, `DebateProgressEvent`, and
-  `DebateProgressSink`;
-- runtime: `StoryRuntime`, `RuntimeSession`;
-- directives: `DirectiveKind`, `RuntimeDirective`, `parse_directive`,
-  `apply_directive`;
-- workspace facade: `Workspace`, `initialize_workspace`, and the supported
-  `FilesystemConversationCatalog`/`FilesystemConversationEventStore` aliases;
-- conversation catalog: `ConversationCatalog`, `ConversationMetadata`,
-  `ConversationStatus`, `normalize_conversation_subject`,
-  `CONVERSATION_METADATA_SCHEMA_VERSION`,
-  `CONVERSATION_SUBJECT_NORMALIZATION_VERSION`, and
-  `MAX_CONVERSATION_SUBJECT_LENGTH`;
-- conversation transcripts: `ConversationEventStore`, `ConversationEvent`,
-  `ConversationEventAppend`, `ConversationEventKind`,
-  `ConversationContextPolicy`, `ConversationContextWindow`,
-  `CONVERSATION_EVENT_SCHEMA_VERSION`, and `CONVERSATION_CONTEXT_POLICY`;
-- conversation search and cited reads: `ConversationMemoryPolicy`,
-  `CONVERSATION_MEMORY_POLICY`, `ConversationSearchScope`,
-  `ConversationSearchQuery`, `ConversationSearchMatchKind`,
-  `ConversationCitation`, `ConversationSearchHit`, `ConversationSearchResult`,
-  `ConversationSearch`, `ReferenceConversationSearch`,
-  `ConversationMemoryService`, `ConversationTranscriptCursor`, and
-  `ConversationTranscriptPage`;
-- bounded retrieval: `CONVERSATION_RETRIEVAL_POLICY`,
-  `ConversationRetrievalPolicy`, `ConversationRetrievalActionKind`,
-  `ConversationRetrievalAction`, `ConversationRetrievalSearchAction`,
-  `ConversationRetrievalReadAction`, `ConversationRetrievalAnswerAction`,
-  `ConversationRetrievalObservation`, `ConversationRetrievalSearchObservation`,
-  `ConversationRetrievalReadObservation`, `ConversationRetrievalSearchItem`,
-  `ConversationRetrievalTranscriptEvent`, `ConversationRetrievalSource`,
-  `ConversationRetrievalRequest`, `ConversationRetrievalReply`,
-  `ConversationRetrievalResult`, `ConversationRetrievalActionHandler`,
-  `ConversationRetrievalProgressPhase`, `ConversationRetrievalProgressEvent`,
-  and `ConversationRetrievalProgressSink`;
-- interactive parser: `ActionKind`, `InteractiveAction`, `CommandSpec`,
-  `COMMANDS`, `parse_interactive_line`;
-- errors: `StoryWritingAgentsError`, `WorkspaceSecurityError`,
-  `WorkspaceFormatError`, `WorkspaceVersionUnsupportedError`,
-  `ConfigurationError`, `DirectiveError`,
-  `SessionIdError`, `ConversationNotFoundError`,
-  `ConversationExistsError`, `ManuscriptExistsError`,
-  `BackendProtocolError`, `SessionExistsError`, `SessionNotFoundError`,
-  `SessionPausedError`, `SessionAccessBlockedError`,
-  `SessionOwnershipUnknownError`, `DebateExistsError`, `ProgressObserverError`,
-  `ConversationRetrievalError`, `ConversationRetrievalSemanticError`,
-  `ConversationRetrievalBudgetError`, and `ConversationRetrievalObserverError`.
-
-The package root does not export `Runtime` or `Session`. Import the explicit
-`StoryRuntime` and `RuntimeSession` names.
-
-`FilesystemConversationCatalog` and `FilesystemConversationEventStore` are
-identical class objects through the package root, the supported static
-`story_writing_agents.workspace` facade, and their defining owner module,
-`story_writing_agents.conversation_storage.filesystem`. Their canonical
-`__module__` is now that owner module. The
-`story_writing_agents.conversation_storage` package facade deliberately does
-not export either class; its direct `filesystem` module is the internal or
-advanced import when ownership clarity matters.
-
-The removal of the two broad runtime aliases and the direct-execution methods is
-intentional. There are no forwarding aliases or alternate entry points.
-Management, configuration, directive, and inspection callers use the explicit
-runtime names. Private conversation implementation globals—including
-serializers, path helpers, and the weak transcript-lock registry—are not
-exposed through the workspace facade.
-
-Canonical artifact value contracts live in
-`story_writing_agents.writing_artifacts`, but are intentionally absent from the
-118-name package-root facade. In addition to immutable path, catalog, kind,
-reference, and filesystem `ArtifactSourceIdentity` values, the subpackage
-exports content-free authorization, operation
-history/state, read-request/action, `ReferenceOperationFailure`, and parser
-contracts. Filesystem-backed `WritingArtifactRepository`, content-bearing read
-results, private capabilities, runtime coordinators, the ranged viewer, and
-interactive activation values remain internal. The current controller does not
-activate that private UI boundary from main input, and the package adds no
-public selection API or standalone artifact command. See
-[Canonical writing artifacts](writing-artifacts.md).
+The root still exposes generic backend, prompt/request/result, debate model,
+session lifecycle, catalog, parser, retrieval, and error contracts. Those are
+component seams, not alternate runtime execution entry points. The exact list
+is authoritative in `story_writing_agents.__all__` and is checked against the
+project module index.
 
 <a id="structured-collaboration-history-boundary"></a>
 
 ## Structured collaboration history boundary
 
-Schema-v2 collaboration value, wire, validation, and projection contracts are
-supported through the static `story_writing_agents.conversations` facade.
-Importing it performs no I/O and does not start the runtime, a provider, a
-store, or a shell:
+Use the static conversations facade for schema-v2 event and context contracts:
 
 ```python
 from story_writing_agents.conversations import (
     CollaborationContextBootstrap,
     CollaborationEventBatch,
     CollaborationEventStore,
-    CollaborationProposal,
+    CollaborationHistoryProjection,
     CollaborationReadableContext,
-    CollaborationReadableField,
     CollaborationReadableRecord,
-    decode_collaboration_batch,
-    encode_collaboration_batch,
     project_collaboration_history,
     project_collaboration_readable_history,
     select_bounded_collaboration_context,
 )
 ```
 
-The facade exports exactly 83 names: the established 17 schema-v1 conversation
-names plus immutable schema-v2 event, proposal, state, readable-field/record/
-context, error, projection, and store contracts; five `COLLABORATION_*`
-constants; two digest functions; eight proposal/event/draft/batch
-encode/decode functions; and five pure readable/history, bounded-context,
-candidate, and transition functions. The owning `conversations.events` and
-`conversations.context` modules export exactly 55 and 21 names, respectively.
-Every facade binding is the same object as its owning-leaf
-binding. All collaboration classes and functions report
-`story_writing_agents.conversations` as their canonical public module.
+The selected `ConversationStorageServices` has same-provenance bindings for
+one catalog, one `CollaborationEventStore`, one aggregate
+`CollaborationHistorySearch`, and one mutation coordinator. The event-store
+port is:
 
-No schema-v2 conversation value is exported by the exact 118-name
-`story_writing_agents` root or by `story_writing_agents.conversation_storage`.
-There is no dynamic forwarding. The current runtime, selected
-filesystem/SQLite transcript adapters, and UI use only the established
-schema-v1 contracts. A direct Python caller can now satisfy the v2
-`CollaborationEventStore` protocol with the concrete filesystem adapter:
+```python
+append_batch(batch: CollaborationEventBatch) -> CollaborationAppendReceipt
+read(session_id: str, conversation_id: str) -> tuple[CollaborationEvent, ...]
+read_context(session_id: str,
+             conversation_id: str) -> CollaborationHistoryProjection
+```
+
+Readable history and state projection are separate. Default
+`select_bounded_collaboration_context()` output is a content-free bootstrap;
+only explicit known event IDs add whole records under the 24-record/32,768-byte
+limit. It does not include current input, private payload, or provider
+authority.
+
+Use the direct search module for current provider-free search and paging:
+
+```python
+from story_writing_agents.conversation_search import (
+    CollaborationHistorySearchQuery,
+    CollaborationHistorySearchScope,
+    CollaborationHistoryService,
+)
+
+service = CollaborationHistoryService(
+    CollaborationHistorySearchScope("novel", include_archived=False),
+    conversation_storage_services=services,
+)
+result = service.search(CollaborationHistorySearchQuery("opening constraint"))
+page = service.read_history(conversation_id, max_records=24)
+```
+
+Search matches only closed readable event fields. Subjects are display-only.
+Citations bind an exact event, field, and code-point range. Page cursors bind
+the exact last sequence and tail-batch digest and fail if history appends.
+
+The concrete stores are supported direct-module APIs only:
 
 ```python
 from story_writing_agents.conversation_storage.filesystem import (
     FilesystemCollaborationEventStore,
 )
-```
-
-Its constructor is
-`FilesystemCollaborationEventStore(workspace, *, catalog=None)`. It exposes
-`append_batch(batch)`, `read(session_id, conversation_id)`, and
-`read_context(session_id, conversation_id)`. Construction performs no I/O.
-The class is the third name in the owning module's `__all__`, after the two
-established v1 filesystem classes, but it is deliberately absent from the
-`conversation_storage`, `workspace`, and project-root facades and from active
-composition. This is an intentional direct-module import path, not dynamic
-forwarding.
-
-The adapter owns strict schema-v2 `collaboration-history.jsonl` plus its
-`.collaboration-history.lock`, atomic full-history append/retry, and state
-projection. It does not replace or forward the active v1 `transcript.jsonl`,
-does not implement SQLite/archive/backend transfer, and does not call a provider or
-recreate authority. See the
-[direct storage scenario](collaboration-history.md#direct-filesystem-storage-and-retry)
-and [filesystem safety](../operations/filesystem-safety.md#schema-v2-collaboration-history-safety).
-
-The fixed collaboration constants are schema version `2`, round limit `2`,
-physical-call limit `12`, maximum visible text size `32_768` UTF-8 bytes, and
-default readable-context policy 24 records/32,768 readable UTF-8 bytes.
-The facade exposes immutable typed actors, inputs, profiles, assignments,
-budget, proposal, payload, outcome, event, batch, receipt, error, history
-projection, readable record/field/context, and next-action values. It also
-exposes strict canonical UTF-8 JSON encode/decode, SHA-256 digest,
-complete-history state/readable projection, explicit bounded record selection,
-candidate-batch, and state-transition functions.
-
-Readable projection returns one complete typed record per canonical event and
-rejects schema-v1 or corrupt v2 histories. Default bounded context contains
-only a content-free schema/session/conversation/count/tail bootstrap; only
-explicit unique known event IDs add whole records under the fixed caps. It has
-no current-input or provider operation. `CollaborationHistoryProjection`
-remains the separate state/recovery summary and the return type of the store
-port's `read_context()`.
-
-Exact literal search, original-range citations, snapshot paging, and derived
-readable-document identity are not added to this facade. They are the following
-12 direct-only names from the existing `conversation_search` owner:
-
-```python
-from story_writing_agents.conversation_search import (
-    COLLABORATION_READABLE_SOURCE_SCHEMA_ID,
-    CollaborationHistoryCitation,
-    CollaborationHistoryPage,
-    CollaborationHistoryPageCursor,
-    CollaborationHistorySearchHit,
-    CollaborationHistorySearchQuery,
-    CollaborationHistorySearchResult,
-    collaboration_readable_document_id,
-    continue_collaboration_history,
-    page_collaboration_history,
-    resolve_collaboration_citation,
-    search_collaboration_history,
+from story_writing_agents.conversation_storage.sqlite import (
+    SQLiteCollaborationEventStore,
 )
 ```
 
-`conversation_search` exports exactly 25 names: its unchanged 13-name
-package-root-supported schema-v1 surface plus those 12 v2 names. None of the 12
-is re-exported at the project root. The direct operations are pure, perform no
-I/O, and do not activate storage, runtime, RAG, or provider behavior.
-
-Start with [Structured collaboration history](collaboration-history.md) for the
-exact user impact, proposal closure, structured-decision rule, state table,
-atomic batch and direct-filesystem contracts, restart behavior, privacy limits,
-and Python examples. See
-[Conversation search](conversation-search.md#schema-v2-readable-collaboration-history)
-for the pure direct read surface. Export availability and stored history do not
-authorize execution and do not imply current UI, provider workflow, active
-SQLite service, selection, or activation. Archive and backend transfer are the
-explicit integrated consumers.
-
-<a id="conversation-literal-search-mechanics"></a>
-
-## Conversation literal-search mechanics
-
-Provider-neutral literal-search mechanics are a supported direct-module API,
-not part of the 118-name package-root or 63-name conversation-storage facades.
-The module is pure, owns no resource, performs no I/O, and exports exactly:
-
-```python
-from story_writing_agents.conversation_literal_search import (
-    CONVERSATION_LITERAL_NORMALIZATION_VERSION,
-    build_conversation_literal_snippet,
-    classify_conversation_literal_subject,
-    conversation_literal_sort_key,
-    normalize_conversation_literal_query,
-    normalize_conversation_literal_text,
-)
-```
-
-The normalization version is exactly `1`. Public call signatures are:
-
-```python
-normalize_conversation_literal_text(value: str) -> str
-normalize_conversation_literal_query(
-    value: str,
-    *,
-    max_characters: int,
-) -> str
-classify_conversation_literal_subject(
-    normalized_subject: str,
-    normalized_query: str,
-) -> str | None
-build_conversation_literal_snippet(
-    searchable: str,
-    normalized_query: str,
-    *,
-    max_characters: int,
-    max_utf8_bytes: int,
-) -> str
-conversation_literal_sort_key(
-    match_kind: str,
-    normalized_subject: str,
-    conversation_id: str,
-) -> tuple[int, str, str]
-```
-
-Normalization is strict-UTF-8 NFKC plus case folding, replacement of every
-Unicode category-C character with a space, and whitespace collapse. Query
-normalization additionally rejects raw category-C characters and enforces
-the caller's exact positive character bound before and after normalization.
-Subject classification returns `exact_subject`, `subject_prefix`,
-`subject_substring`, or `None`; the snippet and sort helpers implement the
-same deterministic public behavior used by both reference and SQLite search.
-See [Conversation search](conversation-search.md#search-contract).
-
-<a id="optional-conversation-rag-boundary"></a>
-
-## Optional conversation RAG boundary
-
-> **Availability:** these are direct Python APIs. Issues #262/#283 provide the
-> contracts, deterministic local provider, disposable generation store, generic
-> adapter, and explicit local composition. Issue #263 adds the direct
-> provider/store-neutral runtime service. Its former direct `StoryRuntime`
-> consumer is unavailable. Issue #348 adds concrete local composition, persisted
-> default-disabled provider/automatic fields and six noninteractive lifecycle
-> and authorized-search workflows. `/settings` RAG editors and next-shell local
-> composition remain; the former one-turn provider preflight is not a current
-> command. Existing literal `/search` is unchanged.
-
-Provider-neutral story contracts live in
-`story_writing_agents.conversation_rag`. The module imports only the standard
-library, performs no I/O, and is safe in the RAG-free base installation. Its
-exact 35-name `__all__` is:
-
-- policy and outcomes: `CONVERSATION_RAG_POLICY`, `ConversationRagPolicy`,
-  `ConversationRagOutcome`, `ConversationRagReason`,
-  `ConversationRagProjectionStateAvailability`,
-  `ConversationRagProjectionStatus`, `ConversationRagProjectionOutcome`, and
-  `ConversationRagProjectionFailureStage`;
-- source and vector values: `ConversationRagDocumentKey`,
-  `ConversationRagDocumentIdentity`, `ConversationRagSourceDocument`,
-  `ConversationRagSourceReference`, `ConversationRagEmbeddingIdentity`,
-  `ConversationRagEmbeddingVector`, `ConversationRagProviderCandidate`, and
-  `ConversationRagVectorRecord`;
-- state, request, and result values:
-  `ConversationRagProjectionCheckpointEntry`,
-  `ConversationRagProjectionCheckpoint`, `ConversationRagProjectionState`,
-  `ConversationRagProjectionRequest`, `ConversationRagProjectionResult`,
-  `ConversationRagRetrievalRequest`, `ConversationRagCandidate`, and
-  `ConversationRagRetrievalResult`;
-- caller-owned ports: `ConversationRagEmbedder`,
-  `ConversationRagVectorIndexWriter`, `ConversationRagVectorIndexResetter`,
-  `ConversationRagVectorIndexReader`, `ConversationRagLexicalRetriever`,
-  `ConversationRagCollaborators`, and `ConversationRagService`; and
-- failures: `ConversationRagError`, `ConversationRagContractError`,
-  `ConversationRagStateError`, and `ConversationRagOperationError`.
-
-The fixed policy is:
-
-| Field | Exact value |
-| --- | ---: |
-| `max_candidates` | `20` |
-| `max_conversations` | `256` |
-| `max_events` | `10_000` |
-| `max_fragment_codepoints` | `800` |
-| `fragment_overlap_codepoints` | `80` |
-| `max_embedding_batch_size` | `32` |
-
-`ConversationRagService` has four positional-only operations:
-
-```python
-project_documents(request, state) -> ConversationRagProjectionResult
-rebuild_projection(request, state) -> ConversationRagProjectionResult
-retrieve_semantic(request, state) -> ConversationRagRetrievalResult
-retrieve_hybrid(request, state) -> ConversationRagRetrievalResult
-```
-
-Projection input can contain authorized source text, but public retrieval
-output does not. `ConversationRagCandidate` carries only a stable source
-reference and contiguous rank. Provider fragment text is non-authoritative
-adapter input and is dropped after identity/range validation. The configured
-runtime reauthorizes and rereads the current range before agent use.
-
-The exact generic translation surface requires the optional package and
-exports three names:
-
-```python
-from story_writing_agents.generic_rag_adapter import (
-    GenericRagCapabilitySnapshot,
-    GenericRagConversationService,
-    inspect_generic_rag_capabilities,
-)
-```
-
-`generic_rag_adapter` is the sole production module importing both projects.
-It maps to the exact `generic-rag` 0.1.0 owning-module API, borrows caller-owned
-collaborators, validates returned types and stable identities, removes provider
-text from story results, and translates ordinary failures to content-free story
-errors. It does not acquire, close, discover, or persist collaborators. Process
-control propagates.
-
-The deterministic local provider is a separate pure direct module with exactly
-five exports:
-
-```python
-from story_writing_agents.conversation_rag_local import (
-    LOCAL_CONVERSATION_RAG_DIMENSIONS,
-    LOCAL_CONVERSATION_RAG_MODEL_ID,
-    LOCAL_CONVERSATION_RAG_PROVIDER_ID,
-    LocalConversationRagEmbedder,
-    LocalConversationRagVectorRanker,
-)
-```
-
-The constants are exactly `256`, `"story-conversation-rag-local-hash-v1"`, and
-`"local"`. `LocalConversationRagEmbedder.identity` returns that fixed model and
-dimension pair. Its public operations are:
-
-```python
-LocalConversationRagEmbedder.embed(
-    texts: tuple[str, ...],
-    /,
-) -> tuple[ConversationRagEmbeddingVector, ...]
-LocalConversationRagVectorRanker.rank(
-    request: ConversationRagRetrievalRequest,
-    embedding: ConversationRagEmbeddingVector,
-    records: Iterable[ConversationRagVectorRecord],
-    /,
-) -> tuple[ConversationRagProviderCandidate, ...]
-```
-
-Embedding pins later codepoint assignments through Unicode 3.2 classification,
-uses shared strict normalized text, hashes whole tokens and boundary-padded
-codepoint 1/2/3-grams through a fixed SHA-256 feature domain, and L2-normalizes
-the 256 integer buckets. It accepts at most 32 texts of at most 800 codepoints
-each. Ranking scans at most 65,536 exact local-dimension records, deduplicates
-identical stable sources, rejects conflicts/cross-session records, retains only
-positive similarity, orders ties by the full stable source key, and returns no
-scores. Neither class owns state or performs I/O, network, credential,
-subprocess, clock, randomness, locale, timezone, hash-seed, or environment
-discovery. This intentionally weak deterministic baseline has no semantic-
-quality guarantee.
-
-Disposable persistence is supported from one identity-bound direct module with
-exactly eight exports:
-
-```python
-from story_writing_agents.conversation_rag_store import (
-    CONVERSATION_RAG_STORE_SCHEMA_ID,
-    ConversationRagGenerationBuilder,
-    ConversationRagGenerationStore,
-    ConversationRagStoreCounts,
-    ConversationRagStoreError,
-    ConversationRagStoreFailure,
-    ConversationRagStoreSnapshot,
-    ConversationRagStoreStatus,
-)
-```
-
-`CONVERSATION_RAG_STORE_SCHEMA_ID` is exactly
-`"story-conversation-rag-store-v1"` and versions only the persisted store
-envelopes. It is not the projection-content schema. The caller owns
-`ConversationRagProjectionRequest.schema_id`; the store preserves that value as
-the generation's `projection_schema_id` and as the checkpoint's `schema_id`.
-Status values are `missing`, `ready`, `stale`, `corrupt`, `incompatible`, and
-`provider_failed`.
-Failure values are `unsupported`, `busy`, `unsafe`, `corrupt`, `incompatible`,
-`provider_failed`, `confirmation_required`, and `operation_failed`.
-`ConversationRagStoreCounts` contains these exact nonnegative fields:
-
-```text
-conversations, events, documents, fragments, source_map_records,
-vector_records, generations, orphan_generations, source_utf8_bytes,
-payload_bytes, generation_bytes
-```
-
-The store constructs without I/O and retains the supplied identity-bound
-`Workspace`. Its public operations are:
-
-```python
-ConversationRagGenerationStore(workspace: Workspace, /)
-store.inspect(
-    session_id: str,
-    provider_id: str,
-    embedding: ConversationRagEmbeddingIdentity,
-    /,
-    *,
-    expected_projection_schema_id: str = CONVERSATION_RAG_STORE_SCHEMA_ID,
-) -> ConversationRagStoreSnapshot
-store.begin_generation(
-    provider_id,
-    request,
-    state,
-    /,
-    *,
-    rebuild: bool,
-) -> ConversationRagGenerationBuilder
-store.open_active_reader(snapshot, ranker, /) -> context manager
-store.set_status(session_id, status, /) -> None
-store.purge(session_id, /, *, confirmed: bool) -> ConversationRagStoreCounts
-```
-
-`expected_projection_schema_id` is additive and keyword-only. It must be an
-exact nonblank, non-whitespace strict-UTF-8 string and is validated before any
-store I/O. The default preserves the original fail-closed expectation for
-generations whose projection schema was the store-v1 value. Callers using a
-different projection format must supply its exact ID.
-
-The snapshot's `status` describes compatibility with the provider, embedding,
-and projection schema requested by this inspection; its `state` describes the
-verified checkpoint itself. A completely verified generation with one of
-those identity mismatches returns `incompatible` with a `present` checkpoint
-and safe provider, generation, and count fields. An incompatible store envelope
-or otherwise unverifiable identity exposes no trusted checkpoint. Advisory
-`ready`, `stale`, or `provider_failed` state cannot mask an identity mismatch.
-
-The builder is an operation-scoped context manager. Its `state` is the exact
-store-loaded state; it implements `replace_document()`, `delete_document()`,
-and `reset_session()` for the generic projection bridge, and
-`publish(result, /)` completely verifies and commits a successful target.
-Generation construction uses the request's projection schema. Incremental
-projection requires a compatible active generation; an explicit rebuild can
-replace a verified incompatible generation without relabeling it.
-An active reader is likewise call-scoped and exposes `search(request,
-embedding, /)` only while its exact snapshot remains current. Advisory status
-accepts only `stale` or `provider_failed`. Purge requires exact
-`confirmed=True` and removes only one session's derived active/status and
-generation contents.
-
-The store owns
-`agent_states/orchestrator_state/conversation_rag/sessions/<session>/`, with
-owner-only modes, descriptor-relative no-follow access, bounded POSIX locks,
-canonical strict-UTF-8 JSON/JSONL, digest/count/range reconstruction, and
-complete active-generation verification. `active.json` is the sole commit
-record. Its atomic rename is the final publish operation after precommit file
-and directory synchronization; no post-rename durability is claimed, so an
-immediate crash can retain either the old or new valid pointer. A reported
-precommit failure preserves the old pointer byte-for-byte. Rebuild restarts
-from the beginning, inspection does not clean, and later mutation removes only
-validated orphans. Deep/noncanonical JSON, non-finite or overflowing numbers,
-and inconsistent persisted records become sanitized corruption. Public
-snapshots/errors/status contain no query or source text, although the private
-derived source-map file contains plaintext fragments. See
-[Persistence](../design/persistence.md#optional-conversation-rag-derived-persistence)
-and [Filesystem safety](../operations/filesystem-safety.md#conversation-rag-generation-store-safety).
-
-Deferred composition is safe to import without `generic-rag` and exports ten
-names:
-
-```python
-from story_writing_agents.conversation_rag_composition import (
-    CONVERSATION_RAG_PROVIDER_ALLOWLIST,
-    ConversationRagCompositionError,
-    ConversationRagCompositionFailure,
-    LocalConversationRagComposition,
-    LocalConversationRagRuntimeComposition,
-    LocalConversationRagRuntimeState,
-    compose_conversation_rag,
-    compose_local_conversation_rag,
-    compose_local_conversation_rag_runtime,
-    inspect_conversation_rag_compatibility,
-)
-```
-
-The allowlist is exactly `("local",)`. Calling
-`compose_conversation_rag(provider, collaborators, /)` validates that value,
-requires installed distribution version `0.1.0`, performs the deferred static
-adapter import, verifies its capability manifest, and constructs the service.
-It does not dynamically discover providers or inspect environment
-configuration. Sanitized failure values are `provider_unsupported`,
-`dependency_missing`, `version_incompatible`, and
-`capability_incompatible`; dependency details do not cross the error boundary.
-
-`compose_local_conversation_rag(store, lexical_retriever, /)` validates the
-same optional dependency immediately and returns
-`LocalConversationRagComposition`. Its `service` property is the composition
-itself and `store` is the retained caller-owned generation store. The fixed
-embedder/ranker and supplied lexical retriever are combined with a fresh
-call-local generic adapter for every projection or retrieval that reaches
-generic work. Successful projection publishes one fully verified inactive
-generation. Retrieval with a present caller state inspects against that
-checkpoint's projection schema, then opens only the exact verified active
-snapshot. A different stored schema therefore returns `literal_fallback` with
-reason `incompatible`; drift from the same-schema caller checkpoint returns
-reason `stale`. Missing, stale, corrupt, provider-failed, or failed
-storage/provider state also returns `literal_fallback` with a fixed content-free
-reason. A missing or incompatible optional package at initial composition
-raises the sanitized composition error before store I/O.
-
-`inspect_conversation_rag_compatibility(provider, /)` runs the same fixed
-allowlist, installed-version, deferred adapter-import, and capability checks
-without constructing a service. `LocalConversationRagRuntimeState(store)` is
-the concrete local adapter for the provider-neutral runtime-state port; it binds
-the store's workspace key and fixed embedding identity, inspects against the
-runtime projection schema, and can mark one session stale.
-
-```python
-compose_local_conversation_rag_runtime(
-    workspace: Workspace,
-    /,
-    *,
-    automatic_enabled: bool = False,
-) -> LocalConversationRagRuntimeComposition
-```
-
-That convenience composition constructs and retains one generation store,
-local runtime-state adapter, and `ConversationRagRuntimeService`; its result
-exposes exact `service`, `store`, and `state` fields. It uses an explicit empty
-low-level lexical collaborator because the runtime authorization layer owns
-authoritative literal fusion. The call validates the optional package and
-capabilities but performs no projection and reads or writes no configuration.
-
-The separate runtime boundary is direct-module-only and exports exactly ten
-names:
-
-```python
-from story_writing_agents.conversation_rag_runtime import (
-    CONVERSATION_RAG_RUNTIME_POLICY,
-    CONVERSATION_RAG_RUNTIME_SCHEMA_ID,
-    ConversationRagRuntimeInspection,
-    ConversationRagRuntimeInspectionStatus,
-    ConversationRagRuntimeError,
-    ConversationRagRuntimePolicy,
-    ConversationRagRuntimeService,
-    ConversationRagRuntimeState,
-    ConversationRagRuntimeStateSnapshot,
-    inspect_authorized_conversation_rag,
-)
-```
-
-The fixed schema is `"story-conversation-rag-visible-turn-v1"`.
-`ConversationRagRuntimePolicy` is immutable at these exact values:
-
-| Field | Exact value |
-| --- | ---: |
-| `max_query_codepoints` | `200` |
-| `max_literal_candidates`, `max_semantic_candidates`, `max_excerpts` | `20` each |
-| `max_excerpt_codepoints` | `800` |
-| `max_context_utf8_bytes` | `32_768` |
-| `max_projected_source_utf8_bytes` | `33_554_432` |
-
-The stateful service surface is:
-
-```python
-ConversationRagRuntimeService(
-    low_level_service: ConversationRagService,
-    state_port: ConversationRagRuntimeState,
-    /,
-    *,
-    automatic_enabled: bool = False,
-)
-service.automatic_enabled -> bool
-service.preflight(
-    conversation_storage_services: ConversationStorageServices,
-    session_id: str,
-    turn_text: str,
-    /,
-    *,
-    forced_query: str | None = None,
-) -> ConversationRagContext | None
-service.search_authorized(
-    conversation_storage_services: ConversationStorageServices,
-    session_id: str,
-    query: str,
-    /,
-) -> ConversationRagContext
-service.project_authorized(
-    conversation_storage_services: ConversationStorageServices,
-    session_id: str,
-    /,
-    *,
-    rebuild: bool = False,
-) -> ConversationRagProjectionResult
-inspect_authorized_conversation_rag(
-    conversation_storage_services: ConversationStorageServices,
-    state_port: ConversationRagRuntimeState,
-    session_id: str,
-    /,
-) -> ConversationRagRuntimeInspection
-```
-
-The application-owned `ConversationRagRuntimeState` port supplies
-`workspace_key`, `embedding`, synchronous
-`inspect_projection_state(session_id)`, and synchronous
-`mark_projection_stale(session_id)`. The composition module supplies the
-fixed-local concrete adapter described above; applications may still implement
-the provider-neutral protocol. There is no interactive settings-owned factory.
-The runtime service owns authorization and orchestration, but no authoritative
-store, generation store, provider lifecycle, settings, network, or credentials.
-
-Only active conversations and complete visible user/reply pairs enter the
-fixed projection. Each document contains exact `Subject`, `User`, and addressed
-`Agent` framing; fixed length-framed SHA-256 domains bind its session,
-conversation, turn, metadata revision, event values, and source text.
-Projection holds one bounded conversation-storage mutation lease across target
-enumeration, provider/generation work, publication, persisted-checkpoint
-verification, and the repeated authoritative read that rejects drift. Preflight
-performs active-only literal search, uses semantic state only when ready, and
-rereads the complete current target under the same authority. It drops provider
-text, validates every stable reference
-and range, keeps literal candidates first, and retains at most one excerpt per
-document within the fixed budgets. Ordinary boundary failures are content-free;
-process-control exceptions propagate.
-
-`search_authorized()` forces one preflight with the supplied query and ignores
-the service's automatic policy. `inspect_authorized_conversation_rag()` is a
-separate no-write optimistic comparison: it reads indexed state, the complete
-authorized target twice, and indexed state again, rejects drift, and returns
-status `missing`, `ready`, `stale`, `failed`, `corrupt`, or `incompatible` plus
-content-free checkpoints/counts and `rebuild_required`. It acquires no mutation
-lease and creates no storage lock or RAG path.
-
-The additive runtime-owned provider values remain direct-module-only from
-`story_writing_agents.conversation_retrieval`:
-
-```python
-ConversationRagAttemptOutcome(*, outcome, reason)
-ConversationRagExcerpt(*, citation_id, source, reference, content)
-ConversationRagContext(*, outcome, excerpts, retained_utf8_bytes, truncated)
-```
-
-Attempted contexts use contiguous `g1` through `g20` citation IDs and expose
-authoritative excerpt text only through the explicit provider dictionary;
-dataclass representations omit it. `ConversationRetrievalRequest.rag_context`
-and `ConversationRetrievalResult.rag_outcome` are additive and default to
-`None`; `ConversationRetrievalResult.rag_sources` is an additive empty-tuple
-default and exact ordered subset of result sources. None of these direct-module
-RAG values joins the unchanged 118-name package-root facade.
-
-The command-domain boundary is direct-module-only and exports exactly seven
-names:
-
-```python
-from story_writing_agents.conversation_rag_cli import (
-    CONVERSATION_RAG_CLI_SCHEMA_VERSION,
-    ConversationRagCliFailure,
-    ConversationRagCliOperation,
-    ConversationRagCliReport,
-    ConversationRagCliRequest,
-    ConversationRagCliState,
-    dispatch_conversation_rag,
-)
-```
-
-The schema version is `1`; operations are `status`, `enable`, `rebuild`,
-`search`, `disable`, and `purge`; states are `disabled`, `unavailable`,
-`missing`, `ready`, `stale`, `failed`, `corrupt`, and `incompatible`.
-`ConversationRagCliRequest` is frozen/slotted and hides its optional query from
-representation. The direct workflow signature is:
-
-```python
-dispatch_conversation_rag(
-    workspace: Workspace,
-    request: ConversationRagCliRequest,
-    /,
-    *,
-    conversation_storage_services: ConversationStorageServices | None = None,
-) -> ConversationRagCliReport
-```
-
-It returns one frozen report and sanitizes ordinary boundary failures;
-process-control exceptions propagate. The CLI
-adapter, rather than this dispatch function, resolves workspace/default-session
-scope and activates configured authoritative storage for confirmed rebuild or
-search. Report fields, failure vocabulary, JSON, privacy, and exit behavior are
-the [conversation RAG CLI contract](cli.md#conversation-rag-operations).
-
-Installation, immutable-pin verification, caller ownership, the redistribution
-restriction, persistence boundary, current agent/command flow, and planned
-interactive flow are in
-[Optional conversation RAG](../guides/conversation-rag.md).
-
-<a id="conversation-storage-subpackage"></a>
-
-## Conversation-storage subpackage
-
-Canonical conversation archive values, deterministic serialization, and the
-privileged filesystem archive adapter are supported from
-`story_writing_agents.conversation_storage`, not from the 118-name package-root
-facade. The subpackage has an exact 63-name `__all__`; the archive surface is
-the archive module's 21 names plus the filesystem adapter's two-name
-surface:
-
-```python
-from story_writing_agents.conversation_storage import (
-    ConversationArchive,
-    ConversationStorageTransferReadiness,
-    ConversationStorageTransferRequiredError,
-    FilesystemConversationArchiveAdapter,
-    compose_filesystem_conversation_archive,
-    deserialize_conversation_archive,
-    serialize_conversation_archive,
-)
-```
-
-This v2-only boundary removes `ConversationArchiveEvent`; archive conversations
-carry exact `CollaborationEvent` values. It also replaces the old
-`ConversationStorageMigrationReadiness` and
-`ConversationStorageMigrationRequiredError` names with the transfer-named
-types above. The old names are absent rather than compatibility aliases.
-
-This facade intentionally does not add `FilesystemConversationCatalog` or
-`FilesystemConversationEventStore`; those two concrete classes are owned by
-the direct `story_writing_agents.conversation_storage.filesystem` module while
-their established root and workspace-facade aliases remain supported.
-
-These imports add no raw archive CLI command and perform no scan or mutation.
-The separate storage transfer CLI composes archive adapters rather than
-serializing caller-owned archive bytes. Exact
-constants, value fields, callable signatures, error hierarchy, bounds, wire
-format, lease usage, and filesystem behavior are in
-[Canonical conversation archives](conversation-archives.md#public-archive-api).
-
-The filesystem adapter captures a private immutable root/key rather than
-retaining the caller's `Workspace` or public catalog/event-store collaborators.
-After pure payload validation where applicable, each call validates its lease
-before creating one private operation-local collaborator set. This archive
-topology is independent of composed conversation services and SQLite's database
-owner; it changes neither root-facade exports nor ordinary runtime defaults.
-
-The export inventory and public signatures are unchanged by runtime diagnostics.
-Public `AgentBackend` and `StoryRuntime` operations use an internal
-workspace-bound writer and may append bounded operational records, including
-for reads that do not mutate provider-session, conversation, debate, or story
-state. No debug-log class, enum, configuration, or telemetry surface is exported
-from the package root. See [Runtime API](runtime-api.md#runtime-diagnostic-side-effect),
-[Backend and sessions](backend-and-sessions.md#backend-diagnostic-side-effect),
-and [Privacy](../operations/privacy-and-provider.md#workspace-debug-log-privacy).
+They are not re-exported by the package root, workspace facade, or storage
+facade. Normal applications should use a complete composed service bundle.
+Filesystem composition is the runtime default; selected SQLite composition
+uses the same v2 port.
+
+If the filesystem owner sees `transcript.jsonl`, or the SQLite owner sees any
+row in `conversation_events`, it rejects the owning boundary before mutation.
+#454 owns the later whole-workspace rejection boundary.
+
+See [Collaboration history](collaboration-history.md),
+[transcripts](conversation-transcripts.md), and
+[search](conversation-search.md).
 
 <a id="conversation-storage-composition"></a>
 
 ## Conversation-storage composition
 
-The conversation-storage composition APIs are supported direct-subpackage
-imports; they are not re-exported by the 118-name project facade:
+`story_writing_agents.conversation_storage` exports contracts and filesystem
+composition, including:
 
 ```python
-from story_writing_agents.conversation_storage import (
-    WorkspaceConversationStorageMutationCoordinator,
-    compare_and_set_conversation_storage_activation,
-    compose_filesystem_conversation_storage,
-    load_conversation_storage_activation_state,
-)
+compose_filesystem_conversation_storage(workspace) -> ConversationStorageServices
+compose_filesystem_conversation_archive(workspace) -> FilesystemConversationArchiveAdapter
 ```
 
-`compose_filesystem_conversation_storage(workspace)` returns one
-`ConversationStorageServices` bundle whose catalog, event store, reference
-search, provenance token, and mutation coordinator derive from the same
-construction-pinned canonical absolute root. Its services remain concrete
-`FilesystemConversationCatalog`, `FilesystemConversationEventStore`, and
-`ReferenceConversationSearch` instances. Later caller-root mutation or
-inherited collaborator rebinding cannot redirect their I/O. Composition with
-an existing `Workspace` performs no conversation-storage I/O, creates no
-guard, and writes no activation state. A path-like argument still invokes
-ordinary `Workspace` construction.
-
-That pinning does not change standalone construction. A directly instantiated
-`FilesystemConversationCatalog(workspace)` or
-`FilesystemConversationEventStore(workspace)` retains the established borrowed
-workspace behavior, and `Workspace` itself remains mutable and pathname-based.
-The optional SQLite adapter has its own separately pinned database owner.
-
-Composition, archive transfer, provisioning, selection, and the
-SQLite implementation use the concrete filesystem owner and/or
-`workspace.core` primitives they require. No conversation-storage
-implementation module depends on the `story_writing_agents.workspace` facade,
-so this stable facade does not reverse storage dependencies and the
-module graph remains acyclic.
-
-`WorkspaceConversationStorageMutationCoordinator(workspace)` likewise captures
-its root without I/O. Its key, the guard lazily opened by an outer `borrow`, and
-every lease identify that root despite later caller mutation.
-
-Activation functions pin one root per call. Compare-and-set validates its lease
-against that root before constructing an operation workspace or accessing a
-path, so a mismatch raises `ConversationStorageCoordinationError` without
-filesystem I/O. A valid call reads state, applies the existing checks,
-revalidates the lease, and writes only through that root. Desired selection and
-coordinated startup are owned by the separate direct module below; these
-low-level functions do not read configuration or select a backend themselves.
-
-Composed filesystem catalog mutations and event append borrow the bundle's
-coordinator. Direct standalone filesystem adapters retain their established
-uncoordinated compatibility behavior, so callers must stop or otherwise
-coordinate those low-level writers around transfer, selection, and startup.
-
-See [Filesystem safety](../operations/filesystem-safety.md#composed-conversation-storage-provenance)
-for the operational boundary.
-
-<a id="conversation-storage-transfer-api"></a>
-
-## Conversation storage transfer
-
-Provider-free transfer and exact parity verification are supported from one
-direct-only module. Its seven names are absent from both the 118-name package
-root and 63-name conversation-storage facade:
-
-```python
-from story_writing_agents.conversation_storage.migration import (
-    CONVERSATION_STORAGE_TRANSFER_SCHEMA_VERSION,
-    CONVERSATION_STORAGE_TRANSFER_CHECKPOINT_DIRECTORY,
-    ConversationStorageTransferOperation,
-    ConversationStorageTransferOutcome,
-    ConversationStorageTransferReport,
-    transfer_conversation_storage,
-    verify_conversation_storage,
-)
-```
-
-The schema version is exactly `1`; the checkpoint directory is exactly
-`"agent_states/orchestrator_state/conversation_storage_transfers"`.
-Importing this module performs no I/O and does not load `sqlite3`. Its public
-workflow signatures are shown below. The physical module filename
-`migration.py` is retained, but it exposes no old
-constants, types, functions, or command aliases. It is a transfer coordinator,
-not an archive/schema converter or compatibility layer.
-
-```python
-transfer_conversation_storage(
-    workspace: Workspace,
-    *,
-    source_backend: ConversationStorageBackend | str,
-    destination_backend: ConversationStorageBackend | str,
-    dry_run: bool = False,
-) -> ConversationStorageTransferReport
-verify_conversation_storage(
-    workspace: Workspace,
-    *,
-    source_backend: ConversationStorageBackend | str,
-    destination_backend: ConversationStorageBackend | str,
-) -> ConversationStorageTransferReport
-```
-
-Backend strings are exactly `filesystem` and `sqlite`. Source and destination
-must differ, the source must equal the current activation state, and SQLite
-must already be provisioned/ready. One outer workspace mutation lease covers
-fresh source/destination archive exports, deterministic planning, transfer,
-checkpointing, and fresh final exact parity. The operations preserve all
-canonical catalog metadata and schema-v2 collaboration events, including
-archived records and recovery outcomes;
-they exclude FTS and every non-conversation workspace channel. They never
-install/provision SQLite, change configuration or activation, delete a source,
-or establish dual write.
-
-Archive wire schema 2 is the only accepted transfer value. A legacy
-filesystem `transcript.jsonl`, any SQLite `conversation_events` row, or
-schema-1 archive rejects the operation before destination mutation. Embedded
-catalog metadata remains schema 1 by design; that record version is not the
-archive version.
-
-`ConversationStorageTransferOperation` values are `transfer` and `verify`;
-`ConversationStorageTransferOutcome` values are `completed`, `work_required`,
-and `failed`. The frozen report fields are:
-
-```text
-operation, outcome, source_backend, destination_backend, dry_run, parity,
-create, identical, conflict, unsupported, destination_only,
-source_conversations, source_events, checkpoint, failure
-```
-
-`to_dict()` returns the fixed nested schema-v1 object, `to_json()` returns its
-compact key-sorted representation without a trailing LF, and `exit_code`
-returns `0`, `1`, or `2` under the CLI contract. `checkpoint` is `none`,
-`resumed`, `advanced`, or `completed`; `failure` is `None` on nonfailed
-reports. The workflow catches content/storage/coordination failures into a
-content-free report; invalid Python argument types or backend values rejected
-before workflow entry, and process-control exceptions, retain their ordinary
-exception behavior.
-
-Transfer plans every identity as create, identical, conflict, unsupported, or
-destination-only. Conflict and unsupported data block all operations;
-destination-only blocks transfer, while otherwise valid create or
-destination-only state makes verify return mismatch. Filesystem-to-SQLite
-transfer is one complete transaction. SQLite-to-filesystem uses a complete
-global preflight, create-only complete-conversation publication, and a
-per-conversation checkpoint callback. Final source and destination exports must
-equal the initial source bytes.
-
-Use the public CLI for the installed workflow and the direct functions when an
-application already owns a `Workspace`; neither route activates the destination.
-See the [exact command/report contract](cli.md#conversation-storage-transfer),
-[archive semantics](conversation-archives.md#conversation-storage-transfer),
-and [checkpoint recovery](../operations/recovery-and-limitations.md#conversation-storage-transfer-recovery).
-
-<a id="conversation-storage-selection-api"></a>
-
-## Conversation storage provisioning and selection
-
-Host/database preparation and desired-selection/startup coordination are two
-separate supported direct-module surfaces. Neither is re-exported by the
-118-name root or 63-name conversation-storage facade, and importing either
-module performs no I/O, launches no process, or loads `sqlite3`.
-
-Provisioning exports exactly four names:
-
-```python
-from story_writing_agents.conversation_storage.provisioning import (
-    ConversationStorageInstallationPlan,
-    ConversationStorageProvisioningFailure,
-    ConversationStorageProvisioningResult,
-    ConversationStorageProvisioner,
-)
-```
-
-`ConversationStorageInstallationPlan.argv` is exactly one allowlisted tuple;
-its `command` property is the literal display form. The provisioner exposes:
-
-```python
-ConversationStorageProvisioner(
-    *,
-    platform_system=platform.system,
-    os_release_reader=_read_os_release,
-    environment: Mapping[str, str] | None = None,
-    executable_lookup=shutil.which,
-    process_runner=subprocess.run,
-)
-ConversationStorageProvisioner.probe_runtime() -> ConversationStoragePreflight
-ConversationStorageProvisioner.plan_installation() -> ConversationStorageInstallationPlan | None
-ConversationStorageProvisioner.install(
-    workspace: Workspace,
-    plan: ConversationStorageInstallationPlan,
-    *,
-    diagnostic_stream: TextIO,
-) -> ConversationStorageProvisioningResult
-ConversationStorageProvisioner.ensure_ready(
-    workspace: Workspace,
-    *,
-    lease: ConversationStorageMutationLease,
-) -> ConversationStorageProvisioningResult
-```
-
-The constructor collaborators are deterministic integration/test seams, not an
-expanded installer policy. Planning recognizes only the exact platforms and
-commands in the [CLI contract](cli.md#conversation-storage-selection).
-`installation_disallowed` reports whether a recognized nonempty CI marker is
-present. Installation runs one exact tuple without a shell, custom environment,
-timeout, retry, privilege escalation, or automatic flag. `ensure_ready()`
-preflights and, only when absent, provisions one empty database under the
-caller's lease; it never installs host packages or transfers conversations.
-
-Selection exports exactly eight names:
-
-```python
-from story_writing_agents.conversation_storage.selection import (
-    CONVERSATION_STORAGE_SELECTION_SCHEMA_VERSION,
-    ConversationStorageSelectionFailure,
-    ConversationStorageSelectionReport,
-    ConversationStorageStartup,
-    activate_configured_conversation_storage,
-    compose_active_conversation_storage,
-    inspect_conversation_storage_parity,
-    select_conversation_storage,
-)
-```
-
-The schema version is `1`. Its public workflow signatures are:
-
-```python
-inspect_conversation_storage_parity(
-    workspace: Workspace,
-    *,
-    lease: ConversationStorageMutationLease,
-    source_backend: ConversationStorageBackend | str,
-    target_backend: ConversationStorageBackend | str,
-    source_generation: int,
-) -> ConversationStorageTransferReadiness
-select_conversation_storage(
-    workspace: Workspace,
-    desired_backend: ConversationStorageBackend | str,
-    *,
-    install_missing: bool = False,
-    yes: bool = False,
-    installation_consent: Callable[[ConversationStorageInstallationPlan], bool] | None = None,
-    diagnostic_stream: TextIO | None = None,
-    configuration_baseline: ConfigurationBaseline | None = None,
-    configuration: ConfigurationSnapshot | None = None,
-    precommit_guard: Callable[[], None] | None = None,
-    provisioner: ConversationStorageProvisioner | None = None,
-    mutation_timeout_seconds: float = 30.0,
-) -> ConversationStorageSelectionReport
-activate_configured_conversation_storage(
-    workspace: Workspace,
-    *,
-    configuration: ConfigurationSnapshot | None = None,
-    mutation_timeout_seconds: float = 30.0,
-) -> ConversationStorageStartup
-compose_active_conversation_storage(
-    workspace: Workspace,
-    /,
-) -> ConversationStorageServices
-```
-
-`select_conversation_storage()` prepares readiness, optionally obtains explicit
-installation consent, provisions an absent empty SQLite database, freshly
-compares canonical archives, and performs the final exact-byte configuration
-CAS. It saves desired state only. `configuration_baseline` and `configuration`
-must be supplied together; the Settings integration uses them for its complete
-pending pair and uses `precommit_guard` for the settings-owned fresh persona
-catalog conflict check. Any guard failure becomes the content-free
-`configuration_conflict` report before the CAS.
-
-`ConversationStorageSelectionReport.to_dict()` returns the exact counts-free
-schema-v1 object, `to_json()` returns compact key-sorted JSON without a trailing
-LF, and `exit_code` is `0` or `2`. The complete fields, state and failure
-vocabularies, installer mappings, command workflow, and privacy boundary are
-centralized in the [CLI selection reference](cli.md#conversation-storage-selection).
-
-`activate_configured_conversation_storage()` is the next-shell owner. Under one
-outer lease it reloads configuration, composes the active bundle, proves fresh
-target readiness/parity, composes the target bundle, and compare-and-sets the
-activation marker. `ConversationStorageStartup` binds that complete services
-bundle to its activation outcome. Pre-CAS failure preserves activation and
-does not fall back; later unrelated shell failure does not undo a successful
-CAS. Neither workflow imports the transfer coordinator, consumes its
-report/checkpoint, deletes
-a source, or establishes live switching or dual write.
-
-`compose_active_conversation_storage()` is the read-only active-backend seam.
-It reads the persisted activation state, composes that exact ready filesystem
-or SQLite bundle, and repeats the activation read; drift or a backend mismatch
-raises the existing coordination failure. It does not consult desired
-configuration, acquire/create the mutation lock, provision, transfer, or advance
-activation. Conversation-RAG status uses this seam to remain truly no-write.
+`ConversationStorageServices` validates complete same-provenance bindings and
+the mutation coordinator workspace key. `StoryRuntime` accepts only this
+complete bundle, not a loose concrete event store.
 
 <a id="optional-sqlite-conversation-storage"></a>
 
 ## Optional SQLite conversation storage
 
-SQLite conversation storage is an explicit direct-module Python API. Importing
-the module performs no I/O and does not load `sqlite3`; the standard-library
-module is loaded and probed only when an operation is requested. SQLite 3.7.16
-or later is required. Each adapter's database owner reads the canonical
-`Workspace.root` once at construction and pins its workspace key and fixed
-database path. Later mutation of the supplied `Workspace.root` does not
-retarget database operations. Direct adapter construction performs no database
-I/O and keeps `sqlite3` lazy; resolving a string or path-like argument still
-follows ordinary `Workspace` construction. The `compose_*` functions perform
-their documented readiness preflight.
-
-The owning module exports exactly 15 names:
+The direct SQLite owner provides catalog, v2 collaboration store, aggregate
+search, archive adapter, preflight/provisioning, and complete composition.
+Use its exact inspected signatures:
 
 ```python
-from story_writing_agents.conversation_storage.sqlite import (
-    SQLITE_CONVERSATION_STORAGE_APPLICATION_ID,
-    SQLITE_CONVERSATION_STORAGE_BUSY_TIMEOUT_SECONDS,
-    SQLITE_CONVERSATION_STORAGE_DATABASE_PATH,
-    SQLITE_CONVERSATION_STORAGE_MINIMUM_VERSION,
-    SQLITE_CONVERSATION_STORAGE_SCHEMA_VERSION,
-    SQLiteConversationArchiveAdapter,
-    SQLiteConversationCatalog,
-    SQLiteCollaborationEventStore,
-    SQLiteConversationEventStore,
-    SQLiteConversationSearch,
-    compose_sqlite_conversation_archive,
-    compose_sqlite_conversation_storage,
-    preflight_sqlite_conversation_storage,
-    probe_sqlite_conversation_storage_runtime,
-    provision_sqlite_conversation_storage,
-)
-```
-
-The constants are exact:
-
-| Constant | Value |
-| --- | --- |
-| `SQLITE_CONVERSATION_STORAGE_APPLICATION_ID` | `0x53574143` (`SWAC`) |
-| `SQLITE_CONVERSATION_STORAGE_BUSY_TIMEOUT_SECONDS` | `5.0` |
-| `SQLITE_CONVERSATION_STORAGE_DATABASE_PATH` | `"discussion_logs/conversation_storage.sqlite3"` |
-| `SQLITE_CONVERSATION_STORAGE_MINIMUM_VERSION` | `(3, 7, 16)` |
-| `SQLITE_CONVERSATION_STORAGE_SCHEMA_VERSION` | `2` |
-
-Schema v2 owns exactly 14 explicit objects: four tables, six indexes, and four
-insert triggers. It retains the intermediate v1 catalog/transcript objects and
-adds one canonical collaboration-event table, event-ID and batch-ordinal
-uniqueness indexes, and a contiguous-sequence trigger. Ordered transcript and
-collaboration reads use their composite-primary-key autoindexes, not redundant
-explicit order indexes. Required authoritative lexical state remains limited
-to the v1 catalog/transcript channel. FTS and its shadow objects never enter the
-main database or determine v2 collaboration truth.
-
-The public call signatures are:
-
-```python
-SQLiteConversationCatalog(
-    workspace: Workspace | str | os.PathLike[str],
-    *,
-    mutation_coordinator: ConversationStorageMutationCoordinator | None = None,
-    mutation_timeout_seconds: float = 5.0,
-)
-SQLiteConversationEventStore(
-    workspace: Workspace | str | os.PathLike[str],
-    *,
-    mutation_coordinator: ConversationStorageMutationCoordinator | None = None,
-    mutation_timeout_seconds: float = 5.0,
-)
-SQLiteCollaborationEventStore(
-    workspace: Workspace | str | os.PathLike[str],
-    *,
-    mutation_coordinator: ConversationStorageMutationCoordinator | None = None,
-    mutation_timeout_seconds: float = 5.0,
-)
-SQLiteCollaborationEventStore.append_batch(
-    batch: CollaborationEventBatch,
-) -> CollaborationAppendReceipt
-SQLiteCollaborationEventStore.read(
-    session_id: str,
-    conversation_id: str,
-) -> tuple[CollaborationEvent, ...]
-SQLiteCollaborationEventStore.read_context(
-    session_id: str,
-    conversation_id: str,
-) -> CollaborationHistoryProjection
-SQLiteConversationSearch(
-    workspace: Workspace | str | os.PathLike[str],
-    *,
-    mutation_coordinator: ConversationStorageMutationCoordinator | None = None,
-    mutation_timeout_seconds: float = 5.0,
-)
-SQLiteConversationSearch.search(
-    scope: ConversationSearchScope,
-    query: ConversationSearchQuery,
-) -> ConversationSearchResult
-SQLiteConversationArchiveAdapter(
-    workspace: Workspace | str | os.PathLike[str],
-    *,
-    mutation_coordinator: ConversationStorageMutationCoordinator | None = None,
-    mutation_timeout_seconds: float = 5.0,
-)
-SQLiteConversationArchiveAdapter.export_archive(
-    lease: ConversationStorageMutationLease,
-) -> ConversationArchive
-SQLiteConversationArchiveAdapter.import_archive(
-    lease: ConversationStorageMutationLease,
-    payload: ConversationArchive,
-) -> ConversationArchiveImportReceipt
-preflight_sqlite_conversation_storage(
-    workspace: Workspace | str | os.PathLike[str],
-    /,
-) -> ConversationStoragePreflight
-probe_sqlite_conversation_storage_runtime() -> ConversationStoragePreflight
-provision_sqlite_conversation_storage(
-    workspace: Workspace | str | os.PathLike[str],
-    /,
-    *,
-    lease: ConversationStorageMutationLease,
-) -> ConversationStoragePreflight
-compose_sqlite_conversation_storage(
-    workspace: Workspace | str | os.PathLike[str],
-    /,
-    *,
-    mutation_timeout_seconds: float = 5.0,
-) -> ConversationStorageServices
-compose_sqlite_conversation_archive(
-    workspace: Workspace | str | os.PathLike[str],
-    /,
-    *,
-    mutation_timeout_seconds: float = 5.0,
-) -> SQLiteConversationArchiveAdapter
-```
-
-`SQLiteCollaborationEventStore` is direct-only: it is absent from the package
-root, `conversation_storage` facade, workspace facade, composed services,
-selection, transfer, archive, shell, and current runtime. A direct caller can
-now persist one canonical v2 batch atomically, read the complete addressed
-history, and project its state after restart. Users cannot yet activate that
-history through the selected SQLite bundle or commands. Existing schema-v1
-databases are rejected without mutation; this release provides no database
-conversion or compatibility layer. See the
-[APPENDED/retry scenario](collaboration-history.md#direct-sqlite-storage-and-retry).
-
-The explicit runtime probe is observational and touches no workspace: it
-functionally exercises SQLite through the active Python interpreter without a
-standalone executable or FTS5 gate. Database preflight is also observational:
-it never creates or repairs storage. On a capable host a missing database
-reports `provisioning_needed`; an unavailable or too-old `sqlite3` runtime
-reports `unavailable`; a valid database reports `ready`. Unsupported schema
-versions, malformed storage, and unsafe paths raise
-`WorkspaceVersionUnsupportedError`, `WorkspaceFormatError`, and
-`WorkspaceSecurityError`. Calling `require_ready()` on a non-ready result
-raises the corresponding conversation-storage readiness error. Every returned
-preflight has `backend == ConversationStorageBackend.SQLITE`, and successful
-provisioning returns `ready`. The private FTS companion is neither inspected nor
-required for main-database readiness; provisioning may attempt its initialization
-only after the authoritative database is ready.
-
-The separately supported direct database-owner module now has 12 exports and
-adds the lower-level equivalent probe:
-
-```python
-from story_writing_agents.conversation_storage.sqlite_database import (
-    probe_sqlite_runtime,
-)
-
-probe_sqlite_runtime() -> None
-```
-
-The lower probe returns normally on readiness and raises its content-free
-database-unavailable error otherwise. Use the adapter-level
-`probe_sqlite_conversation_storage_runtime()` for a typed capability result
-unless an integration already depends on the database-owner module.
-
-Existing-database preflight is exhaustive: it verifies database/schema
-identity, runs SQLite integrity and global foreign-key checks, rejects orphan
-v1 or v2 events, and reconstructs every metadata, transcript, and collaboration
-row. Ordinary adapters use bounded identity verification plus operation-local
-validation instead. The v1 append retains its indexed bounded lookup behavior.
-The direct v2 read reconstructs the complete addressed collaboration history;
-its append validates that same complete history inside `BEGIN IMMEDIATE`
-before inserting the whole candidate or none. It does not advance the v1
-lexical generation or refresh FTS. Database `TEXT` is strict UTF-8 and the v2
-canonical event is stored as a plaintext BLOB with redundant validated facts.
-Malformed stored values map to the documented content-free format or
-collaboration-corruption category.
-
-Every effective v1 catalog/transcript mutation and archive import updates the
-required main-database lexical values and advances its generation atomically.
-Failure rolls back both domain and lexical state; an already-in-target-state
-status call or exact archive reimport is generation-stable. A best-effort
-companion refresh runs only after the main commit under the still-valid lease,
-so its failure cannot roll back authoritative work and exact search remains
-available. The direct v2 collaboration append deliberately leaves lexical
-state and the companion unchanged.
-
-The collaboration adapter validates retry, batch-ID conflict, event-ID
-conflict, stale-tail CAS, and state transition in fixed precedence. Its receipt
-is `APPENDED` only after commit and final checks. Precommit failure rolls back;
-postcommit failure can report operational uncertainty after the complete batch
-is durable. Retrying the exact same batch returns the original
-`ALREADY_COMMITTED` receipt. The coordinator plus `BEGIN IMMEDIATE` serialize
-independent processes: identical candidates commit once and retry once;
-distinct same-tail candidates commit once and reject the loser as stale.
-
-For initial creation, provision only when the application deliberately wants a
-new empty SQLite destination. Provisioning never installs SQLite and does not
-copy or transfer filesystem conversations:
-
-```python
-from story_writing_agents import Workspace
-from story_writing_agents.conversation_storage import (
-    ConversationStorageCapability,
-    WorkspaceConversationStorageMutationCoordinator,
-)
 from story_writing_agents.conversation_storage.sqlite import (
     compose_sqlite_conversation_storage,
     preflight_sqlite_conversation_storage,
     provision_sqlite_conversation_storage,
 )
-
-workspace = Workspace("/path/to/initialized-story")
-
-# Observe capability without creating the database.
-status = preflight_sqlite_conversation_storage(workspace)
-
-# This branch is an explicit application decision for an empty SQLite target.
-if status.capability is ConversationStorageCapability.PROVISIONING_NEEDED:
-    coordinator = WorkspaceConversationStorageMutationCoordinator(workspace)
-    with coordinator.borrow(timeout_seconds=5.0) as lease:
-        status = provision_sqlite_conversation_storage(workspace, lease=lease)
-
-status.require_ready()
-services = compose_sqlite_conversation_storage(workspace)
-catalog = services.catalog
-event_store = services.event_store
-search = services.search  # SQLiteConversationSearch
 ```
 
-Provisioning also verifies a valid existing target and a complete competing
-race winner exhaustively. Its only recovery behavior is cleanup of one provable
-interrupted no-overwrite publication: under the supplied active lease, the
-target and exactly one provisioning-pattern sibling must be the same regular
-two-link inode with no sidecars or ambiguity. The intact two-link database is
-exhaustively validated before provisioning removes only that sibling alias.
-Provisioning synchronizes and then exhaustively validates the recovered
-single-link target again. Preflight and reads remain observational. Symlinks,
-wrong or multiple candidates, unrelated inodes, extra links, sidecars, and
-invalid target content fail closed; this is not a general repair facility. See
-the
-[recovery guidance](../operations/recovery-and-limitations.md#sqlite-conversation-storage-recovery)
-for the operator response.
+Preflight is observational. Provisioning and writes require the mutation
+coordinator. The authoritative database is schema version 2; unsupported
+owning-boundary rows fail before mutation. The private FTS companion is only a
+non-authoritative candidate accelerator; every result is reauthorized against
+canonical events.
 
-Composition verifies readiness but never provisions. It returns one
-same-provenance catalog, event store, `SQLiteConversationSearch`, and shared
-mutation coordinator. Direct adapters implement the catalog and transcript
-contracts documented on their reference pages. Pass the complete bundle when
-the runtime and memory service must share its catalog, events, search, and
-coordination provenance:
+<a id="conversation-storage-transfer-api"></a>
 
-```python
-from story_writing_agents import (
-    ConversationMemoryService,
-    ConversationSearchScope,
-    StoryRuntime,
-)
+## Archive and transfer
 
-runtime = StoryRuntime(
-    workspace,
-    conversation_storage_services=services,
-)
-memory = ConversationMemoryService(
-    ConversationSearchScope("novel"),
-    conversation_storage_services=services,
-)
-```
+The storage facade exposes canonical archive values, filesystem archive
+composition, parity/receipt values, and mutation leases. The direct transfer
+module coordinates source/destination adapters. Transfer carries exact
+schema-v2 histories and excludes derived FTS/RAG data.
 
-Direct `StoryRuntime(workspace)` continues to compose filesystem services; it
-does not read desired or active selection itself. The installed shell performs
-the separate startup activation workflow and injects its resulting complete
-bundle.
+<a id="conversation-storage-selection-api"></a>
 
-`SQLiteConversationSearch.search(scope, query)` owns one stable main-database
-read transaction for the complete public 256-conversation/10,000-event scan.
-It derives exact normalization, ranking, citations, snippets, counters,
-truncation, and ordering from authoritative rows. Optional FTS5 candidates are
-hints only: false positives, false negatives, score/order differences, absence,
-staleness, corruption, unsafe shape, runtime mismatch, or operational failure
-cannot change the result because exact fallback covers the full bounded scan.
-Search performs no repair.
+## Selection and activation
 
-The sole companion owner is another supported direct-module integration
-surface, absent from both facades. Importing it performs no I/O and does not
-load `sqlite3`; its exact five-name export inventory is:
+Selection is persistent desired configuration; activation is the verified
+bundle used by a new shell. It is separate from transfer. Both filesystem and
+SQLite activation now produce a complete same-provenance v2 service bundle.
 
-```python
-from story_writing_agents.conversation_storage.sqlite_search_index import (
-    SQLITE_CONVERSATION_SEARCH_INDEX_PATH,
-    SQLITE_CONVERSATION_SEARCH_INDEX_SCHEMA_VERSION,
-    SQLiteConversationSearchIndex,
-    SQLiteConversationSearchIndexDocument,
-    SQLiteConversationSearchIndexError,
-)
-```
+<a id="optional-conversation-rag-boundary"></a>
 
-The path is exactly
-`"discussion_logs/.conversation_storage_fts5.sqlite3"` and the companion
-schema version is exactly `1`. Integration signatures are:
+## Optional conversation RAG boundary
 
-```python
-SQLiteConversationSearchIndex(
-    workspace_key: str,
-    *,
-    normalization_version: int,
-)
-SQLiteConversationSearchIndexDocument(
-    session_id: str,
-    conversation_id: str,
-    sequence: int,
-    searchable_content: str,
-)
-SQLiteConversationSearchIndex.candidates(
-    *,
-    source_generation: int,
-    session_id: str,
-    conversation_ids: tuple[str, ...],
-    normalized_query: str,
-    maximum: int,
-) -> frozenset[tuple[str, int]]
-SQLiteConversationSearchIndex.rebuild(
-    *,
-    source_generation: int,
-    documents: Iterable[SQLiteConversationSearchIndexDocument],
-    validate_publication: Callable[[], None],
-) -> None
-```
+Conversation RAG uses direct modules for contracts, local provider, derived
+generation storage, composition, runtime authorization, and CLI workflows. It
+builds exactly one compact readable-fields JSON document per canonical event.
+Derived documents and vectors are never authority; returned ranges are
+reauthorized and reread from the selected v2 service.
 
-Construction accepts only an already-canonical absolute workspace key, pins
-the fixed path, and performs path arithmetic only. `candidates()` and
-`rebuild()` live-probe FTS5 and map companion-specific failures to the
-content-free `SQLiteConversationSearchIndexError`. Rebuild can create an absent
-resource or update only a recognized safe one through the owner's contained
-publication checks; it is not a delete, main-database conversion, readiness, or
-search-authority API. Ordinary application search should use
-`SQLiteConversationSearch` or SQLite composition rather than managing hints.
+`StoryRuntime` may receive `conversation_rag_service` as a collaborator, but
+its management facade has no provider turn that consumes it. Direct callers
+use `ConversationRagRuntimeService.search_authorized()`; users use the
+provider-free `story rag` lifecycle/search commands.
 
-`SQLiteConversationArchiveAdapter` is a privileged integration boundary over
-the public canonical `ConversationArchive` value; it does not define a second
-payload or wire format. Export validates every metadata and event row globally
-and rejects orphan events. Import round-trips the canonical value, validates the
-complete destination before mutation and again after mutation in the same
-transaction, and preserves exact statuses, canonical event BLOBs, and every
-schema-v2 event kind. Any legacy `conversation_events` row, malformed
-`collaboration_events` row, or divergent existing identity fails without a
-partial import. The transfer coordinator composes this adapter with the
-filesystem archive adapter rather than exposing database internals. Derived
-FTS data is excluded and non-authoritative; a best-effort refresh after commit
-cannot change the canonical import receipt or parity.
+## Low-level retrieval boundary
 
-The exact database schema is now version `2`. It is a strict superset for this
-intermediate release: the v1 catalog/transcript resources remain, and the v2
-collaboration table/index/trigger resources are added. A schema-v1 database,
-including one created by older unpublished development code, is rejected
-unchanged. This API defines no `ALTER`, converter, schema upgrade, compatibility, or
-dual-write behavior.
+The root and direct retrieval module expose the generic bounded
+`search_conversations` → `read_history` → `answer` protocol, including
+`ConversationRetrievalHistoryRecord`. `BoundAgent.converse_with_retrieval()` is
+a direct component seam. It does not create/focus a conversation or append a
+collaboration event. The installed lead workflow does not invoke it.
 
-On platforms without POSIX `fcntl`, valid existing storage can still be
-preflighted and read observationally. The supported mutation coordinator cannot
-acquire a lease, so provisioning and supported writes fail with
-`ConversationStorageCoordinationError` before changing the database or
-conversation domain state. The lazy coordinator guard keeps its separate
-documented lifecycle. Desired selection, host installation through selection,
-configuration save, and startup activation also require that coordinator and
-therefore fail closed on those platforms.
+## Ownership of later writes
 
-None of these names is re-exported by `story_writing_agents` or
-`story_writing_agents.conversation_storage`. The installed shell uses only the
-v1-shaped SQLite services after the separate desired-selection and next-shell
-activation workflow; direct runtime construction remains filesystem by
-default. The direct collaboration store is not included. The adapter module
-itself adds no automatic installation, configuration selection, activation,
-RAG, MySQL, or new citation behavior. Archive and backend transfer now use
-canonical v2 collaboration history; #478 removed the public direct consumers
-and #479 owns the remaining active-service cutover. The private local FTS5 companion supplies
-non-authoritative v1 literal-search hints only and is not v2 authority, a
-backend, readiness requirement, transfer input, or FTS-only search mode.
-
-## Enum values
-
-| Enum | Exact values |
-| --- | --- |
-| `InputKind` | `prompt`, `draft` |
-| `Phase` | `draft`, `audit`, `propose_revision`, `synthesize`, `finalize` |
-| `Verdict` | `approve`, `conflict` |
-| `DebateStatus` | `consensus`, `deadlock`, `failed` |
-| `DebateContextMode` | `included`, `fresh` |
-| `DebateProgressPhase` | `started`, `drafted`, `audit_started`, `audit_completed`, `synthesized`, `artifacts_committed`, `consensus`, `deadlock`, `failed`, `interrupted` |
-| `DebateFailureKind` | `preflight`, `protocol`, `context`, `workspace`, `artifact_conflict`, `artifact_failure`, `internal` |
-| `DirectiveKind` | `language`, `persona`, `reset` |
-| `SessionDurableState` | `absent`, `ready`, `paused` |
-| `SessionAccessState` | `claimable`, `held_here`, `blocked_by_live_local_owner`, `ownership_unknown` |
-| `ConversationStatus` | `active`, `archived` |
-| `ConversationSearchMatchKind` | `exact_subject`, `subject_prefix`, `subject_substring`, `transcript` |
-| `ConversationRetrievalActionKind` | `search_conversations`, `read_transcript`, `answer` |
-| `ConversationRetrievalProgressPhase` | `search_started`, `search_completed`, `read_started`, `read_completed` |
-| `CollaborationActorKind` | `user`, `lead`, `specialist`, `runtime`, `artifact`, `git` |
-| `CollaborationEventKind` | `message`, `assignment_dispatch`, `specialist_reply`, `step_state`, `confirmation`, `execution_result`, `interruption`, `terminal_outcome` |
-| `CollaborationConfirmationDecision` | `confirm`, `reject`, `revise` |
-| `CollaborationStepState` | `awaiting_confirmation`, `reconfirmation_required`, `confirmed`, `running`, `completed`, `rejected`, `superseded`, `interrupted`, `failed`, `outcome_unknown`, `recovery_required` |
-| `CollaborationAppendStatus` | `APPENDED`, `ALREADY_COMMITTED` |
-| `CollaborationAppendFailure` | `stale_sequence`, `batch_id_conflict`, `event_id_conflict`, `invalid_transition`, `corrupt_history` |
-| `CollaborationReadableFieldKey` | `message.content`, `specialist_reply.content`, `proposal.purpose`, `proposal.user_impact`, `proposal.assignment.instruction`, `proposal.input.locator`, `proposal.input.range`, `proposal.call_usage`, `proposal.assignment.call_limit`, `proposal.synthesis.call_limit`, `dispatch.instruction`, `dispatch.call_limit`, `interruption.content`, `step.state`, `confirmation.decision`, `execution.outcome`, `execution.assignment.outcome`, `execution.assignment.call_usage`, `execution.synthesis.outcome`, `execution.synthesis.call_usage`, `terminal.scope`, `terminal.outcome`, `terminal.call_usage` |
-
-These are `StrEnum` values. Use members such as `Verdict.APPROVE`; a plain
-string like `"approve"` is not accepted where reply validation requires the
-enum member.
-
-There are no alternate session-lifecycle summaries, projections, or
-package-root aliases. See
-[Backend and sessions](backend-and-sessions.md#lifecycle-value-contracts).
+The active public shell is inspection-only for collaboration history. #452
+owns later lead proposal/confirmation/reconfirmation writes; #453 owns later
+specialist execution/result/finalization/outcome-unknown writes. Neither
+workflow is implied by the storage/API exports described here.
 
 ## Reference map
 
-- [Backend and sessions](backend-and-sessions.md)
-- [Agent contracts](agent-contracts.md)
-- [Runtime API](runtime-api.md)
+- [Runtime management API](runtime-api.md)
 - [Workspace API](workspace-api.md)
-- [Canonical writing artifacts](writing-artifacts.md)
-- [Conversation catalog](conversation-catalog.md)
+- [Collaboration history](collaboration-history.md)
 - [Conversation transcripts](conversation-transcripts.md)
-- [Structured collaboration history](collaboration-history.md)
-- [Canonical conversation archives and backend transfer](conversation-archives.md)
-- [Conversation search and cited transcript pages](conversation-search.md)
-- [Bounded conversation retrieval](conversation-retrieval.md)
-- [Optional conversation RAG setup, commands, and interactive use](../guides/conversation-rag.md)
-- [Interactive command parser](interactive-command-parser.md)
-- [Identifiers and errors](configuration/identifiers-and-errors.md)
-
-Lower-level modules may contain implementation helpers. The package-root facade
-matches its `__all__`; archive names are supported only through the explicitly
-documented conversation-storage subpackage and its owning-module surfaces.
-The explicitly documented conversations facade, literal-search, SQLite
-adapter, SQLite companion, conversation transfer, provisioning, selection,
-and conversation-RAG modules are also supported surfaces and match their own
-`__all__` values. Schema-v2 values and ports are exposed by the conversations
-facade; the filesystem and SQLite persistence classes are direct-module-only
-names and are not re-exported by the package-root or conversation-storage
-facade.
-
-`story_writing_agents.agent_context` is an 11-name accounting-only facade. It
-is absent from the 118-name package-root facade and does not export manifest,
-planning, source, action, ledger, service, or observer contracts. The additive
-observer types are supported only from
-`story_writing_agents.agent_context.service`; see
-[Runtime API](runtime-api.md#context-lifecycle-observer) and
-[Agent-context design](../design/agent-context.md#package-boundary-and-owners).
-
-The exact current inventories are package root `118`, conversations `83`
-(`55` events owner / `21` context owner), conversation storage `63`,
-conversation search `25` (13 established root-supported names plus 12
-direct-only v2 names), SQLite database owner `12`, SQLite adapter `15`,
-literal-search mechanics `6`, SQLite companion owner `5`, conversation
-transfer `7`, provisioning `4`, selection `8`, conversation RAG contracts
-`35`, generic RAG adapter `3`, local RAG provider `5`, RAG generation store `8`,
-RAG composition `10`, RAG runtime `10`, and RAG CLI `7`. The production module
-inventory is `97`, with 360 dependency edges, zero cycles, and the established
-facade counts 118/11/31 (root / agent-context accounting / writing artifacts).
+- [Conversation search](conversation-search.md)
+- [Conversation retrieval](conversation-retrieval.md)
+- [Conversation archives and transfer](conversation-archives.md)
+- [SQLite conversation storage](../guides/sqlite-conversation-storage.md)
+- [Conversation RAG](../guides/conversation-rag.md)

@@ -10,14 +10,16 @@ from typing import Any
 from .agents import AGENT_SPECS, EXECUTION_SPECIALIST, ROSTER
 from .conversation_search import (
     CollaborationHistorySearchQuery,
-    page_collaboration_history,
-    search_collaboration_history,
+    CollaborationHistorySearchScope,
+    CollaborationHistoryService,
+)
+from .conversation_storage.contracts import (
+    ConversationStorageBackend,
+    ConversationStorageServices,
 )
 from .conversations import (
     ConversationMetadata,
     ConversationStatus,
-    project_collaboration_history,
-    project_collaboration_readable_history,
     select_bounded_collaboration_context,
 )
 from .debug_log import (
@@ -30,7 +32,6 @@ from .debug_log import (
 from .orchestrator import StoryRuntime
 from .workspace import (
     WORKSPACE_DIRECTORIES,
-    FilesystemConversationCatalog,
     Workspace,
     initialize_workspace,
 )
@@ -154,12 +155,26 @@ def _run_provider_free_smoke_in_workspace(
         _verify_directive(fresh_runtime, session_id)
         completed_checks.append(_CHECK_NAMES[1])
 
-        metadata = _verify_catalog(workspace, session_id)
+        metadata = _verify_catalog(
+            fresh_runtime.conversation_storage_services,
+            session_id,
+        )
         completed_checks.append(_CHECK_NAMES[2])
 
-        history = project_collaboration_history(())
+        active_runtime = StoryRuntime(workspace)
+        services = active_runtime.conversation_storage_services
         _require(
-            history.session_id is None
+            services.backend is ConversationStorageBackend.FILESYSTEM,
+            _CHECK_NAMES[3],
+        )
+        events = services.event_store.read(session_id, metadata.conversation_id)
+        history = services.event_store.read_context(
+            session_id,
+            metadata.conversation_id,
+        )
+        _require(
+            events == ()
+            and history.session_id is None
             and history.conversation_id is None
             and history.last_sequence == 0
             and history.current_turn_id is None
@@ -170,11 +185,9 @@ def _run_provider_free_smoke_in_workspace(
         )
         completed_checks.append(_CHECK_NAMES[3])
 
-        readable = project_collaboration_readable_history(())
-        context = select_bounded_collaboration_context(())
+        context = select_bounded_collaboration_context(events)
         _require(
-            readable == ()
-            and context.records == ()
+            context.records == ()
             and context.bootstrap.session_id is None
             and context.bootstrap.conversation_id is None
             and context.bootstrap.total_records == 0
@@ -189,8 +202,12 @@ def _run_provider_free_smoke_in_workspace(
         )
         completed_checks.append(_CHECK_NAMES[4])
 
+        history_service = CollaborationHistoryService(
+            CollaborationHistorySearchScope(session_id),
+            conversation_storage_services=services,
+        )
         query = CollaborationHistorySearchQuery("smoke")
-        search = search_collaboration_history((), query)
+        search = history_service.search(query)
         _require(
             search.query == query
             and search.hits == ()
@@ -203,10 +220,10 @@ def _run_provider_free_smoke_in_workspace(
         )
         completed_checks.append(_CHECK_NAMES[5])
 
-        page = page_collaboration_history(())
+        page = history_service.read_history(metadata.conversation_id)
         _require(
-            page.session_id is None
-            and page.conversation_id is None
+            page.session_id == session_id
+            and page.conversation_id == metadata.conversation_id
             and page.records == ()
             and page.requested_start_sequence == 1
             and page.requested_end_sequence == 0
@@ -315,21 +332,22 @@ def _verify_directive(runtime: StoryRuntime, session_id: str) -> None:
 
 
 def _verify_catalog(
-    workspace: Workspace,
+    services: ConversationStorageServices,
     session_id: str,
 ) -> ConversationMetadata:
-    """Create and reread one metadata-only conversation without a transcript."""
+    """Create and reread metadata through the active selected service."""
 
-    catalog = FilesystemConversationCatalog(workspace)
+    if type(services) is not ConversationStorageServices:
+        raise _SmokeInvariantError(_CHECK_NAMES[2])
+    catalog = services.catalog
     metadata = catalog.create(session_id, _SUBJECT)
-    fresh_catalog = FilesystemConversationCatalog(workspace)
-    listed = fresh_catalog.list(session_id)
+    listed = catalog.list(session_id)
     _require(
         type(metadata) is ConversationMetadata
         and metadata.session_id == session_id
         and metadata.subject == _SUBJECT
         and metadata.status is ConversationStatus.ACTIVE
-        and fresh_catalog.get(session_id, metadata.conversation_id) == metadata
+        and catalog.get(session_id, metadata.conversation_id) == metadata
         and listed == (metadata,),
         _CHECK_NAMES[2],
     )

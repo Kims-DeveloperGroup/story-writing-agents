@@ -274,17 +274,13 @@ class WorkspaceTests(unittest.TestCase):
         self,
     ) -> None:
         core_names = ["Workspace", "initialize_workspace"]
-        v1_owner_names = [
-            "FilesystemConversationCatalog",
-            "FilesystemConversationEventStore",
-        ]
+        facade_owner_names = ["FilesystemConversationCatalog"]
         direct_only_name = "FilesystemCollaborationEventStore"
-        owner_names = [*v1_owner_names, direct_only_name]
+        owner_names = [*facade_owner_names, direct_only_name]
         public_names = [
             "Workspace",
             "initialize_workspace",
             "FilesystemConversationCatalog",
-            "FilesystemConversationEventStore",
         ]
         self.assertEqual(workspace_facade.__all__, public_names)
         self.assertEqual(workspace_module.__all__, core_names)
@@ -315,10 +311,6 @@ class WorkspaceTests(unittest.TestCase):
             ),
             filesystem_module.FilesystemConversationCatalog: (
                 ("workspace", inspect.Parameter.POSITIONAL_OR_KEYWORD, required),
-            ),
-            filesystem_module.FilesystemConversationEventStore: (
-                ("workspace", inspect.Parameter.POSITIONAL_OR_KEYWORD, required),
-                ("catalog", inspect.Parameter.KEYWORD_ONLY, None),
             ),
             filesystem_module.FilesystemCollaborationEventStore: (
                 ("workspace", inspect.Parameter.POSITIONAL_OR_KEYWORD, required),
@@ -372,7 +364,6 @@ class WorkspaceTests(unittest.TestCase):
             self.assertIs(globals_mapping, workspace_module.__dict__)
         for globals_mapping in (
             filesystem_module.FilesystemConversationCatalog.__init__.__globals__,
-            filesystem_module.FilesystemConversationEventStore.__init__.__globals__,
             filesystem_module.FilesystemCollaborationEventStore.__init__.__globals__,
         ):
             self.assertIs(globals_mapping, filesystem_module.__dict__)
@@ -409,11 +400,11 @@ class WorkspaceTests(unittest.TestCase):
             workspace = Workspace(root)
             catalog = filesystem_module.FilesystemConversationCatalog(workspace)
             path_catalog = filesystem_module.FilesystemConversationCatalog(root)
-            event_store = filesystem_module.FilesystemConversationEventStore(
+            event_store = filesystem_module.FilesystemCollaborationEventStore(
                 workspace,
                 catalog=catalog,
             )
-            path_event_store = filesystem_module.FilesystemConversationEventStore(root)
+            path_event_store = filesystem_module.FilesystemCollaborationEventStore(root)
 
             self.assertIs(catalog.workspace, workspace)
             self.assertIs(event_store.workspace, workspace)
@@ -426,7 +417,7 @@ class WorkspaceTests(unittest.TestCase):
             )
             self.assertIsInstance(
                 event_store,
-                filesystem_module.FilesystemConversationEventStore,
+                filesystem_module.FilesystemCollaborationEventStore,
             )
 
     def test_facade_import_orders_are_clean_and_filesystem_neutral(self) -> None:
@@ -463,27 +454,22 @@ facade = importlib.import_module("story_writing_agents.workspace")
 core = importlib.import_module("story_writing_agents.workspace.core")
 owner = importlib.import_module("story_writing_agents.conversation_storage.filesystem")
 storage = importlib.import_module("story_writing_agents.conversation_storage")
-v1_owner_names = (
-    "FilesystemConversationCatalog",
-    "FilesystemConversationEventStore",
-)
+facade_owner_names = ("FilesystemConversationCatalog",)
 direct_only_name = "FilesystemCollaborationEventStore"
 assert facade.__all__ == [
     "Workspace",
     "initialize_workspace",
     "FilesystemConversationCatalog",
-    "FilesystemConversationEventStore",
 ]
 assert core.__all__ == ["Workspace", "initialize_workspace"]
 assert owner.__all__ == [
     "FilesystemConversationCatalog",
-    "FilesystemConversationEventStore",
     "FilesystemCollaborationEventStore",
 ]
 for name in core.__all__:
     assert getattr(root, name) is getattr(facade, name) is getattr(core, name)
     assert getattr(facade, name).__module__ == "story_writing_agents.workspace"
-for name in v1_owner_names:
+for name in facade_owner_names:
     assert getattr(root, name) is getattr(facade, name) is getattr(owner, name)
     assert getattr(facade, name).__module__ == owner.__name__
     assert not hasattr(core, name)
@@ -524,10 +510,7 @@ assert (
     composition.FilesystemConversationCatalog
     is owner.FilesystemConversationCatalog
 )
-assert (
-    composition.FilesystemConversationEventStore
-    is owner.FilesystemConversationEventStore
-)
+assert not hasattr(composition, "FilesystemConversationEventStore")
 archive = importlib.import_module(
     "story_writing_agents.conversation_storage.filesystem_archive"
 )
@@ -550,7 +533,6 @@ for module_name in (
 assert facade.__dict__.get("__getattr__") is None
 assert owner.__dict__.get("__getattr__") is None
 assert owner.FilesystemConversationCatalog.__init__.__globals__ is owner.__dict__
-assert owner.FilesystemConversationEventStore.__init__.__globals__ is owner.__dict__
 assert owner.FilesystemCollaborationEventStore.__init__.__globals__ is owner.__dict__
 print("ok")
 """

@@ -48,6 +48,7 @@ from story_writing_agents.conversation_search import (
 from story_writing_agents.conversation_storage import (
     CONVERSATION_STORAGE_ACTIVATION_STATE_PATH,
     ConversationStorageBackend,
+    ConversationStorageComponentBinding,
     ConversationStorageServices,
     compose_filesystem_conversation_storage,
 )
@@ -59,6 +60,7 @@ from story_writing_agents.conversation_storage.selection import (
     ConversationStorageSelectionReport,
 )
 from story_writing_agents.conversations import (
+    CollaborationEventBatch,
     CONVERSATION_EVENT_SCHEMA_VERSION,
     CONVERSATION_METADATA_SCHEMA_VERSION,
     ConversationCatalog,
@@ -130,6 +132,7 @@ from story_writing_agents.workspace import (
     Workspace,
 )
 
+from tests.collaboration_contract_fixture import contract_batches
 from tests.helpers import initialized_workspace
 
 
@@ -731,7 +734,18 @@ class ControllerTestCase(unittest.TestCase):
         )
         controller_keywords: dict[str, object] = {}
         if conversation_catalog is not None:
-            controller_keywords["conversation_catalog"] = conversation_catalog
+            if conversation_storage_services is not None:
+                raise TypeError("catalog and storage services are mutually exclusive")
+            base = compose_filesystem_conversation_storage(workspace)
+            conversation_storage_services = ConversationStorageServices(
+                catalog_binding=ConversationStorageComponentBinding(
+                    base.provenance,
+                    conversation_catalog,
+                ),
+                event_store_binding=base.event_store_binding,
+                search_binding=base.search_binding,
+                mutation_coordinator=base.mutation_coordinator,
+            )
         if conversation_storage_services is not None:
             controller_keywords["conversation_storage_services"] = (
                 conversation_storage_services
@@ -779,7 +793,6 @@ class ControllerContractTests(ControllerTestCase):
                 "context",
                 "backend",
                 "terminal",
-                "conversation_catalog",
                 "conversation_storage_services",
                 "auth_coordinator",
                 "provider_catalog",
@@ -792,12 +805,6 @@ class ControllerContractTests(ControllerTestCase):
                 for parameter in tuple(constructor.parameters.values())[:4]
             )
         )
-        catalog_parameter = constructor.parameters["conversation_catalog"]
-        self.assertIs(
-            catalog_parameter.kind,
-            inspect.Parameter.KEYWORD_ONLY,
-        )
-        self.assertIsNone(catalog_parameter.default)
         services_parameter = constructor.parameters["conversation_storage_services"]
         self.assertIs(
             services_parameter.kind,
@@ -820,7 +827,6 @@ class ControllerContractTests(ControllerTestCase):
                 "context": CliContext,
                 "backend": AgentBackend,
                 "terminal": InteractiveTerminal,
-                "conversation_catalog": ConversationCatalog | None,
                 "conversation_storage_services": ConversationStorageServices | None,
                 "auth_coordinator": InteractiveAuthCoordinator | None,
                 "provider_catalog": ProviderCatalogService | None,
@@ -858,7 +864,7 @@ class ControllerContractTests(ControllerTestCase):
         self.assertEqual(callbacks.prompts, [])
         self.assertEqual(callbacks.records, [])
 
-        with self.assertRaisesRegex(TypeError, "ConversationCatalog"):
+        with self.assertRaisesRegex(TypeError, "conversation_catalog"):
             InteractiveController(
                 workspace,
                 CliContext(),
@@ -926,7 +932,7 @@ class ControllerContractTests(ControllerTestCase):
         self.assertIsNone(controller._runner)
         self.assertIsNone(controller._attached_session_id)
         self.assertIsNone(controller._focused_conversation)
-        self.assertIsNone(controller._conversation_memory_service)
+        self.assertIsNone(controller._collaboration_history_service)
 
     def test_trace_failure_preserves_rejected_and_success_output_and_cleanup(
         self,
@@ -963,7 +969,7 @@ class ControllerContractTests(ControllerTestCase):
         self.assertIsNone(controller._runner)
         self.assertIsNone(controller._attached_session_id)
         self.assertIsNone(controller._focused_conversation)
-        self.assertIsNone(controller._conversation_memory_service)
+        self.assertIsNone(controller._collaboration_history_service)
 
     def test_runtime_inspection_facts_are_exact_frozen_internal_contracts(
         self,
@@ -1312,6 +1318,7 @@ class ControllerContractTests(ControllerTestCase):
                 "validate_catalog_metadata",
                 "validate_conversation_reference",
                 "validate_search_result_handles",
+                "validate_history_snapshot",
                 "validate_transcript_page",
                 "visible_conversation_handle",
             ],
@@ -1515,7 +1522,7 @@ class ControllerContractTests(ControllerTestCase):
         for module_name in graph:
             visit(module_name)
         self.assertEqual(len(modules), 97)
-        self.assertEqual(sum(len(dependencies) for dependencies in graph.values()), 360)
+        self.assertEqual(sum(len(dependencies) for dependencies in graph.values()), 362)
         self.assertTrue(
             {
                 "story_writing_agents.conversations",
@@ -1866,11 +1873,15 @@ class ControllerStartupTests(ControllerTestCase):
             "/status",
             "/quit",
         )
-        event_store_type = type(controller._conversation_event_store)
+        event_store_type = type(controller._conversation_storage_services.event_store)
         artifacts_type = type(controller._runtime.artifacts)
         with (
             mock.patch.object(backend, "bind", autospec=True) as bind,
-            mock.patch.object(event_store_type, "append", autospec=True) as append,
+            mock.patch.object(
+                event_store_type,
+                "append_batch",
+                autospec=True,
+            ) as append,
             mock.patch.object(
                 artifacts_type, "list_paths", autospec=True
             ) as list_paths,
@@ -8240,7 +8251,7 @@ class ControllerSettingsTests(ControllerTestCase):
                 )
 
 
-class ControllerSearchAndTranscriptTests(ControllerTestCase):
+class _RetiredSchemaV1ControllerSearchAndTranscriptExamples:
     """Verify provider-free memory commands and attachment-scoped wiring."""
 
     def test_one_explicit_bundle_identity_reaches_controller_runtime_and_memory(
@@ -8276,7 +8287,9 @@ class ControllerSearchAndTranscriptTests(ControllerTestCase):
         self.assertIs(controller._conversation_storage_services, bundle)
         self.assertIs(controller._runtime.conversation_storage_services, bundle)
         self.assertIs(controller._conversation_catalog, bundle.catalog)
-        self.assertIs(controller._conversation_event_store, bundle.event_store)
+        self.assertIs(
+            controller._conversation_storage_services.event_store, bundle.event_store
+        )
         memory_factory.assert_called_once()
         self.assertIs(
             memory_factory.call_args.kwargs["conversation_storage_services"],
@@ -8413,7 +8426,9 @@ class ControllerSearchAndTranscriptTests(ControllerTestCase):
         scope, bound_catalog, bound_store = memory_factory.call_args.args
         self.assertEqual(scope, ConversationSearchScope("session"))
         self.assertIs(bound_catalog, catalog)
-        self.assertIs(bound_store, controller._conversation_event_store)
+        self.assertIs(
+            bound_store, controller._conversation_storage_services.event_store
+        )
         self.assertIs(
             controller._runtime.conversation_event_store,
             bound_store,
@@ -8547,7 +8562,7 @@ class ControllerSearchAndTranscriptTests(ControllerTestCase):
             )
         )
         self.assertFalse(workspace.path(_default_relative("session")).exists())
-        self.assertIsNone(controller._conversation_memory_service)
+        self.assertIsNone(controller._collaboration_history_service)
 
     def test_empty_search_has_one_empty_result_and_no_header_or_row(self) -> None:
         query = ConversationSearchQuery("missing")
@@ -8950,7 +8965,7 @@ class ControllerSearchAndTranscriptTests(ControllerTestCase):
 
         with (
             mock.patch.object(
-                controller._conversation_event_store,
+                controller._conversation_storage_services.event_store,
                 "read",
                 return_value=(stored_user, stored_event),
             ) as read,
@@ -9208,7 +9223,7 @@ class ControllerSearchAndTranscriptTests(ControllerTestCase):
                     rendered.index("[error transcript_invalid]"),
                 )
                 self.assertNotIn("private transcript detail", rendered)
-                self.assertIsNone(controller._conversation_memory_service)
+                self.assertIsNone(controller._collaboration_history_service)
 
     def test_conversation_mutations_do_not_rebind_the_shared_memory_service(
         self,
@@ -9238,12 +9253,14 @@ class ControllerSearchAndTranscriptTests(ControllerTestCase):
 
         memory_factory.assert_called_once()
         bound_store = memory_factory.call_args.args[2]
-        self.assertIs(bound_store, controller._conversation_event_store)
+        self.assertIs(
+            bound_store, controller._conversation_storage_services.event_store
+        )
         self.assertIs(controller._runtime.conversation_event_store, bound_store)
         self.assertEqual(len(catalog.entries), 3)
         self.assertEqual(catalog.entries[1].subject, "Revised")
         self.assertIs(catalog.entries[1].status, ConversationStatus.ARCHIVED)
-        self.assertIsNone(controller._conversation_memory_service)
+        self.assertIsNone(controller._collaboration_history_service)
 
     def test_destination_scope_precedes_detach_and_failed_build_keeps_source(
         self,
@@ -9342,7 +9359,7 @@ class ControllerSearchAndTranscriptTests(ControllerTestCase):
                         load_cli_context(workspace).default_session_id,
                         "destination",
                     )
-                self.assertIsNone(controller._conversation_memory_service)
+                self.assertIsNone(controller._collaboration_history_service)
 
     def test_successful_end_clears_memory_scope_before_lobby_input(self) -> None:
         memory = ScriptedConversationMemoryService()
@@ -9352,7 +9369,7 @@ class ControllerSearchAndTranscriptTests(ControllerTestCase):
             """Assert successful end cleared the service before lobby input."""
 
             self.assertEqual(prompt, "story[lobby]> ")
-            self.assertIsNone(holder["controller"]._conversation_memory_service)
+            self.assertIsNone(holder["controller"]._collaboration_history_service)
             return "/quit"
 
         _workspace, _backend, _catalog, controller, _callbacks = (
@@ -9369,7 +9386,7 @@ class ControllerSearchAndTranscriptTests(ControllerTestCase):
             return_value=memory,
         ):
             self.assertEqual(controller.run_session_lobby(), 0)
-        self.assertIsNone(controller._conversation_memory_service)
+        self.assertIsNone(controller._collaboration_history_service)
 
     def test_search_failures_and_cancellation_preserve_routing_and_selection(
         self,
@@ -9482,7 +9499,7 @@ class ControllerSearchAndTranscriptTests(ControllerTestCase):
         )
         self.assertEqual(workspace.path(_CONTEXT_PATH).read_bytes(), context_before)
         self.assertFalse(workspace.path(_default_relative("session")).exists())
-        self.assertIsNone(controller._conversation_memory_service)
+        self.assertIsNone(controller._collaboration_history_service)
 
     def test_memory_recovery_interrupt_fails_closed_for_search_and_transcript(
         self,
@@ -9568,7 +9585,7 @@ class ControllerSearchAndTranscriptTests(ControllerTestCase):
                         "save_default_conversation",
                     ) as persist_conversation,
                     mock.patch.object(
-                        controller._conversation_event_store,
+                        controller._conversation_storage_services.event_store,
                         "append",
                     ) as append,
                 ):
@@ -9592,7 +9609,7 @@ class ControllerSearchAndTranscriptTests(ControllerTestCase):
                 self.assertNotIn(str(service_failure), rendered)
                 self.assertIsNone(controller._attached_session_id)
                 self.assertIsNone(controller._focused_conversation)
-                self.assertIsNone(controller._conversation_memory_service)
+                self.assertIsNone(controller._collaboration_history_service)
                 self.assertFalse(workspace.path(_access_relative("session")).exists())
                 self.assertFalse(workspace.path(_default_relative("session")).exists())
                 self.assertEqual(catalog.entries, [entry])
@@ -9603,6 +9620,89 @@ class ControllerSearchAndTranscriptTests(ControllerTestCase):
                     ),
                     context_before,
                 )
+
+
+class ControllerV2HistoryCommandTests(ControllerTestCase):
+    """Verify provider-free structured search, transcript, and history commands."""
+
+    def prepared_v2_controller(
+        self,
+        *reads: object,
+        subject: str = "Focused collaboration",
+        with_history: bool = True,
+    ) -> tuple[
+        object,
+        ConversationStorageServices,
+        ConversationMetadata,
+        InteractiveController,
+        ScriptedTerminalCallbacks,
+    ]:
+        workspace = self.make_workspace()
+        self.seed_session(workspace, "session", durable_state=SessionDurableState.READY)
+        save_default_session(workspace, "session")
+        services = compose_filesystem_conversation_storage(workspace)
+        metadata = services.catalog.create("session", subject)
+        save_default_conversation(workspace, "session", metadata.conversation_id)
+        if with_history:
+            batch = contract_batches(metadata.conversation_id)["proposal"]
+            services.event_store.append_batch(
+                CollaborationEventBatch(
+                    batch_id=batch.batch_id,
+                    expected_last_sequence=batch.expected_last_sequence,
+                    events=tuple(
+                        replace(event, session_id="session") for event in batch.events
+                    ),
+                )
+            )
+        controller, backend, callbacks = self.make_controller(
+            workspace,
+            *reads,
+            conversation_storage_services=services,
+            terminal_width=240,
+        )
+        self.addCleanup(backend.close)
+        return workspace, services, metadata, controller, callbacks
+
+    def test_search_transcript_and_history_are_structured_provider_free_reads(
+        self,
+    ) -> None:
+        workspace, services, metadata, controller, callbacks = (
+            self.prepared_v2_controller(
+                "/search Consult specialists",
+                "/history",
+                "/quit",
+            )
+        )
+        # The transcript command needs the generated opaque conversation ID.
+        callbacks.reads.insert(1, f"/transcript {metadata.conversation_id}")
+        before = services.event_store.read("session", metadata.conversation_id)
+        with mock.patch.object(controller._backend, "bind", autospec=True) as bind:
+            self.assertEqual(controller.run_session_lobby(), 0)
+        bind.assert_not_called()
+        self.assertEqual(
+            services.event_store.read("session", metadata.conversation_id),
+            before,
+        )
+        rendered = "".join(callbacks.records)
+        self.assertIn("proposal_event", rendered)
+        self.assertIn("proposal.purpose", rendered)
+        self.assertIn("awaiting_confirmation", rendered.lower())
+        self.assertIn("submit_confirmation", rendered)
+        self.assertNotIn("route_fingerprint", rendered)
+        self.assertTrue(workspace.root.exists())
+
+    def test_subject_text_alone_never_creates_a_history_search_hit(self) -> None:
+        _workspace, _services, _metadata, controller, callbacks = (
+            self.prepared_v2_controller(
+                "/search Consult specialists",
+                "/quit",
+                subject="Consult specialists",
+                with_history=False,
+            )
+        )
+        self.assertEqual(controller.run_session_lobby(), 0)
+        rendered = "".join(callbacks.records)
+        self.assertIn("Search returned 0 of 0 matching readable fields.", rendered)
 
 
 class ControllerConversationCommandTests(ControllerTestCase):

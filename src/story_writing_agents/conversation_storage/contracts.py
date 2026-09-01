@@ -8,8 +8,8 @@ from dataclasses import dataclass
 from enum import StrEnum
 from typing import Generic, Protocol, TypeVar
 
-from ..conversation_search import ConversationSearch
-from ..conversations import ConversationCatalog, ConversationEventStore
+from ..conversation_search import CollaborationHistorySearch
+from ..conversations import CollaborationEventStore, ConversationCatalog
 from ..errors import StoryWritingAgentsError
 
 
@@ -387,11 +387,11 @@ class ConversationStorageComponentBinding(Generic[ComponentT_co]):
 
 @dataclass(frozen=True, slots=True)
 class ConversationStorageServices:
-    """Three same-provenance component bindings plus their coordinator."""
+    """Same-provenance catalog, v2 history, search, and coordinator bindings."""
 
     catalog_binding: ConversationStorageComponentBinding[ConversationCatalog]
-    event_store_binding: ConversationStorageComponentBinding[ConversationEventStore]
-    search_binding: ConversationStorageComponentBinding[ConversationSearch]
+    event_store_binding: ConversationStorageComponentBinding[CollaborationEventStore]
+    search_binding: ConversationStorageComponentBinding[CollaborationHistorySearch]
     mutation_coordinator: ConversationStorageMutationCoordinator
 
     def __post_init__(self) -> None:
@@ -415,7 +415,7 @@ class ConversationStorageServices:
             ),
             (
                 self.event_store_binding.component,
-                ("append", "read", "read_context"),
+                ("append_batch", "read", "read_context"),
             ),
             (self.search_binding.component, ("search",)),
         )
@@ -447,13 +447,13 @@ class ConversationStorageServices:
         return self.catalog_binding.component
 
     @property
-    def event_store(self) -> ConversationEventStore:
+    def event_store(self) -> CollaborationEventStore:
         """Return the raw event-store port without wrapping or introspection."""
 
         return self.event_store_binding.component
 
     @property
-    def search(self) -> ConversationSearch:
+    def search(self) -> CollaborationHistorySearch:
         """Return the raw search port without wrapping or introspection."""
 
         return self.search_binding.component

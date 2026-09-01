@@ -5,8 +5,8 @@ lead-led execution workflow. Public schema-v1 direct-run consumers are absent;
 generic provider, prompt, context, lifecycle, artifact, and terminal components
 remain available behind explicit module boundaries.
 
-The production graph contains 97 modules, 360 dependency edges, no cycles, and
-118 package-root exports.
+The production graph contains 97 modules, 362 dependency edges, no cycles, and
+104 package-root exports.
 
 ## Current user flow
 
@@ -53,21 +53,17 @@ create an implicit public execution path.
 ## Conversation and collaboration storage
 
 Conversation management uses one startup-selected complete service bundle:
-catalog, event store, literal search, and mutation coordination. Filesystem and
-SQLite implementations preserve exact authority/provenance rules. Selection is
-next-shell configuration; transfer is a separate provider-free copy/parity
-operation.
+catalog, `CollaborationEventStore`, aggregate event-field search, and mutation
+coordination. Filesystem and SQLite implementations preserve exact
+authority/provenance rules. Selection is next-shell configuration; transfer is
+a separate provider-free copy/parity operation.
 
-#466 delivered pure schema-v2 collaboration values. #474-#477 added readable
-projection, search/page, filesystem/SQLite store, archive, and transfer pieces
-on the integration branch. In this stage the shell retains its active-v1
-service path where integration still requires it. #479 activates the sole v2
-storage/inspection service and removes that last active-v1 path.
-
-The controller's current catalog/transcript reads are provider-free and do not
-invent transcript events for catalog mutations. Pure/direct schema-v2 readable
-projection, search, and paging remain available outside the selected shell
-service until #479.
+The controller uses that schema-v2 service for `/history`, `/search`,
+`/transcript`, and `/status`. Catalog mutations do not invent events; subjects
+are displayed but never searched. Projection, exact citation, paging, context,
+archive, and transfer all validate canonical events from the same authority.
+Concrete filesystem/SQLite v2 adapters remain direct-module-only; public
+facades expose contracts and compositions rather than concrete store classes.
 
 ## Optional local RAG
 
@@ -122,10 +118,10 @@ Custodian, and Execution Specialist. The lead is the intended user-facing
 channel; specialists are lead-routed collaborators. That target behavior is
 not a current CLI dispatch claim.
 
-After #479 completes the v2 storage cutover and parent #467 completes, open
-#452 owns the lead proposal/confirmation/reconfirmation workflow and open #453
-owns specialist execution/result/finalization/outcome-unknown behavior. Both
-must use the sole v2 store rather than reintroducing direct-run consumers.
+Open #452 owns the later lead proposal/confirmation/reconfirmation workflow
+and open #453 owns specialist execution/result/finalization/outcome-unknown
+behavior. #454 owns whole-workspace rejection of unsupported history. Those
+provider-bound integrations must use the sole v2 store.
 
 ## Dependency direction
 

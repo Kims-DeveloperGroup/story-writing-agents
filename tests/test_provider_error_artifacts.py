@@ -491,7 +491,7 @@ class ProviderErrorArtifactContractTests(unittest.TestCase):
                 for node in ast.walk(owner_tree)
                 if isinstance(node, ast.ImportFrom) and node.level == 2
             },
-            {"conversations", "errors", "workspace.core"},
+            {"conversations", "conversations.events", "errors", "workspace.core"},
         )
 
         repository_root = Path(__file__).resolve().parents[1]
@@ -508,8 +508,8 @@ class ProviderErrorArtifactContractTests(unittest.TestCase):
             "assert module.Workspace is workspace.Workspace is core.Workspace; "
             "assert workspace.FilesystemConversationCatalog is "
             "filesystem.FilesystemConversationCatalog; "
-            "assert workspace.FilesystemConversationEventStore is "
-            "filesystem.FilesystemConversationEventStore; "
+            "assert not hasattr(workspace, 'FilesystemConversationEventStore'); "
+            "assert not hasattr(filesystem, 'FilesystemConversationEventStore'); "
             "assert module.open_workspace_root_directory is "
             "workspace.open_workspace_root_directory; "
             "assert module.verify_workspace_root_directory is "

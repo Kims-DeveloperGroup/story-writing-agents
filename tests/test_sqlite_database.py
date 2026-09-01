@@ -14,14 +14,11 @@ from typing import Callable, cast
 from unittest import mock
 
 from story_writing_agents import (
-    ConversationEventAppend,
-    ConversationEventKind,
     Workspace,
     WorkspaceFormatError,
     WorkspaceSecurityError,
     WorkspaceVersionUnsupportedError,
 )
-from story_writing_agents.agents import LEAD_ORCHESTRATOR
 from story_writing_agents.conversation_storage import (
     ConversationStorageCapability,
     ConversationStorageCoordinationError,
@@ -45,7 +42,6 @@ from story_writing_agents.conversation_storage.sqlite import (
 from tests.sqlite_conversation_storage_fixture import (
     database_path,
     initialized_workspace,
-    make_append,
     provision,
     provisioned_services,
     raw_connection,
@@ -758,61 +754,33 @@ class SQLiteDatabaseVerificationTests(unittest.TestCase):
                     preflight_sqlite_conversation_storage(workspace)
                 self.assertEqual(storage_snapshot(workspace), before)
 
-    def test_invalid_utf8_text_is_content_free_for_preflight_and_adapters(
+    def test_invalid_utf8_subject_is_content_free_for_preflight_and_catalog(
         self,
     ) -> None:
-        for column in ("subject", "content"):
-            with self.subTest(column=column):
-                workspace, services = provisioned_services(self)
-                metadata = services.catalog.create("session_a", "Subject")
-                if column == "content":
-                    services.event_store.append(
-                        make_append(
-                            session_id="session_a",
-                            conversation_id=metadata.conversation_id,
-                            turn_id="turn_a",
-                        )
-                    )
-                with raw_connection(workspace) as connection:
-                    if column == "subject":
-                        connection.execute(
-                            "UPDATE conversations "
-                            "SET subject = CAST(X'73656E74696E656C2D80' AS TEXT) "
-                            "WHERE session_id = ? AND conversation_id = ?",
-                            ("session_a", metadata.conversation_id),
-                        )
-                    else:
-                        connection.execute(
-                            "UPDATE conversation_events "
-                            "SET content = CAST(X'73656E74696E656C2D80' AS TEXT) "
-                            "WHERE session_id = ? AND conversation_id = ?",
-                            ("session_a", metadata.conversation_id),
-                        )
-                before = storage_snapshot(workspace)
-
-                def adapter_operation() -> object:
-                    if column == "subject":
-                        return services.catalog.get(
-                            "session_a", metadata.conversation_id
-                        )
-                    return services.event_store.read(
-                        "session_a", metadata.conversation_id
-                    )
-
-                operations = (
-                    lambda: preflight_sqlite_conversation_storage(workspace),
-                    adapter_operation,
+        workspace, services = provisioned_services(self)
+        metadata = services.catalog.create("session_a", "Subject")
+        with raw_connection(workspace) as connection:
+            connection.execute(
+                "UPDATE conversations "
+                "SET subject = CAST(X'73656E74696E656C2D80' AS TEXT) "
+                "WHERE session_id = ? AND conversation_id = ?",
+                ("session_a", metadata.conversation_id),
+            )
+        before = storage_snapshot(workspace)
+        for operation in (
+            lambda: preflight_sqlite_conversation_storage(workspace),
+            lambda: services.catalog.get("session_a", metadata.conversation_id),
+        ):
+            with self.subTest(operation=operation):
+                with self.assertRaises(WorkspaceFormatError) as caught:
+                    operation()
+                self.assertEqual(
+                    str(caught.exception),
+                    "invalid SQLite conversation storage",
                 )
-                for operation in operations:
-                    with self.assertRaises(WorkspaceFormatError) as caught:
-                        operation()
-                    self.assertEqual(
-                        str(caught.exception),
-                        "invalid SQLite conversation storage",
-                    )
-                    self.assertNotIn("sentinel", str(caught.exception).casefold())
-                    self.assertIsNone(caught.exception.__cause__)
-                self.assertEqual(storage_snapshot(workspace), before)
+                self.assertNotIn("sentinel", str(caught.exception).casefold())
+                self.assertIsNone(caught.exception.__cause__)
+        self.assertEqual(storage_snapshot(workspace), before)
 
     def test_database_pins_one_root_read_for_every_later_operation(self) -> None:
         class RootProbeWorkspace(Workspace):
@@ -964,221 +932,6 @@ class SQLiteDatabaseVerificationTests(unittest.TestCase):
                     trace,
                     expected_count=1,
                 )
-
-
-class SQLiteBoundedAppendTests(unittest.TestCase):
-    def test_append_statement_and_turn_row_shape_do_not_grow_with_history(
-        self,
-    ) -> None:
-        traces: list[tuple[str, ...]] = []
-        for complete_turns in (0, 24):
-            with self.subTest(complete_turns=complete_turns):
-                workspace, services = provisioned_services(self)
-                metadata = services.catalog.create("session_a", "Bounded append")
-                for index in range(complete_turns):
-                    turn_id = f"history_{index:02d}"
-                    services.event_store.append(
-                        make_append(
-                            session_id="session_a",
-                            conversation_id=metadata.conversation_id,
-                            turn_id=turn_id,
-                        )
-                    )
-                    services.event_store.append(
-                        make_append(
-                            session_id="session_a",
-                            conversation_id=metadata.conversation_id,
-                            turn_id=turn_id,
-                            kind=ConversationEventKind.AGENT_REPLY,
-                        )
-                    )
-
-                trace: list[str] = []
-                selected_sizes: list[int] = []
-                connect, _ = _tracking_connect(trace)
-                real_select_turn = sqlite_module._select_turn_events
-
-                def tracked_select_turn(
-                    connection: object,
-                    session_id: str,
-                    conversation_id: str,
-                    turn_id: str,
-                ) -> tuple[object, ...]:
-                    events = real_select_turn(
-                        connection,
-                        session_id,
-                        conversation_id,
-                        turn_id,
-                    )
-                    selected_sizes.append(len(events))
-                    return events
-
-                with (
-                    mock.patch.object(database_module, "_connect", connect),
-                    mock.patch.object(
-                        sqlite_module,
-                        "_select_turn_events",
-                        tracked_select_turn,
-                    ),
-                    mock.patch.object(
-                        sqlite_module,
-                        "_select_events",
-                        side_effect=AssertionError(
-                            "append scanned a complete transcript"
-                        ),
-                    ),
-                ):
-                    user = services.event_store.append(
-                        make_append(
-                            session_id="session_a",
-                            conversation_id=metadata.conversation_id,
-                            turn_id="new_turn",
-                        )
-                    )
-                    reply = services.event_store.append(
-                        make_append(
-                            session_id="session_a",
-                            conversation_id=metadata.conversation_id,
-                            turn_id="new_turn",
-                            kind=ConversationEventKind.AGENT_REPLY,
-                        )
-                    )
-
-                self.assertEqual(
-                    (user.sequence, reply.sequence),
-                    (complete_turns * 2 + 1, complete_turns * 2 + 2),
-                )
-                self.assertEqual(selected_sizes, [0, 1])
-                self.assertEqual(
-                    sum(
-                        statement.startswith(
-                            "SELECT COALESCE(MAX(sequence), 0) FROM conversation_events"
-                        )
-                        for statement in trace
-                    ),
-                    2,
-                )
-                turn_selects = tuple(
-                    statement
-                    for statement in trace
-                    if statement.startswith(
-                        "SELECT schema_version, session_id, conversation_id, "
-                        "turn_id, sequence, timestamp, sender, recipient, kind, "
-                        "content, searchable_content, turn_slot "
-                        "FROM conversation_events"
-                    )
-                    and "AND turn_id = ? ORDER BY turn_slot" in statement
-                )
-                self.assertEqual(len(turn_selects), 2)
-                self.assertTrue(
-                    all(
-                        "AND turn_id = ? ORDER BY turn_slot" in statement
-                        for statement in turn_selects
-                    )
-                )
-                self.assertFalse(
-                    any("ORDER BY sequence" in statement for statement in trace)
-                )
-                _assert_exhaustive_statements(self, trace, expected_count=0)
-                traces.append(tuple(trace))
-
-        self.assertEqual(traces[0], traces[1])
-
-    def test_bounded_append_preserves_pairing_and_rejects_malformed_turns(
-        self,
-    ) -> None:
-        workspace, services = provisioned_services(self)
-        metadata = services.catalog.create("session_a", "Turn rules")
-        identity = {
-            "session_id": "session_a",
-            "conversation_id": metadata.conversation_id,
-            "turn_id": "turn_a",
-        }
-
-        with self.assertRaises(ValueError):
-            services.event_store.append(
-                make_append(**identity, kind=ConversationEventKind.AGENT_REPLY)
-            )
-        user = services.event_store.append(make_append(**identity))
-        with self.assertRaises(ValueError):
-            services.event_store.append(make_append(**identity))
-        mismatched_reply = ConversationEventAppend(
-            **identity,
-            sender=LEAD_ORCHESTRATOR,
-            recipient="user",
-            kind=ConversationEventKind.AGENT_REPLY,
-            content="mismatched",
-        )
-        with self.assertRaises(ValueError):
-            services.event_store.append(mismatched_reply)
-        reply = services.event_store.append(
-            make_append(**identity, kind=ConversationEventKind.AGENT_REPLY)
-        )
-        with self.assertRaises(ValueError):
-            services.event_store.append(
-                make_append(
-                    **identity,
-                    kind=ConversationEventKind.RUNTIME_ERROR,
-                )
-            )
-        self.assertEqual((user.sequence, reply.sequence), (1, 2))
-
-        with raw_connection(workspace) as connection:
-            connection.execute(
-                "UPDATE conversation_events SET sender = ? "
-                "WHERE session_id = ? AND conversation_id = ? AND sequence = 2",
-                (
-                    LEAD_ORCHESTRATOR,
-                    "session_a",
-                    metadata.conversation_id,
-                ),
-            )
-        before = storage_snapshot(workspace)
-        with self.assertRaises(WorkspaceFormatError):
-            services.event_store.append(
-                make_append(
-                    **identity,
-                    kind=ConversationEventKind.RUNTIME_ERROR,
-                )
-            )
-        self.assertEqual(storage_snapshot(workspace), before)
-
-        turn_sql = (
-            "SELECT sequence, turn_id, turn_slot, kind, sender, recipient, content "
-            "FROM conversation_events WHERE session_id = ? AND conversation_id = ? "
-            "AND turn_id = ? ORDER BY turn_slot"
-        )
-        turn_parameters = (
-            identity["session_id"],
-            identity["conversation_id"],
-            identity["turn_id"],
-        )
-        with raw_connection(workspace) as connection:
-            connection.execute(
-                "DELETE FROM conversation_events WHERE session_id = ? "
-                "AND conversation_id = ? AND turn_id = ? AND turn_slot = 0",
-                turn_parameters,
-            )
-            outcome_only = connection.execute(
-                turn_sql,
-                turn_parameters,
-            ).fetchall()
-        self.assertEqual(len(outcome_only), 1)
-        self.assertEqual(outcome_only[0][2:4], (1, "agent_reply"))
-        before = storage_snapshot(workspace)
-
-        with self.assertRaises(WorkspaceFormatError) as caught:
-            services.event_store.append(make_append(**identity))
-
-        self.assertEqual(
-            str(caught.exception),
-            "invalid SQLite conversation storage",
-        )
-        self.assertIsNone(caught.exception.__cause__)
-        self.assertEqual(storage_snapshot(workspace), before)
-        with raw_connection(workspace) as connection:
-            after = connection.execute(turn_sql, turn_parameters).fetchall()
-        self.assertEqual(after, outcome_only)
 
 
 class SQLiteDatabaseTransactionTests(unittest.TestCase):

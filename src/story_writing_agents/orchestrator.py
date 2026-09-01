@@ -18,7 +18,6 @@ from .config import ConfigurationSnapshot, ConfigManager
 from .conversation_rag_runtime import ConversationRagRuntimeService
 from .conversation_storage.composition import compose_filesystem_conversation_storage
 from .conversation_storage.contracts import ConversationStorageServices
-from .conversations import ConversationEventStore
 from .debug_log import (
     DebugComponent,
     DebugOperation,
@@ -54,7 +53,6 @@ class StoryRuntime:
         workspace: Workspace | str | Path,
         backend: AgentBackend | None = None,
         *,
-        conversation_event_store: ConversationEventStore | None = None,
         conversation_storage_services: ConversationStorageServices | None = None,
         conversation_rag_service: ConversationRagRuntimeService | None = None,
     ) -> None:
@@ -69,13 +67,6 @@ class StoryRuntime:
         self.artifacts = WritingArtifactRepository(self.workspace.root)
         if (
             conversation_storage_services is not None
-            and conversation_event_store is not None
-        ):
-            raise TypeError(
-                "conversation_storage_services conflicts with conversation_event_store"
-            )
-        if (
-            conversation_storage_services is not None
             and type(conversation_storage_services) is not ConversationStorageServices
         ):
             raise TypeError(
@@ -87,25 +78,12 @@ class StoryRuntime:
             raise TypeError(
                 "conversation_rag_service must be ConversationRagRuntimeService"
             )
-        if (
-            conversation_rag_service is not None
-            and conversation_event_store is not None
-        ):
-            raise TypeError(
-                "conversation_rag_service requires conversation_storage_services"
-            )
-        if conversation_storage_services is None and conversation_event_store is None:
+        if conversation_storage_services is None:
             conversation_storage_services = compose_filesystem_conversation_storage(
                 self.workspace
             )
         self.conversation_storage_services = conversation_storage_services
         self.conversation_rag_service = conversation_rag_service
-        self.conversation_event_store = (
-            conversation_storage_services.event_store
-            if conversation_storage_services is not None
-            else conversation_event_store
-        )
-        assert self.conversation_event_store is not None
         self._conversation_workspace_roots = tuple(
             dict.fromkeys((workspace_literal, str(self.workspace.root)))
         )

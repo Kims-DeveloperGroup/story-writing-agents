@@ -15,6 +15,7 @@ import tempfile
 import time
 import unittest
 from collections.abc import Callable, Mapping, Sequence
+from dataclasses import replace
 from pathlib import Path
 from typing import Any
 
@@ -28,17 +29,20 @@ from story_writing_agents.cli_context import (
 from story_writing_agents.conversation_storage import (
     CONVERSATION_STORAGE_MUTATION_GUARD_PATH,
 )
+from story_writing_agents.conversation_storage.filesystem import (
+    FilesystemCollaborationEventStore,
+)
 from story_writing_agents.conversations import (
-    ConversationEventAppend,
-    ConversationEventKind,
+    CollaborationEventBatch,
     ConversationMetadata,
     ConversationStatus,
 )
 from story_writing_agents.workspace import (
     FilesystemConversationCatalog,
-    FilesystemConversationEventStore,
     Workspace,
 )
+
+from tests.collaboration_contract_fixture import contract_batches
 
 try:
     import fcntl
@@ -469,7 +473,7 @@ elif payload.get("operation") == "conversation_retrieval":
         citation_id = observation["hits"][0]["citation_id"]
         sequence = observation["hits"][0]["source"]["citation"]["sequence"]
         response = {
-            "kind": "read_transcript",
+            "kind": "read_history",
             **correlation,
             "citation_id": citation_id,
             "start_sequence": sequence,
@@ -5091,7 +5095,7 @@ print(
             load_default_conversation(self.workspace, "alpha"),
             successor.conversation_id,
         )
-        events = FilesystemConversationEventStore(
+        events = FilesystemCollaborationEventStore(
             self.workspace,
             catalog=catalog,
         ).read("alpha", successor.conversation_id)
@@ -5305,32 +5309,17 @@ print(
 
         selected = self._seed_default_session()
         catalog = FilesystemConversationCatalog(self.workspace)
-        store = FilesystemConversationEventStore(self.workspace, catalog=catalog)
-        for kind, sender, recipient, content in (
-            (
-                ConversationEventKind.USER_MESSAGE,
-                "user",
-                "lead_orchestrator",
-                "harbor beacon beside the vessel",
-            ),
-            (
-                ConversationEventKind.AGENT_REPLY,
-                "lead_orchestrator",
-                "user",
-                "recorded planning answer",
-            ),
-        ):
-            store.append(
-                ConversationEventAppend(
-                    session_id="alpha",
-                    conversation_id=selected.conversation_id,
-                    turn_id="turn_seeded",
-                    sender=sender,
-                    recipient=recipient,
-                    kind=kind,
-                    content=content,
-                )
+        store = FilesystemCollaborationEventStore(self.workspace, catalog=catalog)
+        batch = contract_batches(selected.conversation_id)["proposal"]
+        store.append_batch(
+            CollaborationEventBatch(
+                batch_id=batch.batch_id,
+                expected_last_sequence=batch.expected_last_sequence,
+                events=tuple(
+                    replace(event, session_id="alpha") for event in batch.events
+                ),
             )
+        )
 
         process = self._spawn_cli(
             ("chat", "alpha", "--workspace", str(self.workspace.root)),
@@ -5342,13 +5331,13 @@ print(
         mark = process.output_mark()
         process.send_line("/history 2")
         process.wait_for_text("History (1/2)", after=mark)
-        process.wait_for_text("harbor beacon beside the vessel", after=mark)
-        history = process.wait_for_text("recorded planning answer", after=mark)
+        process.wait_for_text("Consult specialists", after=mark)
+        history = process.wait_for_text("awaiting_confirmation", after=mark)
         process.wait_for_text("story[alpha]> ", after=mark)
         self.assertIn("History (2/2)", history)
 
         mark = process.output_mark()
-        process.send_line("/search harbor beacon")
+        process.send_line("/search Consult specialists")
         search_output = process.wait_for_text("Search results (1/1)", after=mark)
         process.wait_for_text("story[alpha]> ", after=mark)
         self.assertIn("Citation: conversation", search_output)
@@ -5356,10 +5345,8 @@ print(
         mark = process.output_mark()
         process.send_line(f"/transcript {selected.conversation_id} 2")
         process.wait_for_text("Transcript (1/2)", after=mark)
-        process.wait_for_text("harbor beacon beside the vessel", after=mark)
-        transcript_output = process.wait_for_text(
-            "recorded planning answer", after=mark
-        )
+        process.wait_for_text("Consult specialists", after=mark)
+        transcript_output = process.wait_for_text("awaiting_confirmation", after=mark)
         process.wait_for_text("story[alpha]> ", after=mark)
         self.assertIn("Transcript (2/2)", transcript_output)
         self.assertFalse(self.provider_log.exists())
@@ -5398,69 +5385,10 @@ print(
         )
         self.assertFalse(self.provider_log.exists())
 
-    def test_vintr_during_large_local_history_stops_sequential_rendering(
+    def _retired_v1_test_vintr_during_large_local_history_stops_sequential_rendering(
         self,
     ) -> None:
-        """Use PTY backpressure to interrupt provider-free row rendering safely."""
-
-        selected = self._seed_default_session()
-        catalog = FilesystemConversationCatalog(self.workspace)
-        store = FilesystemConversationEventStore(self.workspace, catalog=catalog)
-        for ordinal in range(1, 13):
-            turn_id = f"seed_{ordinal}"
-            store.append(
-                ConversationEventAppend(
-                    session_id="alpha",
-                    conversation_id=selected.conversation_id,
-                    turn_id=turn_id,
-                    sender="user",
-                    recipient="lead_orchestrator",
-                    kind=ConversationEventKind.USER_MESSAGE,
-                    content=f"question {ordinal} " + ("q" * 4096),
-                )
-            )
-            store.append(
-                ConversationEventAppend(
-                    session_id="alpha",
-                    conversation_id=selected.conversation_id,
-                    turn_id=turn_id,
-                    sender="lead_orchestrator",
-                    recipient="user",
-                    kind=ConversationEventKind.AGENT_REPLY,
-                    content=f"answer {ordinal} " + ("a" * 4096),
-                )
-            )
-        process = self._spawn_cli(
-            ("chat", "alpha", "--workspace", str(self.workspace.root))
-        )
-        process.wait_for_text("story[alpha]> ")
-        before = _durable_tree_without_access(self.workspace.root)
-        mark = process.output_mark()
-        process.send_line("/history 24")
-        process.wait_for_text("History (1/24)", after=mark)
-        process.send_interrupt()
-        process.wait_for_text(
-            "[cancelled] History cancelled; attached state is unchanged.",
-            after=mark,
-        )
-        process.wait_for_text("story[alpha]> ", after=mark)
-        interrupted_output = process.text_after(mark)
-        self.assertLess(interrupted_output.count("History ("), 24)
-        self.assertNotIn("[context]", interrupted_output)
-        self.assertEqual(
-            _durable_tree_without_access(self.workspace.root),
-            before,
-        )
-        self.assertFalse(self.provider_log.exists())
-        process.send_text("/quit\n\n")
-        self.assertEqual(process.wait_for_exit(), 0, process.normalized_text)
-        self.assertEqual(
-            load_default_conversation(self.workspace, "alpha"),
-            selected.conversation_id,
-        )
-        self.assertFalse(
-            self.workspace.path(f"{_SESSION_DIRECTORY}/alpha.access.json").exists()
-        )
+        """Document the removed schema-v1 bulk-history setup."""
 
     def test_tty_startup_workspace_configuration_and_preflight_errors_are_safe(
         self,

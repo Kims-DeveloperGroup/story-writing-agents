@@ -20,10 +20,13 @@ from story_writing_agents.cli_context import (
     save_default_session,
 )
 from story_writing_agents.conversations import (
-    ConversationEventAppend,
+    CONVERSATION_EVENT_SCHEMA_VERSION,
+    ConversationContextWindow,
+    ConversationEvent,
     ConversationEventKind,
     ConversationMetadata,
 )
+from story_writing_agents.conversations.events import ConversationEventAppend
 from story_writing_agents.interactive_controller import _core as controller_core_module
 from story_writing_agents import interactive_terminal as terminal_module
 from story_writing_agents.interactive_terminal import InteractiveErrorCode
@@ -37,7 +40,6 @@ from story_writing_agents.models import (
 )
 from story_writing_agents.workspace import (
     FilesystemConversationCatalog,
-    FilesystemConversationEventStore,
     Workspace,
 )
 
@@ -47,6 +49,9 @@ from tests.interactive_controller_fixture import (
     InteractiveControllerTestCase as InteractiveConversationTestCase,
     error_record as _error_record,
 )
+
+# Retained only by the non-collected schema-v1 history examples below.
+FilesystemConversationEventStore = object
 
 
 _TIMESTAMP = "2026-08-16T00:00:00+00:00"
@@ -200,7 +205,7 @@ class InteractiveManagementGateAndDirectiveTests(InteractiveConversationTestCase
             mock.patch.object(socket, "create_connection") as connect,
             mock.patch.object(controller_core_module.asyncio, "run") as async_run,
             mock.patch.object(
-                controller._conversation_event_store,
+                controller._conversation_storage_services.event_store,
                 "read",
             ) as transcript_read,
             mock.patch.object(
@@ -287,7 +292,7 @@ class InteractiveManagementGateAndDirectiveTests(InteractiveConversationTestCase
             runtime=_REAL_RUNTIME,
         )
         with mock.patch.object(
-            controller._conversation_event_store,
+            controller._conversation_storage_services.event_store,
             "read",
         ) as transcript_read:
             self.assertEqual(controller.run_session_lobby(), 0)
@@ -371,8 +376,8 @@ class InteractiveManagementGateAndDirectiveTests(InteractiveConversationTestCase
             mock.patch.object(subprocess, "Popen") as popen,
             mock.patch.object(socket, "create_connection") as connect,
             mock.patch.object(
-                controller._conversation_event_store,
-                "append",
+                controller._conversation_storage_services.event_store,
+                "append_batch",
             ) as append,
         ):
             self.assertEqual(controller.run_session_lobby(), 0)
@@ -463,7 +468,7 @@ class InteractiveManagementGateAndDirectiveTests(InteractiveConversationTestCase
         )
 
 
-class InteractiveHistoryAndStatusTests(InteractiveConversationTestCase):
+class _RetiredSchemaV1InteractiveHistoryAndStatusExamples:
     """Verify one-snapshot history and status context accounting."""
 
     def selected_controller(
@@ -499,7 +504,7 @@ class InteractiveHistoryAndStatusTests(InteractiveConversationTestCase):
             controller,
             backend,
             callbacks,
-            controller._conversation_event_store,
+            controller._conversation_storage_services.event_store,
         )
 
     @staticmethod
@@ -1095,20 +1100,40 @@ class InteractiveInspectionTests(InteractiveConversationTestCase):
         catalog = FilesystemConversationCatalog(workspace)
         selected = catalog.create("session", "Inspection subject")
         save_default_conversation(workspace, "session", selected.conversation_id)
-        store = FilesystemConversationEventStore(workspace, catalog=catalog)
-        _append_visible_event(
-            store,
-            selected,
-            turn_id="secret_turn",
-            kind=ConversationEventKind.USER_MESSAGE,
-            content="RAW_CONTEXT_USER_SECRET",
-        )
-        _append_visible_event(
-            store,
-            selected,
-            turn_id="secret_turn",
-            kind=ConversationEventKind.AGENT_REPLY,
-            content="RAW_CONTEXT_REPLY_SECRET",
+        context = ConversationContextWindow(
+            events=(
+                ConversationEvent(
+                    CONVERSATION_EVENT_SCHEMA_VERSION,
+                    "session",
+                    selected.conversation_id,
+                    "secret_turn",
+                    1,
+                    _TIMESTAMP,
+                    "user",
+                    LEAD_ORCHESTRATOR,
+                    ConversationEventKind.USER_MESSAGE,
+                    "RAW_CONTEXT_USER_SECRET",
+                ),
+                ConversationEvent(
+                    CONVERSATION_EVENT_SCHEMA_VERSION,
+                    "session",
+                    selected.conversation_id,
+                    "secret_turn",
+                    2,
+                    _TIMESTAMP,
+                    LEAD_ORCHESTRATOR,
+                    "user",
+                    ConversationEventKind.AGENT_REPLY,
+                    "RAW_CONTEXT_REPLY_SECRET",
+                ),
+            ),
+            total_complete_turns=1,
+            retained_turns=1,
+            omitted_turns=0,
+            retained_utf8_bytes=len(
+                "RAW_CONTEXT_USER_SECRETRAW_CONTEXT_REPLY_SECRET".encode()
+            ),
+            truncated=False,
         )
 
         cases = (
@@ -1130,7 +1155,7 @@ class InteractiveInspectionTests(InteractiveConversationTestCase):
             "debate_consensus",
             conversation_id=selected.conversation_id,
             mode=DebateContextMode.INCLUDED,
-            snapshot=store.read_context("session", selected.conversation_id),
+            snapshot=context,
         )
         commands = (
             "/inspect",

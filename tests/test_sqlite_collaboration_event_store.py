@@ -48,14 +48,12 @@ from story_writing_agents.conversation_storage import (
 )
 from story_writing_agents.conversation_storage.sqlite import (
     SQLiteCollaborationEventStore,
-    SQLiteConversationEventStore,
     compose_sqlite_conversation_storage,
     preflight_sqlite_conversation_storage,
 )
 from story_writing_agents.workspace.core import Workspace
 
 from tests.collaboration_contract_fixture import contract_batches
-from tests.conversation_event_store_contract import make_stored_event
 from tests.sqlite_conversation_storage_fixture import (
     database_path,
     initialized_workspace,
@@ -74,8 +72,7 @@ _SQLITE_EXPORTS = (
     "SQLiteConversationArchiveAdapter",
     "SQLiteConversationCatalog",
     "SQLiteCollaborationEventStore",
-    "SQLiteConversationEventStore",
-    "SQLiteConversationSearch",
+    "SQLiteCollaborationHistorySearch",
     "compose_sqlite_conversation_archive",
     "compose_sqlite_conversation_storage",
     "preflight_sqlite_conversation_storage",
@@ -312,7 +309,7 @@ class SQLiteCollaborationEventStoreFirstSliceTests(unittest.TestCase):
         assert row is not None
         return row[0]
 
-    def test_fresh_direct_append_persists_exact_rows_without_lexical_change(
+    def test_fresh_direct_append_persists_exact_rows_and_refreshes_lexical_index(
         self,
     ) -> None:
         generation_before = self.lexical_generation()
@@ -370,7 +367,7 @@ class SQLiteCollaborationEventStoreFirstSliceTests(unittest.TestCase):
                     "blob",
                 ),
             )
-        self.assertEqual(self.lexical_generation(), generation_before)
+        self.assertEqual(self.lexical_generation(), generation_before + 1)
 
     def test_exact_retry_returns_original_receipt_and_one_physical_batch(
         self,
@@ -391,9 +388,9 @@ class SQLiteCollaborationEventStoreFirstSliceTests(unittest.TestCase):
             ).fetchone()
         self.assertEqual(counts, (len(self.batch.events), 1))
 
-    def test_direct_only_export_and_v1_composition_remain_exact(self) -> None:
+    def test_direct_only_export_and_v2_composition_are_exact(self) -> None:
         self.assertEqual(tuple(sqlite_module.__all__), _SQLITE_EXPORTS)
-        self.assertEqual(len(_SQLITE_EXPORTS), 15)
+        self.assertEqual(len(_SQLITE_EXPORTS), 14)
         self.assertIs(
             sqlite_module.SQLiteCollaborationEventStore,
             SQLiteCollaborationEventStore,
@@ -412,11 +409,9 @@ class SQLiteCollaborationEventStoreFirstSliceTests(unittest.TestCase):
                 self.assertFalse(hasattr(boundary, "SQLiteCollaborationEventStore"))
 
         services = compose_sqlite_conversation_storage(self.workspace)
-        self.assertIsInstance(services.event_store, SQLiteConversationEventStore)
-        self.assertNotIsInstance(
-            services.event_store,
-            SQLiteCollaborationEventStore,
-        )
+        self.assertIsInstance(services.event_store, SQLiteCollaborationEventStore)
+        self.assertTrue(callable(services.event_store.append_batch))
+        self.assertFalse(hasattr(services.event_store, "append"))
 
     def test_all_six_batch_families_append_and_every_split_rolls_back(self) -> None:
         completed = contract_batches(self.metadata.conversation_id)
@@ -865,7 +860,7 @@ class SQLiteCollaborationEventStoreFirstSliceTests(unittest.TestCase):
             validate_snapshot: object,
             validate_lease: object,
         ) -> object:
-            result = real_write(
+            result, generation = real_write(
                 database,
                 operation,  # type: ignore[arg-type]
                 validate_snapshot=validate_snapshot,  # type: ignore[arg-type]
@@ -873,6 +868,7 @@ class SQLiteCollaborationEventStoreFirstSliceTests(unittest.TestCase):
             )
             self.assertIsInstance(result, CollaborationAppendReceipt)
             assert isinstance(result, CollaborationAppendReceipt)
+            self.assertGreater(generation, 0)
             committed_receipts.append(result)
             raise sqlite_database_module.SQLiteDatabaseUnavailableError()
 
@@ -1028,12 +1024,19 @@ class SQLiteCollaborationEventStoreFirstSliceTests(unittest.TestCase):
 
         workspace, metadata, store = self.fresh_store()
         batches = contract_batches(metadata.conversation_id)
-        v1_event = make_stored_event(
-            session_id="session_a",
-            conversation_id=metadata.conversation_id,
-        )
         v1_bytes = json.dumps(
-            v1_event.to_dict(),
+            {
+                "schema_version": 1,
+                "session_id": "session_a",
+                "conversation_id": metadata.conversation_id,
+                "turn_id": "turn_a",
+                "sequence": 1,
+                "timestamp": "2026-09-01T00:00:00+00:00",
+                "sender": "user",
+                "recipient": "lead_orchestrator",
+                "kind": "user_message",
+                "content": "legacy content",
+            },
             ensure_ascii=False,
             separators=(",", ":"),
             sort_keys=True,

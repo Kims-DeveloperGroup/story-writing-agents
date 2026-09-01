@@ -285,7 +285,7 @@ class PublicApiTests(unittest.TestCase):
     def test_all_declared_public_imports_exist_and_runtime_aliases_are_absent(
         self,
     ) -> None:
-        self.assertEqual(len(story_writing_agents.__all__), 118)
+        self.assertEqual(len(story_writing_agents.__all__), 104)
         for name in story_writing_agents.__all__:
             with self.subTest(name=name):
                 self.assertTrue(hasattr(story_writing_agents, name))
@@ -726,6 +726,10 @@ class PublicApiTests(unittest.TestCase):
             "CollaborationHistorySearchHit",
             "CollaborationHistorySearchQuery",
             "CollaborationHistorySearchResult",
+            "CollaborationHistorySearch",
+            "CollaborationHistorySearchScope",
+            "CollaborationHistoryService",
+            "ReferenceCollaborationHistorySearch",
             "collaboration_readable_document_id",
             "continue_collaboration_history",
             "page_collaboration_history",

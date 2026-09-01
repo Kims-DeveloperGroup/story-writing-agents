@@ -1,20 +1,12 @@
 # Structured collaboration history
 
-> **Availability:** schema-v2 collaboration history is an immutable, pure
-> Python contract under `story_writing_agents.conversations`. Readable
-> event/field records, content-free bootstrap, and bounded selected context are
-> available from that facade; literal search, exact citation resolution,
-> snapshot paging, and derived document identity are pure direct-module APIs in
-> `story_writing_agents.conversation_search`. A separate direct-module
-> `FilesystemCollaborationEventStore` and `SQLiteCollaborationEventStore` now
-> persist the v2 contract for direct Python callers. Neither is exported by a
-> package facade or composed into the current runtime, storage selection,
-> transcript views, shell, or provider calls. Canonical archive schema 2 and
-> `story storage transfer` now carry these exact v2 histories between ready
-> filesystem and SQLite stores. #478 removed the public direct-execution
-> consumers; SQLite's active bundle remains v1-shaped until #479 activates the
-> sole v2 storage/inspection service. Stored schema-v1 history is not accepted
-> as schema-v2 history.
+> **Availability:** schema-v2 collaboration history is the sole active
+> storage/inspection contract. The selected filesystem or SQLite bundle owns
+> one `CollaborationEventStore`; `/history`, `/search`, `/transcript`, and
+> `/status` use its provider-free readable projections. Concrete store adapters
+> are direct-module-only, while contracts and pure context/event projections
+> are available from their documented facades. Public lead/specialist provider
+> execution remains unavailable.
 
 Key terms: **proposal**—the complete disclosure for one possible step;
 **decision**—one structured `confirm`, `reject`, or `revise` response to the
@@ -31,30 +23,18 @@ bind a structured decision to that proposal; retain successful sibling results
 when another assignment fails; and expose a deterministic recovery state after
 a restart.
 
-Issue #474 also makes that exact v2 history readable without weakening it. A
-Python caller can project one complete typed record per event, search only the
+The same exact v2 history is readable without weakening it. A Python caller or
+the current shell can project one complete typed record per event, search only the
 closed public field set, resolve a hit to the exact original Unicode substring,
 page one unchanged snapshot, derive a stable lookup-document ID, and explicitly
 select bounded records for possible later provider context.
 
-It cannot yet run a lead or specialist, change a story artifact, mutate Git, or
-display a new shell workflow. A direct Python caller can persist exact v2
-batches on the filesystem or in the exact schema-v2 SQLite database and read
-them after restart. Neither adapter is the current selected
-conversation-storage service. They do not reinterpret free text as permission
-or turn a stored confirmation or projected `next_safe_action` into executable
-or reconstructible authority. Storage selection and provider routing remain
-unchanged. Archive and backend transfer are the first integrated consumers of
-v2 history.
-
-Before #476, SQLite could store only the current v1 catalog/transcript channel;
-v2 callers had to use the filesystem adapter. After #476, a direct caller can
-choose either persistence form with the same append/read contract. Users still
-cannot select or run v2 collaboration through the active shell, but they can
-transfer already-canonical v2 history between ready backends. A fresh SQLite
-database is exact schema
-version `2`; an existing schema-v1 database is rejected unchanged, with no
-`ALTER`, converter, compatibility, or automatic upgrade path.
+It cannot yet run a lead or specialist, change a story artifact, or mutate
+Git. The active filesystem and SQLite compositions persist exact batches and
+read them after restart. They do not reinterpret free text as permission or
+turn a stored confirmation or projected `next_safe_action` into executable
+authority. Archive and backend transfer carry the same canonical events.
+Unsupported owning-boundary history is rejected before mutation.
 
 Before this addition, the pure v2 projector answered operational questions such
 as “what state is this step in?” and “what is the next safe action?” It did not
@@ -63,20 +43,9 @@ projection remains unchanged and a separate readable projection answers “what
 public event and fields can I show, search, page, or select?” Neither projection
 performs I/O or grants authority.
 
-Conceptually, the distinction is:
-
-| Current conversation transcript | Schema-v2 collaboration history |
-| --- | --- |
-| One user message followed by one agent reply or runtime error | Ordered typed exchanges among user, lead, specialists, runtime, artifact, and Git actors |
-| Schema version `1`; current runtime/storage/UI authority | Schema version `2`; pure contracts plus uncomposed direct filesystem and SQLite adapters |
-| Text content and complete-turn context | Proposals, exact decisions, dispatches, replies, terminal provider facts, results, and durable step states |
-| Appends one visible event | Requires atomic batches for facts that must never be separated |
-| Accepted by current transcript stores | Rejected by v1 transcript stores; accepted by the direct v2 filesystem/SQLite adapters and pure projector |
-
-The two histories remain distinct. Schema-v1 `ConversationEvent` values are not
-schema-v2 collaboration events, and `project_collaboration_history()` rejects
-them. This separation defines no conversion workflow. Transfer accepts v2
-history only and rejects schema-v1 sources instead of upgrading them.
+The authoritative history is an ordered sequence of typed exchanges among the
+user, lead, specialists, runtime, artifact, and Git actors. Facts that must
+never be separated are appended as one atomic batch.
 
 ## Explicit readable-history scenario
 
@@ -101,9 +70,8 @@ application can, without invoking a provider:
 The default context selection includes no readable record text. Current user
 input is not accepted by this selector and remains a separate invocation
 input. These pure readable operations do not persist history, authorize
-retrieval, start a provider call, or supply the UI. The direct filesystem
-adapters described below can supply the canonical history; archive/transfer
-uses it, while #479 owns the remaining active-service cutover.
+retrieval, or start a provider call. The selected filesystem or SQLite bundle
+supplies the canonical history; archive/transfer uses the same event contract.
 
 ## Illustrative future interaction
 
@@ -393,9 +361,9 @@ Requested/retained/omitted counts and `truncated` report the result.
 
 The selector has no `current_input` parameter. The current user input remains
 separate, and the selected value still does not invoke a provider or establish
-retrieval authorization. Issue #478 removed the public direct-execution
-consumers; #479 owns storage/inspection activation, while #452/#453 later own
-lead and specialist workflow integration after parent #467 completes.
+retrieval authorization. #452 later owns lead proposal/confirmation writes,
+#453 owns specialist execution/results, and #454 owns whole-workspace
+unsupported-history rejection.
 
 ## Atomic batch flow
 
@@ -433,8 +401,8 @@ themselves or use
 or
 `story_writing_agents.conversation_storage.sqlite.SQLiteCollaborationEventStore`.
 Both classes are direct-module APIs, not `conversation_storage`, `workspace`,
-or project-root exports and not active storage-bundle members. The selected v1
-filesystem and SQLite event stores remain separate. A v2 store decides
+or project-root exports. The selected composition places one of them behind
+the storage-neutral service bundle. A v2 store decides
 whether an atomically committed candidate is `APPENDED` or an exact retry is
 `ALREADY_COMMITTED`; exact retry returns the original sequence range and
 timestamps before current-tail CAS is evaluated.
@@ -460,7 +428,7 @@ The adapter owns two v2-only siblings below the existing catalog conversation:
 ```text
 discussion_logs/SESSION/interactive/conversations/CONVERSATION/
 ├── metadata.json
-├── transcript.jsonl                 # legacy active-v1 residue; archive/transfer rejects it
+├── transcript.jsonl                 # unsupported sentinel; active owner rejects it
 ├── collaboration-history.jsonl      # strict canonical schema-v2 JSONL
 └── .collaboration-history.lock      # persistent advisory guard
 ```
@@ -623,9 +591,9 @@ Malformed collaboration rows make direct `read()`/`read_context()` fail with
 `CollaborationAppendError(CORRUPT_HISTORY)`. Operational availability,
 coordination, path-security, and unsupported-version failures remain separate
 public categories. Preserve the database and stop normal work after
-corruption; this adapter repairs nothing. The v1-shaped active bundle, lexical
-generation, literal-search/FTS authority, archive transfer, storage selection,
-and shell remain unchanged in #476.
+corruption; this adapter repairs nothing. In the active SQLite bundle it is the
+authoritative store behind history, event-field search, transcript paging, and
+state inspection. FTS remains only a non-authoritative candidate accelerator.
 
 ## State and user-action contract
 
@@ -635,17 +603,17 @@ application, never permission to perform the action.
 
 | State | Internal meaning | External user meaning | Allowed next action |
 | --- | --- | --- | --- |
-| `awaiting_confirmation` | A complete proposal and fresh request are the durable tail | Review exactly the displayed proposal | `submit_confirmation`: submit one structured confirm/reject/revise decision while the request remains the exact tail |
-| `reconfirmation_required` | Previously confirmed proposal is retained, but fresh authority is required | Review the unchanged proposal again after restart or revalidation | `submit_confirmation`: answer the fresh request; old confirmation is not reused |
-| `confirmed` | One exact structured confirm decision is durable | Decision recorded; execution has not necessarily begun | `start_or_reconfirm`: revalidate live facts, then start atomically or request fresh confirmation |
-| `running` | One execution attempt and every ordered dispatch are durable | Confirmed work is in progress | `none` while no result exists; if a complete result is durable, `finalize_result` |
-| `completed` | Known successful result and visible terminal notice are durable | Proposed step finished successfully | `none`; a lead may disclose a new higher-revision round within the fixed limits |
-| `rejected` | Structured reject decision is durable; no work started | The proposal will not run | `continue_with_lead`; any later work needs a fresh proposal/request |
-| `superseded` | Structured revise decision retired this proposal | The lead must propose a changed revision | `continue_with_lead`; review a fresh, higher-revision proposal |
-| `interrupted` | Known cancelled execution result and notice are durable | The attempt stopped with a known cancellation | `continue_with_lead`; same-lineage provider work stays blocked, and only `recovery_required` may follow |
-| `failed` | Known failed execution result and notice are durable | The attempt failed; successful sibling facts remain visible | `continue_with_lead`; same-lineage provider work stays blocked, and only `recovery_required` may follow |
-| `outcome_unknown` | Restart/interruption left no authoritative result for a submitted attempt | The system cannot prove whether work completed | `inspect_and_resolve_outcome`; do no more work and never replay the attempt |
-| `recovery_required` | Authoritative history needs external repair | Normal collaboration cannot safely continue | `repair_authoritative_history`; no later state transition is accepted |
+| `awaiting_confirmation` | A complete proposal and fresh request are the durable tail | A proposal is waiting for your confirmation. | `submit_confirmation`: Review the proposal and submit a confirmation decision. |
+| `reconfirmation_required` | Previously confirmed proposal is retained, but fresh authority is required | The earlier confirmation is no longer sufficient; review and confirm the updated proposal. | `submit_confirmation`: Review the proposal and submit a confirmation decision. |
+| `confirmed` | One exact structured confirm decision is durable | You confirmed the proposal; execution has not started yet. | `start_or_reconfirm`: Start confirmed work, or reconfirm if its basis changed. |
+| `running` | One execution attempt and every ordered dispatch are durable | The confirmed work is currently being executed. | `none` while no result exists; with a result, `finalize_result`: Record the terminal result for the running work. |
+| `completed` | Known successful result and visible terminal notice are durable | The confirmed work completed and its result is recorded. | `none`: No history-derived action is pending. |
+| `rejected` | Structured reject decision is durable; no work started | You rejected the proposal; that work will not execute. | `continue_with_lead`: Continue the conversation with the lead agent. |
+| `superseded` | Structured revise decision retired this proposal | A newer proposal replaced this proposal. | `continue_with_lead`: Continue the conversation with the lead agent. |
+| `interrupted` | Known cancelled execution result and notice are durable | Execution stopped before a complete outcome was recorded. | `continue_with_lead`: Continue the conversation with the lead agent. |
+| `failed` | Known failed execution result and notice are durable | Execution failed and the failure outcome is recorded. | `continue_with_lead`: Continue the conversation with the lead agent. |
+| `outcome_unknown` | Restart/interruption left no authoritative result for a submitted attempt | Execution may have occurred, but its outcome cannot be proven. | `inspect_and_resolve_outcome`: Inspect durable evidence and resolve the uncertain outcome. |
+| `recovery_required` | Authoritative history needs external repair | History requires operator inspection before any safe continuation. | `repair_authoritative_history`: Repair authoritative history before continuing. |
 
 Legal state transitions are deliberately narrower than conversational intent.
 In particular, only `confirmed` can enter `running`; `outcome_unknown` can only
@@ -957,18 +925,17 @@ state, and digest only—never bytes. Provider credentials, capabilities, raw
 provider protocol bodies, hidden reasoning, and reconstructed authorization do
 not belong in any payload.
 
-The direct filesystem and SQLite adapters define only their v2 persistence and
+The direct filesystem and SQLite adapters define their v2 persistence and
 durability boundaries above. Archive schema 2 and backend transfer consume
-their canonical histories, but this contract still defines no UI, provider
-call, lead-agent behavior, artifact/Git executor, credential model, complete
-workspace backup, or recovery tool. It also does not wire readable records
-into a provider prompt, automatic context, RAG generation, storage search, or
-selected runtime service. #479 owns that storage/inspection cutover. After
-parent #467 completes, open #452 owns the lead-facing proposal/confirmation
-workflow and open #453 owns specialist execution/results. See the dedicated
+their canonical histories, but this contract still defines no provider call,
+lead-agent behavior, artifact/Git executor, credential model, complete
+workspace backup, or recovery tool. The installed shell wires only
+provider-free readable records, search, pages, and state inspection. Open #452
+owns the lead-facing proposal/confirmation workflow, open #453 owns specialist
+execution/results, and #454 owns whole-workspace rejection. See the dedicated
 [lead-agent guide](../guides/lead-agent.md),
-[conversation transcripts](conversation-transcripts.md) for the active
-schema-v1 path, [persistence](../design/persistence.md) for authority ownership,
+[conversation transcripts](conversation-transcripts.md) for the active readable
+path, [persistence](../design/persistence.md) for authority ownership,
 [filesystem safety](../operations/filesystem-safety.md#schema-v2-collaboration-history-safety)
 for failure handling, and
 [package API](package-api.md#structured-collaboration-history-boundary) for the

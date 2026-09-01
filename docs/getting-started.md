@@ -75,13 +75,12 @@ story[first_novel]> /conversation new Opening structure
 [conversation] Created and focused c_<generated> | Subject: Opening structure
 story[first_novel]> /history
 [context] [empty]
-  History displayed: 0/0 events
-  Complete turns: 0
-  Context retained: 0 turns, 0 events
-  Omitted turns: 0
-  UTF-8 bytes: 0/32768
-  Turn cap: 24
-  Truncated: no.
+  History displayed: 0/0 records
+  Last sequence: 0
+  Current state: empty
+  User meaning: No collaboration event has been recorded yet.
+  Next safe action: none
+  Next action meaning: No history-derived action is pending.
 ```
 
 Capable-terminal decoration varies; the semantic fields and empty-history
@@ -108,12 +107,11 @@ artifact-reference work, progress, or artifact mutation.
 
 There is no noninteractive story-execution command and no public
 `StoryRuntime` method for an advisory turn or debate. Do not build automation
-around an earlier direct path. #466 delivered pure schema-v2 values and
-#474-#477 added projection/storage/archive/transfer pieces on the integration
-branch. #479 activates the sole schema-v2 storage/inspection service and
-removes the last active-v1 service path. After parent #467 completes, open
-issues #452/#453 wire the lead-facing proposal/confirmation and specialist
-execution/result workflows to that store.
+around an earlier direct path. The selected filesystem or SQLite bundle now
+uses the sole schema-v2 collaboration event store and provider-free inspection
+service. Open #452 later owns lead proposal/confirmation writes, #453 owns
+specialist execution/result writes, and #454 owns whole-workspace rejection of
+unsupported history.
 
 ## 6. Continue
 
