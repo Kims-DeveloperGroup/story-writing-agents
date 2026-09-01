@@ -42,6 +42,8 @@ from story_writing_agents.conversations import (
     CollaborationEventKind,
     CollaborationInputKind,
     CollaborationInvocationKind,
+    CollaborationLeadOutcomeFailureCode,
+    CollaborationLeadOutcomeFailurePayload,
     CollaborationMessagePayload,
     CollaborationNextAction,
     CollaborationProposal,
@@ -395,7 +397,14 @@ def _visible_outcome(kind: str, message: str = "Visible lead response."):
     ) -> str:
         return _provider_envelope(
             call,
-            {"kind": kind, "message": message, "proposal": None},
+            {
+                "kind": kind,
+                "message": message,
+                "scope": "workflow_meta",
+                "evidence_status": "not_applicable",
+                "evidence_ids": [],
+                "proposal": None,
+            },
         )
 
     return respond
@@ -416,6 +425,9 @@ def _proposal_outcome(
             {
                 "kind": "proposal",
                 "message": "Specialist review would resolve the open question.",
+                "scope": "story_specific",
+                "evidence_status": "incomplete",
+                "evidence_ids": [call.payload["core_statuses"][0]["evidence_id"]],
                 "proposal": {
                     "relation": relation,
                     "purpose": purpose,
@@ -485,9 +497,12 @@ def _synthesis_outcome(
         return _provider_envelope(
             call,
             {
+                "evidence_ids": contract["evidence_ids"],
+                "evidence_status": contract["evidence_status"],
                 "message": message,
                 "next_intent": next_intent,
                 "reply_event_ids": contract["reply_event_ids"],
+                "scope": contract["scope"],
                 "unresolved_input_ids": (
                     [] if unresolved_input_ids is None else unresolved_input_ids
                 ),
@@ -518,7 +533,7 @@ def _read_history_hit(
 ) -> str:
     observation = call.payload["o"]
     assert isinstance(observation, list) and observation[0] == "s"
-    handle = observation[2][0][5]
+    handle = observation[3][0][5]
     provider.used_handles = (handle,)
     return json.dumps(
         {
@@ -542,6 +557,9 @@ def _answer_from_history(
         {
             "kind": "answer",
             "message": "The prior lead response supplies enough evidence.",
+            "scope": "story_specific",
+            "evidence_status": "verified",
+            "evidence_ids": [observation[1][0][5]],
             "proposal": None,
         },
         used_handles=provider.used_handles,
@@ -770,12 +788,26 @@ class LeadOutcomeAndProposalTests(LeadOrchestrationTestCase):
             with self.subTest(index=index):
                 conversation_id = self.conversation(f"Invalid {index}")
                 self.backend.enqueue(script)
-                with self.assertRaises((BackendProtocolError, ContextExecutionError)):
-                    await self.runtime.lead_turn(
+                if index < 3:
+                    result = await self.runtime.lead_turn(
                         self.session_id,
                         conversation_id,
                         "Reject a noncanonical outcome.",
                     )
+                    self.assertIs(
+                        result.next_action,
+                        CollaborationNextAction.RETRY_LEAD_TURN,
+                    )
+                    self.assertIs(result.kind, LeadOutcomeKind.RECOMMENDATION)
+                else:
+                    with self.assertRaises(
+                        (BackendProtocolError, ContextExecutionError)
+                    ):
+                        await self.runtime.lead_turn(
+                            self.session_id,
+                            conversation_id,
+                            "Reject a noncanonical outcome.",
+                        )
                 history = self.history(conversation_id)
                 self.assertFalse(
                     any(
@@ -783,6 +815,17 @@ class LeadOutcomeAndProposalTests(LeadOrchestrationTestCase):
                         for event in history
                     )
                 )
+                if index < 3:
+                    failures = tuple(
+                        event.payload
+                        for event in history
+                        if type(event.payload) is CollaborationLeadOutcomeFailurePayload
+                    )
+                    self.assertEqual(len(failures), 1)
+                    self.assertIs(
+                        failures[0].code,
+                        CollaborationLeadOutcomeFailureCode.EVIDENCE_VALIDATION_REJECTED,
+                    )
                 self.assertFalse(
                     any(
                         type(event.payload) is CollaborationMessagePayload
@@ -960,17 +1003,27 @@ class LeadOutcomeAndProposalTests(LeadOrchestrationTestCase):
             with self.subTest(label=label):
                 conversation_id = self.conversation(label)
                 self.backend.enqueue(_proposal_outcome(assignments))
-                with self.assertRaises(BackendProtocolError):
-                    await self.runtime.lead_turn(
-                        self.session_id,
-                        conversation_id,
-                        text,
-                    )
+                result = await self.runtime.lead_turn(
+                    self.session_id,
+                    conversation_id,
+                    text,
+                )
+                self.assertIs(
+                    result.next_action,
+                    CollaborationNextAction.RETRY_LEAD_TURN,
+                )
                 self.assertFalse(
                     any(
                         type(event.payload) is CollaborationProposal
                         for event in self.history(conversation_id)
                     )
+                )
+                self.assertEqual(
+                    sum(
+                        type(event.payload) is CollaborationLeadOutcomeFailurePayload
+                        for event in self.history(conversation_id)
+                    ),
+                    1,
                 )
 
 

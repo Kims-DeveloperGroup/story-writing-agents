@@ -102,10 +102,14 @@ Import the lead values and decision enum from the conversations facade:
 ```python
 from story_writing_agents.conversations import (
     CollaborationConfirmationDecision,
+    CollaborationEvidenceAcquisition,
+    CollaborationLeadEvidence,
     CollaborationNextAction,
     CollaborationStepState,
     LeadDecisionResult,
+    LeadEvidenceStatus,
     LeadOutcomeKind,
+    LeadOutcomeScope,
     LeadStepDecision,
     LeadTurnResult,
 )
@@ -127,6 +131,7 @@ LeadTurnResult(
     state: CollaborationStepState | None,
     confirmation_request_id: str | None,
     next_action: CollaborationNextAction,
+    evidence: CollaborationLeadEvidence | None = None,
 )
 ```
 
@@ -141,11 +146,58 @@ A proposal result contains the complete runtime-built
 `CollaborationProposal`, state `awaiting_confirmation`, a fresh confirmation
 request ID, and next action `submit_confirmation`.
 
-The provider must return one strict JSON object with exactly `kind`, `message`,
-and `proposal`. Duplicate/unknown/private fields, a nonobject, an unknown kind,
-a non-null proposal on a direct outcome, or malformed proposal intent fails
-closed. Runtime—not the provider—creates authoritative IDs, revision, digest,
-input facts, impact, effects, profiles, and budgets.
+A fresh provider judgment also returns exact durable `evidence`. It contains
+the provider-declared `scope` (`story_specific` or `workflow_meta`), declared
+status (`not_applicable`, `verified`, `missing`, `empty`, `incomplete`, or
+`conflicting`), and ordered content-free receipts. Proposal evidence is
+identical to `proposal.basis.evidence`. Runtime-generated recovery and evidence-
+rejection notices use `evidence=None`.
+
+The provider must return one strict JSON object with exactly `scope`,
+`evidence_status`, `evidence_ids`, `kind`, `message`, and `proposal`:
+
+```json
+{
+  "scope": "story_specific",
+  "evidence_status": "verified",
+  "evidence_ids": ["reference_1"],
+  "kind": "recommendation",
+  "message": "The referenced outline supports the existing sequence.",
+  "proposal": null
+}
+```
+
+Runtime inventories content-free statuses for the four canonical core
+documents and issues evidence IDs for explicit references, complete zero-hit
+SEARCH, and final-answer-used READ operations. It accepts only the closed
+matrix below:
+
+| Scope/status | Required receipts | Allowed kinds |
+| --- | --- | --- |
+| `workflow_meta` / `not_applicable` | none | answer, question, critique, recommendation |
+| `story_specific` / `verified` | nonempty attached or used READ content | all five |
+| `story_specific` / `missing` | absent-core status or complete non-truncated zero-hit writing-artifact SEARCH | question, recommendation, proposal |
+| `story_specific` / `empty` | zero-byte core status or whole attached reference | question, recommendation, proposal |
+| `story_specific` / `incomplete` | content or core-status receipt | question, critique, recommendation, proposal |
+| `story_specific` / `conflicting` | two distinct nonempty content receipts | question, critique, recommendation, proposal |
+
+All other combinations fail closed. Runtime validates structural facts; it
+does not use NLP to infer scope, status, relevance, or semantic consistency.
+Evidence IDs must be current, unique, and in runtime order. A SEARCH hit that
+was not READ, a READ omitted from final `used_handles`, a truncated or non-
+writing zero-hit search, a prior-invocation ID, or an invented ID is invalid.
+
+Duplicate/unknown/private fields, a nonobject, an unknown kind, a non-null
+proposal on a direct outcome, or malformed proposal intent also fails closed.
+Runtime—not the provider—creates authoritative IDs, revision, digest, input
+facts, impact, effects, profiles, and budgets.
+
+If semantic evidence validation rejects a submitted response, runtime appends
+one typed `lead_outcome_failure`, returns a recommendation with
+`next_action=retry_lead_turn`, and supplies no state, proposal, request, or
+evidence. Retry starts a fresh turn; the rejected physical call is never
+replayed. If that closure cannot be persisted, the result is
+`recovery_required` instead.
 
 ### `LeadStepDecision`
 
@@ -169,9 +221,13 @@ authoritative request event and requires the decision to match its exact tail,
 request, proposal identity, revision, and digest. Callers never supply sequence
 authority.
 
-Confirm also rederives current references, required reviewers, route, profiles,
-context policy, and budget facts. Drift rejects the decision before proposed
-work. After confirmation is durable, runtime creates and consumes one private,
+Confirm also rederives current references and lead-evidence facts, including
+core status, used READ boundaries, and the authorized-source fingerprint for a
+zero-hit SEARCH, plus required reviewers, route, profiles, context policy, and
+budget facts. Drift rejects the decision before proposed work. Ordinary
+collaboration events appended by the same lead step do not falsely invalidate
+a mixed conversation/writing zero-hit receipt. After confirmation is durable,
+runtime creates and consumes one private,
 nonserializable, process-local start capability. It atomically appends
 `running` plus every ordered dispatch before calling providers. No public
 property exposes or reuses the capability.
@@ -230,7 +286,9 @@ synthesis. The synthesis cites every reply event in order and retains all input
 IDs from non-supporting replies as unresolved; it may request only one strict
 same-lineage round-two intent.
 
-One to three assignments run concurrently with isolated reference/context
+Synthesis separately repeats the proposal's exact story-specific scope,
+evidence status, and evidence IDs; reply event IDs are attribution, not story
+evidence. One to three assignments run concurrently with isolated reference/context
 authority and disjoint call reservations. If one fails, siblings finish and
 known replies are preserved, but synthesis is not attempted. Cancellation
 cancels and joins siblings, persists knowable results, and re-raises.
@@ -336,8 +394,9 @@ and inspection calls best-effort append bounded operational facts to
 the method's result or exception.
 
 Lead turns and confirmed consultations append authoritative schema-v2 user,
-lead, dispatch, typed reply/synthesis, provider-call-accounting, result, and
-state events as applicable. Attached references create content-free
+typed evidence-bound lead judgments or failures, dispatch, typed
+reply/synthesis, provider-call-accounting, result, and state events as
+applicable. Attached references create content-free
 reference-operation evidence and send authorized selected bytes to the
 configured provider for each addressed invocation. These methods never publish
 an artifact or mutate Git.

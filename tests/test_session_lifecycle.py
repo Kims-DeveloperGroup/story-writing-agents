@@ -478,7 +478,7 @@ class SessionLifecycleContractTests(unittest.TestCase):
             encoding="utf-8"
         )
         self.assertIn("Importable production units indexed: 97.", index)
-        self.assertIn("Direct internal dependency edges indexed: 369.", index)
+        self.assertIn("Direct internal dependency edges indexed: 370.", index)
         self.assertIn("Directed internal dependency cycles indexed: 0.", index)
         headings = tuple(re.findall(r"^### `([^`]+)`$", index, flags=re.MULTILINE))
         expected_modules: set[str] = set()
@@ -491,10 +491,10 @@ class SessionLifecycleContractTests(unittest.TestCase):
         self.assertEqual(len(headings), 97)
         self.assertEqual(len(set(headings)), 97)
         self.assertEqual(set(headings), expected_modules)
-        self.assertIn("now contains exactly 95 exports", index)
-        self.assertIn("events owners contain 23 and\n  65 respectively", index)
+        self.assertIn("facade\n  now contains exactly 103 exports", index)
+        self.assertIn("events owners contain 23\n  and 73 respectively", index)
         self.assertIn("Exactly 23 owning-module names in `__all__`", index)
-        self.assertIn("Exactly 65 owning-module names in `__all__`", index)
+        self.assertIn("Exactly 73 owning-module names in `__all__`", index)
         self.assertIn(
             "project-root facade retains only its immutable conversation-",
             index,

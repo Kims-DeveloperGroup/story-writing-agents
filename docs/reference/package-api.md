@@ -11,14 +11,14 @@ The stable inventories in this revision are:
 | Import boundary | Exports | Purpose |
 | --- | ---: | --- |
 | `story_writing_agents` | 104 | Management runtime, workspace/catalog, backend/session, generic models, retrieval contracts, parser, and errors |
-| `story_writing_agents.conversations` | 95 | Catalog plus schema-v2 events, projection, lead/specialist values, readable context, and pure validation |
+| `story_writing_agents.conversations` | 103 | Catalog plus schema-v2 events, projection, evidence-grounded lead/specialist values, readable context, and pure validation |
 | `story_writing_agents.conversation_search` | 18 | Schema-v2 search, exact citations, paging, and history service |
 | `story_writing_agents.conversation_retrieval` | 24 | Low-level provider search/read-history/answer contracts |
 | `story_writing_agents.conversation_storage` | 63 | Storage composition, provenance, activation, archive, and transfer contracts |
 | `story_writing_agents.workspace` | 3 | `Workspace`, `initialize_workspace`, and `FilesystemConversationCatalog` |
 
-The production graph has 97 modules, 369 dependency edges, no cycles, and 104
-package-root exports. The conversations facade contributes 65 event exports
+The production graph has 97 modules, 370 dependency edges, no cycles, and 104
+package-root exports. The conversations facade contributes 73 event exports
 and 23 context exports; its bindings are identical to the owner bindings.
 
 Import the management facade explicitly:
@@ -48,15 +48,22 @@ Use the static conversations facade for schema-v2 event and context contracts:
 ```python
 from story_writing_agents.conversations import (
     CollaborationContextBootstrap,
+    CollaborationEvidenceAcquisition,
+    CollaborationEvidenceReceipt,
     CollaborationEventBatch,
     CollaborationEventStore,
     CollaborationHistoryProjection,
+    CollaborationLeadEvidence,
+    CollaborationLeadJudgmentPayload,
+    CollaborationLeadOutcomeFailurePayload,
     CollaborationLeadSynthesisPayload,
     CollaborationReadableContext,
     CollaborationReadableRecord,
     CollaborationSpecialistAssessment,
     LeadDecisionResult,
+    LeadEvidenceStatus,
     LeadOutcomeKind,
+    LeadOutcomeScope,
     LeadStepDecision,
     LeadTurnResult,
     project_collaboration_history,
@@ -65,11 +72,15 @@ from story_writing_agents.conversations import (
 )
 ```
 
-The lead and specialist values are strict public inputs and results. Construct a
-`LeadStepDecision` from the exact proposal identity, digest, revision, and
-confirmation-request ID returned by `lead_turn()`; conversational text is not
-confirmation. A confirmed consultation records typed specialist replies and a
-typed lead synthesis when all assignments succeed. See
+The lead and specialist values are strict public inputs and results. Every
+fresh provider lead judgment carries exact runtime-issued evidence; the runtime
+persists a typed judgment or a content-free validation-failure closure. Scope
+and evidence status are provider semantic declarations, while runtime enforces
+their structural receipt matrix without NLP. Construct a `LeadStepDecision`
+from the exact proposal identity, digest, revision, and confirmation-request ID
+returned by `lead_turn()`; conversational text is not confirmation. A confirmed
+consultation records typed specialist replies and a typed, evidence-preserving
+lead synthesis when all assignments succeed. See
 [Runtime API](runtime-api.md) for signatures and state outcomes.
 
 The selected `ConversationStorageServices` has same-provenance bindings for

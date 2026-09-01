@@ -198,7 +198,7 @@ def _read_search_hit(
 ) -> str:
     framed = call.payload["o"]
     assert isinstance(framed, list) and framed[0] == "s"
-    handle = framed[2][0][5]
+    handle = framed[3][0][5]
     provider.used_handles = (handle,)
     return json.dumps(
         {
@@ -602,6 +602,7 @@ class ContextExecutionValueTests(ContextExecutionTestCase):
                 "invocation_kind",
                 "result_contract",
                 "physical_call_limit",
+                "include_core_statuses",
             ),
         )
         request = self.request()

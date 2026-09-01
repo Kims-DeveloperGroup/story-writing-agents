@@ -26,6 +26,8 @@ from story_writing_agents.conversations import (
     CollaborationHistoryProjection,
     CollaborationInterruptionPayload,
     CollaborationInvocationKind,
+    CollaborationLeadOutcomeFailureCode,
+    CollaborationLeadOutcomeFailurePayload,
     CollaborationMessagePayload,
     CollaborationNextAction,
     CollaborationProviderCallKind,
@@ -198,7 +200,7 @@ class CollaborationTransitionTests(unittest.TestCase):
         self.assertEqual(first.execution_result, result)
         self.assertIs(first.next_safe_action, CollaborationNextAction.FINALIZE_RESULT)
         self.assertEqual(first.rounds_spent, 1)
-        self.assertEqual(first.physical_calls_spent, 3)
+        self.assertEqual(first.physical_calls_spent, 4)
         self.assertEqual(
             tuple(event.sequence for event in history),
             tuple(range(1, len(history) + 1)),
@@ -258,7 +260,7 @@ class CollaborationBudgetAndOutcomeTests(unittest.TestCase):
             assignments=second_assignments,
             inputs=first.basis.inputs,
             rounds_spent=1,
-            physical_calls_spent=3,
+            physical_calls_spent=4,
         )
         request = proposal_state(
             second,
@@ -297,7 +299,7 @@ class CollaborationBudgetAndOutcomeTests(unittest.TestCase):
             assignments=second_assignments,
             inputs=first.basis.inputs,
             rounds_spent=1,
-            physical_calls_spent=2,
+            physical_calls_spent=3,
         )
         drift_batch = make_batch(
             history,
@@ -334,13 +336,13 @@ class CollaborationBudgetAndOutcomeTests(unittest.TestCase):
                     "assignment_character",
                     specialist_id=CHARACTER_CUSTODIAN,
                     input_ids=("input_character",),
-                    max_physical_calls=6,
+                    max_physical_calls=5,
                 ),
             ),
             inputs=inputs,
             synthesis_max_physical_calls=1,
         )
-        self.assertEqual(twelve.budget.max_additional_physical_calls, 12)
+        self.assertEqual(twelve.budget.max_additional_physical_calls, 11)
         awaiting, _ = awaiting_history(twelve)
         self.assertEqual(
             project_collaboration_history(awaiting).current_proposal,
@@ -747,7 +749,7 @@ class CollaborationAtomicBatchTests(unittest.TestCase):
         assert isinstance(retry, CollaborationAppendReceipt)
         self.assertIs(retry.status, CollaborationAppendStatus.ALREADY_COMMITTED)
         self.assertEqual(retry.first_sequence, 1)
-        self.assertEqual(retry.last_sequence, 2)
+        self.assertEqual(retry.last_sequence, len(history))
         self.assertEqual(
             retry.timestamps,
             tuple(event.timestamp for event in history),
@@ -757,7 +759,7 @@ class CollaborationAtomicBatchTests(unittest.TestCase):
         batch_conflict = CollaborationEventBatch(
             original.batch_id,
             original.expected_last_sequence,
-            (conflicting_event, original.events[1]),
+            (conflicting_event, *original.events[1:]),
         )
         _assert_invalid(
             self,
@@ -823,11 +825,21 @@ class CollaborationAtomicBatchTests(unittest.TestCase):
         awaiting, proposal = awaiting_history()
         self.assertEqual(
             tuple(event.kind for event in awaiting),
-            (CollaborationEventKind.MESSAGE, CollaborationEventKind.STEP_STATE),
+            (
+                CollaborationEventKind.PROVIDER_CALL_ACCOUNTING,
+                CollaborationEventKind.PROVIDER_CALL_ACCOUNTING,
+                CollaborationEventKind.MESSAGE,
+                CollaborationEventKind.MESSAGE,
+                CollaborationEventKind.STEP_STATE,
+            ),
         )
         confirmed, _ = confirmed_history(proposal)
         self.assertEqual(
-            tuple(event.kind for event in confirmed[2:4]),
+            tuple(
+                event.kind
+                for event in confirmed
+                if event.batch_id == "batch_confirmation"
+            ),
             (CollaborationEventKind.CONFIRMATION, CollaborationEventKind.STEP_STATE),
         )
         running, _ = running_history(proposal)
@@ -918,13 +930,25 @@ class CollaborationAtomicBatchTests(unittest.TestCase):
         proposal_only = CollaborationEventBatch(
             "batch_proposal_only",
             0,
-            (awaiting[0].to_draft(),),
+            (
+                next(
+                    event.to_draft()
+                    for event in awaiting
+                    if event.event_id == "proposal_event"
+                ),
+            ),
         )
         _assert_invalid(self, (), proposal_only)
         confirmation_only = CollaborationEventBatch(
             "batch_confirmation_only",
             len(awaiting),
-            (confirmed[2].to_draft(),),
+            (
+                next(
+                    event.to_draft()
+                    for event in confirmed
+                    if event.event_id == "confirmation_event"
+                ),
+            ),
         )
         _assert_invalid(self, awaiting, confirmation_only)
         missing_dispatch = CollaborationEventBatch(
@@ -961,7 +985,7 @@ class CollaborationReadableProjectionTests(unittest.TestCase):
     def test_every_event_projects_once_with_complete_identity_and_closed_fields(
         self,
     ) -> None:
-        history, _, _ = executed_history()
+        history, proposal, _ = executed_history()
         records = project_collaboration_readable_history(history)
 
         self.assertEqual(len(records), len(history))
@@ -1045,7 +1069,7 @@ class CollaborationReadableProjectionTests(unittest.TestCase):
             history,
             _terminal_state_batch(
                 history,
-                history[0].payload,
+                proposal,
                 CollaborationStepState.COMPLETED,
             ),
         )
@@ -1054,12 +1078,43 @@ class CollaborationReadableProjectionTests(unittest.TestCase):
             + project_collaboration_readable_history(unknown)
             + project_collaboration_readable_history(completed)
         )
+        failure_history = store_batch(
+            (),
+            make_batch(
+                (),
+                "batch_lead_failure",
+                *provider_call_drafts(
+                    invocation_id="invocation_failure",
+                    call_id="call_failure",
+                    role="lead_orchestrator",
+                    recipient=LEAD,
+                    invocation_kind=CollaborationInvocationKind.LEAD,
+                ),
+                make_draft(
+                    "lead_failure",
+                    CollaborationEventKind.LEAD_OUTCOME_FAILURE,
+                    RUNTIME,
+                    USER,
+                    CollaborationLeadOutcomeFailurePayload(
+                        CollaborationLeadOutcomeFailureCode.EVIDENCE_VALIDATION_REJECTED,
+                        "invocation_failure",
+                        "call_failure",
+                    ),
+                ),
+            ),
+        )
+        all_records += project_collaboration_readable_history(failure_history)
         observed_keys = {field.key for record in all_records for field in record.fields}
         self.assertEqual(observed_keys, set(CollaborationReadableFieldKey))
         self.assertEqual(
             tuple(item.value for item in CollaborationReadableFieldKey),
             (
                 "message.content",
+                "lead_judgment.kind",
+                "lead_judgment.message",
+                "lead_evidence.scope",
+                "lead_evidence.status",
+                "lead_outcome.failure",
                 "specialist_reply.content",
                 "specialist_reply.assessment",
                 "lead_synthesis.message",
@@ -1175,8 +1230,13 @@ class CollaborationReadableProjectionTests(unittest.TestCase):
             with self.subTest(last_event=corrupted[-1].event_id):
                 with self.assertRaises(ValueError):
                     project_collaboration_readable_history(corrupted)
+        populated = next(
+            record
+            for record in project_collaboration_readable_history(history)
+            if record.fields
+        )
         with self.assertRaises(ValueError):
-            replace(project_collaboration_readable_history(history)[0], fields=())
+            replace(populated, fields=())
 
 
 class CollaborationPortAndLegacyIsolationTests(unittest.TestCase):

@@ -47,6 +47,7 @@ infer authority from visible text or replay incomplete work.
 
 | Runtime result | User meaning | Safe response |
 | --- | --- | --- |
+| `retry_lead_turn` | The submitted provider response used invalid, invented, reordered, stale, or matrix-incompatible evidence. Runtime closed that exact call with `lead_outcome_failure`; no judgment/proposal was accepted. | Submit a fresh lead turn. Do not replay, repair, or reinterpret the rejected provider output. If failure closure could not be persisted, follow `recovery_required` instead. |
 | `reply_to_lead` or `continue_with_lead` | Continue the conversation; no work is authorized. | Send a new lead turn. Ordinary text while a proposal is pending supersedes it first. |
 | `submit_confirmation` | One exact proposal is waiting. | Submit `confirm`, `reject`, or `revise` with every returned identity/digest field. Text such as `Yes` is not confirmation. |
 | `start_or_reconfirm` | A confirmation is durable, but projection alone is not a reusable capability. A live `decide_lead_step()` normally crosses this boundary immediately. | Let the owning runtime use its private single-use start authority. After restart, collect the fresh `reconfirmation_required` request instead of reconstructing authority. |
@@ -62,6 +63,15 @@ durable batch before any provider call. A complete result batch can be
 finalized after restart with zero provider calls. Unresolved `running` without
 a live owner/result becomes `outcome_unknown` and is never replayed. See
 [Lead agent](../guides/lead-agent.md) for the complete state table.
+
+Before a confirmed consultation starts, runtime revalidates the proposal's
+exact evidence. A changed attached file or READ boundary, changed core status,
+or changed authorized writing-artifact snapshot behind a zero-hit SEARCH makes
+the decision stale and prevents specialist calls. Form a fresh lead turn from
+current evidence; do not reconstruct an old receipt. Conversation events
+appended by the same lead step are excluded from the stable fingerprint used
+for a mixed conversation/writing zero-hit claim, so the workflow's own durable
+records do not create false drift.
 
 The runtime joins all parallel assignment tasks before classifying a known
 partial failure. One failed peer does not cancel successful siblings, and no
@@ -878,6 +888,12 @@ workflow](privacy-and-provider.md#rejected-provider-response-artifacts).
   work. Python lead turns, structured decisions, and confirmed read-only
   specialist/synthesis execution are available; they stop before artifact
   mutation, consensus, or Git work.
+- Runtime enforces structural evidence scope/status/receipt rules for lead
+  judgments, but it does not perform semantic NLP verification, prove provider
+  comprehension, or guarantee that the lead selected every relevant artifact.
+  Explicit missing `${path}` still raises `ReferenceOperationFailure`; use an
+  absent core status or complete zero-hit writing-artifact SEARCH when absence
+  itself is the intended evidence.
 - Conversation search is active-only; transcript reads retain no cursor.
 - Filesystem remains the missing/legacy conversation-storage default.
   `/settings` and provider-free `story storage use` save a desired filesystem

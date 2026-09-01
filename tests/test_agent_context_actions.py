@@ -29,6 +29,9 @@ from story_writing_agents.agent_context.actions import (
     ContextSourceBoundaryKind,
     ContextSourceEvidence,
     ContextSourceHandle,
+    ContextSourceStatusKind,
+    ContextSourceStatusReceipt,
+    ContextZeroHitSearchReceipt,
     serialize_context_action_observation,
 )
 from story_writing_agents.agent_context.manifest import (
@@ -120,16 +123,62 @@ def _receipt(
     provenance, boundary = _source_facts(kind)
     body = content.encode("utf-8")
     return ContextEvidenceReceipt(
-        ContextSourceHandle(handle),
-        f"source_{kind.value}",
-        kind,
-        _REVISION,
-        provenance,
-        _digest(body),
-        len(body),
-        ContextSourceBoundary.whole() if whole else boundary,
-        _digest(body),
-        len(body),
+        evidence_id="read_2_1",
+        handle=ContextSourceHandle(handle),
+        source_id=f"source_{kind.value}",
+        source_kind=kind,
+        revision=_REVISION,
+        provenance=provenance,
+        source_digest=_digest(body),
+        source_utf8_bytes=len(body),
+        boundary=ContextSourceBoundary.whole() if whole else boundary,
+        boundary_digest=_digest(body),
+        boundary_utf8_bytes=len(body),
+        originating_search_action_index=1,
+        completing_read_action_index=2,
+    )
+
+
+def _status(
+    ordinal: int = 1,
+    *,
+    status: ContextSourceStatusKind = ContextSourceStatusKind.PRESENT,
+) -> ContextSourceStatusReceipt:
+    empty = status is not ContextSourceStatusKind.PRESENT
+    return ContextSourceStatusReceipt(
+        evidence_id=f"status_{ordinal}",
+        source_id=f"core_{ordinal}",
+        locator=(
+            "core_documents/global_outline.md"
+            if ordinal == 1
+            else "core_documents/character_sheets.md"
+        ),
+        status=status,
+        ordinal=ordinal,
+        manifest_digest=_DIGEST,
+        revision=None if status is ContextSourceStatusKind.ABSENT else _REVISION,
+        source_digest=(
+            None
+            if status is ContextSourceStatusKind.ABSENT
+            else _digest(b"")
+            if status is ContextSourceStatusKind.EMPTY
+            else _digest(b"present")
+        ),
+        source_utf8_bytes=0 if empty else len(b"present"),
+    )
+
+
+def _zero_hit(index: int = 1) -> ContextZeroHitSearchReceipt:
+    return ContextZeroHitSearchReceipt(
+        evidence_id=f"search_{index}",
+        correlation=_correlation(index),
+        manifest_digest=_DIGEST,
+        authorized_source_ids=("source_writing_artifact",),
+        authorized_source_kinds=(ContextSourceKind.WRITING_ARTIFACT,),
+        authorized_source_fingerprint=_REVISION,
+        artifact_path_prefix=None,
+        query_digest=_digest(b"query"),
+        query_count=1,
     )
 
 
@@ -172,7 +221,10 @@ def _receipt_value(receipt: ContextEvidenceReceipt) -> dict[str, object]:
         },
         "boundary_digest": receipt.boundary_digest,
         "boundary_utf8_bytes": receipt.boundary_utf8_bytes,
+        "completing_read_action_index": receipt.completing_read_action_index,
+        "evidence_id": receipt.evidence_id,
         "handle": receipt.handle.value,
+        "originating_search_action_index": receipt.originating_search_action_index,
         "provenance": {
             "authority_kind": receipt.provenance.authority_kind.value,
             "locator": receipt.provenance.locator,
@@ -241,6 +293,9 @@ class ActionSurfaceAndPolicyTests(unittest.TestCase):
                 "ContextSourceBoundaryKind",
                 "ContextSourceEvidence",
                 "ContextSourceHandle",
+                "ContextSourceStatusKind",
+                "ContextSourceStatusReceipt",
+                "ContextZeroHitSearchReceipt",
                 "serialize_context_action_observation",
             ),
         )
@@ -251,6 +306,10 @@ class ActionSurfaceAndPolicyTests(unittest.TestCase):
         self.assertEqual(
             tuple(item.value for item in ContextSourceBoundaryKind),
             ("whole", "artifact_lines", "records"),
+        )
+        self.assertEqual(
+            tuple(item.value for item in ContextSourceStatusKind),
+            ("present", "empty", "absent"),
         )
         self.assertEqual(
             tuple(item.value for item in ContextActionErrorCode),
@@ -272,8 +331,8 @@ class ActionSurfaceAndPolicyTests(unittest.TestCase):
             ("correlation", "answer", "used_handles"),
         )
         self.assertIn("answer", inspect.signature(ContextAnswerAction).parameters)
-        self.assertEqual(len(fields(ContextEvidenceReceipt)), 10)
-        self.assertEqual(len(fields(ContextAnswerAuthorization)), 9)
+        self.assertEqual(len(fields(ContextEvidenceReceipt)), 13)
+        self.assertEqual(len(fields(ContextAnswerAuthorization)), 11)
 
     def test_default_policy_is_exact_and_each_independent_cap_rejects_n_plus_one(
         self,
@@ -534,6 +593,44 @@ class ActionValueTests(unittest.TestCase):
                 with self.assertRaises(ContextActionError):
                     ContextAnswerAction(_correlation(), invalid)
 
+    def test_status_and_complete_zero_hit_receipts_are_exact_and_correlated(
+        self,
+    ) -> None:
+        statuses = (
+            _status(),
+            _status(2, status=ContextSourceStatusKind.EMPTY),
+            replace(
+                _status(2, status=ContextSourceStatusKind.ABSENT),
+                evidence_id="status_3",
+                ordinal=3,
+                locator="core_documents/setting_and_glossary.md",
+                source_id="core_3",
+            ),
+        )
+        self.assertEqual(
+            tuple(item.status for item in statuses),
+            (
+                ContextSourceStatusKind.PRESENT,
+                ContextSourceStatusKind.EMPTY,
+                ContextSourceStatusKind.ABSENT,
+            ),
+        )
+        zero_hit = _zero_hit()
+        observation = ContextSearchObservation(_correlation(), (), False, zero_hit)
+        self.assertIs(observation.zero_hit_receipt, zero_hit)
+        for invalid in (
+            lambda: ContextSearchObservation(_correlation(), (), False),
+            lambda: ContextSearchObservation(
+                _correlation(), (_hit(),), False, zero_hit
+            ),
+            lambda: replace(zero_hit, evidence_id="search_2"),
+            lambda: replace(zero_hit, correlation=_correlation(2)),
+            lambda: replace(statuses[1], source_utf8_bytes=1),
+            lambda: replace(statuses[2], revision=_REVISION),
+        ):
+            with self.assertRaises(ContextActionError):
+                invalid()
+
 
 class ActionSerializationAndAuthorizationTests(unittest.TestCase):
     """Verify canonical trust framing and content-free terminal authorization."""
@@ -597,6 +694,8 @@ class ActionSerializationAndAuthorizationTests(unittest.TestCase):
             completed,
             _completed_digest(completed),
             completed,
+            (_status(),),
+            (_zero_hit(),),
             "reference-operation",
             references,
         )
@@ -617,6 +716,8 @@ class ActionSerializationAndAuthorizationTests(unittest.TestCase):
                 )
             },
             {"mandatory_references": references[::-1]},
+            {"core_statuses": (_status(2),)},
+            {"zero_hit_searches": (_zero_hit(), _zero_hit())},
             {"reference_operation_id": None},
         ):
             with self.subTest(override=tuple(override)):

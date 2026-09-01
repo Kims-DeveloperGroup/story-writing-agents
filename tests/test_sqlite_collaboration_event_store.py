@@ -502,6 +502,12 @@ class SQLiteCollaborationEventStoreFirstSliceTests(unittest.TestCase):
                 before = self.database_state(workspace)
                 source = batches[name]
                 partial_events = source.events[selected]
+                if name == "proposal":
+                    partial_events = tuple(
+                        event
+                        for event in source.events
+                        if event.event_id == "proposal_event"
+                    )
                 if name == "running":
                     partial_events = tuple(
                         event
@@ -648,7 +654,11 @@ class SQLiteCollaborationEventStoreFirstSliceTests(unittest.TestCase):
                 workspace, metadata, store = self.fresh_store()
                 batches = contract_batches(metadata.conversation_id)
                 if corruption == "invalid_transition":
-                    draft = batches["proposal"].events[0]
+                    draft = next(
+                        event
+                        for event in batches["proposal"].events
+                        if event.event_id == "proposal_event"
+                    )
                     invalid_batch = CollaborationEventBatch(
                         batch_id="stored_invalid_transition",
                         expected_last_sequence=0,
@@ -702,7 +712,7 @@ class SQLiteCollaborationEventStoreFirstSliceTests(unittest.TestCase):
                             )
                         elif corruption == "gapped_sequence":
                             connection.execute(
-                                "UPDATE collaboration_events SET sequence = 3 "
+                                "UPDATE collaboration_events SET sequence = 6 "
                                 "WHERE sequence = 2"
                             )
                         elif corruption == "ordinal_drift":
@@ -922,7 +932,14 @@ class SQLiteCollaborationEventStoreFirstSliceTests(unittest.TestCase):
                 with self.subTest(runner=runner.__name__, identical=identical):
                     outcomes, workspace = runner(identical=identical)
                     rows = self.collaboration_rows(workspace)
-                    self.assertEqual(len(rows), 2)
+                    self.assertEqual(
+                        len(rows),
+                        len(
+                            contract_batches(self.metadata.conversation_id)[
+                                "proposal"
+                            ].events
+                        ),
+                    )
                     self.assertEqual(len({row[8] for row in rows}), 1)
                     if identical:
                         receipts = [

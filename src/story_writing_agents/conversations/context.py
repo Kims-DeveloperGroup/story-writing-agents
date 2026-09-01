@@ -27,6 +27,9 @@ from .events import (
     CollaborationEventKind as CollaborationEventKindV2,
     CollaborationExecutionOutcomeKind,
     CollaborationExecutionResult,
+    CollaborationLeadEvidence,
+    CollaborationLeadJudgmentPayload,
+    CollaborationLeadOutcomeFailurePayload,
     CollaborationInputKind,
     CollaborationInterruptionPayload,
     CollaborationInvocationKind,
@@ -391,6 +394,7 @@ class CollaborationNextAction(StrEnum):
     INSPECT_AND_RESOLVE_OUTCOME = "inspect_and_resolve_outcome"
     REPAIR_AUTHORITATIVE_HISTORY = "repair_authoritative_history"
     REPLY_TO_LEAD = "reply_to_lead"
+    RETRY_LEAD_TURN = "retry_lead_turn"
 
 
 @dataclass(frozen=True, slots=True)
@@ -495,6 +499,7 @@ class LeadTurnResult:
     state: CollaborationStepState | None
     confirmation_request_id: str | None
     next_action: CollaborationNextAction
+    evidence: CollaborationLeadEvidence | None = None
 
     def __post_init__(self) -> None:
         for value, label in (
@@ -577,7 +582,48 @@ class LeadTurnResult:
             )
         if type(self.next_action) is not CollaborationNextAction:
             raise TypeError("lead result next action must be CollaborationNextAction")
-        if self.kind is LeadOutcomeKind.QUESTION:
+        if self.evidence is not None and type(self.evidence) is not (
+            CollaborationLeadEvidence
+        ):
+            raise TypeError("lead result evidence must be CollaborationLeadEvidence")
+        provider_judgment = (
+            self.proposal is not None
+            and self.proposal.step_kind
+            is CollaborationStepKind.LEAD_SPECIALIST_CONSULTATION
+        ) or (
+            self.proposal is None
+            and self.next_action
+            in {
+                CollaborationNextAction.REPLY_TO_LEAD,
+                CollaborationNextAction.CONTINUE_WITH_LEAD,
+            }
+            and self.state
+            in {
+                None,
+                CollaborationStepState.SUPERSEDED,
+            }
+        )
+        if provider_judgment and self.evidence is None:
+            raise ValueError("provider lead result requires exact evidence")
+        if (
+            self.proposal is not None
+            and self.proposal.step_kind
+            is CollaborationStepKind.LEAD_SPECIALIST_CONSULTATION
+            and self.evidence != self.proposal.basis.evidence
+        ):
+            raise ValueError("lead result evidence must match its proposal")
+        if self.next_action is CollaborationNextAction.RETRY_LEAD_TURN:
+            if (
+                self.kind is not LeadOutcomeKind.RECOMMENDATION
+                or self.state is not None
+                or self.proposal is not None
+                or self.confirmation_request_id is not None
+                or self.evidence is not None
+            ):
+                raise ValueError(
+                    "retry lead result must be a content-free failure notice"
+                )
+        elif self.kind is LeadOutcomeKind.QUESTION:
             if self.next_action is not CollaborationNextAction.REPLY_TO_LEAD:
                 raise ValueError("question result must expose reply-to-lead")
         elif self.state is CollaborationStepState.RECONFIRMATION_REQUIRED:
@@ -751,6 +797,11 @@ class CollaborationReadableFieldKey(StrEnum):
     """Closed searchable fields derived from one public collaboration payload."""
 
     MESSAGE_CONTENT = "message.content"
+    LEAD_JUDGMENT_KIND = "lead_judgment.kind"
+    LEAD_JUDGMENT_MESSAGE = "lead_judgment.message"
+    LEAD_EVIDENCE_SCOPE = "lead_evidence.scope"
+    LEAD_EVIDENCE_STATUS = "lead_evidence.status"
+    LEAD_OUTCOME_FAILURE = "lead_outcome.failure"
     SPECIALIST_REPLY_CONTENT = "specialist_reply.content"
     SPECIALIST_REPLY_ASSESSMENT = "specialist_reply.assessment"
     LEAD_SYNTHESIS_MESSAGE = "lead_synthesis.message"
@@ -1487,6 +1538,7 @@ def _project_validated_collaboration_history(
     provider_call_events: list[
         tuple[CollaborationEventV2, CollaborationProviderCallPayload]
     ] = []
+    completed_lead_invocations: set[str] = set()
     blocked_lineages: set[str] = set()
     event_by_id: dict[str, CollaborationEventV2] = {}
     current_step_id: str | None = None
@@ -1513,6 +1565,12 @@ def _project_validated_collaboration_history(
             tuple[CollaborationEventV2, CollaborationExecutionResult]
         ] = []
         batch_interruptions: list[CollaborationEventV2] = []
+        batch_judgments: list[
+            tuple[CollaborationEventV2, CollaborationLeadJudgmentPayload]
+        ] = []
+        batch_lead_failures: list[
+            tuple[CollaborationEventV2, CollaborationLeadOutcomeFailurePayload]
+        ] = []
 
         for event in batch:
             event_by_id[event.event_id] = event
@@ -1559,9 +1617,44 @@ def _project_validated_collaboration_history(
             if type(payload) is CollaborationMessagePayload:
                 continue
 
+            if type(payload) is CollaborationLeadJudgmentPayload:
+                matching_calls = tuple(
+                    (call_event, call)
+                    for call_event, call in provider_call_events
+                    if call_event.step_id == event.step_id
+                    and call_event.turn_id == event.turn_id
+                    and call.invocation_kind is CollaborationInvocationKind.LEAD
+                    and call.state is CollaborationProviderCallState.SUBMITTED
+                )
+                if not matching_calls:
+                    raise ValueError(
+                        "lead judgment requires a submitted same-turn provider call"
+                    )
+                _call_event, matching_call = matching_calls[-1]
+                invocation_id = matching_call.invocation_id
+                if invocation_id in completed_lead_invocations:
+                    raise ValueError("lead invocation may close only once")
+                expected_operation_id = f"lead_{event.turn_id}"
+                expected_result_correlation_id = f"outcome_{event.turn_id}"
+                if any(
+                    receipt.operation_id != expected_operation_id
+                    or receipt.result_correlation_id != expected_result_correlation_id
+                    for receipt in payload.evidence.receipts
+                ):
+                    raise ValueError(
+                        "lead judgment evidence does not match its durable turn"
+                    )
+                completed_lead_invocations.add(invocation_id)
+                batch_judgments.append((event, payload))
+                continue
+
             if type(payload) is CollaborationProviderCallPayload:
                 if event.step_id in blocked_lineages:
                     raise ValueError("provider calls cannot continue a blocked lineage")
+                if payload.invocation_id in completed_lead_invocations:
+                    raise ValueError(
+                        "provider calls cannot continue a closed lead invocation"
+                    )
                 prepared = prepared_calls.get(payload.call_id)
                 if payload.state is CollaborationProviderCallState.PREPARED:
                     if prepared is not None or payload.call_id in submitted_call_ids:
@@ -1616,6 +1709,39 @@ def _project_validated_collaboration_history(
                             "provider call lineage exceeds the physical-call limit"
                         )
                 provider_call_events.append((event, payload))
+                continue
+
+            if type(payload) is CollaborationLeadOutcomeFailurePayload:
+                matches = tuple(
+                    call
+                    for call_event, call in provider_call_events
+                    if call_event.step_id == event.step_id
+                    and call_event.turn_id == event.turn_id
+                    and call.invocation_id == payload.invocation_id
+                    and call.call_id == payload.call_id
+                    and call.invocation_kind is CollaborationInvocationKind.LEAD
+                    and call.state is CollaborationProviderCallState.SUBMITTED
+                )
+                invocation_calls = tuple(
+                    call
+                    for call_event, call in provider_call_events
+                    if call_event.step_id == event.step_id
+                    and call_event.turn_id == event.turn_id
+                    and call.invocation_id == payload.invocation_id
+                    and call.invocation_kind is CollaborationInvocationKind.LEAD
+                    and call.state is CollaborationProviderCallState.SUBMITTED
+                )
+                if (
+                    len(matches) != 1
+                    or not invocation_calls
+                    or invocation_calls[-1].call_id != payload.call_id
+                    or payload.invocation_id in completed_lead_invocations
+                ):
+                    raise ValueError(
+                        "lead outcome failure does not close the exact submitted call"
+                    )
+                completed_lead_invocations.add(payload.invocation_id)
+                batch_lead_failures.append((event, payload))
                 continue
 
             if proposal is None:
@@ -1797,6 +1923,8 @@ def _project_validated_collaboration_history(
                     raise ValueError("lead synthesis requires the active running state")
                 if payload.execution_attempt_id != attempts.get(event.step_id):
                     raise ValueError("lead synthesis attempt does not match running")
+                if payload.evidence != proposal.basis.evidence:
+                    raise ValueError("lead synthesis evidence drifts from its proposal")
                 expected_reply_ids = tuple(
                     replies[assignment.assignment_id].event_id
                     for assignment in proposal.assignments
@@ -1988,6 +2116,40 @@ def _project_validated_collaboration_history(
             interruptions=batch_interruptions,
             active_proposals=proposals,
         )
+        if batch_lead_failures and (
+            len(batch_lead_failures) != 1
+            or batch_judgments
+            or batch_proposals
+            or any(
+                type(event.payload) is CollaborationMessagePayload
+                and event.sender.kind.value == "lead"
+                for event in batch
+            )
+        ):
+            raise ValueError(
+                "lead outcome failure cannot coexist with a successful outcome"
+            )
+        lead_proposals = tuple(
+            item
+            for item in batch_proposals
+            if item.step_kind is CollaborationStepKind.LEAD_SPECIALIST_CONSULTATION
+            and item.budget.rounds_spent == 0
+        )
+        if lead_proposals:
+            if (
+                len(lead_proposals) != 1
+                or len(batch_judgments) != 1
+                or batch_judgments[0][1].kind is not LeadOutcomeKind.PROPOSAL
+                or lead_proposals[0].basis.evidence != batch_judgments[0][1].evidence
+            ):
+                raise ValueError(
+                    "lead proposal must co-batch its exact evidence judgment"
+                )
+        elif any(
+            payload.kind is LeadOutcomeKind.PROPOSAL
+            for _event, payload in batch_judgments
+        ):
+            raise ValueError("proposal judgment requires one co-batched proposal")
         offset += size
 
     assert current_step_id is not None
@@ -2403,6 +2565,25 @@ def _collaboration_readable_fields(
                 text=payload.content,
             ),
         )
+    if type(payload) is CollaborationLeadJudgmentPayload:
+        return (
+            CollaborationReadableField(
+                key=CollaborationReadableFieldKey.LEAD_JUDGMENT_KIND,
+                text=payload.kind.value,
+            ),
+            CollaborationReadableField(
+                key=CollaborationReadableFieldKey.LEAD_JUDGMENT_MESSAGE,
+                text=payload.message,
+            ),
+            CollaborationReadableField(
+                key=CollaborationReadableFieldKey.LEAD_EVIDENCE_SCOPE,
+                text=payload.evidence.scope.value,
+            ),
+            CollaborationReadableField(
+                key=CollaborationReadableFieldKey.LEAD_EVIDENCE_STATUS,
+                text=payload.evidence.status.value,
+            ),
+        )
     if type(payload) is CollaborationProposal:
         fields = [
             CollaborationReadableField(
@@ -2501,6 +2682,14 @@ def _collaboration_readable_fields(
                 key=CollaborationReadableFieldKey.LEAD_SYNTHESIS_MESSAGE,
                 text=payload.message,
             ),
+            CollaborationReadableField(
+                key=CollaborationReadableFieldKey.LEAD_EVIDENCE_SCOPE,
+                text=payload.evidence.scope.value,
+            ),
+            CollaborationReadableField(
+                key=CollaborationReadableFieldKey.LEAD_EVIDENCE_STATUS,
+                text=payload.evidence.status.value,
+            ),
         )
     if type(payload) is CollaborationStepStatePayload:
         return (
@@ -2581,6 +2770,13 @@ def _collaboration_readable_fields(
         )
     if type(payload) is CollaborationProviderCallPayload:
         return ()
+    if type(payload) is CollaborationLeadOutcomeFailurePayload:
+        return (
+            CollaborationReadableField(
+                key=CollaborationReadableFieldKey.LEAD_OUTCOME_FAILURE,
+                text=payload.code.value,
+            ),
+        )
     raise TypeError("unsupported collaboration payload")
 
 

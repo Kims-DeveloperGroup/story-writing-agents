@@ -183,6 +183,32 @@ handles. READ recaptures requested sources, verifies revision/boundary/digest,
 and returns requested order. Handles are invocation-bound, single-lifecycle
 authorities and cannot be guessed, reused, or transferred.
 
+### Invocation-local lead evidence
+
+A lead-front-channel request opts into a content-free status inventory of the
+four canonical core paths. Each row is exactly `present`, `empty`, or `absent`
+and receives a deterministic `status_<ordinal>` evidence ID plus the current
+manifest and, when present, revision/digest/size facts. This inventory does not
+send a file body. With no explicit reference and no provider SEARCH/READ, a
+workflow/meta result therefore has no story receipt.
+
+SEARCH and READ add evidence through the same invocation lifecycle:
+
+- a complete, non-truncated zero-hit SEARCH receives `search_<action-index>`
+  plus query digest/count, authorized source kinds/IDs, optional artifact
+  prefix, and a deterministic authorized-source fingerprint;
+- a completed READ receives `read_<action-index>_<ordinal>` plus exact source,
+  boundary, revision, digest, and size facts; and
+- final ANSWER authorization includes only READ receipts whose handles the
+  provider names as used, while retaining all completed reads for lifecycle
+  validation.
+
+The evidence IDs and receipts are content-free and invocation-local. Runtime
+maps only a provider-selected canonical ordered subset into durable lead
+evidence, then applies the domain's closed status/kind matrix. The context
+component does not interpret story semantics. Search queries and source bodies
+are absent from durable collaboration evidence.
+
 <a id="compact-provider-wire-v5"></a>
 ## Compact provider wire v5
 
@@ -200,6 +226,14 @@ queries, handles, or answer content; and terminal `u` names used READ handles.
 SEARCH/READ observations retain the full authoritative identity, revision,
 boundary, digest, size, provenance, handle, and untrusted content required for
 provider reasoning, even though wire keys are compact.
+
+For a lead initial call, `core_statuses` is an additional top-level list beside
+`c`, `q`, and `i`. The final lead answer body contains exact `scope`,
+`evidence_status`, `evidence_ids`, `kind`, `message`, and `proposal` fields.
+Those semantic fields are decoded by orchestration only after context ANSWER
+authorization. Invalid, invented, reordered, stale, or matrix-incompatible
+evidence causes a typed no-replay lead failure rather than a successful
+judgment.
 
 The built-in runtime uses provider-managed context and empty mutable-core
 bindings. Package-internal `story_session_context` remains an internal capture

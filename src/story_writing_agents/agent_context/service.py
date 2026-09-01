@@ -44,6 +44,8 @@ from .actions import (
     ContextSourceBoundaryKind,
     ContextSourceEvidence,
     ContextSourceHandle,
+    ContextSourceStatusReceipt,
+    ContextZeroHitSearchReceipt,
     serialize_context_action_observation,
 )
 from .manifest import (
@@ -497,6 +499,43 @@ def _manifest_fingerprint(manifest: ContextManifest) -> str:
     return f"sha256:{hashlib.sha256(body).hexdigest()}"
 
 
+def _authorized_source_fingerprint(
+    entries: tuple[ContextManifestEntry, ...],
+) -> str:
+    """Bind stable source identity and non-self-appending revision facts."""
+
+    body = _canonical_bytes(
+        [
+            "context-zero-hit-authorized-sources-v1",
+            [
+                [
+                    entry.source_id,
+                    entry.source_kind.value,
+                    (
+                        None
+                        if entry.source_kind is ContextSourceKind.CONVERSATION
+                        else entry.revision
+                    ),
+                    (
+                        None
+                        if entry.source_kind is ContextSourceKind.CONVERSATION
+                        else entry.content_digest
+                    ),
+                    entry.provenance.authority_kind.value,
+                    entry.provenance.locator,
+                    (
+                        None
+                        if entry.source_kind is ContextSourceKind.CONVERSATION
+                        else entry.utf8_bytes
+                    ),
+                ]
+                for entry in entries
+            ],
+        ]
+    )
+    return f"sha256:{hashlib.sha256(body).hexdigest()}"
+
+
 def _digest(body: bytes) -> str:
     return f"sha256:{hashlib.sha256(body).hexdigest()}"
 
@@ -527,6 +566,7 @@ def _execution_policy_fingerprint(
 
 def _evidence_value(receipt: ContextEvidenceReceipt) -> tuple[object, ...]:
     return (
+        receipt.evidence_id,
         receipt.handle.value,
         receipt.source_id,
         receipt.source_kind.value,
@@ -538,6 +578,36 @@ def _evidence_value(receipt: ContextEvidenceReceipt) -> tuple[object, ...]:
         _boundary_value(receipt.boundary),
         receipt.boundary_digest,
         receipt.boundary_utf8_bytes,
+        receipt.originating_search_action_index,
+        receipt.completing_read_action_index,
+    )
+
+
+def _status_value(receipt: ContextSourceStatusReceipt) -> tuple[object, ...]:
+    return (
+        receipt.evidence_id,
+        receipt.source_id,
+        receipt.locator,
+        receipt.status.value,
+        receipt.ordinal,
+        receipt.manifest_digest,
+        receipt.revision,
+        receipt.source_digest,
+        receipt.source_utf8_bytes,
+    )
+
+
+def _zero_hit_value(receipt: ContextZeroHitSearchReceipt) -> tuple[object, ...]:
+    return (
+        receipt.evidence_id,
+        receipt.correlation.action_index,
+        receipt.manifest_digest,
+        receipt.authorized_source_ids,
+        tuple(item.value for item in receipt.authorized_source_kinds),
+        receipt.authorized_source_fingerprint,
+        receipt.artifact_path_prefix,
+        receipt.query_digest,
+        receipt.query_count,
     )
 
 
@@ -558,7 +628,12 @@ def _completed_evidence_digest(
                 },
                 "boundary_digest": receipt.boundary_digest,
                 "boundary_utf8_bytes": receipt.boundary_utf8_bytes,
+                "completing_read_action_index": (receipt.completing_read_action_index),
+                "evidence_id": receipt.evidence_id,
                 "handle": receipt.handle.value,
+                "originating_search_action_index": (
+                    receipt.originating_search_action_index
+                ),
                 "provenance": {
                     "authority_kind": receipt.provenance.authority_kind.value,
                     "locator": receipt.provenance.locator,
@@ -910,6 +985,7 @@ class ContextInvocationRequest:
     invocation_kind: ContextInvocationKind | None = None
     result_contract: ContextJsonObjectResultContract | None = None
     physical_call_limit: int | None = None
+    include_core_statuses: bool = False
 
     def __post_init__(self) -> None:
         _safe_identity(self.session_id)
@@ -985,6 +1061,8 @@ class ContextInvocationRequest:
             or self.physical_call_limit < 1
             or self.physical_call_limit > CONTEXT_ACTION_POLICY.max_provider_calls
         ):
+            raise _execution_error(ContextExecutionErrorCode.INVALID_VALUE)
+        if type(self.include_core_statuses) is not bool:
             raise _execution_error(ContextExecutionErrorCode.INVALID_VALUE)
 
 
@@ -1414,6 +1492,7 @@ class ContextInvocationSession:
             _SEARCH_SOURCE_KIND_ORDER
         ),
         physical_call_limit: int | None = None,
+        core_statuses: tuple[ContextSourceStatusReceipt, ...] = (),
     ) -> None:
         if (
             type(binding) is not ContextInvocationBinding
@@ -1441,6 +1520,10 @@ class ContextInvocationSession:
                     or physical_call_limit < 1
                     or physical_call_limit > action_policy.max_provider_calls
                 )
+            )
+            or type(core_statuses) is not tuple
+            or any(
+                type(item) is not ContextSourceStatusReceipt for item in core_statuses
             )
         ):
             raise _action_error(ContextActionErrorCode.INVALID_VALUE)
@@ -1485,6 +1568,11 @@ class ContextInvocationSession:
             raise _action_error(ContextActionErrorCode.INVALID_VALUE)
         self._secret: bytearray | None = bytearray(secret)
         self._manifest_fingerprint = _manifest_fingerprint(binding.manifest)
+        if any(
+            item.manifest_digest != self._manifest_fingerprint for item in core_statuses
+        ):
+            raise _action_error(ContextActionErrorCode.INVALID_VALUE)
+        self._core_statuses = core_statuses
         self._lock = threading.RLock()
         self._state = ContextInvocationState.OPEN
         self._next_action_index = 1
@@ -1503,6 +1591,7 @@ class ContextInvocationSession:
         self._full_handle_by_wire: dict[str, str] = {}
         self._safe_locator_by_full: dict[str, str] = {}
         self._completed_receipts: list[ContextReadReceipt] = []
+        self._zero_hit_receipts: list[ContextZeroHitSearchReceipt] = []
         self._pending_receipt: ContextReadReceipt | None = None
 
     @property
@@ -1661,6 +1750,12 @@ class ContextInvocationSession:
         if alias is None:
             raise _action_error(ContextActionErrorCode.HANDLE_INVALID)
         return alias
+
+    @property
+    def core_statuses(self) -> tuple[ContextSourceStatusReceipt, ...]:
+        """Return the invocation-bound content-free canonical core statuses."""
+
+        return self._core_statuses
 
     def wire_handle_alias(self, handle: ContextSourceHandle) -> str:
         """Return an already-emitted compact alias for one full handle."""
@@ -1956,10 +2051,62 @@ class ContextInvocationSession:
                     - self._observation_utf8_bytes
                 )
                 while True:
+                    search_manifest = self._search_manifest(
+                        action.queries[0].artifact_path_prefix
+                    )
+                    requested_kinds = tuple(
+                        kind
+                        for kind in _SEARCH_SOURCE_KIND_ORDER
+                        if any(kind in query.source_kinds for query in action.queries)
+                    )
+                    authorized_entries = tuple(
+                        entry
+                        for entry in search_manifest.entries
+                        if entry.searchable and entry.source_kind in requested_kinds
+                    )
+                    zero_hit_receipt = (
+                        ContextZeroHitSearchReceipt(
+                            evidence_id=(f"search_{action.correlation.action_index}"),
+                            correlation=action.correlation,
+                            manifest_digest=self._manifest_fingerprint,
+                            authorized_source_ids=tuple(
+                                entry.source_id for entry in authorized_entries
+                            ),
+                            authorized_source_kinds=requested_kinds,
+                            authorized_source_fingerprint=(
+                                _authorized_source_fingerprint(authorized_entries)
+                            ),
+                            artifact_path_prefix=(
+                                action.queries[0].artifact_path_prefix
+                            ),
+                            query_digest=_digest(
+                                _canonical_bytes(
+                                    [
+                                        "context-zero-hit-query-v1",
+                                        [
+                                            [
+                                                query.normalized_text,
+                                                [
+                                                    kind.value
+                                                    for kind in query.source_kinds
+                                                ],
+                                                query.artifact_path_prefix,
+                                            ]
+                                            for query in action.queries
+                                        ],
+                                    ]
+                                )
+                            ),
+                            query_count=len(action.queries),
+                        )
+                        if not hits and not truncated
+                        else None
+                    )
                     observation = ContextSearchObservation(
                         action.correlation,
                         tuple(hits),
                         truncated,
+                        zero_hit_receipt,
                     )
                     framed_bytes = len(
                         serialize_context_action_observation(
@@ -1997,6 +2144,8 @@ class ContextInvocationSession:
                 self._hits += len(hits)
                 self._scan_utf8_bytes += scanned
                 self._observation_utf8_bytes += framed_bytes
+                if observation.zero_hit_receipt is not None:
+                    self._zero_hit_receipts.append(observation.zero_hit_receipt)
                 self._next_action_index += 1
                 self._state = ContextInvocationState.OPEN
                 return observation
@@ -2092,7 +2241,7 @@ class ContextInvocationSession:
                 source_additions: dict[str, int] = {}
                 evidence: list[ContextSourceEvidence] = []
                 batch_bytes = 0
-                for handle_binding in bindings:
+                for evidence_ordinal, handle_binding in enumerate(bindings, start=1):
                     entry = handle_binding.entry
                     snapshot = snapshots[entry.source_id]
                     excerpt = self._boundary_content(
@@ -2118,6 +2267,9 @@ class ContextInvocationSession:
                     ):
                         raise _action_error(ContextActionErrorCode.READ_LIMIT_EXCEEDED)
                     receipt = ContextEvidenceReceipt(
+                        evidence_id=(
+                            f"read_{action.correlation.action_index}_{evidence_ordinal}"
+                        ),
                         handle=handle_binding.handle,
                         source_id=entry.source_id,
                         source_kind=entry.source_kind,
@@ -2130,6 +2282,10 @@ class ContextInvocationSession:
                             f"sha256:{hashlib.sha256(excerpt).hexdigest()}"
                         ),
                         boundary_utf8_bytes=len(excerpt),
+                        originating_search_action_index=(
+                            handle_binding.origin_action_index
+                        ),
+                        completing_read_action_index=(action.correlation.action_index),
                     )
                     evidence.append(
                         ContextSourceEvidence(
@@ -2274,6 +2430,8 @@ class ContextInvocationSession:
                         completed_read_digest,
                         [_evidence_value(item) for item in completed_evidence],
                         [handle.value for handle in action.used_handles],
+                        [_status_value(item) for item in self._core_statuses],
+                        [_zero_hit_value(item) for item in self._zero_hit_receipts],
                         self.binding.reference_operation_id,
                         [
                             _reference_value(reference)
@@ -2299,6 +2457,8 @@ class ContextInvocationSession:
                     used_evidence=tuple(
                         completed[handle.value] for handle in action.used_handles
                     ),
+                    core_statuses=self._core_statuses,
+                    zero_hit_searches=tuple(self._zero_hit_receipts),
                     reference_operation_id=self.binding.reference_operation_id,
                     mandatory_references=self.binding.mandatory_references,
                 )
@@ -3168,6 +3328,20 @@ def _initial_payload(
         "q": _action_query(phase_contract, session, allowed_actions),
         "i": current,
     }
+    if session.core_statuses:
+        payload["core_statuses"] = [
+            {
+                "evidence_id": item.evidence_id,
+                "locator": item.locator,
+                "manifest_digest": item.manifest_digest,
+                "revision": item.revision,
+                "source_digest": item.source_digest,
+                "source_id": item.source_id,
+                "status": item.status.value,
+                "utf8_bytes": item.source_utf8_bytes,
+            }
+            for item in session.core_statuses
+        ]
     if candidate is not None:
         payload["n"] = (
             _wire_candidate_value(
@@ -3744,6 +3918,15 @@ class AgentContextService:
                 active_debate,
                 own_agent_state,
             )
+            manifest_digest = _manifest_fingerprint(manifest)
+            core_statuses = (
+                registry.canonical_core_statuses(
+                    manifest_digest,
+                    self._source_policy,
+                )
+                if request.include_core_statuses
+                else ()
+            )
             stage = "preflight"
             active_thread_id = provider.inspect_context_thread(
                 scope,
@@ -3896,6 +4079,7 @@ class AgentContextService:
                 physical_call_limit=(
                     physical_call_limit - int(bool(request.mandatory_references))
                 ),
+                core_statuses=core_statuses,
             )
 
             current_thread_id = active_thread_id
@@ -4344,6 +4528,14 @@ class AgentContextService:
                 stage = "answer"
                 authorization = action_session.authorize_answer(action)
                 stage = "source_revalidation"
+                if request.include_core_statuses and (
+                    registry.canonical_core_statuses(
+                        manifest_digest,
+                        self._source_policy,
+                    )
+                    != core_statuses
+                ):
+                    raise ContextSourceError(ContextSourceErrorCode.SOURCE_DRIFT)
                 revalidated_manifest = self._manifest_from_descriptors(
                     request,
                     scope,
