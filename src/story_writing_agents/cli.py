@@ -139,11 +139,6 @@ def build_parser() -> argparse.ArgumentParser:
         help="idempotently initialize a local workspace",
     )
     initialize.add_argument("workspace", nargs="?", default=".")
-    initialize.add_argument(
-        "--overwrite-prompts",
-        action="store_true",
-        help="replace only the four canonical agent AGENTS.md files",
-    )
 
     directive = subcommands.add_parser(
         "directive",
@@ -250,7 +245,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
     smoke.add_argument(
         "--workspace",
-        help=("use an explicit workspace path and retain diagnostic artifacts"),
+        help="verify an existing workspace without modifying it",
     )
     return parser
 
@@ -1089,25 +1084,8 @@ def main(argv: Sequence[str] | None = None) -> int:
     session_id: str | None = None
     try:
         if arguments.command == "init":
-            workspace = initialize_workspace(
-                arguments.workspace,
-                overwrite_prompts=arguments.overwrite_prompts,
-            )
-            debug_log_hint_available = True
-            debug_log = _create_cli_debug_log(workspace)
-            _trace_cli(
-                debug_log,
-                DebugOperation.WORKSPACE_INITIALIZATION,
-                DebugPhase.SUCCEEDED,
-                outcome=DebugOutcome.READY,
-            )
-            _trace_cli(
-                debug_log,
-                DebugOperation.CLI_COMMAND,
-                DebugPhase.STARTED,
-            )
+            workspace = initialize_workspace(arguments.workspace)
             print(json.dumps({"workspace": str(workspace.root)}, indent=2))
-            _trace_cli_completion(debug_log)
             return 0
 
         if arguments.command == "smoke":
@@ -1116,9 +1094,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             if arguments.workspace is None:
                 report, exit_code = run_smoke()
             else:
-                workspace = initialize_workspace(arguments.workspace)
-                debug_log_hint_available = True
-                debug_log = _create_cli_debug_log(workspace)
+                workspace = resolve_workspace(arguments.workspace)
                 report, exit_code = run_smoke(workspace)
             print(
                 json.dumps(

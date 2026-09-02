@@ -147,8 +147,19 @@ zero matches until it has readable events. Use a known handle with
 
 ## Smoke exits with 1 or 2
 
-Code `1` includes `failed_check`; repeat with `story smoke --workspace
-./smoke-debug` to retain artifacts. Code `2` uses the normal error channel.
+Code `1` is a disposable-smoke invariant failure and includes `failed_check`.
+Code `2` uses the normal error channel for arguments, initialization, identity,
+discovery, or unexpected failure. `story smoke --workspace PATH` is read-only
+verification of an already clean v2 root; it does not initialize a debug root
+or retain smoke diagnostics. Capture stdout/stderr yourself and preserve the
+affected root unchanged.
+
+For `effective Git identity is unavailable or invalid`, configure a valid Git
+author and committer under normal host policy, then retry `story init PATH` in a
+fresh process. For an exact initialization journal, a fresh process validates
+and resumes it. For unsupported, arbitrary, dirty, drifted, or unsafe state,
+do not delete the journal, reset Git, or remove files to force success. Follow
+[workspace initialization recovery](../operations/recovery-and-limitations.md#workspace-initialization-recovery).
 
 ## Use the bounded runtime debug log
 
@@ -294,12 +305,17 @@ follow
 
 ## A prompt or draft file fails
 
-Run `story init WORKSPACE` to add missing role prompts without overwriting.
-Prompt and persona files must be readable, strict UTF-8, inside the workspace,
-and free of symlink components. Core documents are optional. Present safe
-current bytes enter the allowlisted prompt context even when manual or
-pre-provenance; this does not create publication authorship or repair catalog
-history. Finish concurrent edits before a new-ID retry.
+The role prompts and four zero-byte core documents are exact members of the v2
+initialization baseline. `story init` does not repair or overwrite a missing or
+changed prompt and has no prompt-overwrite option. A fresh readiness check
+preserves and rejects scaffold drift. Restore a trusted exact baseline or
+create a separate new workspace; later supported prompt/core changes belong in
+#449's session worktree rather than the original `main` root.
+
+Prompt and persona files must be readable strict UTF-8, inside the supported
+workspace, and free of symlink components. Present safe current bytes can enter
+later allowlisted context, but source use does not create publication authorship
+or repair catalog history. Finish concurrent edits before a new-ID retry.
 
 The retired noninteractive draft-file execution path is unavailable. Use
 canonical files only as direct repository inputs or future confirmed

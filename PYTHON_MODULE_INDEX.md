@@ -16,9 +16,9 @@ Source root: `src/`
 
 Package root: `src/story_writing_agents/`
 
-Importable production units indexed: 102.
+Importable production units indexed: 104.
 
-Direct internal dependency edges indexed: 370.
+Direct internal dependency edges indexed: 376.
 
 Directed internal dependency cycles indexed: 0.
 
@@ -55,7 +55,7 @@ __main__ -> cli -> conversation_rag_cli
                  |          -> workspace/models/errors/agents
                  |          -> provider_adapter/provider_error_artifacts/provider_process
                  |          -> session_lifecycle/writing_artifacts.read_actions
-                 -> cli_context -> workspace/errors/agents
+                 -> cli_context -> workspace/errors
 
 interactive_controller._core -> interactive_controller._session_policy
                              -> interactive_controller._conversation_policy
@@ -199,7 +199,10 @@ conversations.catalog -> errors
 conversations.context -> conversations.events/errors
 conversations.events -> agents/errors
 workspace -> conversation_storage.filesystem/workspace.core
-workspace.core -> agents/conversations/errors/models/writing_artifacts
+workspace.core -> agents/conversations/errors/models
+               -> workspace.initialization/workspace.schema/writing_artifacts
+workspace.initialization -> errors/git/workspace.schema
+workspace.schema -> agents/errors
 writing_artifacts -> writing_artifacts.authorization/catalog/change_sets/directives
                   -> writing_artifacts.read_actions/references/relationship_policy
 writing_artifacts.authorization -> writing_artifacts.catalog/references
@@ -1397,8 +1400,9 @@ every intermediate arrow. The current runtime graph is acyclic.
   for both console aliases. The grammar contains `chat`, `init`,
   `directive`, `inspect`, `session`, `storage`, `rag`, and `smoke`;
   the former `run` parser, flags, input resolver, dispatch, and result
-  presentation are absent. Backend-override parsing remains shared by retained
-  commands.
+  presentation are absent. `init` accepts only its workspace path: the former
+  prompt-overwrite option and forwarding behavior are absent. Backend-override
+  parsing remains shared by retained commands.
 - **Direct internal dependencies:** `agents`, `backend`, `cli_context`,
   `config`, `conversation_rag_cli`, `conversation_storage.contracts`,
   `conversation_storage.migration`, `conversation_storage.selection`,
@@ -1408,13 +1412,18 @@ every intermediate arrow. The current runtime graph is acyclic.
   `provider_catalog`, `session_lifecycle`, `smoke`, and `workspace`.
 - **State, resources, and side effects:** Argument parsing is resource-free;
   retained dispatch delegates state and resources to the selected owner.
+  Initialization emits the established absolute-workspace JSON only after the
+  workspace owner completes its schema-v2 Git baseline, and deliberately
+  creates no post-baseline debug-log event. Explicit smoke resolves one already
+  ready workspace before calling the read-only smoke path.
 - **Primary verification/documentation:** `tests/test_public_api_and_cli.py`
-  and command-specific CLI tests verify the retained grammar and dispatch.
+  and command-specific CLI tests verify the retained grammar and dispatch;
+  `docs/reference/cli.md` documents the supported command surface.
 
 ### `story_writing_agents.cli_context`
 
 - **Source:** `src/story_writing_agents/cli_context.py`
-- **Responsibility:** Discover initialized workspaces and manage workspace-local
+- **Responsibility:** Resolve validated workspaces and manage workspace-local
   session and conversation defaults.
 - **Supported surface:** Internal `CliContext`, `resolve_workspace`,
   `load_cli_context`, `save_default_session`, `resolve_session`,
@@ -1422,9 +1431,13 @@ every intermediate arrow. The current runtime graph is acyclic.
   `resolve_session` accepts only the explicit `option_session` source and then
   the saved default; lifecycle positional resolution belongs to the CLI
   lifecycle dispatcher rather than this generic helper.
-- **Direct internal dependencies:** `agents`, `errors`, and `workspace`.
-- **State, resources, and side effects:** Reads workspace sentinels and owns
-  exact V2 `agent_states/orchestrator_state/cli_context.json` with
+- **Direct internal dependencies:** `errors` and `workspace`.
+- **State, resources, and side effects:** Explicit resolution constructs one
+  strictly validated schema-v2 workspace; ancestor resolution delegates nearest
+  recognizable-boundary discovery and readiness to the workspace owner. It
+  never interprets loose configuration, prompt, or directory sentinels and
+  never skips an unsupported inner boundary. The module owns exact V2
+  `agent_states/orchestrator_state/cli_context.json` with
   `schema_version` and `default_session_id`, plus exact V2 per-session objects
   under
   `agent_states/orchestrator_state/conversation_defaults/<session_id>.json`
@@ -1433,10 +1446,9 @@ every intermediate arrow. The current runtime graph is acyclic.
   conversation-default file means no default and creates no storage. Old CLI
   context schemas and version-1 conversation-choice artifacts are rejected
   with `WorkspaceVersionUnsupportedError` without migration, deletion, or
-  rewriting; malformed V2 data raises `WorkspaceFormatError`. Workspace
-  discovery requires initialized configuration, agent prompts, and directory
-  sentinels but does not require agent-authored core artifacts to exist.
+  rewriting; malformed V2 data raises `WorkspaceFormatError`.
 - **Primary verification/documentation:** `tests/test_cli_context.py`,
+  `docs/guides/workspaces.md`,
   `docs/reference/cli.md`,
   `docs/reference/configuration/session-storage.md`, and
   `docs/design/session-lifecycle.md`.
@@ -2270,17 +2282,20 @@ every intermediate arrow. The current runtime graph is acyclic.
   `FilesystemCollaborationEventStore`, and
   `ReferenceCollaborationHistorySearch` under
   three explicit same-provenance `ConversationStorageComponentBinding` values.
-  The subclasses materialize operation-local `Workspace` instances from that
-  topology and retain their construction-pinned collaborators, so later caller
-  root mutation or inherited collaborator rebinding cannot redirect composed
-  I/O. The composed catalog's create/rename/archive/unarchive operations and
+  The topology captures an isolated copy of the caller's already-authorized
+  ready workspace lease, and the subclasses materialize isolated operation-
+  local copies of that lease without reopening or revalidating a root that may
+  now contain authorized runtime state. They retain their construction-pinned
+  collaborators, so later caller root mutation or inherited collaborator
+  rebinding cannot redirect composed I/O. The composed catalog's
+  create/rename/archive/unarchive operations and
   collaboration event store's `append_batch` operation borrows the exact
   coordinator returned in the same service bundle. Direct standalone
   filesystem adapters retain their
   established borrowed-`Workspace` and uncoordinated mutation behavior. The
-  coordinator retains no caller `Workspace`; its
-  canonical key, fixed guard, and every issued lease derive from its
-  construction-pinned topology. Activation load and compare-and-set capture one
+  coordinator retains no caller-owned `Workspace` object; its private copied
+  workspace lease, canonical key, fixed guard, and every issued lease derive
+  from its construction-pinned topology. Activation load and compare-and-set capture one
   canonical root per whole call. Compare-and-set rejects a wrong-root lease
   before operation-local workspace materialization or filesystem I/O, then
   requires an active owner-thread lease, an exact
@@ -2293,10 +2308,11 @@ every intermediate arrow. The current runtime graph is acyclic.
   `workspace.core`.
 - **State, resources, and side effects:** Import initializes only a synchronized
   weak in-process registry and immutable constants; it performs no filesystem
-  access and opens no resource. The frozen topology owns only one canonical
-  absolute `Path`; composed pinned subclasses materialize fresh workspaces from
-  it for operations and retain no caller-mutable workspace. Coordinator
-  construction is I/O-free. Its one exclusive borrow validates a finite
+  access and opens no resource. The frozen topology owns one canonical absolute
+  `Path` plus one isolated copy of the already-ready workspace lease; composed
+  pinned subclasses copy that lease per operation and retain no caller-mutable
+  workspace. Topology and coordinator construction perform no filesystem
+  operation or readiness revalidation. The coordinator's one exclusive borrow validates a finite
   caller-supplied timeout, shares an in-process reentrant lock per canonical
   workspace, and on POSIX opens, validates, advisory-locks, unlocks, and closes
   the contained `config/.conversation_storage.lock` guard at the pinned root.
@@ -2445,11 +2461,13 @@ every intermediate arrow. The current runtime graph is acyclic.
   `conversation_storage.contracts`, `conversation_storage.filesystem`,
   `conversations`, `errors`, and `workspace.core`.
 - **State, resources, and side effects:** Import performs no I/O. One adapter
-  captures only one private immutable canonical root and workspace key; it
-  retains no caller `Workspace` or publicly reachable catalog/event-store
-  binding. Each export or import validates the caller-owned active
-  correct-workspace owner-thread lease before materializing one unreachable
-  operation-local public `Workspace`, `FilesystemConversationCatalog`, and
+  captures one private immutable canonical root plus an isolated copy of an
+  already-ready workspace lease and retains no caller-owned `Workspace` or
+  publicly reachable catalog/event-store binding. A path-only construction
+  still performs strict fresh workspace validation before capture. Each export
+  or import validates the caller-owned active correct-workspace owner-thread
+  lease before copying the captured workspace lease into one unreachable
+  operation-local `Workspace`, `FilesystemConversationCatalog`, and
   `FilesystemCollaborationEventStore` set pinned to that root, then revalidates
   the same lease throughout scans and immediately before writes. Every
   included or excluded descendant entry is charged before retention, stat, or
@@ -2517,7 +2535,9 @@ every intermediate arrow. The current runtime graph is acyclic.
 - **State, resources, and side effects:** Import defines frozen values, fixed
   policy metadata, validators, and workflow functions only; it performs no I/O
   and does not load `sqlite3`. Each call captures one canonical absolute
-  workspace root, constructs operation-local public adapters, and holds one
+  workspace root plus an isolated copy of the caller's already-ready workspace
+  lease, constructs operation-local copies and public adapters without a fresh
+  mid-operation root validation, and holds one
   outer workspace mutation lease across activation/readiness validation, fresh
   canonical exports, planning, any destination mutation and checkpoint
   publication, and fresh final source/destination parity. The source must be
@@ -2658,8 +2678,10 @@ every intermediate arrow. The current runtime graph is acyclic.
   `conversation_storage.filesystem_archive`,
   `conversation_storage.provisioning`, and `conversation_storage.sqlite`.
 - **State, resources, and side effects:** Each call captures one immutable
-  absolute workspace root and constructs operation-local public collaborators;
-  it retains no caller-mutable workspace binding. Desired selection first
+  absolute workspace root plus an isolated copy of the caller's already-ready
+  workspace lease and constructs isolated operation-local copies and public
+  collaborators without a fresh mid-operation root validation; it retains no
+  caller-mutable workspace binding. Desired selection first
   proves coordinator acquisition, releases that proof before any optional host
   installation, then reacquires the same coordinator for runtime reprobe,
   explicit SQLite provisioning or filesystem composition, active-state read,
@@ -4688,7 +4710,9 @@ every intermediate arrow. The current runtime graph is acyclic.
   callback accepted-input writer is a no-op; the stream-bound writer delegates
   the already rendered payload to the driver without retaining it.
   The optional debug-log path is call-local presentation input and is not
-  retained by the terminal or semantic adapter.
+  retained by the terminal or semantic adapter. Unsupported-workspace error
+  presentation explicitly states that migration and compatibility are
+  unsupported and directs the user to create a new workspace.
   There is no runtime, filesystem, persistence, subprocess, network, or
   import-time operational I/O.
 - **Primary verification/documentation:** `tests/test_interactive_terminal.py`,
@@ -4887,17 +4911,19 @@ every intermediate arrow. The current runtime graph is acyclic.
 - **Direct internal dependencies:** `agents`, `conversation_search`,
   `conversation_storage.contracts`, `conversations`, `debug_log`,
   `orchestrator`, and `workspace`.
-- **State, resources, and side effects:** Verifies workspace initialization,
-  directive persistence, metadata-only catalog persistence, selected filesystem
-  v2 service provenance, and empty/read-only schema-v2 history, state, readable
-  context, search, and page projections through the active composed services.
-  It calls
-  no provider and leaves no transcript, collaboration-history, debate,
-  specialist-agent state, provider-session, exchange, or manuscript artifact.
-  Temporary mode removes its workspace; explicit mode retains the allowed
-  directive and catalog metadata.
+- **State, resources, and side effects:** An explicit supplied workspace takes
+  the read-only path: a fresh workspace object verifies the exact clean v2
+  marker, scaffold, Git baseline, and status, then returns only initialization
+  and unchanged-execution checks without creating directives, catalog/history,
+  agent state, debug data, or other residue. With no supplied workspace, a
+  disposable directory uses the real initializer and then exercises directive,
+  metadata-only catalog, selected filesystem v2 service provenance, and
+  empty/read-only schema-v2 history, context, search, and page projections.
+  It calls no provider; temporary mode removes its entire workspace and
+  truthfully propagates initializer identity/configuration failures.
 - **Primary verification/documentation:** `tests/test_smoke_cli.py` verifies
-  temporary/explicit lifecycle, report fields, and provider-free invariants.
+  temporary/explicit lifecycle, report fields, and provider-free invariants;
+  `docs/guides/smoke-test.md` and `docs/reference/cli.md` document both modes.
 
 ### `story_writing_agents.workspace`
 
@@ -4912,13 +4938,14 @@ every intermediate arrow. The current runtime graph is acyclic.
   `Workspace` and `initialize_workspace` retain canonical module identity
   `story_writing_agents.workspace`; the catalog intentionally identifies
   `story_writing_agents.conversation_storage.filesystem` as its canonical
-  defining module. Established signatures, workspace/root imports,
-  and pickle lookup through those canonical modules remain supported.
+  defining module. Workspace/root imports and pickle lookup through those
+  canonical modules remain supported, while the intentionally breaking v2
+  initializer removes the former prompt-overwrite parameter without a shim.
   Package-internal `open_workspace_root_directory`,
-  `verify_workspace_root_directory`, and `WORKSPACE_DIRECTORIES` are statically
-  bound on both the facade and core for existing internal consumers but are
-  absent from both modules' `__all__` and from the project-root facade. No
-  incidental core implementation global or private helper is forwarded.
+  `verify_workspace_root_directory`, `WORKSPACE_DIRECTORIES`, and exact-v2
+  `discover_workspace` are statically bound for internal consumers but are
+  absent from `__all__` and from the project-root facade. No incidental core
+  implementation global or private helper is forwarded.
 - **Direct internal dependencies:** `conversation_storage.filesystem` and
   `workspace.core`.
 - **State, resources, and side effects:** Owns no state or external resource.
@@ -4927,7 +4954,10 @@ every intermediate arrow. The current runtime graph is acyclic.
   filesystem owner, and performs no filesystem write, provider, environment,
   thread creation, or application-startup operation.
 - **Primary verification/documentation:** `tests/test_public_api_and_cli.py`,
-  `tests/test_workspace_and_config.py`, and `docs/reference/workspace-api.md`.
+  `tests/test_workspace_and_config.py`,
+  `tests/test_workspace_v2_initialization.py`,
+  `docs/guides/workspaces.md`, `docs/reference/package-api.md`, and
+  `docs/reference/workspace-api.md`.
 
 ### `story_writing_agents.workspace.core`
 
@@ -4941,101 +4971,118 @@ every intermediate arrow. The current runtime graph is acyclic.
   identity-bound internal-storage and topology boundary used by diagnostic,
   agent-exchange, disposable-generation, and smoke owners; they remain
   deliberately absent from both public `__all__` declarations and the
-  project-root facade.
+  project-root facade. Package-internal `discover_workspace` delegates nearest
+  recognizable-boundary selection and constructs an exactly ready workspace.
   `Workspace.inspect_debate_context` is the strict, separate context-sidecar
   inspection operation. `Workspace.read_agent_session_state` returns one
   validated owner's complete session outcomes in stable chronology, while
   `read_agent_state` remains its debate-ID-validating compatibility delegate;
   topology and serialization details are internal.
-- **Direct internal dependencies:** `agents`, `conversations`, `errors`, and
-  `models`, plus the `writing_artifacts` facade.
-- **State, resources, and side effects:** Owns topology, path and symlink
-  security, and each instance's canonical-root identity lifecycle. Construction
-  makes one nonmutating no-follow identity probe and retains no descriptor: an
-  existing directory binds immediately, while a specifically missing root
-  remains pending for its first valid `initialize()` attempt. Invalid
-  `overwrite_prompts` input raises `TypeError` before I/O without consuming that
-  attempt. A first valid pending attempt becomes terminal before capability
-  checks or mutation and preflights the required descriptor-relative directory
-  and atomic-file primitives. It walks or creates canonical-root components
-  without following names, verifies the opened and named root identities, and
-  retains the root descriptor throughout pending topology and default writes.
-  Directory and file-parent traversal stays beneath that descriptor. File
-  installation stages an exclusive temporary regular file, keeps create-only
-  and prompt-overwrite handling distinct, and verifies the staged and installed
-  identities. After all writes, initialization rewalks the canonical root and
-  matches it to the retained identity. Owned descriptors follow exact-once
-  cleanup, and the instance records success only after final root-descriptor
-  cleanup completes. Missing primitives raise `OSError` before mutation. The
-  exact first `OSError`, `KeyboardInterrupt`, or `SystemExit` from initialization
-  or final cleanup propagates unchanged; cleanup does not replace an active
-  failure, and created components or intended partial data are not rolled back.
-  After any earlier failure, every later `initialize()` call raises the
-  established identity-unavailable `OSError` before all filesystem operations
-  without retry or rebind. Roots existing at construction, repeated successful
-  calls, and ordinary post-initialization path operations retain their
-  established behavior; a new `Workspace` performs its own construction probe.
-  An existing root whose
-  initial probe is unavailable or nonmeaningful remains in the distinct
-  unavailable state: diagnostic helper access fails closed without rebinding,
-  while established pathname-based initialization may still scaffold it. The
-  package-internal helpers open and reverify the bound named root and descriptor;
-  once a meaningful identity is bound, a later named or opened symlink,
-  non-directory, or identity replacement raises
-  `WorkspaceSecurityError`, while an unsupported safe primitive raises an
-  ordinary `OSError`. Retained identity protects internal storage owners such
-  as `debug_log` and `conversation_rag_store`, not ordinary domain operations:
-  public path I/O remains pathname-based and nontransactional and may observe a
-  real directory installed later at the same root path. The module also owns
-  strict UTF-8 and JSON I/O, overrides, agent and debate state, logs, results,
-  and immutable debate-context sidecars under
+- **Direct internal dependencies:** `agents`, `conversations`, `errors`,
+  `models`, `workspace.initialization`, `workspace.schema`, and the
+  `writing_artifacts` facade.
+- **State, resources, and side effects:** Owns each public `Workspace` instance,
+  generic safe path resolution, strict UTF-8/JSON persistence, overrides, agent
+  and debate state, logs, results, and immutable debate-context sidecars under
   `discussion_logs/<session_id>/<debate_id>.context.json`, and generic atomic
-  text/JSON replacement, except that its supported generic text/JSON writers
-  reject canonical writing-artifact identities plus every case-folded or
-  NFKC-normalized alias of the repository-owned `core_documents` and
-  `manuscript` namespaces before mutation. It exposes no artifact-specific
-  core-document reader, no longer creates core-document templates, and owns no
-  repository-mediated manuscript/core-document reads, writes, commits, or
-  rollback. Context
-  sidecars use an exact identity-bound version-1 schema, require a non-null
-  canonical snapshot for included mode and a null snapshot for fresh mode,
-  reject malformed or colliding files, and return `None` when absent for legacy
-  debates. Persisted debate results may carry one validated content-free
-  `reference_operation_id`; omission is canonical for `None` and no-reference
-  runs. Workspace owns only that result serialization and never the reference
-  evidence or artifact content. Filesystem conversation metadata,
-  collaboration histories, allocation, parsing, serialization, cleanup, and
-  guarded weak history-lock registry belong exclusively to
-  `conversation_storage.filesystem`; core
-  neither defines nor imports those owners. The fixed initialized topology
-  includes
-  `agent_states/orchestrator_state/conversation_defaults` and `debug_logs`;
-  existing initialized workspaces need neither directory until the corresponding
-  owning feature first creates it lazily. `debug_log`, not `Workspace`, owns the
-  files, lock, schema, append, and rotation inside the diagnostic directory. New
-  workspaces also receive the canonical twelve-key system-default document with
-  null Codex model/reasoning, Antigravity model/effort, and workspace
-  `default_backend` and `conversation_rag_provider` values, automatic RAG set
-  to false, desired `conversation_storage_backend` set to `filesystem`, and
-  `show_message_details` set to false; canonical seven-key
-  per-agent entries retain a null backend,
-  language, persona, and both providers' model/effort values.
-  Existing configuration bytes are never migrated or rewritten by
-  initialization. `cli_context` owns the schema stored in the conversation-
-  default directory. The backend-owned story-session process-access claim
-  remains the cross-process same-session write guard.
-- **Primary verification/documentation:** `tests/test_workspace_and_config.py`,
+  text/JSON replacement. Construction delegates one nonmutating root
+  classification and exact-ready verification to `workspace.initialization`,
+  retaining only canonical path, identity, readiness, and terminal-attempt
+  state. `initialize()` delegates the descriptor-bound lifecycle once; failure
+  makes that instance terminal, while a fresh instance may validate durable
+  journal-backed recovery. `require_ready()` is the composition-time lease and
+  performs no second schema interpretation. The intentionally breaking
+  initializer has no overwrite parameter or compatibility path. Generic writes
+  reject marker/journal identities and normalized/case-folded writing-artifact
+  namespaces before mutation. Package-internal root-descriptor helpers recheck
+  the bound identity for storage owners. This module does not define marker,
+  scaffold, journal, Git, discovery, or readiness policy; it owns no Git
+  subprocess and no repository-mediated artifact write, commit, or rollback.
+  Filesystem conversation metadata and histories remain owned by
+  `conversation_storage.filesystem`; debug files remain owned by `debug_log`;
+  CLI-context schemas remain owned by `cli_context`.
+- **Primary verification/documentation:**
+  `tests/test_workspace_v2_initialization.py`,
+  `tests/test_workspace_and_config.py`,
   `tests/test_debug_log.py`, `tests/test_agent_state.py`,
   `tests/test_public_api_and_cli.py`,
   `tests/conversation_catalog_contract.py`,
   `tests/test_conversation_catalog.py`,
   `tests/test_filesystem_collaboration_event_store.py`,
   `tests/test_conversation_storage.py`,
-  `docs/reference/workspace-api.md`,
+  `docs/guides/workspaces.md`, `docs/reference/workspace-api.md`,
   `docs/reference/configuration/session-storage.md`,
   `docs/reference/conversation-catalog.md`,
   `docs/reference/conversation-transcripts.md`, `docs/design/persistence.md`,
   and `docs/operations/filesystem-safety.md`.
+
+### `story_writing_agents.workspace.initialization`
+
+- **Source:** `src/story_writing_agents/workspace/initialization.py`
+- **Responsibility:** Own the descriptor-bound schema-v2 workspace root
+  initialization and readiness lifecycle.
+- **Supported surface:** Internal-only `WorkspaceRootState`,
+  `WorkspaceRootInspection`, `inspect_workspace_root`,
+  `initialize_workspace_root`, `require_ready_workspace_root`, and
+  `discover_workspace_root`; the module `__all__` is empty and neither the
+  workspace nor project facade exports them.
+- **Direct internal dependencies:** `errors`, the public `git` facade, and
+  `workspace.schema`.
+- **State, resources, and side effects:** Classifies absent, empty,
+  journal-backed initializing, exact ready-v2, unsupported, and recovery states
+  without adopting unknown bytes. Initialization exclusively owns the open
+  root descriptor, no-follow traversal, create-only journal/scaffold
+  convergence, exact 22-file manifest composition, and one #448 baseline call.
+  It preflights every required descriptor-relative, descriptor-path,
+  no-follow, flag, read/write, sync, stat, and cleanup capability plus
+  parent/root Git topology before mutation. It retains and rechecks root
+  identity, verifies the journal-only residue once before removal, fsyncs that
+  final mutation, then verifies the exact clean baseline once before success. A
+  ready reopen is read-only; dirty, drifted, unsafe, or ambiguous state is
+  preserved and rejected. Git identity failure becomes the fixed
+  content-free `ConfigurationError` message; all other Git failures become
+  content-free topology or recovery errors with cleared exception graphs.
+  Discovery returns only the nearest recognizable boundary and never skips a
+  malformed or unsupported inner workspace. It never creates a session
+  branch/ref/worktree, provider state, artifact mutation, remote, or later
+  commit and performs no import-time I/O.
+- **Primary verification/documentation:**
+  `tests/test_workspace_v2_initialization.py`,
+  `tests/test_workspace_and_config.py`,
+  `tests/test_cli_context.py`, and `tests/test_smoke_cli.py`;
+  `docs/getting-started.md`,
+  `docs/guides/workspaces.md`, `docs/reference/workspace-api.md`,
+  `docs/reference/git-adapter.md`,
+  `docs/operations/filesystem-safety.md`, and
+  `docs/operations/recovery-and-limitations.md` document its lifecycle.
+
+### `story_writing_agents.workspace.schema`
+
+- **Source:** `src/story_writing_agents/workspace/schema.py`
+- **Responsibility:** Define the pure exact schema-v2 workspace marker,
+  initialization journal, topology policy, and canonical scaffold bytes.
+- **Supported surface:** Internal-only marker/journal/scaffold constants and
+  frozen values, strict codecs, `validate_workspace_identifier`, and
+  `canonical_initializer_scaffold`; the module `__all__` is empty and no facade
+  exports these names. The established `Workspace` method remains the public
+  session-identifier validation surface.
+- **Direct internal dependencies:** `agents` and `errors`.
+- **State, resources, and side effects:** Owns the exact schema version, marker
+  and journal paths, static session branch/ref/sibling-worktree grammar, four
+  canonical empty core identities, directory set, and 22 sorted initializer
+  entries. Current configuration/persona/role-prompt bytes moved here unchanged.
+  Marker and journal decoders reject noncanonical UTF-8 JSON, duplicates,
+  missing/extra fields, and malformed values; numeric non-v2 versions receive
+  the fixed no-migration guidance. Encoders deeply reconstruct frozen values so
+  forged fields cannot emit bytes. Import and every validation/serialization
+  operation are deterministic and perform no filesystem, Git, provider,
+  environment, process, or mutable-state action.
+- **Primary verification/documentation:**
+  `tests/test_workspace_v2_initialization.py`,
+  `tests/test_workspace_and_config.py`, `tests/test_public_api_and_cli.py`,
+  `docs/guides/workspaces.md`, `docs/reference/workspace-api.md`,
+  `docs/reference/configuration/agent-configuration.md`, and
+  `docs/reference/configuration/session-storage.md`.
 
 ### `story_writing_agents.writing_artifacts`
 
@@ -5649,12 +5696,15 @@ every intermediate arrow. The current runtime graph is acyclic.
 
 ## Consistency Notes
 
-- The inventory contains 102 modules. Static AST derivation over every module-
-  level and function-local import yields 370 unique direct internal edges and
+- The inventory contains 104 modules. Static AST derivation over every module-
+  level and function-local import yields 376 unique direct internal edges and
   no directed cycle. The v2 cutover contributes 97 modules and 362 edges;
   `writing_artifacts.change_sets` and `writing_artifacts.relationship_policy`
   add two pure modules and exactly five inward edges; the safe `git` facade,
-  contracts, and adapter add three modules and exactly three inward edges.
+  contracts, and adapter add three modules and exactly three inward edges. The
+  schema-v2 workspace lifecycle adds two modules and seven approved inward
+  edges while removing `cli_context`'s former dependency on `agents`, for a net
+  six-edge increase.
   Relative to the 360-edge pre-cutover graph, filesystem and
   SQLite storage each add one direct dependency on `conversations.events` for
   private legacy-row/file rejection values, smoke adds one dependency on
@@ -5664,15 +5714,26 @@ every intermediate arrow. The current runtime graph is acyclic.
   active schema-v1 store, search/page/service, and transcript-retrieval surface;
   adds only `ConversationRetrievalHistoryRecord`; and exports no concrete v2
   storage adapter. The workspace facade contains exactly `Workspace`,
-  `initialize_workspace`, and `FilesystemConversationCatalog`. The 63-name
-  conversation-storage facade exports contracts/composition/archive workflow
-  only and no concrete filesystem or SQLite adapter.
+  `initialize_workspace`, and `FilesystemConversationCatalog`; its internal
+  discovery binding adds no export. The 63-name conversation-storage facade
+  exports contracts/composition/archive workflow only and no concrete
+  filesystem or SQLite adapter.
 - The safe Git package facade contains exactly 22 names: 21 pure contract
   values plus the sole `GitRepositoryAdapter`. All remain absent from the
-  project root. The facade-to-contracts, facade-to-adapter, and
-  adapter-to-contracts arrows are the only Git-boundary internal edges; the
-  package has no workspace, provider, conversation, artifact, GitHub, or
-  generic process dependency.
+  project root. Facade-to-contracts, facade-to-adapter, and
+  adapter-to-contracts remain the only edges owned inside that package;
+  `workspace.initialization` consumes only the public facade. Git retains no
+  reverse dependency on workspace, provider, conversation, artifact, GitHub,
+  or a generic process boundary.
+- Schema-v2 workspace definition and resource ownership are split between the
+  pure `workspace.schema` and descriptor/Git-composing
+  `workspace.initialization` modules. `workspace.core` remains the generic
+  public persistence owner and delegates lifecycle policy inward. The only new
+  edges are core-to-schema/initialization, initialization-to-schema/Git/errors,
+  and schema-to-agents/errors; no workspace-to-writing-artifact, Git-to-
+  workspace, provider, or session-resource reverse edge was added. The
+  intentionally breaking initializer has no overwrite, migration,
+  compatibility, or session-resource path.
 - The writing-artifact facade contains exactly 62 names. Its 16 change-set and
   15 relationship-policy additions remain absent from the project root and
   depend inward only on the existing pure catalog plus the change-set owner;
@@ -5709,11 +5770,12 @@ every intermediate arrow. The current runtime graph is acyclic.
   and the generic `run_inputs` module remain indexed because this issue did
   not conclusively establish them as globally dead. The contracted controller
   has no execution-time call path into those terminal capabilities.
-- All dependency arrows point inward to existing owners. Beyond the five
-  approved pure artifact-contract edges, no dependency, packaging change,
-  policy exception, or structural compatibility layer was introduced. The
-  intentionally breaking private-integration cutover has no
-  forwarding, deprecation, migration, conversion, or dual-read/write shim.
+- All dependency arrows point inward to their accepted owners. Beyond the five
+  pure artifact-contract edges, three safe-Git edges, and seven schema-v2
+  workspace edges recorded above, no dependency, packaging change, policy
+  exception, or structural compatibility layer was introduced. The breaking
+  cutovers have no forwarding, deprecation, migration, conversion, or dual-
+  read/write shim.
 - The final documentation-link and production-isolation conformance check is
   `tests/test_agent_context_conformance.py`. Restored retained-shell coverage
   remains in `tests/test_interactive_pty.py`,

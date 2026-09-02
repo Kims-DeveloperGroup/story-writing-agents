@@ -30,8 +30,10 @@ All exported errors derive from `StoryWritingAgentsError`:
 - `WorkspaceSecurityError` rejects escaping paths and symlinks.
 - `WorkspaceFormatError` rejects invalid UTF-8, malformed JSON/JSONL, invalid
   exact schemas, mismatched embedded IDs, timestamps, and other corruption.
-- `WorkspaceVersionUnsupportedError` is a `WorkspaceFormatError` for detected
-  V1 session/default state or another unsupported persisted schema version.
+- `WorkspaceVersionUnsupportedError` is a `WorkspaceFormatError` for a
+  recognizable pre-v2 workspace, V1 session/default state, or another
+  unsupported persisted schema version. Whole-workspace guidance is fixed:
+  migration and compatibility are unsupported, so create a new workspace.
 - `ConfigurationError` rejects unknown keys/agents, invalid values, missing
   persona templates, unresolved defaults/input, and invalid backend overrides.
 - `DirectiveError` rejects invalid or unappliable directives.
@@ -61,7 +63,7 @@ Shell errors use trusted fixed copy and never reproduce exception messages.
 | Durable state is paused | `session_paused` | Resume the session to make it ready before provider work. |
 | Another live local process owns access | `session_access_blocked` | Close that process normally, then retry. |
 | Ownership cannot be verified | `session_ownership_unknown` | Preserve the claim and inspect recovery guidance. |
-| V1 state is detected | `workspace_version_unsupported` | Use the nondestructive manual reset procedure. |
+| A recognizable unsupported workspace/version is detected | `workspace_version_unsupported` | Preserve it and create a separate new v2 workspace; there is no migration, compatibility, or manual-reset path. |
 
 Invalid/missing/existing IDs and provider configuration retain their established
 `session_invalid`, `session_not_found`, `session_exists`, and
@@ -72,7 +74,9 @@ separate domains.
 
 Validation precedes directive replacement, provider work where possible, and
 approved artifact mutation. Lifecycle reads validate complete logical records
-instead of skipping malformed files. Unsupported V1 data is left unchanged.
+instead of skipping malformed files. Unsupported data is left unchanged;
+whole-workspace initialization never adopts, moves, deletes, resets, or
+rewrites it.
 Catalog reads reject duplicate, missing, or extra fields. A duplicate debate ID
 raises before providers; a manuscript collision after finalization returns a
 failed debate and consumes the new debate ID.

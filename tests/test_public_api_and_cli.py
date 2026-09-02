@@ -21,11 +21,13 @@ from unittest import mock
 import story_writing_agents
 from story_writing_agents import cli as cli_module
 from story_writing_agents.workspace import core as workspace_module
+from story_writing_agents.workspace import (
+    initialization as workspace_initialization_module,
+)
 from story_writing_agents.conversation_storage import (
     selection as storage_selection_module,
 )
 from story_writing_agents import (
-    AGENT_SPECS,
     DebateContextMode,
     DebateContextRequest,
     DebateFailureKind,
@@ -74,9 +76,7 @@ from story_writing_agents.provider_auth import (
     ProviderAuthState,
     ProviderAuthStatus,
 )
-from story_writing_agents.workspace.core import DEFAULT_AGENT_PROMPTS
-
-from tests.helpers import initialized_workspace
+from tests.helpers import initialized_workspace, workspace_git_identity
 from tests.sqlite_conversation_storage_fixture import database_path, provision
 
 
@@ -427,27 +427,22 @@ class PublicApiTests(unittest.TestCase):
                 self.assertNotIn(internal, story_writing_agents.__all__)
                 self.assertFalse(hasattr(story_writing_agents, internal))
 
-    def test_uninitialized_direct_constructors_preserve_results_and_artifacts(
+    def test_uninitialized_direct_constructors_reject_without_artifacts(
         self,
     ) -> None:
-        """Keep diagnostics lazy before a direct API has a usable workspace."""
+        """Require strict v2 readiness before direct runtime activation."""
 
         with tempfile.TemporaryDirectory() as temporary:
             target = Path(temporary) / "uninitialized"
-            runtime = StoryRuntime(target)
-            self.assertIsInstance(runtime, StoryRuntime)
-            self.assertEqual(runtime.workspace.root, target.resolve())
-            self.assertFalse(target.exists())
-
-            with self.assertRaises(WorkspaceFormatError) as caught:
-                story_writing_agents.AgentBackend(target)
-
-            self.assertEqual(
-                str(caught.exception),
-                "cannot read file: config/system_defaults.json",
-            )
-            self.assertIsInstance(caught.exception.__cause__, FileNotFoundError)
-            self.assertFalse(target.exists())
+            for factory in (StoryRuntime, story_writing_agents.AgentBackend):
+                with self.subTest(factory=factory.__name__):
+                    with self.assertRaisesRegex(
+                        WorkspaceFormatError,
+                        "workspace is not ready",
+                    ) as caught:
+                        factory(target)
+                    self.assertIsNone(caught.exception.__cause__)
+                    self.assertFalse(target.exists())
 
     def test_debate_context_and_progress_public_models_are_exact(self) -> None:
         required = {
@@ -791,6 +786,7 @@ class CliTests(unittest.TestCase):
         )
         self.auth_service_patcher.start()
         self.auth_coordinator_patcher.start()
+        self.enterContext(workspace_git_identity())
         self.addCleanup(self.auth_coordinator_patcher.stop)
         self.addCleanup(self.auth_service_patcher.stop)
 
@@ -1064,12 +1060,10 @@ class CliTests(unittest.TestCase):
                         "pre_workspace",
                     ]
                 )
-            resolved = target.resolve()
             self.assertEqual(exit_code, 2)
             self.assertEqual(
                 stderr.getvalue(),
-                "ConfigurationError: workspace is not initialized: "
-                f"{resolved}; run 'story init {resolved}'\n",
+                "WorkspaceFormatError: workspace is not ready\n",
             )
             self.assertNotIn("debug_logs/runtime.jsonl", stderr.getvalue())
             self.assertFalse(target.exists())
@@ -1089,10 +1083,7 @@ class CliTests(unittest.TestCase):
                 stderr.getvalue(), "WorkspaceFormatError: initialization failed\n"
             )
             self.assertNotIn("debug_logs/runtime.jsonl", stderr.getvalue())
-            initialize.assert_called_once_with(
-                str(target),
-                overwrite_prompts=False,
-            )
+            initialize.assert_called_once_with(str(target))
             self.assertFalse(target.exists())
 
             stderr = io.StringIO()
@@ -1164,6 +1155,10 @@ class CliTests(unittest.TestCase):
             stderr = io.StringIO()
             with (
                 mock.patch.object(
+                    workspace_initialization_module,
+                    "_require_initialization_operations",
+                ),
+                mock.patch.object(
                     workspace_module.os,
                     "mkdir",
                     side_effect=substitute_final_root,
@@ -1193,78 +1188,6 @@ class CliTests(unittest.TestCase):
                 external_before,
             )
             self.assertFalse(external.joinpath("debug_logs").exists())
-
-    def test_post_bind_init_replacement_is_hint_free_and_contained(self) -> None:
-        """Keep CLI failure exact when the canonical root changes during writes."""
-
-        with tempfile.TemporaryDirectory() as temporary:
-            parent = Path(temporary)
-            root = parent / "pending_cli_workspace"
-            parked = parent / ".parked-pending-cli-workspace"
-            external = parent / "external"
-            external.mkdir()
-            (external / "sentinel.bin").write_bytes(b"external bytes\x00")
-            external_before = {
-                path.relative_to(external).as_posix(): (
-                    None if path.is_dir() else path.read_bytes()
-                )
-                for path in sorted(external.rglob("*"))
-            }
-            real_entries = workspace_module._initialize_pending_workspace_entries
-            substituted = False
-
-            def substitute_after_bind(
-                target_workspace: Workspace,
-                root_descriptor: int,
-                *,
-                overwrite_prompts: bool,
-            ) -> None:
-                nonlocal substituted
-                root.rename(parked)
-                try:
-                    root.symlink_to(external, target_is_directory=True)
-                except (NotImplementedError, OSError) as exc:
-                    self.skipTest(f"directory symlink replacement unavailable: {exc}")
-                substituted = True
-                real_entries(
-                    target_workspace,
-                    root_descriptor,
-                    overwrite_prompts=overwrite_prompts,
-                )
-
-            stdout = io.StringIO()
-            stderr = io.StringIO()
-            with (
-                mock.patch.object(
-                    workspace_module,
-                    "_initialize_pending_workspace_entries",
-                    side_effect=substitute_after_bind,
-                ),
-                contextlib.redirect_stdout(stdout),
-                contextlib.redirect_stderr(stderr),
-            ):
-                exit_code = main(["init", str(root)])
-
-            self.assertEqual(exit_code, 2)
-            self.assertTrue(substituted)
-            self.assertEqual(stdout.getvalue(), "")
-            self.assertTrue(
-                stderr.getvalue().startswith(("NotADirectoryError: ", "OSError: "))
-            )
-            self.assertNotIn("debug_logs/runtime.jsonl", stderr.getvalue())
-            self.assertTrue(root.is_symlink())
-            self.assertTrue(parked.is_dir())
-            self.assertEqual(
-                {
-                    path.relative_to(external).as_posix(): (
-                        None if path.is_dir() else path.read_bytes()
-                    )
-                    for path in sorted(external.rglob("*"))
-                },
-                external_before,
-            )
-            self.assertFalse(external.joinpath("debug_logs").exists())
-            self.assertFalse(parked.joinpath("debug_logs/runtime.jsonl").exists())
 
     def test_init_root_failures_keep_codes_and_process_control_semantics(
         self,
@@ -1297,6 +1220,10 @@ class CliTests(unittest.TestCase):
                 stdout = io.StringIO()
                 stderr = io.StringIO()
                 with (
+                    mock.patch.object(
+                        workspace_initialization_module,
+                        "_require_initialization_operations",
+                    ),
                     mock.patch.object(
                         workspace_module.os,
                         "mkdir",
@@ -2044,7 +1971,7 @@ class CliTests(unittest.TestCase):
                         "InteractiveController",
                     ) as controller,
                 ):
-                    self.assertEqual(main(["chat"]), 0)
+                    self.assertEqual((main(["chat"]), stderr.getvalue()), (0, ""))
                 context.assert_not_called()
                 backend.assert_not_called()
                 controller.assert_not_called()
@@ -2637,39 +2564,28 @@ class CliTests(unittest.TestCase):
                 load_context.assert_called_once_with(workspace)
                 backend.assert_not_called()
 
-    def test_init_logger_acquisition_controls_preserve_exact_success(self) -> None:
-        """Keep initialized state and output when its optional logger is absent."""
+    def test_init_never_constructs_a_post_baseline_logger(self) -> None:
+        """Initialization leaves no diagnostic residue after the baseline."""
 
         with tempfile.TemporaryDirectory() as temporary:
-            for control_type in (KeyboardInterrupt, SystemExit):
-                with self.subTest(control=control_type.__name__):
-                    root = Path(temporary) / control_type.__name__
-                    stdout = io.StringIO()
-                    stderr = io.StringIO()
-                    with (
-                        mock.patch.object(
-                            cli_module,
-                            "WorkspaceDebugLog",
-                            side_effect=control_type("logger acquisition"),
-                        ) as logger,
-                        contextlib.redirect_stdout(stdout),
-                        contextlib.redirect_stderr(stderr),
-                    ):
-                        exit_code = main(["init", str(root)])
+            root = Path(temporary) / "workspace"
+            stdout = io.StringIO()
+            stderr = io.StringIO()
+            with (
+                mock.patch.object(cli_module, "WorkspaceDebugLog") as logger,
+                contextlib.redirect_stdout(stdout),
+                contextlib.redirect_stderr(stderr),
+            ):
+                exit_code = main(["init", str(root)])
 
-                    self.assertEqual(exit_code, 0)
-                    self.assertEqual(stderr.getvalue(), "")
-                    self.assertEqual(
-                        stdout.getvalue(),
-                        json.dumps({"workspace": str(root.resolve())}, indent=2) + "\n",
-                    )
-                    logger.assert_called_once()
-                    logged_workspace = logger.call_args.args[0]
-                    self.assertIs(type(logged_workspace), Workspace)
-                    self.assertEqual(logged_workspace.root, root.resolve())
-                    self.assertTrue(
-                        root.joinpath("config/system_defaults.json").is_file()
-                    )
+            self.assertEqual(exit_code, 0)
+            self.assertEqual(stderr.getvalue(), "")
+            self.assertEqual(
+                stdout.getvalue(),
+                json.dumps({"workspace": str(root.resolve())}, indent=2) + "\n",
+            )
+            logger.assert_not_called()
+            self.assertFalse(root.joinpath("debug_logs/runtime.jsonl").exists())
 
     def test_ordinary_logger_acquisition_controls_preserve_output_and_hint(
         self,
@@ -2778,6 +2694,11 @@ class CliTests(unittest.TestCase):
         stderr = io.StringIO()
         with (
             mock.patch.object(
+                cli_module,
+                "resolve_workspace",
+                return_value=workspace,
+            ),
+            mock.patch.object(
                 cli_module.WorkspaceDebugLog,
                 "error",
                 side_effect=SystemExit("diagnostic failure"),
@@ -2813,6 +2734,11 @@ class CliTests(unittest.TestCase):
         stdout = io.StringIO()
         stderr = io.StringIO()
         with (
+            mock.patch.object(
+                cli_module,
+                "resolve_workspace",
+                return_value=workspace,
+            ),
             mock.patch.object(
                 WorkspaceDebugLog,
                 "trace",
@@ -2852,6 +2778,11 @@ class CliTests(unittest.TestCase):
         stdout = io.StringIO()
         stderr = io.StringIO()
         with (
+            mock.patch.object(
+                cli_module,
+                "resolve_workspace",
+                return_value=workspace,
+            ),
             contextlib.redirect_stdout(stdout),
             contextlib.redirect_stderr(stderr),
         ):
@@ -2921,29 +2852,32 @@ class CliTests(unittest.TestCase):
         self.assertTrue((workspace_path / "config" / "system_defaults.json").is_file())
 
         workspace = Workspace(workspace_path)
-        prompt_path = AGENT_SPECS[PLOT_ARCHITECT].system_prompt_file
-        workspace.write_text(prompt_path, "custom prompt\n")
-        workspace.path("core_documents/global_outline.md").write_text(
-            "preserved outline\n",
-            encoding="utf-8",
-        )
-        stdout = io.StringIO()
-        with contextlib.redirect_stdout(stdout):
-            exit_code = main(
-                [
-                    "init",
-                    str(workspace_path),
-                    "--overwrite-prompts",
-                ]
+        before = {
+            path.relative_to(workspace_path).as_posix(): (
+                path.read_bytes(),
+                path.stat().st_mtime_ns,
             )
-        self.assertEqual(exit_code, 0)
+            for path in workspace_path.rglob("*")
+            if path.is_file()
+        }
+        stderr = io.StringIO()
+        with (
+            contextlib.redirect_stderr(stderr),
+            self.assertRaises(SystemExit) as retired,
+        ):
+            main(["init", str(workspace_path), "--overwrite-prompts"])
+        self.assertEqual(retired.exception.code, 2)
+        self.assertIn("unrecognized arguments: --overwrite-prompts", stderr.getvalue())
         self.assertEqual(
-            workspace.read_text(prompt_path),
-            DEFAULT_AGENT_PROMPTS[PLOT_ARCHITECT],
-        )
-        self.assertEqual(
-            workspace.read_text("core_documents/global_outline.md"),
-            "preserved outline\n",
+            {
+                path.relative_to(workspace_path).as_posix(): (
+                    path.read_bytes(),
+                    path.stat().st_mtime_ns,
+                )
+                for path in workspace_path.rglob("*")
+                if path.is_file()
+            },
+            before,
         )
 
         stdout = io.StringIO()
@@ -2963,7 +2897,14 @@ class CliTests(unittest.TestCase):
         self.assertEqual(inspected["debates"], [])
 
         stderr = io.StringIO()
-        with contextlib.redirect_stderr(stderr):
+        with (
+            mock.patch.object(
+                cli_module,
+                "resolve_workspace",
+                return_value=workspace,
+            ),
+            contextlib.redirect_stderr(stderr),
+        ):
             exit_code = main(
                 [
                     "directive",

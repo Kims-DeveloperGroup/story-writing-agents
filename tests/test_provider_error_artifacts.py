@@ -7,6 +7,7 @@ import errno
 import hashlib
 import inspect
 import json
+import multiprocessing
 import os
 import re
 import stat
@@ -67,6 +68,17 @@ def _record(
         failure_category=PROVIDER_ERROR_ARTIFACT_FAILURE_CATEGORY,
         debate_id=debate_id,
         conversation_id=conversation_id,
+    )
+
+
+def _record_process_artifact(workspace: Workspace, session_id: str) -> None:
+    """Record one process artifact through a transferred authorized lease."""
+
+    _record(
+        WorkspaceProviderErrorArtifacts(workspace),
+        session_id=session_id,
+        response_text=session_id,
+        debate_id="debate",
     )
 
 
@@ -666,6 +678,101 @@ class ProviderErrorArtifactStorageTests(unittest.TestCase):
             self.workspace.path(PROVIDER_ERROR_ARTIFACT_PENDING_RELATIVE_PATH).is_file()
         )
 
+    def test_guard_create_loser_opens_and_verifies_descriptor_relative_winner(
+        self,
+    ) -> None:
+        real_open = os.open
+        observations: dict[str, object] = {}
+        guard_calls: list[tuple[int, int | None]] = []
+
+        def create_winner_then_raise(
+            filename: str,
+            flags: int,
+            mode: int = 0o777,
+            *,
+            dir_fd: int | None = None,
+        ) -> int:
+            if filename != artifact_module._GUARD_FILENAME:
+                return real_open(filename, flags, mode, dir_fd=dir_fd)
+            guard_calls.append((flags, dir_fd))
+            if flags & os.O_EXCL:
+                winner = real_open(filename, flags, mode, dir_fd=dir_fd)
+                try:
+                    metadata = os.fstat(winner)
+                    observations["winner_identity"] = (
+                        metadata.st_dev,
+                        metadata.st_ino,
+                    )
+                finally:
+                    os.close(winner)
+                raise FileExistsError(
+                    errno.EEXIST,
+                    "simulated guard create winner",
+                    filename,
+                )
+            fallback = real_open(filename, flags, mode, dir_fd=dir_fd)
+            metadata = os.fstat(fallback)
+            observations["fallback_identity"] = (
+                metadata.st_dev,
+                metadata.st_ino,
+            )
+            observations["fallback_descriptor"] = fallback
+            return fallback
+
+        directories = artifact_module._prepare_directories(self.workspace)
+        real_verify = artifact_module._verify_open_file
+        with (
+            mock.patch.object(
+                artifact_module,
+                "_prepare_directories",
+                return_value=directories,
+            ) as prepare,
+            mock.patch.object(
+                artifact_module.os,
+                "open",
+                side_effect=create_winner_then_raise,
+            ),
+            mock.patch.object(
+                artifact_module,
+                "_verify_open_file",
+                wraps=real_verify,
+            ) as verify,
+        ):
+            _record(self.owner, session_id="guard_create_winner")
+
+        prepare.assert_called_once_with(self.workspace)
+        self.assertEqual(len(guard_calls), 2)
+        create_flags, create_parent = guard_calls[0]
+        fallback_flags, fallback_parent = guard_calls[1]
+        self.assertIsNotNone(create_parent)
+        self.assertEqual(fallback_parent, create_parent)
+        self.assertEqual(
+            create_flags & (os.O_CREAT | os.O_EXCL), os.O_CREAT | os.O_EXCL
+        )
+        self.assertEqual(fallback_flags & (os.O_CREAT | os.O_EXCL), 0)
+        self.assertEqual(
+            observations["fallback_identity"],
+            observations["winner_identity"],
+        )
+        guard_verifications = [
+            call
+            for call in verify.call_args_list
+            if call.args[2] == artifact_module._GUARD_FILENAME
+        ]
+        self.assertTrue(guard_verifications)
+        self.assertEqual(
+            {call.args[0] for call in guard_verifications},
+            {observations["fallback_descriptor"]},
+        )
+        guard = self.workspace.path(PROVIDER_ERROR_ARTIFACT_GUARD_RELATIVE_PATH)
+        metadata = guard.stat(follow_symlinks=False)
+        self.assertTrue(stat.S_ISREG(metadata.st_mode))
+        self.assertEqual(metadata.st_nlink, 1)
+        self.assertEqual(
+            [record["session_id"] for record in _records(self.owner)],
+            ["guard_create_winner"],
+        )
+
     def test_threads_and_processes_leave_only_complete_unique_artifacts(self) -> None:
         barrier = threading.Barrier(9)
         attempted = {f"thread_{index}" for index in range(8)}
@@ -698,33 +805,30 @@ class ProviderErrorArtifactStorageTests(unittest.TestCase):
         self.assertTrue(set(persisted).issubset(attempted))
 
         process_workspace = initialized_workspace(self)
-        repository_root = Path(__file__).resolve().parents[1]
-        environment = os.environ.copy()
-        environment["PYTHONPATH"] = str(repository_root / "src")
-        environment["PYTHONDONTWRITEBYTECODE"] = "1"
-        script = (
-            "import sys; from story_writing_agents.agents import ROSTER; "
-            "from story_writing_agents.provider_error_artifacts import "
-            "PROVIDER_ERROR_ARTIFACT_FAILURE_CATEGORY as F,WorkspaceProviderErrorArtifacts as A; "
-            "from story_writing_agents.workspace import Workspace; "
-            "A(Workspace(sys.argv[1])).record_rejected_response(provider='codex',"
-            "agent_id=ROSTER[0],session_id=sys.argv[2],response_text=sys.argv[2],"
-            "failure_category=F,debate_id='debate')"
-        )
         process_attempted = {f"process_{index}" for index in range(6)}
+        context = multiprocessing.get_context("spawn")
         processes = [
-            subprocess.Popen(
-                [sys.executable, "-c", script, str(process_workspace.root), session],
-                env=environment,
-                stdout=subprocess.DEVNULL,
-                stderr=subprocess.PIPE,
-                text=True,
+            context.Process(
+                target=_record_process_artifact,
+                args=(process_workspace, session),
             )
             for session in process_attempted
         ]
-        for process in processes:
-            _stdout, stderr = process.communicate(timeout=10)
-            self.assertEqual(process.returncode, 0, stderr)
+        try:
+            for process in processes:
+                process.start()
+            for process in processes:
+                process.join(timeout=10)
+            alive = tuple(process.is_alive() for process in processes)
+            exitcodes = tuple(process.exitcode for process in processes)
+        finally:
+            for process in processes:
+                if process.is_alive():
+                    process.terminate()
+                    process.join(timeout=5)
+                process.close()
+        self.assertEqual(alive, (False,) * len(processes))
+        self.assertEqual(exitcodes, (0,) * len(processes))
         process_owner = WorkspaceProviderErrorArtifacts(process_workspace)
         process_records = _records(process_owner)
         persisted = [str(record["session_id"]) for record in process_records]

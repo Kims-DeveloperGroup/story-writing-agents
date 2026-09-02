@@ -2,12 +2,13 @@
 
 from __future__ import annotations
 
+import copy
 import hashlib
 import json
 import os
 import re
 import stat
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from enum import StrEnum
 from pathlib import Path
 from typing import Any
@@ -322,22 +323,28 @@ class _WorkflowState:
 @dataclass(frozen=True, slots=True)
 class _TransferWorkspaceTopology:
     root: Path
+    _workspace_lease: Workspace = field(repr=False, compare=False)
 
     @classmethod
     def capture(cls, workspace: Workspace) -> _TransferWorkspaceTopology:
         if not isinstance(workspace, Workspace):
             raise TypeError("workspace must be a Workspace")
+        workspace.require_ready()
         root = Path(os.fspath(workspace.root))
         if not root.is_absolute():
             root = Path(os.path.abspath(root))
-        return cls(root=root)
+        lease = copy.copy(workspace)
+        lease.root = root
+        return cls(root=root, _workspace_lease=lease)
 
     @property
     def workspace_key(self) -> str:
         return os.fspath(self.root)
 
     def workspace(self) -> Workspace:
-        return Workspace(self.root)
+        workspace = copy.copy(self._workspace_lease)
+        workspace.root = self.root
+        return workspace
 
 
 @dataclass(frozen=True, slots=True)

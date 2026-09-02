@@ -27,67 +27,60 @@ of overwrite; **atomic file**—a replacement observed as old or complete new da
 
 ## Workspace boundary
 
-`Workspace` resolves its root once and makes a nonmutating identity probe. An
-existing canonical directory with meaningful positive device and inode values
-binds that identity at construction. A specifically missing root remains
-pending for one valid `initialize()` attempt. The method validates
-`overwrite_prompts` before I/O; a non-boolean value raises `TypeError` without
-consuming that attempt.
+`Workspace` classifies the exact lexical absolute root without mutation. An
+existing root must be a non-symlinked directory with a meaningful device/inode
+identity. An absent root remains pending; an empty root is eligible; an exact
+initialization journal is resumable; an exact clean v2 root is ready. Any other
+nonempty, malformed, drifted, or unsafe state fails closed.
 
-At the start of the first valid attempt, a pending instance becomes terminal
-before capability checks or filesystem mutation. Safe initialization preflights
-the required descriptor-relative directory and atomic-file operations,
-no-follow flags and inspection, identity checks, synchronization, and cleanup.
-If any required primitive is unavailable, `initialize()` raises `OSError` before
-mutation rather than using a weaker fallback.
+Before creating a missing root, initialization rejects any repository ancestor.
+Before mutating an empty root, it requires Git topology `absent`. Journal-backed
+recovery accepts only `absent` or an exact standalone repository. Parent
+repositories, nested repositories, linked worktrees, submodules, sparse or bare
+repositories, root mismatches, and unsafe Git administration are never adopted.
 
-The attempt walks the canonical root from an opened filesystem anchor, creates
-each missing component relative to its opened parent, and opens each component
-without following its name. It verifies the opened final root against its final
-named identity, then retains that root descriptor until initialization ends.
-All topology creation and default-file parent traversal is relative to that
-descriptor. Each new file is written and synchronized through an exclusively
-created temporary regular file. Before installation, its meaningful identity is
-captured; after installation, the target must have that same identity. The
-create-only path leaves an existing non-symlink target unchanged and never
-replaces a competing target. `overwrite_prompts=True` instead atomically
-replaces only the four canonical role prompts. Both paths preserve the
-established file bytes and create-versus-overwrite behavior.
+Initialization preflights required descriptor-relative, no-follow,
+exclusive-create, synchronization, identity, and cleanup operations. It opens
+the filesystem anchor, creates/walks each component through retained directory
+descriptors, and repeatedly compares the opened and named root identities. If a
+required primitive is unavailable, it raises `OSError` before root mutation.
 
-After all topology and default writes, initialization reopens the filesystem
-anchor, rewalks the complete canonical root without following component names,
-and requires that descriptor to match the retained root identity. It then closes
-the retained root descriptor. Only after that cleanup succeeds does the instance
-record a successful identity. A canonical ancestor or root replacement after
-the initial comparison cannot redirect writes: they remain on the retained
-root, the final rewalk rejects the changed name, and later debug-log storage has
-no successful identity to follow.
+For a missing or empty root, the first scaffold mutation is an exclusively
+created and synchronized `.story-writing-agents-initialize-v2.json`. Its strict
+canonical JSON binds schema version `2`, state `initializing`, and the SHA-256
+identity of the exact 22-file manifest. Existing entries during recovery must
+be byte-identical members of that manifest; unknown files, undeclared
+directories, symlinks, nonregular entries, mismatched bytes, or a different
+journal are preserved and rejected. There is no overwrite, adoption, cleanup,
+upgrade, or weaker fallback path.
 
-The originating `OSError`, `KeyboardInterrupt`, or `SystemExit` from root
-creation, identity verification, child/default work, or file installation
-propagates unchanged; cleanup does not replace an active body failure. If the
-body succeeds and retained-root cleanup fails, that cleanup failure propagates
-unchanged. Safely created components and intended partial data on the retained
-root are not rolled back. Until complete success, every later `initialize()`
-call on that instance raises the established identity-unavailable `OSError`
-before root creation, stat or bind, child creation, or default writes. It neither
-retries nor repeats the original failure. Calls after successful initialization
-retain the established preserve-existing behavior and optional canonical-prompt
-overwrite.
+Missing exact scaffold files are installed create-only through synchronized
+temporary regular files and descriptor-relative hard-link publication. The
+initializer then asks the closed Git adapter for one fixed parentless `main`
+commit. The adapter verifies the effective author and committer and never uses
+an agent-invented identity. An identity failure leaves the exact journal and
+scaffold available to a fresh retry but creates no absent Git repository.
 
-Any other unavailable or nonmeaningful construction-time identity remains
-unavailable for that `Workspace` instance rather than silently rebinding later.
-An existing directory in that state retains the established limitation: normal
-pathname-based initialization may create its scaffold, but diagnostic storage
-remains unavailable for that instance. A new `Workspace` performs its own
-construction-time probe, so inspect and repair a failed root path before
-constructing one.
+After baseline creation, the initializer verifies the exact marker, scaffold,
+manifest, repository topology, one commit, branch, index/tree, and a status
+containing only the untracked journal. It removes and synchronizes only that
+journal, then repeats ready verification and root-identity comparison. Success
+is reported only after the journal is absent and status is clean. `story init`
+itself creates no debug-log event or other post-baseline residue.
 
-This identity protects internal diagnostic containment only. Public and domain
-operations retain pathname and no-symlink checks but do not compare the retained
-root identity, so they may observe a real directory installed later at the same
-root path. A `Workspace` is not an identity-pinned filesystem snapshot or a
-transaction across operations. Every public path operation rejects:
+An `OSError`, `KeyboardInterrupt`, `SystemExit`, typed workspace failure, or Git
+failure terminalizes that `Workspace` object. It does not roll back durable
+exact partial progress. Every later `initialize()` call on the same object
+raises before another attempt; a fresh object/process must reclassify the
+journal and all bytes. A clean ready-root `initialize()` is read-only and
+creates no second commit. Dirty or drifted ready state is preserved and reported
+as recovery-required.
+
+`Workspace.require_ready()` checks the authorization captured by that object;
+it is not a live disk scan. Fresh CLI resolution, explicit smoke, and fresh
+construction perform strict current inspection. A long-lived `Workspace` is
+not an identity-pinned filesystem snapshot, watcher, or transaction across
+operations. Every public path operation rejects:
 
 - absolute paths;
 - any `..` path component;
@@ -99,8 +92,11 @@ The symlink rule protects logical as well as physical boundaries. A link cannot
 redirect a manuscript, core document, default, catalog record, or transcript.
 Workspace and template identifiers have additional validation.
 
-CLI discovery chooses the nearest initialized ancestor and never initializes a
-directory. Use an explicit path for automation or nested workspaces.
+CLI discovery selects the nearest recognizable boundary and validates it. A
+marker, initialization journal, or known legacy sentinel stops the search, so
+an unsupported or malformed inner boundary is never skipped for an outer one.
+Discovery and explicit paths never initialize. Use the exact root for
+automation; nested workspace/repository initialization is unsupported.
 
 The writing-artifact storage adapter has a distinct construction contract. It
 captures a supplied relative root immediately as a lexical absolute path using
@@ -276,16 +272,18 @@ primitive drops the record instead of using a weaker or less-contained fallback
 destination. The diagnostic may therefore be absent, but the caller's result,
 exception, output, and exit remain unchanged.
 
-Explicit CLI smoke initializes one identity-bearing `Workspace` and passes that
-same object as the smoke run's retained workspace and uses it for CLI diagnostic
-attempts. Every fresh workspace-bound service inside smoke also borrows that
-object. The CLI never resolves the pathname again for handoff or post-run
-diagnostics. Replacing or making the bound root unavailable can therefore drop
-later records, but cannot redirect them into the replacement or change the
-compact report, established stderr lines, propagated process control, or exit
-status. This does not identity-pin ordinary smoke artifacts; their ordinary
-`Workspace` I/O is pathname-based and may observe the replacement. Implicit
-smoke instead owns and removes its temporary workspace.
+Explicit CLI smoke resolves an already ready root, then constructs one fresh
+`Workspace` to reverify the exact clean v2 marker, scaffold, baseline, and
+status. It performs no initialization, directive/catalog/history work, or
+debug-log handle/submission, and creates no filesystem residue. Its report has
+null session/conversation IDs and only the initialization and unchanged-
+execution checks.
+
+Implicit smoke instead owns a disposable directory, uses the real initializer,
+exercises provider-free management/storage checks, and removes the complete
+directory. Effective Git identity failures propagate truthfully; the temporary
+directory is still removed. Neither form can redirect work through a replaced
+root or use diagnostics to change its primary result.
 
 A guarded weak process-wide lock serializes writers for one resolved workspace.
 After the safe-primitive and directory checks pass, an independent persistent

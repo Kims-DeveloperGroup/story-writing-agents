@@ -1,6 +1,7 @@
 # Documentation
 
-The runtime has one active schema-v2 storage/inspection path. Management,
+The runtime has one strict Git-backed schema-v2 workspace boundary and one
+active schema-v2 storage/inspection path. Initialization, management,
 structured history/search/transcript reads, and provider-free smoke are
 available; public story execution is not. Start with the page that matches
 your task.
@@ -18,18 +19,19 @@ your task.
 
 | Task | Canonical page |
 | --- | --- |
-| Initialize and inspect a workspace | [Workspaces](guides/workspaces.md) |
+| Initialize, validate, and understand a strict v2 workspace | [Workspaces](guides/workspaces.md) |
+| Recover an interrupted or rejected initialization | [Workspace recovery](operations/recovery-and-limitations.md#workspace-initialization-recovery) |
 | Manage sessions and conversations | [Story sessions](guides/story-sessions.md) |
 | Understand why story instructions are unavailable | [Collaboration transition](guides/consensus-runs.md) |
 | Understand the lead's responsibilities and confirmation boundary | [Lead agent](guides/lead-agent.md) |
-| Run the local management/storage check | [Provider-free smoke](guides/smoke-test.md) |
+| Run disposable smoke or read-only workspace verification | [Provider-free smoke](guides/smoke-test.md) |
 | Apply session directives | [Directives](guides/directives.md) |
 | Inspect and recover local state | [Inspection and recovery](guides/inspection-and-recovery.md) |
 | Configure or query optional local RAG | [Conversation RAG](guides/conversation-rag.md) |
 | Select or transfer conversation storage | [SQLite conversation storage](guides/sqlite-conversation-storage.md) |
 | Inspect recorded provider exchanges | [Agent exchanges](guides/agent-exchanges.md) |
 | Understand artifact-reference syntax and current availability | [Artifact references](guides/artifact-references.md) |
-| Create or inspect the fixed local Git baseline from Python | [Safe Git adapter](reference/git-adapter.md) |
+| Understand automatic initialization Git or use its closed Python adapter | [Safe Git adapter](reference/git-adapter.md) |
 
 ## Exact reference
 
@@ -37,6 +39,7 @@ your task.
 - [Interactive command parser](reference/interactive-command-parser.md)
 - [Interactive terminal](reference/interactive-terminal.md)
 - [Runtime management API](reference/runtime-api.md)
+- [Workspace API](reference/workspace-api.md)
 - [Package API and exports](reference/package-api.md)
 - [Schema-v2 collaboration history](reference/collaboration-history.md)
 - [Conversation catalog](reference/conversation-catalog.md)

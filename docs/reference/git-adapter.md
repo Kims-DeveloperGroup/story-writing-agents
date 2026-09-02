@@ -10,9 +10,9 @@ This is the complete availability boundary for issue
 
 - Python callers can classify repository topology, inspect or create the fixed
   baseline, and read bounded status, diff, and log metadata.
-- `story init` does **not** call this adapter yet. Issue
-  [#454](https://github.com/Kims-DeveloperGroup/story-writing-agents/issues/454)
-  owns that later automatic v2-workspace composition.
+- `story init` now composes this adapter internally after it records the exact
+  schema-v2 initialization journal and installs its exact 22-file scaffold.
+  The CLI does not expose manifest selection or another Git operation.
 - Session branches, worktrees, internal refs, and confirmed later commits are
   not available here. Issue
   [#449](https://github.com/Kims-DeveloperGroup/story-writing-agents/issues/449)
@@ -29,11 +29,17 @@ result objects. After successful creation, users see a local `main` branch with
 one root commit named `Initialize story workspace`. The commit and index
 contain exactly the regular files selected by the caller's manifest.
 
-Users cannot initialize that Git history by running `story init` in this
-revision. They also cannot use this API to make a second commit, apply a story
-proposal, manage a session worktree, contact a remote, or repair an unexpected
-repository. The adapter reports a closed recovery state instead of guessing
-how to change such a repository.
+Users running `story init` on an absent/empty safe root receive this baseline
+automatically with the initializer's exact 22-file manifest. That composition
+is stricter than the adapter alone: the workspace lifecycle rejects arbitrary
+extra files even though the direct adapter leaves unrelated untracked files
+unchanged.
+
+Users cannot choose a manifest from the CLI, use this API to make a second
+commit, apply a story proposal, manage a session worktree, contact a remote, or
+repair an unexpected repository. Initialization authority covers only the one
+fixed root commit. The adapter reports a closed recovery state instead of
+guessing how to change an unexpected repository.
 
 ## Fixed baseline contract
 
@@ -435,5 +441,5 @@ log_metadata() -> GitLogMetadata
 
 There is no migration or compatibility mode and no arbitrary process runner.
 Use [Package API and exports](package-api.md) for the facade inventory and
-[Workspaces](../guides/workspaces.md) for the currently separate `story init`
-behavior.
+[Workspaces](../guides/workspaces.md) for the stricter automatic `story init`
+composition, journal, and readiness behavior.

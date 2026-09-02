@@ -29,6 +29,7 @@ from story_writing_agents.conversation_storage.sqlite import (
 from story_writing_agents.conversations import CollaborationEventBatch
 
 from tests.collaboration_contract_fixture import contract_batches
+from tests.helpers import initialize_test_workspace
 
 
 @dataclass(frozen=True, slots=True)
@@ -45,7 +46,7 @@ def initialized_workspace(test_case: TestCase) -> Workspace:
 
     temporary = tempfile.TemporaryDirectory(prefix="sqlite-storage-test-")
     test_case.addCleanup(temporary.cleanup)
-    return Workspace(temporary.name).initialize()
+    return initialize_test_workspace(temporary.name)
 
 
 def database_path(workspace: Workspace) -> Path:

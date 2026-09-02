@@ -35,12 +35,14 @@ from story_writing_agents.conversation_rag_store import (
     ConversationRagStoreStatus,
 )
 
+from tests.helpers import initialize_test_workspace
+
 _REPOSITORY_ROOT = Path(__file__).resolve().parents[1]
 _GENERIC_SOURCE = _REPOSITORY_ROOT / "vendor" / "generic-rag" / "src"
 if str(_GENERIC_SOURCE) not in sys.path:
     sys.path.insert(0, str(_GENERIC_SOURCE))
 
-from story_writing_agents.generic_rag_adapter import (
+from story_writing_agents.generic_rag_adapter import (  # noqa: E402
     GenericRagConversationService,
 )
 
@@ -219,7 +221,7 @@ class ConversationRagStoreTests(unittest.TestCase):
     ) -> tuple[Workspace, ConversationRagGenerationStore]:
         temporary = tempfile.TemporaryDirectory()
         self.addCleanup(temporary.cleanup)
-        workspace = Workspace(temporary.name).initialize()
+        workspace = initialize_test_workspace(temporary.name)
         return workspace, ConversationRagGenerationStore(workspace)
 
     @staticmethod
@@ -513,7 +515,7 @@ class ConversationRagStoreTests(unittest.TestCase):
         )
         self.assertNotIn("Alpha 한글 🌙", repr(published))
 
-        reopened = ConversationRagGenerationStore(Workspace(workspace.root)).inspect(
+        reopened = ConversationRagGenerationStore(workspace).inspect(
             "session-a",
             "local",
             LocalConversationRagEmbedder().identity,
@@ -571,7 +573,7 @@ class ConversationRagStoreTests(unittest.TestCase):
             (_VISIBLE_TURN_SCHEMA_ID,) * 3,
         )
 
-        reopened_store = ConversationRagGenerationStore(Workspace(workspace.root))
+        reopened_store = ConversationRagGenerationStore(workspace)
         reopened = reopened_store.inspect(
             "session-a",
             "local",
@@ -780,7 +782,7 @@ class ConversationRagStoreTests(unittest.TestCase):
             (visible.counts.generations, visible.counts.orphan_generations),
             (2, 1),
         )
-        reopened = ConversationRagGenerationStore(Workspace(workspace.root))
+        reopened = ConversationRagGenerationStore(workspace)
         current = reopened.inspect(
             "session-a",
             "local",

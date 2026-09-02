@@ -11,11 +11,12 @@ from importlib import metadata
 from pathlib import Path
 from unittest import mock
 
-from story_writing_agents import Workspace
 from story_writing_agents import conversation_rag as rag
 from story_writing_agents import conversation_rag_composition as composition
 from story_writing_agents import conversation_rag_local as local
 from story_writing_agents import conversation_rag_store as rag_store
+
+from tests.helpers import initialize_test_workspace
 
 _REPOSITORY_ROOT = Path(__file__).resolve().parents[1]
 _GENERIC_RAG_SOURCE = _REPOSITORY_ROOT / "vendor" / "generic-rag" / "src"
@@ -407,7 +408,7 @@ class ConversationRagCompositionTests(unittest.TestCase):
         if str(_GENERIC_RAG_SOURCE) not in sys.path:
             sys.path.insert(0, str(_GENERIC_RAG_SOURCE))
         with tempfile.TemporaryDirectory() as temporary:
-            workspace = Workspace(temporary).initialize()
+            workspace = initialize_test_workspace(temporary)
             store = rag_store.ConversationRagGenerationStore(workspace)
             lexical = _EmptyLexicalRetriever()
             real_compose = composition.compose_conversation_rag
@@ -472,9 +473,7 @@ class ConversationRagCompositionTests(unittest.TestCase):
                         snapshot.state,
                     )
                     fresh = composition.compose_local_conversation_rag(
-                        rag_store.ConversationRagGenerationStore(
-                            Workspace(workspace.root)
-                        ),
+                        rag_store.ConversationRagGenerationStore(workspace),
                         lexical,
                     )
                     reopened = fresh.retrieve_semantic(
@@ -513,7 +512,7 @@ class ConversationRagCompositionTests(unittest.TestCase):
         if str(_GENERIC_RAG_SOURCE) not in sys.path:
             sys.path.insert(0, str(_GENERIC_RAG_SOURCE))
         with tempfile.TemporaryDirectory() as temporary:
-            workspace = Workspace(temporary).initialize()
+            workspace = initialize_test_workspace(temporary)
             store = rag_store.ConversationRagGenerationStore(workspace)
             with mock.patch.object(
                 composition.metadata, "version", return_value="0.1.0"
@@ -556,7 +555,7 @@ class ConversationRagCompositionTests(unittest.TestCase):
                 self.subTest(control=type(control).__name__),
                 tempfile.TemporaryDirectory() as temporary,
             ):
-                workspace = Workspace(temporary).initialize()
+                workspace = initialize_test_workspace(temporary)
                 store = rag_store.ConversationRagGenerationStore(workspace)
                 with mock.patch.object(
                     composition.metadata, "version", return_value="0.1.0"
@@ -612,7 +611,7 @@ class ConversationRagCompositionTests(unittest.TestCase):
         if str(_GENERIC_RAG_SOURCE) not in sys.path:
             sys.path.insert(0, str(_GENERIC_RAG_SOURCE))
         with tempfile.TemporaryDirectory() as temporary:
-            workspace = Workspace(temporary).initialize()
+            workspace = initialize_test_workspace(temporary)
             store = rag_store.ConversationRagGenerationStore(workspace)
             with mock.patch.object(
                 composition.metadata, "version", return_value="0.1.0"
@@ -694,7 +693,7 @@ class ConversationRagCompositionTests(unittest.TestCase):
         if str(_GENERIC_RAG_SOURCE) not in sys.path:
             sys.path.insert(0, str(_GENERIC_RAG_SOURCE))
         with tempfile.TemporaryDirectory() as temporary:
-            workspace = Workspace(temporary).initialize()
+            workspace = initialize_test_workspace(temporary)
             store = rag_store.ConversationRagGenerationStore(workspace)
             with mock.patch.object(
                 composition.metadata,
@@ -738,7 +737,7 @@ class ConversationRagCompositionTests(unittest.TestCase):
         self,
     ) -> None:
         with tempfile.TemporaryDirectory() as temporary:
-            workspace = Workspace(temporary).initialize()
+            workspace = initialize_test_workspace(temporary)
             store = rag_store.ConversationRagGenerationStore(workspace)
             rag_root = (
                 workspace.root / "agent_states/orchestrator_state/conversation_rag"
@@ -772,7 +771,7 @@ class ConversationRagCompositionTests(unittest.TestCase):
 
     def test_compatibility_probe_is_deferred_sanitized_and_resource_free(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
-            workspace = Workspace(temporary).initialize()
+            workspace = initialize_test_workspace(temporary)
             rag_root = (
                 workspace.root / "agent_states/orchestrator_state/conversation_rag"
             )
@@ -822,7 +821,7 @@ class ConversationRagCompositionTests(unittest.TestCase):
         self,
     ) -> None:
         with tempfile.TemporaryDirectory() as temporary:
-            workspace = Workspace(temporary).initialize()
+            workspace = initialize_test_workspace(temporary)
             store = rag_store.ConversationRagGenerationStore(workspace)
             state = composition.LocalConversationRagRuntimeState(store)
             request = _projection_request()
@@ -927,7 +926,7 @@ class ConversationRagCompositionTests(unittest.TestCase):
         self,
     ) -> None:
         with tempfile.TemporaryDirectory() as temporary:
-            workspace = Workspace(temporary).initialize()
+            workspace = initialize_test_workspace(temporary)
             rag_root = (
                 workspace.root / "agent_states/orchestrator_state/conversation_rag"
             )

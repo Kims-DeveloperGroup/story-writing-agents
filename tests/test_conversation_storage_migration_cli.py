@@ -6,8 +6,6 @@ import contextlib
 import io
 import json
 import os
-import subprocess
-import sys
 import tempfile
 import unittest
 from pathlib import Path
@@ -200,7 +198,7 @@ class ConversationStorageTransferCliTests(unittest.TestCase):
         )
         self.assertFalse(workspace.path("debug_logs/runtime.jsonl").exists())
 
-    def test_real_subprocess_exits_zero_one_two_and_resolves_current_workspace(
+    def test_authorized_workspace_exits_zero_one_two_and_rejects_fresh_reopen(
         self,
     ) -> None:
         workspace = transfer_workspace(self)
@@ -209,25 +207,50 @@ class ConversationStorageTransferCliTests(unittest.TestCase):
             ConversationStorageBackend.FILESYSTEM,
             representative_archive(),
         )
-        repository = Path(__file__).resolve().parents[1]
-        environment = os.environ.copy()
-        environment["PYTHONPATH"] = os.fspath(repository / "src")
-
-        def invoke(*arguments: str) -> tuple[subprocess.CompletedProcess[str], dict]:
-            completed = subprocess.run(
-                [sys.executable, "-m", "story_writing_agents", *arguments],
-                cwd=workspace.root,
-                env=environment,
-                capture_output=True,
-                text=True,
-                check=False,
-                timeout=15,
+        rejected_stdout = io.StringIO()
+        rejected_stderr = io.StringIO()
+        with (
+            contextlib.redirect_stdout(rejected_stdout),
+            contextlib.redirect_stderr(rejected_stderr),
+        ):
+            rejected = main(
+                [
+                    "storage",
+                    "verify",
+                    "--from",
+                    "filesystem",
+                    "--to",
+                    "sqlite",
+                    "--workspace",
+                    os.fspath(workspace.root),
+                ]
             )
-            self.assertEqual(completed.stderr, "")
-            self.assertEqual(completed.stdout.count("\n"), 1)
-            value = json.loads(completed.stdout)
+        self.assertEqual(rejected, 2)
+        self.assertEqual(rejected_stderr.getvalue(), "")
+        self.assertEqual(
+            json.loads(rejected_stdout.getvalue())["failure"],
+            "workspace_invalid",
+        )
+
+        def invoke(*arguments: str) -> tuple[int, dict]:
+            stdout = io.StringIO()
+            stderr = io.StringIO()
+            with (
+                mock.patch.object(
+                    cli_module,
+                    "resolve_workspace",
+                    return_value=workspace,
+                ) as resolve,
+                contextlib.redirect_stdout(stdout),
+                contextlib.redirect_stderr(stderr),
+            ):
+                exit_code = main(list(arguments))
+            resolve.assert_called_once_with(None)
+            self.assertEqual(stderr.getvalue(), "")
+            self.assertEqual(stdout.getvalue().count("\n"), 1)
+            value = json.loads(stdout.getvalue())
             self.assertEqual(
-                completed.stdout,
+                stdout.getvalue(),
                 json.dumps(
                     value,
                     ensure_ascii=False,
@@ -236,7 +259,7 @@ class ConversationStorageTransferCliTests(unittest.TestCase):
                 )
                 + "\n",
             )
-            return completed, value
+            return exit_code, value
 
         mismatch, mismatch_value = invoke(
             "storage",
@@ -246,7 +269,7 @@ class ConversationStorageTransferCliTests(unittest.TestCase):
             "--to",
             "sqlite",
         )
-        self.assertEqual(mismatch.returncode, 1)
+        self.assertEqual(mismatch, 1)
         self.assertEqual(mismatch_value["failure"], "parity_mismatch")
 
         dry_run, dry_value = invoke(
@@ -258,7 +281,7 @@ class ConversationStorageTransferCliTests(unittest.TestCase):
             "sqlite",
             "--dry-run",
         )
-        self.assertEqual(dry_run.returncode, 0)
+        self.assertEqual(dry_run, 0)
         self.assertEqual(dry_value["outcome"], "work_required")
 
         transferred, transferred_value = invoke(
@@ -269,7 +292,7 @@ class ConversationStorageTransferCliTests(unittest.TestCase):
             "--to",
             "sqlite",
         )
-        self.assertEqual(transferred.returncode, 0)
+        self.assertEqual(transferred, 0)
         self.assertEqual(transferred_value["parity"], "verified")
 
         verified, verified_value = invoke(
@@ -280,7 +303,7 @@ class ConversationStorageTransferCliTests(unittest.TestCase):
             "--to",
             "sqlite",
         )
-        self.assertEqual(verified.returncode, 0)
+        self.assertEqual(verified, 0)
         self.assertEqual(verified_value["parity"], "verified")
 
         invalid, invalid_value = invoke(
@@ -291,7 +314,7 @@ class ConversationStorageTransferCliTests(unittest.TestCase):
             "--to",
             "filesystem",
         )
-        self.assertEqual(invalid.returncode, 2)
+        self.assertEqual(invalid, 2)
         self.assertEqual(invalid_value["failure"], "invalid_request")
         self.assertFalse(workspace.path("debug_logs/runtime.jsonl").exists())
 

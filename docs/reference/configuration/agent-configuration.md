@@ -55,19 +55,13 @@ Unknown fields are rejected. The complete object is validated before a backend
 accepts any explicit model/effort override, so malformed persisted fields are
 never hidden by CLI or `AgentBackend` constructor values.
 
-Existing legacy files remain valid: all missing provider-specific keys and
-`default_backend` resolve as `null`, providing no workspace model/effort or
-agent-provider fallback beyond Codex. Missing or null
-`conversation_storage_backend` resolves to filesystem; missing RAG keys resolve
-to `null`/`false`, and missing `show_message_details` resolves to `false`.
-Loading does not rewrite legacy bytes. The next successful complete
-`/settings`, `story storage use`, or `story rag enable|disable` persistence
-emits the canonical twelve-key object with explicit storage, RAG, and message-
-details values. A binary that enforces an older closed nine-, ten-, or eleven-
-key schema rejects that newly saved file because it does not recognize every
-new field; downgrading requires an explicit compatible migration.
-Running `story init` again, including with `--overwrite-prompts`, does not
-rewrite or migrate existing system-default bytes. Global `/settings` edits this
+The strict v2 initialization baseline contains this exact canonical twelve-key
+object. `story init` never adopts, rewrites, or migrates an older configuration;
+a recognizable pre-v2 or mismatched scaffold is rejected with guidance to
+create a new workspace. There is no prompt-overwrite, compatibility, downgrade,
+or migration path.
+
+Global `/settings` edits this
 canonical twelve-field object and the per-agent object through an isolated
 current/pending view. Its Conversation RAG editor offers Provider
 Disabled/Local and Automatic Off/On; Disabled canonicalizes both keys to
@@ -264,16 +258,19 @@ and are not interpolated into requests. Runtime definitions instead carry a
 content-addressed reference to the role prompt, configured persona, language, and
 allowlisted core documents.
 
-Normal `story init` creates a missing prompt and preserves existing content.
-`story init --overwrite-prompts` replaces all four canonical prompt files,
-even if only one changed, while preserving every other existing file. One
-backend construction validates and captures the complete persisted system and
-agent configuration pair. Direct on-disk edits have no watcher: a newly
-launched backend validates and reconciles them, while existing other shells
-retain their captured state. Confirmed `/settings` Apply Changes is the distinct
-current-shell hot-activation path for live-capable runtime settings described
-above; desired conversation storage and Conversation RAG remain next-shell
-selections. Session
+The four packaged role prompts are exact files in the initialization manifest.
+There is no init repair or overwrite option. A changed/missing prompt makes the
+original root fail a fresh readiness check rather than being silently restored.
+Later supported role/configuration changes belong in #449's session/internal
+worktrees; the original `main` root remains pristine.
+
+One backend construction validates and captures the complete persisted system
+and agent configuration pair. Direct on-disk edits have no watcher: a newly
+launched backend validates them, while existing other shells retain their
+captured state. Confirmed `/settings` Apply Changes is the distinct current-
+shell hot-activation path for live-capable runtime settings described above;
+desired conversation storage and Conversation RAG remain next-shell selections.
+Session
 language and persona overrides remain live, and explicit applicable
 CLI/constructor provider settings remain higher precedence. Role and persona
 continue to follow the definition-snapshot/binding lifecycle. Built-in mutable

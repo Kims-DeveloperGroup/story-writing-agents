@@ -20,7 +20,7 @@ The stable inventories in this revision are:
 | `story_writing_agents.workspace` | 3 | `Workspace`, `initialize_workspace`, and `FilesystemConversationCatalog` |
 | `story_writing_agents.writing_artifacts` | 62 | Canonical artifact/reference values plus pure exact change-set and relationship-policy contracts |
 
-The production graph has 102 modules, 370 dependency edges, no cycles, and 104
+The production graph has 104 modules, 376 dependency edges, no cycles, and 104
 package-root exports. The conversations owners contribute 54 event exports and
 20 context exports; their facade bindings are identical to their owner
 bindings.
@@ -62,11 +62,28 @@ log = adapter.log_metadata()
 
 The boundary can create or verify only the exact fixed `main` root commit and
 return bounded content-free repository metadata. It has no arbitrary command
-runner, provider, remote, migration, workspace-initialization composition,
-session branch/worktree, or later-commit operation. In particular, the
-installed `story init` command does not call this adapter in this revision.
+runner, provider, remote, migration, session branch/worktree, or later-commit
+operation. The internal schema-v2 workspace initializer now composes this
+adapter with its exact 22-file manifest; callers cannot supply a CLI manifest
+or use that initialization authorization for a later commit.
 See [Safe Git adapter and story baseline](git-adapter.md) for the manifest,
 identity, topology, retry, security, and sample input/output contracts.
+
+The three-name `story_writing_agents.workspace` facade remains unchanged:
+
+```python
+from story_writing_agents.workspace import (
+    FilesystemConversationCatalog,
+    Workspace,
+    initialize_workspace,
+)
+```
+
+`Workspace.initialize()` and `initialize_workspace(root)` intentionally have
+no prompt-overwrite parameter. Pure marker/journal/scaffold ownership and the
+descriptor-bound initialization/readiness/discovery lifecycle live in two
+package-internal modules with empty exports. They do not enlarge the workspace
+or package-root facade.
 
 Canonical artifact value contracts live in
 `story_writing_agents.writing_artifacts`, but are intentionally absent from the
@@ -218,7 +235,8 @@ uses the same v2 port.
 
 If the filesystem owner sees `transcript.jsonl`, or the SQLite owner sees any
 row in `conversation_events`, it rejects the owning boundary before mutation.
-#454 owns the later whole-workspace rejection boundary.
+Strict schema-v2 workspace readiness also rejects unsupported whole-workspace
+state before normal activation.
 
 See [Collaboration history](collaboration-history.md),
 [transcripts](conversation-transcripts.md), and

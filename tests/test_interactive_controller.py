@@ -1521,8 +1521,8 @@ class ControllerContractTests(ControllerTestCase):
 
         for module_name in graph:
             visit(module_name)
-        self.assertEqual(len(modules), 102)
-        self.assertEqual(sum(len(dependencies) for dependencies in graph.values()), 370)
+        self.assertEqual(len(modules), 104)
+        self.assertEqual(sum(len(dependencies) for dependencies in graph.values()), 376)
         self.assertTrue(
             {
                 "story_writing_agents.conversations",
@@ -1543,6 +1543,8 @@ class ControllerContractTests(ControllerTestCase):
                 "story_writing_agents.interactive_controller._exchange_policy",
                 "story_writing_agents.interactive_controller._exchange_viewer",
                 "story_writing_agents.interactive_terminal._external_view",
+                "story_writing_agents.workspace.initialization",
+                "story_writing_agents.workspace.schema",
             }
             <= modules
         )
@@ -11371,7 +11373,41 @@ class ControllerConversationCommandTests(ControllerTestCase):
                     outputs[relative.as_posix()] = path.read_bytes()
             return outputs
 
-        journey_snapshots: list[tuple[Workspace, dict[str, bytes]]] = []
+        first_workspace = self.make_workspace()
+        first_catalog = MemoryConversationCatalog()
+        first_controller, _first_backend, first_callbacks = self.make_controller(
+            first_workspace,
+            *conversation_actions,
+            "/quit",
+            conversation_catalog=first_catalog,
+            terminal_width=200,
+        )
+        second = self.prepared_controller(*future_actions, "/quit")
+        third = self.prepared_controller(
+            "/conversation subject Revised",
+            "/conversation archive",
+            "/conversation list",
+            f"/conversation resume {_UNIQUE_C}",
+            f"/conversation archive {_UNIQUE_C}",
+            "/conversation new Allowed",
+            "/quit",
+        )
+        selected = _conversation_metadata(_UNIQUE_C, "Selected")
+        fourth = self.prepared_controller(
+            *future_actions,
+            "/quit",
+            entries=(selected,),
+            selected_id=selected.conversation_id,
+        )
+        journey_snapshots = [
+            (workspace, protected_outputs(workspace))
+            for workspace in (
+                first_workspace,
+                second[0],
+                third[0],
+                fourth[0],
+            )
+        ]
         provider_patches = (
             mock.patch.object(subprocess, "Popen"),
             mock.patch.object(subprocess, "run"),
@@ -11382,28 +11418,15 @@ class ControllerConversationCommandTests(ControllerTestCase):
             provider_patches[1] as run,
             provider_patches[2] as connect,
         ):
-            workspace = self.make_workspace()
-            catalog = MemoryConversationCatalog()
-            controller, _backend, callbacks = self.make_controller(
-                workspace,
-                *conversation_actions,
-                "/quit",
-                conversation_catalog=catalog,
-                terminal_width=200,
-            )
-            journey_snapshots.append((workspace, protected_outputs(workspace)))
-            self.assertEqual(controller.run_session_lobby(), 0)
-            self.assertEqual(catalog.events, [])
-            rendered = "".join(callbacks.records)
+            self.assertEqual(first_controller.run_session_lobby(), 0)
+            self.assertEqual(first_catalog.events, [])
+            rendered = "".join(first_callbacks.records)
             self.assertEqual(
                 rendered.count("[error session_not_attached]"),
                 len(conversation_actions),
             )
 
-            workspace, _backend, catalog, controller, callbacks = (
-                self.prepared_controller(*future_actions, "/quit")
-            )
-            journey_snapshots.append((workspace, protected_outputs(workspace)))
+            _workspace, _backend, catalog, controller, callbacks = second
             self.assertEqual(controller.run_session_lobby(), 0)
             self.assertEqual(catalog.events, [])
             rendered = "".join(callbacks.records)
@@ -11412,18 +11435,7 @@ class ControllerConversationCommandTests(ControllerTestCase):
                 len(future_actions),
             )
 
-            workspace, _backend, catalog, controller, callbacks = (
-                self.prepared_controller(
-                    "/conversation subject Revised",
-                    "/conversation archive",
-                    "/conversation list",
-                    f"/conversation resume {_UNIQUE_C}",
-                    f"/conversation archive {_UNIQUE_C}",
-                    "/conversation new Allowed",
-                    "/quit",
-                )
-            )
-            journey_snapshots.append((workspace, protected_outputs(workspace)))
+            _workspace, _backend, catalog, controller, callbacks = third
             self.assertEqual(controller.run_session_lobby(), 0)
             rendered = "".join(callbacks.records)
             self.assertEqual(
@@ -11437,16 +11449,7 @@ class ControllerConversationCommandTests(ControllerTestCase):
             )
             self.assertEqual(len(catalog.entries), 1)
 
-            selected = _conversation_metadata(_UNIQUE_C, "Selected")
-            workspace, _backend, _catalog, controller, callbacks = (
-                self.prepared_controller(
-                    *future_actions,
-                    "/quit",
-                    entries=(selected,),
-                    selected_id=selected.conversation_id,
-                )
-            )
-            journey_snapshots.append((workspace, protected_outputs(workspace)))
+            _workspace, _backend, _catalog, controller, callbacks = fourth
             self.assertEqual(controller.run_session_lobby(), 0)
             rendered = "".join(callbacks.records)
             self.assertEqual(

@@ -14,13 +14,13 @@ provider-free inspection.
 
 | You can do now | You cannot do in this stage |
 | --- | --- |
-| Initialize a writing workspace. | Send an ordinary shell line to an agent. |
+| Initialize and verify one strict Git-backed schema-v2 writing workspace. | Send an ordinary shell line to an agent. |
 | Create, resume, list, and pause story sessions. | Route a line to an agent or select a sticky target. |
 | Create, list, focus, rename, archive, search, and read conversations. | Start a debate or publish a manuscript from the installed CLI. |
 | Apply directives and edit workspace settings. | Attach canonical artifact references to an agent call. |
 | Inspect session, debate, history, transcript, status, and recorded exchanges. | Call a direct-execution method on `StoryRuntime` or `RuntimeSession`. |
 | Use schema-v2 collaboration contracts, stores, archive/transfer, readable projection, search, and paging APIs. | Treat the active inspection path as an active lead/provider workflow. |
-| Run a provider-free management/storage smoke check. | Use smoke as evidence of provider behavior or story quality. |
+| Run a disposable management/storage smoke or verify an existing workspace without changing it. | Use smoke as evidence of provider behavior or story quality. |
 
 When ordinary text, routed text, or a retired execution command is submitted in
 the shell, Story reports:
@@ -33,9 +33,10 @@ The rejection happens before provider binding, transcript append, RAG,
 artifact-reference reads, progress reporting, or artifact publication. #466
 delivered the pure schema-v2 values; #474-#479 added readable projections,
 storage, archive/transfer, and the sole active storage/inspection service.
-Open issue #452 owns the later lead proposal/confirmation workflow, #453 owns
-specialist execution/results, and #454 owns whole-workspace rejection of
-unsupported history. None is implied by the current inspection service.
+Open issue #452 owns the later lead proposal/confirmation workflow and #453
+owns specialist execution/results. Workspace activation already rejects
+unsupported whole-workspace versions; none of these provider-bound behaviors
+is implied by the current inspection service.
 
 See [Lead agent and collaboration status](docs/guides/lead-agent.md) for the
 lead's responsibilities, confirmation boundary, and current versus target
@@ -66,14 +67,36 @@ accepted shell content invokes a story provider.
 
 ## Quick start
 
+Configure an effective Git author and committer according to your normal Git
+policy, then initialize an absent path or empty directory:
+
 ```bash
 story init ./my-story
 cd ./my-story
-story smoke
-story
+story smoke --workspace .
 ```
 
-At `story[lobby]>`, manage and inspect local state:
+Successful initialization prints the absolute workspace path:
+
+```json
+{
+  "workspace": "/absolute/path/to/my-story"
+}
+```
+
+It creates one strict schema-v2 workspace, four zero-byte core documents, and
+one clean local `main` root commit named `Initialize story workspace`. The
+initializer writes no story content. Repeating `story init` on that unchanged
+workspace validates it without rewriting, staging, or committing again.
+
+The initialization root is the pristine `main` baseline. This integration
+stage records the future session branch/ref/worktree grammar but does not create
+those resources; issue #449 owns later mutable session worktrees. Do not start
+mutable session work in the baseline or treat initialization as authorization
+for a later story commit.
+
+The installed shell retains this management grammar, which the later #449
+composition will run from isolated session/internal worktrees:
 
 ```text
 /session create novel
@@ -106,7 +129,9 @@ terminal capabilities; the sentence and behavior are stable.
 story smoke
 ```
 
-Smoke creates a temporary workspace and verifies exactly these checks:
+Without `--workspace`, smoke creates a temporary workspace through the real
+initializer, exercises management/storage wiring, and removes the complete
+directory. It verifies exactly these checks:
 
 ```json
 {
@@ -128,11 +153,15 @@ Smoke creates a temporary workspace and verifies exactly these checks:
 The actual report is compact one-line JSON and also includes generated session
 and conversation IDs plus workspace metadata. It proves management, catalog,
 and empty schema-v2 projections work together. It creates no transcript,
-debate, specialist state, provider exchange, or manuscript.
+debate, specialist state, provider exchange, or manuscript. Because it invokes
+the real initializer, a missing effective Git identity is reported rather than
+silently substituted.
 
-Use `story smoke --workspace PATH` to retain the initialized workspace,
-directive, catalog metadata, and bounded diagnostics. See the
-[smoke guide](docs/guides/smoke-test.md).
+`story smoke --workspace PATH` is different: it requires an already clean v2
+workspace and performs only `workspace_initialized` and
+`execution_artifacts_unchanged`. Its session and conversation IDs are `null`,
+and it creates no directive, catalog record, history, debug entry, or other
+residue. See the [smoke guide](docs/guides/smoke-test.md).
 
 ## Supported commands
 
@@ -190,12 +219,20 @@ lowercase-`.md` files below `manuscript/`. `${path}` and
 `${path}#Lx-Ly` remain the content-free reference indicators that future
 collaboration requests will carry. This revision has no public provider-bound
 input span, so `$`, `$$`, and those indicators do not trigger a picker, read,
-or agent requirement. See [artifact-reference status](docs/guides/artifact-references.md).
+or agent requirement. Initialization creates the four canonical core paths as
+empty files only; later lead-confirmed work, not the initializer, supplies
+story content. See [artifact-reference status](docs/guides/artifact-references.md).
 
 ## Important limits
 
 - No public story generation, advisory turn, debate, or artifact modification
   is active in this integration stage.
+- Initialization accepts only an absent/empty root or one exact resumable
+  initialization journal. It never adopts, overwrites, upgrades, or migrates a
+  legacy or arbitrary nonempty directory.
+- A dirty or drifted original `main` root is preserved and reported as requiring
+  recovery. Session branches, sibling worktrees, internal refs, and later
+  commits remain issue #449 work.
 - Smoke is intentionally provider-free and story-free.
 - Workspace configuration, histories, diagnostics, and artifacts are local
   plaintext unless the surrounding environment protects them.

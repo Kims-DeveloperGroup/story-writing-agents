@@ -1,104 +1,182 @@
 # Workspaces
 
-> **Availability:** workspace initialization, discovery, safe management
-> reads/writes, editable role prompts, and writing-artifact repository
-> components are implemented. No current public workflow asks agents to create
-> or modify story artifacts.
+> **Availability:** `story init` creates and validates one exact Git-backed
+> schema-v2 initialization root. It does not run an agent, write story content,
+> create a session resource, or authorize a later story commit.
 
-Key terms: **workspace root**—the resolved project and storage boundary;
-**core documents**—four durable story-context files; **role prompt**—one
-agent's static instructions; **persona**—a selectable behavior template.
+Key terms: **initialization root**—the pristine `main` baseline; **marker**—the
+strict `config/workspace.json` identity; **journal**—the temporary durable
+initialization record; **ready**—the marker, scaffold, Git baseline, index,
+tree, branch, and status all match exactly.
 
-A workspace keeps one story project's inputs and runtime artifacts together.
-Create a dedicated directory from the repository installation:
+## User impact
+
+Users can:
+
+- initialize an absent path or empty safe directory;
+- receive four empty, named core documents ready for later lead-guided work;
+- receive one local `main` root commit named `Initialize story workspace`;
+- validate an unchanged ready root by rerunning `story init`; and
+- resume an exact interrupted initialization with a fresh command.
+
+Users cannot:
+
+- adopt arbitrary existing files or a markerless/legacy workspace;
+- overwrite packaged prompts, migrate, upgrade, or enable compatibility;
+- initialize inside another repository, submodule, linked worktree, sparse
+  checkout, bare repository, or mismatched Git root;
+- use initialization as authorization for a later commit; or
+- treat a dirty, drifted, partial, or unsafe root as ready.
+
+## Before and after
+
+Earlier initialization filled missing scaffold entries, preserved arbitrary
+existing bytes, optionally overwrote prompts, created no core files, and
+created no Git baseline. The current contract is closed:
+
+```text
+story init PATH
+  -> classify PATH before mutation
+  -> write one exact initializing-v2 journal
+  -> install the exact scaffold and four empty core files
+  -> create one exact main baseline using the user's effective Git identity
+  -> verify the marker, manifest, commit, index/tree, and status
+  -> remove and synchronize the journal
+  -> verify the exact clean result again
+  -> print success
+```
+
+The transient journal is strict canonical UTF-8 JSON with a trailing newline:
+
+```json
+{
+  "manifest_digest": "<64-lowercase-hex-sha256>",
+  "schema_version": 2,
+  "state": "initializing"
+}
+```
+
+It is not part of the Git manifest. Do not edit or delete it manually; its
+digest is the evidence a fresh process uses to distinguish exact recovery from
+ambiguous partial state.
+
+## Initialize and verify
+
+Configure an effective Git author and committer under your normal Git policy,
+then choose an absent path or empty directory:
 
 ```bash
 story init ./my-novel
 ```
 
-Initialization is idempotent: it creates missing directories, configuration,
-role prompts, and `.gitkeep` files but normally preserves every existing file
-byte-for-byte. It does not create core-document templates, repair malformed
-configuration, or move existing manuscripts into the canonical layout. After upgrading, running
-`init` again is the safe way to add newly packaged scaffold files.
+Success prints the resolved absolute path:
 
-## Edit the story context
+```json
+{
+  "workspace": "/absolute/path/to/my-novel"
+}
+```
 
-The four files under `core_documents/` have separate jobs:
+You can inspect the externally visible Git facts with ordinary Git reads:
 
-- `global_outline.md` holds story-wide structure and durable facts.
-- `part_outlines.md` holds section, part, or chapter planning.
-- `character_sheets.md` holds character, relationship, and world continuity.
-- `narrative_rules.md` holds prose, viewpoint, tone, grammar, and format rules.
+```bash
+git -C ./my-novel branch --show-current
+git -C ./my-novel rev-list --count HEAD
+git -C ./my-novel log -1 --pretty=%s
+git -C ./my-novel status --porcelain
+```
 
-Initialization does not create these files. In the current integration stage,
-they can appear only through an external/tool-managed filesystem write made
-while workspace processes are stopped or as previously persisted data. The
-installed CLI cannot ask agents to modify them.
+The outputs are `main`, `1`, `Initialize story workspace`, and no status rows.
+Repeating `story init ./my-novel` prints the same workspace JSON after
+validation and leaves the commit count at one.
 
-When a file is present and safe, it is an authoritative role-relevant P2
-context source: the plot specialist is eligible for both outlines, the
-character specialist for character sheets, the execution specialist for
-narrative rules, and the lead for all four. Earlier manuscripts are SEARCH-first
-additive sources rather than automatically eager input. A manual edit changes
-the current source revision and can force a delta/bootstrap; it does not change
-the built-in stable role definition or fabricate authorship, commit history, or
-publication provenance. Generic
-`Workspace` writes still reject canonical paths, so external edits must be made
-only after all workspace processes stop.
+Initialization itself emits no debug-log event. A successful root has no
+initialization journal or other untracked initializer residue.
 
-## Customize a role
+## What each state means
 
-Each canonical agent owns one static prompt:
+| Observed state | User-visible behavior | Safe action |
+| --- | --- | --- |
+| Missing root or empty safe directory | Initialization creates the journal and converges to ready v2. | Wait for success before using the root. |
+| Exact journal plus matching partial scaffold | A fresh command validates every existing byte and continues only missing exact steps. | Rerun the same `story init PATH` in a fresh process. |
+| Exact baseline plus journal | The initializer verifies the baseline, removes only the journal, and verifies again. | Rerun with a fresh process. |
+| Ready v2, journal absent, clean | `story init` is validation-only and creates no second commit. | Continue only through the supported session-worktree workflow. |
+| Effective Git identity unavailable | Initialization reports `ConfigurationError`; the exact journal/scaffold may remain, but an absent repository is not created. | Configure a valid effective author and committer, then rerun with a fresh process. |
+| Recognizable legacy/markerless root or non-v2 numeric version | The command reports that migration and compatibility are unsupported. | Preserve it and create a separate new workspace. |
+| Malformed, arbitrary, dirty, drifted, or unsafe state | The command preserves all bytes and reports invalid/recovery-required state. | Stop; inspect or restore trusted state outside the runtime. Do not delete the journal or reset files to force success. |
+
+After any failed `Workspace.initialize()` attempt, that Python object is
+terminal. A fresh object or CLI process must reclassify the durable state before
+recovery. This prevents an object that observed a failure from guessing that
+the root is now safe.
+
+## Marker and session naming policy
+
+`config/workspace.json` is strict canonical UTF-8 JSON with a trailing newline:
+
+```json
+{
+  "schema_version": 2,
+  "session_topology": {
+    "branch_prefix": "story/session/",
+    "internal_ref_prefix": "refs/story-writing-agents/runtime/sessions/",
+    "worktree_sibling_suffix": ".story-worktrees"
+  }
+}
+```
+
+For a future session ID `novel`, this policy names:
 
 ```text
-config/agents/<agent-id>/AGENTS.md
+branch:   story/session/novel
+ref:      refs/story-writing-agents/runtime/sessions/novel
+worktree: <workspace-parent>/<workspace-name>.story-worktrees/novel
 ```
 
-The four IDs are `lead_orchestrator`, `plot_architect`,
-`character_custodian`, and `execution_specialist`. Prompt files have no
-placeholders and are never interpolated into a request. Role prompt, configured
-persona, language, and contextual protocol form stable provider binding
-material. Mutable core documents are selected separately as current sources.
-Changing stable material changes the later provider binding; changing a core
-document changes later context revision/delta state. Finish edits while no
-workspace process is active.
+#454 records only this grammar. It creates no session ID, branch, internal ref,
+or sibling worktree. #449 owns those resources and the separate confirmation
+required for later user-authored commits. Until that composition is available,
+the original `main` root remains the exact initialization baseline.
 
-Normal initialization preserves customized prompts. To deliberately replace
-all four with packaged defaults:
+## Core documents and role files
 
-```bash
-story init ./my-novel --overwrite-prompts
-```
+Initialization creates these exact zero-byte Markdown files:
 
-This flag is all-or-nothing for the four canonical prompt files. It does not
-replace configuration, personas, core documents, session or debate state,
-logs, or manuscripts. Back up custom prompts first.
+- `core_documents/global_outline.md`
+- `core_documents/part_outlines.md`
+- `core_documents/character_sheets.md`
+- `core_documents/narrative_rules.md`
 
-Persona templates are UTF-8 Markdown in `config/persona_templates/` or its
-`alternative_templates/` directory. Select them through configuration or an
-exact directive; do not place secrets in them.
+Empty means that no story decision exists yet; it is not generated content.
+Later lead workflows must identify incomplete or conflicting evidence and
+propose user-confirmed changes. Initialization never fills these files.
 
-## Work from the workspace
+The four packaged role prompts remain at
+`config/agents/<agent-id>/AGENTS.md`, for `lead_orchestrator`,
+`plot_architect`, `character_custodian`, and `execution_specialist`. They are
+part of the exact baseline. There is no prompt-overwrite option. Editing a
+prompt, configuration file, core document, or adding any other file to the
+original root makes a fresh readiness check reject that root; later supported
+edits belong in #449's session worktree.
 
-After initialization, enter the directory and prepare management scope:
+Persona templates are plaintext UTF-8 Markdown under
+`config/persona_templates/`. Do not put secrets in them.
 
-```bash
-cd ./my-novel
-story session create novel
-story inspect --session novel
-```
+## Discovery and explicit paths
 
-Without `--workspace`, commands search upward and choose the nearest fully
-initialized ancestor. An explicit path wins and is safer in automation or with
-nested workspaces. Neither discovery nor an explicit workspace argument silently
-initializes a directory.
+Without `--workspace`, supported commands search upward for the nearest
+*recognizable* workspace boundary. A marker, initialization journal, or known
+legacy sentinel makes a directory recognizable. Discovery validates that
+nearest boundary and never skips a malformed or unsupported inner workspace to
+select an outer one.
 
-For the complete generated layout and exact storage schemas, use
-[Session storage](../reference/configuration/session-storage.md). For path and
-symlink guarantees, use [Filesystem safety](../operations/filesystem-safety.md).
-For the four exact core paths, part-scoped manuscript grammar, current-source
-rules, and retained publication states, use
-[Canonical writing artifacts](../reference/writing-artifacts.md).
-For source selection, search/read, and limits, see
-[Bounded agent context](agent-context.md).
+An explicit path wins but does not initialize it. Nested repositories and
+nested workspace roots are not supported. For automation, pass the exact
+initialized root and treat any readiness error as fail-closed.
+
+For the exact generated tree, use
+[Session storage](../reference/configuration/session-storage.md). For public
+Python behavior, use [Workspace API](../reference/workspace-api.md). For path,
+Git-topology, and symlink guarantees, use
+[Filesystem safety](../operations/filesystem-safety.md). For recovery, use
+[Recovery and limitations](../operations/recovery-and-limitations.md#workspace-initialization-recovery).

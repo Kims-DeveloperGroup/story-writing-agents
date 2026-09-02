@@ -87,8 +87,8 @@ ERROR_DEFAULTS = {
         "Use a path inside the initialized workspace.",
     ),
     InteractiveErrorCode.WORKSPACE_VERSION_UNSUPPORTED: (
-        "This workspace uses an unsupported older session format.",
-        "Use a new workspace or follow the documented manual reset procedure.",
+        "This workspace uses an unsupported workspace version.",
+        "Migration and compatibility are unsupported; create a new workspace.",
     ),
     InteractiveErrorCode.CONFIGURATION_INVALID: (
         "Runtime configuration is invalid.",

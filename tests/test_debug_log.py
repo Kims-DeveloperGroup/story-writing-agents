@@ -7,6 +7,7 @@ import contextlib
 import errno
 import inspect
 import json
+import multiprocessing
 import os
 import shutil
 import stat
@@ -77,6 +78,12 @@ def _trace(
         DebugPhase.OBSERVED,
         session_id=session_id,
     )
+
+
+def _trace_process_record(workspace: Workspace, session_id: str) -> None:
+    """Write one process record through a transferred authorized lease."""
+
+    _trace(WorkspaceDebugLog(workspace), session_id=session_id)
 
 
 def _trace_payload(log: WorkspaceDebugLog) -> bytes:
@@ -2669,40 +2676,30 @@ class DebugLogStorageTests(unittest.TestCase):
         self.assertTrue(set(persisted).issubset(attempted))
 
     def test_concurrent_processes_leave_only_complete_unique_lines(self) -> None:
-        repository_root = Path(__file__).resolve().parents[1]
-        environment = os.environ.copy()
-        environment["PYTHONPATH"] = str(repository_root / "src")
-        script = (
-            "import sys; "
-            "from story_writing_agents.debug_log import "
-            "DebugComponent,DebugOperation,DebugPhase,WorkspaceDebugLog; "
-            "from story_writing_agents.workspace import Workspace; "
-            "WorkspaceDebugLog(Workspace(sys.argv[1])).trace("
-            "DebugComponent.CLI,DebugOperation.CLI_COMMAND,DebugPhase.OBSERVED,"
-            "session_id=sys.argv[2])"
-        )
         attempted = {f"process_{index}" for index in range(6)}
+        context = multiprocessing.get_context("spawn")
         processes = [
-            subprocess.Popen(
-                [
-                    sys.executable,
-                    "-c",
-                    script,
-                    str(self.workspace.root),
-                    session_id,
-                ],
-                env=environment,
-                stdout=subprocess.DEVNULL,
-                stderr=subprocess.PIPE,
-                text=True,
+            context.Process(
+                target=_trace_process_record,
+                args=(self.workspace, session_id),
             )
             for session_id in attempted
         ]
-        for process in processes:
-            _stdout, stderr = process.communicate(timeout=10)
-            self.assertEqual(process.returncode, 0, stderr)
-            if process.stderr is not None:
-                process.stderr.close()
+        try:
+            for process in processes:
+                process.start()
+            for process in processes:
+                process.join(timeout=10)
+            alive = tuple(process.is_alive() for process in processes)
+            exitcodes = tuple(process.exitcode for process in processes)
+        finally:
+            for process in processes:
+                if process.is_alive():
+                    process.terminate()
+                    process.join(timeout=5)
+                process.close()
+        self.assertEqual(alive, (False,) * len(processes))
+        self.assertEqual(exitcodes, (0,) * len(processes))
 
         raw = self.log.path.read_bytes()
         self.assertTrue(raw.endswith(b"\n"))

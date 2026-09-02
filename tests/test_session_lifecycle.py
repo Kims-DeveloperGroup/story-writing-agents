@@ -32,6 +32,7 @@ from story_writing_agents import (
     SessionLifecycleState,
     SessionNotFoundError,
     SessionOwnershipUnknownError,
+    Workspace,
     WorkspaceFormatError,
     WorkspaceVersionUnsupportedError,
     provider_work_is_ready,
@@ -182,7 +183,7 @@ def _cleanup_rows_since(
 
 
 def _race_for_dead_claim(
-    workspace_root: str,
+    workspace: Workspace,
     ready: Any,
     start: Any,
     release: Any,
@@ -190,7 +191,7 @@ def _race_for_dead_claim(
 ) -> None:
     """Contend for a dead claim while keeping the winning process live."""
 
-    backend = AgentBackend(workspace_root, executable=sys.executable)
+    backend = AgentBackend(workspace, executable=sys.executable)
     ready.put(True)
     if not start.wait(10):
         results.put(("timeout",))
@@ -445,7 +446,7 @@ class SessionLifecycleContractTests(unittest.TestCase):
             ]
         )
         source_files = tuple(source_root.rglob("*.py"))
-        self.assertEqual(len(source_files), 102)
+        self.assertEqual(len(source_files), 104)
         self.assertTrue(
             {
                 source_root / "conversations" / "__init__.py",
@@ -454,6 +455,8 @@ class SessionLifecycleContractTests(unittest.TestCase):
                 source_root / "conversations" / "events.py",
                 source_root / "workspace" / "__init__.py",
                 source_root / "workspace" / "core.py",
+                source_root / "workspace" / "initialization.py",
+                source_root / "workspace" / "schema.py",
                 source_root / "conversation_storage" / "archive.py",
                 source_root / "conversation_storage" / "filesystem.py",
                 source_root / "conversation_storage" / "filesystem_archive.py",
@@ -477,8 +480,8 @@ class SessionLifecycleContractTests(unittest.TestCase):
         index = (source_root.parents[1] / "PYTHON_MODULE_INDEX.md").read_text(
             encoding="utf-8"
         )
-        self.assertIn("Importable production units indexed: 102.", index)
-        self.assertIn("Direct internal dependency edges indexed: 370.", index)
+        self.assertIn("Importable production units indexed: 104.", index)
+        self.assertIn("Direct internal dependency edges indexed: 376.", index)
         self.assertIn("Directed internal dependency cycles indexed: 0.", index)
         headings = tuple(re.findall(r"^### `([^`]+)`$", index, flags=re.MULTILINE))
         expected_modules: set[str] = set()
@@ -488,8 +491,8 @@ class SessionLifecycleContractTests(unittest.TestCase):
             if parts[-1] == "__init__":
                 parts = parts[:-1]
             expected_modules.add(".".join(("story_writing_agents", *parts)))
-        self.assertEqual(len(headings), 102)
-        self.assertEqual(len(set(headings)), 102)
+        self.assertEqual(len(headings), 104)
+        self.assertEqual(len(set(headings)), 104)
         self.assertEqual(set(headings), expected_modules)
         self.assertIn("Exactly 81 names in `__all__`", index)
         self.assertIn("Exactly 20 owning-module names in `__all__`", index)
@@ -508,6 +511,8 @@ class SessionLifecycleContractTests(unittest.TestCase):
             "story_writing_agents.conversation_storage.filesystem",
             "story_writing_agents.workspace",
             "story_writing_agents.workspace.core",
+            "story_writing_agents.workspace.initialization",
+            "story_writing_agents.workspace.schema",
             "story_writing_agents.writing_artifacts.change_sets",
             "story_writing_agents.writing_artifacts.relationship_policy",
         ):
@@ -1482,7 +1487,7 @@ class AgentBackendLifecycleTests(unittest.TestCase):
         processes = [
             context.Process(
                 target=_race_for_dead_claim,
-                args=(str(self.workspace.root), ready, start, release, results),
+                args=(self.workspace, ready, start, release, results),
             )
             for _ in range(2)
         ]

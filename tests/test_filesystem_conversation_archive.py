@@ -7,6 +7,7 @@ import os
 import threading
 import time
 import unittest
+from copy import copy
 from pathlib import Path
 from unittest import mock
 
@@ -15,6 +16,7 @@ from story_writing_agents import (
     FilesystemConversationCatalog,
     ManuscriptExistsError,
     Workspace,
+    WorkspaceFormatError,
 )
 from story_writing_agents.conversation_storage import (
     ConversationArchive,
@@ -164,14 +166,13 @@ class FilesystemConversationArchiveCompositionTests(unittest.TestCase):
         with self.assertRaises(ConversationArchiveSourceError):
             _export(workspace)
         missing = workspace.root / "missing"
-        adapter = compose_filesystem_conversation_archive(missing)
-        lease = ControlledLease(os.fspath(missing))
-        with self.assertRaises(ConversationArchiveSourceError):
-            adapter.export_archive(lease)
+        with self.assertRaisesRegex(WorkspaceFormatError, "workspace is not ready"):
+            compose_filesystem_conversation_archive(missing)
 
     def test_topology_and_lease_pin_all_io_to_one_root(self) -> None:
         workspace = initialized_workspace(self)
         other = initialized_workspace(self)
+        pinned_workspace = copy(workspace)
         adapter = compose_filesystem_conversation_archive(workspace)
         payload = nonempty_archive()
         coordinator = WorkspaceConversationStorageMutationCoordinator(workspace)
@@ -179,7 +180,7 @@ class FilesystemConversationArchiveCompositionTests(unittest.TestCase):
             workspace.root = other.root
             adapter.import_archive(lease, payload)
             self.assertEqual(adapter.export_archive(lease), payload)
-        self.assertEqual(_export(Workspace(coordinator.workspace_key)), payload)
+        self.assertEqual(_export(pinned_workspace), payload)
         self.assertEqual(_export(other), ConversationArchive(2, ()))
 
         wrong = ControlledLease(os.fspath(other.root))

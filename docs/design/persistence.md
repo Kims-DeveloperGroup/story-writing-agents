@@ -719,42 +719,39 @@ recovery uses `execution_profile_recovery_required`, error level, failed phase,
 and `activation_state: "recovery_required"`. A no-op, cancelled save, or
 pre-persist failure emits no successful transition.
 
-`Workspace` owns canonical-root resolution, containment, no-symlink checks, its
-per-instance meaningful root identity, package-internal root open/reverification
-helpers, and the `debug_logs/` scaffold declaration. An existing directory binds
-at construction; a specifically missing root remains pending for one valid
-`initialize()` attempt; any other unavailable identity never silently rebinds
-on that instance. Invalid `overwrite_prompts` input raises `TypeError` before
-I/O without consuming the pending attempt. The first valid attempt becomes
-terminal before capability checks or mutation and preflights the full required
-descriptor-relative directory and atomic-file capability set. It creates
-missing canonical-root components beneath opened parent descriptors, verifies
-the opened final root against its named identity, and retains that root
-descriptor across every topology and default write.
+Workspace lifecycle persistence has three owners. Internal `workspace.schema`
+defines the pure canonical v2 marker, initializing journal, exact 22-file
+scaffold, four empty core identities, and static session naming policy.
+Internal `workspace.initialization` owns root classification, descriptor-bound
+journal/scaffold convergence, Git composition, ready verification, and nearest-
+recognizable-boundary discovery. `workspace.core` owns the public `Workspace`
+object, generic contained persistence, and package-internal root helpers, and
+delegates lifecycle policy instead of interpreting a second schema.
 
-Pending child directories and file parents are traversed relative to the
-retained root without following names. File writes stage exclusive temporary
-regular files and verify both the temporary and installed identities.
-Create-only installation preserves existing non-symlink entries without
-replacement; prompt overwrite remains limited to the four canonical role
-prompts. After all writes, the canonical root is rewalked and matched to the
-retained identity. Successful identity is recorded only after the retained
-descriptor closes.
+Construction is observational. Missing and empty roots remain pending; one
+exact journal-backed partial root is initializing; one exact clean baseline is
+ready. Recognizable legacy, arbitrary nonempty, malformed, dirty, drifted, or
+unsafe state fails closed. Before mutation, initialization rejects repository
+ancestors and unsupported Git topology and preflights descriptor-relative,
+no-follow, exclusive-create, synchronization, identity, and cleanup support.
 
-The first `OSError`, `KeyboardInterrupt`, or `SystemExit` propagates unchanged,
-with an active body failure taking precedence over cleanup failure. Safely
-created components and intended partial data on the retained root are not
-rolled back. After any failure before complete writes, rewalk, and cleanup,
-later `initialize()` calls reject with the established identity-unavailable
-`OSError` before root or child I/O and never retry. Calls after success and roots
-that existed at construction retain their established pathname behavior. A new
-`Workspace` makes its own construction-time identity probe.
+The first scaffold mutation is the strict
+`.story-writing-agents-initialize-v2.json` containing schema version `2`, state
+`initializing`, and the exact manifest digest. The owner installs only missing
+byte-identical scaffold entries, then composes the #448 adapter for one
+parentless `main` commit named `Initialize story workspace` using the effective
+Git author and committer. It verifies the complete baseline with only the
+untracked journal, removes and synchronizes that journal, then verifies the
+exact clean baseline again. `story init` emits no debug record after the
+baseline.
 
-An existing directory whose construction-time probe is unavailable or
-nonmeaningful follows the established, separate limitation: normal
-pathname-based initialization may still create its scaffold, but that instance
-never gains a diagnostic root identity and diagnostic storage fails closed.
-Those helpers are not project-root exports.
+Failures preserve exact durable partial progress. The failed `Workspace` object
+becomes terminal before any second attempt; a fresh object/process must
+reclassify and may resume only the exact journal plus matching bytes. Clean
+ready reopen is read-only. Unknown or divergent state is never overwritten,
+reset, migrated, or adopted. `Workspace.require_ready()` checks the readiness
+captured for that object and is not a live rescan; fresh supported entry points
+construct and validate a fresh object before activation.
 
 For each supported storage attempt, the internal writer owns the lifetimes of
 the root, debug-directory, guard, and active-log descriptors. It creates or opens
@@ -776,21 +773,18 @@ Ordinary `Workspace` domain I/O remains pathname-based and may observe a real
 directory installed later at the same root path. It is not an identity-pinned
 filesystem snapshot or a transaction across operations.
 
-Explicit CLI smoke initializes and retains one identity-bearing `Workspace`,
-then passes that exact instance to `run_smoke`. The workflow treats a supplied
-workspace as caller-owned and borrows it. Every fresh workspace-bound catalog,
-event store, runtime, and memory service inside the workflow also borrows that
-instance; service freshness never rebinds workspace identity.
-Implicit smoke creates, initializes, and removes its own temporary `Workspace`.
-The smoke contract accepts a `Workspace` or `None`, so the CLI does not
-reconstruct the explicit workspace from a path for handoff or post-run
-diagnostics. CLI and smoke diagnostic-handle acquisition and every submission
-have separate `BaseException` guards. After CLI initialization or discovery
-succeeds, hint eligibility is recorded before optional handle acquisition; that
-eligibility, not handle presence or record success, controls a later fixed
-failure hint. A replaced or unavailable bound root can therefore omit a record,
-but cannot redirect diagnostics or change the smoke report, stderr, exception,
-or exit.
+Explicit CLI smoke resolves an already ready v2 root and its smoke owner
+constructs another fresh `Workspace` to reverify exact clean state. This path
+does not create a debug-log handle, directive, catalog, event, session, or other
+record. It returns null session/conversation IDs and only initialization plus
+unchanged-execution checks. `retained:true` describes the caller-owned path,
+not retained smoke output.
+
+Implicit smoke creates, initializes, exercises, and removes its own temporary
+workspace. It uses the real identity-sensitive initializer and can exercise
+debug, directive, catalog, and empty-history owners before the directory is
+deleted. Identity or initialization failures propagate while temporary cleanup
+still runs.
 
 The low-level writer attempts cleanup for every independently acquired
 descriptor and lock and drops ordinary `Exception` failures. An original body
@@ -799,8 +793,8 @@ cleanup process-control failure propagates after later cleanup attempts. Each of
 the five consumers adds a private `BaseException` guard around submissions, so
 diagnostic failure or an absent record cannot replace established results,
 exceptions, cancellation, persistence, cleanup, output, or exits.
-Explicit smoke retains best-effort records; implicit smoke removes them with its
-temporary workspace.
+Explicit smoke writes no record; implicit smoke removes any best-effort record
+with its temporary workspace.
 
 For the five synchronous provider-free `StoryRuntime` methods—directive
 application, runtime-override saving, and session, debate, or context

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import copy
 import errno
 import json
 import os
@@ -10,7 +11,7 @@ import threading
 import time
 import weakref
 from contextlib import contextmanager
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Iterator
 
@@ -66,18 +67,22 @@ _FILESYSTEM_MUTATION_TIMEOUT_SECONDS = 30.0
 
 @dataclass(frozen=True, slots=True)
 class _WorkspaceTopology:
-    """One immutable canonical root used to materialize operation-local workspaces."""
+    """One immutable canonical root and already-authorized workspace lease."""
 
     root: Path
+    _workspace_lease: Workspace = field(repr=False, compare=False)
 
     @classmethod
     def capture(cls, workspace: Workspace) -> _WorkspaceTopology:
-        """Snapshot one absolute root without retaining the caller's workspace."""
+        """Capture one ready lease without later reopening its mutated root."""
 
+        workspace.require_ready()
         root = Path(os.fspath(workspace.root))
         if not root.is_absolute():
             root = Path(os.path.abspath(root))
-        return cls(root=root)
+        lease = copy.copy(workspace)
+        lease.root = root
+        return cls(root=root, _workspace_lease=lease)
 
     @property
     def workspace_key(self) -> str:
@@ -86,9 +91,11 @@ class _WorkspaceTopology:
         return os.fspath(self.root)
 
     def workspace(self) -> Workspace:
-        """Return a fresh workspace whose root derives only from this topology."""
+        """Return an isolated copy of the captured ready workspace lease."""
 
-        return Workspace(self.root)
+        workspace = copy.copy(self._workspace_lease)
+        workspace.root = self.root
+        return workspace
 
 
 class _PinnedFilesystemConversationCatalog(FilesystemConversationCatalog):
