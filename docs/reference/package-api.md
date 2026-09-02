@@ -20,7 +20,7 @@ The stable inventories in this revision are:
 | `story_writing_agents.workspace` | 3 | `Workspace`, `initialize_workspace`, and `FilesystemConversationCatalog` |
 | `story_writing_agents.writing_artifacts` | 62 | Canonical artifact/reference values plus pure exact change-set and relationship-policy contracts |
 
-The production graph has 104 modules, 376 dependency edges, no cycles, and 104
+The production graph has 107 modules, 385 dependency edges, no cycles, and 104
 package-root exports. The conversations owners contribute 54 event exports and
 20 context exports; their facade bindings are identical to their owner
 bindings.
@@ -68,6 +68,14 @@ adapter with its exact 22-file manifest; callers cannot supply a CLI manifest
 or use that initialization authorization for a later commit.
 See [Safe Git adapter and story baseline](git-adapter.md) for the manifest,
 identity, topology, retry, security, and sample input/output contracts.
+
+Separate direct modules implement the package-internal #504 session-resource
+contracts, fixed Git process owner, and inspect/list/provision/require-ready
+operations. None is re-exported by the project, Git, or workspace facade; they
+do not expand the 104/22/3 export counts and are not a stable application API
+or arbitrary Git capability. #455 alone will compose them with explicit
+session commands, while #505 owns later commits and checkpoints. See
+[Package-internal session Git resources](git-adapter.md#package-internal-session-git-resources).
 
 The three-name `story_writing_agents.workspace` facade remains unchanged:
 

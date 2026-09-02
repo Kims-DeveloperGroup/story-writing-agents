@@ -22,6 +22,14 @@ provider-free inspection.
 | Use schema-v2 collaboration contracts, stores, archive/transfer, readable projection, search, and paging APIs. | Treat the active inspection path as an active lead/provider workflow. |
 | Run a disposable management/storage smoke or verify an existing workspace without changing it. | Use smoke as evidence of provider behavior or story quality. |
 
+The runtime also has a package-internal, provider-free Git-resource seam that
+can inspect, list, provision, and require one exact session branch, sibling
+worktree, and internal ref. It is ready for the later session composition, but
+it is not a user command: the installed `story session create` and
+`story session reopen` paths do not call it until issue #455. Their current
+`ready` result describes provider-session lifecycle only, not Git-resource
+readiness. Canonical story commits and runtime checkpoints remain issue #505.
+
 When ordinary text, routed text, or a retired execution command is submitted in
 the shell, Story reports:
 
@@ -89,14 +97,16 @@ one clean local `main` root commit named `Initialize story workspace`. The
 initializer writes no story content. Repeating `story init` on that unchanged
 workspace validates it without rewriting, staging, or committing again.
 
-The initialization root is the pristine `main` baseline. This integration
-stage records the future session branch/ref/worktree grammar but does not create
-those resources; issue #449 owns later mutable session worktrees. Do not start
-mutable session work in the baseline or treat initialization as authorization
-for a later story commit.
+The initialization root is the pristine `main` baseline. `story init` records
+the session branch/ref/worktree grammar but creates none of those resources.
+The package-internal session-resource seam can now create the exact correlated
+triple while leaving that root clean; issue #455 still owns command wiring.
+Do not start mutable session work in the baseline or treat initialization or
+resource provisioning as authorization for a later story commit.
 
-The installed shell retains this management grammar, which the later #449
-composition will run from isolated session/internal worktrees:
+The installed shell retains this management grammar. Until #455 connects it to
+the isolated session worktree, its session lifecycle remains separate from the
+package-internal Git-resource lifecycle:
 
 ```text
 /session create novel
@@ -231,8 +241,9 @@ story content. See [artifact-reference status](docs/guides/artifact-references.m
   initialization journal. It never adopts, overwrites, upgrades, or migrates a
   legacy or arbitrary nonempty directory.
 - A dirty or drifted original `main` root is preserved and reported as requiring
-  recovery. Session branches, sibling worktrees, internal refs, and later
-  commits remain issue #449 work.
+  recovery. Exact correlated session branches, sibling worktrees, and internal
+  refs are supported internally; installed command wiring remains #455 and
+  canonical commits/checkpoints remain #505.
 - Smoke is intentionally provider-free and story-free.
 - Workspace configuration, histories, diagnostics, and artifacts are local
   plaintext unless the surrounding environment protects them.
@@ -252,7 +263,7 @@ story content. See [artifact-reference status](docs/guides/artifact-references.m
 - [Provider-free smoke](docs/guides/smoke-test.md)
 - [CLI reference](docs/reference/cli.md)
 - [Runtime API](docs/reference/runtime-api.md)
-- [Safe Git adapter and story baseline](docs/reference/git-adapter.md)
+- [Safe Git baseline and internal session resources](docs/reference/git-adapter.md)
 - [System design](docs/design/overview.md)
 
 ## Development

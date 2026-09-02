@@ -2,7 +2,9 @@
 
 > **Availability:** `story init` creates and validates one exact Git-backed
 > schema-v2 initialization root. It does not run an agent, write story content,
-> create a session resource, or authorize a later story commit.
+> create a session resource, or authorize a later story commit. A separate
+> package-internal seam can now materialize exact session Git resources, but
+> current `story session` commands do not call it until #455.
 
 Key terms: **initialization root**—the pristine `main` baseline; **marker**—the
 strict `config/workspace.json` identity; **journal**—the temporary durable
@@ -125,7 +127,7 @@ the root is now safe.
 }
 ```
 
-For a future session ID `novel`, this policy names:
+For session ID `novel`, this policy names:
 
 ```text
 branch:   story/session/novel
@@ -133,10 +135,103 @@ ref:      refs/story-writing-agents/runtime/sessions/novel
 worktree: <workspace-parent>/<workspace-name>.story-worktrees/novel
 ```
 
-#454 records only this grammar. It creates no session ID, branch, internal ref,
-or sibling worktree. #449 owns those resources and the separate confirmation
-required for later user-authored commits. Until that composition is available,
-the original `main` root remains the exact initialization baseline.
+`story init` records only this grammar. The package-internal #504 lifecycle can
+create the correlated triple; #455 owns its connection to the installed
+session commands, and #505 owns later confirmed story commits and internal
+checkpoints. The original `main` root remains the exact initialization
+baseline throughout.
+
+## Session Git resources
+
+This is internal runtime infrastructure, not a command available to a user in
+this revision. It gives a later session composition one isolated place for
+mutable files without changing the initialization root.
+
+Users will be able to create or resume one exact triple through #455. They can
+already rely on the implemented substrate to preserve exact resources across
+process exit and to reject ambiguous state. They cannot make current
+`story session create` provision the triple, use Reopen to create or repair
+resources, delete a durable session, migrate an older layout, contact a remote,
+or request reset, clean, prune, garbage collection, rebase, merge, or history
+rewrite through this seam.
+
+The five Git-resource states are separate from the provider-session `ready`
+and `paused` states shown by current commands:
+
+| Git-resource state | Meaning | Safe next action |
+| --- | --- | --- |
+| `absent` | No journal or requested branch/ref/worktree exists. | The future explicit Create composition may provision it. |
+| `provisioning` | A valid immutable journal and one exact ordered prefix exist. | Retry the same Create operation; it resumes only the next missing step. |
+| `ready` | The journal is absent and the complete correlated triple has passed final verification. | Reopen may validate it without mutation; repeated Create returns the same identity. |
+| `outcome_unknown` | A mutation was attempted but the runtime could not prove its result. | Stop automatic replay, preserve all state, and inspect with trusted local tools. |
+| `recovery_required` | A journal, branch, ref, worktree, path, anchor, or topology is partial, malformed, moved, substituted, colliding, or inconsistent. | Preserve the evidence and perform explicit operator recovery; neither Create nor Reopen guesses a repair. |
+
+The following is an illustrative projection of the package-internal seam. It
+is not current terminal input or output:
+
+```json
+{
+  "input": {
+    "operation": "provision",
+    "main_root": "/stories/my-novel",
+    "session_id": "novel"
+  },
+  "output": {
+    "state": "ready",
+    "recovery_action": "reopen",
+    "branch": "story/session/novel",
+    "internal_ref": "refs/story-writing-agents/runtime/sessions/novel",
+    "worktree": "/stories/my-novel.story-worktrees/novel",
+    "baseline_commit_id": "<object-id>",
+    "seed_commit_id": "<object-id>",
+    "current_branch_tip": "<object-id>",
+    "current_internal_tip": "<object-id>"
+  }
+}
+```
+
+Here are the other concrete seam outcomes. These are explanatory projections,
+not serialized terminal records:
+
+- With an exact ready triple, input `provision(novel)` outputs
+  `ready/reopen` with the same baseline, seed, branch, ref, and worktree.
+- With that same triple, input `require_ready(novel)` outputs `ready/reopen`
+  without mutation.
+- With a journal, exact seed ref, and exact baseline branch but no worktree,
+  input `inspect(novel)` outputs `provisioning/retry_create`; subsequent input
+  `provision(novel)` creates only the missing exact worktree and outputs
+  `ready/reopen`.
+- With an unregistered sibling directory, input `provision(novel)` outputs
+  `recovery_required/operator_recovery` without mutation.
+- If a mutation was attempted but neither its result nor recovery inspection
+  can be proved, input `provision(novel)` outputs
+  `outcome_unknown/operator_recovery`.
+
+Repeated provision therefore creates no second branch, ref, worktree, or seed.
+Reopen uses the read-only require-ready seam. An exact interrupted prefix
+resumes only its next missing step. A pre-existing unregistered sibling path is
+detected before the journal, object, ref, or branch is created and is never
+removed.
+
+Provisioning leaves these initialization-root observations unchanged:
+
+```text
+branch: main
+HEAD:   <same-baseline-object-id>
+tree:   <same-baseline-tree-id>
+index:  <same-baseline-index>
+status: clean
+```
+
+Inside `/stories/my-novel.story-worktrees/novel`, discovery returns that exact
+session root, session ID `novel`, and main root `/stories/my-novel`. Discovery
+inside the initialization root returns the main root. A differently located or
+unrelated marker-bearing linked worktree is rejected rather than adopted.
+
+Pause, release, close, and process exit do not remove a branch, ref, worktree,
+administration entry, seed object, or recovery journal. See
+[session Git recovery](../operations/recovery-and-limitations.md#session-git-resource-recovery)
+and the [internal Git-resource contract](../reference/git-adapter.md#package-internal-session-git-resources).
 
 ## Core documents and role files
 
@@ -157,7 +252,7 @@ The four packaged role prompts remain at
 part of the exact baseline. There is no prompt-overwrite option. Editing a
 prompt, configuration file, core document, or adding any other file to the
 original root makes a fresh readiness check reject that root; later supported
-edits belong in #449's session worktree.
+edits belong in the exact session worktree after #455 composes it.
 
 Persona templates are plaintext UTF-8 Markdown under
 `config/persona_templates/`. Do not put secrets in them.

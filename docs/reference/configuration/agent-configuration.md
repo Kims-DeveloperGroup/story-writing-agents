@@ -261,8 +261,8 @@ allowlisted core documents.
 The four packaged role prompts are exact files in the initialization manifest.
 There is no init repair or overwrite option. A changed/missing prompt makes the
 original root fail a fresh readiness check rather than being silently restored.
-Later supported role/configuration changes belong in #449's session/internal
-worktrees; the original `main` root remains pristine.
+Later supported role/configuration changes belong in the exact session/internal
+worktrees after #455 composition; the original `main` root remains pristine.
 
 One backend construction validates and captures the complete persisted system
 and agent configuration pair. Direct on-disk edits have no watcher: a newly

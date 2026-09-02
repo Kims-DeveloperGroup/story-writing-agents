@@ -77,16 +77,18 @@ creates no directive, catalog record, diagnostic, or other residue.
 
 ## 4. Manage a session and conversation
 
-The v2 marker records future session names, but this initialization slice does
-not create a session branch, sibling worktree, or internal runtime ref. Issue
-#449 owns that isolation. The original `main` root must remain the pristine
+The v2 marker records exact session names, but `story init` does not create a
+session branch, sibling worktree, or internal runtime ref. The package-internal
+#504 seam now owns that isolation while #455 owns its connection to installed
+session commands. The original `main` root must remain the pristine
 initialization baseline; it is not the location or authorization for later
 story/runtime writes.
 
 The retained management commands below describe the installed management
-surface. Use them only through the later session-worktree composition; writing
-their mutable state directly into the original baseline makes a fresh v2
-readiness check fail closed.
+surface. Their current provider-session `ready` result does not mean the #504
+Git triple is ready. Use them through the session-worktree composition after
+#455 connects it; writing mutable state directly into the original baseline
+makes a fresh v2 readiness check fail closed.
 
 ```bash
 story
