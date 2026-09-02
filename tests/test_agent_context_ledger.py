@@ -83,6 +83,8 @@ from story_writing_agents.writing_artifacts.repository import (
     WritingArtifactRepository,
 )
 
+from tests.helpers import initialize_test_workspace
+
 
 _REPOSITORY_ROOT = Path(__file__).resolve().parents[1]
 _SOURCE_ROOT = _REPOSITORY_ROOT / "src"
@@ -325,7 +327,9 @@ class LedgerTestCase(unittest.TestCase):
     def setUp(self) -> None:
         self.temporary = tempfile.TemporaryDirectory()
         self.addCleanup(self.temporary.cleanup)
-        self.workspace = Workspace(Path(self.temporary.name) / "workspace").initialize()
+        self.workspace = initialize_test_workspace(
+            Path(self.temporary.name) / "workspace"
+        )
         self.scope = _scope()
         self.key = ContextLedgerKey(self.scope, "provider")
         self.projection = _projection(self.scope, mandatory_reference_count=1)
@@ -1915,7 +1919,7 @@ class LedgerStorageSecurityAndAtomicityTests(LedgerTestCase):
             "lock_mode",
         ):
             with self.subTest(kind=kind), tempfile.TemporaryDirectory() as temporary:
-                workspace = Workspace(Path(temporary) / "workspace").initialize()
+                workspace = initialize_test_workspace(Path(temporary) / "workspace")
                 ledger = ContextLedger(workspace, clock=_Clock())
                 key = ContextLedgerKey(self.scope, "provider")
                 ledger.invalidate(key, expected_generation=0)

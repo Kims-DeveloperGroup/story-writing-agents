@@ -11,6 +11,7 @@ import sys
 import tempfile
 import threading
 import unittest
+from copy import copy
 from dataclasses import FrozenInstanceError
 from pathlib import Path
 from unittest import mock
@@ -1549,7 +1550,7 @@ class ConversationStorageTransferCoordinationTests(unittest.TestCase):
 
     def test_caller_root_mutation_cannot_redirect_any_transfer_io(self) -> None:
         workspace = transfer_workspace(self)
-        root_a = workspace.root
+        pinned_workspace = copy(workspace)
         payload = representative_archive()
         import_backend(workspace, ConversationStorageBackend.FILESYSTEM, payload)
         workspace.write_json(
@@ -1576,7 +1577,7 @@ class ConversationStorageTransferCoordinationTests(unittest.TestCase):
 
         self.assertEqual(report.parity, ConversationStorageParity.VERIFIED)
         self.assertEqual(
-            export_backend(Workspace(root_a), ConversationStorageBackend.SQLITE),
+            export_backend(pinned_workspace, ConversationStorageBackend.SQLITE),
             payload,
         )
         self.assertEqual(namespace_snapshot(root_b), other_before)

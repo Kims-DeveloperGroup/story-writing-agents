@@ -15,7 +15,7 @@ Bare `story` is equivalent to interactive entry without an explicit session.
 | Command | Syntax |
 | --- | --- |
 | Interactive | `story [chat [SESSION]] [--workspace PATH] [--backend AGENT=BACKEND]... [--codex-model MODEL] [--antigravity-executable EXECUTABLE] [--antigravity-model MODEL] [--antigravity-effort EFFORT] [--codex-timeout SECONDS]` |
-| Initialize | `story init [WORKSPACE] [--overwrite-prompts]` |
+| Initialize | `story init [WORKSPACE]` |
 | Directive | `story directive [--workspace PATH] [--session SESSION] TEXT` |
 | Inspect | `story inspect [--workspace PATH] [--session SESSION] [--debate DEBATE]` |
 | Session | `story session {create,reopen,pause} ...` |
@@ -26,20 +26,53 @@ Bare `story` is equivalent to interactive entry without an explicit session.
 There is no noninteractive direct-run grammar. Supplying an unknown top-level
 command is an argparse usage error.
 
-Unless a command documents otherwise, omitted `--workspace` discovers the
-nearest initialized ancestor. Omitted `--session` uses the workspace default.
-Identifiers and workspace paths are validated before the operation.
+Unless a command documents otherwise, omitted `--workspace` discovers and
+validates the nearest recognizable workspace boundary. Discovery never skips
+an unsupported or malformed inner boundary to select an outer workspace.
+Omitted `--session` uses the workspace default. Identifiers and workspace paths
+are validated before the operation.
 
 ## Initialize
 
 ```text
-story init [WORKSPACE] [--overwrite-prompts]
+story init [WORKSPACE]
 ```
 
-The default workspace is `.`. Initialization creates missing canonical
-directories/configuration and preserves existing files. `--overwrite-prompts`
-replaces only the four canonical role `AGENTS.md` files. Success prints the
-resolved workspace path as JSON.
+The default workspace is `.`. Initialization accepts an absent root, an empty
+safe directory, or one exact journal-backed interrupted-v2 root. It creates the
+strict schema-v2 marker, exact 22-file scaffold, four zero-byte core documents,
+and one parentless `main` commit named `Initialize story workspace` using the
+effective Git author and committer. It emits no post-baseline diagnostic or
+untracked residue.
+
+Success is pretty-printed JSON:
+
+```json
+{
+  "workspace": "/absolute/path/to/workspace"
+}
+```
+
+Rerunning init against the unchanged ready root validates only; it does not
+rewrite, stage, or create another commit. There is no prompt-overwrite,
+migration, compatibility, upgrade, or adoption option. A recognizable legacy
+workspace reports:
+
+```text
+WorkspaceVersionUnsupportedError: workspace version is unsupported; migration and compatibility are unsupported, so create a new workspace
+```
+
+Missing effective identity reports:
+
+```text
+ConfigurationError: effective Git identity is unavailable or invalid
+```
+
+That failure can leave the exact journal/scaffold but creates no absent Git
+repository. Configure a valid Git identity and run a fresh command to resume.
+Malformed, arbitrary, dirty, drifted, nested-Git, or unsafe roots are preserved
+and rejected. Initialization failures occur before a usable workspace is
+available and therefore never add the debug-log hint.
 
 ## Session lifecycle
 
@@ -134,9 +167,8 @@ arming form is not part of the current parser. See
 story smoke [--workspace PATH]
 ```
 
-Without a path, smoke creates and removes a temporary workspace. With a path,
-it initializes/uses and retains that workspace. The exact successful `checks`
-array is:
+Without a path, smoke creates and removes a temporary workspace through the
+real initializer. Its exact successful `checks` array is:
 
 ```text
 workspace_initialized
@@ -151,8 +183,36 @@ execution_artifacts_unchanged
 
 The report also contains `command`, `status`, `provider_tested:false`, workspace
 metadata, generated session/conversation IDs, and the note
-`No LLM or external provider was called.` A named invariant failure adds
-`failed_check` and returns code 1. See the [smoke guide](../guides/smoke-test.md).
+`No LLM or external provider was called.` The temporary path can truthfully
+fail for missing Git identity and is removed even on failure.
+
+With `--workspace`, smoke requires an already ready, clean v2 root. It performs
+no initialization or diagnostic submission and returns only:
+
+```json
+{
+  "checks": [
+    "workspace_initialized",
+    "execution_artifacts_unchanged"
+  ],
+  "command": "smoke",
+  "conversation_id": null,
+  "note": "No LLM or external provider was called.",
+  "provider_tested": false,
+  "session_id": null,
+  "status": "passed",
+  "workspace": {
+    "mode": "persistent",
+    "path": "/absolute/path/to/workspace",
+    "retained": true
+  }
+}
+```
+
+Actual output is compact one-line JSON with sorted keys. The explicit form
+creates no directive, conversation, history, agent state, debug log, or other
+residue. A named temporary-mode invariant failure adds `failed_check` and
+returns code 1. See the [smoke guide](../guides/smoke-test.md).
 
 <a id="interactive-streams"></a>
 <a id="interactive-provider-authentication"></a>
@@ -201,8 +261,9 @@ Argparse owns help and syntax exits. Most ordinary command failures return 2
 and print a sanitized exception/error. Domain report commands such as storage,
 RAG, and smoke use their documented JSON report exit codes.
 
-When an initialized explicit workspace is available, later failures can name
+When a ready explicit workspace has already been resolved, later failures can name
 `debug_logs/runtime.jsonl`. The hint means only that a bounded diagnostic may
 exist; logging failure never replaces the primary result. Provider credentials,
 native authentication output, and raw provider stderr are not included in the
-fixed CLI error text.
+fixed CLI error text. Initialization/discovery failures, explicit read-only
+smoke, and implicit temporary smoke never add this hint.

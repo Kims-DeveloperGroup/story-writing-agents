@@ -281,7 +281,7 @@ class ConversationStorageSelectionCliTests(unittest.TestCase):
             )
             self.assertFalse(missing.exists())
 
-    def test_process_use_sqlite_invalid_database_is_exact_and_preserving(
+    def test_process_rejects_dirty_workspace_before_inspecting_invalid_database(
         self,
     ) -> None:
         workspace = initialized_workspace(self)
@@ -333,12 +333,12 @@ class ConversationStorageSelectionCliTests(unittest.TestCase):
                 "activation": "unchanged",
                 "configuration": "preserved",
                 "desired_backend": "sqlite",
-                "failure": "provisioning_failed",
-                "installation": "not_required",
+                "failure": "workspace_invalid",
+                "installation": "not_run",
                 "operation": "use",
                 "outcome": "failed",
                 "parity": "unverified",
-                "provisioning": "failed",
+                "provisioning": "not_run",
                 "schema_version": 1,
             },
         )

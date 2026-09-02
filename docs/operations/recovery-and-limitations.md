@@ -21,6 +21,41 @@
 Key terms: **fail closed** means preserve uncertain state; **taint** means stop
 continuing incomplete provider history; **external backup** is outside the workspace.
 
+<a id="workspace-initialization-recovery"></a>
+
+## Workspace initialization recovery
+
+`story init PATH` supports only an absent root, an empty safe directory, or one
+exact interrupted schema-v2 initialization. It never adopts, overwrites,
+migrates, upgrades, or resets other state.
+
+| Observation or failure | Meaning | Safe response |
+| --- | --- | --- |
+| Success JSON and no journal | The marker, exact 22-file scaffold, one parentless `main` commit, index/tree, and clean status were verified after journal removal. | Keep the original root pristine. Later mutable session and runtime state belongs in #449's sibling/internal worktrees. |
+| `ConfigurationError: effective Git identity is unavailable or invalid` | The runtime did not invent an author/committer. Exact scaffold/journal bytes may exist, but an absent Git repository was not created. | Configure a valid effective Git author and committer under normal host policy, then run the same init command in a fresh process. |
+| Exact `.story-writing-agents-initialize-v2.json` remains | Initialization stopped after durable progress. The failed `Workspace` object is terminal. | Preserve all bytes and rerun with a fresh object/process. It will validate every present byte and continue only missing exact steps. |
+| `WorkspaceVersionUnsupportedError` | A recognizable markerless/pre-v2 root or unsupported numeric marker/journal was found. | Preserve it and create a separate new workspace. Migration and compatibility are unsupported. |
+| `WorkspaceFormatError` naming scaffold, journal, Git state, status, or recovery | State is malformed, ambiguous, dirty, drifted, or differs from the exact initialization contract. | Stop and preserve the complete root. Restore a trusted exact snapshot or create a new workspace; do not edit/delete the journal, reset Git, or remove unknown files to force readiness. |
+| `WorkspaceSecurityError` or topology failure | The root or Git layout is nested, linked, symlinked, replaced, sparse, bare, mismatched, or otherwise unsafe. | Do not follow or repair suspicious paths in place. Preserve evidence and choose a new standalone safe root. |
+| `OSError`, interruption, or process exit | Safe primitives or an operation failed. Exact completed partial steps are not rolled back. | Use a fresh process only after the environment is stable; exact journal recovery will converge or fail closed. |
+
+A clean ready root can be passed to `story init` again. That call validates only
+and does not rewrite, restage, or create a second commit. Any dirty tracked,
+staged, or untracked original-root state is preserved and rejected. Initialization
+itself creates no debug record, so its stderr and the protected root are the
+recovery evidence.
+
+`story smoke --workspace PATH` is read-only validation, not repair. It requires
+an already clean ready root, returns null session/conversation IDs, and creates
+no directive, catalog record, history, or diagnostic. `story smoke` without a
+path uses the real initializer inside a disposable directory, reports identity
+failures, and removes the directory.
+
+Discovery stops at the nearest recognizable boundary. It does not skip an
+unsupported or malformed inner marker/journal/legacy sentinel to select an
+outer workspace. An explicit path also validates strictly and never
+initializes.
+
 ## Session access recovery
 
 | Process-access result | Meaning | Safe response |
@@ -105,8 +140,9 @@ and
 `source_invalid` or `destination_invalid` can mean that archive/transfer found
 a filesystem `transcript.jsonl` or SQLite `conversation_events` row. Those are
 unsupported owning-boundary inputs. Preserve the stores; do not rename,
-parse-and-rewrite, or hand-copy them into v2. #454 owns whole-workspace
-rejection; active adapters reject the addressed owning boundary now.
+parse-and-rewrite, or hand-copy them into v2. Strict workspace-v2 readiness
+rejects unsupported whole-workspace state, and active adapters also reject the
+addressed owning boundary.
 
 Checkpoints remain at
 `agent_states/orchestrator_state/conversation_storage_transfers/{filesystem-to-sqlite,sqlite-to-filesystem}.json`.
@@ -188,7 +224,7 @@ for the plain-language authority, backup, and exposure model.
 | `provisioning_needed` | On a capable host, the fixed database is absent. | Provision only after deciding the SQLite destination is deliberately empty and acquiring the exact workspace mutation lease. Provisioning does not import filesystem conversations. |
 | `unavailable` or `ConversationStorageUnavailableError` | The active Python interpreter's `sqlite3` is missing, older than 3.7.16, fails its functional runtime probe, the database is busy/locked, or an operational resource is unavailable. | Direct preflight remains observational. For a missing runtime, use the explicit selection workflow only when one allowlisted host command and its consent policy apply; otherwise repair the interpreter outside Story. There is no automatic retry, and the standalone SQLite CLI is not readiness proof. |
 | `ConversationStorageProvisioningNeededError` | Composition or an adapter operation requires a database that has not been provisioned. | Run observational preflight and, only for an intended empty target, the explicit leased provisioning flow. |
-| `WorkspaceVersionUnsupportedError` | The file has the recognized application identity but an unsupported schema version. | Stop workspace processes, preserve and verify a complete backup, then use a compatible runtime or a separately approved schema upgrade. Conversation-data transfer does not upgrade SQLite schemas. |
+| `WorkspaceVersionUnsupportedError` | The database has the recognized application identity but an unsupported schema version. | Stop workspace processes and preserve a complete backup. Restore an exact supported database from trusted state or create a separate new v2 workspace; Story provides no database or workspace migration/upgrade path. |
 | `WorkspaceFormatError` | Header, schema manifest/fingerprint/cookie, encoding, integrity, foreign keys, required lexical generation/searchable values, event structure, or strict sidecar state is invalid, or the stable database-name entry is nonregular without being a symlink. | Preserve the database and sidecars unchanged. Restore a known-good complete database or investigate offline; do not hand-edit or ask preflight to repair it. |
 | `WorkspaceSecurityError` | The database name is a symlink, or its named/opened path identity is unsafe, nonmeaningful, replaced, mismatched, or has an unexpected link count. | Stop all processes, back up the complete workspace, and restore safe exact path identities. Do not manually follow, unlink, or replace suspicious names. Explicit leased provisioning can recognize only the exact interrupted-publication case described below. |
 | `ConversationStorageCoordinationError` | A lease is wrong-workspace, wrong-thread, expired, released, or cannot be acquired safely; the POSIX advisory guard may also be unavailable or unsafe. | Let the supported owner finish or close it, then acquire a fresh exact-workspace lease. Never reuse or manufacture lease evidence. Without `fcntl`, keep use observational; supported provisioning and mutations remain unavailable. |
@@ -287,20 +323,13 @@ coordinator described above.
 V1 provider manifests, `<session_id>.lease.json`, `.lease-claims.lock`, V1
 `cli_context.json`, and `conversation_selections/` are rejected unchanged with
 `WorkspaceVersionUnsupportedError`. There is no conversion or compatibility mode.
-
-Use this nondestructive reset:
-
-1. Stop every process using the workspace.
-2. Copy the complete workspace to an external backup and verify the copy.
-3. Prefer a fresh workspace. Otherwise move—never delete—the old
-   `provider_sessions/`, `cli_context.json`, and `conversation_selections/`
-   outside the active workspace.
-4. Run `story init WORKSPACE` to recreate current scaffold directories.
-5. Recreate sessions with `story session create SESSION`, then recreate needed
-   conversation defaults through the shell.
-
-Do not copy old provider state, access files, guards, defaults, or CLI context
-into V2. Copy editable story/configuration files only after review; keep backup.
+At the whole-workspace boundary, recognizable pre-v2 state is unsupported
+before normal activation. Stop every process, preserve and verify an external
+backup, and create a separate new v2 workspace. Do not move selected legacy
+files out of the old root and rerun init, and do not copy old provider state,
+access files, guards, defaults, CLI context, or configuration into the new
+baseline. Any later reviewed content transfer must use a separately supported
+workflow; #454 supplies none.
 
 <a id="authentication-recovery"></a>
 

@@ -12,8 +12,9 @@ ownership of a debate ID; **allowlist**—the fixed permitted core filenames.
 
 ```python
 Workspace(root: str | os.PathLike[str])
-Workspace.initialize(*, overwrite_prompts: bool = False) -> Workspace
-initialize_workspace(root: str | os.PathLike[str], *, overwrite_prompts: bool = False) -> Workspace
+Workspace.initialize() -> Workspace
+Workspace.require_ready() -> Workspace
+initialize_workspace(root: str | os.PathLike[str]) -> Workspace
 
 Workspace.validate_identifier(value: str, *, label: str = "session ID") -> str
 Workspace.validate_template_name(value: str) -> str
@@ -29,76 +30,77 @@ Workspace.load_session_overrides(session_id: str) -> dict[str, Any]
 Workspace.save_session_overrides(session_id: str, overrides: Mapping[str, Any]) -> pathlib.Path
 ```
 
-Initialization creates missing scaffold and normally preserves existing files.
-With `overwrite_prompts=True`, it replaces exactly the four canonical role
-prompts and preserves all other existing content. The option must be a boolean;
-invalid input raises `TypeError` before any I/O and does not consume a pending
-instance's one initialization attempt.
+There is no prompt-overwrite parameter, alias, or compatibility shim.
+Initialization accepts only an absent root, an existing empty safe directory,
+or one exact journal-backed interrupted-v2 root. `initialize_workspace(root)`
+is the convenience wrapper for `Workspace(root).initialize()`.
 
-Initialization creates the `core_documents/` directory but no core-document
-templates or manuscript.
+Construction performs a nonmutating classification. A ready root is fully
+verified at construction; a missing, empty, or exactly initializing root is
+captured as not ready. Unsupported, malformed, arbitrary nonempty, drifted, or
+unsafe state raises immediately. Construction retains no open descriptor and
+performs no Git or filesystem mutation.
 
-Construction resolves the workspace root once and may make a nonmutating
-filesystem identity probe; it retains no open descriptor. An existing canonical
-directory with meaningful positive device and inode values binds immediately. A
-specifically missing root remains pending for the first valid `initialize()`
-call. That call terminalizes the pending state before checking filesystem
-capabilities or mutating anything. It preflights the required safe
-descriptor-relative directory and atomic-file primitives, then walks the
-canonical root from an opened filesystem anchor. Each missing component is
-created relative to its opened parent and opened without following its name.
-The final root descriptor is identity-checked and retained for all topology and
-default writes.
+`initialize()` owns one attempt on that object:
 
-Those writes walk only beneath the retained descriptor and install verified
-temporary regular files through held parent descriptors. Create-only entries
-leave existing non-symlink targets unchanged and do not replace a competing
-target; `overwrite_prompts=True` uses atomic replacement only for the four
-canonical role prompts. Each installed target must identify the staged file.
-After all writes, initialization rewalks the canonical root without following
-component names, matches it to the retained identity, and closes the retained
-descriptor. Only then does the instance record success. Replacing an ancestor
-or root after the initial comparison therefore cannot redirect the scaffold or
-establish a usable diagnostic identity at another location.
+```text
+missing/empty
+  -> exact initialization journal
+  -> exact 22-file scaffold
+  -> one #448 main baseline
+  -> ready verification with journal
+  -> journal removal and directory synchronization
+  -> ready verification without journal
+  -> return self
+```
 
-The original `OSError`, `KeyboardInterrupt`, or `SystemExit` from the first valid
-attempt propagates unchanged, including failures during root creation, file
-installation, identity verification, child/default work, or final descriptor
-cleanup. Cleanup does not replace an active body failure. Safely created root
-components and intended partial data on the retained root are not rolled back.
-If any step before complete success fails, every later `initialize()` call
-rejects with the established identity-unavailable `OSError` before root
-creation, stat or bind, child creation, or default writes; it does not retry or
-repeat the original error. Repeated calls after success retain their established
-pathname-based preserve-existing and optional prompt-overwrite behavior.
-Constructing a new `Workspace` performs a new identity probe, so callers should
-inspect and repair a failed root path first.
+The scaffold includes strict `config/workspace.json`, current packaged
+configuration/persona/role-prompt bytes, ten empty `.gitkeep` files, and the
+four exact zero-byte core documents. It includes no story content. The Git
+baseline uses the effective author and committer, contains exactly the
+initializer manifest, has one parentless commit named
+`Initialize story workspace`, and leaves `main` clean.
 
-This lifecycle changes no public signature, successful return value, or
-initialized file content.
+Marker and journal decoding accepts only canonical UTF-8 JSON with a trailing
+newline and their closed fields. Duplicate, missing, extra, malformed, and
+noncanonical values fail; a numeric version other than `2` receives the fixed
+unsupported-workspace guidance.
 
-If safe creation primitives are unavailable, the first valid attempt raises
-`OSError` before mutation. This is a fail-closed capability requirement, not a
-promise that missing-root initialization works on every platform.
+A ready `initialize()` call is validation-only. It does not rewrite, restage,
+or recommit. If an initialization attempt fails, the object becomes terminal;
+later calls on that same object raise `OSError` before another attempt. A fresh
+object or process may inspect and resume only an exact durable journal and
+matching partial scaffold. Unknown or divergent bytes are preserved and
+rejected rather than adopted, reset, or overwritten.
 
-An existing directory whose construction-time probe is unavailable or
-nonmeaningful is the established exception to the initialization requirement:
-normal pathname-based initialization may still create its scaffold, while
-diagnostic storage remains unavailable for that instance. It also never
-silently rebinds.
+`require_ready()` checks the readiness already authorized for that object. It
+does not perform a live filesystem rescan. Supported CLI entry points and
+explicit smoke construct a fresh object before activation, so they receive a
+strict current inspection. A long-lived direct Python caller must not treat a
+`Workspace` as a filesystem watcher, immutable snapshot, or transaction across
+operations.
 
-Package-internal, non-root-exported helpers open and reverify that bound root for
-diagnostic storage. Replacing the root does not make an existing `Workspace`
-follow the replacement for logging; the diagnostic record is dropped without a
-fallback path. These helpers add no public signature, and this identity does not
-apply to normal `Workspace` methods. Those methods remain pathname-based and may
-read or write a real directory installed later at the same root path; callers
-cannot use one instance as an identity-pinned filesystem snapshot or a
-transaction across operations. Public path operations retain their established
-contract: they accept only safely contained workspace-relative paths with no
-absolute path, `..`, or symlink component.
-Text is strict UTF-8. JSON readers reject malformed structures where the
-consuming contract performs schema validation.
+Exact expected failure categories include:
+
+| Condition | Public result |
+| --- | --- |
+| Effective Git author or committer is missing, invalid, or divergent | `ConfigurationError("effective Git identity is unavailable or invalid")`; a fresh process may resume the exact journal after identity is configured. |
+| Recognizable markerless workspace or non-v2 numeric marker/journal | `WorkspaceVersionUnsupportedError` with guidance that migration and compatibility are unsupported and a new workspace is required. |
+| Arbitrary nonempty root, malformed record, partial mismatch, dirty status, or baseline drift | `WorkspaceFormatError`; bytes are preserved and recovery is required. |
+| Parent repository, linked worktree, submodule, sparse/bare/mismatched repository, symlinked administration, or unsafe root | `WorkspaceSecurityError` or a content-free workspace topology error before unsafe mutation. |
+
+Initialization rejects parent/nested repositories and creates no session
+branch, sibling worktree, internal runtime ref, provider state, artifact
+publication, remote, or later commit. The marker records only the future naming
+grammar; #449 owns those resources. Initialization itself authorizes only its
+one fixed root commit.
+
+Public path operations accept only safely contained workspace-relative paths
+with no absolute path, `..`, or symlink component. They first require the
+object's captured ready state. Text is strict UTF-8. JSON readers reject
+malformed structures where the consuming contract performs schema validation.
+Package-internal root helpers recheck the bound identity for diagnostic and
+storage owners, but they are not public imports.
 
 `Workspace.read_text()` is a raw, safely contained UTF-8 read. It does not
 classify canonical paths or perform the artifact repository's descriptor-safe
@@ -113,18 +115,16 @@ internal workspace files.
 `write_text` and `write_json` atomically replace one file when overwrite is
 allowed, except that both reject the four canonical core-document paths, every
 canonical `manuscript/PART/PATH.md`, and case-folded or NFKC-normalized aliases
-of either reserved top-level namespace. This check occurs before parent or
+of either reserved top-level namespace. They also reject the lifecycle marker
+and journal. This check occurs before parent or
 target mutation. Canonical application writes must go through the artifact
 repository so bytes, authorship, commit history, and the current catalog cannot
-diverge. Generic writes remain available for other safely contained workspace
-files. An external filesystem edit can still create manual, pre-provenance, or
-hash-divergent canonical bytes. When the path and physical file are safe, those
-current bytes can be listed, viewed, explicitly referenced, and supplied as
-allowlisted core context; source use does not create or repair catalog,
-authorship, or commit records. Stop all workspace processes before making such
-an external edit. Orchestration
-restricts core updates to four names and delegates publication to the separate
-artifact repository.
+diverge. Generic writes remain low-level operations, but using them against the
+original initialization root makes a later fresh readiness check reject that
+root. Later legitimate mutable state belongs in #449's session/internal
+worktrees. External edits do not create or repair catalog, authorship, or
+commit records. Stop all workspace processes before any external inspection or
+recovery action.
 
 Cataloged manuscript paths are permanent create-only publication identities.
 Deleting one externally removes it from source discovery but does not free the

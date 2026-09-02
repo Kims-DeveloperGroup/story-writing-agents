@@ -21,6 +21,7 @@ from story_writing_agents.conversation_storage import (
 )
 
 from tests.collaboration_contract_fixture import contract_batches, store_batch
+from tests.helpers import initialize_test_workspace
 
 
 CREATED_AT = "2026-01-01T00:00:00+00:00"
@@ -185,7 +186,7 @@ def initialized_workspace(test_case: unittest.TestCase) -> Workspace:
 
     temporary = tempfile.TemporaryDirectory()
     test_case.addCleanup(temporary.cleanup)
-    return Workspace(temporary.name).initialize()
+    return initialize_test_workspace(temporary.name)
 
 
 def workspace_snapshot(root: Path) -> dict[str, bytes | None]:

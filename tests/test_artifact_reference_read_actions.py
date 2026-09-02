@@ -11,7 +11,6 @@ from pathlib import Path
 from unittest import mock
 
 import story_writing_agents
-from story_writing_agents import Workspace
 from story_writing_agents.agents import PLOT_ARCHITECT
 from story_writing_agents.writing_artifacts import (
     ArtifactLineRange,
@@ -35,6 +34,8 @@ from story_writing_agents.writing_artifacts.read_actions import (
 from story_writing_agents.writing_artifacts.repository import (
     WritingArtifactRepository,
 )
+
+from tests.helpers import initialize_test_workspace
 
 
 _STATE = Path("agent_states/orchestrator_state/writing_artifacts")
@@ -216,7 +217,7 @@ class ReferenceReadRepositoryTests(unittest.TestCase):
         temporary = tempfile.TemporaryDirectory()
         self.addCleanup(temporary.cleanup)
         self.root = Path(temporary.name)
-        Workspace(self.root).initialize()
+        initialize_test_workspace(self.root)
         self.repository = WritingArtifactRepository(self.root)
         for path, content in _MARKERS.items():
             target = self.root / path

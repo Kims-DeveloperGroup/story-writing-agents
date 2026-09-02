@@ -5,7 +5,7 @@ lead-led execution workflow. Public schema-v1 direct-run consumers are absent;
 generic provider, prompt, context, lifecycle, artifact, and terminal components
 remain available behind explicit module boundaries.
 
-The production graph contains 97 modules, 362 dependency edges, no cycles, and
+The production graph contains 104 modules, 376 dependency edges, no cycles, and
 104 package-root exports.
 
 ## Current user flow
@@ -13,6 +13,9 @@ The production graph contains 97 modules, 362 dependency edges, no cycles, and
 ```mermaid
 flowchart LR
     U[User] --> CLI[CLI / TTY controller]
+    CLI --> WI[Strict v2 workspace readiness]
+    WI --> WS[Marker + exact scaffold]
+    WI --> G[One clean main baseline]
     CLI --> M[Session and conversation management]
     CLI --> I[History, search, transcript, status, inspection]
     CLI --> S[Settings and authentication]
@@ -29,6 +32,45 @@ The controller reads ordinary main input with the terminal's plain management
 scope. The parser returns a typed rejection for ordinary/routed/removed
 execution forms. The controller does not bind an agent, append an event, run
 RAG/reference handling, report provider progress, or publish an artifact.
+
+## Workspace initialization and readiness
+
+`story init` is the one user-facing schema-v2 creation path:
+
+```text
+missing/empty root
+  -> strict initializing journal
+  -> exact 22-file scaffold, including four empty core documents
+  -> fixed #448 main root commit with effective Git identity
+  -> verification with journal
+  -> journal removal
+  -> exact clean ready verification
+```
+
+Internally, `workspace.schema` is the pure owner of marker, journal, scaffold,
+and static session naming policy. `workspace.initialization` owns root
+classification, descriptor-safe convergence, current readiness, discovery, and
+Git composition. `workspace.core` owns the public `Workspace` object and generic
+persistence and delegates the lifecycle; it does not define a second schema or
+run Git directly. The two new owner modules are internal and export no public
+names.
+
+Externally, success means one standalone clean `main` root with exactly one
+parentless commit named `Initialize story workspace`. A clean rerun validates
+without mutation. An exact interrupted journal can be resumed only by a fresh
+object/process; legacy, arbitrary, ambiguous, dirty, drifted, or unsafe state is
+preserved and rejected. There is no migration, compatibility, prompt overwrite,
+or adoption path.
+
+The marker stores `story/session/`,
+`refs/story-writing-agents/runtime/sessions/`, and `.story-worktrees` naming
+policy only. #454 creates no session branch, internal ref, or sibling worktree;
+#449 owns those resources and later commit confirmation. The original root is
+the pristine initialization baseline.
+
+Explicit `story smoke --workspace` constructs a fresh workspace verifier and
+performs no mutation or diagnostic submission. Disposable smoke uses the same
+real initializer and removes its temporary root.
 
 ## Management runtime
 
@@ -120,8 +162,11 @@ not a current CLI dispatch claim.
 
 Open #452 owns the later lead proposal/confirmation/reconfirmation workflow
 and open #453 owns specialist execution/result/finalization/outcome-unknown
-behavior. #454 owns whole-workspace rejection of unsupported history. Those
-provider-bound integrations must use the sole v2 store.
+behavior. Strict workspace-v2 activation already rejects unsupported
+whole-workspace state. Those provider-bound integrations must use the sole v2
+store. In the planning vocabulary, #454 owns whole-workspace rejection of unsupported history.
+That ownership is implemented at the readiness boundary, not deferred to a
+provider call.
 
 ## Dependency direction
 
@@ -129,6 +174,7 @@ High-level composition flows downward:
 
 ```text
 CLI -> controller -> policies/runtime/storage/terminal
+CLI -> workspace.initialization -> workspace.schema + git
 runtime -> configuration/workspace/artifact inspection/backend coordination
 backend -> provider adapters/process/context seams
 conversation services -> filesystem or SQLite ports

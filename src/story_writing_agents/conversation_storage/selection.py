@@ -2,10 +2,11 @@
 
 from __future__ import annotations
 
+import copy
 import json
 import os
 import sys
-from dataclasses import dataclass, replace
+from dataclasses import dataclass, field, replace
 from enum import StrEnum
 from pathlib import Path
 from typing import Callable, TextIO
@@ -214,22 +215,28 @@ class ConversationStorageStartup:
 @dataclass(frozen=True, slots=True)
 class _SelectionTopology:
     root: Path
+    _workspace_lease: Workspace = field(repr=False, compare=False)
 
     @classmethod
     def capture(cls, workspace: Workspace) -> _SelectionTopology:
         if not isinstance(workspace, Workspace):
             raise TypeError("workspace must be a Workspace")
+        workspace.require_ready()
         root = Path(os.fspath(workspace.root))
         if not root.is_absolute():
             root = Path(os.path.abspath(root))
-        return cls(root)
+        lease = copy.copy(workspace)
+        lease.root = root
+        return cls(root, lease)
 
     @property
     def workspace_key(self) -> str:
         return os.fspath(self.root)
 
     def workspace(self) -> Workspace:
-        return Workspace(self.root)
+        workspace = copy.copy(self._workspace_lease)
+        workspace.root = self.root
+        return workspace
 
 
 def _coerce_backend(value: object) -> ConversationStorageBackend:

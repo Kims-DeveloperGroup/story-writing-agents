@@ -3,10 +3,12 @@
 from __future__ import annotations
 
 import contextlib
+import errno
 import inspect
 import io
 import json
 import os
+import stat
 import tempfile
 import unittest
 from collections.abc import Iterator
@@ -22,7 +24,6 @@ from story_writing_agents import (
     SessionDurableState,
     SessionLifecycleState,
     Workspace,
-    initialize_workspace,
 )
 from story_writing_agents import cli as cli_module
 from story_writing_agents.cli_context import (
@@ -42,8 +43,9 @@ from story_writing_agents.errors import (
     WorkspaceVersionUnsupportedError,
 )
 from story_writing_agents.run_inputs import read_draft_file
+from story_writing_agents.workspace import initialization as workspace_initialization
 
-from tests.helpers import ScriptedBackend
+from tests.helpers import ScriptedBackend, initialize_test_workspace
 
 
 CLI_CONTEXT_PATH = "agent_states/orchestrator_state/cli_context.json"
@@ -51,6 +53,12 @@ CONVERSATION_DEFAULT_DIRECTORY = "agent_states/orchestrator_state/conversation_d
 V1_CONVERSATION_DIRECTORY = "agent_states/orchestrator_state/conversation_selections"
 _CREATED = "2026-01-01T00:00:00+00:00"
 _UPDATED = "2026-01-02T00:00:00+00:00"
+_LEGACY_WORKSPACE_SENTINELS = (
+    "config/system_defaults.json",
+    "config/agent_configs.json",
+    "config/persona_templates/default_kim_eun_hee.md",
+    "config/agents/lead_orchestrator/AGENTS.md",
+)
 
 
 def conversation_default_path(workspace: Workspace, session_id: str) -> Path:
@@ -71,6 +79,29 @@ def tree_snapshot(root: Path) -> dict[str, tuple[bytes, int, int]]:
         for path in sorted(root.rglob("*"))
         if path.is_file()
     }
+
+
+def boundary_snapshot(
+    root: Path,
+) -> dict[str, tuple[int, int, int, bytes | str | None]]:
+    """Capture a boundary namespace without following symbolic links."""
+
+    snapshot: dict[str, tuple[int, int, int, bytes | str | None]] = {}
+    for path in sorted(root.rglob("*")):
+        metadata = path.lstat()
+        if stat.S_ISLNK(metadata.st_mode):
+            payload: bytes | str | None = os.readlink(path)
+        elif stat.S_ISREG(metadata.st_mode):
+            payload = path.read_bytes()
+        else:
+            payload = None
+        snapshot[path.relative_to(root).as_posix()] = (
+            metadata.st_mode,
+            metadata.st_size,
+            metadata.st_mtime_ns,
+            payload,
+        )
+    return snapshot
 
 
 def invoke_cli(arguments: list[str]) -> tuple[int, str, str]:
@@ -204,20 +235,68 @@ class WorkspaceDiscoveryTests(unittest.TestCase):
         self.addCleanup(temporary.cleanup)
         self.base = Path(temporary.name)
 
-    def test_nearest_initialized_workspace_and_explicit_precedence(self) -> None:
-        outer = initialize_workspace(self.base / "outer")
-        inner = initialize_workspace(outer.root / "projects" / "inner")
-        nested = inner.root / "one" / "two"
-        nested.mkdir(parents=True)
-        self.assertEqual(resolve_workspace(None, start=nested).root, inner.root)
+    def test_nearest_strict_workspace_and_explicit_precedence(self) -> None:
+        outer = initialize_test_workspace(self.base / "outer")
+        nested = outer.root / "core_documents"
+        self.assertEqual(resolve_workspace(None, start=nested).root, outer.root)
         self.assertEqual(
             resolve_workspace(str(outer.root), start=nested).root, outer.root
         )
 
+        unsupported = outer.root / "manuscript" / "unsupported"
+        (unsupported / "config").mkdir(parents=True)
+        (unsupported / "config/workspace.json").write_text(
+            '{"schema_version":1}\n',
+            encoding="utf-8",
+        )
+        with self.assertRaises(WorkspaceVersionUnsupportedError):
+            resolve_workspace(None, start=unsupported)
+
+    def test_dangling_exact_legacy_sentinel_is_nearest_unsafe_boundary(self) -> None:
+        outer = initialize_test_workspace(self.base / "outer")
+        self.assertEqual(
+            workspace_initialization._LEGACY_SENTINELS,
+            _LEGACY_WORKSPACE_SENTINELS,
+        )
+
+        for index, relative in enumerate(_LEGACY_WORKSPACE_SENTINELS):
+            with self.subTest(relative=relative):
+                inner = outer.root / "manuscript" / f"legacy-boundary-{index}"
+                child = inner / "nested" / "child"
+                child.mkdir(parents=True)
+                sentinel = inner / relative
+                sentinel.parent.mkdir(parents=True, exist_ok=True)
+                try:
+                    sentinel.symlink_to("missing-legacy-target")
+                except NotImplementedError:
+                    self.skipTest("symbolic links are unavailable")
+                except OSError as exc:
+                    unsupported = {
+                        errno.EACCES,
+                        errno.EPERM,
+                        getattr(errno, "ENOTSUP", errno.EPERM),
+                        getattr(errno, "EOPNOTSUPP", errno.EPERM),
+                    }
+                    if exc.errno not in unsupported:
+                        raise
+                    self.skipTest("symbolic links are unavailable")
+
+                before = boundary_snapshot(inner)
+                discovered = workspace_initialization.discover_workspace_root(child)
+                self.assertEqual(discovered, inner)
+                self.assertNotEqual(discovered, outer.root)
+                with self.assertRaises(WorkspaceSecurityError) as raised:
+                    resolve_workspace(None, start=child)
+                self.assertEqual(
+                    str(raised.exception),
+                    "workspace contains an unsafe entry",
+                )
+                self.assertEqual(boundary_snapshot(inner), before)
+
     def test_uninitialized_and_absent_discovery_are_actionable(self) -> None:
         uninitialized = self.base / "plain"
         uninitialized.mkdir()
-        with self.assertRaisesRegex(ConfigurationError, "workspace is not initialized"):
+        with self.assertRaisesRegex(WorkspaceFormatError, "workspace is not ready"):
             resolve_workspace(str(uninitialized), start=uninitialized)
         with self.assertRaisesRegex(
             ConfigurationError, "no initialized story workspace"
@@ -231,7 +310,7 @@ class CliDefaultPersistenceTests(unittest.TestCase):
     def setUp(self) -> None:
         temporary = tempfile.TemporaryDirectory()
         self.addCleanup(temporary.cleanup)
-        self.workspace = initialize_workspace(Path(temporary.name) / "workspace")
+        self.workspace = initialize_test_workspace(Path(temporary.name) / "workspace")
 
     def test_default_session_missing_save_load_and_resolve_are_exact(self) -> None:
         self.assertEqual(
@@ -479,7 +558,7 @@ class CliDefaultPersistenceTests(unittest.TestCase):
         self.assertEqual((target.read_bytes(), target.stat().st_mtime_ns), before)
         self.assertEqual(list(target.parent.glob("*.tmp")), [])
 
-        second = initialize_workspace(self.workspace.root.parent / "second")
+        second = initialize_test_workspace(self.workspace.root.parent / "second")
         external = self.workspace.root.parent / "external"
         external.mkdir()
         directory = second.root / CONVERSATION_DEFAULT_DIRECTORY
@@ -519,7 +598,7 @@ class CliDefaultPersistenceTests(unittest.TestCase):
             ):
                 operation()
 
-        second = initialize_workspace(self.workspace.root.parent / "symlink-file")
+        second = initialize_test_workspace(self.workspace.root.parent / "symlink-file")
         target = conversation_default_path(second, "chapter")
         target.parent.mkdir(parents=True, exist_ok=True)
         external_file = self.workspace.root.parent / "outside-default.json"
@@ -589,7 +668,14 @@ class LifecycleAutomationTests(unittest.TestCase):
     def setUp(self) -> None:
         temporary = tempfile.TemporaryDirectory()
         self.addCleanup(temporary.cleanup)
-        self.workspace = initialize_workspace(Path(temporary.name) / "workspace")
+        self.workspace = initialize_test_workspace(Path(temporary.name) / "workspace")
+        self.enterContext(
+            mock.patch.object(
+                cli_module,
+                "resolve_workspace",
+                return_value=self.workspace,
+            )
+        )
 
     def invoke_with(
         self, backend: LifecycleCommandBackend, *arguments: str
@@ -727,7 +813,14 @@ class DirectiveAndInspectDefaultTests(unittest.TestCase):
     def setUp(self) -> None:
         temporary = tempfile.TemporaryDirectory()
         self.addCleanup(temporary.cleanup)
-        self.workspace = initialize_workspace(Path(temporary.name) / "workspace")
+        self.workspace = initialize_test_workspace(Path(temporary.name) / "workspace")
+        self.enterContext(
+            mock.patch.object(
+                cli_module,
+                "resolve_workspace",
+                return_value=self.workspace,
+            )
+        )
 
     def test_nested_cwd_infers_default_for_directive_and_inspect(self) -> None:
         save_default_session(self.workspace, "default_session")

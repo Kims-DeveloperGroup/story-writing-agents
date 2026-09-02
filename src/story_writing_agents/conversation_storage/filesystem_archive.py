@@ -2,11 +2,12 @@
 
 from __future__ import annotations
 
+import copy
 import json
 import os
 import stat
 from collections.abc import Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Callable
 
@@ -65,9 +66,10 @@ _MAX_INCLUDED_TOTAL_BYTES = 134_217_728
 
 @dataclass(frozen=True, slots=True)
 class _ArchiveWorkspaceTopology:
-    """One construction-pinned root used by every archive operation."""
+    """One construction-pinned root and already-authorized workspace lease."""
 
     root: Path
+    _workspace_lease: Workspace = field(repr=False, compare=False)
 
     @classmethod
     def capture(
@@ -77,17 +79,21 @@ class _ArchiveWorkspaceTopology:
         captured = (
             workspace if isinstance(workspace, Workspace) else Workspace(workspace)
         )
+        captured.require_ready()
         root = Path(os.fspath(captured.root))
         if not root.is_absolute():
             root = Path(os.path.abspath(root))
-        return cls(root=root)
+        lease = copy.copy(captured)
+        lease.root = root
+        return cls(root=root, _workspace_lease=lease)
 
     @property
     def workspace_key(self) -> str:
         return os.fspath(self.root)
 
     def operation(self) -> _ArchiveOperation:
-        workspace = Workspace(self.root)
+        workspace = copy.copy(self._workspace_lease)
+        workspace.root = self.root
         catalog = FilesystemConversationCatalog(workspace)
         return _ArchiveOperation(
             workspace=workspace,
