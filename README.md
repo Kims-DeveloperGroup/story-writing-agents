@@ -215,6 +215,7 @@ or agent requirement. See [artifact-reference status](docs/guides/artifact-refer
 - [Provider-free smoke](docs/guides/smoke-test.md)
 - [CLI reference](docs/reference/cli.md)
 - [Runtime API](docs/reference/runtime-api.md)
+- [Safe Git adapter and story baseline](docs/reference/git-adapter.md)
 - [System design](docs/design/overview.md)
 
 ## Development

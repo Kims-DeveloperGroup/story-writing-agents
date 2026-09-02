@@ -1,8 +1,9 @@
 # Package API and exports
 
-The package exposes management, generic backend/model contracts, and direct
-schema-v2 collaboration components. An exported provider or debate component
-does not create an installed story-execution command.
+The package exposes management, generic backend/model contracts, direct
+schema-v2 collaboration components, and a direct safe Git boundary. An
+exported provider, debate, or Git component does not create an installed
+story-execution command.
 
 ## Facade inventory
 
@@ -15,10 +16,11 @@ The stable inventories in this revision are:
 | `story_writing_agents.conversation_search` | 18 | Schema-v2 search, exact citations, paging, and history service |
 | `story_writing_agents.conversation_retrieval` | 24 | Low-level provider search/read-history/answer contracts |
 | `story_writing_agents.conversation_storage` | 63 | Storage composition, provenance, activation, archive, and transfer contracts |
+| `story_writing_agents.git` | 22 | Fixed local topology, exact baseline, status, diff-metadata, and log-metadata contracts and adapter |
 | `story_writing_agents.workspace` | 3 | `Workspace`, `initialize_workspace`, and `FilesystemConversationCatalog` |
 | `story_writing_agents.writing_artifacts` | 62 | Canonical artifact/reference values plus pure exact change-set and relationship-policy contracts |
 
-The production graph has 99 modules, 367 dependency edges, no cycles, and 104
+The production graph has 102 modules, 370 dependency edges, no cycles, and 104
 package-root exports. The conversations owners contribute 54 event exports and
 20 context exports; their facade bindings are identical to their owner
 bindings.
@@ -37,6 +39,34 @@ session lifecycle, catalog, parser, retrieval, and error contracts. Those are
 component seams, not alternate runtime execution entry points. The exact list
 is authoritative in `story_writing_agents.__all__` and is checked against the
 project module index.
+
+<a id="safe-git-boundary"></a>
+
+## Safe Git boundary
+
+The direct `story_writing_agents.git` facade exports 21 pure contracts and the
+sole `GitRepositoryAdapter`. All 22 names are intentionally absent from the
+104-name package-root facade. The adapter exposes exactly six typed operations:
+
+```python
+from story_writing_agents.git import GitRepositoryAdapter
+
+adapter = GitRepositoryAdapter(absolute_workspace_root)
+topology = adapter.inspect_topology()
+inspection = adapter.inspect_baseline(manifest)
+created = adapter.create_baseline(manifest)
+status = adapter.status()
+diff = adapter.diff_metadata()
+log = adapter.log_metadata()
+```
+
+The boundary can create or verify only the exact fixed `main` root commit and
+return bounded content-free repository metadata. It has no arbitrary command
+runner, provider, remote, migration, workspace-initialization composition,
+session branch/worktree, or later-commit operation. In particular, the
+installed `story init` command does not call this adapter in this revision.
+See [Safe Git adapter and story baseline](git-adapter.md) for the manifest,
+identity, topology, retry, security, and sample input/output contracts.
 
 Canonical artifact value contracts live in
 `story_writing_agents.writing_artifacts`, but are intentionally absent from the

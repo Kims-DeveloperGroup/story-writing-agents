@@ -29,6 +29,7 @@ your task.
 | Select or transfer conversation storage | [SQLite conversation storage](guides/sqlite-conversation-storage.md) |
 | Inspect recorded provider exchanges | [Agent exchanges](guides/agent-exchanges.md) |
 | Understand artifact-reference syntax and current availability | [Artifact references](guides/artifact-references.md) |
+| Create or inspect the fixed local Git baseline from Python | [Safe Git adapter](reference/git-adapter.md) |
 
 ## Exact reference
 
@@ -45,6 +46,7 @@ your task.
 - [Conversation retrieval contracts](reference/conversation-retrieval.md)
 - [Backend and sessions](reference/backend-and-sessions.md)
 - [Canonical writing artifacts](reference/writing-artifacts.md)
+- [Safe Git adapter and story baseline](reference/git-adapter.md)
 - Configuration: [agents](reference/configuration/agent-configuration.md),
   [runtime overrides](reference/configuration/runtime-overrides.md),
   [session storage](reference/configuration/session-storage.md), and

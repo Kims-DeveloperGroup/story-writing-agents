@@ -16,9 +16,9 @@ Source root: `src/`
 
 Package root: `src/story_writing_agents/`
 
-Importable production units indexed: 99.
+Importable production units indexed: 102.
 
-Direct internal dependency edges indexed: 367.
+Direct internal dependency edges indexed: 370.
 
 Directed internal dependency cycles indexed: 0.
 
@@ -190,6 +190,9 @@ provider_error_artifacts -> agents/workspace
 provider_auth -> (standard library only)
 provider_catalog -> (standard library only)
 provider_process -> (standard library only)
+git -> git.adapter/git.contracts
+git.adapter -> git.contracts
+git.contracts -> (standard library only)
 session_lifecycle -> (standard library only)
 conversations -> conversations.catalog/context/events
 conversations.catalog -> errors
@@ -1734,6 +1737,88 @@ every intermediate arrow. The current runtime graph is acyclic.
   `tests/test_rag_module_and_packaging_boundary.py`,
   `docs/reference/package-api.md`, `docs/guides/conversation-rag.md`, and
   `docs/design/overview.md`.
+
+### `story_writing_agents.git`
+
+- **Source:** `src/story_writing_agents/git/__init__.py`
+- **Responsibility:** Provide the stable provider-independent safe Git import
+  boundary.
+- **Supported surface:** Exactly 22 names in `__all__`:
+  `GIT_BASELINE_BRANCH`, `GIT_BASELINE_COMMIT_MESSAGE`, `GitOperationKind`,
+  `GitRepositoryState`, `GitTopologyKind`, `GitChangeKind`, `GitFailureCode`,
+  `GitRecoveryAction`, `GitOperationError`, `GitManifestEntry`,
+  `GitBaselineManifest`, `GitIdentity`, `GitEffectiveIdentity`,
+  `GitRepositoryTopology`, `GitBaselineInspection`, `GitStatusEntry`,
+  `GitStatus`, `GitDiffEntry`, `GitDiffMetadata`, `GitCommitMetadata`,
+  `GitLogMetadata`, and `GitRepositoryAdapter`. These names are intentionally
+  absent from the project-root facade.
+- **Direct internal dependencies:** `git.adapter` and `git.contracts`.
+- **State, resources, and side effects:** Owns no state or external resource.
+  Import only binds the pure contracts and adapter class and performs no
+  filesystem access, environment read, process launch, repository operation,
+  or workspace initialization.
+- **Primary verification/documentation:**
+  `tests/test_git_contracts.py` and
+  `tests/test_rag_module_and_packaging_boundary.py`; the supported facade and
+  complete user-facing boundary are documented in
+  `docs/reference/git-adapter.md`.
+
+### `story_writing_agents.git.contracts`
+
+- **Source:** `src/story_writing_agents/git/contracts.py`
+- **Responsibility:** Define immutable closed contracts for safe Git operations.
+- **Supported surface:** Exactly the facade's 21 constants, enums, error, and
+  frozen slotted values other than `GitRepositoryAdapter`, in identical
+  `__all__` order. Fixed baseline constants are branch `main` and message
+  `Initialize story workspace`. No arbitrary command, argv, environment,
+  revision, ref, branch, pathspec, commit-message, credential, or provider
+  field exists.
+- **Direct internal dependencies:** None.
+- **State, resources, and side effects:** Owns only immutable validation policy,
+  fixed content-free diagnostics, and canonical manifest identity derivation.
+  It retains no mutable state and performs no filesystem, environment, process,
+  repository, provider, network, or import-time operational I/O. Public errors
+  carry only closed failure/operation/state/recovery facts and fixed text;
+  identity fields are excluded from representations.
+- **Primary verification/documentation:**
+  `tests/test_git_contracts.py`; contract values, manifest rules, failure
+  states, and public examples are documented in
+  `docs/reference/git-adapter.md`.
+
+### `story_writing_agents.git.adapter`
+
+- **Source:** `src/story_writing_agents/git/adapter.py`
+- **Responsibility:** Execute the closed safe Git operation set for one exact
+  workspace root.
+- **Supported surface:** Exactly `GitRepositoryAdapter` in `__all__`, also
+  re-exported by the `git` facade. Its public constructor accepts only one
+  absolute lexical root; its fixed methods are `inspect_topology`,
+  `inspect_baseline`, `create_baseline`, `status`, `diff_metadata`, and
+  `log_metadata`. No public generic runner or raw Git command escape exists.
+- **Direct internal dependencies:** `git.contracts`.
+- **State, resources, and side effects:** Construction retains only a lexical
+  absolute `Path` and performs no I/O. Each operation freshly binds and
+  revalidates the no-symlink root identity, classifies repository topology,
+  owns every synchronous `git` child through bounded output, timeout,
+  termination/kill, reader join, and content-free failure translation, then
+  retains no process or descriptor. Fixed `shell=False` argv, sanitized Git
+  environment, no-pager/config overrides, plumbing operations, literal-path
+  boundaries, disabled hooks/signing/fsmonitor/external diff/text conversion,
+  and `hash-object --no-filters` prevent provider prose or repository-controlled
+  extensions from becoming execution. Baseline creation preflights effective
+  user author/committer identity, builds an exact 100644 manifest index/tree,
+  creates only the fixed root commit and `main` ref, and detects an identical
+  retry. Inspection and cancellation recovery expose exactly absent,
+  initialized-without-baseline, baseline-committed, or recovery-required;
+  repository content and raw stdout/stderr never cross the adapter. It owns no
+  story initialization, workspace/session topology, later commit confirmation,
+  worktree, internal ref, remote, merge, reset, clean, provider, artifact, or
+  GitHub behavior.
+- **Primary verification/documentation:**
+  `tests/test_git_adapter_process.py` and
+  `tests/test_git_adapter_integration.py`; operation behavior, safety
+  boundaries, recovery, and external meaning are documented in
+  `docs/reference/git-adapter.md`.
 
 ### `story_writing_agents.conversation_rag_composition`
 
@@ -5564,12 +5649,13 @@ every intermediate arrow. The current runtime graph is acyclic.
 
 ## Consistency Notes
 
-- The inventory contains 99 modules. Static AST derivation over every module-
-  level and function-local import yields 367 unique direct internal edges and
+- The inventory contains 102 modules. Static AST derivation over every module-
+  level and function-local import yields 370 unique direct internal edges and
   no directed cycle. The v2 cutover contributes 97 modules and 362 edges;
   `writing_artifacts.change_sets` and `writing_artifacts.relationship_policy`
-  add two pure modules and exactly five inward edges. Relative to the 360-edge
-  pre-cutover graph, filesystem and
+  add two pure modules and exactly five inward edges; the safe `git` facade,
+  contracts, and adapter add three modules and exactly three inward edges.
+  Relative to the 360-edge pre-cutover graph, filesystem and
   SQLite storage each add one direct dependency on `conversations.events` for
   private legacy-row/file rejection values, smoke adds one dependency on
   `conversation_storage.contracts`, and orchestrator removes its dependency on
@@ -5581,6 +5667,12 @@ every intermediate arrow. The current runtime graph is acyclic.
   `initialize_workspace`, and `FilesystemConversationCatalog`. The 63-name
   conversation-storage facade exports contracts/composition/archive workflow
   only and no concrete filesystem or SQLite adapter.
+- The safe Git package facade contains exactly 22 names: 21 pure contract
+  values plus the sole `GitRepositoryAdapter`. All remain absent from the
+  project root. The facade-to-contracts, facade-to-adapter, and
+  adapter-to-contracts arrows are the only Git-boundary internal edges; the
+  package has no workspace, provider, conversation, artifact, GitHub, or
+  generic process dependency.
 - The writing-artifact facade contains exactly 62 names. Its 16 change-set and
   15 relationship-policy additions remain absent from the project root and
   depend inward only on the existing pure catalog plus the change-set owner;
