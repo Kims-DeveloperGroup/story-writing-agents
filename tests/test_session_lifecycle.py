@@ -445,7 +445,7 @@ class SessionLifecycleContractTests(unittest.TestCase):
             ]
         )
         source_files = tuple(source_root.rglob("*.py"))
-        self.assertEqual(len(source_files), 99)
+        self.assertEqual(len(source_files), 102)
         self.assertTrue(
             {
                 source_root / "conversations" / "__init__.py",
@@ -477,8 +477,8 @@ class SessionLifecycleContractTests(unittest.TestCase):
         index = (source_root.parents[1] / "PYTHON_MODULE_INDEX.md").read_text(
             encoding="utf-8"
         )
-        self.assertIn("Importable production units indexed: 99.", index)
-        self.assertIn("Direct internal dependency edges indexed: 367.", index)
+        self.assertIn("Importable production units indexed: 102.", index)
+        self.assertIn("Direct internal dependency edges indexed: 370.", index)
         self.assertIn("Directed internal dependency cycles indexed: 0.", index)
         headings = tuple(re.findall(r"^### `([^`]+)`$", index, flags=re.MULTILINE))
         expected_modules: set[str] = set()
@@ -488,8 +488,8 @@ class SessionLifecycleContractTests(unittest.TestCase):
             if parts[-1] == "__init__":
                 parts = parts[:-1]
             expected_modules.add(".".join(("story_writing_agents", *parts)))
-        self.assertEqual(len(headings), 99)
-        self.assertEqual(len(set(headings)), 99)
+        self.assertEqual(len(headings), 102)
+        self.assertEqual(len(set(headings)), 102)
         self.assertEqual(set(headings), expected_modules)
         self.assertIn("Exactly 81 names in `__all__`", index)
         self.assertIn("Exactly 20 owning-module names in `__all__`", index)

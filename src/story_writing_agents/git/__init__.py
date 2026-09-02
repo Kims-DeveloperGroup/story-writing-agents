@@ -1,0 +1,52 @@
+"""Supported provider-independent safe Git boundary."""
+
+from .adapter import GitRepositoryAdapter
+from .contracts import (
+    GIT_BASELINE_BRANCH,
+    GIT_BASELINE_COMMIT_MESSAGE,
+    GitBaselineInspection,
+    GitBaselineManifest,
+    GitChangeKind,
+    GitCommitMetadata,
+    GitDiffEntry,
+    GitDiffMetadata,
+    GitEffectiveIdentity,
+    GitFailureCode,
+    GitIdentity,
+    GitLogMetadata,
+    GitManifestEntry,
+    GitOperationError,
+    GitOperationKind,
+    GitRecoveryAction,
+    GitRepositoryState,
+    GitRepositoryTopology,
+    GitStatus,
+    GitStatusEntry,
+    GitTopologyKind,
+)
+
+
+__all__ = [
+    "GIT_BASELINE_BRANCH",
+    "GIT_BASELINE_COMMIT_MESSAGE",
+    "GitOperationKind",
+    "GitRepositoryState",
+    "GitTopologyKind",
+    "GitChangeKind",
+    "GitFailureCode",
+    "GitRecoveryAction",
+    "GitOperationError",
+    "GitManifestEntry",
+    "GitBaselineManifest",
+    "GitIdentity",
+    "GitEffectiveIdentity",
+    "GitRepositoryTopology",
+    "GitBaselineInspection",
+    "GitStatusEntry",
+    "GitStatus",
+    "GitDiffEntry",
+    "GitDiffMetadata",
+    "GitCommitMetadata",
+    "GitLogMetadata",
+    "GitRepositoryAdapter",
+]
