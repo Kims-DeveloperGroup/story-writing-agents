@@ -19,7 +19,10 @@
 > per-session generation store. An explicitly injected runtime service or the
 > noninteractive local lifecycle/search commands can authorize and schedule its
 > use; interactive `/settings` persists next-shell policy, and startup composes
-> Local only beside a complete authoritative storage bundle.
+> Local only beside a complete authoritative storage bundle. Exact session
+> branch/ref/sibling-worktree provisioning is also implemented as
+> package-internal #504 infrastructure. It is not yet connected to installed
+> session commands.
 
 Key terms: **containment**—keeping paths beneath the workspace root; **symlink**—
 a filesystem alias the runtime rejects; **exclusive creation**—failure instead
@@ -97,6 +100,62 @@ marker, initialization journal, or known legacy sentinel stops the search, so
 an unsupported or malformed inner boundary is never skipped for an outer one.
 Discovery and explicit paths never initialize. Use the exact root for
 automation; nested workspace/repository initialization is unsupported.
+
+<a id="session-git-resource-safety"></a>
+
+## Session Git-resource safety
+
+The package-internal owner freshly binds the initialization root and its exact
+non-symlink `.git` directory for every operation. One repository-wide advisory
+lock covers exhaustive inspection, provisioning, and finalization across both
+same-session and different-session calls. The persistent owner-only lock is:
+
+```text
+.git/story-writing-agents/runtime/session-provisioning/.lock
+```
+
+Read-only inspect/list/require-ready operations never create that namespace.
+Provision may create the private directories and lock, then writes one
+owner-only `<session_id>.json` journal by descriptor-relative, no-follow,
+exclusive creation. The immutable payload is canonical UTF-8 JSON with a
+trailing newline and a 64-KiB maximum. The journal file and its containing
+directory are synchronized before any seed, ref, branch, or worktree mutation.
+Malformed names, types, links, modes, duplicate or unknown fields, noncanonical
+bytes, and identity substitution fail closed.
+
+Under the lock, provisioning performs this fixed order:
+
+```text
+verify main baseline and exhaustive inventory
+-> reject sibling-path and identity collisions
+-> capture effective identity, UTC timestamp, baseline, provisioning ID
+-> publish and synchronize the immutable journal
+-> create and fully decode/verify the deterministic empty-tree seed object
+-> compare-and-swap internal ref from zero to the seed
+-> compare-and-swap session branch from zero to the baseline
+-> create the exact sibling linked worktree for that branch
+-> verify root invariance and the correlated triple
+-> remove and synchronize only the journal
+-> verify the complete journal-free result again
+```
+
+The main root must keep symbolic `HEAD` on `main`, the same baseline/tree/index,
+the exact initializer files, and clean status. Inventory accounts for every
+branch, session internal ref, registered worktree, and provisioning journal;
+unknown or uncorrelated facts are not ignored. An accepted session worktree
+must be at its schema-derived sibling path, have exact common-Git indirection
+and registration, use its expected symbolic session branch, and retain the
+immutable baseline and seed roots. Later tips may advance, but #504 does not
+interpret that #505 history.
+
+Every Git child uses fixed arguments, `shell=False`, bounded streams and time,
+disabled prompting, hooks, signing, filters, pagers, and inherited Git control
+variables, followed by root-identity revalidation and complete process/pipe
+cleanup. Only a temporary file still proved to belong to the in-process
+operation can be removed automatically. Named refs, branches, worktrees,
+administration entries, Git objects, journals that carry recovery evidence,
+and user bytes are never cleaned up automatically. See
+[Session Git-resource recovery](recovery-and-limitations.md#session-git-resource-recovery).
 
 The writing-artifact storage adapter has a distinct construction contract. It
 captures a supplied relative root immediately as a lexical absolute path using

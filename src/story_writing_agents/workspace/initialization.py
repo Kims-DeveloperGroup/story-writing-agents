@@ -27,6 +27,19 @@ from ..git import (
     GitRepositoryState,
     GitTopologyKind,
 )
+from ..git.session_contracts import (
+    GIT_SESSION_WORKTREE_SIBLING_SUFFIX,
+    GitSessionResourceError,
+    GitSessionResourceInspection,
+    GitSessionResourceInventory,
+    GitSessionResourceState,
+)
+from ..git.session_resources import (
+    inspect_git_session_resources as _inspect_git_session_resources,
+    list_git_session_resources as _list_git_session_resources,
+    provision_git_session_resources as _provision_git_session_resources,
+    require_ready_git_session_resources as _require_ready_git_session_resources,
+)
 from .schema import (
     WORKSPACE_DIRECTORIES,
     WORKSPACE_INITIALIZATION_JOURNAL_PATH,
@@ -37,6 +50,7 @@ from .schema import (
     decode_initialization_journal,
     decode_workspace_marker,
     encode_initialization_journal,
+    validate_workspace_identifier,
 )
 
 
@@ -57,21 +71,64 @@ class WorkspaceRootState(StrEnum):
     READY = "ready"
 
 
+class WorkspaceRootRole(StrEnum):
+    """Closed root roles recognized by schema-v2 discovery."""
+
+    MAIN = "main"
+    SESSION = "session"
+
+
 @dataclass(frozen=True, slots=True)
 class WorkspaceRootInspection:
     """One exact root identity and initialization state."""
 
     state: WorkspaceRootState
     identity: tuple[int, int] | None
+    role: WorkspaceRootRole | None = None
+    session_id: str | None = None
+    main_root: Path | None = None
 
     def __post_init__(self) -> None:
         if type(self.state) is not WorkspaceRootState:
             raise TypeError("state must be a WorkspaceRootState")
         if self.state is WorkspaceRootState.MISSING:
-            if self.identity is not None:
+            if any(
+                value is not None
+                for value in (self.identity, self.role, self.session_id, self.main_root)
+            ):
                 raise TypeError("a missing workspace cannot have an identity")
         elif not _valid_identity(self.identity):
             raise TypeError("an existing workspace must have an identity")
+        if self.state is WorkspaceRootState.READY:
+            if type(self.role) is not WorkspaceRootRole or not isinstance(
+                self.main_root, Path
+            ):
+                raise TypeError("a ready workspace must have one exact root role")
+            if (self.role is WorkspaceRootRole.MAIN) != (self.session_id is None):
+                raise TypeError("workspace session identity is inconsistent")
+        elif any(
+            value is not None for value in (self.role, self.session_id, self.main_root)
+        ):
+            raise TypeError("an unready workspace cannot have a root role")
+
+
+@dataclass(frozen=True, slots=True)
+class WorkspaceRootDiscovery:
+    """One nearest exact v2 boundary with its main/session identity."""
+
+    root: Path
+    role: WorkspaceRootRole
+    session_id: str | None
+    main_root: Path
+
+    def __post_init__(self) -> None:
+        if (
+            not isinstance(self.root, Path)
+            or not isinstance(self.main_root, Path)
+            or type(self.role) is not WorkspaceRootRole
+            or (self.role is WorkspaceRootRole.MAIN) != (self.session_id is None)
+        ):
+            raise TypeError("workspace discovery is invalid")
 
 
 def inspect_workspace_root(root: Path) -> WorkspaceRootInspection:
@@ -98,9 +155,19 @@ def inspect_workspace_root(root: Path) -> WorkspaceRootInspection:
                 WorkspaceRootState.INITIALIZING,
                 identity,
             )
-        if WORKSPACE_MARKER_PATH in _snapshot_relative_files(descriptor):
-            _verify_ready(descriptor, root, journal_present=False)
-            return WorkspaceRootInspection(WorkspaceRootState.READY, identity)
+        if _workspace_marker_present(descriptor):
+            role, session_id, main_root = _verify_ready(
+                descriptor,
+                root,
+                journal_present=False,
+            )
+            return WorkspaceRootInspection(
+                WorkspaceRootState.READY,
+                identity,
+                role,
+                session_id,
+                main_root,
+            )
         if _contains_legacy_boundary(descriptor):
             raise WorkspaceVersionUnsupportedError(
                 "workspace version is unsupported; migration and compatibility "
@@ -126,12 +193,22 @@ def initialize_workspace_root(
         inspection = WorkspaceRootInspection(
             state=inspection.state,
             identity=inspection.identity,
+            role=inspection.role,
+            session_id=inspection.session_id,
+            main_root=inspection.main_root,
         )
     except TypeError:
         raise TypeError("inspection must be a valid WorkspaceRootInspection") from None
     if inspection.state is WorkspaceRootState.READY:
         identity = require_ready_workspace_root(root, inspection.identity)
-        return WorkspaceRootInspection(WorkspaceRootState.READY, identity)
+        role, session_id, main_root = _workspace_role(root)
+        return WorkspaceRootInspection(
+            WorkspaceRootState.READY,
+            identity,
+            role,
+            session_id,
+            main_root,
+        )
     _require_initialization_operations()
     if inspection.state is WorkspaceRootState.MISSING:
         _reject_repository_ancestor(root)
@@ -181,7 +258,13 @@ def initialize_workspace_root(
         os.fsync(descriptor)
         _verify_ready(descriptor, root, journal_present=False, manifest=manifest)
         _verify_named_identity(root, descriptor, identity)
-        return WorkspaceRootInspection(WorkspaceRootState.READY, identity)
+        return WorkspaceRootInspection(
+            WorkspaceRootState.READY,
+            identity,
+            WorkspaceRootRole.MAIN,
+            None,
+            root,
+        )
     finally:
         os.close(descriptor)
 
@@ -205,9 +288,74 @@ def require_ready_workspace_root(
         os.close(descriptor)
 
 
+def inspect_session_resources(
+    root: Path,
+    session_id: str,
+) -> GitSessionResourceInspection:
+    """Inspect one session through the bounded workspace-owned composition seam."""
+
+    manifest = _baseline_manifest(canonical_initializer_scaffold())
+    return _inspect_git_session_resources(_main_root(root), manifest, session_id)
+
+
+def list_session_resources(root: Path) -> GitSessionResourceInventory:
+    """List the complete correlated session inventory without mutation."""
+
+    manifest = _baseline_manifest(canonical_initializer_scaffold())
+    return _list_git_session_resources(_main_root(root), manifest)
+
+
+def provision_session_resources(
+    root: Path,
+    session_id: str,
+) -> GitSessionResourceInspection:
+    """Create or resume one exact session triple under the repository lock."""
+
+    main_root = _main_root(root)
+    manifest = _baseline_manifest(canonical_initializer_scaffold())
+    return _provision_git_session_resources(main_root, manifest, session_id)
+
+
+def require_ready_session_resources(
+    root: Path,
+    session_id: str,
+) -> GitSessionResourceInspection:
+    """Require one exact ready session triple without mutation."""
+
+    manifest = _baseline_manifest(canonical_initializer_scaffold())
+    return _require_ready_git_session_resources(
+        _main_root(root),
+        manifest,
+        session_id,
+    )
+
+
+def discover_workspace_location(start: Path) -> WorkspaceRootDiscovery | None:
+    """Return the nearest recognizable exact main or session boundary."""
+
+    boundary = _nearest_workspace_boundary(start)
+    if boundary is None:
+        return None
+    inspection = inspect_workspace_root(boundary)
+    if inspection.state is not WorkspaceRootState.READY:
+        raise WorkspaceFormatError("workspace is not ready")
+    assert inspection.role is not None
+    assert inspection.main_root is not None
+    return WorkspaceRootDiscovery(
+        root=boundary,
+        role=inspection.role,
+        session_id=inspection.session_id,
+        main_root=inspection.main_root,
+    )
+
+
 def discover_workspace_root(start: Path) -> Path | None:
     """Return the nearest recognizable workspace boundary without skipping it."""
 
+    return _nearest_workspace_boundary(start)
+
+
+def _nearest_workspace_boundary(start: Path) -> Path | None:
     current = _lexical_absolute(start)
     try:
         if not current.is_dir():
@@ -226,9 +374,24 @@ def _verify_ready(
     *,
     journal_present: bool,
     manifest: GitBaselineManifest | None = None,
-) -> None:
+) -> tuple[WorkspaceRootRole, str | None, Path]:
     scaffold = canonical_initializer_scaffold()
     manifest = manifest or _baseline_manifest(scaffold)
+    role, session_id, main_root = _workspace_role(root)
+    if role is WorkspaceRootRole.SESSION:
+        try:
+            marker_bytes = _read_relative_regular(descriptor, WORKSPACE_MARKER_PATH)
+        except OSError:
+            raise WorkspaceFormatError("workspace marker is missing") from None
+        decode_workspace_marker(marker_bytes)
+        assert session_id is not None
+        try:
+            _require_ready_git_session_resources(root, manifest, session_id)
+        except GitSessionResourceError:
+            raise WorkspaceFormatError(
+                "workspace session resources require recovery"
+            ) from None
+        return role, session_id, main_root
     snapshot = _snapshot_relative_files(descriptor)
     marker_bytes = snapshot.get(WORKSPACE_MARKER_PATH)
     if marker_bytes is None:
@@ -248,6 +411,19 @@ def _verify_ready(
         raise WorkspaceFormatError("workspace initialization requires recovery")
     if snapshot != allowed_files:
         raise WorkspaceFormatError("workspace scaffold requires recovery")
+    if not journal_present:
+        try:
+            inventory = _list_git_session_resources(root, manifest)
+        except GitSessionResourceError:
+            raise WorkspaceFormatError(
+                "workspace Git resources require recovery"
+            ) from None
+        if any(
+            value.state is not GitSessionResourceState.READY
+            for value in inventory.sessions
+        ):
+            raise WorkspaceFormatError("workspace Git resources require recovery")
+        return role, session_id, main_root
     adapter = GitRepositoryAdapter(root)
     git_failure: WorkspaceFormatError | ConfigurationError | None = None
     try:
@@ -272,6 +448,29 @@ def _verify_ready(
             raise WorkspaceFormatError("workspace status requires recovery")
     elif not status.clean:
         raise WorkspaceFormatError("workspace status requires recovery")
+    return role, session_id, main_root
+
+
+def _workspace_role(root: Path) -> tuple[WorkspaceRootRole, str | None, Path]:
+    parent = root.parent
+    suffix = GIT_SESSION_WORKTREE_SIBLING_SUFFIX
+    if parent.name.endswith(suffix):
+        workspace_name = parent.name[: -len(suffix)]
+        if not workspace_name:
+            raise WorkspaceFormatError("workspace session path is invalid")
+        try:
+            session_id = validate_workspace_identifier(root.name)
+        except Exception:
+            raise WorkspaceFormatError("workspace session path is invalid") from None
+        main_root = parent.parent / workspace_name
+        return WorkspaceRootRole.SESSION, session_id, main_root
+    return WorkspaceRootRole.MAIN, None, root
+
+
+def _main_root(root: Path) -> Path:
+    lexical = _require_lexical_root(root)
+    _role, _session_id, main_root = _workspace_role(lexical)
+    return main_root
 
 
 def _validate_initializing_root(
@@ -369,6 +568,25 @@ def _snapshot_relative_files(descriptor: int) -> dict[str, bytes]:
 
     visit(descriptor, ())
     return result
+
+
+def _workspace_marker_present(descriptor: int) -> bool:
+    try:
+        _read_relative_regular(descriptor, WORKSPACE_MARKER_PATH)
+    except (FileNotFoundError, NotADirectoryError):
+        return False
+    except OSError:
+        raise WorkspaceFormatError("workspace marker cannot be inspected") from None
+    return True
+
+
+def _read_relative_regular(descriptor: int, relative: str) -> bytes:
+    parts = Path(relative).parts
+    parent = _walk_directories(descriptor, parts[:-1], create=False)
+    try:
+        return _read_regular_file(parent, parts[-1])
+    finally:
+        os.close(parent)
 
 
 def _allowed_directories() -> frozenset[str]:
@@ -572,7 +790,9 @@ def _root_names(descriptor: int) -> tuple[str, ...]:
 def _contains_legacy_boundary(descriptor: int) -> bool:
     try:
         files = _snapshot_relative_files(descriptor)
-    except (WorkspaceFormatError, WorkspaceSecurityError):
+    except WorkspaceSecurityError:
+        raise
+    except WorkspaceFormatError:
         names = _root_names(descriptor)
         return any(
             name in {"config", "agent_states", "discussion_logs", "manuscript"}

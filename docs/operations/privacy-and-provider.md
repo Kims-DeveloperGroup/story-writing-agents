@@ -40,6 +40,33 @@ Blackboards can contain input, drafts, reviews, and errors. Provider output is
 not generally scrubbed; catalog archive status neither deletes nor conceals
 conversations; transcripts retain messages, replies, and runtime errors.
 
+### Session Git-resource exposure
+
+The package-internal #504 lifecycle is local and provider-free, but it is not
+secret storage. During provisioning, the owner-only plaintext journal beneath
+`.git/story-writing-agents/runtime/session-provisioning/` contains the session
+ID, random provisioning ID, baseline object ID, one UTC timestamp, and the
+effective author and committer names and email addresses. Its exact path and
+filesystem metadata also reveal the session identity and operation timing. The
+journal is removed only after the correlated triple verifies and removal is
+synchronized; interruption or recovery-required state can retain it.
+
+The permanent internal seed commit retains the effective author/committer,
+timestamp, and session ID in its message
+`Initialize story session runtime: <session_id>`. It has an empty tree and no
+story content, but it remains local Git history and is never securely erased by
+the runtime. Branch/ref names and the sibling worktree path also expose the
+session ID. The persistent lock contains no story content but its metadata can
+expose use timing.
+
+Provisioning sends none of these values to Codex, Antigravity, another
+provider, or a remote. That does not encrypt them or prevent another local
+process with repository access from reading them. Protect the complete main
+repository, sibling worktree directory, `.git` storage, backups, and process
+memory. Pause, release, close, and process exit are not retention or secure-
+erase operations; there is no automatic deletion, migration, compatibility,
+push, or remote-cleanup path.
+
 <a id="conversation-archive-privacy"></a>
 
 ### Conversation archive exposure

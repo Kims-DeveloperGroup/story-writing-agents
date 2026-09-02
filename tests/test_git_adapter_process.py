@@ -19,6 +19,7 @@ from story_writing_agents.git import (
     GitRepositoryState,
 )
 from story_writing_agents.git import adapter as adapter_module
+from story_writing_agents.git import process as process_module
 
 from tests.git_contract_fixture import digest, exception_graph
 
@@ -120,7 +121,7 @@ class GitAdapterProcessTests(unittest.TestCase):
         identity_environment: dict[str, str] | None = None,
     ) -> tuple[object, mock.Mock]:
         popen = mock.Mock(return_value=process)
-        with mock.patch.object(adapter_module.subprocess, "Popen", popen):
+        with mock.patch.object(process_module.subprocess, "Popen", popen):
             result = self.adapter._run_git(  # noqa: SLF001
                 arguments,
                 identity=self.identity,
@@ -239,7 +240,7 @@ class GitAdapterProcessTests(unittest.TestCase):
             self.adapter._run_git(  # noqa: SLF001
                 ("status",),
                 identity=self.identity,
-                stdin=b"x" * (adapter_module._MAX_STDIN_BYTES + 1),  # noqa: SLF001
+                stdin=b"x" * (process_module._MAX_STDIN_BYTES + 1),  # noqa: SLF001
             )
         self.assertIs(caught.exception.code, GitFailureCode.INVALID_REQUEST)
         with self.assertRaises(adapter_module._AdapterFailure) as caught:  # noqa: SLF001
@@ -259,7 +260,7 @@ class GitAdapterProcessTests(unittest.TestCase):
         for failure, expected in cases:
             with self.subTest(code=expected.value):
                 with mock.patch.object(
-                    adapter_module.subprocess, "Popen", side_effect=failure
+                    process_module.subprocess, "Popen", side_effect=failure
                 ):
                     with self.assertRaises(GitOperationError) as caught:
                         self.adapter._public_call(  # noqa: SLF001
@@ -278,7 +279,7 @@ class GitAdapterProcessTests(unittest.TestCase):
     def test_nonzero_required_command_preserves_only_bounded_exit_code(self) -> None:
         process = _FakeProcess(stdout=(b"secret output", b""), wait_results=(17,))
         with mock.patch.object(
-            adapter_module.subprocess, "Popen", return_value=process
+            process_module.subprocess, "Popen", return_value=process
         ):
             with self.assertRaises(GitOperationError) as caught:
                 self.adapter._public_call(  # noqa: SLF001
@@ -302,7 +303,7 @@ class GitAdapterProcessTests(unittest.TestCase):
             poll_results=(None,),
         )
         with mock.patch.object(
-            adapter_module.subprocess, "Popen", return_value=process
+            process_module.subprocess, "Popen", return_value=process
         ):
             with self.assertRaises(GitOperationError) as caught:
                 self.adapter._public_call(  # noqa: SLF001
@@ -319,14 +320,14 @@ class GitAdapterProcessTests(unittest.TestCase):
         self.assertEqual(
             process.wait_timeouts,
             [
-                adapter_module._PROCESS_TIMEOUT_SECONDS,  # noqa: SLF001
-                adapter_module._PROCESS_STOP_TIMEOUT_SECONDS,  # noqa: SLF001
-                adapter_module._PROCESS_STOP_TIMEOUT_SECONDS,  # noqa: SLF001
+                process_module._PROCESS_TIMEOUT_SECONDS,  # noqa: SLF001
+                process_module._PROCESS_STOP_TIMEOUT_SECONDS,  # noqa: SLF001
+                process_module._PROCESS_STOP_TIMEOUT_SECONDS,  # noqa: SLF001
             ],
         )
 
     def test_oversized_or_invalid_streams_fail_without_exposing_bytes(self) -> None:
-        oversized = b"s" * (adapter_module._MAX_STDERR_BYTES + 1)  # noqa: SLF001
+        oversized = b"s" * (process_module._MAX_STDERR_BYTES + 1)  # noqa: SLF001
         cases = (
             (
                 _FakeProcess(stderr=(oversized, b"")),
@@ -352,7 +353,7 @@ class GitAdapterProcessTests(unittest.TestCase):
                     process.stdout.read = fail_read  # type: ignore[method-assign]
                     self.addCleanup(setattr, process.stdout, "read", original)
                 with mock.patch.object(
-                    adapter_module.subprocess, "Popen", return_value=process
+                    process_module.subprocess, "Popen", return_value=process
                 ):
                     with self.assertRaises(GitOperationError) as caught:
                         self.adapter._public_call(  # noqa: SLF001
@@ -373,7 +374,7 @@ class GitAdapterProcessTests(unittest.TestCase):
             poll_results=(None,),
         )
         with mock.patch.object(
-            adapter_module.subprocess, "Popen", return_value=process
+            process_module.subprocess, "Popen", return_value=process
         ):
             with self.assertRaises(KeyboardInterrupt):
                 self.adapter._run_git(  # noqa: SLF001
@@ -402,7 +403,7 @@ class GitAdapterProcessTests(unittest.TestCase):
                 self.assertEqual(exception_graph(caught.exception), (caught.exception,))
 
     def test_root_identity_change_is_rejected_before_process_start(self) -> None:
-        with mock.patch.object(adapter_module.subprocess, "Popen") as popen:
+        with mock.patch.object(process_module.subprocess, "Popen") as popen:
             with self.assertRaises(adapter_module._AdapterFailure) as caught:  # noqa: SLF001
                 self.adapter._run_git(  # noqa: SLF001
                     ("status", "--"), identity=(self.identity[0], self.identity[1] + 1)
@@ -416,7 +417,7 @@ class GitAdapterProcessTests(unittest.TestCase):
         partial = _FakeProcess()
         partial.stderr = None  # type: ignore[assignment]
         with mock.patch.object(
-            adapter_module.subprocess, "Popen", return_value=partial
+            process_module.subprocess, "Popen", return_value=partial
         ):
             with self.assertRaises(GitOperationError) as caught:
                 self.adapter._public_call(  # noqa: SLF001
@@ -433,7 +434,7 @@ class GitAdapterProcessTests(unittest.TestCase):
         close_failure = _FakeProcess()
         close_failure.stdout.close_failure = OSError("private close error")
         with mock.patch.object(
-            adapter_module.subprocess,
+            process_module.subprocess,
             "Popen",
             return_value=close_failure,
         ):

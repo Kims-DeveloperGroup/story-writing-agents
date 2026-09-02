@@ -98,6 +98,13 @@ Success prints:
 
 Pause reports `durable_state:"paused"`.
 
+This JSON is provider-session lifecycle output. In the current revision it
+does not prove or trigger creation of the #504 Git branch, sibling worktree, or
+internal ref. Those resources have a separate package-internal lifecycle;
+#455 owns command wiring. Their five-state and recovery contract is documented
+in [Workspaces](../guides/workspaces.md#session-git-resources). #505 later owns
+confirmed story commits and internal checkpoints.
+
 ## Directives and inspection
 
 ```text

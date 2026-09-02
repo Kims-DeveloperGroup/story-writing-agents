@@ -332,8 +332,8 @@ class RagModuleBoundaryTests(unittest.TestCase):
     ) -> None:
         modules = _module_inventory()
         edges = _internal_edges(modules)
-        self.assertEqual(len(modules), 104)
-        self.assertEqual(len(edges), 376)
+        self.assertEqual(len(modules), 107)
+        self.assertEqual(len(edges), 385)
         self.assertIsNone(_cycle_witness(modules, edges))
         conversation_dependencies = {
             "story_writing_agents.conversations": {
@@ -376,11 +376,14 @@ class RagModuleBoundaryTests(unittest.TestCase):
             "story_writing_agents.workspace.initialization": {
                 "story_writing_agents.errors",
                 "story_writing_agents.git",
+                "story_writing_agents.git.session_contracts",
+                "story_writing_agents.git.session_resources",
                 "story_writing_agents.workspace.schema",
             },
             "story_writing_agents.workspace.schema": {
                 "story_writing_agents.agents",
                 "story_writing_agents.errors",
+                "story_writing_agents.git.session_contracts",
             },
             "story_writing_agents.conversation_storage.filesystem": {
                 "story_writing_agents.conversations",
@@ -391,6 +394,34 @@ class RagModuleBoundaryTests(unittest.TestCase):
         }
         for source, expected in workspace_dependencies.items():
             with self.subTest(workspace_source=source):
+                self.assertEqual(
+                    {target for edge_source, target in edges if edge_source == source},
+                    expected,
+                )
+        git_dependencies = {
+            "story_writing_agents.git": {
+                "story_writing_agents.git.adapter",
+                "story_writing_agents.git.contracts",
+            },
+            "story_writing_agents.git.contracts": set(),
+            "story_writing_agents.git.process": {
+                "story_writing_agents.git.contracts",
+            },
+            "story_writing_agents.git.adapter": {
+                "story_writing_agents.git.contracts",
+                "story_writing_agents.git.process",
+            },
+            "story_writing_agents.git.session_contracts": {
+                "story_writing_agents.git.contracts",
+            },
+            "story_writing_agents.git.session_resources": {
+                "story_writing_agents.git.contracts",
+                "story_writing_agents.git.process",
+                "story_writing_agents.git.session_contracts",
+            },
+        }
+        for source, expected in git_dependencies.items():
+            with self.subTest(git_source=source):
                 self.assertEqual(
                     {target for edge_source, target in edges if edge_source == source},
                     expected,

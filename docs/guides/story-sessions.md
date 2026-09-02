@@ -50,6 +50,16 @@ Each successful command prints JSON containing `session_id`, `durable_state`,
 and `access_state`. Create and reopen return after releasing their temporary
 claim, so successful noninteractive reports are ready and claimable.
 
+That output describes the current provider-session lifecycle manifest and
+access claim.
+It does **not** mean that the #504 Git branch, sibling worktree, and internal
+ref are ready. The exact Git-resource substrate is implemented only as a
+package-internal seam; #455 will connect explicit Create/Reopen flows to it.
+Until then, these current commands neither provision nor require that triple.
+The Git-resource states `absent`, `provisioning`, `ready`, `outcome_unknown`,
+and `recovery_required` are a separate state machine documented in
+[Workspaces](workspaces.md#session-git-resources).
+
 ## Conversation workflow
 
 After attachment, these commands manage catalog metadata and local history:

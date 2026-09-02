@@ -13,10 +13,10 @@ This is the complete availability boundary for issue
 - `story init` now composes this adapter internally after it records the exact
   schema-v2 initialization journal and installs its exact 22-file scaffold.
   The CLI does not expose manifest selection or another Git operation.
-- Session branches, worktrees, internal refs, and confirmed later commits are
-  not available here. Issue
-  [#449](https://github.com/Kims-DeveloperGroup/story-writing-agents/issues/449)
-  owns those later operations.
+- The public adapter still has no session branch, worktree, internal-ref, or
+  later-commit method. Separate package-internal #504 modules now own exact
+  session resources for #455 composition. Confirmed story commits and internal
+  checkpoints remain #505.
 
 The adapter is not a general Git client. It accepts no command, argument list,
 revision, ref, commit message, credential, prose, or provider-tool input.
@@ -279,7 +279,7 @@ representations, although callers can explicitly read the typed identity fields.
 | `absent` | The exact root is not a repository and is not inside another one. Baseline creation may proceed. |
 | `standalone` | The root owns a normal `.git` directory. Further baseline validation decides whether creation or reads may proceed. |
 | `parent_repository` | The root is nested inside another repository. The adapter refuses to adopt it. |
-| `linked_worktree` | `.git` is an administrative-file link. Session worktrees are outside #448. |
+| `linked_worktree` | `.git` is an administrative-file link. This baseline adapter rejects it; the separate #504 owner accepts only an exact correlated session worktree. |
 | `submodule` | The root is a submodule or has a Git-link entry. |
 | `sparse_checkout` | Sparse-checkout configuration is active. |
 | `root_mismatch` | Git's worktree/top-level/bare facts do not identify the exact supplied root. |
@@ -364,6 +364,110 @@ unsupported topologies direct the caller to recreate the workspace.
 
 These implementation mechanisms are not a public command escape hatch. The
 supported surface remains the six typed methods shown below.
+
+<a id="package-internal-session-git-resources"></a>
+
+## Package-internal session Git resources
+
+The #504 substrate is deliberately absent from the project, `git`, and
+`workspace` facades. It exposes four direct-module operations solely for the
+later #455 composition:
+
+```text
+inspect one session       read-only
+list exhaustive sessions read-only
+provision one session     create or resume an exact prefix
+require one ready session read-only
+```
+
+They accept a validated session ID and the initializer's exact baseline
+manifest. They do not accept raw Git arguments, arbitrary refs or paths,
+provider or lead text, serialized tool instructions, commit messages, or
+credentials. Current `story session create` and `story session reopen` do not
+call them. A command reporting provider-session `ready` therefore does not yet
+report Git-resource readiness.
+
+For session `novel`, the exact identity is:
+
+```text
+branch:   story/session/novel
+ref:      refs/story-writing-agents/runtime/sessions/novel
+worktree: <workspace-parent>/<workspace-name>.story-worktrees/novel
+```
+
+Provision runs under one repository-wide lock. It verifies the pristine main
+baseline and exhaustive correlated inventory, rejects an unregistered sibling
+collision before resource mutation, captures the effective author and
+committer plus one UTC whole-second timestamp, then publishes an immutable
+provisioning journal before the first Git object/ref/branch/worktree mutation.
+It creates and verifies an empty-tree, parentless seed object, compare-and-swap
+creates the internal ref and baseline-anchored branch, creates the exact linked
+worktree, verifies the complete triple, removes and synchronizes the journal,
+and verifies again before returning `ready`.
+
+The common-Git namespace is:
+
+```text
+.git/story-writing-agents/runtime/session-provisioning/
+├── .lock
+└── <session_id>.json
+```
+
+The persistent lock and directories use private local modes. The temporary
+journal is owner-only, canonical UTF-8 JSON with a trailing newline, at most
+64 KiB, and accepts no missing, duplicate, extra, malformed, or noncanonical
+field. It binds schema version, `provisioning` state, session and provisioning
+IDs, baseline object ID, captured author/committer names and emails, and the
+seed timestamp. It is immutable: observed Git facts determine which exact
+ordered prefix can resume.
+
+An illustrative decoded journal is below. On disk it is encoded as one compact,
+sorted-key JSON line followed by `\n`:
+
+```json
+{
+  "baseline_commit_id": "<object-id>",
+  "effective_identity": {
+    "author": {"email": "author@example.invalid", "name": "Story Author"},
+    "committer": {"email": "committer@example.invalid", "name": "Story Committer"}
+  },
+  "provisioning_id": "0123456789abcdef0123456789abcdef",
+  "schema_version": 1,
+  "seed_timestamp_seconds": 1780000000,
+  "session_id": "novel",
+  "state": "provisioning"
+}
+```
+
+The seed message is `Initialize story session runtime: <session_id>`. Its tree
+is the repository-format empty tree, it has no parent, signing is disabled, and
+its captured author/committer timestamp uses `+0000`. This makes retry recreate
+and verify the same SHA-1 or SHA-256 object ID. A completed triple may later
+have advanced branch/internal tips, but its branch root must remain the v2
+baseline and its internal root must remain this seed. #505 alone will interpret
+later canonical commits and checkpoints.
+
+The result vocabulary is closed:
+
+| State | Recovery action | Meaning |
+| --- | --- | --- |
+| `absent` | `create` | No journal or requested resource exists. |
+| `provisioning` | `retry_create` | A valid journal and exact resumable prefix exist. |
+| `ready` | `reopen` | The journal is absent and the exact complete triple verifies. |
+| `outcome_unknown` | `operator_recovery` | An attempted mutation cannot be classified safely. |
+| `recovery_required` | `operator_recovery` | State is partial without a journal, malformed, colliding, moved, substituted, mismatched, or topologically unsafe. |
+
+An exact complete triple is authoritative and idempotent even after its journal
+has been removed. Require-ready/Reopen never creates or continues a prefix.
+Any unknown or non-exact fact is preserved; there is no automatic branch, ref,
+worktree, administration-entry, object, or recovery-journal deletion. The seam
+has no migration, compatibility, remote, reset, clean, prune, garbage
+collection, rebase, merge, or history-rewrite operation.
+
+For user-oriented scenarios and illustrative typed values, see
+[Workspaces](../guides/workspaces.md#session-git-resources). For failures and
+safe next actions, see
+[Session Git-resource recovery](../operations/recovery-and-limitations.md#session-git-resource-recovery).
 
 ## Safety and privacy boundary
 

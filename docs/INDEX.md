@@ -3,8 +3,9 @@
 The runtime has one strict Git-backed schema-v2 workspace boundary and one
 active schema-v2 storage/inspection path. Initialization, management,
 structured history/search/transcript reads, and provider-free smoke are
-available; public story execution is not. Start with the page that matches
-your task.
+available. Exact session Git-resource provisioning exists as package-internal
+infrastructure for #455 but is not yet a user command; public story execution
+is not available. Start with the page that matches your task.
 
 ## Start here
 
@@ -21,6 +22,8 @@ your task.
 | --- | --- |
 | Initialize, validate, and understand a strict v2 workspace | [Workspaces](guides/workspaces.md) |
 | Recover an interrupted or rejected initialization | [Workspace recovery](operations/recovery-and-limitations.md#workspace-initialization-recovery) |
+| Understand exact session branches, worktrees, refs, and state | [Session Git resources](guides/workspaces.md#session-git-resources) |
+| Recover interrupted or inconsistent session Git resources | [Session Git-resource recovery](operations/recovery-and-limitations.md#session-git-resource-recovery) |
 | Manage sessions and conversations | [Story sessions](guides/story-sessions.md) |
 | Understand why story instructions are unavailable | [Collaboration transition](guides/consensus-runs.md) |
 | Understand the lead's responsibilities and confirmation boundary | [Lead agent](guides/lead-agent.md) |

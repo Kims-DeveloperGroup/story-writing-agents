@@ -15,6 +15,9 @@
 > Automatic retry, silent installation, general destructive cleanup, event
 > repair, live switching, automation picker UI, and Windows console emulation
 > are not available.
+> Package-internal session Git-resource inspection, provisioning, exact-prefix
+> resume, and require-ready validation are available for #455 composition, but
+> are not wired to current `story session` commands.
 > Explicit SQLite provisioning recognizes only one exact
 > interrupted-publication alias shape.
 
@@ -31,7 +34,7 @@ migrates, upgrades, or resets other state.
 
 | Observation or failure | Meaning | Safe response |
 | --- | --- | --- |
-| Success JSON and no journal | The marker, exact 22-file scaffold, one parentless `main` commit, index/tree, and clean status were verified after journal removal. | Keep the original root pristine. Later mutable session and runtime state belongs in #449's sibling/internal worktrees. |
+| Success JSON and no journal | The marker, exact 22-file scaffold, one parentless `main` commit, index/tree, and clean status were verified after journal removal. | Keep the original root pristine. Later mutable session and runtime state belongs in the exact sibling/internal resources after #455 composition. |
 | `ConfigurationError: effective Git identity is unavailable or invalid` | The runtime did not invent an author/committer. Exact scaffold/journal bytes may exist, but an absent Git repository was not created. | Configure a valid effective Git author and committer under normal host policy, then run the same init command in a fresh process. |
 | Exact `.story-writing-agents-initialize-v2.json` remains | Initialization stopped after durable progress. The failed `Workspace` object is terminal. | Preserve all bytes and rerun with a fresh object/process. It will validate every present byte and continue only missing exact steps. |
 | `WorkspaceVersionUnsupportedError` | A recognizable markerless/pre-v2 root or unsupported numeric marker/journal was found. | Preserve it and create a separate new workspace. Migration and compatibility are unsupported. |
@@ -55,6 +58,51 @@ Discovery stops at the nearest recognizable boundary. It does not skip an
 unsupported or malformed inner marker/journal/legacy sentinel to select an
 outer workspace. An explicit path also validates strictly and never
 initializes.
+
+<a id="session-git-resource-recovery"></a>
+
+## Session Git-resource recovery
+
+This recovery contract belongs to the package-internal #504 seam. Current
+`story session create` and `story session reopen` do not invoke it; their
+provider-session state is not evidence that these Git resources are ready.
+
+| Observation or result | Meaning | Safe response |
+| --- | --- | --- |
+| `absent` / `create` | No journal, requested branch/ref, or registered worktree exists. Provision still performs a separate sibling-path collision preflight. | #455 may invoke explicit Create when available. Reopen remains read-only and fails rather than creating. |
+| `provisioning` / `retry_create` | The immutable journal and an exact ordered prefix exist. This includes a complete triple whose journal removal or post-removal verification did not finish. | Preserve all facts and retry the same Create operation. It reinspects before attempting only the next missing exact step. |
+| `ready` / `reopen` | The journal is absent and the exact correlated branch, ref, worktree, baseline root, and seed root passed final verification. | Reopen or repeat Create may return the same identity. Neither creates a duplicate. |
+| `outcome_unknown` / `operator_recovery` | A mutation may have happened, but subsequent inspection could not prove whether it did. | Stop automatic replay and all workspace writers. Inspect the complete repository and sibling path with trusted local tools before deciding a recovery. |
+| `recovery_required` / `operator_recovery` | Durable facts are malformed, partial without a journal, non-prefix, moved, substituted, differently anchored, colliding, or otherwise unsafe. | Preserve every path, ref, object, journal, and administration record. Restore a trusted exact state or create a separate workspace; do not delete or rewrite evidence to force readiness. |
+
+Concrete cases:
+
+- If interruption leaves only the journal, or the journal plus the exact seed
+  ref, or the journal plus exact seed ref and baseline branch, the same Create
+  resumes in order. Reopen and require-ready only report `provisioning` and
+  never continue it.
+- If `git worktree add` completed but its process result was lost, a fresh
+  Create first inspects the worktree. An exact completed triple proceeds to
+  journal removal and final verification instead of creating another one.
+- If journal removal fails, the complete triple remains `provisioning` with
+  `retry_create`. A later Create verifies it, removes only that journal, and
+  verifies again.
+- A pre-existing file, directory, symlink, or filesystem alias at the sibling
+  path is preserved and rejected before journal, object, ref, or branch
+  mutation. A foreign registered worktree, unknown ref, packed-ref collision,
+  moved worktree, malformed `.git` indirection, or changed anchor likewise
+  fails closed.
+- Concurrent Create calls for the same or different session IDs serialize
+  across the repository. Exact same-session calls converge; case-distinct IDs
+  follow filesystem identity truth and a real alias fails closed.
+
+The runtime never automatically removes a named branch, internal ref,
+worktree, worktree-administration entry, seed object, journal-backed recovery
+fact, or user byte. The lock file persists as coordination infrastructure.
+Pause, release, close, and process exit preserve durable session resources.
+There is no migration, compatibility, remote, reset, clean, prune, garbage
+collection, rebase, merge, or history-rewrite recovery route. #505, not #504,
+will define later story commits and internal checkpoints.
 
 ## Session access recovery
 

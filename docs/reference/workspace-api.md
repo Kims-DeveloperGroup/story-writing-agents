@@ -41,6 +41,14 @@ captured as not ready. Unsupported, malformed, arbitrary nonempty, drifted, or
 unsafe state raises immediately. Construction retains no open descriptor and
 performs no Git or filesystem mutation.
 
+A ready root may be the pristine initialization root or one exact #504 session
+linked worktree. Session-root construction verifies its schema-derived path,
+session ID, common-Git indirection, registration, branch, and immutable
+baseline/seed anchors. It does not make arbitrary linked worktrees valid and
+does not interpret later #505 history. Nearest discovery preserves whether the
+result is the main or session root internally; the public `Workspace.root`
+remains the exact root that was discovered or supplied.
+
 `initialize()` owns one attempt on that object:
 
 ```text
@@ -87,13 +95,13 @@ Exact expected failure categories include:
 | Effective Git author or committer is missing, invalid, or divergent | `ConfigurationError("effective Git identity is unavailable or invalid")`; a fresh process may resume the exact journal after identity is configured. |
 | Recognizable markerless workspace or non-v2 numeric marker/journal | `WorkspaceVersionUnsupportedError` with guidance that migration and compatibility are unsupported and a new workspace is required. |
 | Arbitrary nonempty root, malformed record, partial mismatch, dirty status, or baseline drift | `WorkspaceFormatError`; bytes are preserved and recovery is required. |
-| Parent repository, linked worktree, submodule, sparse/bare/mismatched repository, symlinked administration, or unsafe root | `WorkspaceSecurityError` or a content-free workspace topology error before unsafe mutation. |
+| Parent repository, arbitrary or uncorrelated linked worktree, submodule, sparse/bare/mismatched repository, symlinked administration, or unsafe root | `WorkspaceSecurityError` or a content-free workspace topology error before unsafe mutation. An exact correlated #504 session worktree is the only supported linked-worktree form. |
 
 Initialization rejects parent/nested repositories and creates no session
 branch, sibling worktree, internal runtime ref, provider state, artifact
-publication, remote, or later commit. The marker records only the future naming
-grammar; #449 owns those resources. Initialization itself authorizes only its
-one fixed root commit.
+publication, remote, or later commit. The marker records only the exact naming
+grammar. The separate package-internal #504 seam owns those resources for #455;
+initialization itself authorizes only its one fixed root commit.
 
 Public path operations accept only safely contained workspace-relative paths
 with no absolute path, `..`, or symlink component. They first require the
@@ -121,8 +129,8 @@ target mutation. Canonical application writes must go through the artifact
 repository so bytes, authorship, commit history, and the current catalog cannot
 diverge. Generic writes remain low-level operations, but using them against the
 original initialization root makes a later fresh readiness check reject that
-root. Later legitimate mutable state belongs in #449's session/internal
-worktrees. External edits do not create or repair catalog, authorship, or
+root. Later legitimate mutable state belongs in the exact session/internal
+worktrees after #455 composition. External edits do not create or repair catalog, authorship, or
 commit records. Stop all workspace processes before any external inspection or
 recovery action.
 
@@ -183,6 +191,22 @@ primitives—including Darwin `renameatx_np(RENAME_EXCL)` or Linux
 `renameat2(RENAME_NOREPLACE)`—can continue to use non-artifact workspace and
 runtime APIs; the first source list/read, catalog read, or artifact commit raises
 `WorkspaceSecurityError`.
+
+## Internal session-resource composition
+
+`workspace.initialization` defines four package-internal typed operations for
+#455: inspect one session, list the exhaustive correlated inventory, provision
+or resume one exact triple, and require one exact ready triple. They are absent
+from `story_writing_agents`, `story_writing_agents.workspace`, and
+`story_writing_agents.git`; direct application code must not treat them as a
+stable public API.
+
+Inspect, list, and require-ready are read-only. Provision alone may create or
+resume, and only from the exact main root. Results contain closed identities,
+states, recovery actions, and object IDs—never descriptors, raw Git output,
+argv/environment, story content, or a reusable Git capability. Provider or
+lead text and serialized values cannot invoke the mutation owner. See the
+[internal Git-resource contract](git-adapter.md#package-internal-session-git-resources).
 
 ## Directive utility
 

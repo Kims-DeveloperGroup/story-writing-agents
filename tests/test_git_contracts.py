@@ -40,6 +40,7 @@ from story_writing_agents.git import (
 )
 from story_writing_agents.git import adapter as adapter_module
 from story_writing_agents.git import contracts as contracts_module
+from story_writing_agents.git import process as process_module
 
 from tests.git_contract_fixture import digest, exception_graph
 
@@ -251,7 +252,7 @@ class GitContractTests(unittest.TestCase):
         root = Path("/definitely/not/inspected/by/construction")
         with (
             mock.patch.object(os, "lstat") as lstat,
-            mock.patch.object(adapter_module.subprocess, "Popen") as popen,
+            mock.patch.object(process_module.subprocess, "Popen") as popen,
         ):
             adapter = GitRepositoryAdapter(root)
         self.assertEqual(adapter._root, root)  # noqa: SLF001
