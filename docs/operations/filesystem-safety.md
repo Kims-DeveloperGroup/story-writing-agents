@@ -19,7 +19,13 @@
 > per-session generation store. An explicitly injected runtime service or the
 > noninteractive local lifecycle/search commands can authorize and schedule its
 > use; interactive `/settings` persists next-shell policy, and startup composes
-> Local only beside a complete authoritative storage bundle.
+> Local only beside a complete authoritative storage bundle. Exact session
+> branch/ref/sibling-worktree provisioning is also implemented as
+> package-internal #504 infrastructure. Package-internal #508 adds the shared
+> repository lease, durable content-free session-history records, and a bounded
+> alternate checkpoint index. Package-internal #509 adds exact confirmed story
+> commits, and package-internal #510 adds exact closed-path checkpoints. None is
+> yet connected to installed story commands or lead confirmation UI.
 
 Key terms: **containment**—keeping paths beneath the workspace root; **symlink**—
 a filesystem alias the runtime rejects; **exclusive creation**—failure instead
@@ -97,6 +103,125 @@ marker, initialization journal, or known legacy sentinel stops the search, so
 an unsupported or malformed inner boundary is never skipped for an outer one.
 Discovery and explicit paths never initialize. Use the exact root for
 automation; nested workspace/repository initialization is unsupported.
+
+<a id="session-git-resource-safety"></a>
+
+## Session Git-resource safety
+
+The package-internal owner freshly binds the initialization root and its exact
+non-symlink `.git` directory for every operation. One repository-wide advisory
+lease on the opened common-Git directory now serializes provisioning and
+session-history work across both same-session and different-session calls.
+Provisioning additionally retains its persistent owner-only lock:
+
+```text
+.git/story-writing-agents/runtime/session-provisioning/.lock
+```
+
+Read-only inspect/list/require-ready operations never create that namespace.
+Provision may create the private directories and lock, then writes one
+owner-only `<session_id>.json` journal by descriptor-relative, no-follow,
+exclusive creation. The immutable payload is canonical UTF-8 JSON with a
+trailing newline and a 64-KiB maximum. The journal file and its containing
+directory are synchronized before any seed, ref, branch, or worktree mutation.
+Malformed names, types, links, modes, duplicate or unknown fields, noncanonical
+bytes, and identity substitution fail closed.
+
+Under the lock, provisioning performs this fixed order:
+
+```text
+verify main baseline and exhaustive inventory
+-> reject sibling-path and identity collisions
+-> capture effective identity, UTC timestamp, baseline, provisioning ID
+-> publish and synchronize the immutable journal
+-> create and fully decode/verify the deterministic empty-tree seed object
+-> compare-and-swap internal ref from zero to the seed
+-> compare-and-swap session branch from zero to the baseline
+-> create the exact sibling linked worktree for that branch
+-> verify root invariance and the correlated triple
+-> remove and synchronize only the journal
+-> verify the complete journal-free result again
+```
+
+The main root must keep symbolic `HEAD` on `main`, the same baseline/tree/index,
+the exact initializer files, and clean status. Inventory accounts for every
+branch, session internal ref, registered worktree, and provisioning journal;
+unknown or uncorrelated facts are not ignored. An accepted session worktree
+must be at its schema-derived sibling path, have exact common-Git indirection
+and registration, use its expected symbolic session branch, and retain the
+immutable baseline and seed roots. Later tips may advance, but #504 does not
+interpret that #505 history.
+
+Every Git child uses fixed arguments, `shell=False`, bounded streams and time,
+disabled prompting, hooks, signing, filters, pagers, and inherited Git control
+variables, followed by root-identity revalidation and complete process/pipe
+cleanup. Only a temporary file still proved to belong to the in-process
+operation can be removed automatically. Named refs, branches, worktrees,
+administration entries, Git objects, journals that carry recovery evidence,
+and user bytes are never cleaned up automatically. See
+[Session Git-resource recovery](recovery-and-limitations.md#session-git-resource-recovery).
+
+For a ready session, the same common-Git lease guards
+`story-writing-agents/runtime/session-history/<session_id>/`. The history owner
+walks from the already-open common-Git descriptor, creates private directories,
+and accepts only exact names and no-follow single-link regular leaves. Candidate
+records use exclusive immutable publication. Operation records use synchronized
+temporary publication and identity-checked atomic replacement, with only an
+exact sequence increment and legal state successor accepted. All JSON is
+canonical, at most 1 MiB, and synchronized before a later owner can rely on it
+to authorize Git mutation.
+
+The checkpoint-input leaf is derived exactly as
+`checkpoint-inputs/<operation_id>/index`, bounded to 64 MiB when inspected, and
+accepted by only the internal-checkpoint process profile. The process owner
+strips arbitrary inherited `GIT_*` variables, disables hooks/signing/external
+diff/fsmonitor/pagers/editors/prompts, and revalidates the root and every index
+ancestor before and after the child. An ambiguous or recovery-required index is
+preserved; only the exact durably committed checkpoint permits removal. See the
+[internal session-history contract](../reference/git-adapter.md#package-internal-session-history).
+
+The package-internal checkpoint owner accepts only exact, same-session path
+families supplied as immutable create/update/delete snapshots by one of five
+matching runtime owners. It never scans a directory, treats omission as
+deletion, or accepts canonical, configuration, debug, SQLite/global,
+provider-private, temporary, cross-session, or unknown paths. Under the same
+lease, it initializes only the operation-owned alternate index from the current
+internal-ref tree, applies literal delta paths, validates the complete result,
+creates one parented commit, and compare-and-swap advances only
+`refs/story-writing-agents/runtime/sessions/<session_id>`. The story branch,
+real indexes, both `HEAD` values and working trees, canonical artifacts,
+unrelated bytes, and pristine main root are not mutation targets. Recovery
+preserves uncertain objects/indexes and never resets, cleans, replays, or
+contacts a remote. See the
+[exact checkpoint contract](../reference/git-adapter.md#package-internal-session-checkpoints).
+
+The package-internal story-commit owner takes this same repository lease. Its
+Prepare phase uses only fixed read operations against the session/main roots;
+the sole durable write is exclusive immutable candidate-history publication.
+It requires a clean real session index, an exact ready branch/tip/worktree,
+complete equality between current canonical files and typed successful
+application evidence, stable effective identity/source, stable internal ref and
+main-root facts, and no unreported canonical change. Canonical symlinks,
+aliases, unsafe paths, content drift, pre-staged entries, and moved identities
+fail closed. Noncanonical untracked files are omitted and preserved.
+
+Commit authority is nonserializable and consumed before I/O. Under the lease,
+the executor synchronizes `running` evidence before the first mutation, then
+uses only literal `hash-object -w --no-filters --stdin`, `update-index`
+cache-entry/removal, `write-tree`, `commit-tree`, and compare-and-swap
+`update-ref` operations. Durable `staged` evidence precedes `commit-tree`.
+Candidate paths are supplied after `--` where the Git command accepts a path;
+no glob, directory-wide add, checkout, reset, clean, hook, signing, filter,
+textconv, alias, pager/editor, credential prompt, remote, or provider input can
+widen the set.
+
+The verified tree must equal the prepared expected tree. The commit has exactly
+one prepared parent, exact message, and captured effective identity, and only
+the expected session branch can advance from the prepared tip. The internal
+ref, main root/head/index/status, and unrelated noncandidate files are never
+targets. On interruption, staged index/object state is preserved; recovery
+classifies it without reset, replay, cleanup, or duplicate commit. See the
+[exact story-commit contract](../reference/git-adapter.md#package-internal-exact-story-commits).
 
 The writing-artifact storage adapter has a distinct construction contract. It
 captures a supplied relative root immediately as a lexical absolute path using

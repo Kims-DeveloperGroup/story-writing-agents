@@ -15,6 +15,9 @@
 > Automatic retry, silent installation, general destructive cleanup, event
 > repair, live switching, automation picker UI, and Windows console emulation
 > are not available.
+> Package-internal session Git-resource inspection, provisioning, exact-prefix
+> resume, and require-ready validation are available for #455 composition, but
+> are not wired to current `story session` commands.
 > Explicit SQLite provisioning recognizes only one exact
 > interrupted-publication alias shape.
 
@@ -31,7 +34,7 @@ migrates, upgrades, or resets other state.
 
 | Observation or failure | Meaning | Safe response |
 | --- | --- | --- |
-| Success JSON and no journal | The marker, exact 22-file scaffold, one parentless `main` commit, index/tree, and clean status were verified after journal removal. | Keep the original root pristine. Later mutable session and runtime state belongs in #449's sibling/internal worktrees. |
+| Success JSON and no journal | The marker, exact 22-file scaffold, one parentless `main` commit, index/tree, and clean status were verified after journal removal. | Keep the original root pristine. Later mutable session and runtime state belongs in the exact sibling/internal resources after #455 composition. |
 | `ConfigurationError: effective Git identity is unavailable or invalid` | The runtime did not invent an author/committer. Exact scaffold/journal bytes may exist, but an absent Git repository was not created. | Configure a valid effective Git author and committer under normal host policy, then run the same init command in a fresh process. |
 | Exact `.story-writing-agents-initialize-v2.json` remains | Initialization stopped after durable progress. The failed `Workspace` object is terminal. | Preserve all bytes and rerun with a fresh object/process. It will validate every present byte and continue only missing exact steps. |
 | `WorkspaceVersionUnsupportedError` | A recognizable markerless/pre-v2 root or unsupported numeric marker/journal was found. | Preserve it and create a separate new workspace. Migration and compatibility are unsupported. |
@@ -55,6 +58,130 @@ Discovery stops at the nearest recognizable boundary. It does not skip an
 unsupported or malformed inner marker/journal/legacy sentinel to select an
 outer workspace. An explicit path also validates strictly and never
 initializes.
+
+<a id="session-git-resource-recovery"></a>
+
+## Session Git-resource recovery
+
+This recovery contract belongs to the package-internal #504 seam. Current
+`story session create` and `story session reopen` do not invoke it; their
+provider-session state is not evidence that these Git resources are ready.
+
+| Observation or result | Meaning | Safe response |
+| --- | --- | --- |
+| `absent` / `create` | No journal, requested branch/ref, or registered worktree exists. Provision still performs a separate sibling-path collision preflight. | #455 may invoke explicit Create when available. Reopen remains read-only and fails rather than creating. |
+| `provisioning` / `retry_create` | The immutable journal and an exact ordered prefix exist. This includes a complete triple whose journal removal or post-removal verification did not finish. | Preserve all facts and retry the same Create operation. It reinspects before attempting only the next missing exact step. |
+| `ready` / `reopen` | The journal is absent and the exact correlated branch, ref, worktree, baseline root, and seed root passed final verification. | Reopen or repeat Create may return the same identity. Neither creates a duplicate. |
+| `outcome_unknown` / `operator_recovery` | A mutation may have happened, but subsequent inspection could not prove whether it did. | Stop automatic replay and all workspace writers. Inspect the complete repository and sibling path with trusted local tools before deciding a recovery. |
+| `recovery_required` / `operator_recovery` | Durable facts are malformed, partial without a journal, non-prefix, moved, substituted, differently anchored, colliding, or otherwise unsafe. | Preserve every path, ref, object, journal, and administration record. Restore a trusted exact state or create a separate workspace; do not delete or rewrite evidence to force readiness. |
+
+Concrete cases:
+
+- If interruption leaves only the journal, or the journal plus the exact seed
+  ref, or the journal plus exact seed ref and baseline branch, the same Create
+  resumes in order. Reopen and require-ready only report `provisioning` and
+  never continue it.
+- If `git worktree add` completed but its process result was lost, a fresh
+  Create first inspects the worktree. An exact completed triple proceeds to
+  journal removal and final verification instead of creating another one.
+- If journal removal fails, the complete triple remains `provisioning` with
+  `retry_create`. A later Create verifies it, removes only that journal, and
+  verifies again.
+- A pre-existing file, directory, symlink, or filesystem alias at the sibling
+  path is preserved and rejected before journal, object, ref, or branch
+  mutation. A foreign registered worktree, unknown ref, packed-ref collision,
+  moved worktree, malformed `.git` indirection, or changed anchor likewise
+  fails closed.
+- Concurrent Create calls for the same or different session IDs serialize
+  across the repository. Exact same-session calls converge; case-distinct IDs
+  follow filesystem identity truth and a real alias fails closed.
+
+The runtime never automatically removes a named branch, internal ref,
+worktree, worktree-administration entry, seed object, journal-backed recovery
+fact, or user byte. The lock file persists as coordination infrastructure.
+Pause, release, close, and process exit preserve durable session resources.
+There is no migration, compatibility, remote, reset, clean, prune, garbage
+collection, rebase, merge, or history-rewrite recovery route. #505, not #504,
+coordinates that later work; #509 now supplies internal story commits and #510
+supplies closed-path internal checkpoints.
+
+<a id="session-history-recovery"></a>
+
+## Session-history recovery
+
+Issue #508 supplies package-internal evidence and classification. #509 now
+supplies internal exact story-commit execution, and #510 now supplies exact
+internal-ref checkpoint execution and conservative recovery. No current
+command, lead action, or public facade starts either one, and no current UI
+displays these states: #491 still owns application evidence and #492 owns the
+lead confirmation UI.
+
+For any internal interruption or later public-workflow interruption, first stop
+repository writers and preserve the main repository, sibling session worktree,
+common `.git` directory, and the complete session-history subtree together.
+Restoring only one JSON record, one index, one ref, or one worktree can destroy
+the correlation needed for safe classification.
+
+| State, result, or failure | Meaning | Safe response |
+| --- | --- | --- |
+| Candidate `prepared` | Exact path/digest/expected-tree evidence exists; no confirmation or Git index/object/ref mutation is implied. | Revalidate it. When #492 is available, request a fresh exact decision; if any candidate fact changed, `reprepare` from new successful application evidence. |
+| Checkpoint `unchanged` / `none` | An empty delta or fully validated same-tree result needed no operation. No operation ID, index, object, or ref update exists to recover. | Continue from the unchanged internal tip; do not fabricate an operation or checkpoint ID. |
+| Commit `rejected` / `none` | One Reject or Revise decision was recorded before execution. It is terminal and authorizes nothing. Reject preserves the candidate; Revise invalidates it. | After Reject, keep the candidate and require a fresh confirmation for another decision. After Revise, apply/prepare a new candidate and request new confirmation. |
+| Story commit `running` / `inspect` | Commit authority was consumed and intent was durable before staging, but the resulting index/branch state is not yet proved. | Call the internal recovery classifier once writers are stopped. Do not replay confirmation or execute again. It may classify exact staging, an exact committed tip, ambiguity, or recovery-required state. |
+| Checkpoint `running` / `inspect` | Intent is durable against one expected internal tip, but CAS completion is not proved. | Stop repository writers and call the internal checkpoint recovery classifier. Do not resubmit the delta, rerun `commit-tree`, or retry CAS. |
+| Story commit `staged` / `operator_recovery` | The branch remains at the old tip and index/worktree exactly match the candidate tree, but no commit is proved. | Preserve worktree, index, objects, and records. Inspect and recover explicitly; the service never automatically commits, resets, cleans, or restages. |
+| Story commit or checkpoint `committed` / `none` | The terminal record names the exact commit and corresponding branch/internal-ref tip. Recovery can reach this state when a correlated commit was already CAS-installed but result persistence/reporting failed. | Treat the returned existing object as the result after verification. Do not create a duplicate commit. |
+| Operation `outcome_unknown` / `inspect` | Git may have mutated, or the branch/index/result cannot be classified exactly. | Preserve all records, index, refs, and objects. Inspect; only an exact correlated tip may advance the same record to `committed`. Otherwise retain ambiguity or require operator recovery. |
+| Operation `recovery_required` / `operator_recovery` | State is inconsistent, unsafe, substituted, or no longer automatically reconcilable. It is terminal. | Perform explicit operator recovery or restore a complete trusted backup. Never edit the record or delete/reset evidence to force another transition. |
+| Missing/noncanonical/oversized record, unexpected entry, alias, symlink, hard link, or failed fsync | The store cannot trust the addressed history boundary. | Stop all writers, retain exact bytes and metadata, and investigate offline. Do not normalize, replace, or follow the rejected path. |
+| Repository lock unavailable or root/common-Git identity changed | Safe serialization or repository identity cannot be proved. | End the operation and retry only after the original exact repository is trustworthy and no competing writer remains. |
+
+An `outcome_unknown` checkpoint can retain
+`checkpoint-inputs/<operation_id>/index`; `recovery_required` may retain it as
+well. The runtime removes that leaf only after the exact checkpoint record is
+durably `committed`. Candidate and operation records have no automatic expiry
+or cleanup. Process exit, session pause/close, and a later successful operation
+do not erase earlier evidence.
+
+For story commits specifically:
+
+- If interruption leaves `running` but the old branch tip and exact candidate
+  index/worktree are present, `recover()` records/returns `staged` with
+  `operator_recovery`; it does not continue to `commit-tree`.
+- If the branch points at a commit with the candidate's exact tree, sole parent,
+  and literal message, `recover()` advances the existing operation to
+  `committed` and returns that same object ID. It creates no second object or
+  branch update.
+- If the branch remains old but index/worktree match neither the parent nor
+  candidate tree, recovery records terminal `recovery_required`. A staged
+  record whose expected index was lost is likewise recovery-required.
+- A foreign or otherwise unproved new branch tip remains `outcome_unknown`.
+  Recovery does not reset it or inspect provider history to guess intent.
+
+For checkpoints specifically:
+
+- If uncertain pre-CAS work leaves the internal ref at its exact expected tip,
+  `recover()` records terminal `recovery_required`. It preserves an allocated
+  alternate index and never repeats `commit-tree` or CAS.
+- If the internal ref already names the exact one-parent commit whose salted
+  intent matches the durable record, recovery records `committed`, returns that
+  same object ID, and removes only its completed alternate index.
+- A stale CAS never overwrites the newer tip. If that tip is foreign or cannot
+  be correlated, recovery reports or retains `outcome_unknown`; it does not
+  reset the ref or guess.
+- Checkpoint recovery restores no excluded runtime store, canonical artifact,
+  working-file byte, or remote history. The internal-ref Git objects and
+  content-free JSON are evidence, not a complete workspace backup.
+
+These records are content-free, so they are not a story-data backup. Conversely,
+a story-files-only backup is not recovery evidence. A useful recovery backup
+must preserve the repository, common Git administration/history namespace, and
+sibling worktree consistently. Git commits produced by the internal services
+also contain effective identity and commit-message metadata. See the
+[story-commit scenarios](../guides/workspaces.md#exact-confirmed-story-commits),
+[checkpoint scenarios](../guides/workspaces.md#exact-session-runtime-checkpoints),
+[story-commit contract](../reference/git-adapter.md#package-internal-exact-story-commits),
+and [checkpoint contract](../reference/git-adapter.md#package-internal-session-checkpoints).
 
 ## Session access recovery
 

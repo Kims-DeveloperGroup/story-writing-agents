@@ -5,7 +5,7 @@ lead-led execution workflow. Public schema-v1 direct-run consumers are absent;
 generic provider, prompt, context, lifecycle, artifact, and terminal components
 remain available behind explicit module boundaries.
 
-The production graph contains 104 modules, 376 dependency edges, no cycles, and
+The production graph contains 113 modules, 407 dependency edges, no cycles, and
 104 package-root exports.
 
 ## Current user flow
@@ -16,6 +16,9 @@ flowchart LR
     CLI --> WI[Strict v2 workspace readiness]
     WI --> WS[Marker + exact scaffold]
     WI --> G[One clean main baseline]
+    WI --> GI[Exhaustive correlated Git-resource inventory]
+    GI --> GH[Internal content-free session history]
+    GH --> GC[Internal exact story-commit service]
     CLI --> M[Session and conversation management]
     CLI --> I[History, search, transcript, status, inspection]
     CLI --> S[Settings and authentication]
@@ -26,6 +29,7 @@ flowchart LR
     X -. no call .-> P[Provider components]
     X -. no append .-> CS
     X -. no read/write .-> A[Writing artifacts]
+    M -. #455 not yet connected .-> GR[Internal session Git-resource seam]
 ```
 
 The controller reads ordinary main input with the terminal's plain management
@@ -52,8 +56,13 @@ and static session naming policy. `workspace.initialization` owns root
 classification, descriptor-safe convergence, current readiness, discovery, and
 Git composition. `workspace.core` owns the public `Workspace` object and generic
 persistence and delegates the lifecycle; it does not define a second schema or
-run Git directly. The two new owner modules are internal and export no public
-names.
+run Git directly. Package-internal `git.process`, `git.session_contracts`, and
+`git.session_resources` own the shared fixed-process lifecycle, pure session
+Git values, and serialized resource lifecycle respectively. The package-
+internal `git.repository_lock`, `git.session_history_contracts`, and
+`git.session_history` modules add one shared repository lease, pure durable
+history values, and descriptor-safe storage for later commits/checkpoints.
+They add no public facade exports.
 
 Externally, success means one standalone clean `main` root with exactly one
 parentless commit named `Initialize story workspace`. A clean rerun validates
@@ -64,9 +73,106 @@ or adoption path.
 
 The marker stores `story/session/`,
 `refs/story-writing-agents/runtime/sessions/`, and `.story-worktrees` naming
-policy only. #454 creates no session branch, internal ref, or sibling worktree;
-#449 owns those resources and later commit confirmation. The original root is
-the pristine initialization baseline.
+policy. Initialization creates no session branch, internal ref, or sibling
+worktree. The package-internal #504 seam can inspect/list and provision or
+require-ready one exact correlated triple while the original root remains the
+pristine initialization baseline. #455 owns the installed command connection;
+#505 coordinates confirmed history work. Exact story commits now exist as
+package-internal #509 infrastructure; #491 still owns application production,
+#492 owns the lead confirmation UI. Exact closed-path internal checkpoints now
+exist as package-internal #510 infrastructure.
+
+### Session Git-resource lifecycle
+
+Provisioning derives exactly one branch, internal ref, and sibling linked
+worktree from a validated session ID. One common-Git repository lock serializes
+all sessions. An immutable, at-most-64-KiB owner-only journal precedes the
+deterministic empty-tree seed, compare-and-swap ref and branch creation, and
+exact worktree creation. Complete verification precedes journal removal and is
+repeated afterward. Exact facts are idempotently ready; an exact journal prefix
+can resume; partial, unknown, colliding, moved, substituted, or mismatched facts
+are preserved and fail closed.
+
+Main readiness now composes the exact scaffold/baseline with an exhaustive
+correlated session inventory. Session-root readiness recognizes only the exact
+schema-derived linked worktree and immutable baseline/seed roots. It reports
+current tips without interpreting later #505 history. Typed discovery retains
+main/session role and session identity. Inspect, list, and require-ready are
+read-only; provision is the only mutation authority and cannot be invoked by
+provider or lead text. See
+[the exact contract](../reference/git-adapter.md#package-internal-session-git-resources).
+
+### Durable session-history infrastructure
+
+One common-Git repository lease now serializes session provisioning and
+session-history work. For each ready session, the internal history owner stores
+immutable candidate metadata, monotonic story-commit operation metadata,
+monotonic checkpoint operation metadata, and any operation-owned alternate
+index that must survive an ambiguous result. Records contain identities,
+canonical paths, digests, correlations, and fixed states, not manuscript/core-
+document bytes, provider text, or executable authority.
+
+Closed Git process profiles suppress prompts and repository- or user-controlled
+execution extensions. Only the internal-checkpoint profile can receive the
+validated alternate index derived from an exact session/operation identity;
+callers cannot inject arbitrary `GIT_*` environment variables. #509 now
+consumes the story-commit seam, and #510 now consumes the checkpoint seam. #492
+owns the user confirmation UI. This revision exposes no command, lead action,
+or public facade for the new infrastructure. See the
+[exact history contract](../reference/git-adapter.md#package-internal-session-history).
+
+### Exact confirmed story commits
+
+Package-internal `git.story_commit_contracts` owns immutable application,
+candidate, lead-projection, confirmation, result, state, and failure values.
+`git.story_commit_candidates` owns read-only capture/revalidation plus immutable
+candidate-history publication. `git.story_commits` owns the process-local
+one-use authority, decision recording, exact execution, inspection, and
+conservative recovery. None is exported through a facade.
+
+Prepare requires a ready session and successful typed application evidence. It
+proves a clean real index, exact symbolic session branch/tip, complete canonical
+artifact state, expected tree, effective identity/source, unchanged internal
+ref, and unchanged main root. Apart from immutable candidate history, it does
+not stage, write a Git object, create a commit, update a ref, or modify a
+working file. The content-free projection is suitable for the future lead UI;
+it carries no story bytes or authority.
+
+Only a fresh exact structured Commit decision can mint a service/process/thread-
+bound, nonserializable, one-use authority. Execute consumes it before I/O,
+revalidates all facts under the shared repository lease, durably records
+`running`, stages literal candidate blobs/paths, records `staged`, verifies the
+tree, creates a one-parent commit with the captured identity/message, and
+compare-and-swap updates only the expected session branch. It then actively
+verifies the exact session tip/tree, original main head/status, and internal ref
+before recording `committed`. Unrelated noncandidate bytes remain untargeted
+and unchanged; focused invariance tests verify that preservation rather than
+the runtime rereading each byte. Reject and Revise record no Git mutation;
+Revise requires a newly prepared candidate. Recovery never resets or replays
+staged work and can finalize an already-correlated branch tip without a
+duplicate commit. See
+[the user scenarios](../guides/workspaces.md#exact-confirmed-story-commits) and
+[the internal contract](../reference/git-adapter.md#package-internal-exact-story-commits).
+
+### Exact session runtime checkpoints
+
+Package-internal `git.session_checkpoint_contracts` owns the closed classifier
+and immutable owner/delta/result values. `git.session_checkpoints` owns exact
+tree derivation, isolated-index execution, internal-ref CAS, inspection, and
+conservative recovery. Five runtime owners may submit only their eleven
+allowlisted same-session path families; omission is preservation, not deletion.
+
+Checkpoint execution validates the complete current and resulting internal
+trees, durably records `running`, constructs the result in the exact
+operation-owned alternate index, makes a one-parent commit with captured local
+identity and UTC timestamps, and compare-and-swap advances only the session
+internal ref. The shared repository lease serializes this sequence with #509.
+The story branch and real indexes, both working trees and `HEAD` values,
+canonical artifacts, unrelated bytes, and pristine main remain untargeted and
+unchanged. Recovery correlates an exact post-CAS tip without replay; otherwise
+it preserves ambiguity or requires an operator. See
+[the checkpoint scenarios](../guides/workspaces.md#exact-session-runtime-checkpoints)
+and [the internal contract](../reference/git-adapter.md#package-internal-session-checkpoints).
 
 Explicit `story smoke --workspace` constructs a fresh workspace verifier and
 performs no mutation or diagnostic submission. Disposable smoke uses the same

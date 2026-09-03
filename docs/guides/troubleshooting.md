@@ -288,6 +288,17 @@ without deleting prior provider-native data.
 retry. For `session_ownership_unknown`, preserve the claim and guard; inspect
 [access recovery](../operations/recovery-and-limitations.md#session-access-recovery).
 
+## Session Git resources require recovery
+
+Do not infer Git-resource readiness from current `story session` JSON. #455 has
+not yet connected those commands to the package-internal #504 lifecycle. A
+Git-resource result of `provisioning` permits only the same explicit Create to
+resume the exact journal prefix; `outcome_unknown` and `recovery_required`
+require operators to stop writers and preserve every branch, ref, worktree,
+administration entry, object, journal, and sibling-path byte. Reopen never
+creates or repairs resources. Follow the
+[session Git-resource recovery table](../operations/recovery-and-limitations.md#session-git-resource-recovery).
+
 ## Conversation storage selection or transfer fails
 
 Keep desired storage in `config/system_defaults.json` distinct from the active
@@ -310,7 +321,8 @@ initialization baseline. `story init` does not repair or overwrite a missing or
 changed prompt and has no prompt-overwrite option. A fresh readiness check
 preserves and rejects scaffold drift. Restore a trusted exact baseline or
 create a separate new workspace; later supported prompt/core changes belong in
-#449's session worktree rather than the original `main` root.
+the exact session worktree after #455 composition rather than the original
+`main` root.
 
 Prompt and persona files must be readable strict UTF-8, inside the supported
 workspace, and free of symlink components. Present safe current bytes can enter

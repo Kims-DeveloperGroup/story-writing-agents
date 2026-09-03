@@ -21,6 +21,7 @@ from story_writing_agents.git import (
     GitTopologyKind,
 )
 from story_writing_agents.git import adapter as adapter_module
+from story_writing_agents.git import process as process_module
 
 from tests.git_contract_fixture import (
     DisposableGitTestCase,
@@ -287,7 +288,7 @@ class GitAdapterIntegrationTests(DisposableGitTestCase):
 
         with (
             mock.patch.object(adapter_module.os, "open", wraps=os.open) as open_file,
-            mock.patch.object(adapter_module.subprocess, "Popen") as popen,
+            mock.patch.object(process_module.subprocess, "Popen") as popen,
         ):
             for operation in ("inspect_baseline", "create_baseline"):
                 with self.subTest(operation=operation):

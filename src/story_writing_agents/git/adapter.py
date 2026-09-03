@@ -6,10 +6,7 @@ import hashlib
 import os
 import re
 import stat
-import subprocess
-import threading
 from collections.abc import Callable
-from dataclasses import dataclass
 from pathlib import Path
 
 from .contracts import (
@@ -34,14 +31,9 @@ from .contracts import (
     GitStatusEntry,
     GitTopologyKind,
 )
+from .process import GitProcessFailure, GitProcessResult, GitProcessRunner
 
 
-_GIT_EXECUTABLE = "git"
-_PROCESS_TIMEOUT_SECONDS = 30.0
-_PROCESS_STOP_TIMEOUT_SECONDS = 2.0
-_MAX_STDOUT_BYTES = 8 * 1024 * 1024
-_MAX_STDERR_BYTES = 64 * 1024
-_MAX_STDIN_BYTES = 64 * 1024 * 1024
 _MAX_FILE_BYTES = 8 * 1024 * 1024
 _MAX_MANIFEST_BYTES = 64 * 1024 * 1024
 _MAX_MANIFEST_ENTRIES = 65_536
@@ -54,40 +46,6 @@ _IDENT = re.compile(
 )
 _OBJECT_ID = re.compile(rb"(?:[0-9a-f]{40}|[0-9a-f]{64})")
 _ZERO_OBJECT_ID = re.compile(rb"(?:0{40}|0{64})")
-
-_SAFE_CONFIG = (
-    "-c",
-    f"core.hooksPath={os.devnull}",
-    "-c",
-    "commit.gpgSign=false",
-    "-c",
-    "tag.gpgSign=false",
-    "-c",
-    "core.fsmonitor=false",
-    "-c",
-    "diff.external=",
-    "-c",
-    "pager.status=false",
-    "-c",
-    "pager.diff=false",
-    "-c",
-    "pager.log=false",
-)
-
-_IDENTITY_ENVIRONMENT = frozenset(
-    {
-        "GIT_AUTHOR_NAME",
-        "GIT_AUTHOR_EMAIL",
-        "GIT_COMMITTER_NAME",
-        "GIT_COMMITTER_EMAIL",
-    }
-)
-
-
-@dataclass(frozen=True, slots=True)
-class _ProcessResult:
-    stdout: bytes
-    returncode: int
 
 
 class _AdapterFailure(Exception):
@@ -104,34 +62,6 @@ class _AdapterFailure(Exception):
         self.exit_code = exit_code
         self.repository_state = repository_state
         super().__init__(code.value)
-
-
-class _BoundedCapture:
-    __slots__ = ("_stream", "_maximum", "data", "exceeded", "failed")
-
-    def __init__(self, stream: object, maximum: int) -> None:
-        self._stream = stream
-        self._maximum = maximum
-        self.data = bytearray()
-        self.exceeded = False
-        self.failed = False
-
-    def read(self) -> None:
-        try:
-            while True:
-                chunk = self._stream.read(_READ_CHUNK_BYTES)  # type: ignore[attr-defined]
-                if not chunk:
-                    return
-                if not isinstance(chunk, bytes):
-                    self.failed = True
-                    return
-                remaining = self._maximum - len(self.data)
-                if remaining > 0:
-                    self.data.extend(chunk[:remaining])
-                if len(chunk) > remaining:
-                    self.exceeded = True
-        except BaseException:
-            self.failed = True
 
 
 class GitRepositoryAdapter:
@@ -1131,7 +1061,7 @@ class GitRepositoryAdapter:
         stdin: bytes = b"",
         read_only: bool = False,
         identity_environment: dict[str, str] | None = None,
-    ) -> _ProcessResult:
+    ) -> GitProcessResult:
         result = self._run_git(
             arguments,
             identity=identity,
@@ -1156,112 +1086,21 @@ class GitRepositoryAdapter:
         read_only: bool = False,
         identity_environment: dict[str, str] | None = None,
         allow_failure: bool = False,
-    ) -> _ProcessResult:
+    ) -> GitProcessResult:
         del allow_failure
-        if (
-            type(arguments) is not tuple
-            or not arguments
-            or any(type(argument) is not str for argument in arguments)
-        ):
-            raise _AdapterFailure(GitFailureCode.INVALID_REQUEST)
-        if type(stdin) is not bytes or len(stdin) > _MAX_STDIN_BYTES:
-            raise _AdapterFailure(GitFailureCode.INVALID_REQUEST)
-        self._verify_root(identity)
-        environment = _safe_environment(
-            read_only=read_only,
-            identity_environment=identity_environment,
-        )
-        command = (_GIT_EXECUTABLE, "--no-pager", *_SAFE_CONFIG, *arguments)
         try:
-            process = subprocess.Popen(
-                command,
-                cwd=os.fspath(self._root),
-                env=environment,
-                stdin=subprocess.PIPE if stdin else subprocess.DEVNULL,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
-                shell=False,
+            return GitProcessRunner(self._root).run(
+                arguments,
+                expected_identity=identity,
+                stdin=stdin,
+                read_only=read_only,
+                identity_environment=identity_environment,
             )
-        except FileNotFoundError:
-            raise _AdapterFailure(GitFailureCode.EXECUTABLE_UNAVAILABLE)
-        except OSError:
-            raise _AdapterFailure(GitFailureCode.PROCESS_START_FAILED)
-        process_stdin = process.stdin if stdin else None
-        process_stdout = process.stdout
-        process_stderr = process.stderr
-        if (
-            process_stdout is None
-            or process_stderr is None
-            or (stdin and process_stdin is None)
-        ):
-            _stop_process(process)
-            for stream in (process_stdin, process_stdout, process_stderr):
-                close = getattr(stream, "close", None)
-                if close is not None:
-                    try:
-                        close()
-                    except BaseException:
-                        pass
-            raise _AdapterFailure(GitFailureCode.PROCESS_START_FAILED)
-        stdout = _BoundedCapture(process_stdout, _MAX_STDOUT_BYTES)
-        stderr = _BoundedCapture(process_stderr, _MAX_STDERR_BYTES)
-        readers = (
-            threading.Thread(target=stdout.read, daemon=True),
-            threading.Thread(target=stderr.read, daemon=True),
-        )
-        started_readers: list[threading.Thread] = []
-        close_failed = False
-        try:
-            for reader in readers:
-                reader.start()
-                started_readers.append(reader)
-            if stdin:
-                assert process_stdin is not None
-                try:
-                    process_stdin.write(stdin)
-                finally:
-                    close = getattr(process_stdin, "close", None)
-                    if close is not None:
-                        try:
-                            close()
-                        except BaseException:
-                            close_failed = True
-                    process_stdin = None
-            try:
-                returncode = process.wait(timeout=_PROCESS_TIMEOUT_SECONDS)
-            except subprocess.TimeoutExpired:
-                _stop_process(process)
-                raise _AdapterFailure(GitFailureCode.PROCESS_TIMED_OUT)
-        except BaseException:
-            _stop_process(process)
-            raise
-        finally:
-            for reader in started_readers:
-                reader.join(_PROCESS_STOP_TIMEOUT_SECONDS)
-            for stream in (process_stdin, process_stdout, process_stderr):
-                close = getattr(stream, "close", None)
-                if close is not None:
-                    try:
-                        close()
-                    except BaseException:
-                        close_failed = True
-            for reader in started_readers:
-                if reader.is_alive():
-                    reader.join(_PROCESS_STOP_TIMEOUT_SECONDS)
-        self._verify_root(identity)
-        if (
-            any(reader.is_alive() for reader in readers)
-            or stdout.failed
-            or stderr.failed
-            or close_failed
-        ):
-            raise _AdapterFailure(GitFailureCode.PROCESS_START_FAILED)
-        if stdout.exceeded or stderr.exceeded:
+        except GitProcessFailure as exc:
             raise _AdapterFailure(
-                GitFailureCode.PROCESS_OUTPUT_EXCEEDED,
-                exit_code=returncode,
-            )
-        return _ProcessResult(stdout=bytes(stdout.data), returncode=returncode)
+                exc.code,
+                exit_code=exc.exit_code,
+            ) from None
 
     def _bind_root(self) -> tuple[int, int]:
         try:
@@ -1375,58 +1214,6 @@ def _cleared_error(code: GitFailureCode) -> GitOperationError:
     error.__context__ = None
     error.__suppress_context__ = True
     return error
-
-
-def _safe_environment(
-    *,
-    read_only: bool,
-    identity_environment: dict[str, str] | None,
-) -> dict[str, str]:
-    environment = {
-        key: value
-        for key, value in os.environ.items()
-        if not key.startswith("GIT_") or key in _IDENTITY_ENVIRONMENT
-    }
-    environment.update(
-        {
-            "GIT_TERMINAL_PROMPT": "0",
-            "GIT_ASKPASS": os.devnull,
-            "GIT_PAGER": "cat",
-            "GIT_FLUSH": "1",
-            "GIT_NO_REPLACE_OBJECTS": "1",
-            "LC_ALL": "C",
-            "LANG": "C",
-        }
-    )
-    if read_only:
-        environment["GIT_OPTIONAL_LOCKS"] = "0"
-    if identity_environment is not None:
-        if set(identity_environment) != _IDENTITY_ENVIRONMENT:
-            raise _AdapterFailure(GitFailureCode.IDENTITY_INVALID)
-        environment.update(identity_environment)
-    return environment
-
-
-def _stop_process(process: subprocess.Popen[bytes]) -> None:
-    if process.poll() is not None:
-        return
-    try:
-        process.terminate()
-    except (OSError, ProcessLookupError):
-        return
-    try:
-        process.wait(timeout=_PROCESS_STOP_TIMEOUT_SECONDS)
-        return
-    except subprocess.TimeoutExpired:
-        pass
-    try:
-        process.kill()
-    except (OSError, ProcessLookupError):
-        return
-    try:
-        process.wait(timeout=_PROCESS_STOP_TIMEOUT_SECONDS)
-    except subprocess.TimeoutExpired:
-        return
 
 
 def _same_real_path(observed: str, expected: Path) -> bool:

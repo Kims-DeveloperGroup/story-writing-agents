@@ -21,15 +21,16 @@ from ..errors import (
     WorkspaceFormatError,
     WorkspaceVersionUnsupportedError,
 )
+from ..git.session_contracts import (
+    GIT_SESSION_BRANCH_PREFIX as SESSION_BRANCH_PREFIX,
+    GIT_SESSION_INTERNAL_REF_PREFIX as SESSION_INTERNAL_REF_PREFIX,
+    GIT_SESSION_WORKTREE_SIBLING_SUFFIX as SESSION_WORKTREE_SIBLING_SUFFIX,
+)
 
 
 WORKSPACE_SCHEMA_VERSION = 2
 WORKSPACE_MARKER_PATH = "config/workspace.json"
 WORKSPACE_INITIALIZATION_JOURNAL_PATH = ".story-writing-agents-initialize-v2.json"
-SESSION_BRANCH_PREFIX = "story/session/"
-SESSION_INTERNAL_REF_PREFIX = "refs/story-writing-agents/runtime/sessions/"
-SESSION_WORKTREE_SIBLING_SUFFIX = ".story-worktrees"
-
 _SAFE_IDENTIFIER = re.compile(r"[A-Za-z0-9][A-Za-z0-9_-]{0,63}")
 _DIGEST = re.compile(r"[0-9a-f]{64}")
 

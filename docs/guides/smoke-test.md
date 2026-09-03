@@ -113,7 +113,14 @@ A pass does not validate:
 - interactive terminal behavior;
 - provider request/response capture;
 - story generation, debate, publication, or quality;
-- future session branches/worktrees/internal refs; or
+- session Git-resource provisioning, interruption/resume, or later #505
+  commits/checkpoints; or
 - SQLite activation (disposable smoke uses the filesystem management bundle).
+
+Explicit `story smoke --workspace PATH` does perform fresh workspace readiness,
+so any already-present session branch/worktree/internal-ref inventory must be
+exactly correlated. Smoke does not create, resume, repair, or remove those
+resources and current `story session` commands are not connected to them until
+#455.
 
 The exact report contract is in the [CLI reference](../reference/cli.md#smoke).

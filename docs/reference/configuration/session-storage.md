@@ -7,6 +7,8 @@
 > rejected-provider-response artifacts persist as plaintext workspace files.
 > Runtime-managed documents and records are strict UTF-8. These retained files
 > and low-level components do not imply a current public story-execution path.
+> Package-internal session Git resources are implemented for #455, but current
+> session commands do not provision them.
 
 Key terms: **default**—a persisted command or conversation fallback;
 **manifest**—durable provider state; **access claim**—temporary process ownership;
@@ -20,7 +22,10 @@ owners; #454 does not create them in the initialization baseline.
 
 ```text
 workspace/
-├── .git/                                                       [one local main root commit]
+├── .git/                                                       [common Git storage; fixed main baseline plus lazy session seeds]
+│   └── story-writing-agents/runtime/session-provisioning/
+│       ├── .lock                                               [lazy persistent repository guard]
+│       └── <session_id>.json                                   [transient immutable provisioning journal]
 ├── .story-writing-agents-initialize-v2.json                    [transient initialization journal; absent on success]
 ├── config/
 │   ├── workspace.json                                          [exact schema-v2 marker and topology policy]
@@ -90,7 +95,15 @@ workspace/
 │           ├── .collaboration-history.lock                     [lazy excluded safe lock]
 │           └── transcript.jsonl                                [unsupported sentinel; active v2 owner rejects it]
 └── manuscript/<part-id>/<safe-relative-markdown-path>           [lazy create-only output]
+
+<workspace-parent>/<workspace-name>.story-worktrees/
+└── <session_id>/                                               [lazy exact linked session worktree]
 ```
+
+Git logically owns `refs/heads/story/session/<session_id>` at the baseline and
+`refs/story-writing-agents/runtime/sessions/<session_id>` at the seed. Those
+refs may be loose or packed, so they are identities rather than guaranteed
+filesystem leaves in the tree above.
 
 The four core files are empty identities, not generated story content.
 Initialization also creates selected empty directories, but Git records only
@@ -131,9 +144,11 @@ manuscript/.gitkeep
 The transient `.story-writing-agents-initialize-v2.json`, `.git`, empty
 directory entries, mutable logs/state, later artifacts, and arbitrary files are
 excluded. A clean ready reopen requires the marker/scaffold bytes, commit,
-index/tree, only `refs/heads/main`, and worktree status to match exactly.
+index/tree, `refs/heads/main`, clean main status, and an exhaustive inventory in
+which every additional session branch/ref/worktree/journal fact is exactly
+correlated.
 
-`config/workspace.json` records this future naming policy for one validated
+`config/workspace.json` records this naming policy for one validated
 session ID `<id>`:
 
 ```text
@@ -142,8 +157,13 @@ ref:      refs/story-writing-agents/runtime/sessions/<id>
 worktree: <workspace-parent>/<workspace-name>.story-worktrees/<id>
 ```
 
-The initial session set is empty. #449, not initialization, will materialize
-those resources and keep later mutable state off the pristine `main` root.
+The initial session set is empty. `story init` still creates none of these
+resources. The package-internal #504 provision operation can materialize one
+exact correlated triple while keeping the pristine `main` root invariant;
+#455 owns command wiring. #508 provides internal content-free history evidence;
+#509 owns later story commits, #510 owns checkpoints, and #492 owns their
+confirmation UI. Session provisioning/history state is separate from both the
+root initialization journal and writing-artifact transaction journals.
 
 Artifact state appears only when its direct repository owner is accessed; no
 current public shell command publishes output. `recovery_blocked.json` appears

@@ -13,10 +13,11 @@ This is the complete availability boundary for issue
 - `story init` now composes this adapter internally after it records the exact
   schema-v2 initialization journal and installs its exact 22-file scaffold.
   The CLI does not expose manifest selection or another Git operation.
-- Session branches, worktrees, internal refs, and confirmed later commits are
-  not available here. Issue
-  [#449](https://github.com/Kims-DeveloperGroup/story-writing-agents/issues/449)
-  owns those later operations.
+- The public adapter still has no session branch, worktree, internal-ref, or
+  later-commit method. Separate package-internal #504 modules now own exact
+  session resources for #455 composition. Package-internal #509 now owns exact
+  story commits, and package-internal #510 owns closed-path checkpoints;
+  #491/#492 still own application/confirmation integration.
 
 The adapter is not a general Git client. It accepts no command, argument list,
 revision, ref, commit message, credential, prose, or provider-tool input.
@@ -279,7 +280,7 @@ representations, although callers can explicitly read the typed identity fields.
 | `absent` | The exact root is not a repository and is not inside another one. Baseline creation may proceed. |
 | `standalone` | The root owns a normal `.git` directory. Further baseline validation decides whether creation or reads may proceed. |
 | `parent_repository` | The root is nested inside another repository. The adapter refuses to adopt it. |
-| `linked_worktree` | `.git` is an administrative-file link. Session worktrees are outside #448. |
+| `linked_worktree` | `.git` is an administrative-file link. This baseline adapter rejects it; the separate #504 owner accepts only an exact correlated session worktree. |
 | `submodule` | The root is a submodule or has a Git-link entry. |
 | `sparse_checkout` | Sparse-checkout configuration is active. |
 | `root_mismatch` | Git's worktree/top-level/bare facts do not identify the exact supplied root. |
@@ -365,6 +366,432 @@ unsupported topologies direct the caller to recreate the workspace.
 These implementation mechanisms are not a public command escape hatch. The
 supported surface remains the six typed methods shown below.
 
+<a id="package-internal-session-git-resources"></a>
+
+## Package-internal session Git resources
+
+The #504 substrate is deliberately absent from the project, `git`, and
+`workspace` facades. It exposes four direct-module operations solely for the
+later #455 composition:
+
+```text
+inspect one session       read-only
+list exhaustive sessions read-only
+provision one session     create or resume an exact prefix
+require one ready session read-only
+```
+
+They accept a validated session ID and the initializer's exact baseline
+manifest. They do not accept raw Git arguments, arbitrary refs or paths,
+provider or lead text, serialized tool instructions, commit messages, or
+credentials. Current `story session create` and `story session reopen` do not
+call them. A command reporting provider-session `ready` therefore does not yet
+report Git-resource readiness.
+
+For session `novel`, the exact identity is:
+
+```text
+branch:   story/session/novel
+ref:      refs/story-writing-agents/runtime/sessions/novel
+worktree: <workspace-parent>/<workspace-name>.story-worktrees/novel
+```
+
+Provision runs under one repository-wide lock. It verifies the pristine main
+baseline and exhaustive correlated inventory, rejects an unregistered sibling
+collision before resource mutation, captures the effective author and
+committer plus one UTC whole-second timestamp, then publishes an immutable
+provisioning journal before the first Git object/ref/branch/worktree mutation.
+It creates and verifies an empty-tree, parentless seed object, compare-and-swap
+creates the internal ref and baseline-anchored branch, creates the exact linked
+worktree, verifies the complete triple, removes and synchronizes the journal,
+and verifies again before returning `ready`.
+
+The common-Git namespace is:
+
+```text
+.git/story-writing-agents/runtime/session-provisioning/
+├── .lock
+└── <session_id>.json
+```
+
+The persistent lock and directories use private local modes. The temporary
+journal is owner-only, canonical UTF-8 JSON with a trailing newline, at most
+64 KiB, and accepts no missing, duplicate, extra, malformed, or noncanonical
+field. It binds schema version, `provisioning` state, session and provisioning
+IDs, baseline object ID, captured author/committer names and emails, and the
+seed timestamp. It is immutable: observed Git facts determine which exact
+ordered prefix can resume.
+
+An illustrative decoded journal is below. On disk it is encoded as one compact,
+sorted-key JSON line followed by `\n`:
+
+```json
+{
+  "baseline_commit_id": "<object-id>",
+  "effective_identity": {
+    "author": {"email": "author@example.invalid", "name": "Story Author"},
+    "committer": {"email": "committer@example.invalid", "name": "Story Committer"}
+  },
+  "provisioning_id": "0123456789abcdef0123456789abcdef",
+  "schema_version": 1,
+  "seed_timestamp_seconds": 1780000000,
+  "session_id": "novel",
+  "state": "provisioning"
+}
+```
+
+The seed message is `Initialize story session runtime: <session_id>`. Its tree
+is the repository-format empty tree, it has no parent, signing is disabled, and
+its captured author/committer timestamp uses `+0000`. This makes retry recreate
+and verify the same SHA-1 or SHA-256 object ID. A completed triple may later
+have advanced branch/internal tips, but its branch root must remain the v2
+baseline and its internal root must remain this seed. #505 alone will interpret
+later canonical commits and checkpoints.
+
+The result vocabulary is closed:
+
+| State | Recovery action | Meaning |
+| --- | --- | --- |
+| `absent` | `create` | No journal or requested resource exists. |
+| `provisioning` | `retry_create` | A valid journal and exact resumable prefix exist. |
+| `ready` | `reopen` | The journal is absent and the exact complete triple verifies. |
+| `outcome_unknown` | `operator_recovery` | An attempted mutation cannot be classified safely. |
+| `recovery_required` | `operator_recovery` | State is partial without a journal, malformed, colliding, moved, substituted, mismatched, or topologically unsafe. |
+
+An exact complete triple is authoritative and idempotent even after its journal
+has been removed. Require-ready/Reopen never creates or continues a prefix.
+Any unknown or non-exact fact is preserved; there is no automatic branch, ref,
+worktree, administration-entry, object, or recovery-journal deletion. The seam
+has no migration, compatibility, remote, reset, clean, prune, garbage
+collection, rebase, merge, or history-rewrite operation.
+
+For user-oriented scenarios and illustrative typed values, see
+[Workspaces](../guides/workspaces.md#session-git-resources). For failures and
+safe next actions, see
+[Session Git-resource recovery](../operations/recovery-and-limitations.md#session-git-resource-recovery).
+
+<a id="package-internal-session-history"></a>
+
+## Package-internal session history and process profiles
+
+Issue #508 supplies the common infrastructure now used by #509 story commits
+and #510 internal checkpoints. The history store itself does not stage a file,
+create a commit/checkpoint, update a ref, consume confirmation, or expose a
+CLI/runtime/facade method. #492 owns the later confirmation UI.
+
+`git.session_history_contracts` owns the pure schema-v1 values and codecs;
+`git.session_history` owns descriptor-relative durable storage;
+`git.repository_lock` owns the identity-bound common-Git lease; and
+`git.process` owns the fixed process profiles. These modules are package-
+internal and add no name to `story_writing_agents`, `story_writing_agents.git`,
+or a workspace facade.
+
+Opening a history first requires the exact #504 session triple to be `ready`,
+then takes the same repository-wide lease used by provisioning and revalidates
+the session under that lease. The per-session namespace is:
+
+```text
+.git/story-writing-agents/runtime/session-history/<session_id>/
+├── candidates/<64-lowercase-hex-candidate-id>.json
+├── commit-operations/<32-lowercase-hex-operation-id>.json
+├── checkpoint-operations/<32-lowercase-hex-operation-id>.json
+└── checkpoint-inputs/<32-lowercase-hex-operation-id>/index
+```
+
+Directories request mode `0700`; JSON leaves request `0600`. JSON is bounded to
+1 MiB and must be one canonical sorted-key UTF-8 object plus a trailing newline.
+Reads and writes reject aliases, links, nonregular or multiply linked leaves,
+case-colliding names, oversized data, noncanonical encodings, unexpected
+fields, and identity substitution. Candidate publication is create-only and
+idempotent only for the identical canonical value. Operation replacement is
+atomic, synchronized, and accepted only for the exact next sequence and legal
+successor state.
+
+### Records and transitions
+
+A candidate ID is the SHA-256 of its canonical content excluding the ID itself.
+The record binds the ready session and branch, expected branch tip/tree,
+worktree identity digest, application/proposal/correlation IDs, sorted unique
+path operations with before/after SHA-256 digests, proposed commit message,
+sorted impact labels, and author/committer identity-source categories. It does
+not store the affected files' bytes or the effective identity values.
+
+A story-commit operation binds its candidate, correlation, expected branch tip,
+sequence, state, and optional terminal commit ID. A checkpoint operation binds
+its correlation, expected internal-ref tip, sequence, state, optional terminal
+checkpoint ID, and whether its alternate index is preserved. Neither operation
+record contains prompt/reply text, story bytes, raw Git output, a descriptor,
+credentials, or executable/confirmation authority.
+
+| Record/current state | Allowed next state |
+| --- | --- |
+| Candidate `prepared` | None; the candidate is immutable. |
+| New story-commit operation | `rejected` as a terminal pre-execution decision, or `running` to begin later execution. |
+| Story commit `running` | `staged`, `outcome_unknown`, or `recovery_required` |
+| Story commit `staged` | `committed`, `outcome_unknown`, or `recovery_required` |
+| Story commit `outcome_unknown` | `committed` or `recovery_required` |
+| New checkpoint operation | `running` |
+| Checkpoint `running` | `committed`, `outcome_unknown`, or `recovery_required` |
+| Checkpoint `outcome_unknown` | `committed` or `recovery_required` |
+| Any `committed`, `rejected`, or `recovery_required` operation | None; terminal. |
+
+`prepared` belongs only to the immutable candidate. `staged` and `rejected`
+belong only to story commits. `committed` requires the same-format Git object
+ID recorded in the operation. `outcome_unknown` can advance only to
+`committed` or terminal `recovery_required`; no terminal record reopens or
+moves backward. The store returns content-free failure/recovery facts and a
+bounded inventory of IDs, states, and preserved checkpoint indices.
+
+### Closed Git process profiles
+
+The four internal profiles are `read_only`, `mutation`, `identity_mutation`,
+and `internal_checkpoint`. Each process uses caller-fixed arguments,
+`shell=False`, `--no-pager`, bounded input/output and time, disabled hooks and
+signing, disabled external diff/fsmonitor/pagers/editors/prompts, and a freshly
+sanitized environment. Inherited Git directory/worktree/configuration/SSH/
+index controls and other arbitrary `GIT_*` variables do not pass through;
+the four standard author/committer identity variables are the only inherited
+Git-environment exceptions.
+
+`identity_mutation` accepts only a typed effective author/committer value. Only
+`internal_checkpoint` accepts a `GitAlternateIndex` and typed UTC commit
+timestamps, and that index value derives the
+single exact operation-owned path shown above. The runner revalidates the main
+root and every alternate-index ancestor before and after the child process. It
+does not admit an arbitrary `GIT_INDEX_FILE`. Git commits created by the #509
+and #510 internal services retain the effective author/committer and message in
+Git history even though session-history JSON omits effective identity values.
+
+### Cleanup and interruption
+
+The checkpoint index is allocated only after a durable `running` checkpoint
+record. It is preserved when the result is `outcome_unknown` or
+`recovery_required`; removal is allowed only for that exact operation after a
+durable `committed` record and synchronization. No cleanup routine removes
+candidate/operation records, Git objects/refs, provisioning journals, user
+files, an ambiguous index, or unrelated repository data.
+
+If process exit, cancellation, I/O failure, or lost process output leaves the
+result uncertain, the operation owner must inspect the durable operation and
+repository facts. It must not replay a consumed confirmation or rerun Git
+from `running`/`staged` merely because no success was returned. See
+[session-history recovery](../operations/recovery-and-limitations.md#session-history-recovery)
+and [session-history privacy](../operations/privacy-and-provider.md#session-history-exposure).
+
+<a id="package-internal-exact-story-commits"></a>
+
+## Package-internal exact story commits
+
+Issue #509 implements the local Git operation behind a future lead-confirmed
+story commit. It remains a direct-module capability: there is no CLI command,
+provider path, lead binding, or export from `story_writing_agents`,
+`story_writing_agents.git`, or a workspace facade. #491 owns production of
+successful typed application evidence, #492 owns the interactive lead
+projection and confirmation UI. The separate #510 checkpoint service is
+described below.
+
+The three internal owners are:
+
+| Module | Responsibility |
+| --- | --- |
+| `git.story_commit_contracts` | Frozen typed application evidence, candidate paths/candidate, lead projection, structured confirmation, decision/state/failure/recovery enums, content-free result, and projection. |
+| `git.story_commit_candidates` | Prepare/load/revalidate one exact candidate, bind content-bearing staging inputs only in process memory, and publish immutable candidate history. |
+| `git.story_commits` | Process-local authority, Commit/Reject/Revise decision handling, exact execution, durable inspection, and conservative restart recovery. |
+
+The direct-module operations are:
+
+```text
+prepare_story_commit_candidate(root, manifest, evidence, message, impact)
+load_story_commit_candidate(root, manifest, session_id, candidate_id)
+revalidate_story_commit_candidate(binding, history=None)
+project_story_commit_candidate(candidate)
+
+StoryCommitService(root, manifest, session_id)
+  .prepare(evidence, message, impact)
+  .authorize(candidate, commit_confirmation)
+  .execute(authority)
+  .reject(candidate, reject_confirmation)
+  .revise(candidate, revise_confirmation)
+  .inspect(operation_id)
+  .recover(operation_id)
+```
+
+These are internal contracts, not a stable application API. The serializable
+values contain no method or hidden capability. `StoryCommitAuthority` can be
+created only by the service after one exact fresh Commit decision; it is bound
+to that service owner, process, and thread, cannot be copied/pickled, and is
+consumed before the first filesystem or Git action. Reject/Revise/Apply/
+consultation values cannot authorize execution, a confirmation ID cannot be
+reserved twice by the same service, and candidate/proposal/correlation IDs must
+all match. No authority survives restart; the future #492 owner must obtain a
+fresh user decision instead of presenting an old serialized decision again.
+
+### Prepare and lead projection
+
+`StoryCommitApplicationEvidence` binds the session, application/proposal/
+correlation IDs, exact `ArtifactChangeSet`, and its projected-state digest.
+Prepare requires that the change set is already applied exactly in the ready
+session worktree. It proves:
+
+- symbolic `HEAD` names the exact session branch and equals the ready tip;
+- the real index has no pre-staged entry;
+- the complete current canonical artifact mapping equals the projected change
+  set, with no unreported canonical change;
+- candidate paths are exact unique canonical artifact paths;
+- the expected full tree can be derived without writing a Git object;
+- effective author/committer identity and its source are stable;
+- the internal ref, main `HEAD`, main status, session/main directory identities,
+  and worktree identity match; and
+- unrelated noncanonical files are excluded and left byte-identical.
+
+Its only durable mutation is create-only publication of the immutable candidate
+under #508 session history. It does not alter a working file, index, object,
+ref, branch, or commit. Repeating the exact preparation returns the same
+content-addressed candidate.
+
+The lead projection exposes candidate/session/branch/tip/tree IDs, exact path
+operations and before/after SHA-256 digests, bounded proposed message and
+sorted impact boundary, application/proposal/correlation IDs, and identity-
+source categories. It deliberately omits story bytes, effective identity
+values, worktree identity, runtime binding, authority, raw Git output, and
+provider text.
+
+Artifact application operations normalize as follows:
+
+| Applied operation | Candidate path entries |
+| --- | --- |
+| Create | destination `create` with only `after_sha256` |
+| Patch or replace | path `update` with distinct `before_sha256` and `after_sha256` |
+| Delete | source `delete` with only `before_sha256` |
+| Rename | source `delete` plus destination `create`, then all entries sorted by UTF-8 path bytes |
+
+### Exact Commit sequence
+
+Authorize revalidates the process-local binding before minting one-use
+authority. Execute consumes that authority, takes the common-Git/session-history
+lease, revalidates again, then follows this fixed order:
+
+```text
+publish and fsync RUNNING operation evidence
+-> for each sorted candidate path only:
+     create/update: hash-object -w --no-filters --stdin
+                    update-index --add --cacheinfo 100644,<blob>,<literal-path>
+     delete:        update-index --force-remove -- <literal-path>
+-> write-tree and require candidate.expected_tree
+-> publish and fsync STAGED operation evidence
+-> commit-tree <expected-tree> -p <prepared-tip>
+   using the prepared literal message and effective identity
+-> update-ref refs/heads/<session-branch> <commit> <prepared-tip>
+-> verify exact new session tip/tree plus unchanged main head/status and
+   internal ref; literal targeting leaves main index and unrelated bytes alone
+-> publish and fsync COMMITTED evidence with the commit ID
+```
+
+The branch update is compare-and-swap; it cannot silently replace a moved tip.
+The commit has exactly one parent, exact expected tree/message, no hook/signing/
+filter/textconv/alias/editor/pager/credential widening, and the prepared
+effective author and committer. The same algorithm works in SHA-1 and SHA-256
+repositories. It does not update the internal checkpoint ref, main root, remote,
+or any noncandidate path. It provides no reset, clean, checkout, merge, rebase,
+push, deletion, migration, or compatibility operation.
+
+### Decisions, results, and restart
+
+Reject records one terminal `rejected` decision without changing files, index,
+objects, or refs; the candidate remains available. Revise records `rejected`
+under the deterministic revision identity, removes the live binding, and makes
+that candidate ineligible for later authorization. A changed proposal therefore
+requires newly applied evidence, a new candidate, and fresh confirmation.
+
+`StoryCommitResult` is content-free: session/candidate/operation/correlation,
+state/recovery action, branch/tip, and optional committed object ID. Inspection
+reads durable evidence only. Recovery performs read-only Git classification
+plus monotonic history updates; it never resets the real index, stages again,
+reuses authority/confirmation, or creates a commit.
+
+- Exact expected staging with the old branch tip is returned as `staged` /
+  `operator_recovery`.
+- A branch tip that is exactly the candidate tree, sole parent, and message is
+  finalized as `committed` without another commit.
+- A conflicting index/worktree is terminal `recovery_required`.
+- An unproved or foreign branch result remains `outcome_unknown` / `inspect`.
+
+See the [user scenarios](../guides/workspaces.md#exact-confirmed-story-commits),
+[recovery matrix](../operations/recovery-and-limitations.md#session-history-recovery),
+and [privacy boundary](../operations/privacy-and-provider.md#session-history-exposure).
+
+<a id="package-internal-session-checkpoints"></a>
+
+## Package-internal session checkpoints
+
+Issue #510 implements exact local commits of selected session runtime state to
+the session internal ref. It remains a direct-module capability: there is no
+CLI command, provider call, lead binding, workspace method, or export from
+`story_writing_agents` or `story_writing_agents.git`.
+
+| Module | Responsibility |
+| --- | --- |
+| `git.session_checkpoint_contracts` | Closed path classifier; frozen owner, path-operation, delta request/result, state, failure, and recovery values. |
+| `git.session_checkpoints` | Exact no-op proof, alternate-index tree construction, commit/internal-ref CAS, durable inspection, and conservative recovery. |
+
+The supported internal direct-module surface is
+`classify_session_checkpoint_path(path, session_id)`, the frozen contract
+values listed by `git.session_checkpoint_contracts.__all__`, and
+`SessionCheckpointService(root, manifest, session_id)` with `checkpoint()`,
+`inspect(operation_id)`, and `recover(operation_id)`. These are not a stable
+application API. The complete allowlist and five-owner mapping are in the
+[workspace guide](../guides/workspaces.md#included-paths-and-owners).
+
+`SessionCheckpointRequest` contains unique snapshots sorted by UTF-8 path
+bytes. Each snapshot is exactly `create`, `update`, or `delete` with the
+required before/after SHA-256 proof and, for create/update, exact bytes held in
+memory. The declared owner must match the path family. Missing snapshots do not
+delete paths, and the service never recursively discovers files. Requests are
+bounded to 4,096 paths, 8 MiB per supplied body, and 64 MiB of supplied or
+existing checkpoint-tree content.
+
+Under the shared common-Git lease, `checkpoint()` validates the ready session,
+main/session symbolic heads and real indexes, pristine main status, current
+internal-ref tree, effective local identity, and the complete resulting path
+classification. If the request is empty or produces the same proven tree, it
+returns `unchanged` without an operation record, alternate index, object, or ref
+mutation. Otherwise it performs exactly:
+
+```text
+fsync RUNNING operation with expected tip/tree and salted commit-intent digest
+-> allocate checkpoint-inputs/<operation-id>/index
+-> read-tree <expected-internal-tip> into that isolated index
+-> hash exact create/update bytes with filters disabled; update/remove exact paths
+-> verify index entries and write-tree == expected tree
+-> commit-tree <expected-tree> -p <expected-internal-tip>
+   using captured effective identity, fixed message, and captured UTC timestamps
+-> CAS refs/story-writing-agents/runtime/sessions/<session-id>
+-> verify exact commit intent/tip and unchanged repository invariants
+-> fsync COMMITTED operation -> remove only the completed alternate index
+```
+
+The commit has one parent and works identically for SHA-1 and SHA-256 object
+formats apart from object-ID length. The fixed message records session,
+correlation, and operation IDs. Author and committer use Git's exact effective
+local names/emails; both timestamps use the one captured second at `+0000`.
+
+The operation never uses a real index and never targets a working file, story
+branch, symbolic `HEAD`, canonical artifact, unrelated path, pristine main ref,
+or remote. It exposes no arbitrary `GIT_*`, command, reset, clean, checkout,
+merge, rebase, push, migration, or compatibility mechanism. The shared lease
+serializes it with #509. If a checkpoint moves the internal ref before a
+prepared story commit authorizes, that candidate fails revalidation before any
+story-commit mutation.
+
+Recovery never repeats `commit-tree` or CAS. An exact post-CAS tip matching the
+salted intent is finalized as `committed`; an unchanged expected tip after
+uncertain pre-CAS work becomes terminal `recovery_required`; and a foreign tip
+remains `outcome_unknown`. It never overwrites the foreign tip. Only an exact
+durably committed operation permits removal of its alternate index. See the
+[checkpoint scenarios](../guides/workspaces.md#exact-session-runtime-checkpoints),
+[recovery matrix](../operations/recovery-and-limitations.md#session-history-recovery),
+and [privacy boundary](../operations/privacy-and-provider.md#session-history-exposure).
+
 ## Safety and privacy boundary
 
 Every operation is local and synchronous. Internally the adapter uses fixed
@@ -382,8 +809,11 @@ Repository- or user-controlled execution extensions are blocked or bypassed:
 - external diff and text-conversion drivers;
 - clean/smudge filters, including required filters;
 - configurable aliases and credential helpers; and
-- inherited Git directory/worktree, configuration-path, SSH, and similar
-  `GIT_*` environment overrides, except the four validated identity fields.
+- inherited Git directory/worktree, configuration-path, SSH, index, and similar
+  `GIT_*` environment overrides, except the four standard author/committer
+  identity fields. Explicit identity overrides are typed; the sole alternate
+  index is admitted only by the validated internal-checkpoint profile described
+  above.
 
 Selected bytes are hashed and stored without filters. The API defines no
 remote or credential-bearing operation; terminal prompts and askpass are also

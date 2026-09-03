@@ -39,7 +39,7 @@ from ..models import (
 from ..writing_artifacts import canonical_artifact_kind
 from .initialization import (
     WorkspaceRootState,
-    discover_workspace_root,
+    discover_workspace_location,
     initialize_workspace_root,
     inspect_workspace_root,
 )
@@ -103,6 +103,9 @@ class Workspace:
         self.root = Path(os.path.realpath(lexical.parent)) / lexical.name
         self._root_inspection = inspect_workspace_root(self.root)
         self._root_identity = self._root_inspection.identity
+        self._root_role = self._root_inspection.role
+        self._session_id = self._root_inspection.session_id
+        self._main_root = self._root_inspection.main_root
         self._ready = self._root_inspection.state is WorkspaceRootState.READY
         self._initialization_failed = False
 
@@ -134,6 +137,9 @@ class Workspace:
             raise
         self._root_inspection = inspection
         self._root_identity = inspection.identity
+        self._root_role = inspection.role
+        self._session_id = inspection.session_id
+        self._main_root = inspection.main_root
         self._ready = True
         return self
 
@@ -1162,8 +1168,8 @@ def initialize_workspace(
 def discover_workspace(start: Path) -> Workspace | None:
     """Return the nearest exact ready workspace, or no recognizable boundary."""
 
-    boundary = discover_workspace_root(start)
-    return None if boundary is None else Workspace(boundary).require_ready()
+    location = discover_workspace_location(start)
+    return None if location is None else Workspace(location.root).require_ready()
 
 
 def open_workspace_root_directory(workspace: Workspace) -> int:
