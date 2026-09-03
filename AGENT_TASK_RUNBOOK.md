@@ -180,6 +180,117 @@ gh project item-list 1 --owner Kims-DeveloperGroup --limit 100 --format json \
     .["linked pull requests"]'
 ```
 
+## Preflight Every Writer
+
+Before a writer's first tracked mutation, its first action is the minimum
+capability/identity preflight. From the assigned worktree, capture:
+
+```bash
+pwd -P
+git rev-parse --show-toplevel
+git branch --show-current
+git rev-parse HEAD
+git merge-base HEAD <approved-base-sha>
+git merge-base --is-ancestor <approved-base-sha> HEAD
+git status --porcelain=v1 -z --untracked-files=all | od -An -tx1
+git status --porcelain=v1 -z --untracked-files=all | shasum -a 256
+```
+
+Report the exact porcelain bytes, SHA-256 fingerprint, decoded paths, and
+exclusive targets. Match every value to the handoff. Accepted upstream dirty
+state is valid only when its exact bytes, fingerprint, and paths were pinned
+there. Stop before mutation on any path, repository, branch, HEAD,
+approved-base identity or ancestry, status, capability, or ownership mismatch.
+Preserve the state; never reset, checkout, clean, or revert user changes to
+obtain a match.
+
+After upstream changes, interruption, or other identity invalidation, the root
+records the new expected identity/fingerprint and the same writer repeats this
+preflight before resuming. Before dispatch, also record exactly one canonical
+`worktree_disposition`; nest both records under existing packet fields.
+
+## Route Work on the Critical Path
+
+Apply the canonical [Delegation-Gain Gate](AGENTS.md#delegation-gain-gate) and
+[Orchestration Sequence](AGENTS.md#orchestration-sequence) before each
+specialist dispatch:
+
+1. Record `root_sequential_estimate`, `parallel_critical_path`,
+   `spawn_wait_handoff_synthesis_overhead`, the calculated
+   `predicted_critical_path_savings_seconds`, and its percentage. Dispatch only
+   when both canonical gain thresholds pass or the decision names
+   `material_correctness_risk_reduction` or `mandatory_ownership_rule`.
+2. Use the root fast path only for a clear one- or two-file production-code or
+   configuration change within an established boundary. It never includes
+   documentation or tests. Assign all README, policy, guide, and example writes
+   exclusively to `documentation_maintainer`, and all test work exclusively to
+   `test_engineer`; assign triggered modularity work to
+   `modularity_maintainer`.
+3. Dispatch `requirements_analyst` only for substantial ambiguity and
+   `regression_diagnostician` only for an unknown failure. Do not dispatch an
+   agent merely to run a deterministic command; batch safe independent static
+   reads in the main agent's tool calls.
+4. Apply the canonical
+   [Role, Mode, and Control Gate](AGENTS.md#role-mode-and-control-gate). Reject
+   an unsupported role/mode before spawn. The child performs only identity and
+   effective-capability preflight first; reject unavailable evidence or a
+   matrix mismatch before further task reads or writes.
+5. Apply the canonical [Root-Capability Routing](AGENTS.md#root-capability-routing)
+   algorithm. Resolve the root pair, measure and classify only the child's
+   dispatch context, classify complexity/risk and role needs, derive and clamp
+   each axis independently, then treat the capped pair as the preferred
+   minimum-quality target within the effective root ceiling. Supply both child
+   overrides atomically or omit both for exact inheritance; never guess a
+   cross-family order, select a weaker pair automatically, or exceed either
+   effective root value.
+6. Narrow or split oversized context before dispatch. If high-consequence work
+   is ceiling-limited, stop for a narrower task or stronger root session.
+   Otherwise record all routing inputs, desired/capped/selected pairs,
+   availability, limitation, and fallback or inheritance evidence in the
+   canonical packet.
+7. Send the compact `task_packet` in bounded, self-contained context. Full
+   history requires its named reason, relevant bound, stale-context risk, root
+   approval, and task evidence. Thread reuse alone does not authorize it.
+8. Record every requested result ID and expected role/mode. Cross the join
+   barrier only when none is running or missing and every response validates
+   against the exact canonical `result_packet` schema; do not synthesize
+   otherwise.
+9. Retry one transient spawn/delivery/join control failure exactly once only
+   after proving no task write occurred. For possible partial-writer timeout or
+   interruption, inspect state and resume the same thread; never retry blindly.
+   Do not retry policy, capability, scope, or schema failures.
+10. Resolve conflicts by evidence level and role ownership, never voting. Route
+    unresolved material conflicts to the owner, root, or user under the
+    canonical gate. Root fallback may use only existing root authority and
+    never bypasses mandatory documentation, test, or modularity ownership.
+
+Keep writers sequential. After production stabilizes, fuse test planning,
+editing, exact execution, and final behavioral/coverage review into one
+`test_engineer` implementation turn when its dependencies permit it; otherwise
+resume that same thread after the dependency stabilizes.
+
+## Dispose or Retain Worktrees
+
+At completion, capture the exact worktree path, branch, HEAD, porcelain
+bytes/fingerprint/paths, Issue/PR state, and commit/PR recoverability. Record
+whether cleanup authority was requested and granted, denied, or not required,
+plus the actual outcome, reason, and next owner.
+
+Retain when disposition requires it, authority is absent, or any removal gate
+is unmet. For authorized `remove_after_integration`, first prove clean status,
+completed integration verification, and recoverability. Then remove only the
+exact path without force and verify both registry and filesystem absence:
+
+```bash
+git worktree remove <exact-worktree-path>
+git worktree list --porcelain
+test ! -e <exact-worktree-path>
+```
+
+Branch deletion is a separate authorization and action. Retain the parent
+worktree until its branch reaches `main`. Change a disposition only after a
+recorded authority or lifecycle-state change.
+
 ## Plan and Record Verification
 
 Apply [Adaptive Verification](AGENTS.md#adaptive-verification) as the canonical
@@ -188,11 +299,18 @@ verification begins, the main agent records a compact root-owned plan with the
 task's `verification_class` and risk rationale; each acceptance criterion's
 mandatory evidence; changed inputs, affected inventory, and justified
 exclusions; the exact checks or test IDs in `authorized_selection` and their
-selection rationale; `estimated_seconds`, estimate source and confidence;
+selection rationale; one `evidence_execution_owner` per evidence item;
+`estimated_seconds`, estimate source and confidence;
 `total_stage_budget_seconds`, `max_shard_seconds`, `spent_seconds`, and
 `remaining_seconds`; stop and escalation conditions; each objective full-suite
 trigger or an explicit record that none applies; reusable evidence and its
 invalidation analysis; and residual risk.
+
+Before launch, deduplicate every item on exactly `normalized_command`,
+`exact_ids`, `relevant_input_digest`, and `environment_class`. Normally execute
+exact and semantic-cluster evidence locally and affected or full suites in CI;
+do not duplicate equivalent broad local and CI runs unless a local-environment
+acceptance criterion requires both.
 
 Execute and ledger that plan as follows:
 
@@ -200,9 +318,9 @@ Execute and ledger that plan as follows:
    `remaining_seconds` before launch. If a selection is too large, partition it
    into deterministic, disjoint exact-ID shards whose union is the authorized
    selection and in which each ID occurs once. Run sequentially unless the main
-   agent separately authorizes safe parallel execution. Stop before starting a
-   shard that would exceed the remaining budget and return the decision to the
-   main agent.
+   agent separately authorizes isolated, disjoint fast-fail shards; no more than
+   two may run concurrently. Stop before starting a shard that would exceed the
+   remaining budget and return the decision to the main agent.
 2. For every selection or shard, record its purpose, evidence level, exact IDs
    and command, provenance, actual duration and result, manifest identity,
    `relevant_input_digest`, `completed_ids`, `failed_ids`, `accepted_skips`,
@@ -231,8 +349,9 @@ Execute and ledger that plan as follows:
 
 1. **Pass the planning gate.** Complete or verify the initialization above.
    Record the gate state, Issue graph, Project metadata, logical Iteration,
-   dependencies, approved base, and authorization. Stop before writing unless
-   the gate is `passed` or `not_required`.
+   dependencies, approved base, authorization, and exactly one worktree
+   disposition. Stop before writing unless the gate is `passed` or
+   `not_required`.
 2. **Prepare the parent.** Create or reuse its Development-linked branch and
    worktree at the recorded base commit, assign the integration owner, verify
    the link, and move the parent to the correct Project state. After the first
@@ -241,11 +360,13 @@ Execute and ledger that plan as follows:
 3. **Start one child.** Confirm that the child is `Ready`, assigned the root's
    Iteration, and unblocked. Create its Development-linked branch and worktree
    from the current parent commit, assign its owner, verify the link, and move
-   it to `In progress` before tracked edits.
+   it to `In progress`. Require the assigned writer to pass the exact preflight
+   above before tracked edits.
 4. **Implement and verify.** Change only the child scope. Follow the commit
-   policy, update tests and documentation, apply the verification plan and
-   evidence ledger above, run its authorized checks, and review the final diff
-   and worktree status.
+   policy and the routed ownership above; the root fast path never absorbs test
+   or documentation writes. Apply the verification plan and evidence ledger,
+   run its authorized checks through the assigned execution owner, and review
+   the final diff and worktree status.
 5. **Review the child.** Merge the latest parent branch into the child without
    rebasing, rerun affected checks, and open a draft PR whose base is the
    parent branch and whose head is the child branch. Use `Refs #<child>`. Mark
@@ -270,17 +391,18 @@ Execute and ledger that plan as follows:
    includes the resulting parent closure. Record and verify the final merge
    SHA, Issue closure, Project `Done`, and milestone state.
 8. **Clean up and hand off.** Remove a worktree only after its status is clean
-   and its integration is verified. Never use forced worktree removal. Branch
-   deletion requires separate authorization; because squash merging does not
-   mark a child branch as Git-merged, verify PR and commit recoverability before
-   deleting it. Retain the parent worktree until the parent reaches `main`.
+   and its integration and recoverability are verified, its disposition permits
+   removal, and cleanup is authorized. Follow the non-forced removal and
+   completion inventory above. Treat branch deletion separately and retain the
+   parent worktree until the parent reaches `main`.
 
-The handoff must include the planning-gate state and evidence, Issue and PR
-links, base/head branches and SHAs, resulting squash SHAs, worktree paths,
-Development and `Linked pull requests` evidence, Project metadata and
-Iteration, completed and remaining criteria, checks, blockers, cleanup, GitHub
-mutations, and the next owner or action. Include the compact adaptive
-verification plan and current evidence ledger, distinguishing completed,
-failed, accepted-skip, invalidated, and unexecuted evidence and identifying any
-selection, concurrency, evidence-level, or budget decision still owned by the
-main agent.
+Use the exact canonical `task_packet` and `result_packet` schemas in
+[Handoff and Result Contracts](AGENTS.md#handoff-and-result-contracts). Nest the
+planning-gate evidence, Issue and PR links, branches and SHAs, worktree,
+Development and Project metadata, Iteration, criteria, adaptive-verification
+ledger, blockers, and GitHub mutations under their defined fields. Nest writer
+identity and disposition under `identity`; cleanup authorization,
+recoverability, and final inventory under `evidence`; and actual disposition,
+reason, risk, and next owner under `findings`, `risks`, and `next_action` as
+applicable. Keep the packet compact; link stable evidence instead of copying
+raw logs, full Issue bodies, or the complete plan.

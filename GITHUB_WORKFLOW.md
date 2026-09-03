@@ -19,7 +19,8 @@ canonical Project, set their planning metadata, and create the in-scope task
 branch through the Issue's Development section after the gate passes.
 Project-schema changes, unrelated Issue edits, staging, commits, other pushes,
 PR actions, review, closure, merge, deletion, and cleanup still require explicit
-authorization.
+authorization. Worktree removal and branch deletion are distinct actions and
+require separate authority.
 
 ## Initial Planning Gate
 
@@ -125,7 +126,10 @@ Pre-start blocked work stays `Backlog`; interrupted active work stays
 
 Assign one accountable owner per branch and worktree, plus one integration
 owner for a parent branch. Only one write-capable owner is active at a time.
-Inspect each worktree first and preserve unrelated changes.
+Before its first tracked write, bind that owner to the exact identity and dirty
+state required by [AGENTS.md](AGENTS.md#role-mode-and-control-gate). Preserve
+unrelated changes; a mismatch never authorizes reset, checkout, cleaning, or
+reversion.
 
 Use `issue-<number>-<short-slug>` for nontrivial work. A standalone branch
 identifies its leaf Issue. For a parent initiative, its branch is the
@@ -167,6 +171,22 @@ authorization.
 Issue closure is the completion trigger; automation may then set `Done`. Do not
 use Project `Done` to close unfinished work. Verify Issue, PR, and Project state
 after automation.
+
+### Worktree Disposition and Cleanup
+
+At task initialization, record exactly one disposition defined by
+[AGENTS.md](AGENTS.md#worktree-disposition). `remove_after_integration` requires
+existing cleanup authorization; otherwise retain with a reason or record
+`authorization_required`. Update it only for a recorded authority or lifecycle
+state change.
+
+Completion must inventory the final exact worktree/branch/HEAD and porcelain
+state, Issue/PR state, commit/PR recoverability, cleanup authorization decision,
+and actual retained/removed outcome, reason, and next owner. Removal requires
+clean status, completed integration verification, and recoverability, and must
+be non-forced and verified absent afterward. Branch deletion is a separate
+authorized action. Retain the parent worktree until the parent branch is
+integrated into `main`.
 
 ## Completion and Exceptions
 
