@@ -106,21 +106,74 @@ create a subagent merely to run a deterministic command. The main agent should
 batch safe, independent static reads through its tools when no specialist
 judgment or mandatory ownership is required.
 
-Use these dynamic model and reasoning-effort recommendations per dispatch:
+### Root-Capability Routing
 
-| Agent | Default | Escalation |
-| --- | --- | --- |
-| `requirements_analyst` | `gpt-5.6-terra`, `medium` | `gpt-5.6-sol`, `high` for multi-domain, security, migration, or deep ambiguity |
-| `regression_diagnostician` | `gpt-5.6-sol`, `high` | Already quality-oriented because dispatch is limited to unknown causal failures |
-| `modularity_maintainer` | `gpt-5.6-sol`, `high` | `gpt-5.6-terra`, `medium` only for an accepted index-only reconciliation |
-| `runtime_implementer` | `gpt-5.6-sol`, `medium` | `high` for security, concurrency, migration, public API, or difficult edge cases |
-| `test_engineer` | `gpt-5.6-terra`, `medium` | `gpt-5.6-sol`, `high` for security, concurrency, PTY/process, lifecycle, or complex risk coverage |
-| `documentation_maintainer` | `gpt-5.6-terra`, `medium` | `gpt-5.6-sol`, `high` for normative governance, security, compatibility, or migration policy |
+At dispatch, resolve root effective model/effort after aliases/defaults/session
+overrides and runtime child settings/pairs. TOMLs remain unpinned.
 
-These are recommendations, not account-specific TOML pins. For every dispatch,
-the main agent records model availability, the selected model and effort, and
-any compatible fallback with its reason; it never silently assumes a model is
-available or lowers the required quality.
+`dispatch_context_tokens` counts only `task_packet`, intentional inherited
+turns, attachments/preloads, and irreducible child material. Record
+`observed|estimated|unavailable`, method, and confidence.
+
+| Context | Tokens |
+| --- | --- |
+| `compact` | <=8,192 |
+| `moderate` | 8,193--32,768 |
+| `large` | 32,769--131,072 |
+| `oversized` | >131,072, or cannot fit verified output/reasoning reserve |
+
+Unknown/unverified fit is `oversized`; narrow/split. Context never relaxes
+root ceilings. Classify complexity/risk separately and target:
+
+| Class | Trigger | Model | Effort |
+| --- | --- | --- | --- |
+| `routine` | literal/mechanical/reversible; no unresolved judgment/material risk | `gpt-5.6-terra` | `medium` |
+| `standard` | bounded semantic work; one established responsibility | `gpt-5.6-sol` | `high` |
+| `complex` | substantial ambiguity/unknown cause; multi-domain synthesis; boundary/public API; compatibility/migration; security/authorization; concurrency/process/PTY; lifecycle/persistence/resource ownership; difficult nonlocal edges | `gpt-5.6-sol` | `xhigh` |
+| `critical` | two interacting complex triggers; explicitly high-consequence security/data-loss/irreversible-migration/breaking-compatibility | `gpt-5.6-sol` | `max` |
+
+Role defaults `routine` and only raises task class:
+
+| Role | `complex` uplift |
+| --- | --- |
+| `requirements_analyst`/`regression_diagnostician` | substantial ambiguity/unknown causal failure |
+| `modularity_maintainer` | boundary work; accepted index-only keeps actual class |
+| `runtime_implementer` | security/concurrency/migration/public API/difficult nonlocal edges |
+| `test_engineer` | security/concurrency/PTY/process/lifecycle/complex-risk coverage |
+| `documentation_maintainer` | normative governance/security/compatibility/migration policy |
+
+Context affects only model: compact/moderate floor Luna; large raises to Sol.
+Complexity/risk controls effort. Derive/clamp independently:
+
+```text
+desired_model = max(task_model_target, role_model_target, context_model_target)
+desired_effort = max(task_effort_target, role_effort_target)
+capped_model = min(desired_model, root_effective_model)
+capped_effort = min(desired_effort, root_effective_effort)
+```
+
+Only `gpt-5.6-luna < gpt-5.6-terra < gpt-5.6-sol` is initially comparable;
+never assume cross-family/alias/future order. Portable effort:
+`none < low < medium < high < xhigh < max`; `ultra` applies only when runtime-
+exposed as comparable/selectable.
+
+Capped is minimum quality; selected child model/effort independently stay
+<=root. Choose exact cap, else nearest stronger compatible pair within root
+(fewest upward steps; tie: smaller model then effort increase). Never auto-select
+below cap for availability/cost; weaker-only returns to root. Set both
+overrides or neither. Unresolved root/order/availability/support means omit both
+for exact inheritance; model-only may default effort.
+
+`ceiling_limited` means either cap is below desired. Non-high-consequence may
+proceed compatibly only with recorded residual risk; high-consequence must
+narrow or require stronger root. Record root/source; context count/
+class/method/confidence; complexity/triggers; role target; desired/capped/
+selected/compatible pairs; limitation; fallback/inheritance reason. Packets
+stay narrow: exclusions, accepted decisions, observable criteria,
+`observed|inferred|proposed|unknown` evidence, uncertainty stops.
+
+Sources: [subagents](https://learn.chatgpt.com/docs/agent-configuration/subagents),
+[model guidance](https://developers.openai.com/api/docs/guides/latest-model).
 
 ### Modularity Gate
 

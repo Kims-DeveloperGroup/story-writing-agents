@@ -201,10 +201,20 @@ specialist dispatch:
    `regression_diagnostician` only for an unknown failure. Do not dispatch an
    agent merely to run a deterministic command; batch safe independent static
    reads in the main agent's tool calls.
-4. Select the model and effort dynamically from the canonical recommendation
-   table. Record availability, selection, and any reasoned compatible fallback;
-   do not depend on an account-specific TOML pin.
-5. Send the canonical compact `task_packet` in a bounded, self-contained
+4. Apply the canonical [Root-Capability Routing](AGENTS.md#root-capability-routing)
+   algorithm. Resolve the root pair, measure and classify only the child's
+   dispatch context, classify complexity/risk and role needs, derive and clamp
+   each axis independently, then treat the capped pair as the preferred
+   minimum-quality target within the effective root ceiling. Supply both child
+   overrides atomically or omit both for exact inheritance; never guess a
+   cross-family order, select a weaker pair automatically, or exceed either
+   effective root value.
+5. Narrow or split oversized context before dispatch. If high-consequence work
+   is ceiling-limited, stop for a narrower task or stronger root session.
+   Otherwise record all routing inputs, desired/capped/selected pairs,
+   availability, limitation, and fallback or inheritance evidence in the
+   canonical packet.
+6. Send the canonical compact `task_packet` in a bounded, self-contained
    context. Reuse the same specialist thread for follow-up phases unless stale
    context or isolation risk is recorded. Do not send raw logs, the full Issue
    body, or a duplicate of the complete plan.

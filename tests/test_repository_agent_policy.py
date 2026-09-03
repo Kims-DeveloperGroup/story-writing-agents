@@ -60,6 +60,11 @@ class RepositoryAgentPolicyTests(unittest.TestCase):
             "### Delegation-Gain Gate",
         )
         cls.delegation_normalized = _normalized(cls.delegation_source)
+        cls.routing_source = _markdown_section(
+            cls.agents_source,
+            "### Root-Capability Routing",
+        )
+        cls.routing_normalized = _normalized(cls.routing_source)
         cls.orchestration_source = _markdown_section(
             cls.agents_source,
             "### Orchestration Sequence",
@@ -104,6 +109,7 @@ class RepositoryAgentPolicyTests(unittest.TestCase):
                 self.assertTrue(definition["developer_instructions"].strip())
                 self.assertNotIn("model", definition)
                 self.assertNotIn("model_reasoning_effort", definition)
+                self.assertNotIn("reasoning_effort", definition)
         self.assertNotIn("reviewer", self.agent_data)
 
     def test_existing_role_and_mode_boundaries_are_preserved(self) -> None:
@@ -228,55 +234,228 @@ class RepositoryAgentPolicyTests(unittest.TestCase):
             ),
         )
 
-    def test_dynamic_model_matrix_is_canonical_and_not_toml_pinned(self) -> None:
-        rows = {
-            match.group("name"): (
-                match.group("default").strip(),
-                match.group("escalation").strip(),
-            )
+    def test_root_capability_context_and_complexity_are_canonical(self) -> None:
+        routing_with_heading = (
+            "### Root-Capability Routing\n" + self.routing_source
+        )
+        self.assertLessEqual(len(routing_with_heading.split()), 407)
+        context_rows = {
+            match.group("name"): match.group("material").strip()
             for match in re.finditer(
-                r"^\|\s*`(?P<name>[a-z_]+)`\s*"
-                r"\|\s*(?P<default>.*?)\s*"
-                r"\|\s*(?P<escalation>.*?)\s*\|$",
-                self.delegation_source,
+                r"^\|\s*`(?P<name>compact|moderate|large|oversized)`\s*"
+                r"\|\s*(?P<material>.*?)\s*\|$",
+                self.routing_source,
                 flags=re.MULTILINE,
             )
         }
         self.assertEqual(
-            rows,
+            context_rows,
             {
-                "requirements_analyst": (
-                    "`gpt-5.6-terra`, `medium`",
-                    "`gpt-5.6-sol`, `high` for multi-domain, security, migration, or deep ambiguity",
-                ),
-                "regression_diagnostician": (
-                    "`gpt-5.6-sol`, `high`",
-                    "Already quality-oriented because dispatch is limited to unknown causal failures",
-                ),
-                "modularity_maintainer": (
-                    "`gpt-5.6-sol`, `high`",
-                    "`gpt-5.6-terra`, `medium` only for an accepted index-only reconciliation",
-                ),
-                "runtime_implementer": (
-                    "`gpt-5.6-sol`, `medium`",
-                    "`high` for security, concurrency, migration, public API, or difficult edge cases",
-                ),
-                "test_engineer": (
-                    "`gpt-5.6-terra`, `medium`",
-                    "`gpt-5.6-sol`, `high` for security, concurrency, PTY/process, lifecycle, or complex risk coverage",
-                ),
-                "documentation_maintainer": (
-                    "`gpt-5.6-terra`, `medium`",
-                    "`gpt-5.6-sol`, `high` for normative governance, security, compatibility, or migration policy",
+                "compact": "<=8,192",
+                "moderate": "8,193--32,768",
+                "large": "32,769--131,072",
+                "oversized": (
+                    ">131,072, or cannot fit verified output/reasoning reserve"
                 ),
             },
         )
         self.assertContainsAll(
-            self.delegation_normalized,
+            self.routing_normalized,
             (
-                "recommendations, not account-specific TOML pins",
-                "records model availability, the selected model and effort, and any compatible fallback with its reason",
+                "`dispatch_context_tokens` counts only `task_packet`",
+                "intentional inherited turns, attachments/preloads, and irreducible child material",
+                "`observed|estimated|unavailable`, method, and confidence",
+                "Unknown/unverified fit is `oversized`; narrow/split",
+                "Context never relaxes root ceilings",
+                "Classify complexity/risk separately",
             ),
+        )
+        self.assertContainsAll(
+            self.runbook_normalized,
+            (
+                "[Root-Capability Routing](AGENTS.md#root-capability-routing)",
+                "measure and classify only the child's dispatch context",
+                "classify complexity/risk and role needs",
+                "Narrow or split oversized context before dispatch",
+            ),
+        )
+
+    def test_root_capability_quality_and_role_targets_are_canonical(self) -> None:
+        quality_rows = {
+            match.group("name"): (
+                match.group("trigger").strip(),
+                match.group("model").strip(),
+                match.group("effort").strip(),
+            )
+            for match in re.finditer(
+                r"^\|\s*`(?P<name>routine|standard|complex|critical)`\s*"
+                r"\|\s*(?P<trigger>.*?)\s*"
+                r"\|\s*(?P<model>.*?)\s*"
+                r"\|\s*(?P<effort>.*?)\s*\|$",
+                self.routing_source,
+                flags=re.MULTILINE,
+            )
+        }
+        self.assertEqual(
+            quality_rows,
+            {
+                "routine": (
+                    "literal/mechanical/reversible; no unresolved judgment/material risk",
+                    "`gpt-5.6-terra`",
+                    "`medium`",
+                ),
+                "standard": (
+                    "bounded semantic work; one established responsibility",
+                    "`gpt-5.6-sol`",
+                    "`high`",
+                ),
+                "complex": (
+                    "substantial ambiguity/unknown cause; multi-domain synthesis; boundary/public API; compatibility/migration; security/authorization; concurrency/process/PTY; lifecycle/persistence/resource ownership; difficult nonlocal edges",
+                    "`gpt-5.6-sol`",
+                    "`xhigh`",
+                ),
+                "critical": (
+                    "two interacting complex triggers; explicitly high-consequence security/data-loss/irreversible-migration/breaking-compatibility",
+                    "`gpt-5.6-sol`",
+                    "`max`",
+                ),
+            },
+        )
+        role_source = self.routing_source.split(
+            "Role defaults `routine` and only raises task class:",
+            maxsplit=1,
+        )[1].split("Context affects only model:", maxsplit=1)[0]
+        role_rows = {
+            match.group("role").strip(): match.group("uplift").strip()
+            for match in re.finditer(
+                r"^\|\s*(?P<role>`[^|]+?)\s*"
+                r"\|\s*(?P<uplift>.*?)\s*\|$",
+                role_source,
+                flags=re.MULTILINE,
+            )
+        }
+        self.assertEqual(
+            role_rows,
+            {
+                "`requirements_analyst`/`regression_diagnostician`": (
+                    "substantial ambiguity/unknown causal failure"
+                ),
+                "`modularity_maintainer`": (
+                    "boundary work; accepted index-only keeps actual class"
+                ),
+                "`runtime_implementer`": (
+                    "security/concurrency/migration/public API/difficult nonlocal edges"
+                ),
+                "`test_engineer`": (
+                    "security/concurrency/PTY/process/lifecycle/complex-risk coverage"
+                ),
+                "`documentation_maintainer`": (
+                    "normative governance/security/compatibility/migration policy"
+                ),
+            },
+        )
+        self.assertContainsAll(
+            self.routing_normalized,
+            (
+                "Role defaults `routine` and only raises task class",
+                "Context affects only model: compact/moderate floor Luna; large raises to Sol",
+                "Complexity/risk controls effort",
+            ),
+        )
+
+    def test_root_capability_clamps_and_orders_each_axis_independently(self) -> None:
+        self.assertContainsAll(
+            self.routing_source,
+            (
+                "desired_model = max(task_model_target, role_model_target, context_model_target)",
+                "desired_effort = max(task_effort_target, role_effort_target)",
+                "capped_model = min(desired_model, root_effective_model)",
+                "capped_effort = min(desired_effort, root_effective_effort)",
+            ),
+        )
+        self.assertContainsAll(
+            self.routing_normalized,
+            (
+                "Derive/clamp independently",
+                "Only `gpt-5.6-luna < gpt-5.6-terra < gpt-5.6-sol` is initially comparable",
+                "never assume cross-family/alias/future order",
+                "Portable effort: `none < low < medium < high < xhigh < max`",
+                "selected child model/effort independently stay <=root",
+            ),
+        )
+        self.assertRegex(
+            self.routing_source,
+            r"`ultra` applies only when runtime-\s*exposed as comparable/selectable",
+        )
+        self.assertContainsAll(
+            self.runbook_normalized,
+            (
+                "derive and clamp each axis independently",
+                "never guess a cross-family order",
+                "exceed either effective root value",
+            ),
+        )
+
+    def test_root_capability_selection_and_inheritance_are_canonical(self) -> None:
+        self.assertContainsAll(
+            self.routing_normalized,
+            (
+                "Capped is minimum quality",
+                "Choose exact cap, else nearest stronger compatible pair within root",
+                "fewest upward steps; tie: smaller model then effort increase",
+                "Never auto-select below cap for availability/cost; weaker-only returns to root",
+                "Set both overrides or neither",
+                "Unresolved root/order/availability/support means omit both for exact inheritance",
+                "model-only may default effort",
+                "`ceiling_limited` means either cap is below desired",
+                "Non-high-consequence may proceed compatibly only with recorded residual risk",
+                "high-consequence must narrow or require stronger root",
+            ),
+        )
+        self.assertContainsAll(
+            self.runbook_normalized,
+            (
+                "treat the capped pair as the preferred minimum-quality target within the effective root ceiling",
+                "Supply both child overrides atomically or omit both for exact inheritance",
+                "select a weaker pair automatically",
+                "If high-consequence work is ceiling-limited, stop for a narrower task or stronger root session",
+            ),
+        )
+
+    def test_root_capability_routing_evidence_is_complete(self) -> None:
+        routing_without_whitespace = re.sub(r"\s+", "", self.routing_source)
+        self.assertContainsAll(
+            routing_without_whitespace,
+            (
+                "Recordroot/source",
+                "contextcount/class/method/confidence",
+                "complexity/triggers",
+                "roletarget",
+                "desired/capped/selected/compatiblepairs",
+                "`ceiling_limited`",
+                "fallback/inheritancereason",
+                "Packetsstaynarrow",
+                "exclusions",
+                "accepteddecisions",
+                "observablecriteria",
+                "`observed|inferred|proposed|unknown`evidence",
+                "uncertaintystops",
+            ),
+        )
+        self.assertContainsAll(
+            self.runbook_normalized,
+            (
+                "record all routing inputs, desired/capped/selected pairs, availability, limitation, and fallback or inheritance evidence in the canonical packet",
+                "Send the canonical compact `task_packet`",
+            ),
+        )
+        self.assertNotIn(
+            "Use these dynamic model and reasoning-effort recommendations per dispatch",
+            self.delegation_source,
+        )
+        self.assertNotIn(
+            "| Agent | Default | Escalation |",
+            self.delegation_source,
         )
 
     def test_specialist_ownership_fusion_and_thread_reuse_are_explicit(self) -> None:
