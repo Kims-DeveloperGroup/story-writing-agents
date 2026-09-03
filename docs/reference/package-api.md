@@ -249,13 +249,13 @@ without its matching detailed checkpoint record instead fails closed as
 `missing_predecessor` owned by `checkpoint`; the classifier does not guess its
 operation state from the index.
 
-This contract classifies active correlated workflows only. A fresh idle
-session remains a session-lifecycle concern and is rejected as
-`unsupported_shape`. There is no codec, pre-v2 reader, migration, or legacy
-compatibility path. Issue #527 now gathers and reconciles owner facts through
-an internal direct module, while #528 will decide how a runtime lifecycle or
-CLI presents and enforces a result. Neither behavior is exported by this
-facade. See
+This contract classifies active correlated workflows only and rejects an idle
+shape as `unsupported_shape`. The separate package-internal transition
+assessor described below supplies the stable idle proof. There is no codec,
+pre-v2 reader, migration, or legacy compatibility path. Issue #527 now gathers
+and reconciles active owner facts through an internal direct module, while
+#528 will decide how a runtime lifecycle or CLI presents and enforces a
+result. Neither behavior is exported by this facade. See
 [Correlated session-recovery projection](../operations/recovery-and-limitations.md#correlated-session-recovery-projection)
 for every state, safe action, and sample input/output.
 
@@ -331,6 +331,77 @@ starts provider work, reconstructs authority, replays an operation, stages or
 commits Git, mutates lifecycle state, cleans evidence, or executes the
 projected next action. The result remains content-free. See the
 [stable owner flow and user scenarios](../operations/recovery-and-limitations.md#session-recovery-owner-reconciliation).
+
+<a id="session-transition-assessment-api"></a>
+
+### Story-session transition assessment
+
+Internal integration code can inspect whether an idle or active story session
+has enough stable evidence for a later transition:
+
+```python
+from story_writing_agents.session_recovery.transition_assessment import (
+    SessionTransitionAssessment,
+    SessionTransitionAssessmentState,
+    SessionTransitionAssessor,
+    SessionTransitionNextAction,
+    SessionTransitionOperation,
+    SessionTransitionScope,
+)
+
+assessor = SessionTransitionAssessor(workspace_root)
+assessment = assessor.inspect(
+    lifecycle_state=lifecycle_state,
+    conversation_id=conversation_id,
+    collaboration_store=collaboration_store,
+    reviewed_proposal=reviewed_proposal,
+    artifact_application=artifact_application,
+)
+```
+
+Those six names are the direct module's exact exports. None is exported by
+`story_writing_agents.session_recovery` or the project root. The exact
+signatures are:
+
+```text
+SessionTransitionAssessor(workspace_root: Path) -> None
+inspect(
+    *,
+    lifecycle_state: SessionLifecycleState,
+    conversation_id: str | None = None,
+    collaboration_store: CollaborationEventStore | None = None,
+    reviewed_proposal: SessionReviewedProposalEvidence | None = None,
+    artifact_application: SessionArtifactApplicationEvidence | None = None,
+) -> SessionTransitionAssessment
+```
+
+Construction accepts one normalized absolute `Path`, retains only that root,
+and performs no I/O. Active inspection requires both `conversation_id` and
+`collaboration_store`. It creates one call-local `SessionRecoveryReconciler`,
+delegates exactly once, preserves that exact nested recovery result, and does
+not reread or reinterpret its owners. Idle inspection requires both active
+inputs to be absent and rejects reviewed-proposal or application evidence. It
+first requires lifecycle `ready + held_here`, then observes session resources,
+complete session history, external Git, and linked-worktree status as
+generation A and again as generation B. It returns `idle_ready` only when the
+two generations agree and prove ready resources, no external Git operation, a
+clean exact session branch and tip, closed story-commit history, matching story
+and checkpoint tips (or their initial tips when no commit exists), and no
+running, uncertain, recovery-required, staged, or preserved-index operation.
+
+`SessionTransitionAssessment` contains exactly `session_id`, optional
+`conversation_id`, `scope`, `state`, `next_action`, optional `owner`,
+`failure_code`, ordered `allowed_operations`, and an optional exact
+`recovery_result`. It contains no story/provider content, proof path, branch or
+ref, proof or repository/worktree identity digest, process identity, live
+handle, or executable capability. Inspection does not acquire or release a
+claim, call a provider, apply an artifact, run a Git command that mutates
+state, pause a session, or
+perform any allowed operation or process-lifecycle action. It adds no codec or
+persisted format, so there is no migration or compatibility reader. The result
+is evidence for #528's future controller enforcement, not transition
+authority. See the
+[canonical permission matrix and examples](../operations/recovery-and-limitations.md#session-transition-assessment).
 
 <a id="structured-collaboration-history-boundary"></a>
 
