@@ -16,9 +16,9 @@ Source root: `src/`
 
 Package root: `src/story_writing_agents/`
 
-Importable production units indexed: 115.
+Importable production units indexed: 116.
 
-Direct internal dependency edges indexed: 413.
+Direct internal dependency edges indexed: 416.
 
 Directed internal dependency cycles indexed: 0.
 
@@ -225,8 +225,10 @@ workspace.core -> agents/conversations/errors/models
 workspace.initialization -> errors/git/git.session_contracts
                          -> git.session_resources/workspace.schema
 workspace.schema -> agents/errors/git.session_contracts
-writing_artifacts -> writing_artifacts.authorization/catalog/change_sets/directives
-                  -> writing_artifacts.read_actions/references/relationship_policy
+writing_artifacts -> writing_artifacts.application_contracts/authorization/catalog
+                  -> writing_artifacts.change_sets/directives/read_actions
+                  -> writing_artifacts.references/relationship_policy
+writing_artifacts.application_contracts -> writing_artifacts.catalog/change_sets
 writing_artifacts.authorization -> writing_artifacts.catalog/references
 writing_artifacts.change_sets -> writing_artifacts.catalog
 writing_artifacts.relationship_policy -> writing_artifacts.catalog/change_sets
@@ -5508,7 +5510,7 @@ every intermediate arrow. The current runtime graph is acyclic.
 - **Source:** `src/story_writing_agents/writing_artifacts/__init__.py`
 - **Responsibility:** Provide the side-effect-free canonical writing-artifact
   value facade.
-- **Supported surface:** Exactly 62 names in `__all__`: canonical core and
+- **Supported surface:** Exactly 76 names in `__all__`: canonical core and
   resource-limit constants; `ArtifactKind`, `ArtifactCatalogEntry`,
   `ArtifactCatalog`, `ArtifactSourceIdentity`, `ArtifactContentSnapshot`,
   `ArtifactLineRange`, and `ArtifactReference`; immutable
@@ -5524,10 +5526,14 @@ every intermediate arrow. The current runtime graph is acyclic.
   constant, closed operation/error enums, content-free error, immutable exact
   byte hunk, five operation values and their union, immutable change-set value,
   and the four pure build, project, serialize, and deserialize functions owned
-  by `change_sets`; the relationship-policy schema, empty companion set, four
-  exact resource-limit constants, closed relationship/error/review enums,
-  content-free error, immutable edge/review/complete-validation values, and
-  pure projected relationship validator owned by `relationship_policy`; plus
+  by `change_sets`; the application schema, closed terminal-state/error enums,
+  content-free error, immutable proposal-correlation provenance, exact
+  content-bearing request, final-artifact, rename-lineage, deletion-provenance,
+  and terminal-result values, and four strict request/result codecs owned by
+  `application_contracts`; the relationship-policy schema, empty companion
+  set, four exact resource-limit constants, closed relationship/error/review
+  enums, content-free error, immutable edge/review/complete-validation values,
+  and pure projected relationship validator owned by `relationship_policy`; plus
   `canonical_artifact_kind`, `manuscript_artifact_path`, and
   `parse_artifact_references`. `canonical_artifact_kind` and
   `manuscript_artifact_path` retain strict publication grammar; public
@@ -5537,15 +5543,18 @@ every intermediate arrow. The current runtime graph is acyclic.
   synchronous read coordinator, and transient content-bearing authorization,
   capability, delivery, and read-result values are intentionally not
   re-exported.
-- **Direct internal dependencies:** `writing_artifacts.authorization`,
-  `writing_artifacts.catalog`, `writing_artifacts.change_sets`,
+- **Direct internal dependencies:** `writing_artifacts.application_contracts`,
+  `writing_artifacts.authorization`, `writing_artifacts.catalog`,
+  `writing_artifacts.change_sets`,
   `writing_artifacts.directives`,
   `writing_artifacts.read_actions`, `writing_artifacts.references`, and
   `writing_artifacts.relationship_policy`.
 - **State, resources, and side effects:** Owns no state or resource. Importing
   the facade constructs only immutable metadata and performs no filesystem,
   provider, process, environment, or application-startup operation.
-- **Primary verification/documentation:** `tests/test_artifact_change_sets.py`,
+- **Primary verification/documentation:**
+  `tests/test_artifact_application_contracts.py`,
+  `tests/test_artifact_change_sets.py`,
   `tests/test_artifact_relationship_policy.py`,
   `tests/test_writing_artifacts.py`,
   `tests/test_artifact_reference_directives.py`,
@@ -5554,6 +5563,47 @@ every intermediate arrow. The current runtime graph is acyclic.
   `tests/test_public_api_and_cli.py`,
   `docs/guides/artifact-references.md`, `docs/reference/writing-artifacts.md`,
   `docs/reference/workspace-api.md`, and `docs/design/persistence.md`.
+
+### `story_writing_agents.writing_artifacts.application_contracts`
+
+- **Source:**
+  `src/story_writing_agents/writing_artifacts/application_contracts.py`
+- **Responsibility:** Define immutable exact writing-artifact application
+  request and terminal-result contracts.
+- **Supported surface:** Exactly 14 names in module `__all__`, all re-exported
+  by the writing-artifact facade and absent from the project-root facade:
+  `ARTIFACT_APPLICATION_SCHEMA_VERSION`,
+  `ArtifactApplicationErrorCode`, content-free `ArtifactApplicationError`,
+  terminal `ArtifactApplicationState`, content-free
+  `ArtifactApplicationProvenance`, content-bearing
+  `ArtifactApplicationRequest`, `ArtifactApplicationFinalArtifact`,
+  `ArtifactRenameLineage`, `ArtifactDeletionProvenance`,
+  `ArtifactApplicationResult`, and the four strict request/result serialize
+  and deserialize functions. Provenance binds one application identity to the
+  exact reviewed candidate identity/revision, tagged candidate and
+  relationship-validation digests, and the embedded change-set digest without
+  importing proposal or orchestration code. Results report the canonical
+  affected identity set, exact current paths/kinds/digests, manuscript rename
+  lineage and deletion provenance, plus deterministic applied-versus-unchanged
+  truth. Core paths cannot appear in rename or deletion evidence. Requests and
+  results use one canonical no-trailing-newline JSON representation, reject
+  recursive duplicate keys, unknown fields, alternate encodings, invalid
+  values, and mismatched embedded change-set correlation. Request
+  serialization intentionally contains proposed artifact text; ordinary
+  representations, results, provenance, lineage, deletion facts, and complete
+  error graphs do not.
+- **Direct internal dependencies:** `writing_artifacts.catalog` and
+  `writing_artifacts.change_sets`.
+- **State, resources, and side effects:** Frozen values and pure call-local
+  validation, canonical JSON encoding/decoding, and tuple validation only. The
+  module owns no filesystem, persistence, repository, proposal,
+  conversation, agent-context, agent, provider, lead, confirmation, Git,
+  process, environment, clock, entropy, thread, or application-startup
+  resource. Importing it performs no operational side effect.
+- **Primary verification/documentation:**
+  `tests/test_artifact_application_contracts.py`, facade and clean-import
+  inventory in `tests/test_rag_module_and_packaging_boundary.py`, and
+  `docs/reference/writing-artifacts.md`.
 
 ### `story_writing_agents.writing_artifacts.change_sets`
 
@@ -6115,11 +6165,12 @@ every intermediate arrow. The current runtime graph is acyclic.
 
 ## Consistency Notes
 
-- The inventory contains 115 modules. Static AST derivation over every module-
-  level and function-local import yields 413 unique direct internal edges and
+- The inventory contains 116 modules. Static AST derivation over every module-
+  level and function-local import yields 416 unique direct internal edges and
   no directed cycle. The v2 cutover contributes 97 modules and 362 edges;
   `writing_artifacts.change_sets` and `writing_artifacts.relationship_policy`
-  add two pure modules and exactly five inward edges; the safe `git` facade,
+  add two pure modules and exactly five inward edges; application contracts
+  add one pure module and three inward edges; the safe `git` facade,
   contracts, and adapter add three modules and exactly three inward edges. The
   schema-v2 workspace lifecycle adds two modules and seven approved inward
   edges while removing `cli_context`'s former dependency on `agents`, for a net
@@ -6149,7 +6200,7 @@ every intermediate arrow. The current runtime graph is acyclic.
   `story_commits`, whose one, eight, and six direct internal edges respectively
   add three modules and 15 edges to yield its historical 113-module, 407-edge
   graph. #510 adds pure `session_checkpoint_contracts` plus the six-edge
-  `session_checkpoints` service, yielding the current 115-module, 413-edge
+  `session_checkpoints` service, yielding its historical 115-module, 413-edge
   graph. Its typed timestamp and durable checkpoint-intent refinements add no
   edge. The 22-name Git facade remains closed, and Git retains no forbidden
   reverse dependency on workspace, provider, conversation, artifact, GitHub,
@@ -6165,9 +6216,10 @@ every intermediate arrow. The current runtime graph is acyclic.
   compatibility path. It now composes exhaustive main/session resource
   readiness through the package-internal Git session boundary without owning
   its journal, lock, seed, refs, branches, or worktrees.
-- The writing-artifact facade contains exactly 62 names. Its 16 change-set and
-  15 relationship-policy additions remain absent from the project root and
-  depend inward only on the existing pure catalog plus the change-set owner;
+- The writing-artifact facade contains exactly 76 names. Its 16 change-set, 15
+  relationship-policy, and 14 application-contract additions remain absent
+  from the project root and depend inward only on the existing pure catalog
+  plus the change-set owner;
   they own no runtime, provider, conversation, agent, repository, filesystem,
   confirmation, apply, publication, or Git behavior.
 - `models.py` remains a provider-neutral value-contract owner with direct
