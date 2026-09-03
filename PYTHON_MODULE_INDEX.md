@@ -1847,7 +1847,9 @@ every intermediate arrow. The current runtime graph is acyclic.
   absolute lexical root; its fixed methods are `inspect_topology`,
   `inspect_baseline`, `create_baseline`, `status`, `diff_metadata`, and
   `log_metadata`, plus zero-argument `inspect_external_operation`. No public
-  generic runner or raw Git command escape exists.
+  generic runner or raw Git command escape exists. `status` and `log_metadata`
+  accept an exact standalone repository or securely validated linked worktree;
+  baseline inspection/creation and `diff_metadata` remain standalone-only.
 - **Direct internal dependencies:** `git.contracts` and `git.process`.
 - **State, resources, and side effects:** Construction retains only a lexical
   absolute `Path` and performs no I/O. Each operation freshly binds and
@@ -1869,16 +1871,24 @@ every intermediate arrow. The current runtime graph is acyclic.
   directory, and the closed merge/rebase/cherry-pick/revert/sequencer marker
   grammar before returning only the kind and opaque repository/worktree
   identity digests. Unsafe, unreadable, replaced, wrong-type, racing, or
-  ambiguous administrative observations fail closed as recovery-required. It
-  owns no story initialization, workspace/session topology, later commit
-  confirmation, worktree, internal ref, remote, operation continuation or
-  abortion, reset, clean, provider, artifact, or GitHub behavior.
+  ambiguous administrative observations fail closed as recovery-required.
+  Linked-worktree status and log reads reuse that exact observation before and
+  after the bounded read, including after a body failure or interruption;
+  stable supported markers remain observable, while marker, physical-root, or
+  administration drift fails recovery-required under the requested public
+  operation. Standalone status/log behavior is unchanged. It owns no story
+  initialization, workspace/session topology, later commit confirmation,
+  worktree, internal ref, remote, operation continuation or abortion, reset,
+  clean, provider, artifact, or GitHub behavior.
 - **Primary verification/documentation:**
   `tests/test_git_adapter_process.py` and
   `tests/test_git_adapter_integration.py`, plus
-  `tests/test_git_external_operation_inspection.py`; operation behavior,
-  safety boundaries, recovery, and external meaning are documented in
+  `tests/test_git_external_operation_inspection.py` and
+  `tests/test_git_linked_worktree_reads.py`; operation behavior, safety
+  boundaries, recovery, and external meaning are documented in
+  `docs/reference/git-adapter.md#linked-worktree-status-and-log`,
   `docs/reference/git-adapter.md#external-git-operation-inspection`,
+  `docs/operations/recovery-and-limitations.md#linked-worktree-read-recovery`,
   `docs/operations/recovery-and-limitations.md#external-git-operation-recovery`,
   and `docs/guides/workspaces.md#external-git-operation-guard`.
 

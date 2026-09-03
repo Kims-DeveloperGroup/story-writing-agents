@@ -300,7 +300,7 @@ representations, although callers can explicitly read the typed identity fields.
 | `absent` | The exact root is not a repository and is not inside another one. Baseline creation may proceed. |
 | `standalone` | The root owns a normal `.git` directory. Further baseline validation decides whether creation or reads may proceed. |
 | `parent_repository` | The root is nested inside another repository. The adapter refuses to adopt it. |
-| `linked_worktree` | `.git` is an administrative-file link. This baseline adapter rejects it; the separate #504 owner accepts only an exact correlated session worktree. |
+| `linked_worktree` | `.git` is an administrative-file link. Baseline and diff operations reject it; `status()` and `log_metadata()` can observe a securely validated linked worktree without establishing session ownership. |
 | `submodule` | The root is a submodule or has a Git-link entry. |
 | `sparse_checkout` | Sparse-checkout configuration is active. |
 | `root_mismatch` | Git's worktree/top-level/bare facts do not identify the exact supplied root. |
@@ -320,10 +320,11 @@ around filesystem and process work.
 | `baseline_committed` | The one exact manifest-bound root commit, tree, index, branch, and identities were verified. Repeating creation is read-like and idempotent. |
 | `recovery_required` | Topology, refs, history, tree, index, files, or message do not match the closed baseline. Inspect or recreate the workspace outside this adapter; it will not rewrite unexpected history. |
 
-For a non-standalone topology, baseline inspection reports
-`recovery_required`, baseline creation refuses it, and status/diff/log reads
-report `unsupported_topology`. A symlinked or replaced root fails as
-`unsafe_root`.
+For a linked worktree, baseline inspection reports `recovery_required`,
+baseline creation refuses it, and `diff_metadata()` reports
+`unsupported_topology`; guarded `status()` and `log_metadata()` are the only
+exceptions. Other non-standalone topologies remain unsupported for
+status/diff/log reads. A symlinked or replaced root fails as `unsafe_root`.
 
 <a id="external-git-operation-inspection"></a>
 
@@ -385,6 +386,81 @@ local tools. This method never continues, aborts, resets, cleans, checks out, or
 otherwise mutates Git. #527 will correlate this fact with one session; #528 will
 later block lifecycle mutation. #530 itself owns neither behavior.
 
+<a id="linked-worktree-status-and-log"></a>
+
+## Linked-worktree status and log
+
+Issue #539 extends the existing read methods, without changing their
+signatures or result types:
+
+```text
+status() -> GitStatus
+log_metadata() -> GitLogMetadata
+```
+
+Each now accepts either a standalone repository or a securely validated linked
+worktree. For a linked worktree, the adapter binds the exact root and
+administration identities and inspects its external-operation markers before
+the bounded read. It repeats both checks afterward, including when the read
+fails or is interrupted. The opening and closing observations must agree
+exactly. A stable `merge`, `rebase`, `cherry_pick`, `revert`, or `sequencer`
+marker is readable; that only permits observation and never authorizes Story
+or Git mutation. The marker kind is not added to `GitStatus` or
+`GitLogMetadata`; use `inspect_external_operation()` when that separate fact is
+needed.
+
+`status()` reports the linked worktree's literal branch, `HEAD`, and bounded
+index/worktree path states. `log_metadata()` reports that worktree's `HEAD`
+history newest first, using the same content-safe commit metadata as a
+standalone repository. For example:
+
+```text
+input:
+  root topology: linked_worktree
+  external-operation observation before/after: merge / merge
+  calls: status(), log_metadata()
+
+output:
+  status={branch: story/session/review,
+          head_id: <object-id>,
+          entries: [
+            {path: manuscript/part-01/opening.md,
+             index_change: added, worktree_change: null},
+            {path: core_documents/global_outline.md,
+             index_change: null, worktree_change: modified}]}
+  log_metadata={commits: [<HEAD metadata>, <parent metadata>, ...]}
+  ordering: newest_first
+  mutation: false
+```
+
+If the body reports an ordinary typed failure and the closing guard remains
+stable, that failure is preserved. A stable interruption remains `cancelled`.
+If the marker, physical root, or administration identity changes, guard drift
+takes precedence over either outcome and no successful status/log result is
+returned:
+
+```text
+input:
+  call: status()
+  external-operation observation before/after: none / merge
+
+output:
+  GitOperationError(
+    code="recovery_required",
+    operation="status",
+    recovery_action="inspect_repository"
+  )
+  mutation: false
+```
+
+The adapter does not correlate this worktree to a story session or continue,
+abort, reset, clean, checkout, stage, commit, or repair anything. Baseline
+inspection/creation and `diff_metadata()` remain standalone-only. Standalone
+status/log behavior, the 24-name Git facade, and the seven-method adapter
+surface are unchanged; this adds no command, dependency, migration, or
+compatibility path. #527 will correlate observations later, and #528 will own
+lifecycle blocking.
+
 ## Cancellation, retry, and failure recovery
 
 If `KeyboardInterrupt` or `SystemExit` interrupts baseline creation, the public
@@ -441,10 +517,11 @@ unsupported topologies direct the caller to recreate the workspace.
 | Resolve and cross-check Git's effective author and committer before initialization. | A verified identity on a completed inspection, or `identity_invalid` before an absent repository is changed. |
 | Build an exact index/tree and install only the fixed root commit and `main` ref. | One manifest-bound baseline; unrelated files remain untracked. |
 | Own each local child process through timeout, stream bounds, termination, and cleanup. | Typed bounded metadata or a fixed error; no raw process stream or retained child resource. |
+| Guard a linked-worktree status/log body with matching root, administration, and external-operation observations before and after it. | Literal linked branch/HEAD/status or newest-first log metadata when stable; `recovery_required` on guard drift. A stable marker grants observation only. |
 | Reinspect after creation or cancellation. | `absent`, `initialized_without_baseline`, `baseline_committed`, or `recovery_required`, enabling a deterministic retry decision. |
 
 These implementation mechanisms are not a public command escape hatch. The
-supported surface remains the six typed methods shown below.
+supported surface remains the seven typed methods shown below.
 
 <a id="package-internal-session-git-resources"></a>
 
