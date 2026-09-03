@@ -99,6 +99,8 @@ def _checkpoint(
         state=state,
         sequence=sequence,
         expected_internal_tip=_TREE,
+        expected_tree=_OID,
+        commit_intent_sha256=_DIGEST_A,
         checkpoint_id="4" * 40 if state is GitSessionHistoryState.COMMITTED else None,
         alternate_index_preserved=preserved,
     )

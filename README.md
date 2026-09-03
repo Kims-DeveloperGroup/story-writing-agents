@@ -29,11 +29,13 @@ and monotonic commit/checkpoint operation states under the common Git
 directory, serialize them with provisioning, and run fixed Git operations
 through closed process profiles. The package-internal story-commit service can
 now prepare an exact content-free candidate and execute one literal local
-session-branch commit after a fresh structured Commit decision. None of this is
-a user command: installed
+session-branch commit after a fresh structured Commit decision. A separate
+package-internal checkpoint service can commit exact owner-supplied runtime
+state deltas to only the session internal ref through an isolated index. None
+of this is a user command: installed
 `story session create` and `story session reopen` do not provision Git
-resources until #455, #491 still owns the application-evidence producer, #492
-owns the lead confirmation UI, and #510 will create internal checkpoints.
+resources until #455, #491 still owns the application-evidence producer, and
+#492 owns the lead confirmation UI; no CLI or lead path invokes checkpoints.
 Current provider-session `ready` does not mean that any of those Git operations
 ran.
 
@@ -249,10 +251,10 @@ story content. See [artifact-reference status](docs/guides/artifact-references.m
   legacy or arbitrary nonempty directory.
 - A dirty or drifted original `main` root is preserved and reported as requiring
   recovery. Exact correlated session branches, sibling worktrees, internal
-  refs, content-free session history, and exact confirmed story commits are
-  supported internally; installed resource wiring remains #455, application
-  evidence remains #491, confirmation UI remains #492, and checkpoints remain
-  #510.
+  refs, content-free session history, exact confirmed story commits, and
+  closed-path internal checkpoints are supported internally; installed resource
+  wiring remains #455, application evidence remains #491, and confirmation UI
+  remains #492.
 - Smoke is intentionally provider-free and story-free.
 - Workspace configuration, histories, diagnostics, and artifacts are local
   plaintext unless the surrounding environment protects them.

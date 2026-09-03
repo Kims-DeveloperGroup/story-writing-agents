@@ -7,8 +7,9 @@
 > current `story session` commands do not call it until #455. Another internal
 > seam persists content-free commit/checkpoint evidence. An internal service
 > can now execute exact confirmed story commits, while #491 and #492 still own
-> application production and the user-facing lead confirmation UI; #510 owns
-> checkpoints.
+> application production and the user-facing lead confirmation UI. A second
+> internal service can now checkpoint a closed set of session runtime paths;
+> neither service is wired to a command or lead action.
 
 Key terms: **initialization root**—the pristine `main` baseline; **marker**—the
 strict `config/workspace.json` identity; **journal**—the temporary durable
@@ -142,8 +143,8 @@ worktree: <workspace-parent>/<workspace-name>.story-worktrees/novel
 `story init` records only this grammar. The package-internal #504 lifecycle can
 create the correlated triple; #455 owns its connection to the installed
 session commands. #505 coordinates later history work. #509 now supplies exact
-story commits internally; #491 and #492 still own application production and
-the lead confirmation UI, and #510 owns internal checkpoints. The original
+story commits and closed-path checkpoints internally; #491 and #492 still own
+application production and the lead confirmation UI. The original
 `main` root remains the exact initialization baseline throughout.
 
 ## Session Git resources
@@ -243,9 +244,8 @@ and the [internal Git-resource contract](../reference/git-adapter.md#package-int
 ## Durable session-history infrastructure
 
 This section explains infrastructure now used by internal exact story commits
-and reserved for future internal checkpoints. There is no `story commit` or
-checkpoint command in this revision, and the lead cannot trigger either
-operation yet.
+and session runtime checkpoints. There is no `story commit` or checkpoint
+command in this revision, and the lead cannot trigger either operation yet.
 
 Before #508, an interrupted future Git operation would have had no dedicated,
 restart-safe record showing which candidate and repository tip it concerned.
@@ -268,23 +268,23 @@ Future lead integration (#491 + #492)
   user: chooses Commit, Reject, or Revise
   runtime: supplies the typed evidence/decision to #509
 
-Future internal checkpoint (#510)
-  runtime: records evidence -> uses its isolated index -> advances internal ref
+Internal checkpoint now (#510)
+  owner delta -> records running -> isolated index -> internal-ref CAS
   user files and the ordinary session index are not borrowed for the checkpoint
 ```
 
-The future output will be based on the durable classification rather than a
-blind retry. For example, interruption after a Git process starts can produce
-`outcome_unknown`; restart must inspect the exact repository facts instead of
-reusing the user's confirmation. #508 supplies that classification, but does
-not currently display this scenario.
+Later application output must be based on the durable classification rather
+than a blind retry. For example, interruption after a Git process starts can
+produce `outcome_unknown`; restart must inspect the exact repository facts
+instead of reusing the user's confirmation or checkpoint request. No current UI
+displays these internal classifications.
 
 ### What the recorded states mean
 
 | State | External meaning in the future workflow | Safe next action |
 | --- | --- | --- |
 | `prepared` | An immutable candidate describes exact affected paths and before/after digests. It is evidence, not confirmation and not a Git mutation. | Present/revalidate it through the future confirmation workflow; prepare a new candidate if its facts are stale. |
-| `running` | A later operation owner durably recorded that work started against one expected tip. Success is not proved. | If interrupted, inspect the operation and repository before any retry. Never infer that confirmation remains reusable. |
+| `running` | An operation owner durably recorded that work started against one expected tip. Success is not proved. | If interrupted, inspect the operation and repository before any retry. Never infer that confirmation or a checkpoint request remains reusable. |
 | `staged` | A future story-commit operation recorded that staging completed, but no commit is proved. Checkpoints do not use this state. | Preserve the worktree/index and inspect; do not restage or commit blindly. |
 | `committed` | The terminal record includes the resulting story commit or checkpoint object ID. | Reverify the referenced object/tip and report success through the future owning workflow. |
 | `rejected` | A story-commit proposal was declined before execution. It is terminal and authorizes nothing. Checkpoints do not use this state. | Leave it as evidence; prepare a new candidate for a materially different proposal. |
@@ -466,6 +466,145 @@ defines the exact safe next action for all seven states. The
 [artifact-operation mapping](../reference/writing-artifacts.md#story-commit-application-evidence),
 and [privacy boundary](../operations/privacy-and-provider.md#session-history-exposure)
 provide the lower-level details.
+
+<a id="exact-session-runtime-checkpoints"></a>
+
+## Exact session runtime checkpoints
+
+This capability is package-internal infrastructure, not an installed command,
+lead trigger, provider action, or public facade. It gives a later application a
+local restart trail for a closed set of session runtime state while keeping
+that state out of story commits. A checkpoint advances only
+`refs/story-writing-agents/runtime/sessions/<session_id>`; it does not advance
+the story branch.
+
+### Included paths and owners
+
+The calling runtime component supplies an ordered create/update/delete delta.
+The Git layer does not scan the workspace. Every path must contain the same
+safe session ID as the request and belong to its declared owner:
+
+| Owner | Exact accepted path family (`S` session, `D` debate, `C` conversation, `H` 64 lowercase hex) |
+| --- | --- |
+| `workspace` | `agent_states/orchestrator_state/sessions/{S}.json` |
+| `workspace` | `agent_states/{OWNER}/debates/{S}/{D}.jsonl`, where `OWNER` is exactly `orchestrator_state`, `plot_architect_state`, `character_custodian_state`, or `execution_specialist_state` |
+| `workspace` | `discussion_logs/{S}/{D}.jsonl`, `discussion_logs/{S}/{D}.state.json`, `discussion_logs/{S}/{D}.result.json`, or `discussion_logs/{S}/{D}.context.json` |
+| `cli_context` | `agent_states/orchestrator_state/conversation_defaults/{S}.json` |
+| `backend` | `agent_states/orchestrator_state/provider_sessions/{S}.json` |
+| `backend` | `agent_states/orchestrator_state/provider_sessions/.contextual/v1/{S}/{H}.json` |
+| `conversation_catalog` | `discussion_logs/{S}/interactive/conversations/{C}/metadata.json` |
+| `collaboration_history` | `discussion_logs/{S}/interactive/conversations/{C}/collaboration-history.jsonl` |
+
+For example, `workspace` may submit an update for
+`discussion_logs/novel/debate_1.state.json`, but `backend` may not submit that
+same path. Create proves absence and matching after bytes/digest; update proves
+the existing before digest and distinct matching after bytes/digest; delete
+proves the existing before digest and supplies no after bytes. A path omitted
+from the request stays in the internal-ref tree; omission never means deletion.
+
+Examples rejected before checkpoint mutation include:
+
+```text
+core_documents/global_outline.md                         # canonical story file
+manuscript/part-01/opening.md                            # canonical story file
+config/settings.json                                    # configuration
+debug_logs/novel.jsonl                                  # debug data
+discussion_logs/conversation_storage.sqlite3            # SQLite/global store
+agent_states/orchestrator_state/cli_context.json         # global state
+agent_states/orchestrator_state/provider_sessions/.antigravity/novel.json
+agent_states/orchestrator_state/sessions/novel.lock      # temporary/lock leaf
+discussion_logs/novel/unknown.future                    # unknown family
+agent_states/orchestrator_state/sessions/other.json      # another session
+```
+
+### Successful checkpoint: user and runtime views
+
+A future application may describe the action to the user as “save supported
+runtime progress for session `novel`.” It must not imply that story content was
+committed or that all workspace state can be restored. The following values are
+illustrative direct-module facts, not a CLI wire format:
+
+```json
+{
+  "session_id": "novel",
+  "correlation_id": "turn:opening-review:7",
+  "snapshots": [
+    {
+      "owner": "workspace",
+      "path": "discussion_logs/novel/debate_1.state.json",
+      "operation": "update",
+      "before_sha256": "<64-lowercase-hex>",
+      "after_sha256": "<64-lowercase-hex>",
+      "content": "<exact bytes supplied in memory; omitted from display>"
+    }
+  ]
+}
+```
+
+```text
+runtime: validate ready session, complete internal tree, path owner, and digest
+runtime: record running -> allocate isolated index -> apply exact delta
+runtime: write one-parent commit -> CAS only the internal ref -> verify
+runtime: record committed -> remove only that completed alternate index
+```
+
+```json
+{
+  "session_id": "novel",
+  "correlation_id": "turn:opening-review:7",
+  "state": "committed",
+  "recovery_action": "none",
+  "internal_tip": "<new-object-id>",
+  "operation_id": "<32-lowercase-hex>",
+  "checkpoint_id": "<same-new-object-id>"
+}
+```
+
+The one-parent commit uses the exact effective local Git author and committer
+names/emails and one captured UTC second for both timestamps. Its fixed message
+contains the session, correlation, and operation IDs. These identity, message,
+timestamp, path, and runtime-state bytes persist in local Git history even
+though the durable operation JSON remains content-free.
+
+### Outcomes and safe next actions
+
+| Result | Meaning | Safe action |
+| --- | --- | --- |
+| `unchanged` / `none` | An empty delta or a fully validated same-tree result needs no commit. No operation record, alternate index, object, or ref update is created. | Continue; do not invent a checkpoint ID. |
+| `running` / `inspect` | Durable intent exists, but completion is not proved. | Stop repository writers and inspect/recover the exact operation; do not resubmit it blindly. |
+| `committed` / `none` | The internal ref names the exact correlated checkpoint. | Use the returned existing checkpoint ID; do not create a duplicate. |
+| `outcome_unknown` / `inspect` | Git may have changed, or a foreign/stale-CAS tip cannot be correlated. | Preserve the ref, objects, index, and records. Inspect; never reset or retry the CAS. |
+| `recovery_required` / `operator_recovery` | The expected tip stayed put after uncertain pre-CAS work, or repository evidence is unsafe/inconsistent. | Preserve the operation-owned index and perform explicit operator recovery or restore a consistent trusted backup. |
+
+Concrete interruption cases:
+
+- A failure after the alternate index/commit work begins but before the ref CAS
+  returns uncertainty. Recovery that still sees the expected old ref records
+  terminal `recovery_required`; it does not replay `commit-tree` or CAS.
+- If CAS succeeded but result verification or publication was interrupted,
+  recovery matches the ref tip to the salted commit intent and finalizes that
+  same object as `committed`. It creates no duplicate commit.
+- If another writer installed a foreign internal-ref tip, the compare-and-swap
+  preserves it and recovery reports `outcome_unknown`; it never guesses which
+  result was intended.
+
+The checkpoint uses an operation-owned alternate index under the common Git
+directory. The real main and session indexes, both symbolic `HEAD` values, the
+story branch, canonical files, owner source files, unrelated bytes, and the
+pristine main root remain unchanged on success and conservative failure.
+Checkpoint and story-commit services take the same repository/session-history
+lease, so they cannot mutate Git concurrently. A checkpoint that moves the
+internal ref first makes an already prepared story candidate stale; the story
+operation fails before mutation and must be prepared again.
+
+A checkpoint restores none of the excluded paths above, canonical artifacts,
+remote history, or working-file bytes. Recovery never resets, cleans, checks
+out, replays a commit/CAS, or contacts a remote. Back up the common Git
+directory, session-history subtree, and related working trees consistently;
+the operation JSON alone is not a runtime-data backup. See the
+[internal checkpoint contract](../reference/git-adapter.md#package-internal-session-checkpoints),
+[recovery matrix](../operations/recovery-and-limitations.md#session-history-recovery),
+and [privacy boundary](../operations/privacy-and-provider.md#session-history-exposure).
 
 ## Core documents and role files
 

@@ -99,10 +99,12 @@ narrow removal. Candidate and operation records have no expiry, compaction, or
 automatic cleanup.
 
 #508 itself creates no story commit or checkpoint. The package-internal #509
-service can now create literal blobs/tree/commit objects and update one local
+service can create literal blobs/tree/commit objects and update one local
 session branch after receiving typed applied-change evidence and a fresh exact
-Commit decision. No installed command or lead UI invokes it; #491 and #492 own
-those integrations, while #510 owns checkpoints.
+Commit decision. The package-internal #510 service can create literal runtime-
+state blobs/tree/commit objects and update only one local session internal ref
+from exact owner-supplied deltas. No installed command or lead UI invokes
+either service; #491 and #492 own story application/confirmation integration.
 
 Prepare persists only the content-free candidate metadata described above. A
 Commit authority remains process/service/thread-bound, nonserializable, and
@@ -120,6 +122,17 @@ effective author/committer names and emails, paths, parent/tree IDs, and story
 content to local Git readers according to Git reachability/retention behavior.
 SHA-256 object IDs improve collision properties but do not encrypt content;
 SHA-1 and SHA-256 repositories have the same disclosure boundary.
+
+During a checkpoint, the content-free operation JSON stores session,
+correlation and operation IDs, expected internal tip/tree, salted commit-intent
+digest, state/sequence, optional checkpoint ID, and alternate-index preservation
+flag. It does not store the supplied runtime-state bodies or effective identity.
+Those bodies do enter local Git object storage as filter-free blobs, and the
+checkpoint commit permanently records their paths plus the fixed message,
+effective author/committer names and emails, and captured UTC timestamps. The
+operation-owned alternate index can reveal paths, object IDs, and staging facts.
+Provider-free and content-free history therefore do not make checkpointed
+runtime state encrypted, anonymous, remotely backed up, or securely erasable.
 
 Removing a session-history record, staged index entry, or alternate checkpoint
 index would neither securely erase Git objects nor revoke a prior confirmation.

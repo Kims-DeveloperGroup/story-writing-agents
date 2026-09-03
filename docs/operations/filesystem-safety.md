@@ -23,9 +23,9 @@
 > branch/ref/sibling-worktree provisioning is also implemented as
 > package-internal #504 infrastructure. Package-internal #508 adds the shared
 > repository lease, durable content-free session-history records, and a bounded
-> alternate checkpoint index. Package-internal #509 now adds exact confirmed
-> story commits. None is yet connected to installed story commands or lead
-> confirmation UI.
+> alternate checkpoint index. Package-internal #509 adds exact confirmed story
+> commits, and package-internal #510 adds exact closed-path checkpoints. None is
+> yet connected to installed story commands or lead confirmation UI.
 
 Key terms: **containment**—keeping paths beneath the workspace root; **symlink**—
 a filesystem alias the runtime rejects; **exclusive creation**—failure instead
@@ -179,6 +179,21 @@ diff/fsmonitor/pagers/editors/prompts, and revalidates the root and every index
 ancestor before and after the child. An ambiguous or recovery-required index is
 preserved; only the exact durably committed checkpoint permits removal. See the
 [internal session-history contract](../reference/git-adapter.md#package-internal-session-history).
+
+The package-internal checkpoint owner accepts only exact, same-session path
+families supplied as immutable create/update/delete snapshots by one of five
+matching runtime owners. It never scans a directory, treats omission as
+deletion, or accepts canonical, configuration, debug, SQLite/global,
+provider-private, temporary, cross-session, or unknown paths. Under the same
+lease, it initializes only the operation-owned alternate index from the current
+internal-ref tree, applies literal delta paths, validates the complete result,
+creates one parented commit, and compare-and-swap advances only
+`refs/story-writing-agents/runtime/sessions/<session_id>`. The story branch,
+real indexes, both `HEAD` values and working trees, canonical artifacts,
+unrelated bytes, and pristine main root are not mutation targets. Recovery
+preserves uncertain objects/indexes and never resets, cleans, replays, or
+contacts a remote. See the
+[exact checkpoint contract](../reference/git-adapter.md#package-internal-session-checkpoints).
 
 The package-internal story-commit owner takes this same repository lease. Its
 Prepare phase uses only fixed read operations against the session/main roots;

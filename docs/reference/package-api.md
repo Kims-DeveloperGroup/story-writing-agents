@@ -76,13 +76,16 @@ pure session-history contracts, and durable session-history storage; the fixed
 process owner also exposes closed profiles and the exact internal checkpoint
 index value. Three #509 direct modules now own pure story-commit values,
 candidate preparation/revalidation, and exact decision/execution/recovery.
+Two #510 direct modules own the closed session-runtime path/delta contracts and
+exact internal-ref checkpoint execution/recovery; they reuse the shared
+history, lease, and typed internal-checkpoint process profile.
 None is re-exported by the project, Git, or workspace facade; they do not
 expand the 104/22/3 export counts and are not a stable application API or
 arbitrary Git capability. #455 will compose session resources, #491 will
-produce applied-change evidence, #492 will own the confirmation UI, and #510
-will own checkpoints. See
-[Package-internal session Git resources](git-adapter.md#package-internal-session-git-resources)
-and [exact story commits](git-adapter.md#package-internal-exact-story-commits).
+produce applied-change evidence, and #492 will own the confirmation UI. See
+[Package-internal session Git resources](git-adapter.md#package-internal-session-git-resources),
+[exact story commits](git-adapter.md#package-internal-exact-story-commits), and
+[session checkpoints](git-adapter.md#package-internal-session-checkpoints).
 
 The three-name `story_writing_agents.workspace` facade remains unchanged:
 

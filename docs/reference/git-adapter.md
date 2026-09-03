@@ -16,8 +16,8 @@ This is the complete availability boundary for issue
 - The public adapter still has no session branch, worktree, internal-ref, or
   later-commit method. Separate package-internal #504 modules now own exact
   session resources for #455 composition. Package-internal #509 now owns exact
-  story commits; #491/#492 still own their application/confirmation integration,
-  and #510 owns internal checkpoints.
+  story commits, and package-internal #510 owns closed-path checkpoints;
+  #491/#492 still own application/confirmation integration.
 
 The adapter is not a general Git client. It accepts no command, argument list,
 revision, ref, commit message, credential, prose, or provider-tool input.
@@ -474,10 +474,10 @@ safe next actions, see
 
 ## Package-internal session history and process profiles
 
-Issue #508 adds infrastructure for #509 story commits and #510 internal
-checkpoints. It does not stage a file, create a commit/checkpoint, update a ref,
-consume confirmation, or expose a CLI/runtime/facade method. #492 owns the
-later confirmation UI.
+Issue #508 supplies the common infrastructure now used by #509 story commits
+and #510 internal checkpoints. The history store itself does not stage a file,
+create a commit/checkpoint, update a ref, consume confirmation, or expose a
+CLI/runtime/facade method. #492 owns the later confirmation UI.
 
 `git.session_history_contracts` owns the pure schema-v1 values and codecs;
 `git.session_history` owns descriptor-relative durable storage;
@@ -554,12 +554,13 @@ the four standard author/committer identity variables are the only inherited
 Git-environment exceptions.
 
 `identity_mutation` accepts only a typed effective author/committer value. Only
-`internal_checkpoint` accepts a `GitAlternateIndex`, and that value derives the
+`internal_checkpoint` accepts a `GitAlternateIndex` and typed UTC commit
+timestamps, and that index value derives the
 single exact operation-owned path shown above. The runner revalidates the main
 root and every alternate-index ancestor before and after the child process. It
-does not admit an arbitrary `GIT_INDEX_FILE`. Future real Git commits will
-retain the effective author/committer and message in Git history even though
-the session-history candidate stores only identity-source categories.
+does not admit an arbitrary `GIT_INDEX_FILE`. Git commits created by the #509
+and #510 internal services retain the effective author/committer and message in
+Git history even though session-history JSON omits effective identity values.
 
 ### Cleanup and interruption
 
@@ -571,8 +572,8 @@ candidate/operation records, Git objects/refs, provisioning journals, user
 files, an ambiguous index, or unrelated repository data.
 
 If process exit, cancellation, I/O failure, or lost process output leaves the
-result uncertain, the later operation owner must inspect the durable operation
-and repository facts. It must not replay a consumed confirmation or rerun Git
+result uncertain, the operation owner must inspect the durable operation and
+repository facts. It must not replay a consumed confirmation or rerun Git
 from `running`/`staged` merely because no success was returned. See
 [session-history recovery](../operations/recovery-and-limitations.md#session-history-recovery)
 and [session-history privacy](../operations/privacy-and-provider.md#session-history-exposure).
@@ -586,7 +587,8 @@ story commit. It remains a direct-module capability: there is no CLI command,
 provider path, lead binding, or export from `story_writing_agents`,
 `story_writing_agents.git`, or a workspace facade. #491 owns production of
 successful typed application evidence, #492 owns the interactive lead
-projection and confirmation UI, and #510 separately owns checkpoints.
+projection and confirmation UI. The separate #510 checkpoint service is
+described below.
 
 The three internal owners are:
 
@@ -715,6 +717,78 @@ reuses authority/confirmation, or creates a commit.
 - An unproved or foreign branch result remains `outcome_unknown` / `inspect`.
 
 See the [user scenarios](../guides/workspaces.md#exact-confirmed-story-commits),
+[recovery matrix](../operations/recovery-and-limitations.md#session-history-recovery),
+and [privacy boundary](../operations/privacy-and-provider.md#session-history-exposure).
+
+<a id="package-internal-session-checkpoints"></a>
+
+## Package-internal session checkpoints
+
+Issue #510 implements exact local commits of selected session runtime state to
+the session internal ref. It remains a direct-module capability: there is no
+CLI command, provider call, lead binding, workspace method, or export from
+`story_writing_agents` or `story_writing_agents.git`.
+
+| Module | Responsibility |
+| --- | --- |
+| `git.session_checkpoint_contracts` | Closed path classifier; frozen owner, path-operation, delta request/result, state, failure, and recovery values. |
+| `git.session_checkpoints` | Exact no-op proof, alternate-index tree construction, commit/internal-ref CAS, durable inspection, and conservative recovery. |
+
+The supported internal direct-module surface is
+`classify_session_checkpoint_path(path, session_id)`, the frozen contract
+values listed by `git.session_checkpoint_contracts.__all__`, and
+`SessionCheckpointService(root, manifest, session_id)` with `checkpoint()`,
+`inspect(operation_id)`, and `recover(operation_id)`. These are not a stable
+application API. The complete allowlist and five-owner mapping are in the
+[workspace guide](../guides/workspaces.md#included-paths-and-owners).
+
+`SessionCheckpointRequest` contains unique snapshots sorted by UTF-8 path
+bytes. Each snapshot is exactly `create`, `update`, or `delete` with the
+required before/after SHA-256 proof and, for create/update, exact bytes held in
+memory. The declared owner must match the path family. Missing snapshots do not
+delete paths, and the service never recursively discovers files. Requests are
+bounded to 4,096 paths, 8 MiB per supplied body, and 64 MiB of supplied or
+existing checkpoint-tree content.
+
+Under the shared common-Git lease, `checkpoint()` validates the ready session,
+main/session symbolic heads and real indexes, pristine main status, current
+internal-ref tree, effective local identity, and the complete resulting path
+classification. If the request is empty or produces the same proven tree, it
+returns `unchanged` without an operation record, alternate index, object, or ref
+mutation. Otherwise it performs exactly:
+
+```text
+fsync RUNNING operation with expected tip/tree and salted commit-intent digest
+-> allocate checkpoint-inputs/<operation-id>/index
+-> read-tree <expected-internal-tip> into that isolated index
+-> hash exact create/update bytes with filters disabled; update/remove exact paths
+-> verify index entries and write-tree == expected tree
+-> commit-tree <expected-tree> -p <expected-internal-tip>
+   using captured effective identity, fixed message, and captured UTC timestamps
+-> CAS refs/story-writing-agents/runtime/sessions/<session-id>
+-> verify exact commit intent/tip and unchanged repository invariants
+-> fsync COMMITTED operation -> remove only the completed alternate index
+```
+
+The commit has one parent and works identically for SHA-1 and SHA-256 object
+formats apart from object-ID length. The fixed message records session,
+correlation, and operation IDs. Author and committer use Git's exact effective
+local names/emails; both timestamps use the one captured second at `+0000`.
+
+The operation never uses a real index and never targets a working file, story
+branch, symbolic `HEAD`, canonical artifact, unrelated path, pristine main ref,
+or remote. It exposes no arbitrary `GIT_*`, command, reset, clean, checkout,
+merge, rebase, push, migration, or compatibility mechanism. The shared lease
+serializes it with #509. If a checkpoint moves the internal ref before a
+prepared story commit authorizes, that candidate fails revalidation before any
+story-commit mutation.
+
+Recovery never repeats `commit-tree` or CAS. An exact post-CAS tip matching the
+salted intent is finalized as `committed`; an unchanged expected tip after
+uncertain pre-CAS work becomes terminal `recovery_required`; and a foreign tip
+remains `outcome_unknown`. It never overwrites the foreign tip. Only an exact
+durably committed operation permits removal of its alternate index. See the
+[checkpoint scenarios](../guides/workspaces.md#exact-session-runtime-checkpoints),
 [recovery matrix](../operations/recovery-and-limitations.md#session-history-recovery),
 and [privacy boundary](../operations/privacy-and-provider.md#session-history-exposure).
 

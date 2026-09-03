@@ -90,6 +90,22 @@ class GitAlternateIndex:
         object.__setattr__(self, "path", value)
 
 
+@dataclass(frozen=True, slots=True)
+class GitCommitTimestamps:
+    """Exact bounded author and committer seconds for one trusted commit."""
+
+    author_timestamp_seconds: int
+    committer_timestamp_seconds: int
+
+    def __post_init__(self) -> None:
+        for value in (
+            self.author_timestamp_seconds,
+            self.committer_timestamp_seconds,
+        ):
+            if type(value) is not int or not 0 <= value <= 2**63 - 1:
+                raise _process_failure(GitFailureCode.INVALID_REQUEST)
+
+
 _IDENTITY_ENVIRONMENT = frozenset(
     {
         "GIT_AUTHOR_NAME",
@@ -166,6 +182,7 @@ class GitProcessRunner:
         profile: GitProcessProfile | None = None,
         effective_identity: GitEffectiveIdentity | None = None,
         alternate_index: GitAlternateIndex | None = None,
+        commit_timestamps: GitCommitTimestamps | None = None,
         read_only: bool | None = None,
         identity_environment: dict[str, str] | None = None,
     ) -> GitProcessResult:
@@ -179,10 +196,11 @@ class GitProcessRunner:
             or len(stdin) > _MAX_STDIN_BYTES
         ):
             raise _process_failure(GitFailureCode.INVALID_REQUEST)
-        selected_profile, selected_identity = _process_request(
+        selected_profile, selected_identity, selected_timestamps = _process_request(
             profile=profile,
             effective_identity=effective_identity,
             alternate_index=alternate_index,
+            commit_timestamps=commit_timestamps,
             read_only=read_only,
             identity_environment=identity_environment,
         )
@@ -193,6 +211,7 @@ class GitProcessRunner:
             profile=selected_profile,
             effective_identity=selected_identity,
             alternate_index=alternate_index,
+            commit_timestamps=selected_timestamps,
         )
         command = (_GIT_EXECUTABLE, "--no-pager", *_SAFE_CONFIG, *arguments)
         process: subprocess.Popen[bytes] | None = None
@@ -336,9 +355,14 @@ def _process_request(
     profile: GitProcessProfile | None,
     effective_identity: GitEffectiveIdentity | None,
     alternate_index: GitAlternateIndex | None,
+    commit_timestamps: GitCommitTimestamps | None,
     read_only: bool | None,
     identity_environment: dict[str, str] | None,
-) -> tuple[GitProcessProfile, GitEffectiveIdentity | None]:
+) -> tuple[
+    GitProcessProfile,
+    GitEffectiveIdentity | None,
+    GitCommitTimestamps | None,
+]:
     if profile is not None:
         if (
             type(profile) is not GitProcessProfile
@@ -377,7 +401,18 @@ def _process_request(
         raise _process_failure(GitFailureCode.IDENTITY_INVALID)
     if selected is GitProcessProfile.MUTATION and identity is not None:
         raise _process_failure(GitFailureCode.IDENTITY_INVALID)
-    return selected, identity
+    timestamps = (
+        None
+        if commit_timestamps is None
+        else _reconstruct_commit_timestamps(commit_timestamps)
+    )
+    if timestamps is not None and (
+        selected is not GitProcessProfile.INTERNAL_CHECKPOINT or identity is None
+    ):
+        raise _process_failure(GitFailureCode.INVALID_REQUEST)
+    if profile is None and commit_timestamps is not None:
+        raise _process_failure(GitFailureCode.INVALID_REQUEST)
+    return selected, identity, timestamps
 
 
 def _legacy_identity(value: dict[str, str] | None) -> GitEffectiveIdentity | None:
@@ -424,6 +459,18 @@ def _identity_environment(value: GitEffectiveIdentity) -> dict[str, str]:
     }
 
 
+def _reconstruct_commit_timestamps(value: object) -> GitCommitTimestamps:
+    try:
+        if type(value) is not GitCommitTimestamps:
+            raise TypeError
+        return GitCommitTimestamps(
+            author_timestamp_seconds=value.author_timestamp_seconds,
+            committer_timestamp_seconds=value.committer_timestamp_seconds,
+        )
+    except (AttributeError, RuntimeError, TypeError):
+        raise _process_failure(GitFailureCode.INVALID_REQUEST) from None
+
+
 def _reconstruct_alternate_index(value: object) -> GitAlternateIndex:
     try:
         if type(value) is not GitAlternateIndex:
@@ -445,6 +492,7 @@ def _safe_environment(
     profile: GitProcessProfile,
     effective_identity: GitEffectiveIdentity | None,
     alternate_index: GitAlternateIndex | None,
+    commit_timestamps: GitCommitTimestamps | None,
 ) -> dict[str, str]:
     environment = {
         key: value
@@ -469,6 +517,16 @@ def _safe_environment(
         environment["GIT_OPTIONAL_LOCKS"] = "0"
     if effective_identity is not None:
         environment.update(_identity_environment(effective_identity))
+    if commit_timestamps is not None:
+        timestamps = _reconstruct_commit_timestamps(commit_timestamps)
+        environment.update(
+            {
+                "GIT_AUTHOR_DATE": f"{timestamps.author_timestamp_seconds} +0000",
+                "GIT_COMMITTER_DATE": (
+                    f"{timestamps.committer_timestamp_seconds} +0000"
+                ),
+            }
+        )
     if profile is GitProcessProfile.INTERNAL_CHECKPOINT:
         assert alternate_index is not None
         environment["GIT_INDEX_FILE"] = os.fspath(alternate_index.path)
@@ -525,6 +583,7 @@ def _process_failure(
 
 __all__ = [
     "GitAlternateIndex",
+    "GitCommitTimestamps",
     "GitProcessFailure",
     "GitProcessProfile",
     "GitProcessResult",
