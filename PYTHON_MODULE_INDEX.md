@@ -16,9 +16,9 @@ Source root: `src/`
 
 Package root: `src/story_writing_agents/`
 
-Importable production units indexed: 116.
+Importable production units indexed: 117.
 
-Direct internal dependency edges indexed: 416.
+Direct internal dependency edges indexed: 423.
 
 Directed internal dependency cycles indexed: 0.
 
@@ -238,10 +238,14 @@ writing_artifacts.runtime_references -> writing_artifacts.authorization/directiv
                                      -> writing_artifacts.read_actions/references/repository
 writing_artifacts.references -> writing_artifacts.catalog
 writing_artifacts._reference_evidence -> writing_artifacts._storage/authorization
+writing_artifacts._application_store -> errors/writing_artifacts._storage
+                                     -> writing_artifacts.application_contracts/catalog
+                                     -> writing_artifacts.change_sets/relationship_policy
 writing_artifacts.filesystem_sources -> errors/writing_artifacts._storage
                                      -> writing_artifacts.catalog/references
 writing_artifacts.repository -> agents/errors/writing_artifacts._reference_evidence
-                             -> writing_artifacts._storage/authorization/catalog
+                             -> writing_artifacts._application_store/_storage
+                             -> writing_artifacts.authorization/catalog
                              -> writing_artifacts.filesystem_sources/read_actions/references
 writing_artifacts._storage -> errors
 ```
@@ -5684,8 +5688,8 @@ every intermediate arrow. The current runtime graph is acyclic.
 ### `story_writing_agents.writing_artifacts.catalog`
 
 - **Source:** `src/story_writing_agents/writing_artifacts/catalog.py`
-- **Responsibility:** Define immutable artifact provenance values and strict
-  publication path grammar.
+- **Responsibility:** Define immutable current-application provenance values
+  and strict publication path grammar.
 - **Supported surface:** Package-supported `CORE_ARTIFACT_PATHS`,
   `ArtifactKind`, `ArtifactCatalogEntry`, `ArtifactCatalog`,
   `canonical_artifact_kind`, and `manuscript_artifact_path`. Canonical core
@@ -5695,13 +5699,17 @@ every intermediate arrow. The current runtime graph is acyclic.
   safe component `manuscript` is a legal part identifier. Package-internal
   `validate_artifact_path_syntax` owns only shared normalized, workspace-
   relative, strict-UTF-8 POSIX lexical validation; it classifies neither
-  publication nor reference-source eligibility. Catalog entries are
-  publication and audit metadata; they do not authorize filesystem discovery
-  or reads.
+  publication nor reference-source eligibility. Schema-version-2 catalog
+  entries bind each current path and digest to one immutable application
+  sequence, exact candidate identity/revision/digest, change-set digest, and
+  relationship-validation digest. Earlier catalog shapes are unsupported and
+  have no migration path. Catalog entries are current projection and audit
+  metadata; they do not authorize filesystem discovery or reads.
 - **Direct internal dependencies:** None.
 - **State, resources, and side effects:** Immutable values and pure validation
   only; catalog mappings are copied and exposed read-only.
 - **Primary verification/documentation:** `tests/test_writing_artifacts.py`,
+  `tests/test_artifact_application_store_lifecycle.py`,
   `tests/test_workspace_and_config.py`,
   `docs/reference/writing-artifacts.md`, `docs/reference/runtime-api.md`, and
   `docs/reference/workspace-api.md`.
@@ -5920,7 +5928,7 @@ every intermediate arrow. The current runtime graph is acyclic.
   Accepted operations require all invocations terminal and at least one
   accepted invocation. The adapter retains no artifact bytes, opens no lock,
   does not enumerate repository transaction journals, and cannot make evidence
-  corruption block unrelated catalog, commit, or recovery work.
+  corruption block unrelated catalog, application, or recovery work.
 - **Primary verification/documentation:**
   `tests/test_artifact_reference_evidence.py`,
   `tests/test_artifact_reference_authorization.py`,
@@ -5930,6 +5938,55 @@ every intermediate arrow. The current runtime graph is acyclic.
   `docs/operations/recovery-and-limitations.md`, and
   `docs/reference/configuration/session-storage.md`.
 
+### `story_writing_agents.writing_artifacts._application_store`
+
+- **Source:**
+  `src/story_writing_agents/writing_artifacts/_application_store.py`
+- **Responsibility:** Privately interpret exact five-operation artifact
+  applications as one recoverable repository transaction.
+- **Supported surface:** Private `ArtifactApplicationStore`, constructed and
+  called only by `writing_artifacts.repository`. Its `ensure_directories`
+  method is the sole descriptor-safe bootstrap exception: the repository calls
+  it after acquiring its process lock but before acquiring the workspace lease
+  so the lease parent exists. Every other mutating or authoritative store call
+  runs with both locks active. The module also owns the package-private fixed
+  state paths and eight deterministic fault-injection checkpoints used by its
+  focused recovery verification; it exports no public names. It consumes the
+  immutable application request/result contracts, reprojects each exact change
+  set over the immediate complete canonical state, and reruns the pure
+  relationship policy under the lease before any durable preparation.
+- **Direct internal dependencies:** `errors`, `writing_artifacts._storage`,
+  `writing_artifacts.application_contracts`, `writing_artifacts.catalog`,
+  `writing_artifacts.change_sets`, and
+  `writing_artifacts.relationship_policy`.
+- **State, resources, and side effects:** Owns schema-version-1 immutable
+  application records and transaction journals plus the schema-version-2
+  catalog projection under
+  `agent_states/orchestrator_state/writing_artifacts/`. Permanent application
+  records retain only request hashes, base/projected digests, content-free
+  operation facts, exact terminal results, and contiguous application
+  sequence; temporary journals alone retain target bytes needed for recovery.
+  Create, patch, replace, rename, and delete use one catalog-last transaction:
+  recovery accepts each target at its exact old or new digest, rolls forward
+  to the complete new state, verifies the immutable record and replayed
+  catalog, then retires the journal. Thus repository-authoritative reads expose
+  only the exact catalog-before or catalog-after state. Completed retries with
+  the same application identity and request hash return the historical result
+  as `unchanged`; correlation mismatch, drift, corruption, legacy nonempty
+  `commits/`, and unsupported stored shapes fail closed. Manuscript rename
+  lineage and deletion provenance remain durable and content-free; core rename
+  and delete are rejected by the relationship policy. The store borrows the
+  repository-owned secure storage adapter and opens no lock, Git, provider,
+  agent, confirmation, context, process, clock, or application-startup
+  resource. Import and construction perform no filesystem I/O.
+- **Primary verification/documentation:**
+  `tests/test_artifact_application_store_lifecycle.py`,
+  `tests/test_artifact_application_store_recovery.py`,
+  `tests/test_writing_artifacts.py`,
+  `docs/reference/writing-artifacts.md#application-storage-and-recovery-mechanism`,
+  and the artifact-application persistence section in
+  `docs/design/persistence.md`.
+
 ### `story_writing_agents.writing_artifacts._storage`
 
 - **Source:** `src/story_writing_agents/writing_artifacts/_storage.py`
@@ -5938,9 +5995,10 @@ every intermediate arrow. The current runtime graph is acyclic.
 - **Supported surface:** Private `SecureWorkspaceStorage` and
   `ArtifactTraversalLimitError`, consumed only by
   `writing_artifacts.repository` and its package-private
+  `writing_artifacts._application_store`,
   `writing_artifacts._reference_evidence` and
   `writing_artifacts.filesystem_sources` adapters. The repository remains the
-  only lease owner; both adapters receive the same instance and use its
+  only lease owner; these adapters receive the same instance and use its
   supported methods only within repository-managed calls.
 - **Direct internal dependencies:** `errors`.
 - **State, resources, and side effects:** Construction captures only a lexical
@@ -6043,130 +6101,55 @@ every intermediate arrow. The current runtime graph is acyclic.
   capability across provider action, delivery, result receipt, acceptance, or
   termination. The repository is not exported by either package facade.
 - **Direct internal dependencies:** `agents`, `errors`,
+  `writing_artifacts._application_store`,
   `writing_artifacts._reference_evidence`, `writing_artifacts._storage`,
   `writing_artifacts.authorization`, `writing_artifacts.catalog`,
   `writing_artifacts.filesystem_sources`, `writing_artifacts.read_actions`, and
   `writing_artifacts.references`.
-- **State, resources, and side effects:** Owns a per-instance reentrant lock
-  and the workspace-local permanent `.artifacts.lock`,
-  `.artifacts.lock.anchor`, and `.artifacts.lock.ready` readiness triple.
-  Provenance state is the exact sibling `catalog.json`, `commits/`,
-  `transactions/`, reserved `input_snapshots/`, and non-journal `staging/`
-  topology. Staging retains exclusively named prior versions, failed
-  publications, and completed journals; recovery enumerates only authoritative
-  transaction JSON and ignores all such residue. Immutable exact-name commit
-  records form the permanent audit ledger, and their stored bytes must exactly
-  equal the repository's canonical JSON serialization. Manuscript paths must be
-  unique across the ledger, and the catalog path set must equal the union of
-  every artifact path across every non-exempt commit, with repeated core paths
-  collapsed. Every catalog entry must project an exact artifact and metadata
-  record from its named commit. Historical core records may be superseded, but
-  their paths remain required; for each repeated core path the current entry
-  must name the unique commit with the greatest parsed, offset-aware
-  `committed_at`. Equal greatest instants and stale projections fail closed.
-  Each supported commit instant is strictly greater than the maximum instant in
-  the entire ledger even if the clock moves backward; timestamp overflow fails
-  before transaction or target mutation. Outside one exact pending phase, a
-  missing catalog is valid
-  only with an empty non-exempt ledger; divergence fails closed and is never
-  reconstructed. Every catalog audit and commit performs locked recovery
-  first. One
-  create-only immutable schema-v2 transaction journal records the
-  exact catalog-before existence/hash/image, complete catalog-after image,
-  immutable commit, ordered targets, old/new hashes, and complete new bytes
-  before any target mutation; it has no replaceable phase field. JSON decoding
-  rejects duplicate object keys recursively for journals, catalogs, and commits.
-  At exact catalog-before, recovery accepts each target only at its recorded old
-  or new bytes and may exempt only this journal's exact already-published commit
-  from the expected path union and newest-core authority selection, so that
-  commit contributes no paths while all older established manuscript and core
-  paths remain required; the projected catalog-after is audited without an
-  exemption. Recovery completes remaining
-  target and commit publication,
-  rechecks journal authority and catalog-before, then publishes the catalog
-  last. At exact catalog-after, recovery is verification-only with no exemption
-  and requires every target, commit, and ledger projection to be final. Any
-  other catalog position, unrelated catalog or commit entry, target/commit
-  divergence, or missing/changed journal creates a durable recovery-block
-  marker and fails closed. The exact immutable journal is strictly retired only
-  after final target, commit, catalog-after, and ledger verification; a missing
-  retirement source is never success.
-  Source listing acquires the same permanent repository lease without
-  recovering transactions or loading or auditing the catalog or ledger. It
-  metadata-inspects the four exact core paths and recursively walks only the
-  `manuscript/` tree, filters every result through reference-source eligibility,
-  and returns deterministic complete workspace-relative paths. It reads no
-  artifact body and includes safe empty, initialized, manual, pre-provenance,
-  published, hash-divergent, root-level, arbitrarily nested, space-bearing, and
-  Unicode current Markdown files. Unsafe aliases, overlong, unrepresentable,
-  non-Markdown, `.gitkeep`, symlinked, non-unique hard-linked, device, FIFO,
-  socket, and absent files remain excluded.
-  Selective reads reopen only the requested reference sources and return
-  immutable snapshots after stable descriptor reads, strict UTF-8 decoding,
-  and NUL rejection. Supplied-text viewing borrows the same source boundary
-  with its caller-provided 8 MiB bound. Catalog or ledger absence, corruption,
-  or membership does not participate in discovery, prompt reads, viewing, or
-  reference capture, and no read reconstructs, adopts, or changes provenance.
-  Root, lock, path, or source-identity insecurity still fails closed. The
-  repository imports no controller or terminal unit and retains no viewer
-  state. Consensus commits require the execution specialist for
-  revision-zero manuscripts and the lead for later manuscripts, publish them
-  create-only beneath a part directory, reject every identity already reserved
-  by immutable commit history even when its file or catalog entry was externally
-  deleted, and allow only lead-authored core updates. Transaction/commit/
-  catalog-before/catalog-after sets, unrelated-entry preservation, authorship,
-  ordering, and scalar schemas are correlated exactly. Publication and
-  recovery retain their complete provenance, ledger, journal, authorship, and
-  hash audits; filesystem read eligibility never weakens those write gates.
-  Explicit-reference capture returns `None` before a lock, filesystem access,
-  or history when the parsed batch has no references. Otherwise one existing
-  source/evidence lease securely reads each unique requested path once,
-  validates its complete strict-UTF-8, NUL-free bytes, and captures canonical
-  path/kind, full-source hash and size, plus device, inode, modification, and
-  change stamps. Ordered whole/ranged selections enforce the 128 KiB
-  per-reference and 256 KiB aggregate limits; an empty whole source is valid
-  while an empty ranged selection fails. Durable authorization evidence uses
-  schema version 2 and stores only source identities, range facts, selected
-  hashes, and lifecycle metadata. Schema-version-1 authorization evidence is
-  not reusable. Delivery consumes its exact repository-minted capability
-  before any revalidation, requires the complete ordered request, persists
-  delivery evidence before exposing captured bytes, and never refreshes the
-  snapshot. Provider-result acceptance and top-level workflow acceptance each
-  reopen and re-hash every unique source and require the complete captured
-  physical identity, so deletion, replacement, content drift, and same-byte
-  replacement are drift. Retries use new invocation
-  correlations with the next positive ordinal and a new private capability
-  identity over the same operation snapshot. Finalization disposes captured
-  bytes only after a durable accepted or terminated event.
-  The private reference-read coordinator serializes its own state under one
-  call-local lock, rejects every action except the first exact request, converts
-  one repository delivery into one closeable read result, closes result bytes
-  before result-received evidence, and revalidates before acceptance. Repeated,
-  mismatched, failed, and explicitly terminated calls preserve the primary
-  failure while best-effort retiring the same capability; it performs no
-  provider call and exposes no capability identity.
-  The repository owns both lock modes and all filesystem and recovery lifetime;
-  its source/evidence mode creates only required state/evidence directories and
-  never calls recovery or loads publication state. The private filesystem
-  adapter applies reference-source eligibility and owns capture, the private
-  evidence adapter owns only create-only schema mechanics, and authorization
-  values own only transient bytes and one-use state.
+- **State, resources, and side effects:** Owns the per-instance reentrant
+  process lock and workspace-local permanent `.artifacts.lock`, anchor, and
+  ready-link lease. It constructs and lends one secure storage adapter to the
+  private application, filesystem-source, and reference-evidence owners. Both
+  repository lock modes acquire that same workspace lease and invoke application
+  recovery before any authoritative catalog, source, or reference observation,
+  so no caller observes a mixed multi-file transaction state.
+  `commit_consensus` retains its existing package-internal caller shape and
+  author/revision/path validation, but now translates the manuscript plus ordered
+  allowlisted core updates into one exact native change set and delegates all
+  preparation, persistence, publication, audit, and recovery to
+  `_application_store`; no legacy commit record, decoder, journal, or alternate
+  persistence path remains in the repository. Manuscript publication stays
+  create-only and the application engine preserves core replacement semantics.
+  Catalog reads return only current files whose exact bytes match the
+  ledger-audited catalog digest.
+  Source discovery and selective reads remain filesystem-authoritative beneath
+  the four exact core paths and recursive `manuscript/` tree, enforcing the
+  existing canonical eligibility, traversal, UTF-8, NUL, identity, and size
+  rules. Explicit-reference capture, one-use delivery, result receipt,
+  revalidation, acceptance/termination, retry correlation, and content-free
+  evidence inspection retain their schema-version-2 behavior; however each now
+  follows application recovery under the shared lease. The repository imports
+  no controller, terminal, provider, Git, lead, confirmation, or agent-context
+  implementation and retains no viewer state or artifact bytes beyond a call.
 - **Primary verification/documentation:** `tests/test_writing_artifacts.py`,
+  `tests/test_artifact_application_store_lifecycle.py`,
+  `tests/test_artifact_application_store_recovery.py`,
   `tests/test_artifact_reference_authorization.py`,
   `tests/test_artifact_reference_evidence.py`,
   `tests/test_artifact_reference_read_actions.py`,
   `tests/test_runtime_reference_integration.py`,
   `tests/test_smoke_cli.py`, `docs/guides/artifact-references.md`,
-  `docs/reference/writing-artifacts.md`,
+  `docs/reference/writing-artifacts.md#application-storage-and-recovery-mechanism`,
   `docs/reference/configuration/session-storage.md`,
+  the artifact-application persistence section in
   `docs/design/persistence.md`, `docs/operations/filesystem-safety.md`,
   `docs/operations/privacy-and-provider.md`, and
   `docs/operations/recovery-and-limitations.md`.
 
 ## Consistency Notes
 
-- The inventory contains 116 modules. Static AST derivation over every module-
-  level and function-local import yields 416 unique direct internal edges and
+- The inventory contains 117 modules. Static AST derivation over every module-
+  level and function-local import yields 423 unique direct internal edges and
   no directed cycle. The v2 cutover contributes 97 modules and 362 edges;
   `writing_artifacts.change_sets` and `writing_artifacts.relationship_policy`
   add two pure modules and exactly five inward edges; application contracts
@@ -6174,7 +6157,9 @@ every intermediate arrow. The current runtime graph is acyclic.
   contracts, and adapter add three modules and exactly three inward edges. The
   schema-v2 workspace lifecycle adds two modules and seven approved inward
   edges while removing `cli_context`'s former dependency on `agents`, for a net
-  six-edge increase.
+  six-edge increase. The private artifact-application store adds one module
+  with six required inward dependencies, and repository delegation adds one
+  edge, producing the current seven-edge increase without a facade export.
   Relative to the 360-edge pre-cutover graph, filesystem and
   SQLite storage each add one direct dependency on `conversations.events` for
   private legacy-row/file rejection values, smoke adds one dependency on
