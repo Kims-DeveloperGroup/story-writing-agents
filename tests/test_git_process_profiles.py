@@ -19,6 +19,7 @@ from story_writing_agents.git.contracts import (
 from story_writing_agents.git import process as process_module
 from story_writing_agents.git.process import (
     GitAlternateIndex,
+    GitCommitTimestamps,
     GitProcessFailure,
     GitProcessProfile,
     GitProcessRunner,
@@ -42,6 +43,7 @@ class GitProcessProfileContractTests(unittest.TestCase):
             tuple(process_module.__all__),
             (
                 "GitAlternateIndex",
+                "GitCommitTimestamps",
                 "GitProcessFailure",
                 "GitProcessProfile",
                 "GitProcessResult",
@@ -58,6 +60,11 @@ class GitProcessProfileContractTests(unittest.TestCase):
         self.assertEqual(
             tuple(field.name for field in fields(alternate)),
             ("common_git", "session_id", "operation_id", "path"),
+        )
+        timestamps = GitCommitTimestamps(1, 2)
+        self.assertEqual(
+            tuple(field.name for field in fields(timestamps)),
+            ("author_timestamp_seconds", "committer_timestamp_seconds"),
         )
         self.assertEqual(
             alternate.path,
@@ -103,6 +110,7 @@ class GitProcessProfileTests(unittest.TestCase):
         *,
         effective_identity: GitEffectiveIdentity | None = None,
         alternate_index: GitAlternateIndex | None = None,
+        commit_timestamps: GitCommitTimestamps | None = None,
     ) -> tuple[object, mock.Mock]:
         process = _FakeProcess(stdout=(b"bounded", b""), stderr=(b"",))
         popen = mock.Mock(return_value=process)
@@ -113,6 +121,7 @@ class GitProcessProfileTests(unittest.TestCase):
                 profile=profile,
                 effective_identity=effective_identity,
                 alternate_index=alternate_index,
+                commit_timestamps=commit_timestamps,
             )
         return result, popen
 
@@ -185,10 +194,15 @@ class GitProcessProfileTests(unittest.TestCase):
             GitProcessProfile.INTERNAL_CHECKPOINT,
             effective_identity=_identity(),
             alternate_index=alternate,
+            commit_timestamps=GitCommitTimestamps(123, 456),
         )
         self.assertEqual(
             popen.call_args.kwargs["env"]["GIT_INDEX_FILE"],
             os.fspath(alternate.path),
+        )
+        self.assertEqual(popen.call_args.kwargs["env"]["GIT_AUTHOR_DATE"], "123 +0000")
+        self.assertEqual(
+            popen.call_args.kwargs["env"]["GIT_COMMITTER_DATE"], "456 +0000"
         )
         invalid = (
             (GitProcessProfile.INTERNAL_CHECKPOINT, None),

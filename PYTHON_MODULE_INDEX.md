@@ -16,9 +16,9 @@ Source root: `src/`
 
 Package root: `src/story_writing_agents/`
 
-Importable production units indexed: 113.
+Importable production units indexed: 115.
 
-Direct internal dependency edges indexed: 407.
+Direct internal dependency edges indexed: 413.
 
 Directed internal dependency cycles indexed: 0.
 
@@ -196,6 +196,10 @@ git.contracts -> (standard library only)
 git.process -> git.contracts
 git.repository_lock -> (standard library only)
 git.session_contracts -> git.contracts
+git.session_checkpoint_contracts -> (standard library only)
+git.session_checkpoints -> git.contracts/git.process
+                        -> git.session_checkpoint_contracts/git.session_contracts
+                        -> git.session_history/git.session_history_contracts
 git.session_history_contracts -> (standard library only)
 git.session_history -> git.contracts/git.process/git.repository_lock
                      -> git.session_contracts/git.session_history_contracts
@@ -1855,14 +1859,15 @@ every intermediate arrow. The current runtime graph is acyclic.
 - **Source:** `src/story_writing_agents/git/process.py`
 - **Responsibility:** Own the package-internal bounded synchronous Git child-
   process lifecycle and closed execution profiles.
-- **Supported surface:** Exactly `GitAlternateIndex`, `GitProcessFailure`,
-  `GitProcessProfile`, `GitProcessResult`, and `GitProcessRunner` in direct-
-  module `__all__`; none is re-exported by the Git or project facade. The four
-  profiles are read-only, mutation, identity mutation, and internal checkpoint;
-  only the last accepts one reconstructed operation-owned alternate index. The
-  retained exact-key identity mapping is an internal compatibility input for
-  the already integrated baseline/session callers, not arbitrary environment
-  injection.
+- **Supported surface:** Exactly `GitAlternateIndex`, `GitCommitTimestamps`,
+  `GitProcessFailure`, `GitProcessProfile`, `GitProcessResult`, and
+  `GitProcessRunner` in direct-module `__all__`; none is re-exported by the Git
+  or project facade. The four profiles are read-only, mutation, identity
+  mutation, and internal checkpoint; only the last accepts one reconstructed
+  operation-owned alternate index and optional validated author/committer
+  seconds. The retained exact-key identity mapping is an internal compatibility
+  input for the already integrated baseline/session callers, not arbitrary
+  environment injection.
 - **Direct internal dependencies:** `git.contracts`.
 - **State, resources, and side effects:** Construction retains one lexical
   absolute root without I/O. Each explicit `run` owns its fixed `shell=False`
@@ -1872,7 +1877,8 @@ every intermediate arrow. The current runtime graph is acyclic.
   process or descriptor. Every other inherited `GIT_*` value is removed; fixed
   configuration and editor/pager/credential environment suppress repository-
   controlled hooks, signing, external diff/text conversion, interactive
-  prompts, and replacement objects. Failures carry
+  prompts, and replacement objects. Only the internal-checkpoint profile can
+  project typed timestamps to the two exact Git date variables. Failures carry
   only a closed Git failure code and optional exit code. Import performs no
   process, filesystem, environment, thread, network, or application action.
 - **Primary verification/documentation:**
@@ -1942,6 +1948,73 @@ every intermediate arrow. The current runtime graph is acyclic.
   `docs/operations/privacy-and-provider.md` document the durable states,
   recovery actions, and local plaintext journal identity impact.
 
+### `story_writing_agents.git.session_checkpoint_contracts`
+
+- **Source:** `src/story_writing_agents/git/session_checkpoint_contracts.py`
+- **Responsibility:** Define the pure closed path classifier and immutable
+  owner-snapshot/result contracts for one session runtime checkpoint.
+- **Supported surface:** Exactly 15 direct-module names in `__all__`: three
+  bounds/message constants; owner, path-family, path-operation, state, failure,
+  and recovery enums; content-free error; path classification, snapshot,
+  request, and result values; and `classify_session_checkpoint_path`. Nothing
+  is re-exported by the Git or project facade.
+- **Direct internal dependencies:** None.
+- **State, resources, and side effects:** Owns the exact eleven same-session
+  path patterns, their five runtime-owner mappings, bounded UTF-8-byte-ordered
+  create/update/delete deltas, before/after SHA-256 shape, hidden immutable
+  content, deterministic unchanged-result shape, defensive reconstruction,
+  and fixed diagnostics. It accepts no canonical, global, administrative,
+  temporary, debug, SQLite, provider-private, mixed-session, or unknown path.
+  Import and value/classifier operations perform no filesystem, Git, process,
+  clock, environment, provider, or mutable-state action.
+- **Primary verification/documentation:**
+  `tests/test_git_session_checkpoint_classifier.py` and
+  `tests/test_git_session_checkpoint_contracts.py` verify the exact closed path
+  grammar, owner mapping, immutable values, bounds, and content-free failures.
+  `docs/reference/git-adapter.md` and `docs/reference/package-api.md` define the
+  direct-module contract and closed surface; `docs/guides/workspaces.md`,
+  `docs/operations/filesystem-safety.md`, and
+  `docs/operations/privacy-and-provider.md` explain the allowed owner/path
+  grammar, input bounds, exclusions, and retained-byte impact.
+
+### `story_writing_agents.git.session_checkpoints`
+
+- **Source:** `src/story_writing_agents/git/session_checkpoints.py`
+- **Responsibility:** Execute, inspect, and conservatively recover one exact
+  closed-path checkpoint on a story session's internal ref.
+- **Supported surface:** Only `SessionCheckpointService` in direct-module
+  `__all__`; it exposes `checkpoint`, `inspect`, and `recover`. It is absent
+  from all facades and exposes no raw argv, environment, descriptor, repository
+  lease, alternate-index path, story bytes, or reusable mutation capability.
+- **Direct internal dependencies:** `git.contracts`, `git.process`,
+  `git.session_checkpoint_contracts`, `git.session_contracts`,
+  `git.session_history`, and `git.session_history_contracts`.
+- **State, resources, and side effects:** Borrows the one shared session-history
+  repository lease, validates every current and resulting internal-tree path,
+  proves owner-supplied before/after deltas, and returns a mutation-free
+  `unchanged` result when the resulting tree equals its parent. Otherwise it
+  durably records running intent, uses only the history-owned alternate index,
+  writes exact filter-free blobs/tree, creates one fixed-message one-parent
+  commit with captured identity/timestamps, and CAS-updates only the exact
+  session internal ref before durable committed evidence and narrow index
+  cleanup. It captures and rechecks main/session branch, HEAD, index, and main-
+  root invariants. Recovery never replays commit/CAS, resets, cleans, stages a
+  real index, or removes ambiguous evidence; it finalizes only a current commit
+  matching the salted durable intent digest.
+- **Primary verification/documentation:**
+  `tests/test_git_session_checkpoint_process.py` and
+  `tests/test_git_session_checkpoints.py` verify process construction, complete
+  tree bounds, exact repository mutation, invariants, and conservative
+  recovery. `README.md` and `docs/INDEX.md` route the package-internal
+  capability; `docs/design/overview.md`, `docs/guides/workspaces.md`, and
+  `docs/reference/git-adapter.md` describe its runtime flow, user-visible
+  outcomes, direct API, and exact Git algorithm.
+  `docs/operations/filesystem-safety.md`,
+  `docs/operations/privacy-and-provider.md`, and
+  `docs/operations/recovery-and-limitations.md` define its safety, retention,
+  privacy, interruption, and recovery rules; `docs/reference/package-api.md`
+  records the closed package-surface decision.
+
 ### `story_writing_agents.git.session_history_contracts`
 
 - **Source:** `src/story_writing_agents/git/session_history_contracts.py`
@@ -1957,9 +2030,11 @@ every intermediate arrow. The current runtime graph is acyclic.
 - **State, resources, and side effects:** Owns only immutable values, bounds,
   canonical strict-UTF-8 JSON with a trailing newline, SHA-256 candidate
   identity, unique UTF-8-byte-ordered candidate paths and impact boundaries,
-  defensive reconstruction, and closed transition graphs. Records may retain
-  bounded commit metadata, paths, digests, identity-source facts, and opaque
-  correlations, but no story bytes, provider response, raw Git output,
+  defensive reconstruction, and closed transition graphs. Checkpoint records
+  additionally retain their exact expected tree and an operation-salted
+  content-free commit-intent digest invariant across transitions. Records may
+  retain bounded commit metadata, paths, digests, identity-source facts, and
+  opaque correlations, but no story bytes, provider response, raw Git output,
   descriptor, writable capability, or serialized authority. Import and all
   contract operations perform no I/O.
 - **Primary verification/documentation:**
@@ -6040,8 +6115,8 @@ every intermediate arrow. The current runtime graph is acyclic.
 
 ## Consistency Notes
 
-- The inventory contains 113 modules. Static AST derivation over every module-
-  level and function-local import yields 407 unique direct internal edges and
+- The inventory contains 115 modules. Static AST derivation over every module-
+  level and function-local import yields 413 unique direct internal edges and
   no directed cycle. The v2 cutover contributes 97 modules and 362 edges;
   `writing_artifacts.change_sets` and `writing_artifacts.relationship_policy`
   add two pure modules and exactly five inward edges; the safe `git` facade,
@@ -6072,8 +6147,11 @@ every intermediate arrow. The current runtime graph is acyclic.
   exact inward edges yielded its historical 110-module, 392-edge graph. #509
   adds `story_commit_contracts`, `story_commit_candidates`, and
   `story_commits`, whose one, eight, and six direct internal edges respectively
-  add three modules and 15 edges to yield the current 113-module, 407-edge
-  graph. The 22-name Git facade remains closed, and Git retains no forbidden
+  add three modules and 15 edges to yield its historical 113-module, 407-edge
+  graph. #510 adds pure `session_checkpoint_contracts` plus the six-edge
+  `session_checkpoints` service, yielding the current 115-module, 413-edge
+  graph. Its typed timestamp and durable checkpoint-intent refinements add no
+  edge. The 22-name Git facade remains closed, and Git retains no forbidden
   reverse dependency on workspace, provider, conversation, artifact, GitHub,
   or an entry point.
 - Schema-v2 workspace definition and resource ownership are split between the

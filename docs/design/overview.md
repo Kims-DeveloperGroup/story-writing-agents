@@ -79,7 +79,8 @@ require-ready one exact correlated triple while the original root remains the
 pristine initialization baseline. #455 owns the installed command connection;
 #505 coordinates confirmed history work. Exact story commits now exist as
 package-internal #509 infrastructure; #491 still owns application production,
-#492 owns the lead confirmation UI, and #510 owns internal checkpoints.
+#492 owns the lead confirmation UI. Exact closed-path internal checkpoints now
+exist as package-internal #510 infrastructure.
 
 ### Session Git-resource lifecycle
 
@@ -115,9 +116,9 @@ Closed Git process profiles suppress prompts and repository- or user-controlled
 execution extensions. Only the internal-checkpoint profile can receive the
 validated alternate index derived from an exact session/operation identity;
 callers cannot inject arbitrary `GIT_*` environment variables. #509 now
-consumes the story-commit seam, while #510 will consume the checkpoint seam.
-#492 owns the user confirmation UI. This revision exposes no command, lead
-action, or public facade for the new infrastructure. See the
+consumes the story-commit seam, and #510 now consumes the checkpoint seam. #492
+owns the user confirmation UI. This revision exposes no command, lead action,
+or public facade for the new infrastructure. See the
 [exact history contract](../reference/git-adapter.md#package-internal-session-history).
 
 ### Exact confirmed story commits
@@ -152,6 +153,26 @@ staged work and can finalize an already-correlated branch tip without a
 duplicate commit. See
 [the user scenarios](../guides/workspaces.md#exact-confirmed-story-commits) and
 [the internal contract](../reference/git-adapter.md#package-internal-exact-story-commits).
+
+### Exact session runtime checkpoints
+
+Package-internal `git.session_checkpoint_contracts` owns the closed classifier
+and immutable owner/delta/result values. `git.session_checkpoints` owns exact
+tree derivation, isolated-index execution, internal-ref CAS, inspection, and
+conservative recovery. Five runtime owners may submit only their eleven
+allowlisted same-session path families; omission is preservation, not deletion.
+
+Checkpoint execution validates the complete current and resulting internal
+trees, durably records `running`, constructs the result in the exact
+operation-owned alternate index, makes a one-parent commit with captured local
+identity and UTC timestamps, and compare-and-swap advances only the session
+internal ref. The shared repository lease serializes this sequence with #509.
+The story branch and real indexes, both working trees and `HEAD` values,
+canonical artifacts, unrelated bytes, and pristine main remain untargeted and
+unchanged. Recovery correlates an exact post-CAS tip without replay; otherwise
+it preserves ambiguity or requires an operator. See
+[the checkpoint scenarios](../guides/workspaces.md#exact-session-runtime-checkpoints)
+and [the internal contract](../reference/git-adapter.md#package-internal-session-checkpoints).
 
 Explicit `story smoke --workspace` constructs a fresh workspace verifier and
 performs no mutation or diagnostic submission. Disposable smoke uses the same

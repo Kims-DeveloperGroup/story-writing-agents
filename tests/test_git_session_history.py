@@ -68,6 +68,8 @@ def _checkpoint_running(tip: str) -> GitSessionCheckpointOperationRecord:
         state=GitSessionHistoryState.RUNNING,
         sequence=0,
         expected_internal_tip=tip,
+        expected_tree="5" * len(tip),
+        commit_intent_sha256="6" * 64,
     )
 
 

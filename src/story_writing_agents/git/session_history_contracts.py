@@ -267,6 +267,8 @@ class GitSessionCheckpointOperationRecord:
     state: GitSessionHistoryState
     sequence: int
     expected_internal_tip: str
+    expected_tree: str
+    commit_intent_sha256: str
     checkpoint_id: str | None = None
     alternate_index_preserved: bool = False
     schema_version: int = GIT_SESSION_HISTORY_SCHEMA_VERSION
@@ -277,6 +279,8 @@ class GitSessionCheckpointOperationRecord:
         _require_operation_id(self.operation_id)
         _require_opaque_id(self.correlation_id)
         tip = _require_object_id(self.expected_internal_tip)
+        tree = _require_object_id(self.expected_tree)
+        _require_digest(self.commit_intent_sha256)
         checkpoint = _optional_object_id(self.checkpoint_id)
         if (
             type(self.state) is not GitSessionHistoryState
@@ -287,6 +291,7 @@ class GitSessionCheckpointOperationRecord:
             or type(self.schema_version) is not int
             or self.schema_version != GIT_SESSION_HISTORY_SCHEMA_VERSION
             or self.action is not GitSessionHistoryAction.CHECKPOINT
+            or len(tree) != len(tip)
             or (checkpoint is not None and len(checkpoint) != len(tip))
             or (self.state is GitSessionHistoryState.COMMITTED)
             != (checkpoint is not None)
@@ -539,6 +544,8 @@ def decode_checkpoint_operation(payload: bytes) -> GitSessionCheckpointOperation
             state=GitSessionHistoryState(value["state"]),
             sequence=value["sequence"],
             expected_internal_tip=value["expected_internal_tip"],
+            expected_tree=value["expected_tree"],
+            commit_intent_sha256=value["commit_intent_sha256"],
             checkpoint_id=value["checkpoint_id"],
             alternate_index_preserved=value["alternate_index_preserved"],
             schema_version=value["schema_version"],
@@ -603,8 +610,10 @@ def _operation_object(value: object) -> dict[str, Any]:
             "action": value.action.value,
             "alternate_index_preserved": value.alternate_index_preserved,
             "checkpoint_id": value.checkpoint_id,
+            "commit_intent_sha256": value.commit_intent_sha256,
             "correlation_id": value.correlation_id,
             "expected_internal_tip": value.expected_internal_tip,
+            "expected_tree": value.expected_tree,
             "operation_id": value.operation_id,
             "schema_version": value.schema_version,
             "sequence": value.sequence,
