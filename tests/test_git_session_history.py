@@ -21,6 +21,7 @@ from story_writing_agents.git.session_history_contracts import (
     GitSessionHistoryError,
     GitSessionHistoryFailureCode,
     GitSessionHistoryState,
+    GitSessionHistorySnapshot,
     GitSessionIdentitySource,
     advance_checkpoint_operation,
     advance_commit_operation,
@@ -110,6 +111,122 @@ class GitSessionHistorySafetyTests(GitSessionResourceGitTestCase):
 
     def _tree(self, root: Path) -> str:
         return self.run_git(root, "rev-parse", "HEAD^{tree}").stdout.decode().strip()
+
+    def test_snapshot_empty_create_false_and_complete_records_are_exact(self) -> None:
+        root, tip = self._ready_root("snapshot-positive")
+        history_root = root / ".git" / GIT_SESSION_HISTORY_DIRECTORY / "novel"
+        with open_git_session_history(
+            root, _manifest(), "novel", create=False
+        ) as empty_history:
+            empty = empty_history.snapshot()
+            self.assertEqual(
+                empty,
+                GitSessionHistorySnapshot(
+                    empty.inspection,
+                    (),
+                    (),
+                    (),
+                ),
+            )
+            self.assertEqual(empty.inspection.candidate_ids, ())
+        self.assertFalse(history_root.exists())
+
+        candidate = _candidate(tip, self._tree(root))
+        commit = GitSessionCommitOperationRecord(
+            session_id="novel",
+            operation_id=_OPERATION_ID,
+            candidate_id=candidate.candidate_id,
+            correlation_id=candidate.correlation_id,
+            state=GitSessionHistoryState.RUNNING,
+            sequence=0,
+            expected_branch_tip=tip,
+        )
+        checkpoint = _checkpoint_running("4" * len(tip))
+        with open_git_session_history(
+            root, _manifest(), "novel", create=True
+        ) as history:
+            history.write_candidate(candidate)
+            history.write_commit_operation(commit)
+            history.write_checkpoint_operation(checkpoint)
+            repository_before = self.repository_snapshot(root)
+            with (
+                mock.patch.object(
+                    history_module,
+                    "decode_candidate_record",
+                    wraps=history_module.decode_candidate_record,
+                ) as candidate_decoder,
+                mock.patch.object(
+                    history_module,
+                    "decode_commit_operation",
+                    wraps=history_module.decode_commit_operation,
+                ) as commit_decoder,
+                mock.patch.object(
+                    history_module,
+                    "decode_checkpoint_operation",
+                    wraps=history_module.decode_checkpoint_operation,
+                ) as checkpoint_decoder,
+            ):
+                snapshot = history.snapshot()
+            self.assertEqual(candidate_decoder.call_count, 2)
+            self.assertEqual(commit_decoder.call_count, 2)
+            self.assertEqual(checkpoint_decoder.call_count, 2)
+            self.assertEqual(snapshot.candidates, (candidate,))
+            self.assertEqual(snapshot.commit_operations, (commit,))
+            self.assertEqual(snapshot.checkpoint_operations, (checkpoint,))
+            self.assertEqual(snapshot.inspection, history.inspect())
+            self.assertEqual(history.read_candidate(candidate.candidate_id), candidate)
+            history.require_active()
+            self.assertEqual(self.repository_snapshot(root), repository_before)
+
+    def test_snapshot_fails_closed_on_drift_corruption_and_preserves_lease(self) -> None:
+        root, tip = self._ready_root("snapshot-fail-closed")
+        candidate = _candidate(tip, self._tree(root))
+        with open_git_session_history(
+            root, _manifest(), "novel", create=True
+        ) as history:
+            history.write_candidate(candidate)
+            repository_before = self.repository_snapshot(root)
+            divergent = GitSessionHistorySnapshot(
+                history.inspect(),
+                (candidate,),
+                (),
+                (),
+            ).inspection
+            with mock.patch.object(
+                history_module.GitSessionHistory,
+                "inspect",
+                return_value=type(divergent)("novel", (), (), (), ()),
+            ):
+                with self.assertRaises(GitSessionHistoryError) as drift:
+                    history.snapshot()
+            self.assertIs(
+                drift.exception.code,
+                GitSessionHistoryFailureCode.RECOVERY_REQUIRED,
+            )
+            history.require_active()
+            self.assertEqual(self.repository_snapshot(root), repository_before)
+
+            record = (
+                root
+                / ".git"
+                / GIT_SESSION_HISTORY_DIRECTORY
+                / "novel"
+                / "candidates"
+                / f"{candidate.candidate_id}.json"
+            )
+            record.write_bytes(b"not canonical history bytes")
+            with self.assertRaises(GitSessionHistoryError) as corrupt:
+                history.snapshot()
+            self.assertIs(
+                corrupt.exception.code,
+                GitSessionHistoryFailureCode.RECORD_INVALID,
+            )
+            self.assertIs(
+                corrupt.exception.recovery_action,
+                history_module.GitSessionHistoryRecoveryAction.NONE,
+            )
+            self.assertNotIn("canonical history", repr(corrupt.exception))
+            history.require_active()
 
     def test_candidate_is_durable_immutable_idempotent_and_restart_readable(
         self,

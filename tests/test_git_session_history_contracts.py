@@ -4,10 +4,11 @@ from __future__ import annotations
 
 import json
 import unittest
-from dataclasses import FrozenInstanceError, fields, is_dataclass
+from dataclasses import FrozenInstanceError, fields, is_dataclass, replace
 
 import story_writing_agents
 import story_writing_agents.git as git_facade
+import story_writing_agents.git.session_history as history_module
 from story_writing_agents.git import session_history_contracts as contracts_module
 
 from story_writing_agents.git.session_history_contracts import (
@@ -24,6 +25,7 @@ from story_writing_agents.git.session_history_contracts import (
     GitSessionHistoryError,
     GitSessionHistoryFailureCode,
     GitSessionHistoryInspection,
+    GitSessionHistorySnapshot,
     GitSessionHistoryRecoveryAction,
     GitSessionHistoryState,
     GitSessionIdentitySource,
@@ -125,6 +127,7 @@ class GitSessionHistoryContractTests(unittest.TestCase):
             "GitSessionHistoryError",
             "GitSessionHistoryFailureCode",
             "GitSessionHistoryInspection",
+            "GitSessionHistorySnapshot",
             "GitSessionHistoryRecoveryAction",
             "GitSessionHistoryState",
             "GitSessionIdentitySource",
@@ -139,6 +142,11 @@ class GitSessionHistoryContractTests(unittest.TestCase):
             "encode_commit_operation",
         )
         self.assertEqual(tuple(contracts_module.__all__), expected_exports)
+        self.assertEqual(
+            history_module.__all__,
+            ["GitSessionHistory", "GitSessionHistorySnapshot", "open_git_session_history"],
+        )
+        self.assertIs(history_module.GitSessionHistorySnapshot, GitSessionHistorySnapshot)
         self.assertEqual(
             (
                 GIT_SESSION_HISTORY_DIRECTORY,
@@ -175,8 +183,112 @@ class GitSessionHistoryContractTests(unittest.TestCase):
         for name in expected_exports:
             self.assertFalse(hasattr(git_facade, name), name)
             self.assertFalse(hasattr(story_writing_agents, name), name)
-        self.assertEqual(len(git_facade.__all__), 22)
+        self.assertEqual(len(git_facade.__all__), 24)
         self.assertEqual(len(story_writing_agents.__all__), 104)
+
+    def test_snapshot_is_exact_frozen_slotted_sorted_and_content_safe(self) -> None:
+        candidate = _candidate(
+            paths=(
+                GitSessionCandidatePath(
+                    "manuscript/part-01/opening.md",
+                    GitSessionCandidatePathOperation.CREATE,
+                    None,
+                    _DIGEST_B,
+                ),
+            ),
+            impact_boundary=("plot",),
+        )
+        commit = GitSessionCommitOperationRecord(
+            session_id="novel",
+            operation_id="d" * 32,
+            candidate_id=candidate.candidate_id,
+            correlation_id="correlation:1",
+            state=GitSessionHistoryState.RUNNING,
+            sequence=0,
+            expected_branch_tip=_OID,
+        )
+        checkpoint = _checkpoint()
+        inspection = GitSessionHistoryInspection(
+            "novel",
+            (candidate.candidate_id,),
+            ((commit.operation_id, commit.state),),
+            ((checkpoint.operation_id, checkpoint.state),),
+            (),
+        )
+        snapshot = GitSessionHistorySnapshot(
+            inspection,
+            (candidate,),
+            (commit,),
+            (checkpoint,),
+        )
+        self.assertEqual(
+            tuple(item.name for item in fields(GitSessionHistorySnapshot)),
+            ("inspection", "candidates", "commit_operations", "checkpoint_operations"),
+        )
+        self.assertTrue(is_dataclass(snapshot))
+        self.assertFalse(hasattr(snapshot, "__dict__"))
+        with self.assertRaises((FrozenInstanceError, AttributeError, TypeError)):
+            snapshot.inspection = inspection  # type: ignore[misc]
+        self.assertNotIn("Update the opening", repr(snapshot))
+        other_candidate = _candidate(
+            paths=(
+                GitSessionCandidatePath(
+                    "manuscript/part-01/second.md",
+                    GitSessionCandidatePathOperation.CREATE,
+                    None,
+                    _DIGEST_A,
+                ),
+            ),
+            impact_boundary=("character",),
+        )
+        ordered_candidates = tuple(
+            sorted((candidate, other_candidate), key=lambda value: value.candidate_id)
+        )
+        ordered_inspection = GitSessionHistoryInspection(
+            "novel",
+            tuple(value.candidate_id for value in ordered_candidates),
+            (),
+            (),
+            (),
+        )
+        invalid = (
+            lambda: GitSessionHistorySnapshot(inspection, [candidate], (commit,), (checkpoint,)),  # type: ignore[arg-type]
+            lambda: GitSessionHistorySnapshot(inspection, (), (commit,), (checkpoint,)),
+            lambda: GitSessionHistorySnapshot(
+                replace(inspection, session_id="other"),
+                (candidate,),
+                (commit,),
+                (checkpoint,),
+            ),
+            lambda: GitSessionHistorySnapshot(
+                inspection,
+                (candidate,),
+                (commit, commit),
+                (checkpoint,),
+            ),
+            lambda: GitSessionHistorySnapshot(
+                ordered_inspection,
+                tuple(reversed(ordered_candidates)),
+                (),
+                (),
+            ),
+            lambda: GitSessionHistorySnapshot(
+                replace(
+                    inspection,
+                    preserved_checkpoint_indices=(checkpoint.operation_id,),
+                ),
+                (candidate,),
+                (commit,),
+                (checkpoint,),
+            ),
+        )
+        for callback in invalid:
+            with self.subTest(callback=callback):
+                with self.assertRaises(GitSessionHistoryError) as raised:
+                    callback()
+                self.assertIs(raised.exception.code, GitSessionHistoryFailureCode.RECORD_INVALID)
+                self.assertIs(raised.exception.recovery_action, GitSessionHistoryRecoveryAction.NONE)
+                self.assertNotIn("opening", repr(raised.exception))
 
     def test_candidate_paths_and_impact_boundary_require_unique_utf8_order(
         self,

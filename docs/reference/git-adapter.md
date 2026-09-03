@@ -622,6 +622,55 @@ ID recorded in the operation. `outcome_unknown` can advance only to
 moves backward. The store returns content-free failure/recovery facts and a
 bounded inventory of IDs, states, and preserved checkpoint indices.
 
+<a id="package-internal-session-history-snapshot"></a>
+
+### Complete read-only snapshots
+
+Issue #536 adds `GitSessionHistorySnapshot` and
+`GitSessionHistory.snapshot() -> GitSessionHistorySnapshot` to the internal
+direct module. A snapshot pairs the existing content-free
+`GitSessionHistoryInspection` with sorted, complete tuples of the candidate,
+story-commit operation, and checkpoint-operation records named by that
+inspection. The complete tuples are excluded from `repr(snapshot)`. Internal
+callers can still read the records' existing bounded fields—such as candidate
+paths and digests, proposed message, impact labels, correlations, states, and
+identity sources—but the snapshot adds no story-file bytes, absolute or
+physical paths, raw Git output, live descriptor, capability, or executable
+authority.
+
+`snapshot()` captures and decodes the first complete inventory while holding
+the existing repository lease, constructs an exact immutable snapshot, then
+independently re-inspects the inventory under that lease. If a record
+disappears or changes between those observations, it raises the existing typed
+`recovery_required` failure and returns no partial snapshot. Malformed,
+missing, unsafe, substituted, or lock-unavailable state uses the existing
+content-safe session-history failure semantics. Opening with `create=False`
+and finding no history returns an empty snapshot without creating the history
+directory.
+
+For example, an internal capture can report candidate `C4`, story-commit
+operation `O4`, checkpoint operation `K4`, and `K4`'s preserved alternate
+index while returning the exact three matching records:
+
+```text
+input:  snapshot() under the active session-history lease
+output: inspection={candidate_ids:[C4],
+                    commit_operations:[(O4, staged)],
+                    checkpoint_operations:[(K4, outcome_unknown)],
+                    preserved_checkpoint_indices:[K4]}
+        candidates=[complete C4 record]
+        commit_operations=[complete O4 record]
+        checkpoint_operations=[complete K4 record]
+        mutation=false, replay=false
+```
+
+If `O4` disappears or changes before the independent second inspection, the
+result is `GitSessionHistoryError(recovery_required)`, with no partial result
+and no new operation record. The method never writes, replays an operation,
+or changes an index, object, ref, branch, or worktree. It has no provider,
+session-reconciliation, UI, or lifecycle behavior; #527 consumes this evidence
+later. No persisted format, migration, or compatibility reader is added.
+
 ### Closed Git process profiles
 
 The four internal profiles are `read_only`, `mutation`, `identity_mutation`,
