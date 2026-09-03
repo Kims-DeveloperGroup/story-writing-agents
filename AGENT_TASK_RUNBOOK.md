@@ -201,7 +201,12 @@ specialist dispatch:
    `regression_diagnostician` only for an unknown failure. Do not dispatch an
    agent merely to run a deterministic command; batch safe independent static
    reads in the main agent's tool calls.
-4. Apply the canonical [Root-Capability Routing](AGENTS.md#root-capability-routing)
+4. Apply the canonical
+   [Role, Mode, and Control Gate](AGENTS.md#role-mode-and-control-gate). Reject
+   an unsupported role/mode before spawn. The child performs only identity and
+   effective-capability preflight first; reject unavailable evidence or a
+   matrix mismatch before further task reads or writes.
+5. Apply the canonical [Root-Capability Routing](AGENTS.md#root-capability-routing)
    algorithm. Resolve the root pair, measure and classify only the child's
    dispatch context, classify complexity/risk and role needs, derive and clamp
    each axis independently, then treat the capped pair as the preferred
@@ -209,15 +214,26 @@ specialist dispatch:
    overrides atomically or omit both for exact inheritance; never guess a
    cross-family order, select a weaker pair automatically, or exceed either
    effective root value.
-5. Narrow or split oversized context before dispatch. If high-consequence work
+6. Narrow or split oversized context before dispatch. If high-consequence work
    is ceiling-limited, stop for a narrower task or stronger root session.
    Otherwise record all routing inputs, desired/capped/selected pairs,
    availability, limitation, and fallback or inheritance evidence in the
    canonical packet.
-6. Send the canonical compact `task_packet` in a bounded, self-contained
-   context. Reuse the same specialist thread for follow-up phases unless stale
-   context or isolation risk is recorded. Do not send raw logs, the full Issue
-   body, or a duplicate of the complete plan.
+7. Send the compact `task_packet` in bounded, self-contained context. Full
+   history requires its named reason, relevant bound, stale-context risk, root
+   approval, and task evidence. Thread reuse alone does not authorize it.
+8. Record every requested result ID and expected role/mode. Cross the join
+   barrier only when none is running or missing and every response validates
+   against the exact canonical `result_packet` schema; do not synthesize
+   otherwise.
+9. Retry one transient spawn/delivery/join control failure exactly once only
+   after proving no task write occurred. For possible partial-writer timeout or
+   interruption, inspect state and resume the same thread; never retry blindly.
+   Do not retry policy, capability, scope, or schema failures.
+10. Resolve conflicts by evidence level and role ownership, never voting. Route
+    unresolved material conflicts to the owner, root, or user under the
+    canonical gate. Root fallback may use only existing root authority and
+    never bypasses mandatory documentation, test, or modularity ownership.
 
 Keep writers sequential. After production stabilizes, fuse test planning,
 editing, exact execution, and final behavioral/coverage review into one

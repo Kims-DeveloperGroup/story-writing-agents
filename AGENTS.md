@@ -175,6 +175,57 @@ stay narrow: exclusions, accepted decisions, observable criteria,
 Sources: [subagents](https://learn.chatgpt.com/docs/agent-configuration/subagents),
 [model guidance](https://developers.openai.com/api/docs/guides/latest-model).
 
+### Role, Mode, and Control Gate
+
+Before task work, validate the selected project role, requested mode, and
+runtime-observed effective capability against this matrix:
+
+| Role | Supported mode | Required observed effective capability |
+| --- | --- | --- |
+| `requirements_analyst` | `analysis` | repository/worktree reads; effective filesystem is read-only and no approval path can enable writes |
+| `regression_diagnostician` | `analysis` | repository/worktree reads; effective filesystem is read-only and no approval path can enable writes |
+| `modularity_maintainer` | `analysis`, `review` | repository/worktree reads; effective filesystem is read-only and no approval path can enable writes |
+| `modularity_maintainer` | `implementation` | assigned-worktree writes are available |
+| `runtime_implementer` | `implementation` | assigned-worktree writes are available |
+| `test_engineer` | `analysis` | repository/worktree reads; effective filesystem is read-only and no approval path can enable writes |
+| `test_engineer` | `implementation` | assigned-worktree writes are available |
+| `documentation_maintainer` | `analysis` | repository/worktree reads; effective filesystem is read-only and no approval path can enable writes |
+| `documentation_maintainer` | `implementation` | assigned-worktree writes are available |
+
+The child first performs only the minimum capability and identity preflight and
+reports its observed filesystem/sandbox, write availability, and approval path.
+The root and child reject an unsupported mode, unavailable capability evidence,
+or mismatch before any other task read or write. This is observed fail-closed
+routing, not hard sandbox enforcement: prompts, TOMLs, and static tests express
+and check policy but cannot prove or enforce runtime isolation.
+
+Use bounded, self-contained context by default. Full-history inheritance is
+exceptional and requires a named reason, bounded relevant scope, assessed
+stale-context risk, explicit root approval, and all four facts in task evidence.
+
+Before dispatch, the root records every requested child result identifier and
+its expected role/mode. A join barrier validates each returned packet against
+the exact `result_packet` schema below. The root must not synthesize while any
+requested result is running, missing, or invalid.
+
+Retry exactly once only for a transient control-plane spawn, delivery, or join
+failure when evidence establishes that no task write occurred. Record the
+failure fingerprint and retry. A writer timeout or interruption after a
+possible write requires process/worktree/task-state inspection, diff
+preservation, and same-thread resume from the known state—never blind retry or
+duplicate dispatch. Policy, capability, scope, and result-schema failures are
+non-transient and are not retried.
+
+Resolve conflicting child findings by evidence level
+(`observed > inferred > proposed > unknown`) within the applicable role's
+ownership, never by vote. Route unresolved material conflicts to the owning
+specialist, then to the root for cross-role synthesis or risk acceptance, and
+to the user for required scope, breaking-policy, or external decisions. After
+a failed control retry, the root may perform only its already-authorized static
+reads or fast-path work; otherwise it narrows, defers, or returns the blocker.
+Root fallback never absorbs mandatory documentation, test, or modularity
+ownership and never creates a reviewer role.
+
 ### Modularity Gate
 
 Call `modularity_maintainer` when a change does any of the following:
@@ -429,15 +480,9 @@ to `regression_diagnostician`; boundary review belongs to
 `modularity_maintainer`; the main agent retains final risk acceptance. Do not
 create another reviewer role.
 
-Modes and read-only requirements declared in prompts or TOML are behavioral
-policy; they do not prove capability-level sandbox enforcement. Static policy
-tests must not claim otherwise. The main agent must treat actual effective
-sandbox and approval capabilities as separate runtime evidence.
-
 ### Handoff and Result Contracts
 
-Use a bounded, self-contained fork or context by default. Every handoff sends a
-compact `task_packet` with exactly these top-level fields:
+Every handoff sends a compact `task_packet` with exactly these top-level fields:
 
 - `mode`: `analysis`, `implementation`, or `review`;
 - `objective`: the concrete outcome and relevant evidence;
@@ -473,8 +518,8 @@ top-level fields:
 
 Keep each packet limited to context necessary for the assigned phase. Do not
 include raw logs, repeat the full Issue body, or restate the complete plan.
-Prefer specialist-thread reuse; create a fresh bounded context only when stale
-context or an isolation risk is recorded.
+Prefer specialist-thread reuse; reuse does not authorize full-history
+inheritance.
 
 If a required language policy is missing, the modularity agent returns the
 exact language and expected path. The main agent asks the user whether to

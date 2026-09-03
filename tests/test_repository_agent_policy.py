@@ -49,6 +49,38 @@ def _normalized(source: str) -> str:
     return " ".join(source.split())
 
 
+def _declared_supported_modes(instructions: str) -> set[str]:
+    """Parse the supported-mode declaration used by one project-agent TOML."""
+
+    declaration_source = _normalized(instructions)
+    supported = set(
+        re.findall(
+            r"(?:Support only|Require) `mode = (analysis|implementation|review)`",
+            declaration_source,
+        )
+    )
+    handoff = re.search(
+        r"parent handoff must set `mode` to (?P<modes>[^.]+)\.",
+        declaration_source,
+    )
+    if handoff is not None:
+        supported.update(
+            re.findall(
+                r"`(analysis|implementation|review)`",
+                handoff.group("modes"),
+            )
+        )
+    supported.update(
+        re.findall(
+            r"In `(analysis|implementation|review)` mode,",
+            declaration_source,
+        )
+    )
+    if not supported:
+        raise AssertionError("missing supported-mode declaration")
+    return supported
+
+
 class RepositoryAgentPolicyTests(unittest.TestCase):
     """Prevent drift in the prompted root/subagent verification contract."""
 
@@ -65,6 +97,11 @@ class RepositoryAgentPolicyTests(unittest.TestCase):
             "### Root-Capability Routing",
         )
         cls.routing_normalized = _normalized(cls.routing_source)
+        cls.control_source = _markdown_section(
+            cls.agents_source,
+            "### Role, Mode, and Control Gate",
+        )
+        cls.control_normalized = _normalized(cls.control_source)
         cls.orchestration_source = _markdown_section(
             cls.agents_source,
             "### Orchestration Sequence",
@@ -446,7 +483,7 @@ class RepositoryAgentPolicyTests(unittest.TestCase):
             self.runbook_normalized,
             (
                 "record all routing inputs, desired/capped/selected pairs, availability, limitation, and fallback or inheritance evidence in the canonical packet",
-                "Send the canonical compact `task_packet`",
+                "Send the compact `task_packet`",
             ),
         )
         self.assertNotIn(
@@ -456,6 +493,139 @@ class RepositoryAgentPolicyTests(unittest.TestCase):
         self.assertNotIn(
             "| Agent | Default | Escalation |",
             self.delegation_source,
+        )
+
+    def test_role_mode_capability_matrix_matches_toml_declarations(self) -> None:
+        matrix = {}
+        for match in re.finditer(
+            r"^\|\s*`(?P<role>[a-z_]+)`\s*"
+            r"\|\s*(?P<modes>.*?)\s*"
+            r"\|\s*(?P<capability>.*?)\s*\|$",
+            self.control_source,
+            flags=re.MULTILINE,
+        ):
+            modes = re.findall(
+                r"`(analysis|implementation|review)`",
+                match.group("modes"),
+            )
+            for mode in modes:
+                key = (match.group("role"), mode)
+                self.assertNotIn(key, matrix)
+                matrix[key] = match.group("capability").strip()
+
+        read_only = (
+            "repository/worktree reads; effective filesystem is read-only "
+            "and no approval path can enable writes"
+        )
+        writable = "assigned-worktree writes are available"
+        self.assertEqual(
+            matrix,
+            {
+                ("requirements_analyst", "analysis"): read_only,
+                ("regression_diagnostician", "analysis"): read_only,
+                ("modularity_maintainer", "analysis"): read_only,
+                ("modularity_maintainer", "review"): read_only,
+                ("modularity_maintainer", "implementation"): writable,
+                ("runtime_implementer", "implementation"): writable,
+                ("test_engineer", "analysis"): read_only,
+                ("test_engineer", "implementation"): writable,
+                ("documentation_maintainer", "analysis"): read_only,
+                ("documentation_maintainer", "implementation"): writable,
+            },
+        )
+        matrix_modes = {
+            role: {mode for candidate, mode in matrix if candidate == role}
+            for role in _EXPECTED_AGENTS
+        }
+        toml_modes = {
+            role: _declared_supported_modes(
+                self.agent_data[role]["developer_instructions"]
+            )
+            for role in _EXPECTED_AGENTS
+        }
+        self.assertEqual(toml_modes, matrix_modes)
+
+    def test_control_gate_preflight_is_observed_and_fail_closed(self) -> None:
+        self.assertContainsAll(
+            self.control_normalized,
+            (
+                "first performs only the minimum capability and identity preflight",
+                "reports its observed filesystem/sandbox, write availability, and approval path",
+                "reject an unsupported mode, unavailable capability evidence, or mismatch before any other task read or write",
+                "observed fail-closed routing, not hard sandbox enforcement",
+                "prompts, TOMLs, and static tests express and check policy but cannot prove or enforce runtime isolation",
+            ),
+        )
+
+    def test_full_history_exception_is_bounded_and_evidenced(self) -> None:
+        self.assertContainsAll(
+            self.control_normalized,
+            (
+                "Use bounded, self-contained context by default",
+                "Full-history inheritance is exceptional",
+                "named reason",
+                "bounded relevant scope",
+                "assessed stale-context risk",
+                "explicit root approval",
+                "all four facts in task evidence",
+            ),
+        )
+        self.assertContainsAll(
+            self.runbook_normalized,
+            (
+                "Send the compact `task_packet` in bounded, self-contained context",
+                "Full history requires its named reason, relevant bound, stale-context risk, root approval, and task evidence",
+                "Thread reuse alone does not authorize it",
+            ),
+        )
+
+    def test_join_retry_and_partial_writer_controls_are_explicit(self) -> None:
+        self.assertContainsAll(
+            self.control_normalized,
+            (
+                "records every requested child result identifier and its expected role/mode",
+                "A join barrier validates each returned packet against the exact `result_packet` schema",
+                "must not synthesize while any requested result is running, missing, or invalid",
+                "Retry exactly once only for a transient control-plane spawn, delivery, or join failure",
+                "evidence establishes that no task write occurred",
+                "Record the failure fingerprint and retry",
+                "writer timeout or interruption after a possible write requires process/worktree/task-state inspection, diff preservation, and same-thread resume from the known state",
+                "never blind retry or duplicate dispatch",
+                "Policy, capability, scope, and result-schema failures are non-transient and are not retried",
+            ),
+        )
+
+    def test_conflicts_and_root_fallback_preserve_role_ownership(self) -> None:
+        self.assertContainsAll(
+            self.control_normalized,
+            (
+                "Resolve conflicting child findings by evidence level (`observed > inferred > proposed > unknown`) within the applicable role's ownership, never by vote",
+                "Route unresolved material conflicts to the owning specialist",
+                "then to the root for cross-role synthesis or risk acceptance",
+                "to the user for required scope, breaking-policy, or external decisions",
+                "After a failed control retry, the root may perform only its already-authorized static reads or fast-path work",
+                "otherwise it narrows, defers, or returns the blocker",
+                "Root fallback never absorbs mandatory documentation, test, or modularity ownership",
+                "never creates a reviewer role",
+            ),
+        )
+
+    def test_runbook_applies_role_mode_and_control_gate(self) -> None:
+        self.assertContainsAll(
+            self.runbook_normalized,
+            (
+                "[Role, Mode, and Control Gate](AGENTS.md#role-mode-and-control-gate)",
+                "Reject an unsupported role/mode before spawn",
+                "only identity and effective-capability preflight first",
+                "reject unavailable evidence or a matrix mismatch before further task reads or writes",
+                "Record every requested result ID and expected role/mode",
+                "Cross the join barrier only when none is running or missing and every response validates against the exact canonical `result_packet` schema",
+                "Retry one transient spawn/delivery/join control failure exactly once only after proving no task write occurred",
+                "possible partial-writer timeout or interruption, inspect state and resume the same thread; never retry blindly",
+                "Do not retry policy, capability, scope, or schema failures",
+                "Resolve conflicts by evidence level and role ownership, never voting",
+                "Root fallback may use only existing root authority and never bypasses mandatory documentation, test, or modularity ownership",
+            ),
         )
 
     def test_specialist_ownership_fusion_and_thread_reuse_are_explicit(self) -> None:
@@ -704,11 +874,11 @@ class RepositoryAgentPolicyTests(unittest.TestCase):
 
     def test_policy_does_not_claim_capability_level_sandbox_enforcement(self) -> None:
         self.assertContainsAll(
-            self.adaptive_normalized,
+            self.control_normalized,
             (
-                "Modes and read-only requirements declared in prompts or TOML are behavioral policy",
-                "do not prove capability-level sandbox enforcement",
-                "actual effective sandbox and approval capabilities as separate runtime evidence",
+                "reports its observed filesystem/sandbox, write availability, and approval path",
+                "observed fail-closed routing, not hard sandbox enforcement",
+                "prompts, TOMLs, and static tests express and check policy but cannot prove or enforce runtime isolation",
             ),
         )
 
@@ -750,10 +920,14 @@ class RepositoryAgentPolicyTests(unittest.TestCase):
         self.assertContainsAll(
             self.handoff_normalized,
             (
-                "bounded, self-contained fork or context by default",
                 "Do not include raw logs, repeat the full Issue body, or restate the complete plan",
                 "Prefer specialist-thread reuse",
+                "reuse does not authorize full-history inheritance",
             ),
+        )
+        self.assertIn(
+            "Use bounded, self-contained context by default",
+            self.control_normalized,
         )
         self.assertContainsAll(
             self.runbook_normalized,
