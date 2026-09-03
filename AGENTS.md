@@ -167,6 +167,156 @@ Reuse the same specialist thread for follow-up phases when practical. The main
 agent remains the hub: it passes concise upstream decisions to the next agent,
 and specialists do not delegate to or coordinate directly with peers.
 
+### Adaptive Verification
+
+The main agent owns verification selection, authorization, budgeting, evidence
+reuse, escalation, and the final sufficiency decision. Specialists may propose
+narrower or additional evidence, but they must not independently broaden an
+authorized evidence level, selection, concurrency, or budget. Unknown-cost or
+over-budget work returns to the main agent for `split`, `narrow`, `defer`,
+`stop`, or an explicit maintainer-approved budget increase.
+
+Verification is a partial order of selectable evidence, not a mandatory
+ladder. Select the smallest complete set justified by the accepted criteria and
+risks:
+
+1. `static_inventory`: map changed inputs, directly associated tests,
+   transitive production consumers, shared helpers and fixtures, invariants,
+   risks, and exclusions. Require it for every nontrivial tracked change.
+2. `exact`: check new or changed acceptance behavior and every known failing
+   test ID.
+3. `semantic_cluster`: check tests that share the changed invariant,
+   collaborator contract, fixture, or failure family.
+4. `affected_suite`: check a bounded subsystem or accepted blast radius only
+   when narrower evidence cannot cover it.
+5. `full_suite`: collect exceptional repository-wide evidence only when an
+   objective trigger below applies.
+
+`complete` is a terminal state, not a sixth required evidence step. It may
+follow any selected level when every item of mandatory evidence is current and
+green or an accepted skip, failures are resolved, the inventory is sufficient,
+and the main agent explicitly accepts the recorded residual risk. Passing one
+level neither requires nor authorizes the next. Mark an acceptance checklist
+item complete only after its exact mandatory evidence is recorded and current.
+
+Classify each task before executing verification and apply these default
+cumulative command budgets and maximum shard sizes:
+
+| `verification_class` | `total_stage_budget_seconds` | `max_shard_seconds` | Normal evidence floor |
+| --- | ---: | ---: | --- |
+| `local` | 300 | 180 | inventory plus exact or static evidence |
+| `bounded` | 900 | 300 | inventory, exact, and required semantic evidence |
+| `cross_cutting` | 1800 | 600 | inventory plus selected cluster or affected evidence |
+| `release` | Issue-defined | Issue-defined | named integration or release gates |
+
+An accepted task criterion may override a default. These values authorize
+launch and continuation; they are not correctness waivers or unsafe process
+kill deadlines. Do not start the next shard when its estimate exceeds the
+remaining budget. If an already-running command exceeds its estimate, allow a
+safe completion or use a runner-supported interrupt that preserves completed
+evidence. Budget exhaustion never makes incomplete mandatory evidence
+optional.
+
+Before authorizing a verification command, record a plan containing:
+
+- `verification_class` and its risk rationale;
+- each acceptance criterion mapped to `mandatory_evidence`;
+- `changed_inputs` covering source, tests, fixtures, configuration, policy,
+  documentation, and environment inputs;
+- directly associated tests, transitive production consumers, shared helpers,
+  fixtures, invariants, cross-boundary consumers, and justified exclusions;
+- risk flags for public APIs, packaging, persistence or migration,
+  authorization or security, concurrency, process or PTY behavior, shared
+  configuration, and uncertain dynamic coupling;
+- `authorized_selection` containing the exact test IDs or static checks and
+  their selection rationale;
+- `estimated_seconds`, `estimate_source`, and `estimate_confidence`;
+- `total_stage_budget_seconds`, `max_shard_seconds`, `spent_seconds`, and
+  `remaining_seconds`;
+- escalation and full-suite triggers, stop conditions, reusable evidence and
+  its invalidation analysis, and residual risk.
+
+Incomplete dependency knowledge is uncertainty, not evidence that no test is
+affected. Broaden the inventory or stop for diagnosis before authorizing work
+whose affected set or cost cannot be bounded.
+
+For provenance, every result records repository, absolute worktree, baseline
+and HEAD SHAs, dirty-state fingerprint, relevant environment capabilities,
+purpose, evidence level, exact selection and command, outcome, actual duration,
+and any stable failure fingerprint. Whole-repository identity does not by
+itself decide reuse. Each selection also has a conservative
+`relevant_input_digest` covering its selected tests, shared fixtures and
+helpers, runner configuration, transitive production dependency closure, and
+relevant environment capabilities. Reuse evidence after a HEAD change only
+when the main agent proves the later change is disjoint and the digest and
+purpose remain unchanged. Any relevant or uncertain input or dependency change
+invalidates it; renaming the purpose does not create distinct evidence.
+
+When a selection is estimated above `max_shard_seconds`, partition it into
+deterministic, disjoint shards of exact portable test IDs. For Python
+`unittest`, use module, class, or method IDs. The shard union must equal the
+authorized selection and each ID must occur exactly once. Run risk-bearing and
+short-feedback shards first. Sequential execution is the portable default;
+parallel execution requires separate main-agent authorization, isolated
+resources, nonoverlapping IDs, and runner support.
+
+Record for every shard its manifest digest, ordinal, exact IDs,
+`relevant_input_digest`, result, duration, `completed_ids`, `failed_ids`,
+`accepted_skips`, and `unexecuted_ids`. Aggregate success requires valid green
+or accepted-skip evidence for every authorized ID. After a repair, rerun exact
+failures and only invalidated shards. A timeout, user replacement, or
+interruption is neither a pass nor an assertion failure: stop only the owned
+process, classify the termination, preserve `completed_ids`, `failed_ids`,
+`accepted_skips`, and `unexecuted_ids`, and resume only unexecuted or invalidated
+IDs whose inputs remain valid. Partial evidence never establishes `complete`.
+A bounded, recorded repeat may diagnose a suspected flaky failure; changing a
+label or purpose cannot bypass reuse and deduplication rules.
+
+Authorize `full_suite` only when at least one objective trigger is recorded:
+
+- an Issue, parent integration criterion, or release gate explicitly requires
+  it;
+- static inventory cannot conservatively bound the affected set;
+- a package-wide, public, or cross-domain invariant changed;
+- global discovery, bootstrap, packaging, or test-harness behavior makes
+  narrower evidence unreliable;
+- narrower verification reveals an unknown out-of-cluster failure family; or
+- a concrete residual risk cannot be covered by affected selections.
+
+Tracked implementation, final review, or the existence of `full_suite` is not
+a trigger. If required broad evidence exceeds the accepted budget, return the
+decision to the main agent; do not silently omit it or claim completion.
+Prompt, TOML, policy, or documentation-only work may complete with static
+parsing, exact policy tests, link or formatting checks, and diff inspection
+when no runtime-relevant change or full-suite trigger exists.
+
+Handle failures without restarting broad verification:
+
+- For a known failure family, repair it and rerun the exact invalidated
+  evidence.
+- When the same stable fingerprint appears in two or more distinct
+  responsibility holders, stop broad reruns and perform one repository-wide
+  occurrence inventory with explicit roots, exclusions, patterns,
+  classifications, and limitations.
+- For a cross-boundary ownership or capability defect, apply the existing
+  modularity gate once across all holders and consumers.
+- For an unknown failure, run `regression_diagnostician` instead of launching
+  broad validation.
+- When cost is unknown or budget is exhausted, return completed and mandatory
+  remaining evidence, revised estimates, residual risk, and root decision
+  alternatives.
+
+The six existing project roles remain sufficient. Verification evidence and
+behavioral coverage review belong to `test_engineer`; failure diagnosis belongs
+to `regression_diagnostician`; boundary review belongs to
+`modularity_maintainer`; the main agent retains final risk acceptance. Do not
+create another reviewer role.
+
+Modes and read-only requirements declared in prompts or TOML are behavioral
+policy; they do not prove capability-level sandbox enforcement. Static policy
+tests must not claim otherwise. The main agent must treat actual effective
+sandbox and approval capabilities as separate runtime evidence.
+
 ### Handoff and Result Contracts
 
 Every subagent handoff must include:
@@ -186,6 +336,15 @@ Every subagent handoff must include:
 - required checks and output; and
 - stop conditions, including missing or conflicting policies, breaking API
   decisions, scope deviation, and unexpected structural work.
+
+When a handoff authorizes verification, it must also carry the applicable
+verification plan and current compact evidence ledger. A specialist result
+must distinguish `mandatory_evidence`, `completed_ids`, `failed_ids`,
+`accepted_skips`, invalidated evidence, and `unexecuted_ids`; report exact
+commands and `authorized_selection`, actual duration, spent and remaining
+budget, identities and digests, failure fingerprints, residual risk, and
+recommended next evidence; and return any proposed selection, concurrency,
+evidence-level, or budget expansion for main-agent authorization.
 
 Every result must report findings, files inspected or changed, module indices
 consulted or updated, implementation/index consistency, checks run, blockers,

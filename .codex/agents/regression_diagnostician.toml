@@ -6,6 +6,16 @@ Stay read-only. Reproduce the reported failure when possible, inspect the
 relevant execution path, compare expected and actual behavior, and isolate the
 smallest likely cause.
 
+Assign a stable failure-family fingerprint. Search for equivalent code and
+test patterns across the approved roots and report suspected occurrences,
+explicit exclusions, classifications, limitations, and inventory completeness.
+When the fingerprint occurs in two or more distinct responsibility holders,
+recommend one complete occurrence inventory and stop recommending broad
+reruns. Return the smallest reproduction and exact portable test IDs, together
+with `estimated_seconds`, estimate source, and confidence. Do not launch a broad
+suite or independently broaden the root-authorized evidence level, selection,
+concurrency, or budget.
+
 Classify the likely cause as contained within an established module boundary
 or crossing a package or module boundary. Flag dependency cycles, private
 reach-through, misplaced responsibility, public-contract drift, and state or
@@ -16,8 +26,11 @@ Do not apply a fix. Return:
 - reproduction steps and observed evidence
 - affected files, symbols, or configuration
 - likely root cause and confidence
+- stable failure-family fingerprint, equivalent patterns, suspected
+  repository-wide occurrences, and inventory completeness
 - `boundary_impact = contained | cross_boundary | uncertain` with rationale
 - architecture constraints remediation must preserve
 - focused remediation recommendation
-- checks that should confirm the fix
+- exact checks that should confirm the fix and their `estimated_seconds`,
+  estimate source, and confidence
 """

@@ -180,6 +180,53 @@ gh project item-list 1 --owner Kims-DeveloperGroup --limit 100 --format json \
     .["linked pull requests"]'
 ```
 
+## Plan and Record Verification
+
+Apply [Adaptive Verification](AGENTS.md#adaptive-verification) as the canonical
+selection, budget, reuse, escalation, and completion contract. Before
+verification begins, the main agent records a compact root-owned plan with the
+task's `verification_class` and risk rationale; each acceptance criterion's
+mandatory evidence; changed inputs, affected inventory, and justified
+exclusions; the exact checks or test IDs in `authorized_selection` and their
+selection rationale; `estimated_seconds`, estimate source and confidence;
+`total_stage_budget_seconds`, `max_shard_seconds`, `spent_seconds`, and
+`remaining_seconds`; stop and escalation conditions; each objective full-suite
+trigger or an explicit record that none applies; reusable evidence and its
+invalidation analysis; and residual risk.
+
+Execute and ledger that plan as follows:
+
+1. Compare each command estimate with both `max_shard_seconds` and
+   `remaining_seconds` before launch. If a selection is too large, partition it
+   into deterministic, disjoint exact-ID shards whose union is the authorized
+   selection and in which each ID occurs once. Run sequentially unless the main
+   agent separately authorizes safe parallel execution. Stop before starting a
+   shard that would exceed the remaining budget and return the decision to the
+   main agent.
+2. For every selection or shard, record its purpose, evidence level, exact IDs
+   and command, provenance, actual duration and result, manifest identity,
+   `relevant_input_digest`, `completed_ids`, `failed_ids`, `accepted_skips`,
+   and `unexecuted_ids`. Keep cumulative spent and remaining budget current.
+3. Treat a timeout, replacement request, or other interruption as neither a
+   pass nor an assertion failure. Stop only the owned process, preserve the
+   completed, failed, skipped, and unexecuted IDs, and return that state to the
+   main agent. Resume only unexecuted or invalidated IDs whose inputs remain
+   valid.
+4. Reuse evidence only when its purpose and `relevant_input_digest` remain
+   unchanged and the main agent has proved intervening changes are disjoint.
+   A commit SHA is provenance, not sufficient reuse proof; invalidate evidence
+   after any relevant or uncertain input or dependency change.
+5. Run `full_suite` only when the plan records an objective full-suite trigger.
+   Tracked implementation, final review, and suite availability do not make it
+   the default. If required evidence exceeds the accepted budget, return the
+   completed evidence, remaining mandatory evidence, revised estimate, and
+   decision alternatives instead of silently omitting it.
+6. Before handoff or completion, confirm that all mandatory evidence is current
+   and green or an accepted skip, failures are resolved, the inventory is
+   sufficient, and the main agent has accepted the recorded residual risk.
+   Only then record the terminal evidence state `complete`; partial evidence or
+   budget exhaustion never establishes completion.
+
 ## Task Lifecycle
 
 1. **Pass the planning gate.** Complete or verify the initialization above.
@@ -196,8 +243,9 @@ gh project item-list 1 --owner Kims-DeveloperGroup --limit 100 --format json \
    from the current parent commit, assign its owner, verify the link, and move
    it to `In progress` before tracked edits.
 4. **Implement and verify.** Change only the child scope. Follow the commit
-   policy, update tests and documentation, run relevant checks, and review the
-   final diff and worktree status.
+   policy, update tests and documentation, apply the verification plan and
+   evidence ledger above, run its authorized checks, and review the final diff
+   and worktree status.
 5. **Review the child.** Merge the latest parent branch into the child without
    rebasing, rerun affected checks, and open a draft PR whose base is the
    parent branch and whose head is the child branch. Use `Refs #<child>`. Mark
@@ -231,4 +279,8 @@ The handoff must include the planning-gate state and evidence, Issue and PR
 links, base/head branches and SHAs, resulting squash SHAs, worktree paths,
 Development and `Linked pull requests` evidence, Project metadata and
 Iteration, completed and remaining criteria, checks, blockers, cleanup, GitHub
-mutations, and the next owner or action.
+mutations, and the next owner or action. Include the compact adaptive
+verification plan and current evidence ledger, distinguishing completed,
+failed, accepted-skip, invalidated, and unexecuted evidence and identifying any
+selection, concurrency, evidence-level, or budget decision still owned by the
+main agent.

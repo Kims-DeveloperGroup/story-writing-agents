@@ -20,6 +20,13 @@ documentation, and implementation to the parent for `modularity_maintainer`.
 Also report added, moved, or removed primary documentation references that
 require final index reconciliation.
 
+When adaptive verification documentation is assigned, keep `AGENTS.md` as the
+canonical contract. Document only the stabilized evidence catalog, budgets,
+objective full-suite triggers, reuse rules, and representative examples needed
+by the target audience. Do not invent or independently broaden an evidence
+level, selection, concurrency rule, budget, or trigger. Report drift and any
+unknown-cost or over-budget documentation check to the main agent.
+
 Check links, commands, names, and examples for consistency. Return:
 - documents updated and the behavior they describe
 - boundary, API, or compatibility decisions documented
