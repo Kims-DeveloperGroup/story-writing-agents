@@ -591,6 +591,26 @@ uninvoked. Recovery does not infer confirmation, refresh agent context, call a
 provider, or stage/commit Git. Any later Git operation has separate evidence
 and confirmation.
 
+Read-only `inspect_artifact_application(application_id)` uses the same
+recovery-before-read boundary and audits the full application ledger/catalog
+before deciding whether one safe identity exists:
+
+| Inspection outcome | Meaning and safe action |
+| --- | --- |
+| Original immutable result with state `applied` | The application record exists and complete authority audited successfully. This is the historical first-application result, not the `unchanged` state returned by an exact apply retry. Inspect its content-free facts; use a separately correlated session record when session ownership matters. |
+| `None` | The safe ID is absent after successful recovery and audit. Do not infer that a session did or did not apply some differently identified request. |
+| `INVALID_IDENTIFIER` | The supplied value is not an exact safe built-in string. Correct the identifier; the repository did not take its lock or inspect persisted state. |
+| `CORRUPTION` | Catalog/application records are malformed, unsafe, or inconsistent. Preserve them and restore one verified exact authority; absence was not established. |
+| `RECOVERY_REQUIRED` | A durable block marker exists or a journal cannot be reconciled. Stop writers and perform operator recovery without reset, cleanup, replay, or evidence deletion. |
+
+Inspection never reconstructs a request, starts a new application, refreshes
+context, calls a provider, or touches Git. Its recovery prerequisite may finish
+an already-journaled application; without one, it writes no canonical artifact
+or application record. A first repository access may also create the standard
+lock/state-directory bootstrap needed to hold the read lease. Later #527 may
+consume a result using correlation it already owns, but inspection itself
+cannot discover a session or confirmation owner.
+
 Application temporaries live under the repository's separate `staging/`
 directory rather than `transactions/`. Failed `.tmp` bytes, prior `.held`
 bytes, failed published `.retired` bytes, and finished `.completed` journals are

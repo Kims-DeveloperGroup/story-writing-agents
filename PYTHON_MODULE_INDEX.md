@@ -5962,6 +5962,10 @@ every intermediate arrow. The current runtime graph is acyclic.
   `ArtifactApplicationStoreFailureCode`, and
   `ArtifactApplicationStoreFailure`, constructed or consumed only by
   `writing_artifacts.repository` and absent from both package facades. Its
+  `inspect_result(application_id)` recovers and audits the complete immutable
+  ledger and catalog before returning the exact original terminal result or
+  `None`; malformed identities fail with the public content-free invalid-ID
+  code and the lookup creates no application record or canonical artifact. Its
   `ensure_directories`
   method is the sole descriptor-safe bootstrap exception: the repository calls
   it after acquiring its process lock but before acquiring the workspace lease
@@ -5997,15 +6001,20 @@ every intermediate arrow. The current runtime graph is acyclic.
   as `unchanged`; correlation mismatch, drift, corruption, legacy nonempty
   `commits/`, and unsupported stored shapes fail closed. Manuscript rename
   lineage and deletion provenance remain durable and content-free; core rename
-  and delete are rejected by the relationship policy. The store borrows the
-  repository-owned secure storage adapter and opens no lock, Git, provider,
+  and delete are rejected by the relationship policy. Historical-result
+  inspection performs the same recovery and complete ledger/catalog audit and
+  never replays a request or coerces an applied result to `unchanged`. The
+  store borrows the repository-owned secure storage adapter and opens no lock,
+  Git, provider,
   agent, confirmation, context, process, clock, or application-startup
   resource. Import and construction perform no filesystem I/O.
 - **Primary verification/documentation:**
+  `tests/test_artifact_application_inspection.py`,
   `tests/test_artifact_application_seam.py`,
   `tests/test_artifact_application_store_lifecycle.py`,
   `tests/test_artifact_application_store_recovery.py`,
   `tests/test_writing_artifacts.py`,
+  `docs/reference/writing-artifacts.md#inspecting-one-historical-application`,
   `docs/reference/writing-artifacts.md#application-storage-and-recovery-mechanism`,
   the artifact-application persistence section in `docs/design/persistence.md`,
   and the writing-artifact section in
@@ -6116,6 +6125,7 @@ every intermediate arrow. The current runtime graph is acyclic.
 - **Supported surface:** Module-supported internal
   `WritingArtifactRepository`, with provenance-audited `catalog`, exact
   request-only `apply_artifact_changes`,
+  exact read-only `inspect_artifact_application(application_id)`,
   filesystem-authoritative sorted `list_paths`, complete bounded
   `list_paths_bounded`, ordered selective immutable
   `read_current`, verified `read_text`, and
@@ -6145,7 +6155,11 @@ every intermediate arrow. The current runtime graph is acyclic.
   lock and lease once, delegates once to the private application store, and
   returns its immutable terminal result. It maps typed drift, corruption, and
   recovery-required failures to the public content-free application codes
-  without parsing prose or exposing exception context.
+  without parsing prose or exposing exception context. Application inspection
+  validates the exact identity, acquires that same lock and lease once,
+  delegates once, and returns the original immutable historical result or
+  `None` without reconstructing or reapplying a request, creating an application
+  record, or inferring session ownership.
   `commit_consensus` retains its existing package-internal caller shape and
   author/revision/path validation, but now translates the manuscript plus ordered
   allowlisted core updates into one exact native change set and delegates all
@@ -6165,6 +6179,7 @@ every intermediate arrow. The current runtime graph is acyclic.
   no controller, terminal, provider, Git, lead, confirmation, or agent-context
   implementation and retains no viewer state or artifact bytes beyond a call.
 - **Primary verification/documentation:**
+  `tests/test_artifact_application_inspection.py`,
   `tests/test_artifact_application_seam.py`,
   `tests/test_writing_artifacts.py`,
   `tests/test_artifact_application_store_lifecycle.py`,
@@ -6175,6 +6190,7 @@ every intermediate arrow. The current runtime graph is acyclic.
   `tests/test_runtime_reference_integration.py`,
   `tests/test_smoke_cli.py`,
   `docs/guides/artifact-references.md#what-happens-when-an-attached-source-is-later-applied`,
+  `docs/reference/writing-artifacts.md#inspecting-one-historical-application`,
   `docs/reference/writing-artifacts.md#application-storage-and-recovery-mechanism`,
   `docs/reference/configuration/session-storage.md`,
   the artifact-application persistence section in

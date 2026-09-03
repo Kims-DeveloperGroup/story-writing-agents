@@ -145,6 +145,25 @@ class WritingArtifactRepository:
         except (WorkspaceFormatError, WorkspaceSecurityError):
             _raise_application_failure(ArtifactApplicationErrorCode.CORRUPTION)
 
+    def inspect_artifact_application(
+        self,
+        application_id: str,
+    ) -> ArtifactApplicationResult | None:
+        """Return one exact immutable historical application result if present."""
+
+        if (
+            type(application_id) is not str
+            or _SAFE_IDENTITY.fullmatch(application_id) is None
+        ):
+            _raise_application_failure(ArtifactApplicationErrorCode.INVALID_IDENTIFIER)
+        try:
+            with self._locked_repository():
+                return self._applications.inspect_result(application_id)
+        except ArtifactApplicationStoreFailure as exc:
+            _raise_application_failure(_STORE_FAILURE_CODES[exc.code])
+        except (WorkspaceFormatError, WorkspaceSecurityError):
+            _raise_application_failure(ArtifactApplicationErrorCode.CORRUPTION)
+
     def list_paths(self) -> tuple[str, ...]:
         """Return every safe current canonical filesystem identity."""
 

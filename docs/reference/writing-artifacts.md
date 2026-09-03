@@ -1677,6 +1677,54 @@ workflow must separately prepare exact Git evidence from the applied state and
 obtain its own fresh Commit decision. The application result alone is neither
 Git authority nor proof that the user confirmed Commit.
 
+### Inspecting one historical application
+
+The module-supported repository also provides one read-only lookup:
+
+```python
+result = repository.inspect_artifact_application("application-1")
+```
+
+The ID must be an exact built-in `str` matching the safe application-ID grammar;
+an empty value, unsafe value, non-string, or string subclass raises
+`ArtifactApplicationErrorCode.INVALID_IDENTIFIER` before locking. A valid call
+takes the repository lock and workspace lease once, recovers pending journals,
+audits the complete application-record history against the current catalog,
+delegates one lookup, and then returns:
+
+```text
+input: "application-1" (existing completed identity)
+output: ArtifactApplicationResult(state="applied", original exact facts...)
+
+input: "missing" (safe but absent identity)
+output: None
+```
+
+An existing lookup always returns the immutable historical `applied` result
+stored by the first application. It does **not** return `unchanged`; that state
+belongs only to calling `apply_artifact_changes()` again with the exact completed
+request. An absent lookup returns `None` only after recovery and the full
+ledger/catalog audit succeeds. On a brand-new workspace, taking the repository
+lease may initialize its standard lock/state-directory topology, but inspection
+does not initiate a new artifact/application write. Recovery may finish an
+already-journaled application before returning; otherwise inspection writes no
+canonical artifact, application record, journal, or catalog entry.
+
+Inspection does not reconstruct or expose the content-bearing request, reapply
+the operation, infer a session, or initiate changes to files, context, provider
+state, agents, or Git. The returned result remains content-free but does expose
+its intended paths, digests, candidate/application identifiers, rename lineage,
+and deletion provenance. Malformed catalog/record authority raises content-safe
+`CORRUPTION`; a durable block marker or unrecoverable journal raises
+`RECOVERY_REQUIRED`. Preserve the workspace and follow the recovery action
+below rather than treating either failure as absence.
+
+Later #527 session recovery may look up the application ID already recorded in
+its own correlated session evidence. This seam supplies only application truth;
+it cannot discover or prove which session, confirmation, or conversation owns
+that application. The lookup is additive over existing schema-1 application
+records and introduces no persisted format or migration.
+
 <a id="provenance-and-work-history"></a>
 
 ## Provenance, membership, and immutable history
