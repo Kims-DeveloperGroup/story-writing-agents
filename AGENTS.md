@@ -106,21 +106,119 @@ create a subagent merely to run a deterministic command. The main agent should
 batch safe, independent static reads through its tools when no specialist
 judgment or mandatory ownership is required.
 
-Use these dynamic model and reasoning-effort recommendations per dispatch:
+### Root-Capability Routing
 
-| Agent | Default | Escalation |
+Select every child model and reasoning effort at dispatch time. First resolve
+the root's effective model and effort after aliases, configured defaults, and
+session overrides, together with the runtime-supported child settings and
+available pairs. Custom-agent TOMLs remain unpinned so dispatch-time selection
+or exact parent inheritance stays authoritative.
+
+Measure `dispatch_context_tokens` over only the compact `task_packet`,
+intentionally inherited turns, attachments or preloaded text, and other
+irreducible material the child receives. Record the count as `observed`,
+`estimated`, or `unavailable`, including method and confidence, then classify:
+
+| Context class | Dispatch material |
+| --- | --- |
+| `compact` | at most 8,192 tokens |
+| `moderate` | 8,193--32,768 tokens |
+| `large` | 32,769--131,072 tokens |
+| `oversized` | more than 131,072 tokens, or unable to fit with the selected model's verified output and reasoning reserve |
+
+An unavailable measurement that cannot establish fit is `oversized`. Narrow
+or split oversized work before dispatch. More context never permits a child
+above either root ceiling.
+
+Classify logical complexity and risk separately from context:
+
+- `routine`: literal, mechanical, reversible work with no unresolved judgment
+  or material risk;
+- `standard`: bounded semantic work in one established responsibility;
+- `complex`: substantial ambiguity, an unknown causal failure, multi-domain
+  synthesis, module-boundary or public-API work, compatibility or migration,
+  security or authorization, concurrency, process or PTY behavior, lifecycle,
+  persistence, resource ownership, or difficult nonlocal edge cases; and
+- `critical`: at least two interacting `complex` triggers, or an explicitly
+  high-consequence security, data-loss, irreversible-migration, or
+  breaking-compatibility decision.
+
+Use the resulting class for the quality target:
+
+| Task class | Desired model | Desired effort |
 | --- | --- | --- |
-| `requirements_analyst` | `gpt-5.6-terra`, `medium` | `gpt-5.6-sol`, `high` for multi-domain, security, migration, or deep ambiguity |
-| `regression_diagnostician` | `gpt-5.6-sol`, `high` | Already quality-oriented because dispatch is limited to unknown causal failures |
-| `modularity_maintainer` | `gpt-5.6-sol`, `high` | `gpt-5.6-terra`, `medium` only for an accepted index-only reconciliation |
-| `runtime_implementer` | `gpt-5.6-sol`, `medium` | `high` for security, concurrency, migration, public API, or difficult edge cases |
-| `test_engineer` | `gpt-5.6-terra`, `medium` | `gpt-5.6-sol`, `high` for security, concurrency, PTY/process, lifecycle, or complex risk coverage |
-| `documentation_maintainer` | `gpt-5.6-terra`, `medium` | `gpt-5.6-sol`, `high` for normative governance, security, compatibility, or migration policy |
+| `routine` | `gpt-5.6-terra` | `medium` |
+| `standard` | `gpt-5.6-sol` | `high` |
+| `complex` | `gpt-5.6-sol` | `xhigh` |
+| `critical` | `gpt-5.6-sol` | `max` |
 
-These are recommendations, not account-specific TOML pins. For every dispatch,
-the main agent records model availability, the selected model and effort, and
-any compatible fallback with its reason; it never silently assumes a model is
-available or lowers the required quality.
+The role target is `routine` unless these role requirements raise it:
+
+- `requirements_analyst` and `regression_diagnostician` require `complex`
+  because their allowed dispatches involve substantial ambiguity or an
+  unknown causal failure.
+- `modularity_maintainer` requires `complex` for boundary work; an accepted
+  index-only reconciliation keeps the class warranted by its actual work.
+- `runtime_implementer` requires `complex` for security, concurrency,
+  migration, public API, or difficult nonlocal edge cases.
+- `test_engineer` requires `complex` for security, concurrency, PTY/process,
+  lifecycle, or complex-risk coverage.
+- `documentation_maintainer` requires `complex` for normative governance,
+  security, compatibility, or migration policy.
+
+Role requirements may only raise the task-derived class. For the model axis,
+`compact` and `moderate` context have a `gpt-5.6-luna` floor, while `large`
+context raises the target to `gpt-5.6-sol`. Context does not raise effort;
+logical complexity and risk control it. Derive and clamp the two axes
+independently:
+
+```text
+desired_model = max(task_model_target, role_model_target, context_model_target)
+desired_effort = max(task_effort_target, role_effort_target)
+capped_model = min(desired_model, root_effective_model)
+capped_effort = min(desired_effort, root_effective_effort)
+```
+
+These operations require a verified order. The only initially comparable model
+ladder is `gpt-5.6-luna < gpt-5.6-terra < gpt-5.6-sol`. Do not invent an order
+across GPT-5.4, GPT-5.5, GPT-5.6, unresolved aliases, unrelated families, or
+future models. The portable effort ladder is
+`none < low < medium < high < xhigh < max`. `ultra` participates only when the
+active runtime exposes it as a comparable, selectable child effort.
+
+Treat the capped pair as the preferred minimum-quality target and the effective
+root pair as the strict ceiling. Filter to context-compatible available pairs
+whose model and effort are each at least the capped value and at most the root
+value. Prefer the exact capped pair; if it is unavailable, choose the nearest
+stronger compatible pair by the fewest total upward ladder steps, breaking ties
+by the smaller model increase and then the smaller effort increase. Never
+substitute a pair below either capped value merely for availability or cost.
+
+Select the pair atomically: supply both overrides or neither, never only one.
+If root capability, ordering, availability, or a supported compatible pair
+remains unresolved, omit both settings and require exact parent inheritance;
+selecting only a model can instead apply that model's default effort. If
+runtime evidence establishes that a weaker pair is the only explicit option,
+return for root decision instead of selecting it automatically.
+
+Set `ceiling_limited = true` when either capped axis is below its desired axis.
+Ceiling-limited work that is not high-consequence may proceed at a compatible
+selected pair only with residual risk recorded. For high-consequence work, a
+ceiling-limited decision must stop for a narrower task or a stronger root
+session instead of silently accepting lower quality.
+
+Record the effective root pair and source; context count, class, method, and
+confidence; complexity class and triggers; role target; desired, capped, and
+selected pairs; available compatible pairs; `ceiling_limited`; and fallback or
+inheritance reason in task identity and evidence. Keep the child scope narrow
+through explicit exclusions, accepted upstream decisions, observable
+acceptance criteria, evidence classified as `observed`, `inferred`,
+`proposed`, or `unknown`, and stop conditions that return uncertainty instead
+of guessing.
+
+This policy follows the official OpenAI guidance for
+[subagent inheritance and model/effort selection](https://learn.chatgpt.com/docs/agent-configuration/subagents)
+and the current [GPT-5.6 model and reasoning profiles](https://developers.openai.com/api/docs/guides/latest-model).
 
 ### Modularity Gate
 
