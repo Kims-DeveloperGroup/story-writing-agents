@@ -35,6 +35,7 @@ class GitOperationKind(StrEnum):
     STATUS = "status"
     DIFF_METADATA = "diff_metadata"
     LOG_METADATA = "log_metadata"
+    INSPECT_EXTERNAL_OPERATION = "inspect_external_operation"
 
 
 class GitRepositoryState(StrEnum):
@@ -58,6 +59,17 @@ class GitTopologyKind(StrEnum):
     ROOT_MISMATCH = "root_mismatch"
     SYMLINKED_ADMINISTRATIVE_PATH = "symlinked_administrative_path"
     MALFORMED_ADMINISTRATIVE_PATH = "malformed_administrative_path"
+
+
+class GitExternalOperationKind(StrEnum):
+    """Closed external Git operations visible in administrative metadata."""
+
+    NONE = "none"
+    MERGE = "merge"
+    REBASE = "rebase"
+    CHERRY_PICK = "cherry_pick"
+    REVERT = "revert"
+    SEQUENCER = "sequencer"
 
 
 class GitChangeKind(StrEnum):
@@ -270,6 +282,21 @@ class GitRepositoryTopology:
 
 
 @dataclass(frozen=True, slots=True)
+class GitExternalOperationInspection:
+    """Content-free external-operation kind and opaque physical identities."""
+
+    kind: GitExternalOperationKind
+    repository_identity_digest: str
+    worktree_identity_digest: str
+
+    def __post_init__(self) -> None:
+        if type(self.kind) is not GitExternalOperationKind:
+            raise _contract_error(GitFailureCode.OUTPUT_INVALID)
+        _require_output_digest(self.repository_identity_digest)
+        _require_output_digest(self.worktree_identity_digest)
+
+
+@dataclass(frozen=True, slots=True)
 class GitBaselineInspection:
     """Exact nonmutating baseline and recovery truth."""
 
@@ -460,6 +487,12 @@ def _require_digest(value: object) -> str:
     return value
 
 
+def _require_output_digest(value: object) -> str:
+    if type(value) is not str or _DIGEST.fullmatch(value) is None:
+        raise _contract_error(GitFailureCode.OUTPUT_INVALID)
+    return value
+
+
 def _require_object_id(value: object) -> str:
     if type(value) is not str or _OBJECT_ID.fullmatch(value) is None:
         raise _contract_error(GitFailureCode.OUTPUT_INVALID)
@@ -560,6 +593,7 @@ __all__ = [
     "GitOperationKind",
     "GitRepositoryState",
     "GitTopologyKind",
+    "GitExternalOperationKind",
     "GitChangeKind",
     "GitFailureCode",
     "GitRecoveryAction",
@@ -569,6 +603,7 @@ __all__ = [
     "GitIdentity",
     "GitEffectiveIdentity",
     "GitRepositoryTopology",
+    "GitExternalOperationInspection",
     "GitBaselineInspection",
     "GitStatusEntry",
     "GitStatus",

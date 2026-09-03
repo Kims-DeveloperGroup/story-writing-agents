@@ -1784,31 +1784,34 @@ every intermediate arrow. The current runtime graph is acyclic.
 - **Source:** `src/story_writing_agents/git/__init__.py`
 - **Responsibility:** Provide the stable provider-independent safe Git import
   boundary.
-- **Supported surface:** Exactly 22 names in `__all__`:
+- **Supported surface:** Exactly 24 names in `__all__`:
   `GIT_BASELINE_BRANCH`, `GIT_BASELINE_COMMIT_MESSAGE`, `GitOperationKind`,
-  `GitRepositoryState`, `GitTopologyKind`, `GitChangeKind`, `GitFailureCode`,
-  `GitRecoveryAction`, `GitOperationError`, `GitManifestEntry`,
+  `GitRepositoryState`, `GitTopologyKind`, `GitExternalOperationKind`,
+  `GitChangeKind`, `GitFailureCode`, `GitRecoveryAction`, `GitOperationError`,
+  `GitManifestEntry`,
   `GitBaselineManifest`, `GitIdentity`, `GitEffectiveIdentity`,
-  `GitRepositoryTopology`, `GitBaselineInspection`, `GitStatusEntry`,
-  `GitStatus`, `GitDiffEntry`, `GitDiffMetadata`, `GitCommitMetadata`,
-  `GitLogMetadata`, and `GitRepositoryAdapter`. These names are intentionally
-  absent from the project-root facade.
+  `GitRepositoryTopology`, `GitExternalOperationInspection`,
+  `GitBaselineInspection`, `GitStatusEntry`, `GitStatus`, `GitDiffEntry`,
+  `GitDiffMetadata`, `GitCommitMetadata`, `GitLogMetadata`, and
+  `GitRepositoryAdapter`. These names are intentionally absent from the
+  project-root facade.
 - **Direct internal dependencies:** `git.adapter` and `git.contracts`.
 - **State, resources, and side effects:** Owns no state or external resource.
   Import only binds the pure contracts and adapter class and performs no
   filesystem access, environment read, process launch, repository operation,
   or workspace initialization.
 - **Primary verification/documentation:**
-  `tests/test_git_contracts.py` and
+  `tests/test_git_contracts.py`,
+  `tests/test_git_external_operation_inspection.py`, and
   `tests/test_rag_module_and_packaging_boundary.py`; the supported facade and
   complete user-facing boundary are documented in
-  `docs/reference/git-adapter.md`.
+  `docs/reference/git-adapter.md#external-git-operation-inspection`.
 
 ### `story_writing_agents.git.contracts`
 
 - **Source:** `src/story_writing_agents/git/contracts.py`
 - **Responsibility:** Define immutable closed contracts for safe Git operations.
-- **Supported surface:** Exactly the facade's 21 constants, enums, error, and
+- **Supported surface:** Exactly the facade's 23 constants, enums, error, and
   frozen slotted values other than `GitRepositoryAdapter`, in identical
   `__all__` order. Fixed baseline constants are branch `main` and message
   `Initialize story workspace`. No arbitrary command, argv, environment,
@@ -1816,15 +1819,18 @@ every intermediate arrow. The current runtime graph is acyclic.
   field exists.
 - **Direct internal dependencies:** None.
 - **State, resources, and side effects:** Owns only immutable validation policy,
-  fixed content-free diagnostics, and canonical manifest identity derivation.
-  It retains no mutable state and performs no filesystem, environment, process,
-  repository, provider, network, or import-time operational I/O. Public errors
-  carry only closed failure/operation/state/recovery facts and fixed text;
-  identity fields are excluded from representations.
+  fixed content-free diagnostics, canonical manifest identity derivation, and
+  strict opaque external-operation identity projections. It retains no mutable
+  state and performs no filesystem, environment, process, repository, provider,
+  network, or import-time operational I/O. Public errors carry only closed
+  failure/operation/state/recovery facts and fixed text; Git author identity
+  fields are excluded from representations and physical identities are exposed
+  only as validated lowercase SHA-256 digests.
 - **Primary verification/documentation:**
-  `tests/test_git_contracts.py`; contract values, manifest rules, failure
-  states, and public examples are documented in
-  `docs/reference/git-adapter.md`.
+  `tests/test_git_contracts.py` and
+  `tests/test_git_external_operation_inspection.py`; contract values, manifest
+  rules, failure states, and public examples are documented in
+  `docs/reference/git-adapter.md#external-git-operation-inspection`.
 
 ### `story_writing_agents.git.adapter`
 
@@ -1835,7 +1841,8 @@ every intermediate arrow. The current runtime graph is acyclic.
   re-exported by the `git` facade. Its public constructor accepts only one
   absolute lexical root; its fixed methods are `inspect_topology`,
   `inspect_baseline`, `create_baseline`, `status`, `diff_metadata`, and
-  `log_metadata`. No public generic runner or raw Git command escape exists.
+  `log_metadata`, plus zero-argument `inspect_external_operation`. No public
+  generic runner or raw Git command escape exists.
 - **Direct internal dependencies:** `git.contracts` and `git.process`.
 - **State, resources, and side effects:** Construction retains only a lexical
   absolute `Path` and performs no I/O. Each operation freshly binds and
@@ -1851,15 +1858,24 @@ every intermediate arrow. The current runtime graph is acyclic.
   creates only the fixed root commit and `main` ref, and detects an identical
   retry. Inspection and cancellation recovery expose exactly absent,
   initialized-without-baseline, baseline-committed, or recovery-required;
-  repository content and raw stdout/stderr never cross the adapter. It owns no
-  story initialization, workspace/session topology, later commit confirmation,
-  worktree, internal ref, remote, merge, reset, clean, provider, artifact, or
-  GitHub behavior.
+  repository content and raw stdout/stderr never cross the adapter. External
+  operation inspection invokes no process: it directly and repeatedly validates
+  the physical root, per-worktree administrative directory, common repository
+  directory, and the closed merge/rebase/cherry-pick/revert/sequencer marker
+  grammar before returning only the kind and opaque repository/worktree
+  identity digests. Unsafe, unreadable, replaced, wrong-type, racing, or
+  ambiguous administrative observations fail closed as recovery-required. It
+  owns no story initialization, workspace/session topology, later commit
+  confirmation, worktree, internal ref, remote, operation continuation or
+  abortion, reset, clean, provider, artifact, or GitHub behavior.
 - **Primary verification/documentation:**
   `tests/test_git_adapter_process.py` and
-  `tests/test_git_adapter_integration.py`; operation behavior, safety
-  boundaries, recovery, and external meaning are documented in
-  `docs/reference/git-adapter.md`.
+  `tests/test_git_adapter_integration.py`, plus
+  `tests/test_git_external_operation_inspection.py`; operation behavior,
+  safety boundaries, recovery, and external meaning are documented in
+  `docs/reference/git-adapter.md#external-git-operation-inspection`,
+  `docs/operations/recovery-and-limitations.md#external-git-operation-recovery`,
+  and `docs/guides/workspaces.md#external-git-operation-guard`.
 
 ### `story_writing_agents.git.process`
 

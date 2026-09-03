@@ -59,6 +59,44 @@ unsupported or malformed inner marker/journal/legacy sentinel to select an
 outer workspace. An explicit path also validates strictly and never
 initializes.
 
+<a id="external-git-operation-recovery"></a>
+
+## External Git operation recovery
+
+The direct Git facade can inspect an externally started operation without
+running Git or mutating the repository. This observation is not yet wired to a
+session command or lifecycle guard; #527 will correlate it with session
+evidence and #528 will enforce blocking.
+
+| Observed kind | User meaning and one safe response |
+| --- | --- |
+| `none` | No supported external-operation marker is present. Continue only after separate `GitStatus`, topology, and workflow checks also pass; this does not prove a clean index/worktree. |
+| `merge` | One unambiguous merge is active. Stop Story mutation and resolve the merge externally before reinspection. |
+| `rebase` | Exactly one rebase mode is active. Stop Story mutation and resolve the rebase externally before reinspection. |
+| `cherry_pick` | One cherry-pick, optionally using the sequencer, is active. Stop Story mutation and resolve it externally before reinspection. |
+| `revert` | One revert, optionally using the sequencer, is active. Stop Story mutation and resolve it externally before reinspection. |
+| `sequencer` | Sequenced Git work exists without the supported cherry-pick/revert head. Stop Story mutation and inspect/resolve that operation externally. |
+| `RECOVERY_REQUIRED` | Markers are mixed, contradictory, wrong-type, symlinked, unreadable, replaced, or changed during inspection. Preserve the repository, common Git administration, worktree, markers, index, refs, and files; inspect them offline. |
+
+The failure is content-safe and recommends `inspect_repository`. The adapter
+never chooses `git merge --continue`, `rebase --abort`, reset, clean, checkout,
+or another repair. It also cannot infer which story session owns the work. A
+dirty, staged, or unmerged `GitStatus` remains separate evidence: neither
+inspection result substitutes for the other.
+
+```text
+input: direct inspection of MERGE_HEAD plus rebase-merge/
+output: GitOperationError(
+  code="recovery_required",
+  operation="inspect_external_operation",
+  recovery_action="inspect_repository"
+)
+repository mutation: none
+```
+
+See [External Git operation inspection](../reference/git-adapter.md#external-git-operation-inspection)
+for the exact accepted marker shapes and opaque identity binding.
+
 <a id="session-git-resource-recovery"></a>
 
 ## Session Git-resource recovery
