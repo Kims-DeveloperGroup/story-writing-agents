@@ -5,8 +5,10 @@
 > create a session resource, or authorize a later story commit. A separate
 > package-internal seam can now materialize exact session Git resources, but
 > current `story session` commands do not call it until #455. Another internal
-> seam can persist content-free evidence for later commits and checkpoints;
-> #509, #510, and #492 still own those operations and their confirmation UI.
+> seam persists content-free commit/checkpoint evidence. An internal service
+> can now execute exact confirmed story commits, while #491 and #492 still own
+> application production and the user-facing lead confirmation UI; #510 owns
+> checkpoints.
 
 Key terms: **initialization root**—the pristine `main` baseline; **marker**—the
 strict `config/workspace.json` identity; **journal**—the temporary durable
@@ -139,10 +141,10 @@ worktree: <workspace-parent>/<workspace-name>.story-worktrees/novel
 
 `story init` records only this grammar. The package-internal #504 lifecycle can
 create the correlated triple; #455 owns its connection to the installed
-session commands. #505 coordinates later history work: #509 owns confirmed
-story commits, #510 owns internal checkpoints, and #492 owns their confirmation
-UI. The original `main` root remains the exact initialization baseline
-throughout.
+session commands. #505 coordinates later history work. #509 now supplies exact
+story commits internally; #491 and #492 still own application production and
+the lead confirmation UI, and #510 owns internal checkpoints. The original
+`main` root remains the exact initialization baseline throughout.
 
 ## Session Git resources
 
@@ -240,9 +242,10 @@ and the [internal Git-resource contract](../reference/git-adapter.md#package-int
 
 ## Durable session-history infrastructure
 
-This section explains infrastructure that future confirmed story commits and
-internal checkpoints will use. There is no `story commit` or checkpoint command
-in this revision, and the lead cannot trigger either operation yet.
+This section explains infrastructure now used by internal exact story commits
+and reserved for future internal checkpoints. There is no `story commit` or
+checkpoint command in this revision, and the lead cannot trigger either
+operation yet.
 
 Before #508, an interrupted future Git operation would have had no dedicated,
 restart-safe record showing which candidate and repository tip it concerned.
@@ -256,11 +259,14 @@ Available internally now (#508)
   -> fixed monotonic state
   -> safe process profile and shared repository serialization
 
-Future confirmed story commit (#492 + #509)
-  user: "Apply the approved outline change"
+Internal exact story commit now (#509)
+  typed successful application evidence + exact structured decision
+  -> prepare candidate -> authorize Commit -> stage -> commit -> classify
+
+Future lead integration (#491 + #492)
   lead: proposes exact paths, impact, and commit message
-  user: confirms
-  runtime: records evidence -> stages -> commits -> reports the commit ID
+  user: chooses Commit, Reject, or Revise
+  runtime: supplies the typed evidence/decision to #509
 
 Future internal checkpoint (#510)
   runtime: records evidence -> uses its isolated index -> advances internal ref
@@ -271,7 +277,7 @@ The future output will be based on the durable classification rather than a
 blind retry. For example, interruption after a Git process starts can produce
 `outcome_unknown`; restart must inspect the exact repository facts instead of
 reusing the user's confirmation. #508 supplies that classification, but does
-not currently execute or display this scenario.
+not currently display this scenario.
 
 ### What the recorded states mean
 
@@ -315,6 +321,151 @@ not automatically deleted. See the
 [exact internal contract](../reference/git-adapter.md#package-internal-session-history),
 [recovery table](../operations/recovery-and-limitations.md#session-history-recovery),
 and [privacy implications](../operations/privacy-and-provider.md#session-history-exposure).
+
+<a id="exact-confirmed-story-commits"></a>
+
+## Exact confirmed story commits
+
+The capability in this section is package-internal. It proves the runtime can
+perform the safe Git part of a confirmed story commit, but there is no installed
+command and no current lead conversation calls it. #491 must first supply typed
+evidence that an exact artifact change set was successfully applied, and #492
+must turn an interactive user choice into the structured decision shown below.
+
+### User impact and complete flow
+
+With that integration, users can review every affected canonical path,
+before/after digest, proposed message, impact boundary, branch tip/tree, opaque
+correlations, and author/committer identity source before choosing Commit,
+Reject, or Revise. Applying files never stages or commits them. A stale,
+revised, mismatched, or already-used decision never persists as replayable Git
+authority: the same service rejects a reused confirmation ID, and a process
+restart loses every authority. #492 must obtain a fresh user decision after
+restart rather than resubmitting an old decision value.
+
+```text
+successful artifact application evidence (#491)
+  -> Prepare: verify exact files/session/index and persist immutable candidate
+  -> lead shows content-free candidate projection (#492)
+  -> user chooses Commit | Reject | Revise (#492)
+  -> Commit only: one-use authority -> durable running -> exact staging
+                  -> durable staged -> commit-tree -> branch CAS
+                  -> durable committed result
+```
+
+Prepare is read-only for working files, the real index, Git objects, refs, and
+commits. Its only durable write is the immutable content-free candidate record.
+It fails before that publication for pre-staged entries, unreported canonical
+changes, mismatched application bytes/digests, an unsafe path, or a moved
+session branch/tip. Unrelated noncanonical files remain unchanged and are not
+included in the candidate.
+
+### Successful Commit example
+
+The following is an illustrative projection of the exact typed values, not a
+current CLI transcript or JSON wire protocol:
+
+```json
+{
+  "request": "Apply the approved opening revision",
+  "candidate": {
+    "candidate_id": "<sha256>",
+    "session_id": "novel",
+    "branch": "story/session/novel",
+    "branch_tip": "<object-id>",
+    "expected_tree": "<object-id>",
+    "paths": [
+      {
+        "path": "core_documents/global_outline.md",
+        "operation": "update",
+        "before_sha256": "<sha256>",
+        "after_sha256": "<sha256>"
+      }
+    ],
+    "proposed_message": "Revise the opening structure",
+    "impact_boundary": ["Readers encounter the inciting event earlier"],
+    "author_identity_source": "repository",
+    "committer_identity_source": "repository",
+    "proposal_id": "proposal:opening-2",
+    "correlation_id": "correlation:opening-2"
+  }
+}
+```
+
+```text
+Lead: Commit this exact candidate, reject it, or revise the proposal?
+User: Commit.
+```
+
+```json
+{
+  "decision": "commit",
+  "confirmation_id": "confirmation:opening-2",
+  "candidate_id": "<same-sha256>",
+  "proposal_id": "proposal:opening-2",
+  "correlation_id": "correlation:opening-2"
+}
+```
+
+```json
+{
+  "state": "committed",
+  "recovery_action": "none",
+  "branch": "story/session/novel",
+  "branch_tip": "<new-object-id>",
+  "commit_id": "<same-new-object-id>",
+  "candidate_id": "<same-sha256>",
+  "operation_id": "<32-lowercase-hex>"
+}
+```
+
+The runtime revalidates the complete candidate twice around authorization and
+execution. After durable `running`, it hashes each create/update body literally
+with filters disabled and stages only the exact path; deletion stages only an
+exact literal removal. After durable `staged`, it verifies the index tree,
+creates one commit whose sole parent is the candidate branch tip and whose
+message/identity are the prepared values, then compare-and-swap updates only
+that session branch. SHA-1 and SHA-256 repositories follow the same contract;
+only object-ID length differs.
+
+Create maps to `create`; patch and replace map to `update`; delete maps to
+`delete`. Rename maps to two UTF-8-byte-sorted entries: source `delete` plus
+destination `create`. Only canonical core documents and manuscripts may appear.
+The internal ref, pristine main root/head/index/status, noncandidate index
+state, and unrelated noncanonical working bytes remain invariant.
+
+### Reject, Revise, drift, and interruption
+
+- **Reject:** the future user selects Reject. The runtime records terminal
+  `rejected`, changes no Git object/index/ref or artifact byte, and preserves
+  the candidate. A different later decision needs a fresh confirmation.
+- **Revise:** the future user asks the lead to change paths, message, or impact.
+  The runtime records `rejected`, invalidates that candidate's process-local
+  binding, and requires newly applied evidence, a newly prepared candidate, and
+  a new confirmation. The old authority cannot be recovered.
+- **Drift before staging:** if a canonical byte, session tip, index, identity
+  source, internal ref, or main-root fact no longer matches,
+  authorization/execution returns a content-free failure with `reprepare`.
+  Even if confirmation was already supplied, it cannot be reused. A mismatched
+  candidate/proposal/correlation ID is instead rejected as invalid authority and
+  is not acceptance of anything.
+- **Interrupted after staging:** restart can prove the branch stayed at the old
+  tip and the worktree/index exactly matches the expected tree. It reports
+  `staged` with `operator_recovery`; it never resets, commits, cleans, or replays
+  the consumed confirmation automatically.
+- **Commit exists after a lost result:** if the session branch already points
+  to the exact one-parent candidate commit, recovery records `committed` and
+  returns that object ID without creating another commit.
+- **Outcome unknown:** a foreign branch tip, unclassifiable process result, or
+  uncertain post-mutation history leaves `outcome_unknown` with `inspect`.
+  Preserve files, index, refs, objects, and records; do not auto-retry.
+
+The [recovery matrix](../operations/recovery-and-limitations.md#session-history-recovery)
+defines the exact safe next action for all seven states. The
+[internal API and Git sequence](../reference/git-adapter.md#package-internal-exact-story-commits),
+[artifact-operation mapping](../reference/writing-artifacts.md#story-commit-application-evidence),
+and [privacy boundary](../operations/privacy-and-provider.md#session-history-exposure)
+provide the lower-level details.
 
 ## Core documents and role files
 

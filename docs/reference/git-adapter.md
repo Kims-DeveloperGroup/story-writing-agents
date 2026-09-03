@@ -15,8 +15,9 @@ This is the complete availability boundary for issue
   The CLI does not expose manifest selection or another Git operation.
 - The public adapter still has no session branch, worktree, internal-ref, or
   later-commit method. Separate package-internal #504 modules now own exact
-  session resources for #455 composition. Confirmed story commits and internal
-  checkpoints remain #505.
+  session resources for #455 composition. Package-internal #509 now owns exact
+  story commits; #491/#492 still own their application/confirmation integration,
+  and #510 owns internal checkpoints.
 
 The adapter is not a general Git client. It accepts no command, argument list,
 revision, ref, commit message, credential, prose, or provider-tool input.
@@ -575,6 +576,147 @@ and repository facts. It must not replay a consumed confirmation or rerun Git
 from `running`/`staged` merely because no success was returned. See
 [session-history recovery](../operations/recovery-and-limitations.md#session-history-recovery)
 and [session-history privacy](../operations/privacy-and-provider.md#session-history-exposure).
+
+<a id="package-internal-exact-story-commits"></a>
+
+## Package-internal exact story commits
+
+Issue #509 implements the local Git operation behind a future lead-confirmed
+story commit. It remains a direct-module capability: there is no CLI command,
+provider path, lead binding, or export from `story_writing_agents`,
+`story_writing_agents.git`, or a workspace facade. #491 owns production of
+successful typed application evidence, #492 owns the interactive lead
+projection and confirmation UI, and #510 separately owns checkpoints.
+
+The three internal owners are:
+
+| Module | Responsibility |
+| --- | --- |
+| `git.story_commit_contracts` | Frozen typed application evidence, candidate paths/candidate, lead projection, structured confirmation, decision/state/failure/recovery enums, content-free result, and projection. |
+| `git.story_commit_candidates` | Prepare/load/revalidate one exact candidate, bind content-bearing staging inputs only in process memory, and publish immutable candidate history. |
+| `git.story_commits` | Process-local authority, Commit/Reject/Revise decision handling, exact execution, durable inspection, and conservative restart recovery. |
+
+The direct-module operations are:
+
+```text
+prepare_story_commit_candidate(root, manifest, evidence, message, impact)
+load_story_commit_candidate(root, manifest, session_id, candidate_id)
+revalidate_story_commit_candidate(binding, history=None)
+project_story_commit_candidate(candidate)
+
+StoryCommitService(root, manifest, session_id)
+  .prepare(evidence, message, impact)
+  .authorize(candidate, commit_confirmation)
+  .execute(authority)
+  .reject(candidate, reject_confirmation)
+  .revise(candidate, revise_confirmation)
+  .inspect(operation_id)
+  .recover(operation_id)
+```
+
+These are internal contracts, not a stable application API. The serializable
+values contain no method or hidden capability. `StoryCommitAuthority` can be
+created only by the service after one exact fresh Commit decision; it is bound
+to that service owner, process, and thread, cannot be copied/pickled, and is
+consumed before the first filesystem or Git action. Reject/Revise/Apply/
+consultation values cannot authorize execution, a confirmation ID cannot be
+reserved twice by the same service, and candidate/proposal/correlation IDs must
+all match. No authority survives restart; the future #492 owner must obtain a
+fresh user decision instead of presenting an old serialized decision again.
+
+### Prepare and lead projection
+
+`StoryCommitApplicationEvidence` binds the session, application/proposal/
+correlation IDs, exact `ArtifactChangeSet`, and its projected-state digest.
+Prepare requires that the change set is already applied exactly in the ready
+session worktree. It proves:
+
+- symbolic `HEAD` names the exact session branch and equals the ready tip;
+- the real index has no pre-staged entry;
+- the complete current canonical artifact mapping equals the projected change
+  set, with no unreported canonical change;
+- candidate paths are exact unique canonical artifact paths;
+- the expected full tree can be derived without writing a Git object;
+- effective author/committer identity and its source are stable;
+- the internal ref, main `HEAD`, main status, session/main directory identities,
+  and worktree identity match; and
+- unrelated noncanonical files are excluded and left byte-identical.
+
+Its only durable mutation is create-only publication of the immutable candidate
+under #508 session history. It does not alter a working file, index, object,
+ref, branch, or commit. Repeating the exact preparation returns the same
+content-addressed candidate.
+
+The lead projection exposes candidate/session/branch/tip/tree IDs, exact path
+operations and before/after SHA-256 digests, bounded proposed message and
+sorted impact boundary, application/proposal/correlation IDs, and identity-
+source categories. It deliberately omits story bytes, effective identity
+values, worktree identity, runtime binding, authority, raw Git output, and
+provider text.
+
+Artifact application operations normalize as follows:
+
+| Applied operation | Candidate path entries |
+| --- | --- |
+| Create | destination `create` with only `after_sha256` |
+| Patch or replace | path `update` with distinct `before_sha256` and `after_sha256` |
+| Delete | source `delete` with only `before_sha256` |
+| Rename | source `delete` plus destination `create`, then all entries sorted by UTF-8 path bytes |
+
+### Exact Commit sequence
+
+Authorize revalidates the process-local binding before minting one-use
+authority. Execute consumes that authority, takes the common-Git/session-history
+lease, revalidates again, then follows this fixed order:
+
+```text
+publish and fsync RUNNING operation evidence
+-> for each sorted candidate path only:
+     create/update: hash-object -w --no-filters --stdin
+                    update-index --add --cacheinfo 100644,<blob>,<literal-path>
+     delete:        update-index --force-remove -- <literal-path>
+-> write-tree and require candidate.expected_tree
+-> publish and fsync STAGED operation evidence
+-> commit-tree <expected-tree> -p <prepared-tip>
+   using the prepared literal message and effective identity
+-> update-ref refs/heads/<session-branch> <commit> <prepared-tip>
+-> verify exact new session tip/tree plus unchanged main head/status and
+   internal ref; literal targeting leaves main index and unrelated bytes alone
+-> publish and fsync COMMITTED evidence with the commit ID
+```
+
+The branch update is compare-and-swap; it cannot silently replace a moved tip.
+The commit has exactly one parent, exact expected tree/message, no hook/signing/
+filter/textconv/alias/editor/pager/credential widening, and the prepared
+effective author and committer. The same algorithm works in SHA-1 and SHA-256
+repositories. It does not update the internal checkpoint ref, main root, remote,
+or any noncandidate path. It provides no reset, clean, checkout, merge, rebase,
+push, deletion, migration, or compatibility operation.
+
+### Decisions, results, and restart
+
+Reject records one terminal `rejected` decision without changing files, index,
+objects, or refs; the candidate remains available. Revise records `rejected`
+under the deterministic revision identity, removes the live binding, and makes
+that candidate ineligible for later authorization. A changed proposal therefore
+requires newly applied evidence, a new candidate, and fresh confirmation.
+
+`StoryCommitResult` is content-free: session/candidate/operation/correlation,
+state/recovery action, branch/tip, and optional committed object ID. Inspection
+reads durable evidence only. Recovery performs read-only Git classification
+plus monotonic history updates; it never resets the real index, stages again,
+reuses authority/confirmation, or creates a commit.
+
+- Exact expected staging with the old branch tip is returned as `staged` /
+  `operator_recovery`.
+- A branch tip that is exactly the candidate tree, sole parent, and message is
+  finalized as `committed` without another commit.
+- A conflicting index/worktree is terminal `recovery_required`.
+- An unproved or foreign branch result remains `outcome_unknown` / `inspect`.
+
+See the [user scenarios](../guides/workspaces.md#exact-confirmed-story-commits),
+[recovery matrix](../operations/recovery-and-limitations.md#session-history-recovery),
+and [privacy boundary](../operations/privacy-and-provider.md#session-history-exposure).
 
 ## Safety and privacy boundary
 

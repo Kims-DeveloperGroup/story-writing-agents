@@ -80,6 +80,45 @@ change set to the implemented
 lead-review and apply workflows may consume these values, but this API itself
 grants none of their authority.
 
+<a id="story-commit-application-evidence"></a>
+
+### Story-commit application evidence
+
+The package-internal #509 story-commit service consumes a typed
+`StoryCommitApplicationEvidence` only after some owning workflow has applied the
+exact change set successfully. #491 will produce that evidence; it is not a
+public writing-artifacts export or current CLI/lead behavior. Applying artifact
+files and committing them remain separate operations: Apply never stages or
+commits, and a change-set value or application receipt is not user confirmation
+or Git authority.
+
+The evidence binds the session/application/proposal/correlation IDs, complete
+`ArtifactChangeSet`, and its exact projected-state digest. Candidate preparation
+then rereads the complete canonical artifact state and requires it to equal that
+projection before publishing content-free candidate metadata. An extra
+canonical edit, missing applied edit, digest mismatch, unsafe path, pre-staged
+index entry, or moved session branch fails closed. Noncanonical untracked files
+are excluded and preserved.
+
+The commit candidate maps application operations to Git path effects without
+carrying their content:
+
+| Change-set operation | Candidate path effect |
+| --- | --- |
+| `create` | One `create` with `after_sha256` |
+| `patch` or `replace` | One `update` with distinct `before_sha256` and `after_sha256` |
+| `delete` | One `delete` with `before_sha256` |
+| `rename` | Source `delete` plus destination `create`, sorted with all paths by UTF-8 bytes |
+
+Only the four canonical core documents and valid manuscript paths can enter
+this mapping. During a later exact Commit decision, #509 rereads the current
+after-bytes through the artifact repository, checks those digests again, and
+passes them only to literal filter-free blob/index operations. Reject preserves
+the applied files and candidate. Revise or drift requires newly prepared
+evidence/candidate and fresh confirmation. See the
+[user flow](../guides/workspaces.md#exact-confirmed-story-commits) and
+[internal Git contract](git-adapter.md#package-internal-exact-story-commits).
+
 ### Public Python surface
 
 Import the 16 change-set symbols from the writing-artifacts facade, not the

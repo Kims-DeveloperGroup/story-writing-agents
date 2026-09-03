@@ -20,7 +20,7 @@ The stable inventories in this revision are:
 | `story_writing_agents.workspace` | 3 | `Workspace`, `initialize_workspace`, and `FilesystemConversationCatalog` |
 | `story_writing_agents.writing_artifacts` | 62 | Canonical artifact/reference values plus pure exact change-set and relationship-policy contracts |
 
-The production graph has 110 modules, 392 dependency edges, no cycles, and 104
+The production graph has 113 modules, 407 dependency edges, no cycles, and 104
 package-root exports. The conversations owners contribute 54 event exports and
 20 context exports; their facade bindings are identical to their owner
 bindings.
@@ -74,13 +74,15 @@ contracts, fixed Git process owner, and inspect/list/provision/require-ready
 operations. Three more direct modules own the common-Git repository lease,
 pure session-history contracts, and durable session-history storage; the fixed
 process owner also exposes closed profiles and the exact internal checkpoint
-index value. None is re-exported by the project, Git, or workspace facade; they
-do not expand the 104/22/3 export counts and are not a stable application API
-or arbitrary Git capability. #455 will compose session resources, #509 will
-own story commits, #510 will own checkpoints, and #492 will own their
-confirmation UI. See
+index value. Three #509 direct modules now own pure story-commit values,
+candidate preparation/revalidation, and exact decision/execution/recovery.
+None is re-exported by the project, Git, or workspace facade; they do not
+expand the 104/22/3 export counts and are not a stable application API or
+arbitrary Git capability. #455 will compose session resources, #491 will
+produce applied-change evidence, #492 will own the confirmation UI, and #510
+will own checkpoints. See
 [Package-internal session Git resources](git-adapter.md#package-internal-session-git-resources)
-and [session history](git-adapter.md#package-internal-session-history).
+and [exact story commits](git-adapter.md#package-internal-exact-story-commits).
 
 The three-name `story_writing_agents.workspace` facade remains unchanged:
 

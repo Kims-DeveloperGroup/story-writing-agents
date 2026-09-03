@@ -5,7 +5,7 @@ lead-led execution workflow. Public schema-v1 direct-run consumers are absent;
 generic provider, prompt, context, lifecycle, artifact, and terminal components
 remain available behind explicit module boundaries.
 
-The production graph contains 110 modules, 392 dependency edges, no cycles, and
+The production graph contains 113 modules, 407 dependency edges, no cycles, and
 104 package-root exports.
 
 ## Current user flow
@@ -18,6 +18,7 @@ flowchart LR
     WI --> G[One clean main baseline]
     WI --> GI[Exhaustive correlated Git-resource inventory]
     GI --> GH[Internal content-free session history]
+    GH --> GC[Internal exact story-commit service]
     CLI --> M[Session and conversation management]
     CLI --> I[History, search, transcript, status, inspection]
     CLI --> S[Settings and authentication]
@@ -76,8 +77,9 @@ policy. Initialization creates no session branch, internal ref, or sibling
 worktree. The package-internal #504 seam can inspect/list and provision or
 require-ready one exact correlated triple while the original root remains the
 pristine initialization baseline. #455 owns the installed command connection;
-#505 coordinates confirmed history work; #509 owns story commits, #510 owns
-internal checkpoints, and #492 owns their confirmation UI.
+#505 coordinates confirmed history work. Exact story commits now exist as
+package-internal #509 infrastructure; #491 still owns application production,
+#492 owns the lead confirmation UI, and #510 owns internal checkpoints.
 
 ### Session Git-resource lifecycle
 
@@ -112,11 +114,44 @@ document bytes, provider text, or executable authority.
 Closed Git process profiles suppress prompts and repository- or user-controlled
 execution extensions. Only the internal-checkpoint profile can receive the
 validated alternate index derived from an exact session/operation identity;
-callers cannot inject arbitrary `GIT_*` environment variables. #509 and #510
-will consume these seams to create story commits and checkpoints. #492 owns the
-user confirmation UI. This revision exposes no command, lead action, or public
-facade for the new infrastructure. See the
+callers cannot inject arbitrary `GIT_*` environment variables. #509 now
+consumes the story-commit seam, while #510 will consume the checkpoint seam.
+#492 owns the user confirmation UI. This revision exposes no command, lead
+action, or public facade for the new infrastructure. See the
 [exact history contract](../reference/git-adapter.md#package-internal-session-history).
+
+### Exact confirmed story commits
+
+Package-internal `git.story_commit_contracts` owns immutable application,
+candidate, lead-projection, confirmation, result, state, and failure values.
+`git.story_commit_candidates` owns read-only capture/revalidation plus immutable
+candidate-history publication. `git.story_commits` owns the process-local
+one-use authority, decision recording, exact execution, inspection, and
+conservative recovery. None is exported through a facade.
+
+Prepare requires a ready session and successful typed application evidence. It
+proves a clean real index, exact symbolic session branch/tip, complete canonical
+artifact state, expected tree, effective identity/source, unchanged internal
+ref, and unchanged main root. Apart from immutable candidate history, it does
+not stage, write a Git object, create a commit, update a ref, or modify a
+working file. The content-free projection is suitable for the future lead UI;
+it carries no story bytes or authority.
+
+Only a fresh exact structured Commit decision can mint a service/process/thread-
+bound, nonserializable, one-use authority. Execute consumes it before I/O,
+revalidates all facts under the shared repository lease, durably records
+`running`, stages literal candidate blobs/paths, records `staged`, verifies the
+tree, creates a one-parent commit with the captured identity/message, and
+compare-and-swap updates only the expected session branch. It then actively
+verifies the exact session tip/tree, original main head/status, and internal ref
+before recording `committed`. Unrelated noncandidate bytes remain untargeted
+and unchanged; focused invariance tests verify that preservation rather than
+the runtime rereading each byte. Reject and Revise record no Git mutation;
+Revise requires a newly prepared candidate. Recovery never resets or replays
+staged work and can finalize an already-correlated branch tip without a
+duplicate commit. See
+[the user scenarios](../guides/workspaces.md#exact-confirmed-story-commits) and
+[the internal contract](../reference/git-adapter.md#package-internal-exact-story-commits).
 
 Explicit `story smoke --workspace` constructs a fresh workspace verifier and
 performs no mutation or diagnostic submission. Disposable smoke uses the same

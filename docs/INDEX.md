@@ -5,8 +5,9 @@ active schema-v2 storage/inspection path. Initialization, management,
 structured history/search/transcript reads, and provider-free smoke are
 available. Exact session Git resources and durable content-free
 commit/checkpoint operation evidence exist as package-internal infrastructure,
-but they are not yet user commands; public story execution is not available.
-Start with the page that matches your task.
+and an internal service can now create an exact confirmed local story commit.
+They are not yet user commands or lead actions; public story execution is not
+available. Start with the page that matches your task.
 
 ## Start here
 
@@ -25,8 +26,9 @@ Start with the page that matches your task.
 | Recover an interrupted or rejected initialization | [Workspace recovery](operations/recovery-and-limitations.md#workspace-initialization-recovery) |
 | Understand exact session branches, worktrees, refs, and state | [Session Git resources](guides/workspaces.md#session-git-resources) |
 | Recover interrupted or inconsistent session Git resources | [Session Git-resource recovery](operations/recovery-and-limitations.md#session-git-resource-recovery) |
-| Understand future commit/checkpoint evidence and interruption states | [Durable session-history infrastructure](guides/workspaces.md#durable-session-history-infrastructure) |
-| Recover an interrupted future commit or checkpoint operation | [Session-history recovery](operations/recovery-and-limitations.md#session-history-recovery) |
+| Understand exact confirmed story-commit scenarios and decisions | [Exact confirmed story commits](guides/workspaces.md#exact-confirmed-story-commits) |
+| Understand commit/checkpoint evidence and interruption states | [Durable session-history infrastructure](guides/workspaces.md#durable-session-history-infrastructure) |
+| Recover an interrupted internal story commit or future checkpoint | [Session-history recovery](operations/recovery-and-limitations.md#session-history-recovery) |
 | Manage sessions and conversations | [Story sessions](guides/story-sessions.md) |
 | Understand why story instructions are unavailable | [Collaboration transition](guides/consensus-runs.md) |
 | Understand the lead's responsibilities and confirmation boundary | [Lead agent](guides/lead-agent.md) |
