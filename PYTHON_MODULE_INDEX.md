@@ -18,7 +18,7 @@ Package root: `src/story_writing_agents/`
 
 Importable production units indexed: 121.
 
-Direct internal dependency edges indexed: 449.
+Direct internal dependency edges indexed: 456.
 
 Directed internal dependency cycles indexed: 0.
 
@@ -36,6 +36,7 @@ __main__ -> cli -> conversation_rag_cli
                  -> interactive_settings -> agents/config/errors/workspace
                  -> provider_auth -> (standard library only)
                  -> provider_catalog -> (standard library only)
+                 -> session_recovery.transition_assessment
                  -> debug_log -> agents/provider_adapter/workspace
                  -> orchestrator -> backend/config/debug_log/directives
                  |               -> conversation_rag_runtime
@@ -51,10 +52,15 @@ __main__ -> cli -> conversation_rag_cli
                  |          |                 -> errors/models
                  |          |                 -> provider_adapter/provider_process
                  |          -> config/conversation_retrieval/debug_log
+                 |          -> git.session_contracts
                  |          -> interactive_settings
                  |          -> workspace/models/errors/agents
                  |          -> provider_adapter/provider_error_artifacts/provider_process
-                 |          -> session_lifecycle/writing_artifacts.read_actions
+                 |          -> conversations/session_lifecycle
+                 |          -> session_recovery
+                 |          -> session_recovery.transition_assessment
+                 |          -> workspace.initialization
+                 |          -> writing_artifacts.read_actions
                  -> cli_context -> workspace/errors
 
 interactive_controller._core -> interactive_controller._session_policy
@@ -70,6 +76,7 @@ interactive_controller._core -> interactive_controller._session_policy
                              -> orchestrator/provider_adapter/provider_auth
                              -> provider_catalog/session_lifecycle/workspace
 interactive_controller._session_policy -> errors/interactive_terminal/session_lifecycle
+                                       -> session_recovery.transition_assessment
 interactive_controller._conversation_policy -> conversation_search/conversations
                                             -> errors/interactive_terminal/workspace
 interactive_controller._exchange_policy -> agent_exchanges/agents/models
@@ -929,7 +936,14 @@ every intermediate arrow. The current runtime graph is acyclic.
   `acquire_session_access(session_id)`, `release_session_access(session_id)`,
   `create_session_with_access(session_id)`,
   `reopen_session_with_access(session_id)`, and
-  `pause_session_and_release_access(session_id)`.
+  `pause_session_and_release_access(session_id)`. Additive
+  `provision_session_resources(session_id)` delegates one exact session Git-
+  resource provision and ready verification, while
+  `assess_session_transition(...)` delegates one active or idle assessment for
+  an exact requested operation and returns the assessor's identity-preserved
+  result. Its annotations consume the resource inspection from its owning
+  `git.session_contracts` module and reviewed/application evidence through the
+  supported `session_recovery` facade rather than peer re-exports.
   The class also exposes exact active-roster execution-profile inspection and
   confirmation/thread-status reads. Package-internal
   `BackendRuntimeConfigurationCandidate` plus the backend's stage, validate,
@@ -949,12 +963,14 @@ every intermediate arrow. The current runtime graph is acyclic.
 - **Direct internal dependencies:** `agent_context`, `agent_context.service`,
   the supported `agent_exchanges` facade, the internal
   `agent_exchanges.capture` module, `agents`, `antigravity_adapter`,
-  `codex_adapter`, `config`,
-  `conversation_retrieval`, `debug_log`, `errors`, `interactive_settings`,
+  `codex_adapter`, `config`, `conversations`,
+  `conversation_retrieval`, `debug_log`, `errors`, `git.session_contracts`,
+  `interactive_settings`,
   `models`, `provider_adapter`, `provider_error_artifacts`, `provider_process`,
-  `session_lifecycle`, and
-  `workspace`, plus the provider-neutral `writing_artifacts.read_actions`
-  boundary.
+  `session_lifecycle`, `session_recovery`,
+  `session_recovery.transition_assessment`, `workspace`, and
+  `workspace.initialization`, plus the provider-neutral
+  `writing_artifacts.read_actions` boundary.
 - **State, resources, and side effects:** Owns exact V2 provider-session
   manifests at
   `agent_states/orchestrator_state/provider_sessions/<session_id>.json`, exact
@@ -973,6 +989,14 @@ every intermediate arrow. The current runtime graph is acyclic.
   token. Version-1 manifests, access sidecars, and access guards are rejected
   with `WorkspaceVersionUnsupportedError` without migration, deletion, or
   rewriting. The backend also owns
+  coordination of one exact provision-plus-ready-verification call pair for
+  session branch, sibling worktree, and internal-ref resources through the
+  workspace-initialization owner. It delegates transition assessment exactly
+  once after validating the requested operation, requires the returned session
+  identity to match the supplied lifecycle, and returns the exact assessment,
+  including any nested recovery result, without reconstructing recovery
+  evidence or granting executable authority. Assessment performs no provider,
+  lifecycle, content, artifact, or Git mutation. The backend also owns
   timeout/cancellation taint handling, provider cleanup coordination, and
   per-instance `atexit`
   registration. Each concrete `BoundAgent` privately owns synchronized
@@ -1136,7 +1160,9 @@ every intermediate arrow. The current runtime graph is acyclic.
   `tests/test_prompts.py`,
   `tests/test_conversation_retrieval.py`,
   `tests/test_antigravity_adapter.py`, `tests/test_antigravity_parity.py`,
-  `tests/test_session_lifecycle.py`, `docs/reference/backend-and-sessions.md`,
+  `tests/test_session_lifecycle.py`,
+  `tests/test_session_transition_assessment.py`,
+  `docs/reference/backend-and-sessions.md`,
   `docs/guides/antigravity.md`, `docs/guides/lead-agent.md`,
   `docs/reference/conversation-retrieval.md`,
   `docs/design/prompts-and-provider.md`, `docs/design/session-lifecycle.md`, and
@@ -1446,23 +1472,37 @@ every intermediate arrow. The current runtime graph is acyclic.
   the former `run` parser, flags, input resolver, dispatch, and result
   presentation are absent. `init` accepts only its workspace path: the former
   prompt-overwrite option and forwarding behavior are absent. Backend-override
-  parsing remains shared by retained commands.
+  parsing remains shared by retained commands. Session create, reopen, and
+  pause results include one content-safe transition-assessment projection;
+  denied transitions return exit status 2 and a rejected debug outcome.
 - **Direct internal dependencies:** `agents`, `backend`, `cli_context`,
   `config`, `conversation_rag_cli`, `conversation_storage.contracts`,
   `conversation_storage.migration`, `conversation_storage.selection`,
   `debug_log`, `errors`, `interactive_auth`,
   `interactive_controller`, `interactive_settings`,
   `interactive_terminal`, `orchestrator`, `provider_auth`,
-  `provider_catalog`, `session_lifecycle`, `smoke`, and `workspace`.
+  `provider_catalog`, `session_lifecycle`,
+  `session_recovery.transition_assessment`, `smoke`, and `workspace`.
 - **State, resources, and side effects:** Argument parsing is resource-free;
   retained dispatch delegates state and resources to the selected owner.
   Initialization emits the established absolute-workspace JSON only after the
   workspace owner completes its schema-v2 Git baseline, and deliberately
   creates no post-baseline debug-log event. Explicit smoke resolves one already
-  ready workspace before calling the read-only smoke path.
+  ready workspace before calling the read-only smoke path. Session create
+  provisions and verifies resources before lifecycle creation. Reopen and pause
+  resolve the persisted active conversation default through `cli_context` and
+  validate it through the configured same-provenance catalog, then pass that
+  bundle's event store as transition evidence; a missing or archived default
+  remains idle evidence.
+  Create/reopen assess enter permission before default persistence and release;
+  pause assesses pause permission immediately before durable pause and release.
+  Denial exposes only fixed assessment fields and performs none of the denied
+  transition.
 - **Primary verification/documentation:** `tests/test_public_api_and_cli.py`
-  and command-specific CLI tests verify the retained grammar and dispatch;
-  `docs/reference/cli.md` documents the supported command surface.
+  and command-specific CLI tests, including `tests/test_session_lifecycle.py`
+  and `tests/test_session_transition_assessment.py`, verify the retained grammar,
+  transition ordering, and dispatch; `docs/reference/cli.md` documents the
+  supported command surface.
 
 ### `story_writing_agents.cli_context`
 
@@ -3892,7 +3932,9 @@ every intermediate arrow. The current runtime graph is acyclic.
   execution path. The controller uses the non-reference `InteractiveMainInput.read_main`
   seam, supplies an attached session without an agent target, supplies no
   artifact collaborators, and presents deterministic direct-execution
-  unavailability.
+  unavailability. It consumes the session policy's exact transition values and
+  fixed content-safe denial projection without adding a direct assessor-module
+  dependency.
 - **Direct internal dependencies:** `agent_exchanges`, `agents`, `backend`,
   `cli_context`, `conversation_search`,
   `conversation_storage.contracts`, `conversation_storage.selection`,
@@ -3917,6 +3959,15 @@ every intermediate arrow. The current runtime graph is acyclic.
   settings/provider-catalog management; history inspection performs no bind,
   provider call, append, RAG mutation, reference read, artifact operation,
   progress emission, debate, or manuscript write.
+  Session creation provisions resources before lifecycle creation. Destination
+  enter is assessed from exact focused conversation/store evidence or idle
+  evidence after ready access and before default persistence or attachment.
+  During a switch, source leave is assessed before destination-default
+  persistence, and that persistence completes before source access is released;
+  pause is assessed immediately before the combined durable pause and access
+  release. A denial releases only an uncommitted destination when applicable,
+  preserves the source, and renders fixed content-safe assessment fields without
+  executing the denied operation.
 - **Primary verification/documentation:** `tests/test_interactive_controller.py`,
   `tests/test_interactive_management.py`,
   `tests/test_interactive_cancellation.py`, `tests/test_interactive_search.py`,
@@ -3995,23 +4046,30 @@ every intermediate arrow. The current runtime graph is acyclic.
 ### `story_writing_agents.interactive_controller._session_policy`
 
 - **Source:** `src/story_writing_agents/interactive_controller/_session_policy.py`
-- **Responsibility:** Interpret lifecycle facts for interactive session
-  decisions.
+- **Responsibility:** Interpret lifecycle and transition-assessment facts for
+  interactive session decisions.
 - **Supported surface:** No project-public import. Its exact package-internal
-  `__all__` contains immutable `RECOVERABLE_SESSION_ERROR_CODES` plus
-  `classify_session_failure`, `next_session_action`,
+  `__all__` contains immutable `RECOVERABLE_SESSION_ERROR_CODES`, exact
+  transition values `SessionTransitionAssessment`,
+  `SessionTransitionOperation`, and frozen/slotted
+  `SessionTransitionPresentation`, plus `classify_session_failure`,
+  `next_session_action`, `project_transition_assessment`,
   `require_correlated_state`, `require_lifecycle_state`,
-  `require_ready_access_state`, and `require_released_state`. These pure
-  functions validate exact lifecycle identities, transition correlations,
-  access release, fixed next-action copy, and safe exception-to-error mapping.
+  `require_ready_access_state`, `require_released_state`,
+  `require_transition_assessment`, and `transition_operation_is_allowed`.
+  These pure functions validate exact lifecycle and assessment identities,
+  requested operations, transition correlations, access release, allowed-
+  operation consumption, fixed content-safe projection and next-action copy,
+  and safe exception-to-error mapping.
 - **Direct internal dependencies:** `errors`, `interactive_terminal`, and
-  `session_lifecycle`.
+  `session_lifecycle`, plus `session_recovery.transition_assessment`.
 - **State, resources, and side effects:** Immutable policy metadata only; owns
   no process state or resource and performs no I/O, lifecycle transition,
   mutation of supplied values, or import-time operational side effect.
 - **Primary verification/documentation:** `tests/test_interactive_controller.py`,
-  `tests/test_session_lifecycle.py`, `docs/design/session-lifecycle.md`, and
-  `docs/design/overview.md`.
+  `tests/test_session_lifecycle.py`,
+  `tests/test_session_transition_assessment.py`,
+  `docs/design/session-lifecycle.md`, and `docs/design/overview.md`.
 
 ### `story_writing_agents.interactive_controller._conversation_policy`
 
@@ -6385,7 +6443,7 @@ every intermediate arrow. The current runtime graph is acyclic.
 ## Consistency Notes
 
 - The inventory contains 121 modules. Static AST derivation over every module-
-  level and function-local import yields 449 unique direct internal edges and
+  level and function-local import yields 456 unique direct internal edges and
   no directed cycle. The v2 cutover contributes 97 modules and 362 edges;
   `writing_artifacts.change_sets` and `writing_artifacts.relationship_policy`
   add two pure modules and exactly five inward edges; application contracts
@@ -6406,8 +6464,15 @@ every intermediate arrow. The current runtime graph is acyclic.
   nine owner-facing inward edges, producing its historical 120-module,
   441-edge acyclic graph without a facade export. The transition assessor adds
   one internal module with exactly eight inward owner-contract and observation
-  edges, producing the current 121-module, 449-edge acyclic graph without a
-  facade export.
+  edges, producing its historical 121-module, 449-edge acyclic graph without a
+  facade export. Session-transition integration adds seven orchestration-facing
+  edges from `backend` to `conversations`, `git.session_contracts`,
+  `session_recovery`, `session_recovery.transition_assessment`, and
+  `workspace.initialization`, from `cli` to
+  `session_recovery.transition_assessment`, and from
+  `interactive_controller._session_policy` to
+  `session_recovery.transition_assessment`, producing the current 121-module,
+  456-edge acyclic graph without an assessment facade export.
   Relative to the 360-edge pre-cutover graph, filesystem and
   SQLite storage each add one direct dependency on `conversations.events` for
   private legacy-row/file rejection values, smoke adds one dependency on

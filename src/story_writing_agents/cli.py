@@ -15,6 +15,7 @@ from .backend import AgentBackend
 from .cli_context import (
     CliContext,
     load_cli_context,
+    load_default_conversation,
     resolve_session,
     resolve_workspace,
     save_default_session,
@@ -27,7 +28,10 @@ from .conversation_rag_cli import (
     ConversationRagCliRequest,
     dispatch_conversation_rag,
 )
-from .conversation_storage.contracts import ConversationStorageCoordinationError
+from .conversation_storage.contracts import (
+    ConversationStorageCoordinationError,
+    ConversationStorageServices,
+)
 from .conversation_storage.selection import (
     ConversationStorageSelectionFailure,
     ConversationStorageSelectionReport,
@@ -44,6 +48,7 @@ from .debug_log import (
 from .errors import (
     BackendProtocolError,
     ConfigurationError,
+    ConversationNotFoundError,
     SessionIdError,
     WorkspaceFormatError,
     WorkspaceSecurityError,
@@ -77,6 +82,10 @@ from .session_lifecycle import (
     SessionDurableState,
     SessionLifecycleState,
     provider_work_is_ready,
+)
+from .session_recovery.transition_assessment import (
+    SessionTransitionAssessment,
+    SessionTransitionOperation,
 )
 from .workspace import Workspace, initialize_workspace
 
@@ -334,6 +343,87 @@ def _require_session_command_state(
             "session command returned uncorrelated lifecycle facts"
         )
     return value
+
+
+def _transition_assessment_payload(
+    assessment: SessionTransitionAssessment,
+) -> dict[str, object]:
+    """Return only fixed content-safe transition fields for CLI JSON."""
+
+    if type(assessment) is not SessionTransitionAssessment:
+        raise BackendProtocolError(
+            "session command returned an invalid transition assessment"
+        )
+    try:
+        assessment.__post_init__()
+    except Exception as exc:
+        raise BackendProtocolError(
+            "session command returned malformed transition assessment facts"
+        ) from exc
+    recovery = assessment.recovery_result
+    recovery_payload: dict[str, object] | None = None
+    if recovery is not None:
+        recovery_payload = {
+            "application_id": recovery.application_id,
+            "checkpoint_operation_id": recovery.checkpoint_operation_id,
+            "collaboration_tail_sequence": recovery.collaboration_tail_sequence,
+            "commit_id": recovery.commit_id,
+            "confirmation_request_id": recovery.confirmation_request_id,
+            "conversation_id": recovery.conversation_id,
+            "correlation_id": recovery.correlation_id,
+            "failure_code": recovery.failure_code.value,
+            "next_action": recovery.next_action.value,
+            "owner": recovery.owner.value,
+            "proposal_id": recovery.proposal_id,
+            "reviewed_candidate_id": recovery.reviewed_candidate_id,
+            "session_id": recovery.session_id,
+            "state": recovery.state.value,
+            "story_commit_candidate_id": recovery.story_commit_candidate_id,
+            "story_commit_operation_id": recovery.story_commit_operation_id,
+        }
+    return {
+        "allowed_operations": [
+            operation.value for operation in assessment.allowed_operations
+        ],
+        "conversation_id": assessment.conversation_id,
+        "failure_code": assessment.failure_code.value,
+        "next_action": assessment.next_action.value,
+        "owner": assessment.owner.value if assessment.owner is not None else None,
+        "recovery_result": recovery_payload,
+        "scope": assessment.scope.value,
+        "session_id": assessment.session_id,
+        "state": assessment.state.value,
+    }
+
+
+def _session_transition_conversation_storage(
+    workspace: Workspace,
+    session_id: str,
+) -> tuple[str | None, ConversationStorageServices | None]:
+    """Resolve one persisted active default and its same-provenance services."""
+
+    conversation_id = load_default_conversation(workspace, session_id)
+    if conversation_id is None:
+        return None, None
+    services = activate_configured_conversation_storage(workspace).services
+    try:
+        metadata = services.catalog.get(session_id, conversation_id)
+    except ConversationNotFoundError:
+        return None, None
+    if (
+        metadata.session_id != session_id
+        or metadata.conversation_id != conversation_id
+    ):
+        raise BackendProtocolError(
+            "conversation storage returned metadata for another scope"
+        )
+    if metadata.status.value == "archived":
+        return None, None
+    if metadata.status.value != "active":
+        raise BackendProtocolError(
+            "conversation storage returned an invalid conversation status"
+        )
+    return conversation_id, services
 
 
 def _interactive_streams_are_terminals() -> bool:
@@ -1228,12 +1318,21 @@ def main(argv: Sequence[str] | None = None) -> int:
                     "'story session create SESSION'"
                 )
             backend = AgentBackend(workspace)
+            assessment: SessionTransitionAssessment | None = None
+            denied = False
             try:
                 if arguments.session_action == "create":
+                    _require_session_command_state(
+                        backend.get_session_lifecycle(session_id),
+                        session_id=session_id,
+                        durable_state=SessionDurableState.ABSENT,
+                        access_state=SessionAccessState.CLAIMABLE,
+                    )
                     if backend.validate_provider_configuration(session_id) is not True:
                         raise BackendProtocolError(
                             "provider configuration validation did not return true"
                         )
+                    backend.provision_session_resources(session_id)
                     acquired = _require_session_command_state(
                         backend.create_session_with_access(session_id),
                         session_id=session_id,
@@ -1246,33 +1345,189 @@ def main(argv: Sequence[str] | None = None) -> int:
                             "created session lifecycle changed before release"
                         )
                     try:
-                        save_default_session(workspace, session_id)
+                        assessment = backend.assess_session_transition(
+                            lifecycle_state=acquired,
+                            requested_operation=(
+                                SessionTransitionOperation.ENTER_DESTINATION
+                            ),
+                            conversation_id=None,
+                            collaboration_store=None,
+                        )
+                        denied = (
+                            SessionTransitionOperation.ENTER_DESTINATION
+                            not in assessment.allowed_operations
+                        )
+                        if not denied:
+                            save_default_session(workspace, session_id)
                     finally:
                         state = backend.release_session_access(session_id)
                 elif arguments.session_action == "reopen":
-                    if backend.validate_provider_configuration(session_id) is not True:
+                    before = backend.get_session_lifecycle(session_id)
+                    if type(before) is not SessionLifecycleState:
                         raise BackendProtocolError(
-                            "provider configuration validation did not return true"
+                            "session command returned an invalid lifecycle state"
                         )
-                    acquired = _require_session_command_state(
-                        backend.reopen_session_with_access(session_id),
-                        session_id=session_id,
-                        durable_state=SessionDurableState.READY,
-                        access_state=SessionAccessState.HELD_HERE,
+                    provider_work_is_ready(
+                        before,
+                        provider_configuration_ready=False,
                     )
-                    observed = backend.get_session_lifecycle(session_id)
-                    if observed != acquired:
+                    if (
+                        before.session_id != session_id
+                        or before.durable_state is SessionDurableState.ABSENT
+                    ):
                         raise BackendProtocolError(
-                            "reopened session lifecycle changed before release"
+                            "session command cannot reopen an absent session"
                         )
-                    try:
-                        save_default_session(workspace, session_id)
-                    finally:
-                        state = backend.release_session_access(session_id)
+                    if before.access_state in {
+                        SessionAccessState.BLOCKED_BY_LIVE_LOCAL_OWNER,
+                        SessionAccessState.OWNERSHIP_UNKNOWN,
+                    }:
+                        denied = True
+                        state = before
+                    else:
+                        if backend.validate_provider_configuration(session_id) is not True:
+                            raise BackendProtocolError(
+                                "provider configuration validation did not return true"
+                            )
+                        transition = (
+                            backend.reopen_session_with_access(session_id)
+                            if before.durable_state is SessionDurableState.PAUSED
+                            else backend.acquire_session_access(session_id)
+                        )
+                        acquired = _require_session_command_state(
+                            transition,
+                            session_id=session_id,
+                            durable_state=SessionDurableState.READY,
+                            access_state=SessionAccessState.HELD_HERE,
+                        )
+                        observed = backend.get_session_lifecycle(session_id)
+                        if observed != acquired:
+                            raise BackendProtocolError(
+                                "reopened session lifecycle changed before release"
+                            )
+                        try:
+                            conversation_id, storage_services = (
+                                _session_transition_conversation_storage(
+                                    workspace,
+                                    session_id,
+                                )
+                            )
+                            assessment = backend.assess_session_transition(
+                                lifecycle_state=acquired,
+                                requested_operation=(
+                                    SessionTransitionOperation.ENTER_DESTINATION
+                                ),
+                                conversation_id=conversation_id,
+                                collaboration_store=(
+                                    storage_services.event_store
+                                    if storage_services is not None
+                                    else None
+                                ),
+                            )
+                            denied = (
+                                SessionTransitionOperation.ENTER_DESTINATION
+                                not in assessment.allowed_operations
+                            )
+                            if not denied:
+                                save_default_session(workspace, session_id)
+                        finally:
+                            state = backend.release_session_access(session_id)
                 else:
-                    state = backend.pause_session_and_release_access(session_id)
+                    before = backend.get_session_lifecycle(session_id)
+                    if type(before) is not SessionLifecycleState:
+                        raise BackendProtocolError(
+                            "session command returned an invalid lifecycle state"
+                        )
+                    provider_work_is_ready(
+                        before,
+                        provider_configuration_ready=False,
+                    )
+                    if before.session_id != session_id:
+                        raise BackendProtocolError(
+                            "session command returned another lifecycle identity"
+                        )
+                    if (
+                        before.durable_state is SessionDurableState.READY
+                        and before.access_state is SessionAccessState.CLAIMABLE
+                    ):
+                        current = _require_session_command_state(
+                            backend.acquire_session_access(session_id),
+                            session_id=session_id,
+                            durable_state=SessionDurableState.READY,
+                            access_state=SessionAccessState.HELD_HERE,
+                        )
+                        newly_acquired = True
+                    elif (
+                        before.durable_state is SessionDurableState.READY
+                        and before.access_state is SessionAccessState.HELD_HERE
+                    ):
+                        current = before
+                        newly_acquired = False
+                    else:
+                        denied = True
+                        state = before
+                    if not denied:
+                        conversation_id, storage_services = (
+                            _session_transition_conversation_storage(
+                                workspace,
+                                session_id,
+                            )
+                        )
+                        assessment = backend.assess_session_transition(
+                            lifecycle_state=current,
+                            requested_operation=(
+                                SessionTransitionOperation.PAUSE_SESSION
+                            ),
+                            conversation_id=conversation_id,
+                            collaboration_store=(
+                                storage_services.event_store
+                                if storage_services is not None
+                                else None
+                            ),
+                        )
+                        denied = (
+                            SessionTransitionOperation.PAUSE_SESSION
+                            not in assessment.allowed_operations
+                        )
+                        if denied:
+                            state = (
+                                backend.release_session_access(session_id)
+                                if newly_acquired
+                                else before
+                            )
+                        else:
+                            state = backend.pause_session_and_release_access(session_id)
             finally:
                 backend.close()
+            if denied:
+                print(
+                    json.dumps(
+                        {
+                            "access_state": state.access_state.value,
+                            "assessment": (
+                                _transition_assessment_payload(assessment)
+                                if assessment is not None
+                                else None
+                            ),
+                            "durable_state": state.durable_state.value,
+                            "session_id": state.session_id,
+                            "transition_denial": (
+                                None
+                                if assessment is not None
+                                else "lifecycle_not_ready_held_here"
+                            ),
+                        },
+                        ensure_ascii=False,
+                        indent=2,
+                        sort_keys=True,
+                    )
+                )
+                _trace_cli_completion(
+                    debug_log,
+                    session_id=session_id,
+                    outcome=DebugOutcome.REJECTED,
+                )
+                return 2
             expected_durable_state = (
                 SessionDurableState.PAUSED
                 if arguments.session_action == "pause"
@@ -1284,10 +1539,12 @@ def main(argv: Sequence[str] | None = None) -> int:
                 durable_state=expected_durable_state,
                 access_state=SessionAccessState.CLAIMABLE,
             )
+            assert assessment is not None
             print(
                 json.dumps(
                     {
                         "access_state": state.access_state.value,
+                        "assessment": _transition_assessment_payload(assessment),
                         "durable_state": state.durable_state.value,
                         "session_id": state.session_id,
                     },
