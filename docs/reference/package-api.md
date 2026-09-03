@@ -252,11 +252,85 @@ operation state from the index.
 This contract classifies active correlated workflows only. A fresh idle
 session remains a session-lifecycle concern and is rejected as
 `unsupported_shape`. There is no codec, pre-v2 reader, migration, or legacy
-compatibility path. Issue #527 will gather and reconcile owner facts, while
-#528 will decide how a runtime lifecycle or CLI presents and enforces a result;
-neither behavior is implemented by this facade. See
+compatibility path. Issue #527 now gathers and reconciles owner facts through
+an internal direct module, while #528 will decide how a runtime lifecycle or
+CLI presents and enforces a result. Neither behavior is exported by this
+facade. See
 [Correlated session-recovery projection](../operations/recovery-and-limitations.md#correlated-session-recovery-projection)
 for every state, safe action, and sample input/output.
+
+<a id="correlated-session-recovery-reconciliation"></a>
+
+### Read-only owner reconciliation
+
+Internal integration code can use the one-name direct module:
+
+```python
+from story_writing_agents.session_recovery.reconciliation import (
+    SessionRecoveryReconciler,
+)
+
+reconciler = SessionRecoveryReconciler(workspace_root, collaboration_store)
+result = reconciler.inspect(
+    lifecycle_state=lifecycle_state,
+    conversation_id=conversation_id,
+    reviewed_proposal=reviewed_proposal,
+    artifact_application=artifact_application,
+)
+```
+
+The exact signatures are:
+
+```text
+SessionRecoveryReconciler(
+    workspace_root: Path,
+    collaboration_store: CollaborationEventStore,
+) -> None
+inspect(
+    *,
+    lifecycle_state: SessionLifecycleState,
+    conversation_id: str,
+    reviewed_proposal: SessionReviewedProposalEvidence | None = None,
+    artifact_application: SessionArtifactApplicationEvidence | None = None,
+) -> SessionRecoveryResult
+```
+
+`SessionRecoveryReconciler` is the direct module's only export. It is absent
+from `story_writing_agents.session_recovery` and the project root. Construction
+performs no I/O and retains only the normalized absolute workspace root and
+the caller's collaboration-store port; it owns no repository, adapter, lock,
+history, journal, process, capability, or lifecycle.
+
+Inspection first validates inputs and derives the session only from the
+supplied lifecycle value. Owner observation proceeds only for exact
+`ready + held_here`; the reconciler never acquires, reopens, pauses, switches,
+or releases access. It then performs this closed sequence:
+
+1. Read collaboration history, session resources, and the complete session-
+   history snapshot as generation A.
+2. When application evidence was supplied, ask the artifact repository for
+   that exact application ID. Never reconstruct or submit an Apply request.
+3. Inspect the external Git operation and status in the exact linked session
+   worktree, then uniquely select candidate, commit, and checkpoint records by
+   their complete session/proposal/application/candidate/correlation facts.
+4. Only when generation A claims a committed story operation, read the current
+   linked-worktree log; other states perform no log read.
+5. Read collaboration, resources, history, external Git, and status again as
+   generation B. Compare each owner independently and reject mixed
+   generations.
+6. Repeat correlation selection, verify any claimed commit against stable
+   status and the first current-`HEAD` log entry, construct
+   `SessionRecoveryEvidence`, and delegate ordinary state precedence to the
+   pure `reconcile_session_recovery()` classifier.
+
+The artifact lookup uses that owner's recovery-before-read behavior. It may
+complete or verify an already-journaled application before returning its
+original immutable result. That is owner-controlled maintenance, not a new
+workflow mutation: the reconciler never calls `apply_artifact_changes()`,
+starts provider work, reconstructs authority, replays an operation, stages or
+commits Git, mutates lifecycle state, cleans evidence, or executes the
+projected next action. The result remains content-free. See the
+[stable owner flow and user scenarios](../operations/recovery-and-limitations.md#session-recovery-owner-reconciliation).
 
 <a id="structured-collaboration-history-boundary"></a>
 
