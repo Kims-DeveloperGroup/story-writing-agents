@@ -65,8 +65,8 @@ initializes.
 
 The direct Git facade can inspect an externally started operation without
 running Git or mutating the repository. This observation is not yet wired to a
-session command or lifecycle guard; #527 will correlate it with session
-evidence and #528 will enforce blocking.
+session command or lifecycle guard; the internal #527 reconciler can now
+correlate it with session evidence, while #528 will enforce lifecycle blocking.
 
 | Observed kind | User meaning and one safe response |
 | --- | --- |
@@ -120,8 +120,9 @@ offline. Do not retry merely because partial metadata may have been read.
 
 These reads never continue, abort, reset, clean, checkout, stage, commit, or
 repair Git. They also do not establish which story session owns the worktree.
-#527 will correlate the observations and #528 will enforce lifecycle blocking;
-#539 itself provides neither orchestration nor a user command. See the
+#527 now correlates those observations internally, and #528 will enforce
+lifecycle blocking; #539 itself provides neither orchestration nor a user
+command. See the
 [linked-worktree read contract](../reference/git-adapter.md#linked-worktree-status-and-log).
 
 <a id="session-git-resource-recovery"></a>
@@ -202,9 +203,9 @@ available to the later internal consumer.
 If operation `O4` disappears or changes before the second inspection, the
 snapshot attempt returns the existing typed `recovery_required` failure—never
 a partial result—and creates no replacement record. Stop writers and preserve
-the history, Git state, and any alternate checkpoint index. Later #527
-reconciliation can use a stable snapshot to surface the preserved recovery
-state; it must not duplicate the commit or checkpoint. #536 itself has no UI,
+the history, Git state, and any alternate checkpoint index. The internal #527
+reconciler can use a stable snapshot to surface the preserved recovery state;
+it does not duplicate the commit or checkpoint. #536 itself has no UI,
 lifecycle decision, replay, recovery mutation, provider call, or cleanup
 authority. An empty `create=False` inspection creates nothing, and this
 additive read path adds no persisted format, migration, or compatibility
@@ -278,9 +279,57 @@ and [checkpoint contract](../reference/git-adapter.md#package-internal-session-c
 
 Issue #526 adds a pure package API that converts already gathered, immutable
 owner facts for one active story workflow into one content-free state and one
-safe next-action label. It is not wired to the installed CLI. It neither
-inspects owners nor performs the action: #527 will own read-only owner
-reconciliation and #528 will own lifecycle presentation and enforcement.
+safe next-action label. The internal #527 reconciler now gathers stable owner
+facts and delegates to it, but neither component is wired to the installed
+CLI or performs the projected action. #528 will own lifecycle presentation and
+enforcement.
+
+<a id="session-recovery-owner-reconciliation"></a>
+
+### Stable owner reconciliation
+
+`SessionRecoveryReconciler.inspect()` accepts owner observation only when the
+caller-supplied lifecycle is exactly `ready + held_here`. It does not acquire
+the claim. Ready state held by another live process or with unknown ownership
+returns `outcome_unknown`; absent, paused, or claimable rather than held state
+returns `recovery_required`. When no authoritative collaboration read was
+accepted, `collaboration_tail_sequence=0` means “tail unavailable,” not
+“durable history is empty.”
+
+For an accepted lifecycle, the reconciler reads collaboration, the exact
+session-resource triple, complete session history, external Git operation, and
+linked session-worktree status as generation A. It performs an exact
+application-ID owner lookup when application evidence exists, selects at most
+one correlated candidate/commit/checkpoint chain, and reads the current-`HEAD`
+log only when that chain claims a committed story operation. It then rereads
+collaboration, resources, history, external Git, and status as generation B.
+Any owner drift or second-read failure returns `outcome_unknown` for that owner
+instead of combining generations. Stable facts are selected again, any commit
+is checked against the nonempty newest-first log and stable status, and only
+then are they passed to the pure classifier.
+
+The visible result fields answer different questions:
+
+- `state` says the exact workflow position that was proved.
+- `next_action` names one safe instruction but grants no authority.
+- `owner` identifies the durable boundary to inspect or maintain.
+- `failure_code` says why progress is accepted, uncertain, or blocked.
+- Optional proposal, application, candidate, operation, commit, checkpoint,
+  and correlation IDs appear only when the evidence proved them. Direct
+  blockers do not fabricate them.
+
+A first-read owner failure normally returns `recovery_required`; a second-read
+failure or changed A/B observation returns `outcome_unknown`. Resource
+provisioning also remains outcome-unknown, while absent resources are a
+missing predecessor. Artifact inspection distinguishes a recovered exact
+result from blocked outcomes: absence maps to `missing_predecessor`; drift,
+corruption, or a mismatched/foreign result maps to `correlation_mismatch`; and
+artifact `recovery_required` maps to `owner_recovery_required`. Its documented
+recovery-before-read may finish or verify an already-journaled application and
+create only its standard maintenance state. This is owner maintenance, not a
+new workflow mutation: reconciliation
+never calls Apply, invokes a provider, replays work, changes Git or lifecycle,
+cleans evidence, or performs `next_action`.
 
 | Projected state | What it means to a user | Exact next action |
 | --- | --- | --- |
@@ -323,7 +372,10 @@ unmerged changes: those produce `recovery_required` with
 ### Sample input and output
 
 The following JSON-shaped summaries are explanatory views of Python values,
-not a wire format. This package defines no serializer or legacy reader.
+not a wire format. Operational flags such as `provider_call`, `replay`, and
+`new_workflow_mutation` annotate the scenario; they are not
+`SessionRecoveryResult` fields. This package defines no serializer or legacy
+reader.
 
 An awaiting-application projection retains request `R9`, proposal `P7`
 revision 3, and reviewed candidate `D7`, while deliberately retaining no
@@ -331,11 +383,11 @@ provider or write capability:
 
 ```text
 input owner facts:
-  lifecycle/session resources: ready and exactly correlated to session story_review
-  collaboration: conversation review_1, tail 12, proposal P7 revision 3
+  lifecycle: ready + held_here for session story_review
+  generation A/B: exact ready resources, stable linked status, no external Git
+  collaboration A/B: conversation review_1, tail 12, proposal P7 revision 3
   reviewed proposal: candidate D7, correlation K1, request R9
   visible choices: [confirm, reject, revise]
-  external Git operation: none
 
 output:
   {state: awaiting_application,
@@ -345,7 +397,10 @@ output:
    proposal_id: P7,
    confirmation_request_id: R9,
    reviewed_candidate_id: D7,
-   correlation_id: K1}
+   correlation_id: K1,
+   provider_call: false,
+   new_workflow_mutation: false,
+   replay: false}
 ```
 
 An exact staged story commit can correlate operation `O4`, commit candidate
@@ -353,11 +408,11 @@ An exact staged story commit can correlate operation `O4`, commit candidate
 
 ```text
 input owner facts:
+  lifecycle: ready + held_here
   reviewed proposal and session-bound application A2: exact
-  story-commit candidate C4: exact application/proposal/path/branch binding
-  story-commit operation O4: staged at the expected branch tip
-  repository status: exactly C4 paths staged, no worktree or unmerged change
-  external Git operation: none
+  generation A/B: candidate C4 and operation O4 have exact bindings
+  linked status A/B: exactly C4 paths staged at the expected branch tip
+  external Git A/B: none
 
 output:
   {state: staged,
@@ -366,7 +421,48 @@ output:
    failure_code: none,
    application_id: A2,
    story_commit_candidate_id: C4,
-   story_commit_operation_id: O4}
+   story_commit_operation_id: O4,
+   commit_replay: false}
+```
+
+If an owner changes between the two generations, later-looking facts are not
+combined with earlier ones:
+
+```text
+input: linked repository status A != linked repository status B, accepted tail 12
+output:
+  {state: outcome_unknown,
+   next_action: inspect_owner_outcome,
+   owner: repository_status,
+   failure_code: owner_outcome_unknown,
+   collaboration_tail_sequence: 12,
+   new_workflow_mutation: false}
+```
+
+If lifecycle access is paused before any collaboration read, the unavailable
+tail is explicit:
+
+```text
+input: lifecycle durable_state=paused
+output:
+  {state: recovery_required,
+   next_action: operator_recovery,
+   owner: session_lifecycle,
+   failure_code: invalid_request,
+   collaboration_tail_sequence: 0}
+```
+
+A claimed committed operation is accepted only when stable status names that
+commit as `HEAD` and the nonempty log's newest entry is the same commit. For
+example, if operation `O5` records commit `G5`, status names `G5`, but the log's
+first commit is `F5`, the result is:
+
+```text
+{state: recovery_required,
+ next_action: operator_recovery,
+ owner: story_commit,
+ failure_code: correlation_mismatch,
+ replay: false}
 ```
 
 If the session-bound application instead names a different proposal than its
@@ -825,9 +921,9 @@ Inspection never reconstructs a request, starts a new application, refreshes
 context, calls a provider, or touches Git. Its recovery prerequisite may finish
 an already-journaled application; without one, it writes no canonical artifact
 or application record. A first repository access may also create the standard
-lock/state-directory bootstrap needed to hold the read lease. Later #527 may
-consume a result using correlation it already owns, but inspection itself
-cannot discover a session or confirmation owner.
+lock/state-directory bootstrap needed to hold the read lease. The internal
+#527 reconciler can consume a result using correlation it already owns, but
+inspection itself cannot discover a session or confirmation owner.
 
 Application temporaries live under the repository's separate `staging/`
 directory rather than `transactions/`. Failed `.tmp` bytes, prior `.held`

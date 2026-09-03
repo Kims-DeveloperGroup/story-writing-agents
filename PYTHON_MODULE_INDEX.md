@@ -16,9 +16,9 @@ Source root: `src/`
 
 Package root: `src/story_writing_agents/`
 
-Importable production units indexed: 119.
+Importable production units indexed: 120.
 
-Direct internal dependency edges indexed: 432.
+Direct internal dependency edges indexed: 441.
 
 Directed internal dependency cycles indexed: 0.
 
@@ -218,6 +218,11 @@ session_recovery -> session_recovery.contracts
 session_recovery.contracts -> conversations/git/git.session_contracts
                            -> git.session_history_contracts/session_lifecycle
                            -> writing_artifacts
+session_recovery.reconciliation -> conversations/git/git.session_contracts
+                                -> git.session_history_contracts/session_lifecycle
+                                -> session_recovery.contracts
+                                -> workspace.initialization/writing_artifacts
+                                -> writing_artifacts.repository
 session_lifecycle -> (standard library only)
 conversations -> conversations.catalog/context/events
 conversations.catalog -> errors
@@ -5384,6 +5389,40 @@ every intermediate arrow. The current runtime graph is acyclic.
   `docs/reference/package-api.md#correlated-session-recovery-api`, and
   `docs/operations/recovery-and-limitations.md#correlated-session-recovery-projection`.
 
+### `story_writing_agents.session_recovery.reconciliation`
+
+- **Source:** `src/story_writing_agents/session_recovery/reconciliation.py`
+- **Responsibility:** Observe authoritative owners and assemble one stable,
+  correlated story-session recovery result without replaying work.
+- **Supported surface:** Direct-module `__all__` contains exactly
+  `SessionRecoveryReconciler`. The class accepts an absolute lexical workspace
+  root and a structural `CollaborationEventStore`, retains only those two
+  collaborators, and exposes keyword-only `inspect(...)`. It is intentionally
+  absent from both the `session_recovery` and project-root facades.
+- **Direct internal dependencies:** `conversations`, `git`,
+  `git.session_contracts`, `git.session_history_contracts`,
+  `session_lifecycle`, `session_recovery.contracts`,
+  `workspace.initialization`, `writing_artifacts`, and
+  `writing_artifacts.repository`.
+- **State, resources, and side effects:** The constructor normalizes and
+  validates inputs without I/O. Inspection requires a ready lifecycle held by
+  this process. It observes collaboration, session resources, and session
+  history as generation A; performs the optional exact artifact inspection;
+  observes external Git and repository status A plus the conditional current-
+  commit log; then observes all five owners as generation B before rejecting
+  drift, reselecting correlated records, and delegating one complete immutable
+  evidence graph to the pure classifier. It
+  retains no live Git/history/repository value and owns no durable record,
+  lease, capability, process, mutation, provider call, replay, cleanup, or
+  lifecycle transition. Direct blocker results expose only content-safe
+  correlation facts; tail sequence zero means no collaboration tail was
+  accepted.
+- **Primary verification/documentation:**
+  `tests/test_session_recovery_reconciliation.py`,
+  `docs/reference/package-api.md#correlated-session-recovery-reconciliation`,
+  and
+  `docs/operations/recovery-and-limitations.md#session-recovery-owner-reconciliation`.
+
 ### `story_writing_agents.session_lifecycle`
 
 - **Source:** `src/story_writing_agents/session_lifecycle.py`
@@ -6307,8 +6346,8 @@ every intermediate arrow. The current runtime graph is acyclic.
 
 ## Consistency Notes
 
-- The inventory contains 119 modules. Static AST derivation over every module-
-  level and function-local import yields 432 unique direct internal edges and
+- The inventory contains 120 modules. Static AST derivation over every module-
+  level and function-local import yields 441 unique direct internal edges and
   no directed cycle. The v2 cutover contributes 97 modules and 362 edges;
   `writing_artifacts.change_sets` and `writing_artifacts.relationship_policy`
   add two pure modules and exactly five inward edges; application contracts
@@ -6324,7 +6363,10 @@ every intermediate arrow. The current runtime graph is acyclic.
   exactly seven inward edges, producing its historical 119-module, 431-edge
   acyclic graph without a project-root export. The immutable session-history
   snapshot adds no module and only the workspace-initialization-to-history
-  composition edge, producing the current 119-module, 432-edge acyclic graph.
+  composition edge, producing the historical 119-module, 432-edge acyclic
+  graph. The internal session-recovery reconciler adds one module with exactly
+  nine owner-facing inward edges, producing the current 120-module, 441-edge
+  acyclic graph without a facade export.
   Relative to the 360-edge pre-cutover graph, filesystem and
   SQLite storage each add one direct dependency on `conversations.events` for
   private legacy-row/file rejection values, smoke adds one dependency on
