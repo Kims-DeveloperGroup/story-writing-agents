@@ -48,9 +48,9 @@ workspace/
 │   │   ├── provider_sessions/<session_id>.access.json          [temporary claim]
 │   │   ├── debates/<session_id>/<debate_id>.jsonl              [lazy history]
 │   │   └── writing_artifacts/
-│   │       ├── catalog.json                                    [lazy current provenance]
-│   │       ├── commits/<commit_id>.json                        [lazy immutable history]
-│   │       ├── transactions/<commit_id>.json                   [authoritative pending journal]
+│   │       ├── catalog.json                                    [lazy schema-2 current membership]
+│   │       ├── applications/<application_id>.json              [lazy schema-1 immutable content-free history]
+│   │       ├── transactions/<transaction_id>.json              [schema-1 content-bearing pending journal]
 │   │       ├── staging/.artifacts-*.tmp                        [retained staged bytes]
 │   │       ├── staging/.artifacts-*.held                       [retained prior bytes]
 │   │       ├── staging/.artifacts-*.retired                    [retained failed publication]
