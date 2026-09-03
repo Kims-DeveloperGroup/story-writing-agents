@@ -16,9 +16,9 @@ Source root: `src/`
 
 Package root: `src/story_writing_agents/`
 
-Importable production units indexed: 117.
+Importable production units indexed: 119.
 
-Direct internal dependency edges indexed: 424.
+Direct internal dependency edges indexed: 431.
 
 Directed internal dependency cycles indexed: 0.
 
@@ -214,6 +214,10 @@ git.story_commit_candidates -> git.contracts/git.process/git.session_history
 git.story_commits -> git.contracts/git.process/git.session_history
                   -> git.session_history_contracts/git.story_commit_candidates
                   -> git.story_commit_contracts
+session_recovery -> session_recovery.contracts
+session_recovery.contracts -> conversations/git/git.session_contracts
+                           -> git.session_history_contracts/session_lifecycle
+                           -> writing_artifacts
 session_lifecycle -> (standard library only)
 conversations -> conversations.catalog/context/events
 conversations.catalog -> errors
@@ -5300,6 +5304,61 @@ every intermediate arrow. The current runtime graph is acyclic.
   strict loading behavior, and `tests/test_interactive_controller.py` verifies
   the direct-module-only import boundary.
 
+### `story_writing_agents.session_recovery`
+
+- **Source:** `src/story_writing_agents/session_recovery/__init__.py`
+- **Responsibility:** Provide the stable pure correlated story-session recovery
+  import boundary.
+- **Supported surface:** Exactly ten names in `__all__`:
+  `SessionRecoveryState`, `SessionRecoveryNextAction`,
+  `SessionRecoveryOwner`, `SessionRecoveryFailureCode`,
+  `SessionRecoveryError`, `SessionReviewedProposalEvidence`,
+  `SessionArtifactApplicationEvidence`, `SessionRecoveryEvidence`,
+  `SessionRecoveryResult`, and `reconcile_session_recovery`. These names are
+  intentionally absent from the project-root facade.
+- **Direct internal dependencies:** `session_recovery.contracts`.
+- **State, resources, and side effects:** Owns no persistent state or external
+  resource. Import only binds immutable contracts and the deterministic pure
+  classifier; it performs no lifecycle, conversation, artifact, filesystem,
+  Git, provider, controller, storage, capability, codec, migration, or
+  import-time operational I/O.
+- **Primary verification/documentation:**
+  `tests/test_session_recovery_contracts.py`; exact imports and the content-free
+  boundary are documented in
+  `docs/reference/package-api.md#correlated-session-recovery-api`, and the
+  nine states, actions, user meanings, and examples are documented in
+  `docs/operations/recovery-and-limitations.md#correlated-session-recovery-projection`.
+
+### `story_writing_agents.session_recovery.contracts`
+
+- **Source:** `src/story_writing_agents/session_recovery/contracts.py`
+- **Responsibility:** Define and deterministically classify immutable evidence
+  for one active correlated story-session workflow.
+- **Supported surface:** Exactly the facade's four closed enums, content-safe
+  `SessionRecoveryError`, three frozen slotted evidence values, frozen slotted
+  result, and `reconcile_session_recovery(evidence)`. The function accepts one
+  already assembled exact `SessionRecoveryEvidence` and returns one of nine
+  fixed state/action pairs; it exports no capability, adapter, owner reader,
+  serializer, compatibility shape, or executable recovery action.
+- **Direct internal dependencies:** `conversations`, `git`,
+  `git.session_contracts`, `git.session_history_contracts`,
+  `session_lifecycle`, and `writing_artifacts`.
+- **State, resources, and side effects:** Owns only immutable validation and
+  deterministic content-free classification policy. Recovery-required facts
+  outrank unresolved owner outcomes, which outrank the furthest exactly proved
+  closed stage; committed evidence supersedes staged evidence. A bare artifact
+  application result cannot prove session ownership. The relationship-
+  validation digest is supplied by its authoritative owner and compared across
+  evidence; this module does not call or reproduce a private digest algorithm.
+  It retains no mutable or persistent state and performs no filesystem, Git,
+  lifecycle-store, conversation-store, artifact-repository, provider,
+  controller, process, network, clock, environment, capability, codec,
+  migration, or import-time operational I/O.
+- **Primary verification/documentation:**
+  `tests/test_session_recovery_contracts.py`,
+  `docs/reference/package-api.md#correlated-session-recovery-api`, and
+  `docs/operations/recovery-and-limitations.md#correlated-session-recovery-projection`.
+
 ### `story_writing_agents.session_lifecycle`
 
 - **Source:** `src/story_writing_agents/session_lifecycle.py`
@@ -6216,8 +6275,8 @@ every intermediate arrow. The current runtime graph is acyclic.
 
 ## Consistency Notes
 
-- The inventory contains 117 modules. Static AST derivation over every module-
-  level and function-local import yields 424 unique direct internal edges and
+- The inventory contains 119 modules. Static AST derivation over every module-
+  level and function-local import yields 431 unique direct internal edges and
   no directed cycle. The v2 cutover contributes 97 modules and 362 edges;
   `writing_artifacts.change_sets` and `writing_artifacts.relationship_policy`
   add two pure modules and exactly five inward edges; application contracts
@@ -6229,6 +6288,9 @@ every intermediate arrow. The current runtime graph is acyclic.
   with six required inward dependencies, and repository delegation adds its
   store edge plus one direct application-contract edge, producing the current
   eight-edge increase without a facade export.
+  The pure `session_recovery` facade and contract owner add two modules and
+  exactly seven inward edges, producing the current 119-module, 431-edge
+  acyclic graph without a project-root export.
   Relative to the 360-edge pre-cutover graph, filesystem and
   SQLite storage each add one direct dependency on `conversations.events` for
   private legacy-row/file rejection values, smoke adds one dependency on
@@ -6242,7 +6304,7 @@ every intermediate arrow. The current runtime graph is acyclic.
   discovery binding adds no export. The 63-name conversation-storage facade
   exports contracts/composition/archive workflow only and no concrete
   filesystem or SQLite adapter.
-- The safe Git package facade contains exactly 22 names: 21 pure contract
+- The safe Git package facade contains exactly 24 names: 23 pure contract
   values plus the sole `GitRepositoryAdapter`. All remain absent from the
   project root. Internal `repository_lock`, `session_history_contracts`, and
   `session_history` add the shared repository lease, pure durable history
@@ -6256,7 +6318,9 @@ every intermediate arrow. The current runtime graph is acyclic.
   graph. #510 adds pure `session_checkpoint_contracts` plus the six-edge
   `session_checkpoints` service, yielding its historical 115-module, 413-edge
   graph. Its typed timestamp and durable checkpoint-intent refinements add no
-  edge. The 22-name Git facade remains closed, and Git retains no forbidden
+  edge. External-operation inspection later expanded the existing Git facade
+  to 24 names without adding a module or internal edge. The Git facade remains
+  closed, and Git retains no forbidden
   reverse dependency on workspace, provider, conversation, artifact, GitHub,
   or an entry point.
 - Schema-v2 workspace definition and resource ownership are split between the

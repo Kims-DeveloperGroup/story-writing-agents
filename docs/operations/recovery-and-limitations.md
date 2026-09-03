@@ -221,6 +221,135 @@ also contain effective identity and commit-message metadata. See the
 [story-commit contract](../reference/git-adapter.md#package-internal-exact-story-commits),
 and [checkpoint contract](../reference/git-adapter.md#package-internal-session-checkpoints).
 
+<a id="correlated-session-recovery-projection"></a>
+
+## Correlated session-recovery projection
+
+Issue #526 adds a pure package API that converts already gathered, immutable
+owner facts for one active story workflow into one content-free state and one
+safe next-action label. It is not wired to the installed CLI. It neither
+inspects owners nor performs the action: #527 will own read-only owner
+reconciliation and #528 will own lifecycle presentation and enforcement.
+
+| Projected state | What it means to a user | Exact next action |
+| --- | --- | --- |
+| `proposed` | The collaboration history has an active proposal, but no exact reviewed artifact candidate is supplied. | `continue_with_lead` |
+| `reviewed` | The reviewed proposal/candidate facts agree, but no application-confirmation request exists. | `request_application_confirmation` |
+| `awaiting_application` | The exact application request and its visible Confirm/Reject/Revise choices are durable and still correlated. No executable capability is retained. | `submit_application_decision` |
+| `applied_not_committed` | An exact session-bound terminal application result is correlated, but no story commit is closed. `applied` requires exactly its affected paths as unstaged changes; idempotent `unchanged` requires a clean status. | `request_commit_confirmation` |
+| `staged` | The exact candidate and commit operation are correlated and Git status proves only those candidate paths are staged at the expected branch tip. A commit is not yet proved. | `inspect_story_commit` |
+| `committed` | Commit metadata, branch tip, tree, parent, candidate, application, proposal, and correlation facts agree. | `continue_with_lead` |
+| `rejected` | Collaboration history or the exact story-commit operation records a terminal rejection. It authorizes no apply or commit. | `continue_with_lead` |
+| `outcome_unknown` | One authoritative owner is still running, provisioning, ownership-unknown, or otherwise cannot prove its outcome. A session-history operation summary is sufficient even when its optional detailed record is absent. | `inspect_owner_outcome` |
+| `recovery_required` | An owner or session-history summary already requires recovery, external Git is active, a predecessor is missing, or cross-owner/repository facts contradict one another. | `operator_recovery` |
+
+The action names are instructions for a later controller, not callable
+authority. Users can use the projection to understand which exact decision or
+inspection should happen next. They cannot use it to call a provider, apply an
+artifact, stage or commit Git data, reconstruct a capability, retry an
+operation, or continue/abort/reset/clean a repository. For
+`outcome_unknown`, preserve evidence and inspect the named owner. For
+`recovery_required`, stop automated work and have an operator restore or prove
+one exact consistent state; do not reexecute or clean away evidence.
+
+Recovery-required facts are evaluated before unresolved outcomes, and
+unresolved outcomes before ordinary progress. With neither present, the
+furthest exactly proved closed state wins: for example, a correlated
+`committed` operation supersedes its earlier staged, applied, and reviewed
+facts. Equivalent owner evidence therefore produces the same projection
+regardless of the order in which the caller obtained it.
+
+Session-history operation summaries are durable owner facts, not hints. A
+summary entry marked `recovery_required` or `outcome_unknown` controls the
+projection even if the caller has no optional detailed operation record. If a
+preserved checkpoint index is listed without the detailed checkpoint record
+that explains it, the safe result is `recovery_required` with
+`missing_predecessor` and `checkpoint` ownership. Likewise, an authoritative
+`unchanged` application result does not excuse unexplained worktree, staged, or
+unmerged changes: those produce `recovery_required` with
+`repository_state_mismatch`.
+
+### Sample input and output
+
+The following JSON-shaped summaries are explanatory views of Python values,
+not a wire format. This package defines no serializer or legacy reader.
+
+An awaiting-application projection retains request `R9`, proposal `P7`
+revision 3, and reviewed candidate `D7`, while deliberately retaining no
+provider or write capability:
+
+```text
+input owner facts:
+  lifecycle/session resources: ready and exactly correlated to session story_review
+  collaboration: conversation review_1, tail 12, proposal P7 revision 3
+  reviewed proposal: candidate D7, correlation K1, request R9
+  visible choices: [confirm, reject, revise]
+  external Git operation: none
+
+output:
+  {state: awaiting_application,
+   next_action: submit_application_decision,
+   owner: lead,
+   failure_code: none,
+   proposal_id: P7,
+   confirmation_request_id: R9,
+   reviewed_candidate_id: D7,
+   correlation_id: K1}
+```
+
+An exact staged story commit can correlate operation `O4`, commit candidate
+`C4`, and application `A2` without claiming the commit completed:
+
+```text
+input owner facts:
+  reviewed proposal and session-bound application A2: exact
+  story-commit candidate C4: exact application/proposal/path/branch binding
+  story-commit operation O4: staged at the expected branch tip
+  repository status: exactly C4 paths staged, no worktree or unmerged change
+  external Git operation: none
+
+output:
+  {state: staged,
+   next_action: inspect_story_commit,
+   owner: story_commit,
+   failure_code: none,
+   application_id: A2,
+   story_commit_candidate_id: C4,
+   story_commit_operation_id: O4}
+```
+
+If the session-bound application instead names a different proposal than its
+reviewed predecessor, the classifier does not guess which owner is correct:
+
+```text
+input owner facts:
+  reviewed proposal: P7, correlation K1
+  session-bound application: proposal P8, correlation K1
+
+output:
+  {state: recovery_required,
+   next_action: operator_recovery,
+   owner: artifact_application,
+   failure_code: correlation_mismatch}
+```
+
+An `ArtifactApplicationResult` by itself is not application evidence. It must
+be wrapped in `SessionArtifactApplicationEvidence` with the exact session,
+conversation, collaboration-tail, proposal, and correlation binding. The
+relationship-validation digest is likewise supplied by its authoritative
+owner and compared across those facts; this classifier does not privately
+recompute it. A fresh idle session has no active correlated workflow to
+project and raises `SessionRecoveryError` with `unsupported_shape`; lifecycle
+code remains responsible for idle-session behavior.
+
+The projection contracts are frozen and side-effect-free. A result contains
+identifiers, owner, state, action, and a content-safe failure code; fixed
+errors contain only a content-safe code and message. Neither contains story
+bytes or provider text. Pre-v2 dictionaries, mutable or subclassed shapes,
+unknown fields, and invalid or duplicate values are not adapted. There is no
+codec, migration, or compatibility reader. See the
+[exact package imports](../reference/package-api.md#correlated-session-recovery-api).
+
 ## Session access recovery
 
 | Process-access result | Meaning | Safe response |

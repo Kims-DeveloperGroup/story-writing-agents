@@ -16,11 +16,12 @@ The stable inventories in this revision are:
 | `story_writing_agents.conversation_search` | 18 | Schema-v2 search, exact citations, paging, and history service |
 | `story_writing_agents.conversation_retrieval` | 24 | Low-level provider search/read-history/answer contracts |
 | `story_writing_agents.conversation_storage` | 63 | Storage composition, provenance, activation, archive, and transfer contracts |
-| `story_writing_agents.git` | 22 | Fixed local topology, exact baseline, status, diff-metadata, and log-metadata contracts and adapter |
+| `story_writing_agents.git` | 24 | Fixed local topology, external-operation inspection, exact baseline, status, diff-metadata, and log-metadata contracts and adapter |
+| `story_writing_agents.session_recovery` | 10 | Pure correlated session-recovery evidence and projection contracts |
 | `story_writing_agents.workspace` | 3 | `Workspace`, `initialize_workspace`, and `FilesystemConversationCatalog` |
-| `story_writing_agents.writing_artifacts` | 62 | Canonical artifact/reference values plus pure exact change-set and relationship-policy contracts |
+| `story_writing_agents.writing_artifacts` | 76 | Canonical artifact/reference values plus pure exact change-set, relationship-policy, and artifact-application contracts |
 
-The production graph has 113 modules, 407 dependency edges, no cycles, and 104
+The production graph has 119 modules, 431 dependency edges, no cycles, and 104
 package-root exports. The conversations owners contribute 54 event exports and
 20 context exports; their facade bindings are identical to their owner
 bindings.
@@ -44,15 +45,16 @@ project module index.
 
 ## Safe Git boundary
 
-The direct `story_writing_agents.git` facade exports 21 pure contracts and the
-sole `GitRepositoryAdapter`. All 22 names are intentionally absent from the
-104-name package-root facade. The adapter exposes exactly six typed operations:
+The direct `story_writing_agents.git` facade exports 23 pure contracts and the
+sole `GitRepositoryAdapter`. All 24 names are intentionally absent from the
+104-name package-root facade. The adapter exposes exactly seven typed operations:
 
 ```python
 from story_writing_agents.git import GitRepositoryAdapter
 
 adapter = GitRepositoryAdapter(absolute_workspace_root)
 topology = adapter.inspect_topology()
+external_operation = adapter.inspect_external_operation()
 inspection = adapter.inspect_baseline(manifest)
 created = adapter.create_baseline(manifest)
 status = adapter.status()
@@ -105,11 +107,12 @@ or package-root facade.
 
 Canonical artifact value contracts live in
 `story_writing_agents.writing_artifacts`, but are intentionally absent from the
-104-name package-root facade. Its exact 62-name facade includes immutable path,
+104-name package-root facade. Its exact 76-name facade includes immutable path,
 catalog, kind, reference, and filesystem `ArtifactSourceIdentity` values;
 content-free authorization, operation history/state, read-request/action,
 `ReferenceOperationFailure`, and parser contracts; and the 16 pure exact
-change-set symbols and 15 pure relationship-policy symbols below.
+change-set symbols, 15 pure relationship-policy symbols, and 14 pure artifact-
+application contract symbols below.
 Filesystem-backed `WritingArtifactRepository`, content-bearing read results,
 private capabilities, runtime coordinators, the ranged viewer, and interactive
 activation values remain internal. The current management controller does not
@@ -175,6 +178,85 @@ facts. It owns no filesystem, repository, provider, agent, confirmation,
 apply, publication, or Git behavior. Exact fields, limits, grammar, graph
 deltas, review domains, errors, and all seven user workflows are documented
 under [Canonical artifact relationship validation](writing-artifacts.md#canonical-artifact-relationship-validation).
+
+<a id="correlated-session-recovery-api"></a>
+
+## Correlated session-recovery contracts
+
+`story_writing_agents.session_recovery` is a ten-name package facade for a
+pure, read-nothing recovery projection:
+
+```python
+from story_writing_agents.session_recovery import (
+    SessionArtifactApplicationEvidence,
+    SessionRecoveryError,
+    SessionRecoveryEvidence,
+    SessionRecoveryFailureCode,
+    SessionRecoveryNextAction,
+    SessionRecoveryOwner,
+    SessionRecoveryResult,
+    SessionRecoveryState,
+    SessionReviewedProposalEvidence,
+    reconcile_session_recovery,
+)
+
+result = reconcile_session_recovery(evidence)
+```
+
+These are the facade's exact ten exports. They are intentionally absent from
+the 104-name package root. The evidence and result values are frozen, slotted,
+exactly typed, and provider-free. `reconcile_session_recovery()` accepts only
+one already assembled `SessionRecoveryEvidence`; it reads no lifecycle store,
+conversation history, artifact repository, filesystem, Git repository, or
+session. It calls no provider and cannot mutate, replay, continue, abort,
+reset, clean, or execute a recovery action.
+
+The caller supplies facts from the existing authoritative owners: lifecycle,
+collaboration history, session Git resources, external-Git inspection,
+session history, repository status and commit metadata, plus any reviewed
+proposal, artifact application, story-commit candidate/operation, or
+checkpoint operation. `SessionReviewedProposalEvidence` binds the exact
+session/conversation/history tail to proposal and candidate revisions and
+digests, the change set, relationship validation, correlation ID, and any
+application-confirmation request and visible choices.
+`SessionArtifactApplicationEvidence` is the mandatory session-bound wrapper
+around an `ArtifactApplicationResult`; a bare workspace result is insufficient
+to establish `applied_not_committed`. Both authoritative terminal application
+results are valid: `applied` must match the exact unstaged affected paths,
+while idempotent `unchanged` must accompany a clean Git status. Dirty, staged,
+or unmerged status beside `unchanged` is a repository contradiction, not new
+work to infer. The relationship-validation digest is also an owner-supplied
+fact: the classifier compares it across reviewed and application evidence and
+checks the embedded change-set/validation state digests, but does not privately
+recompute the tagged relationship digest.
+
+After exact shape checks, classification is deterministic and content-free.
+Cross-owner contradictions, missing predecessors, repository mismatches, or a
+non-`none` external Git operation fail closed. A recovery-required owner
+outranks unresolved outcomes; an unresolved owner outranks ordinary workflow
+progress. Otherwise the result reports the furthest exactly correlated closed
+state, so a proved commit supersedes its earlier staged/application/review
+facts. The result carries only correlation identifiers, its responsible owner,
+one failure code, and one safe next-action label. It carries no story text and
+the label is guidance, never executable authority.
+
+`GitSessionHistoryInspection` remains authoritative even when a caller omits
+the optional detailed commit or checkpoint record. A compact operation entry
+in `recovery_required` or `outcome_unknown` therefore still projects that
+state with `story_commit` or `checkpoint` ownership. When a detailed record is
+supplied, it must match exactly one compact entry. A preserved checkpoint index
+without its matching detailed checkpoint record instead fails closed as
+`missing_predecessor` owned by `checkpoint`; the classifier does not guess its
+operation state from the index.
+
+This contract classifies active correlated workflows only. A fresh idle
+session remains a session-lifecycle concern and is rejected as
+`unsupported_shape`. There is no codec, pre-v2 reader, migration, or legacy
+compatibility path. Issue #527 will gather and reconcile owner facts, while
+#528 will decide how a runtime lifecycle or CLI presents and enforces a result;
+neither behavior is implemented by this facade. See
+[Correlated session-recovery projection](../operations/recovery-and-limitations.md#correlated-session-recovery-projection)
+for every state, safe action, and sample input/output.
 
 <a id="structured-collaboration-history-boundary"></a>
 
