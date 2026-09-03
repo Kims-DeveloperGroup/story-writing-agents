@@ -16,9 +16,9 @@ Source root: `src/`
 
 Package root: `src/story_writing_agents/`
 
-Importable production units indexed: 120.
+Importable production units indexed: 121.
 
-Direct internal dependency edges indexed: 441.
+Direct internal dependency edges indexed: 449.
 
 Directed internal dependency cycles indexed: 0.
 
@@ -223,6 +223,11 @@ session_recovery.reconciliation -> conversations/git/git.session_contracts
                                 -> session_recovery.contracts
                                 -> workspace.initialization/writing_artifacts
                                 -> writing_artifacts.repository
+session_recovery.transition_assessment -> conversations/git/git.session_contracts
+                                       -> git.session_history_contracts/session_lifecycle
+                                       -> session_recovery.contracts
+                                       -> session_recovery.reconciliation
+                                       -> workspace.initialization
 session_lifecycle -> (standard library only)
 conversations -> conversations.catalog/context/events
 conversations.catalog -> errors
@@ -5423,6 +5428,39 @@ every intermediate arrow. The current runtime graph is acyclic.
   and
   `docs/operations/recovery-and-limitations.md#session-recovery-owner-reconciliation`.
 
+### `story_writing_agents.session_recovery.transition_assessment`
+
+- **Source:** `src/story_writing_agents/session_recovery/transition_assessment.py`
+- **Responsibility:** Assess immutable, content-safe session-transition
+  permission from active recovery truth or stable idle owner observations.
+- **Supported surface:** Direct-module `__all__` contains exactly
+  `SessionTransitionScope`, `SessionTransitionAssessmentState`,
+  `SessionTransitionNextAction`, `SessionTransitionOperation`,
+  `SessionTransitionAssessment`, and `SessionTransitionAssessor`. These names
+  are intentionally absent from both the `session_recovery` and project-root
+  facades.
+- **Direct internal dependencies:** `conversations`, `git`,
+  `git.session_contracts`, `git.session_history_contracts`,
+  `session_lifecycle`, `session_recovery.contracts`,
+  `session_recovery.reconciliation`, and `workspace.initialization`.
+- **State, resources, and side effects:** Owns only frozen transition values,
+  exact validation, active-result projection, idle A/B observation policy, and
+  the closed enter/leave/pause permission mapping. The assessor retains only a
+  validated lexical absolute workspace root. Active inspection delegates once
+  to the existing reconciler; idle inspection compares complete session
+  resource and history snapshots plus external-operation and status
+  observations, requiring exact clean branch, worktree, and internal-ref truth
+  before permitting a transition. It exposes no path, identity digest, live
+  owner, capability, or executable authority and performs no provisioning,
+  lifecycle mutation, provider call, artifact operation, Git mutation, replay,
+  cleanup, continue, abort, reset, deletion, or import-time I/O.
+- **Primary verification/documentation:**
+  `tests/test_session_transition_assessment.py`,
+  `docs/reference/package-api.md#session-transition-assessment-api`,
+  `docs/operations/recovery-and-limitations.md#session-transition-assessment`,
+  and
+  `docs/design/session-lifecycle.md#story-session-transition-assessment`.
+
 ### `story_writing_agents.session_lifecycle`
 
 - **Source:** `src/story_writing_agents/session_lifecycle.py`
@@ -6346,8 +6384,8 @@ every intermediate arrow. The current runtime graph is acyclic.
 
 ## Consistency Notes
 
-- The inventory contains 120 modules. Static AST derivation over every module-
-  level and function-local import yields 441 unique direct internal edges and
+- The inventory contains 121 modules. Static AST derivation over every module-
+  level and function-local import yields 449 unique direct internal edges and
   no directed cycle. The v2 cutover contributes 97 modules and 362 edges;
   `writing_artifacts.change_sets` and `writing_artifacts.relationship_policy`
   add two pure modules and exactly five inward edges; application contracts
@@ -6365,8 +6403,11 @@ every intermediate arrow. The current runtime graph is acyclic.
   snapshot adds no module and only the workspace-initialization-to-history
   composition edge, producing the historical 119-module, 432-edge acyclic
   graph. The internal session-recovery reconciler adds one module with exactly
-  nine owner-facing inward edges, producing the current 120-module, 441-edge
-  acyclic graph without a facade export.
+  nine owner-facing inward edges, producing its historical 120-module,
+  441-edge acyclic graph without a facade export. The transition assessor adds
+  one internal module with exactly eight inward owner-contract and observation
+  edges, producing the current 121-module, 449-edge acyclic graph without a
+  facade export.
   Relative to the 360-edge pre-cutover graph, filesystem and
   SQLite storage each add one direct dependency on `conversations.events` for
   private legacy-row/file rejection values, smoke adds one dependency on

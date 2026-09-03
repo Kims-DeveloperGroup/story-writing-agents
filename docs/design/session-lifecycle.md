@@ -62,6 +62,41 @@ sequenceDiagram
 Identity and pre/post facts must correlate. Failure compensates only a newly
 acquired claim; it never deletes another process's claim.
 
+<a id="story-session-transition-assessment"></a>
+
+## Story-session transition assessment
+
+The package now has one shared, content-safe assessment for a later controller
+to consult before entering a destination, leaving a source, or pausing a story
+session. It is package-internal and is not yet consumed by an installed
+command. The assessment is evidence, not authority: it never acquires or
+releases ownership, performs a transition, calls a provider, applies an
+artifact, or changes Git. #528 remains responsible for presenting and
+enforcing it in the runtime lifecycle.
+
+Active and idle sessions use different evidence paths:
+
+1. With both a conversation ID and collaboration store, the assessor delegates
+   exactly once to the #527 reconciler. It preserves the exact nested recovery
+   result. Proposed, reviewed, awaiting-application, committed, and rejected
+   work permits all three transitions; applied-not-committed or staged work
+   permits destination attachment only, so the user can inspect it without
+   releasing or pausing its owner.
+2. With neither active input, it first requires lifecycle `ready + held_here`.
+   It then observes session resources and complete history, followed by
+   external Git and linked-worktree status, and repeats the same four reads as
+   generation B. Only equal, clean, fully closed owner facts produce
+   `idle_ready`. First-read failure, owner uncertainty, second-read failure, or
+   drift fails closed with the responsible owner and no permitted operation.
+
+The assessor does not claim access while checking and does not release access
+afterward; lifecycle ownership must already be held. Enter permission only
+means a later controller may proceed with attachment. Leave and pause
+permission means that controller may proceed through the existing release
+mechanism. The assessor itself retains no proof path, digest, provider content,
+process identity, handle, or capability. See the
+[canonical operation matrix and user examples](../operations/recovery-and-limitations.md#session-transition-assessment).
+
 ## Commands and next actions
 
 | Facts | Command | Next action |

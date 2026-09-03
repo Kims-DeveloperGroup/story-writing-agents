@@ -485,9 +485,9 @@ be wrapped in `SessionArtifactApplicationEvidence` with the exact session,
 conversation, collaboration-tail, proposal, and correlation binding. The
 relationship-validation digest is likewise supplied by its authoritative
 owner and compared across those facts; this classifier does not privately
-recompute it. A fresh idle session has no active correlated workflow to
-project and raises `SessionRecoveryError` with `unsupported_shape`; lifecycle
-code remains responsible for idle-session behavior.
+recompute it. A fresh idle session has no active correlated workflow for this
+classifier and raises `SessionRecoveryError` with `unsupported_shape`; the
+separate transition assessment below proves idle transition safety.
 
 The projection contracts are frozen and side-effect-free. A result contains
 identifiers, owner, state, action, and a content-safe failure code; fixed
@@ -496,6 +496,125 @@ bytes or provider text. Pre-v2 dictionaries, mutable or subclassed shapes,
 unknown fields, and invalid or duplicate values are not adapted. There is no
 codec, migration, or compatibility reader. See the
 [exact package imports](../reference/package-api.md#correlated-session-recovery-api).
+
+<a id="session-transition-assessment"></a>
+
+## Story-session transition assessment
+
+The package-internal `SessionTransitionAssessor` gives a later controller one
+content-safe answer about entering a destination, leaving a source, or pausing
+a session. It does not perform or authorize the transition. In particular,
+`enter_destination` means only that a controller may proceed with attachment;
+it grants no provider, artifact Apply, staging, or commit authority. A permitted
+leave or pause lets that controller proceed through the existing ownership-
+release path, but this assessment itself neither acquires nor releases a claim.
+
+This is the canonical permission matrix:
+
+| Assessment / nested recovery state | `next_action` | Enter destination | Leave source | Pause session |
+| --- | --- | --- | --- | --- |
+| `idle_ready` | `begin_with_lead` | Yes | Yes | Yes |
+| Active `proposed`, `reviewed`, `awaiting_application`, `committed`, or `rejected` | `follow_active_recovery` | Yes | Yes | Yes |
+| Active `applied_not_committed` or `staged` | `follow_active_recovery` | Yes | No | No |
+| `outcome_unknown` | `inspect_owner_outcome` | No | No | No |
+| `recovery_required` | `operator_recovery` | No | No | No |
+
+For active work, the assessment contains the exact nested #527 recovery result.
+Normal active progress has outer state `active`; its allowed operations come
+only from the nested state. Uncertainty or required recovery copies the nested
+`owner` and `failure_code` and allows nothing. Safe known recovery takes
+precedence over uncertainty.
+
+For idle work, `conversation_id` and `recovery_result` are absent. Lifecycle
+must be exactly `ready + held_here`. The assessor reads resources, complete
+session history, external Git, and linked-worktree status twice and accepts
+only equal generations. Ready resources must identify the exact session
+worktree; status must be clean on its exact branch and current tip; external
+Git must be `none`; every candidate must have one unique terminal committed or
+rejected operation; the latest committed story tip must match the current
+branch tip (or the initial tip when there is no commit), and the latest
+checkpoint tip must likewise match the internal ref (or its initial tip); and
+no running, uncertain, recovery-required or staged operation or preserved
+checkpoint index may remain.
+
+A generic failure on the first owner read is `recovery_required`; a typed
+uncertain first read is `outcome_unknown`. A failure on the second read or any
+A/B drift is `outcome_unknown`, because no single generation was proved. The
+result identifies the owner and gives only `operator_recovery` or
+`inspect_owner_outcome`; it never combines observations. Recovery-before-read
+work performed inside an authoritative owner may finish or verify that owner's
+already-journaled state. That is owner maintenance, not a new workflow
+mutation by the assessor.
+
+The result never exposes the worktree or proof paths, branch or internal ref,
+proof or repository/worktree identity digests, story/provider content, process
+identity, raw Git output, live handles, or capabilities. Its exact fields are
+`session_id`, `conversation_id`, `scope`, `state`, `next_action`, `owner`,
+`failure_code`,
+`allowed_operations`, and `recovery_result`. The JSON-shaped examples below
+are explanatory views; labels such as R9 are values inside the nested recovery
+result, not additional assessment fields.
+
+An idle session whose two observations agree can begin with the lead:
+
+```text
+input: lifecycle ready + held_here; stable ready resources/history;
+       external Git none; exact clean session branch and tips
+output: {session_id: story_review, conversation_id: null, scope: idle,
+         state: idle_ready, next_action: begin_with_lead, owner: null,
+         failure_code: none,
+         allowed_operations: [enter_destination, leave_source, pause_session],
+         recovery_result: null}
+```
+
+An active R9 confirmation request remains governed by its nested recovery:
+
+```text
+input: conversation review_1; #527 result awaiting_application for request R9
+output: {scope: active, state: active,
+         next_action: follow_active_recovery, owner: null, failure_code: none,
+         allowed_operations: [enter_destination, leave_source, pause_session],
+         recovery_result: {state: awaiting_application,
+                           confirmation_request_id: R9,
+                           next_action: submit_application_decision}}
+```
+
+A staged active operation permits attachment for inspection, but not leaving
+or pausing while the Git outcome remains unresolved:
+
+```text
+input: #527 result staged for operation O4
+output: {scope: active, state: active,
+         next_action: follow_active_recovery,
+         allowed_operations: [enter_destination],
+         recovery_result: {state: staged,
+                           story_commit_operation_id: O4,
+                           next_action: inspect_story_commit}}
+```
+
+Stable external Git activity blocks every transition:
+
+```text
+input: idle generations A and B both report external Git merge
+output: {scope: idle, state: recovery_required,
+         next_action: operator_recovery, owner: external_git,
+         failure_code: external_git_operation, allowed_operations: []}
+```
+
+Changed history between the two idle reads proves no safe generation:
+
+```text
+input: idle history A != idle history B
+output: {scope: idle, state: outcome_unknown,
+         next_action: inspect_owner_outcome, owner: story_commit,
+         failure_code: owner_outcome_unknown, allowed_operations: []}
+```
+
+The installed CLI and controller do not yet consume this evidence. #528 owns
+future presentation and lifecycle enforcement; until then, no command is made
+safe merely by constructing an assessment. The exact internal imports and
+signatures are in the
+[package reference](../reference/package-api.md#session-transition-assessment-api).
 
 ## Session access recovery
 
