@@ -34,6 +34,7 @@ from ..git.session_contracts import (
     GitSessionResourceInventory,
     GitSessionResourceState,
 )
+from ..git.session_history import GitSessionHistorySnapshot, open_git_session_history
 from ..git.session_resources import (
     inspect_git_session_resources as _inspect_git_session_resources,
     list_git_session_resources as _list_git_session_resources,
@@ -296,6 +297,22 @@ def inspect_session_resources(
 
     manifest = _baseline_manifest(canonical_initializer_scaffold())
     return _inspect_git_session_resources(_main_root(root), manifest, session_id)
+
+
+def inspect_session_history(
+    root: Path,
+    session_id: str,
+) -> GitSessionHistorySnapshot:
+    """Return one immutable complete history snapshot without creating storage."""
+
+    manifest = _baseline_manifest(canonical_initializer_scaffold())
+    with open_git_session_history(
+        _main_root(root),
+        manifest,
+        session_id,
+        create=False,
+    ) as history:
+        return history.snapshot()
 
 
 def list_session_resources(root: Path) -> GitSessionResourceInventory:

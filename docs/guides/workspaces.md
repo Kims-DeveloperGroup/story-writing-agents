@@ -117,6 +117,45 @@ terminal. A fresh object or CLI process must reclassify the durable state before
 recovery. This prevents an object that observed a failure from guessing that
 the root is now safe.
 
+<a id="external-git-operation-guard"></a>
+
+## External Git operation guard
+
+The direct Python Git adapter can now report whether an external merge, rebase,
+cherry-pick, revert, or sequencer operation is visible. Current `story session`
+commands do not call this inspection yet. #527 will correlate the observation
+to a session and #528 will use it to block lifecycle mutation; #530 by itself
+only reports a fact.
+
+Common user scenarios are:
+
+| External-operation inspection | Separate `GitStatus` | What it means now |
+| --- | --- | --- |
+| `none` | Clean | No supported marker or status change was observed. Other topology/workflow checks still decide readiness. |
+| `none` | Dirty or staged | No supported operation marker exists, but files or the index changed. Do not treat `none` as clean. |
+| `merge` | Usually, but not necessarily, unmerged entries | A merge marker is authoritative for the operation kind; status still provides distinct path/index/worktree facts. Stop Story mutation and resolve externally. |
+| `rebase`, `cherry_pick`, `revert`, or `sequencer` | Any status | Preserve the repository and resolve the named external operation before another Story-owned mutation. |
+| `RECOVERY_REQUIRED` | Any status | Git administration was ambiguous or unsafe. Preserve everything and inspect offline; do not reset or delete markers to force `none`. |
+
+For an unchanged standalone repository, the direct call returns an explanatory
+projection like:
+
+```text
+input: GitRepositoryAdapter(worktree).inspect_external_operation()
+output:
+  kind: none
+  repository_identity_digest: <64-lowercase-hex>
+  worktree_identity_digest: <64-lowercase-hex>
+side effects: none
+```
+
+The digests bind the common repository and exact worktree without revealing
+their paths. Two linked worktrees share the repository digest and have distinct
+worktree digests. The result does not identify a session and does not continue,
+abort, reset, clean, checkout, or otherwise mutate Git. See the
+[API contract](../reference/git-adapter.md#external-git-operation-inspection)
+and [safe recovery action](../operations/recovery-and-limitations.md#external-git-operation-recovery).
+
 ## Marker and session naming policy
 
 `config/workspace.json` is strict canonical UTF-8 JSON with a trailing newline:

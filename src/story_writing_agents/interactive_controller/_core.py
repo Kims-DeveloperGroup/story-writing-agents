@@ -196,12 +196,17 @@ from ._runtime_policy import (
 )
 from ._session_policy import (
     RECOVERABLE_SESSION_ERROR_CODES,
+    SessionTransitionAssessment,
+    SessionTransitionOperation,
     classify_session_failure,
     next_session_action,
+    project_transition_assessment,
     require_correlated_state,
     require_lifecycle_state,
     require_ready_access_state,
     require_released_state,
+    require_transition_assessment,
+    transition_operation_is_allowed,
 )
 
 
@@ -1189,15 +1194,16 @@ class InteractiveController:
             return
         access_acquired = False
         try:
+            before = self._backend.get_session_lifecycle(session_id)
+            require_lifecycle_state(before, session_id)
+            if before.durable_state is not SessionDurableState.ABSENT:
+                raise SessionExistsError(f"session already exists: {session_id}")
             configured = self._backend.validate_provider_configuration(session_id)
             if configured is not True:
                 raise BackendProtocolError(
                     "provider configuration validation returned a non-true value"
                 )
-            before = self._backend.get_session_lifecycle(session_id)
-            require_lifecycle_state(before, session_id)
-            if before.durable_state is not SessionDurableState.ABSENT:
-                raise SessionExistsError(f"session already exists: {session_id}")
+            self._backend.provision_session_resources(session_id)
             acquired = self._backend.create_session_with_access(session_id)
             access_acquired = True
             require_ready_access_state(acquired, session_id)
@@ -1321,15 +1327,15 @@ class InteractiveController:
 
         newly_acquired = False
         try:
+            before = self._backend.get_session_lifecycle(session_id)
+            require_lifecycle_state(before, session_id)
+            if before.durable_state is SessionDurableState.ABSENT:
+                raise SessionNotFoundError(f"session not found: {session_id}")
             configured = self._backend.validate_provider_configuration(session_id)
             if configured is not True:
                 raise BackendProtocolError(
                     "provider configuration validation returned a non-true value"
                 )
-            before = self._backend.get_session_lifecycle(session_id)
-            require_lifecycle_state(before, session_id)
-            if before.durable_state is SessionDurableState.ABSENT:
-                raise SessionNotFoundError(f"session not found: {session_id}")
             newly_acquired = before.access_state is not SessionAccessState.HELD_HERE
             if before.durable_state is SessionDurableState.PAUSED:
                 acquired = self._backend.reopen_session_with_access(session_id)
@@ -1372,6 +1378,23 @@ class InteractiveController:
             self._present_destination_conversation_failure(exc)
             return
         try:
+            assessment = self._assess_session_transition(
+                state,
+                SessionTransitionOperation.ENTER_DESTINATION,
+                focused_conversation,
+            )
+        except Exception as exc:
+            self._release_uncommitted_destination(session_id)
+            self._present_session_failure(exc, session_id)
+            return
+        if not transition_operation_is_allowed(
+            assessment,
+            SessionTransitionOperation.ENTER_DESTINATION,
+        ):
+            self._release_uncommitted_destination(session_id)
+            self._write_transition_denial(assessment)
+            return
+        try:
             history_service = CollaborationHistoryService(
                 CollaborationHistorySearchScope(session_id),
                 conversation_storage_services=self._conversation_storage_services,
@@ -1394,6 +1417,59 @@ class InteractiveController:
             attachment,
             focused_conversation,
             history_service,
+        )
+
+    def _assess_session_transition(
+        self,
+        lifecycle: SessionLifecycleState,
+        operation: SessionTransitionOperation,
+        conversation: ConversationMetadata | None,
+    ) -> SessionTransitionAssessment:
+        """Delegate exact active or idle transition evidence to the backend."""
+
+        conversation_id = (
+            conversation.conversation_id if conversation is not None else None
+        )
+        assessment = self._backend.assess_session_transition(
+            lifecycle_state=lifecycle,
+            requested_operation=operation,
+            conversation_id=conversation_id,
+            collaboration_store=(
+                self._conversation_storage_services.event_store
+                if conversation_id is not None
+                else None
+            ),
+        )
+        return require_transition_assessment(
+            assessment,
+            expected_session=lifecycle.session_id,
+            expected_conversation=conversation_id,
+            requested_operation=operation,
+        )
+
+    def _write_transition_denial(
+        self,
+        assessment: SessionTransitionAssessment,
+    ) -> None:
+        """Present only fixed content-safe transition assessment fields."""
+
+        projection = project_transition_assessment(assessment)
+        self._semantic_output.write_component(
+            Record(
+                "session transition",
+                fields=(
+                    Field("Scope", projection.scope),
+                    Field("State", projection.state),
+                    Field("Next action", projection.next_action),
+                    Field("Owner", projection.owner),
+                    Field("Failure", projection.failure_code),
+                    Field(
+                        "Allowed operations",
+                        ", ".join(projection.allowed_operations) or "none",
+                    ),
+                ),
+                state=ViewState.ERROR,
+            )
         )
 
     def _load_destination_conversation(
@@ -1479,15 +1555,35 @@ class InteractiveController:
     ) -> None:
         """Save the destination default before replacing source and read scope.
 
-        Destination acquisition has already succeeded. Default-write failure
-        releases it and preserves the source. Source-release failure after the
-        default write is not rolled back; owned resources are closed best
-        effort and the process exits with ``cleanup_failed``. The candidate
-        history service commits only after source access is released.
+        Destination enter and source leave assessments have already succeeded.
+        Default-write failure releases the destination and preserves the
+        source. Source-release failure after the default write is not rolled
+        back; owned resources are closed best effort and the process exits with
+        ``cleanup_failed``. The candidate history service commits only after
+        source access is released.
         """
 
         source_session = self._attached_session_id
         assert source_session is not None
+        try:
+            source_lifecycle = self._backend.get_session_lifecycle(source_session)
+            require_ready_access_state(source_lifecycle, source_session)
+            assessment = self._assess_session_transition(
+                source_lifecycle,
+                SessionTransitionOperation.LEAVE_SOURCE,
+                self._focused_conversation,
+            )
+        except Exception as exc:
+            self._release_uncommitted_destination(destination_session)
+            self._present_session_failure(exc, source_session)
+            return
+        if not transition_operation_is_allowed(
+            assessment,
+            SessionTransitionOperation.LEAVE_SOURCE,
+        ):
+            self._release_uncommitted_destination(destination_session)
+            self._write_transition_denial(assessment)
+            return
         next_context = self._persist_destination_default(destination_session)
         if next_context is None:
             return
@@ -6813,6 +6909,19 @@ class InteractiveController:
             self._write_session_pause_cancelled_status()
             return False
         try:
+            current = self._backend.get_session_lifecycle(session_id)
+            require_ready_access_state(current, session_id)
+            assessment = self._assess_session_transition(
+                current,
+                SessionTransitionOperation.PAUSE_SESSION,
+                self._focused_conversation,
+            )
+            if not transition_operation_is_allowed(
+                assessment,
+                SessionTransitionOperation.PAUSE_SESSION,
+            ):
+                self._write_transition_denial(assessment)
+                return False
             state = self._backend.pause_session_and_release_access(session_id)
             state = require_lifecycle_state(state, session_id)
             if (

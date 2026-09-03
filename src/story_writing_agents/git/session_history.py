@@ -28,6 +28,7 @@ from .session_history_contracts import (
     GitSessionHistoryFailureCode,
     GitSessionHistoryInspection,
     GitSessionHistoryRecoveryAction,
+    GitSessionHistorySnapshot,
     GitSessionHistoryState,
     advance_checkpoint_operation,
     advance_commit_operation,
@@ -297,9 +298,41 @@ class GitSessionHistory:
     def inspect(self) -> GitSessionHistoryInspection:
         """Return a complete bounded content-free inventory or fail closed."""
 
+        inspection, _candidates, _commits, _checkpoints = self._capture()
+        return inspection
+
+    def snapshot(self) -> GitSessionHistorySnapshot:
+        """Return one complete immutable record snapshot or fail closed."""
+
+        inspection, candidates, commits, checkpoints = self._capture()
+        result = GitSessionHistorySnapshot(
+            inspection,
+            candidates,
+            commits,
+            checkpoints,
+        )
+        if self.inspect() != inspection:
+            raise _history_error(GitSessionHistoryFailureCode.RECOVERY_REQUIRED)
+        return result
+
+    def _capture(
+        self,
+    ) -> tuple[
+        GitSessionHistoryInspection,
+        tuple[GitSessionCandidateRecord, ...],
+        tuple[GitSessionCommitOperationRecord, ...],
+        tuple[GitSessionCheckpointOperationRecord, ...],
+    ]:
+        """Decode one complete sorted inventory under the active repository lease."""
+
         self.require_active()
         if self._descriptor is None:
-            return GitSessionHistoryInspection(self._session_id, (), (), (), ())
+            return (
+                GitSessionHistoryInspection(self._session_id, (), (), (), ()),
+                (),
+                (),
+                (),
+            )
         candidates = self._inventory_records(
             _CANDIDATE_DIRECTORY,
             length=64,
@@ -323,12 +356,18 @@ class GitSessionHistory:
                 _CHECKPOINT_INPUT_DIRECTORY,
             },
         )
-        return GitSessionHistoryInspection(
+        inspection = GitSessionHistoryInspection(
             self._session_id,
             tuple(item[0] for item in candidates),
             tuple((item[0], item[1].state) for item in commits),
             tuple((item[0], item[1].state) for item in checkpoints),
             tuple(item[0] for item in preserved),
+        )
+        return (
+            inspection,
+            tuple(item[1] for item in candidates),
+            tuple(item[1] for item in commits),
+            tuple(item[1] for item in checkpoints),
         )
 
     def _require_session(self, session_id: str) -> None:
@@ -822,4 +861,8 @@ def _history_error(code: GitSessionHistoryFailureCode) -> GitSessionHistoryError
     return error
 
 
-__all__ = ["GitSessionHistory", "open_git_session_history"]
+__all__ = [
+    "GitSessionHistory",
+    "GitSessionHistorySnapshot",
+    "open_git_session_history",
+]

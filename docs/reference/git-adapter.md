@@ -1,15 +1,16 @@
 # Safe Git adapter and story baseline
 
 The `story_writing_agents.git` package is a direct Python API for inspecting one
-local repository and creating one exact initial story-workspace commit. It is
-provider-independent and uses only the Python standard library plus the local
-Git executable.
+local repository, detecting an external Git operation, and creating one exact
+initial story-workspace commit. It is provider-independent and uses only the
+Python standard library plus the local Git executable.
 
-This is the complete availability boundary for issue
-[#448](https://github.com/Kims-DeveloperGroup/story-writing-agents/issues/448):
+This is the complete availability boundary for the #448 baseline and #530
+external-operation inspection work:
 
 - Python callers can classify repository topology, inspect or create the fixed
-  baseline, and read bounded status, diff, and log metadata.
+  baseline, inspect external-operation metadata, and read bounded status, diff,
+  and log metadata.
 - `story init` now composes this adapter internally after it records the exact
   schema-v2 initialization journal and installs its exact 22-file scaffold.
   The CLI does not expose manifest selection or another Git operation.
@@ -41,6 +42,14 @@ commit, apply a story proposal, manage a session worktree, contact a remote, or
 repair an unexpected repository. Initialization authority covers only the one
 fixed root commit. The adapter reports a closed recovery state instead of
 guessing how to change an unexpected repository.
+
+A Python caller can now detect an externally started merge, rebase,
+cherry-pick, revert, or sequencer operation without running Git or exposing its
+administrative payload. Users can use that fact to stop before another owner
+mutates the repository. This inspection does not itself block a lifecycle
+action, identify a story session, or continue, abort, reset, clean, or repair
+the operation; #527 will correlate it and #528 will enforce the lifecycle
+decision.
 
 ## Fixed baseline contract
 
@@ -137,6 +146,7 @@ created = adapter.create_baseline(manifest)
 retried = adapter.create_baseline(manifest)
 
 # READ: these projections contain metadata, never file or commit-message bodies.
+external_operation = adapter.inspect_external_operation()
 status = adapter.status()
 diff = adapter.diff_metadata()
 log = adapter.log_metadata()
@@ -161,6 +171,11 @@ result = {
     "retry": {
         "same_commit": retried.commit_id == created.commit_id,
         "same_tree": retried.tree_id == created.tree_id,
+    },
+    "external_operation": {
+        "kind": external_operation.kind.value,
+        "repository_identity_digest": "<repository-identity-digest>",
+        "worktree_identity_digest": "<worktree-identity-digest>",
     },
     "status": {
         "branch": status.branch,
@@ -223,6 +238,11 @@ For the new workspace and exact bytes above, the sanitized output is:
     "same_commit": true,
     "same_tree": true
   },
+  "external_operation": {
+    "kind": "none",
+    "repository_identity_digest": "<repository-identity-digest>",
+    "worktree_identity_digest": "<worktree-identity-digest>"
+  },
   "status": {
     "branch": "main",
     "head_id": "<object-id>",
@@ -280,7 +300,7 @@ representations, although callers can explicitly read the typed identity fields.
 | `absent` | The exact root is not a repository and is not inside another one. Baseline creation may proceed. |
 | `standalone` | The root owns a normal `.git` directory. Further baseline validation decides whether creation or reads may proceed. |
 | `parent_repository` | The root is nested inside another repository. The adapter refuses to adopt it. |
-| `linked_worktree` | `.git` is an administrative-file link. This baseline adapter rejects it; the separate #504 owner accepts only an exact correlated session worktree. |
+| `linked_worktree` | `.git` is an administrative-file link. Baseline and diff operations reject it; `status()` and `log_metadata()` can observe a securely validated linked worktree without establishing session ownership. |
 | `submodule` | The root is a submodule or has a Git-link entry. |
 | `sparse_checkout` | Sparse-checkout configuration is active. |
 | `root_mismatch` | Git's worktree/top-level/bare facts do not identify the exact supplied root. |
@@ -300,10 +320,146 @@ around filesystem and process work.
 | `baseline_committed` | The one exact manifest-bound root commit, tree, index, branch, and identities were verified. Repeating creation is read-like and idempotent. |
 | `recovery_required` | Topology, refs, history, tree, index, files, or message do not match the closed baseline. Inspect or recreate the workspace outside this adapter; it will not rewrite unexpected history. |
 
-For a non-standalone topology, baseline inspection reports
-`recovery_required`, baseline creation refuses it, and status/diff/log reads
-report `unsupported_topology`. A symlinked or replaced root fails as
-`unsafe_root`.
+For a linked worktree, baseline inspection reports `recovery_required`,
+baseline creation refuses it, and `diff_metadata()` reports
+`unsupported_topology`; guarded `status()` and `log_metadata()` are the only
+exceptions. Other non-standalone topologies remain unsupported for
+status/diff/log reads. A symlinked or replaced root fails as `unsafe_root`.
+
+<a id="external-git-operation-inspection"></a>
+
+## External Git operation inspection
+
+`GitRepositoryAdapter.inspect_external_operation()` directly inspects the
+bound Git administration directories without starting a Git process. It returns
+one frozen, content-free `GitExternalOperationInspection`:
+
+| `kind` | Exact unambiguous administrative shape | What the user should do |
+| --- | --- | --- |
+| `none` | None of the supported operation markers is present. | Continue only if separate topology, status, and workflow checks also allow it. `none` does not mean clean. |
+| `merge` | `MERGE_HEAD` alone. | Stop Story mutation and resolve or abort the merge with trusted Git tooling outside this API. |
+| `rebase` | Exactly one of `rebase-merge/` or `rebase-apply/`, alone. | Stop and finish or abort the rebase externally. |
+| `cherry_pick` | `CHERRY_PICK_HEAD`, alone or with `sequencer/`. | Stop and finish or abort the cherry-pick externally. |
+| `revert` | `REVERT_HEAD`, alone or with `sequencer/`. | Stop and finish or abort the revert externally. |
+| `sequencer` | `sequencer/` alone. | Stop and inspect the sequenced Git work externally before continuing. |
+
+The other two result fields are fresh 64-lowercase-hex SHA-256 identity
+digests. `repository_identity_digest` binds the common Git repository;
+`worktree_identity_digest` binds the exact worktree root plus its administrative
+directory. Repeated inspection of unchanged identities is stable. Linked
+worktrees share the repository digest but have different worktree digests, so a
+later #527 correlation can reject evidence observed from the wrong worktree.
+The values are opaque: they do not reveal paths, device/inode facts, marker
+contents, or story text, and they do not identify a session by themselves.
+
+Example explanatory output for a merge is:
+
+```json
+{
+  "kind": "merge",
+  "repository_identity_digest": "<64-lowercase-hex>",
+  "worktree_identity_digest": "<64-lowercase-hex>"
+}
+```
+
+`GitStatus` remains a separate observation. A repository can report
+`kind="none"` while status is dirty, staged, or unmerged; conversely an operation
+marker does not replace the literal index/worktree facts in `status()`. Callers
+must not infer an operation kind from status alone or infer cleanliness from
+this inspection.
+
+An absent or malformed Git administration root, dual or contradictory markers,
+two rebase directories, wrong marker types, symlinks, unreadable or replaced
+administration state, and metadata that races during inspection fail closed as
+`GitOperationError` with:
+
+```text
+code: recovery_required
+operation: inspect_external_operation
+repository_state: recovery_required
+recovery_action: inspect_repository
+```
+
+The fixed error contains no administrative payload. Preserve every repository,
+worktree, marker, index, ref, and working byte and inspect them with trusted
+local tools. This method never continues, aborts, resets, cleans, checks out, or
+otherwise mutates Git. #527 will correlate this fact with one session; #528 will
+later block lifecycle mutation. #530 itself owns neither behavior.
+
+<a id="linked-worktree-status-and-log"></a>
+
+## Linked-worktree status and log
+
+Issue #539 extends the existing read methods, without changing their
+signatures or result types:
+
+```text
+status() -> GitStatus
+log_metadata() -> GitLogMetadata
+```
+
+Each now accepts either a standalone repository or a securely validated linked
+worktree. For a linked worktree, the adapter binds the exact root and
+administration identities and inspects its external-operation markers before
+the bounded read. It repeats both checks afterward, including when the read
+fails or is interrupted. The opening and closing observations must agree
+exactly. A stable `merge`, `rebase`, `cherry_pick`, `revert`, or `sequencer`
+marker is readable; that only permits observation and never authorizes Story
+or Git mutation. The marker kind is not added to `GitStatus` or
+`GitLogMetadata`; use `inspect_external_operation()` when that separate fact is
+needed.
+
+`status()` reports the linked worktree's literal branch, `HEAD`, and bounded
+index/worktree path states. `log_metadata()` reports that worktree's `HEAD`
+history newest first, using the same content-safe commit metadata as a
+standalone repository. For example:
+
+```text
+input:
+  root topology: linked_worktree
+  external-operation observation before/after: merge / merge
+  calls: status(), log_metadata()
+
+output:
+  status={branch: story/session/review,
+          head_id: <object-id>,
+          entries: [
+            {path: manuscript/part-01/opening.md,
+             index_change: added, worktree_change: null},
+            {path: core_documents/global_outline.md,
+             index_change: null, worktree_change: modified}]}
+  log_metadata={commits: [<HEAD metadata>, <parent metadata>, ...]}
+  ordering: newest_first
+  mutation: false
+```
+
+If the body reports an ordinary typed failure and the closing guard remains
+stable, that failure is preserved. A stable interruption remains `cancelled`.
+If the marker, physical root, or administration identity changes, guard drift
+takes precedence over either outcome and no successful status/log result is
+returned:
+
+```text
+input:
+  call: status()
+  external-operation observation before/after: none / merge
+
+output:
+  GitOperationError(
+    code="recovery_required",
+    operation="status",
+    recovery_action="inspect_repository"
+  )
+  mutation: false
+```
+
+The adapter does not correlate this worktree to a story session or continue,
+abort, reset, clean, checkout, stage, commit, or repair anything. Baseline
+inspection/creation and `diff_metadata()` remain standalone-only. Standalone
+status/log behavior, the 24-name Git facade, and the seven-method adapter
+surface are unchanged; this adds no command, dependency, migration, or
+compatibility path. #527 will correlate observations later, and #528 will own
+lifecycle blocking.
 
 ## Cancellation, retry, and failure recovery
 
@@ -361,10 +517,11 @@ unsupported topologies direct the caller to recreate the workspace.
 | Resolve and cross-check Git's effective author and committer before initialization. | A verified identity on a completed inspection, or `identity_invalid` before an absent repository is changed. |
 | Build an exact index/tree and install only the fixed root commit and `main` ref. | One manifest-bound baseline; unrelated files remain untracked. |
 | Own each local child process through timeout, stream bounds, termination, and cleanup. | Typed bounded metadata or a fixed error; no raw process stream or retained child resource. |
+| Guard a linked-worktree status/log body with matching root, administration, and external-operation observations before and after it. | Literal linked branch/HEAD/status or newest-first log metadata when stable; `recovery_required` on guard drift. A stable marker grants observation only. |
 | Reinspect after creation or cancellation. | `absent`, `initialized_without_baseline`, `baseline_committed`, or `recovery_required`, enabling a deterministic retry decision. |
 
 These implementation mechanisms are not a public command escape hatch. The
-supported surface remains the six typed methods shown below.
+supported surface remains the seven typed methods shown below.
 
 <a id="package-internal-session-git-resources"></a>
 
@@ -541,6 +698,55 @@ ID recorded in the operation. `outcome_unknown` can advance only to
 `committed` or terminal `recovery_required`; no terminal record reopens or
 moves backward. The store returns content-free failure/recovery facts and a
 bounded inventory of IDs, states, and preserved checkpoint indices.
+
+<a id="package-internal-session-history-snapshot"></a>
+
+### Complete read-only snapshots
+
+Issue #536 adds `GitSessionHistorySnapshot` and
+`GitSessionHistory.snapshot() -> GitSessionHistorySnapshot` to the internal
+direct module. A snapshot pairs the existing content-free
+`GitSessionHistoryInspection` with sorted, complete tuples of the candidate,
+story-commit operation, and checkpoint-operation records named by that
+inspection. The complete tuples are excluded from `repr(snapshot)`. Internal
+callers can still read the records' existing bounded fields—such as candidate
+paths and digests, proposed message, impact labels, correlations, states, and
+identity sources—but the snapshot adds no story-file bytes, absolute or
+physical paths, raw Git output, live descriptor, capability, or executable
+authority.
+
+`snapshot()` captures and decodes the first complete inventory while holding
+the existing repository lease, constructs an exact immutable snapshot, then
+independently re-inspects the inventory under that lease. If a record
+disappears or changes between those observations, it raises the existing typed
+`recovery_required` failure and returns no partial snapshot. Malformed,
+missing, unsafe, substituted, or lock-unavailable state uses the existing
+content-safe session-history failure semantics. Opening with `create=False`
+and finding no history returns an empty snapshot without creating the history
+directory.
+
+For example, an internal capture can report candidate `C4`, story-commit
+operation `O4`, checkpoint operation `K4`, and `K4`'s preserved alternate
+index while returning the exact three matching records:
+
+```text
+input:  snapshot() under the active session-history lease
+output: inspection={candidate_ids:[C4],
+                    commit_operations:[(O4, staged)],
+                    checkpoint_operations:[(K4, outcome_unknown)],
+                    preserved_checkpoint_indices:[K4]}
+        candidates=[complete C4 record]
+        commit_operations=[complete O4 record]
+        checkpoint_operations=[complete K4 record]
+        mutation=false, replay=false
+```
+
+If `O4` disappears or changes before the independent second inspection, the
+result is `GitSessionHistoryError(recovery_required)`, with no partial result
+and no new operation record. The method never writes, replays an operation,
+or changes an index, object, ref, branch, or worktree. It has no provider,
+session-reconciliation, UI, or lifecycle behavior; #527 consumes this evidence
+later. No persisted format, migration, or compatibility reader is added.
 
 ### Closed Git process profiles
 
@@ -827,7 +1033,7 @@ commit-message bodies never cross the public boundary.
 
 ## Supported imports and methods
 
-Import the 22-name direct facade; none of these names is re-exported by
+Import the 24-name direct facade; none of these names is re-exported by
 `story_writing_agents`:
 
 ```python
@@ -841,6 +1047,8 @@ from story_writing_agents.git import (
     GitDiffEntry,
     GitDiffMetadata,
     GitEffectiveIdentity,
+    GitExternalOperationInspection,
+    GitExternalOperationKind,
     GitFailureCode,
     GitIdentity,
     GitLogMetadata,
@@ -867,6 +1075,7 @@ create_baseline(manifest: GitBaselineManifest) -> GitBaselineInspection
 status() -> GitStatus
 diff_metadata() -> GitDiffMetadata
 log_metadata() -> GitLogMetadata
+inspect_external_operation() -> GitExternalOperationInspection
 ```
 
 There is no migration or compatibility mode and no arbitrary process runner.

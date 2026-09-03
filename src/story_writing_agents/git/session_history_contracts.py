@@ -348,6 +348,89 @@ class GitSessionHistoryInspection:
             _require_operation_id(operation_id)
 
 
+@dataclass(frozen=True, slots=True)
+class GitSessionHistorySnapshot:
+    """Complete immutable session-history records from one bounded capture."""
+
+    inspection: GitSessionHistoryInspection
+    candidates: tuple[GitSessionCandidateRecord, ...] = field(repr=False)
+    commit_operations: tuple[GitSessionCommitOperationRecord, ...] = field(
+        repr=False
+    )
+    checkpoint_operations: tuple[GitSessionCheckpointOperationRecord, ...] = field(
+        repr=False
+    )
+
+    def __post_init__(self) -> None:
+        invalid = False
+        inspection: GitSessionHistoryInspection | None = None
+        candidates: tuple[GitSessionCandidateRecord, ...] = ()
+        commits: tuple[GitSessionCommitOperationRecord, ...] = ()
+        checkpoints: tuple[GitSessionCheckpointOperationRecord, ...] = ()
+        try:
+            if type(self.inspection) is not GitSessionHistoryInspection:
+                raise TypeError
+            inspection = GitSessionHistoryInspection(
+                self.inspection.session_id,
+                self.inspection.candidate_ids,
+                self.inspection.commit_operations,
+                self.inspection.checkpoint_operations,
+                self.inspection.preserved_checkpoint_indices,
+            )
+            if (
+                type(self.candidates) is not tuple
+                or type(self.commit_operations) is not tuple
+                or type(self.checkpoint_operations) is not tuple
+            ):
+                raise TypeError
+            candidates = tuple(
+                _reconstruct_candidate_record(value) for value in self.candidates
+            )
+            commits = tuple(
+                _reconstruct_commit_record(value) for value in self.commit_operations
+            )
+            checkpoints = tuple(
+                _reconstruct_checkpoint_record(value)
+                for value in self.checkpoint_operations
+            )
+        except (AttributeError, TypeError, ValueError, GitSessionHistoryError):
+            invalid = True
+        if invalid or inspection is None:
+            raise _error(GitSessionHistoryFailureCode.RECORD_INVALID)
+
+        candidate_ids = tuple(value.candidate_id for value in candidates)
+        candidate_id_set = set(candidate_ids)
+        commit_ids = tuple(value.operation_id for value in commits)
+        checkpoint_ids = tuple(value.operation_id for value in checkpoints)
+        if (
+            candidates != self.candidates
+            or commits != self.commit_operations
+            or checkpoints != self.checkpoint_operations
+            or candidate_ids != tuple(sorted(candidate_ids))
+            or commit_ids != tuple(sorted(commit_ids))
+            or checkpoint_ids != tuple(sorted(checkpoint_ids))
+            or len(candidate_id_set) != len(candidate_ids)
+            or len(set(commit_ids)) != len(commit_ids)
+            or len(set(checkpoint_ids)) != len(checkpoint_ids)
+            or any(value.session_id != inspection.session_id for value in candidates)
+            or any(value.session_id != inspection.session_id for value in commits)
+            or any(value.session_id != inspection.session_id for value in checkpoints)
+            or candidate_ids != inspection.candidate_ids
+            or tuple((value.operation_id, value.state) for value in commits)
+            != inspection.commit_operations
+            or tuple((value.operation_id, value.state) for value in checkpoints)
+            != inspection.checkpoint_operations
+            or any(value.candidate_id not in candidate_id_set for value in commits)
+            or tuple(
+                value.operation_id
+                for value in checkpoints
+                if value.alternate_index_preserved
+            )
+            != inspection.preserved_checkpoint_indices
+        ):
+            raise _error(GitSessionHistoryFailureCode.RECORD_INVALID)
+
+
 _COMMIT_STATES = frozenset(
     {
         GitSessionHistoryState.RUNNING,
@@ -829,6 +912,7 @@ __all__ = [
     "GitSessionHistoryError",
     "GitSessionHistoryFailureCode",
     "GitSessionHistoryInspection",
+    "GitSessionHistorySnapshot",
     "GitSessionHistoryRecoveryAction",
     "GitSessionHistoryState",
     "GitSessionIdentitySource",

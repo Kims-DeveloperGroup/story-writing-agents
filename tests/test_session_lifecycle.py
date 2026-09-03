@@ -45,6 +45,14 @@ from story_writing_agents.debug_log import (
     DEBUG_LOG_RELATIVE_PATH,
     WorkspaceDebugLog,
 )
+from story_writing_agents.session_recovery import SessionRecoveryFailureCode
+from story_writing_agents.session_recovery.transition_assessment import (
+    SessionTransitionAssessment,
+    SessionTransitionAssessmentState,
+    SessionTransitionNextAction,
+    SessionTransitionOperation,
+    SessionTransitionScope,
+)
 
 from tests.helpers import initialized_workspace
 
@@ -268,6 +276,16 @@ class SessionLifecycleContractTests(unittest.TestCase):
             "create_session_with_access": ("self", "session_id"),
             "reopen_session_with_access": ("self", "session_id"),
             "pause_session_and_release_access": ("self", "session_id"),
+            "provision_session_resources": ("self", "session_id"),
+            "assess_session_transition": (
+                "self",
+                "lifecycle_state",
+                "requested_operation",
+                "conversation_id",
+                "collaboration_store",
+                "reviewed_proposal",
+                "artifact_application",
+            ),
         }
         for method_name, parameters in expected.items():
             with self.subTest(method=method_name):
@@ -547,6 +565,68 @@ class AgentBackendLifecycleTests(unittest.TestCase):
         backend = AgentBackend(self.workspace, executable=sys.executable)
         self.addCleanup(backend.close)
         return backend
+
+    def test_provision_and_assessment_delegate_once_preserving_exact_identity(
+        self,
+    ) -> None:
+        backend = self.backend()
+        resource = object()
+        lifecycle = SessionLifecycleState(
+            session_id="session",
+            durable_state=SessionDurableState.READY,
+            access_state=SessionAccessState.HELD_HERE,
+            owner_hostname="localhost",
+            owner_pid=42,
+            created_at=_CREATED,
+            updated_at=_UPDATED,
+        )
+        assessment = SessionTransitionAssessment(
+            session_id="session",
+            conversation_id=None,
+            scope=SessionTransitionScope.IDLE,
+            state=SessionTransitionAssessmentState.IDLE_READY,
+            next_action=SessionTransitionNextAction.BEGIN_WITH_LEAD,
+            owner=None,
+            failure_code=SessionRecoveryFailureCode.NONE,
+            allowed_operations=tuple(SessionTransitionOperation),
+            recovery_result=None,
+        )
+        assessor = mock.Mock()
+        assessor.inspect.return_value = assessment
+        with (
+            mock.patch.object(
+                backend_module,
+                "_provision_session_resources",
+                return_value=resource,
+            ) as provision,
+            mock.patch.object(
+                backend_module,
+                "_require_ready_session_resources",
+                return_value=resource,
+            ) as verify,
+            mock.patch.object(
+                backend_module,
+                "SessionTransitionAssessor",
+                return_value=assessor,
+            ) as assessor_type,
+        ):
+            self.assertIs(backend.provision_session_resources("session"), resource)
+            observed = backend.assess_session_transition(
+                lifecycle_state=lifecycle,
+                requested_operation=SessionTransitionOperation.PAUSE_SESSION,
+            )
+
+        provision.assert_called_once_with(self.workspace.root, "session")
+        verify.assert_called_once_with(self.workspace.root, "session")
+        assessor_type.assert_called_once_with(self.workspace.root)
+        assessor.inspect.assert_called_once_with(
+            lifecycle_state=lifecycle,
+            conversation_id=None,
+            collaboration_store=None,
+            reviewed_proposal=None,
+            artifact_application=None,
+        )
+        self.assertIs(observed, assessment)
 
     def prepare_close_state(
         self,

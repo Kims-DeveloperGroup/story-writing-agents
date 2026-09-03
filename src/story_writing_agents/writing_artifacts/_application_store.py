@@ -223,6 +223,23 @@ class ArtifactApplicationStore:
         return catalog
 
     @_typed_store_failures
+    def inspect_result(
+        self,
+        application_id: str,
+    ) -> ArtifactApplicationResult | None:
+        """Return one exact historical result after recovery and full audit."""
+
+        if (
+            type(application_id) is not str
+            or _IDENTIFIER.fullmatch(application_id) is None
+        ):
+            _raise_application_failure(ArtifactApplicationErrorCode.INVALID_IDENTIFIER)
+        self.recover()
+        _catalog, _raw, records = self._load_catalog_audited()
+        record = records.get(application_id)
+        return None if record is None else _record_result(record)
+
+    @_typed_store_failures
     def current_state(self) -> dict[str, bytes]:
         """Read one complete bounded canonical artifact state under the lease."""
 

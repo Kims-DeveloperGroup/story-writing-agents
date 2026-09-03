@@ -16,9 +16,9 @@ Source root: `src/`
 
 Package root: `src/story_writing_agents/`
 
-Importable production units indexed: 117.
+Importable production units indexed: 121.
 
-Direct internal dependency edges indexed: 424.
+Direct internal dependency edges indexed: 456.
 
 Directed internal dependency cycles indexed: 0.
 
@@ -36,6 +36,7 @@ __main__ -> cli -> conversation_rag_cli
                  -> interactive_settings -> agents/config/errors/workspace
                  -> provider_auth -> (standard library only)
                  -> provider_catalog -> (standard library only)
+                 -> session_recovery.transition_assessment
                  -> debug_log -> agents/provider_adapter/workspace
                  -> orchestrator -> backend/config/debug_log/directives
                  |               -> conversation_rag_runtime
@@ -51,10 +52,15 @@ __main__ -> cli -> conversation_rag_cli
                  |          |                 -> errors/models
                  |          |                 -> provider_adapter/provider_process
                  |          -> config/conversation_retrieval/debug_log
+                 |          -> git.session_contracts
                  |          -> interactive_settings
                  |          -> workspace/models/errors/agents
                  |          -> provider_adapter/provider_error_artifacts/provider_process
-                 |          -> session_lifecycle/writing_artifacts.read_actions
+                 |          -> conversations/session_lifecycle
+                 |          -> session_recovery
+                 |          -> session_recovery.transition_assessment
+                 |          -> workspace.initialization
+                 |          -> writing_artifacts.read_actions
                  -> cli_context -> workspace/errors
 
 interactive_controller._core -> interactive_controller._session_policy
@@ -70,6 +76,7 @@ interactive_controller._core -> interactive_controller._session_policy
                              -> orchestrator/provider_adapter/provider_auth
                              -> provider_catalog/session_lifecycle/workspace
 interactive_controller._session_policy -> errors/interactive_terminal/session_lifecycle
+                                       -> session_recovery.transition_assessment
 interactive_controller._conversation_policy -> conversation_search/conversations
                                             -> errors/interactive_terminal/workspace
 interactive_controller._exchange_policy -> agent_exchanges/agents/models
@@ -214,6 +221,20 @@ git.story_commit_candidates -> git.contracts/git.process/git.session_history
 git.story_commits -> git.contracts/git.process/git.session_history
                   -> git.session_history_contracts/git.story_commit_candidates
                   -> git.story_commit_contracts
+session_recovery -> session_recovery.contracts
+session_recovery.contracts -> conversations/git/git.session_contracts
+                           -> git.session_history_contracts/session_lifecycle
+                           -> writing_artifacts
+session_recovery.reconciliation -> conversations/git/git.session_contracts
+                                -> git.session_history_contracts/session_lifecycle
+                                -> session_recovery.contracts
+                                -> workspace.initialization/writing_artifacts
+                                -> writing_artifacts.repository
+session_recovery.transition_assessment -> conversations/git/git.session_contracts
+                                       -> git.session_history_contracts/session_lifecycle
+                                       -> session_recovery.contracts
+                                       -> session_recovery.reconciliation
+                                       -> workspace.initialization
 session_lifecycle -> (standard library only)
 conversations -> conversations.catalog/context/events
 conversations.catalog -> errors
@@ -223,7 +244,8 @@ workspace -> conversation_storage.filesystem/workspace.core
 workspace.core -> agents/conversations/errors/models
                -> workspace.initialization/workspace.schema/writing_artifacts
 workspace.initialization -> errors/git/git.session_contracts
-                         -> git.session_resources/workspace.schema
+                         -> git.session_history/git.session_resources
+                         -> workspace.schema
 workspace.schema -> agents/errors/git.session_contracts
 writing_artifacts -> writing_artifacts.application_contracts/authorization/catalog
                   -> writing_artifacts.change_sets/directives/read_actions
@@ -914,7 +936,14 @@ every intermediate arrow. The current runtime graph is acyclic.
   `acquire_session_access(session_id)`, `release_session_access(session_id)`,
   `create_session_with_access(session_id)`,
   `reopen_session_with_access(session_id)`, and
-  `pause_session_and_release_access(session_id)`.
+  `pause_session_and_release_access(session_id)`. Additive
+  `provision_session_resources(session_id)` delegates one exact session Git-
+  resource provision and ready verification, while
+  `assess_session_transition(...)` delegates one active or idle assessment for
+  an exact requested operation and returns the assessor's identity-preserved
+  result. Its annotations consume the resource inspection from its owning
+  `git.session_contracts` module and reviewed/application evidence through the
+  supported `session_recovery` facade rather than peer re-exports.
   The class also exposes exact active-roster execution-profile inspection and
   confirmation/thread-status reads. Package-internal
   `BackendRuntimeConfigurationCandidate` plus the backend's stage, validate,
@@ -934,12 +963,14 @@ every intermediate arrow. The current runtime graph is acyclic.
 - **Direct internal dependencies:** `agent_context`, `agent_context.service`,
   the supported `agent_exchanges` facade, the internal
   `agent_exchanges.capture` module, `agents`, `antigravity_adapter`,
-  `codex_adapter`, `config`,
-  `conversation_retrieval`, `debug_log`, `errors`, `interactive_settings`,
+  `codex_adapter`, `config`, `conversations`,
+  `conversation_retrieval`, `debug_log`, `errors`, `git.session_contracts`,
+  `interactive_settings`,
   `models`, `provider_adapter`, `provider_error_artifacts`, `provider_process`,
-  `session_lifecycle`, and
-  `workspace`, plus the provider-neutral `writing_artifacts.read_actions`
-  boundary.
+  `session_lifecycle`, `session_recovery`,
+  `session_recovery.transition_assessment`, `workspace`, and
+  `workspace.initialization`, plus the provider-neutral
+  `writing_artifacts.read_actions` boundary.
 - **State, resources, and side effects:** Owns exact V2 provider-session
   manifests at
   `agent_states/orchestrator_state/provider_sessions/<session_id>.json`, exact
@@ -958,6 +989,14 @@ every intermediate arrow. The current runtime graph is acyclic.
   token. Version-1 manifests, access sidecars, and access guards are rejected
   with `WorkspaceVersionUnsupportedError` without migration, deletion, or
   rewriting. The backend also owns
+  coordination of one exact provision-plus-ready-verification call pair for
+  session branch, sibling worktree, and internal-ref resources through the
+  workspace-initialization owner. It delegates transition assessment exactly
+  once after validating the requested operation, requires the returned session
+  identity to match the supplied lifecycle, and returns the exact assessment,
+  including any nested recovery result, without reconstructing recovery
+  evidence or granting executable authority. Assessment performs no provider,
+  lifecycle, content, artifact, or Git mutation. The backend also owns
   timeout/cancellation taint handling, provider cleanup coordination, and
   per-instance `atexit`
   registration. Each concrete `BoundAgent` privately owns synchronized
@@ -1121,7 +1160,9 @@ every intermediate arrow. The current runtime graph is acyclic.
   `tests/test_prompts.py`,
   `tests/test_conversation_retrieval.py`,
   `tests/test_antigravity_adapter.py`, `tests/test_antigravity_parity.py`,
-  `tests/test_session_lifecycle.py`, `docs/reference/backend-and-sessions.md`,
+  `tests/test_session_lifecycle.py`,
+  `tests/test_session_transition_assessment.py`,
+  `docs/reference/backend-and-sessions.md`,
   `docs/guides/antigravity.md`, `docs/guides/lead-agent.md`,
   `docs/reference/conversation-retrieval.md`,
   `docs/design/prompts-and-provider.md`, `docs/design/session-lifecycle.md`, and
@@ -1431,23 +1472,37 @@ every intermediate arrow. The current runtime graph is acyclic.
   the former `run` parser, flags, input resolver, dispatch, and result
   presentation are absent. `init` accepts only its workspace path: the former
   prompt-overwrite option and forwarding behavior are absent. Backend-override
-  parsing remains shared by retained commands.
+  parsing remains shared by retained commands. Session create, reopen, and
+  pause results include one content-safe transition-assessment projection;
+  denied transitions return exit status 2 and a rejected debug outcome.
 - **Direct internal dependencies:** `agents`, `backend`, `cli_context`,
   `config`, `conversation_rag_cli`, `conversation_storage.contracts`,
   `conversation_storage.migration`, `conversation_storage.selection`,
   `debug_log`, `errors`, `interactive_auth`,
   `interactive_controller`, `interactive_settings`,
   `interactive_terminal`, `orchestrator`, `provider_auth`,
-  `provider_catalog`, `session_lifecycle`, `smoke`, and `workspace`.
+  `provider_catalog`, `session_lifecycle`,
+  `session_recovery.transition_assessment`, `smoke`, and `workspace`.
 - **State, resources, and side effects:** Argument parsing is resource-free;
   retained dispatch delegates state and resources to the selected owner.
   Initialization emits the established absolute-workspace JSON only after the
   workspace owner completes its schema-v2 Git baseline, and deliberately
   creates no post-baseline debug-log event. Explicit smoke resolves one already
-  ready workspace before calling the read-only smoke path.
+  ready workspace before calling the read-only smoke path. Session create
+  provisions and verifies resources before lifecycle creation. Reopen and pause
+  resolve the persisted active conversation default through `cli_context` and
+  validate it through the configured same-provenance catalog, then pass that
+  bundle's event store as transition evidence; a missing or archived default
+  remains idle evidence.
+  Create/reopen assess enter permission before default persistence and release;
+  pause assesses pause permission immediately before durable pause and release.
+  Denial exposes only fixed assessment fields and performs none of the denied
+  transition.
 - **Primary verification/documentation:** `tests/test_public_api_and_cli.py`
-  and command-specific CLI tests verify the retained grammar and dispatch;
-  `docs/reference/cli.md` documents the supported command surface.
+  and command-specific CLI tests, including `tests/test_session_lifecycle.py`
+  and `tests/test_session_transition_assessment.py`, verify the retained grammar,
+  transition ordering, and dispatch; `docs/reference/cli.md` documents the
+  supported command surface.
 
 ### `story_writing_agents.cli_context`
 
@@ -1784,31 +1839,34 @@ every intermediate arrow. The current runtime graph is acyclic.
 - **Source:** `src/story_writing_agents/git/__init__.py`
 - **Responsibility:** Provide the stable provider-independent safe Git import
   boundary.
-- **Supported surface:** Exactly 22 names in `__all__`:
+- **Supported surface:** Exactly 24 names in `__all__`:
   `GIT_BASELINE_BRANCH`, `GIT_BASELINE_COMMIT_MESSAGE`, `GitOperationKind`,
-  `GitRepositoryState`, `GitTopologyKind`, `GitChangeKind`, `GitFailureCode`,
-  `GitRecoveryAction`, `GitOperationError`, `GitManifestEntry`,
+  `GitRepositoryState`, `GitTopologyKind`, `GitExternalOperationKind`,
+  `GitChangeKind`, `GitFailureCode`, `GitRecoveryAction`, `GitOperationError`,
+  `GitManifestEntry`,
   `GitBaselineManifest`, `GitIdentity`, `GitEffectiveIdentity`,
-  `GitRepositoryTopology`, `GitBaselineInspection`, `GitStatusEntry`,
-  `GitStatus`, `GitDiffEntry`, `GitDiffMetadata`, `GitCommitMetadata`,
-  `GitLogMetadata`, and `GitRepositoryAdapter`. These names are intentionally
-  absent from the project-root facade.
+  `GitRepositoryTopology`, `GitExternalOperationInspection`,
+  `GitBaselineInspection`, `GitStatusEntry`, `GitStatus`, `GitDiffEntry`,
+  `GitDiffMetadata`, `GitCommitMetadata`, `GitLogMetadata`, and
+  `GitRepositoryAdapter`. These names are intentionally absent from the
+  project-root facade.
 - **Direct internal dependencies:** `git.adapter` and `git.contracts`.
 - **State, resources, and side effects:** Owns no state or external resource.
   Import only binds the pure contracts and adapter class and performs no
   filesystem access, environment read, process launch, repository operation,
   or workspace initialization.
 - **Primary verification/documentation:**
-  `tests/test_git_contracts.py` and
+  `tests/test_git_contracts.py`,
+  `tests/test_git_external_operation_inspection.py`, and
   `tests/test_rag_module_and_packaging_boundary.py`; the supported facade and
   complete user-facing boundary are documented in
-  `docs/reference/git-adapter.md`.
+  `docs/reference/git-adapter.md#external-git-operation-inspection`.
 
 ### `story_writing_agents.git.contracts`
 
 - **Source:** `src/story_writing_agents/git/contracts.py`
 - **Responsibility:** Define immutable closed contracts for safe Git operations.
-- **Supported surface:** Exactly the facade's 21 constants, enums, error, and
+- **Supported surface:** Exactly the facade's 23 constants, enums, error, and
   frozen slotted values other than `GitRepositoryAdapter`, in identical
   `__all__` order. Fixed baseline constants are branch `main` and message
   `Initialize story workspace`. No arbitrary command, argv, environment,
@@ -1816,15 +1874,18 @@ every intermediate arrow. The current runtime graph is acyclic.
   field exists.
 - **Direct internal dependencies:** None.
 - **State, resources, and side effects:** Owns only immutable validation policy,
-  fixed content-free diagnostics, and canonical manifest identity derivation.
-  It retains no mutable state and performs no filesystem, environment, process,
-  repository, provider, network, or import-time operational I/O. Public errors
-  carry only closed failure/operation/state/recovery facts and fixed text;
-  identity fields are excluded from representations.
+  fixed content-free diagnostics, canonical manifest identity derivation, and
+  strict opaque external-operation identity projections. It retains no mutable
+  state and performs no filesystem, environment, process, repository, provider,
+  network, or import-time operational I/O. Public errors carry only closed
+  failure/operation/state/recovery facts and fixed text; Git author identity
+  fields are excluded from representations and physical identities are exposed
+  only as validated lowercase SHA-256 digests.
 - **Primary verification/documentation:**
-  `tests/test_git_contracts.py`; contract values, manifest rules, failure
-  states, and public examples are documented in
-  `docs/reference/git-adapter.md`.
+  `tests/test_git_contracts.py` and
+  `tests/test_git_external_operation_inspection.py`; contract values, manifest
+  rules, failure states, and public examples are documented in
+  `docs/reference/git-adapter.md#external-git-operation-inspection`.
 
 ### `story_writing_agents.git.adapter`
 
@@ -1835,7 +1896,10 @@ every intermediate arrow. The current runtime graph is acyclic.
   re-exported by the `git` facade. Its public constructor accepts only one
   absolute lexical root; its fixed methods are `inspect_topology`,
   `inspect_baseline`, `create_baseline`, `status`, `diff_metadata`, and
-  `log_metadata`. No public generic runner or raw Git command escape exists.
+  `log_metadata`, plus zero-argument `inspect_external_operation`. No public
+  generic runner or raw Git command escape exists. `status` and `log_metadata`
+  accept an exact standalone repository or securely validated linked worktree;
+  baseline inspection/creation and `diff_metadata` remain standalone-only.
 - **Direct internal dependencies:** `git.contracts` and `git.process`.
 - **State, resources, and side effects:** Construction retains only a lexical
   absolute `Path` and performs no I/O. Each operation freshly binds and
@@ -1851,15 +1915,32 @@ every intermediate arrow. The current runtime graph is acyclic.
   creates only the fixed root commit and `main` ref, and detects an identical
   retry. Inspection and cancellation recovery expose exactly absent,
   initialized-without-baseline, baseline-committed, or recovery-required;
-  repository content and raw stdout/stderr never cross the adapter. It owns no
-  story initialization, workspace/session topology, later commit confirmation,
-  worktree, internal ref, remote, merge, reset, clean, provider, artifact, or
-  GitHub behavior.
+  repository content and raw stdout/stderr never cross the adapter. External
+  operation inspection invokes no process: it directly and repeatedly validates
+  the physical root, per-worktree administrative directory, common repository
+  directory, and the closed merge/rebase/cherry-pick/revert/sequencer marker
+  grammar before returning only the kind and opaque repository/worktree
+  identity digests. Unsafe, unreadable, replaced, wrong-type, racing, or
+  ambiguous administrative observations fail closed as recovery-required.
+  Linked-worktree status and log reads reuse that exact observation before and
+  after the bounded read, including after a body failure or interruption;
+  stable supported markers remain observable, while marker, physical-root, or
+  administration drift fails recovery-required under the requested public
+  operation. Standalone status/log behavior is unchanged. It owns no story
+  initialization, workspace/session topology, later commit confirmation,
+  worktree, internal ref, remote, operation continuation or abortion, reset,
+  clean, provider, artifact, or GitHub behavior.
 - **Primary verification/documentation:**
   `tests/test_git_adapter_process.py` and
-  `tests/test_git_adapter_integration.py`; operation behavior, safety
+  `tests/test_git_adapter_integration.py`, plus
+  `tests/test_git_external_operation_inspection.py` and
+  `tests/test_git_linked_worktree_reads.py`; operation behavior, safety
   boundaries, recovery, and external meaning are documented in
-  `docs/reference/git-adapter.md`.
+  `docs/reference/git-adapter.md#linked-worktree-status-and-log`,
+  `docs/reference/git-adapter.md#external-git-operation-inspection`,
+  `docs/operations/recovery-and-limitations.md#linked-worktree-read-recovery`,
+  `docs/operations/recovery-and-limitations.md#external-git-operation-recovery`,
+  and `docs/guides/workspaces.md#external-git-operation-guard`.
 
 ### `story_writing_agents.git.process`
 
@@ -2027,42 +2108,52 @@ every intermediate arrow. The current runtime graph is acyclic.
 - **Source:** `src/story_writing_agents/git/session_history_contracts.py`
 - **Responsibility:** Define pure bounded records and monotonic transitions for
   one session's prepared candidates, story commits, and internal checkpoints.
-- **Supported surface:** Direct-module `__all__` contains five layout/schema
-  constants; the closed action, state, failure, recovery, identity-source, and
-  candidate-path enums; content-free error; immutable candidate-path,
-  candidate, commit-operation, checkpoint-operation, and inspection values;
-  candidate builder; legal transition functions; and strict canonical JSON
-  codecs. Nothing is re-exported by a facade.
+- **Supported surface:** Exactly 27 names in direct-module `__all__`: five
+  layout/schema constants; the closed action, state, failure, recovery,
+  identity-source, and candidate-path enums; content-free error; immutable
+  candidate-path, candidate, commit-operation, checkpoint-operation,
+  inspection, and `GitSessionHistorySnapshot` values; candidate builder; legal
+  transition functions; and strict canonical JSON codecs. Nothing is
+  re-exported by a package facade or the project root.
 - **Direct internal dependencies:** None.
 - **State, resources, and side effects:** Owns only immutable values, bounds,
   canonical strict-UTF-8 JSON with a trailing newline, SHA-256 candidate
   identity, unique UTF-8-byte-ordered candidate paths and impact boundaries,
-  defensive reconstruction, and closed transition graphs. Checkpoint records
-  additionally retain their exact expected tree and an operation-salted
-  content-free commit-intent digest invariant across transitions. Records may
-  retain bounded commit metadata, paths, digests, identity-source facts, and
-  opaque correlations, but no story bytes, provider response, raw Git output,
-  descriptor, writable capability, or serialized authority. Import and all
-  contract operations perform no I/O.
+  defensive reconstruction, and closed transition graphs. The snapshot binds
+  one exact inspection to complete, canonically ordered candidate,
+  commit-operation, and checkpoint-operation tuples; it rejects foreign,
+  duplicate, missing, extra, state-mismatched, or noncanonical records and
+  correlates preserved checkpoint indices exactly. Its three record tuples are
+  representation-hidden so their bounded nested paths and proposed message do
+  not appear in snapshot diagnostics. Checkpoint records additionally retain
+  their exact expected tree and an operation-salted content-free commit-intent
+  digest invariant across transitions. Records may retain bounded commit
+  metadata, paths, digests, identity-source facts, and opaque correlations, but
+  no story bytes, provider response, raw Git output, descriptor, writable
+  capability, or serialized authority. Import and all contract operations
+  perform no I/O.
 - **Primary verification/documentation:**
   `tests/test_git_session_history_contracts.py` directly verifies candidate
-  identity, ordering, bounds, state transitions, codecs, and defensive
-  reconstruction. `docs/reference/git-adapter.md`,
+  identity, ordering, bounds, state transitions, codecs, defensive
+  reconstruction, and complete snapshot invariants.
+  `docs/reference/git-adapter.md#package-internal-session-history-snapshot`,
   `docs/guides/workspaces.md`, and
-  `docs/operations/recovery-and-limitations.md` document the record meanings
-  and recovery states.
+  `docs/operations/recovery-and-limitations.md#session-history-snapshot-recovery`
+  document the record meanings and recovery states.
 
 ### `story_writing_agents.git.session_history`
 
 - **Source:** `src/story_writing_agents/git/session_history.py`
 - **Responsibility:** Persist one ready session's bounded Git-history evidence
   beneath its descriptor-bound common Git directory.
-- **Supported surface:** Internal-only `GitSessionHistory` and
-  `open_git_session_history` in direct-module `__all__`; no facade re-exports
-  them. The live transaction supports immutable candidate publication,
-  monotonic commit/checkpoint operation publication and reads, complete
-  content-free inspection, checkpoint-index allocation, and conservative
-  completed-index cleanup.
+- **Supported surface:** Exactly three internal-only direct-module `__all__`
+  names: `GitSessionHistory`, the identity-preserving
+  `GitSessionHistorySnapshot` contract re-export, and
+  `open_git_session_history`; no package facade or project-root facade
+  re-exports them. The live transaction supports immutable candidate
+  publication, monotonic commit/checkpoint operation publication and reads,
+  complete content-free inspection, one complete immutable `snapshot()`,
+  checkpoint-index allocation, and conservative completed-index cleanup.
 - **Direct internal dependencies:** `git.contracts`, `git.process`,
   `git.repository_lock`, `git.session_contracts`,
   `git.session_history_contracts`, and `git.session_resources`.
@@ -2075,21 +2166,25 @@ every intermediate arrow. The current runtime graph is acyclic.
   descriptor-relative, exact-spelling, no-follow, bounded, single-link,
   mode-limited, and fsynced. Filesystem failures are mapped at this storage
   boundary to content-free typed outcomes, while the shared repository lease
-  preserves caller-body error ownership. Alternate indices are isolated by
-  checkpoint operation and are preserved for uncertain/recoverable state;
-  cleanup accepts only a durably committed exact index. It never scans
-  workspace content or owns refs, objects, commits, provider state, story
-  bytes, or import-time I/O.
+  preserves caller-body error ownership. Snapshot capture decodes one complete
+  sorted inventory under that existing active lease, builds the immutable
+  result from the same capture, then performs a final exact reinspection;
+  drift fails recovery-required and no-create inspection leaves absent history
+  storage absent. Alternate indices are isolated by checkpoint operation and
+  are preserved for uncertain/recoverable state; cleanup accepts only a
+  durably committed exact index. It never scans workspace content or owns
+  refs, objects, commits, provider state, story bytes, or import-time I/O.
 - **Primary verification/documentation:**
   `tests/test_git_session_history.py` directly verifies real-repository,
   no-follow, fsync, concurrency, cleanup, fault-injection, exact-identifier,
-  and replacement-revalidation behavior;
+  replacement-revalidation, stable snapshot, drift, and no-create behavior;
   `tests/test_git_session_resources.py` retains shared-lease provisioning
-  regression coverage. `docs/reference/git-adapter.md`,
+  regression coverage.
+  `docs/reference/git-adapter.md#package-internal-session-history-snapshot`,
   `docs/guides/workspaces.md`, `docs/design/overview.md`,
   `docs/operations/filesystem-safety.md`, and
-  `docs/operations/recovery-and-limitations.md` document storage, external
-  state meaning, and recovery.
+  `docs/operations/recovery-and-limitations.md#session-history-snapshot-recovery`
+  document storage, external state meaning, and recovery.
 
 ### `story_writing_agents.git.session_resources`
 
@@ -3837,7 +3932,9 @@ every intermediate arrow. The current runtime graph is acyclic.
   execution path. The controller uses the non-reference `InteractiveMainInput.read_main`
   seam, supplies an attached session without an agent target, supplies no
   artifact collaborators, and presents deterministic direct-execution
-  unavailability.
+  unavailability. It consumes the session policy's exact transition values and
+  fixed content-safe denial projection without adding a direct assessor-module
+  dependency.
 - **Direct internal dependencies:** `agent_exchanges`, `agents`, `backend`,
   `cli_context`, `conversation_search`,
   `conversation_storage.contracts`, `conversation_storage.selection`,
@@ -3862,6 +3959,15 @@ every intermediate arrow. The current runtime graph is acyclic.
   settings/provider-catalog management; history inspection performs no bind,
   provider call, append, RAG mutation, reference read, artifact operation,
   progress emission, debate, or manuscript write.
+  Session creation provisions resources before lifecycle creation. Destination
+  enter is assessed from exact focused conversation/store evidence or idle
+  evidence after ready access and before default persistence or attachment.
+  During a switch, source leave is assessed before destination-default
+  persistence, and that persistence completes before source access is released;
+  pause is assessed immediately before the combined durable pause and access
+  release. A denial releases only an uncommitted destination when applicable,
+  preserves the source, and renders fixed content-safe assessment fields without
+  executing the denied operation.
 - **Primary verification/documentation:** `tests/test_interactive_controller.py`,
   `tests/test_interactive_management.py`,
   `tests/test_interactive_cancellation.py`, `tests/test_interactive_search.py`,
@@ -3940,23 +4046,30 @@ every intermediate arrow. The current runtime graph is acyclic.
 ### `story_writing_agents.interactive_controller._session_policy`
 
 - **Source:** `src/story_writing_agents/interactive_controller/_session_policy.py`
-- **Responsibility:** Interpret lifecycle facts for interactive session
-  decisions.
+- **Responsibility:** Interpret lifecycle and transition-assessment facts for
+  interactive session decisions.
 - **Supported surface:** No project-public import. Its exact package-internal
-  `__all__` contains immutable `RECOVERABLE_SESSION_ERROR_CODES` plus
-  `classify_session_failure`, `next_session_action`,
+  `__all__` contains immutable `RECOVERABLE_SESSION_ERROR_CODES`, exact
+  transition values `SessionTransitionAssessment`,
+  `SessionTransitionOperation`, and frozen/slotted
+  `SessionTransitionPresentation`, plus `classify_session_failure`,
+  `next_session_action`, `project_transition_assessment`,
   `require_correlated_state`, `require_lifecycle_state`,
-  `require_ready_access_state`, and `require_released_state`. These pure
-  functions validate exact lifecycle identities, transition correlations,
-  access release, fixed next-action copy, and safe exception-to-error mapping.
+  `require_ready_access_state`, `require_released_state`,
+  `require_transition_assessment`, and `transition_operation_is_allowed`.
+  These pure functions validate exact lifecycle and assessment identities,
+  requested operations, transition correlations, access release, allowed-
+  operation consumption, fixed content-safe projection and next-action copy,
+  and safe exception-to-error mapping.
 - **Direct internal dependencies:** `errors`, `interactive_terminal`, and
-  `session_lifecycle`.
+  `session_lifecycle`, plus `session_recovery.transition_assessment`.
 - **State, resources, and side effects:** Immutable policy metadata only; owns
   no process state or resource and performs no I/O, lifecycle transition,
   mutation of supplied values, or import-time operational side effect.
 - **Primary verification/documentation:** `tests/test_interactive_controller.py`,
-  `tests/test_session_lifecycle.py`, `docs/design/session-lifecycle.md`, and
-  `docs/design/overview.md`.
+  `tests/test_session_lifecycle.py`,
+  `tests/test_session_transition_assessment.py`,
+  `docs/design/session-lifecycle.md`, and `docs/design/overview.md`.
 
 ### `story_writing_agents.interactive_controller._conversation_policy`
 
@@ -5284,6 +5397,128 @@ every intermediate arrow. The current runtime graph is acyclic.
   strict loading behavior, and `tests/test_interactive_controller.py` verifies
   the direct-module-only import boundary.
 
+### `story_writing_agents.session_recovery`
+
+- **Source:** `src/story_writing_agents/session_recovery/__init__.py`
+- **Responsibility:** Provide the stable pure correlated story-session recovery
+  import boundary.
+- **Supported surface:** Exactly ten names in `__all__`:
+  `SessionRecoveryState`, `SessionRecoveryNextAction`,
+  `SessionRecoveryOwner`, `SessionRecoveryFailureCode`,
+  `SessionRecoveryError`, `SessionReviewedProposalEvidence`,
+  `SessionArtifactApplicationEvidence`, `SessionRecoveryEvidence`,
+  `SessionRecoveryResult`, and `reconcile_session_recovery`. These names are
+  intentionally absent from the project-root facade.
+- **Direct internal dependencies:** `session_recovery.contracts`.
+- **State, resources, and side effects:** Owns no persistent state or external
+  resource. Import only binds immutable contracts and the deterministic pure
+  classifier; it performs no lifecycle, conversation, artifact, filesystem,
+  Git, provider, controller, storage, capability, codec, migration, or
+  import-time operational I/O.
+- **Primary verification/documentation:**
+  `tests/test_session_recovery_contracts.py`; exact imports and the content-free
+  boundary are documented in
+  `docs/reference/package-api.md#correlated-session-recovery-api`, and the
+  nine states, actions, user meanings, and examples are documented in
+  `docs/operations/recovery-and-limitations.md#correlated-session-recovery-projection`.
+
+### `story_writing_agents.session_recovery.contracts`
+
+- **Source:** `src/story_writing_agents/session_recovery/contracts.py`
+- **Responsibility:** Define and deterministically classify immutable evidence
+  for one active correlated story-session workflow.
+- **Supported surface:** Exactly the facade's four closed enums, content-safe
+  `SessionRecoveryError`, three frozen slotted evidence values, frozen slotted
+  result, and `reconcile_session_recovery(evidence)`. The function accepts one
+  already assembled exact `SessionRecoveryEvidence` and returns one of nine
+  fixed state/action pairs; it exports no capability, adapter, owner reader,
+  serializer, compatibility shape, or executable recovery action.
+- **Direct internal dependencies:** `conversations`, `git`,
+  `git.session_contracts`, `git.session_history_contracts`,
+  `session_lifecycle`, and `writing_artifacts`.
+- **State, resources, and side effects:** Owns only immutable validation and
+  deterministic content-free classification policy. Recovery-required facts
+  outrank unresolved owner outcomes, which outrank the furthest exactly proved
+  closed stage; committed evidence supersedes staged evidence. A bare artifact
+  application result cannot prove session ownership. The relationship-
+  validation digest is supplied by its authoritative owner and compared across
+  evidence; this module does not call or reproduce a private digest algorithm.
+  It retains no mutable or persistent state and performs no filesystem, Git,
+  lifecycle-store, conversation-store, artifact-repository, provider,
+  controller, process, network, clock, environment, capability, codec,
+  migration, or import-time operational I/O.
+- **Primary verification/documentation:**
+  `tests/test_session_recovery_contracts.py`,
+  `docs/reference/package-api.md#correlated-session-recovery-api`, and
+  `docs/operations/recovery-and-limitations.md#correlated-session-recovery-projection`.
+
+### `story_writing_agents.session_recovery.reconciliation`
+
+- **Source:** `src/story_writing_agents/session_recovery/reconciliation.py`
+- **Responsibility:** Observe authoritative owners and assemble one stable,
+  correlated story-session recovery result without replaying work.
+- **Supported surface:** Direct-module `__all__` contains exactly
+  `SessionRecoveryReconciler`. The class accepts an absolute lexical workspace
+  root and a structural `CollaborationEventStore`, retains only those two
+  collaborators, and exposes keyword-only `inspect(...)`. It is intentionally
+  absent from both the `session_recovery` and project-root facades.
+- **Direct internal dependencies:** `conversations`, `git`,
+  `git.session_contracts`, `git.session_history_contracts`,
+  `session_lifecycle`, `session_recovery.contracts`,
+  `workspace.initialization`, `writing_artifacts`, and
+  `writing_artifacts.repository`.
+- **State, resources, and side effects:** The constructor normalizes and
+  validates inputs without I/O. Inspection requires a ready lifecycle held by
+  this process. It observes collaboration, session resources, and session
+  history as generation A; performs the optional exact artifact inspection;
+  observes external Git and repository status A plus the conditional current-
+  commit log; then observes all five owners as generation B before rejecting
+  drift, reselecting correlated records, and delegating one complete immutable
+  evidence graph to the pure classifier. It
+  retains no live Git/history/repository value and owns no durable record,
+  lease, capability, process, mutation, provider call, replay, cleanup, or
+  lifecycle transition. Direct blocker results expose only content-safe
+  correlation facts; tail sequence zero means no collaboration tail was
+  accepted.
+- **Primary verification/documentation:**
+  `tests/test_session_recovery_reconciliation.py`,
+  `docs/reference/package-api.md#correlated-session-recovery-reconciliation`,
+  and
+  `docs/operations/recovery-and-limitations.md#session-recovery-owner-reconciliation`.
+
+### `story_writing_agents.session_recovery.transition_assessment`
+
+- **Source:** `src/story_writing_agents/session_recovery/transition_assessment.py`
+- **Responsibility:** Assess immutable, content-safe session-transition
+  permission from active recovery truth or stable idle owner observations.
+- **Supported surface:** Direct-module `__all__` contains exactly
+  `SessionTransitionScope`, `SessionTransitionAssessmentState`,
+  `SessionTransitionNextAction`, `SessionTransitionOperation`,
+  `SessionTransitionAssessment`, and `SessionTransitionAssessor`. These names
+  are intentionally absent from both the `session_recovery` and project-root
+  facades.
+- **Direct internal dependencies:** `conversations`, `git`,
+  `git.session_contracts`, `git.session_history_contracts`,
+  `session_lifecycle`, `session_recovery.contracts`,
+  `session_recovery.reconciliation`, and `workspace.initialization`.
+- **State, resources, and side effects:** Owns only frozen transition values,
+  exact validation, active-result projection, idle A/B observation policy, and
+  the closed enter/leave/pause permission mapping. The assessor retains only a
+  validated lexical absolute workspace root. Active inspection delegates once
+  to the existing reconciler; idle inspection compares complete session
+  resource and history snapshots plus external-operation and status
+  observations, requiring exact clean branch, worktree, and internal-ref truth
+  before permitting a transition. It exposes no path, identity digest, live
+  owner, capability, or executable authority and performs no provisioning,
+  lifecycle mutation, provider call, artifact operation, Git mutation, replay,
+  cleanup, continue, abort, reset, deletion, or import-time I/O.
+- **Primary verification/documentation:**
+  `tests/test_session_transition_assessment.py`,
+  `docs/reference/package-api.md#session-transition-assessment-api`,
+  `docs/operations/recovery-and-limitations.md#session-transition-assessment`,
+  and
+  `docs/design/session-lifecycle.md#story-session-transition-assessment`.
+
 ### `story_writing_agents.session_lifecycle`
 
 - **Source:** `src/story_writing_agents/session_lifecycle.py`
@@ -5439,12 +5674,14 @@ every intermediate arrow. The current runtime graph is acyclic.
 - **Supported surface:** Internal-only `WorkspaceRootState`,
   `WorkspaceRootRole`, `WorkspaceRootInspection`, `WorkspaceRootDiscovery`,
   the inspect/initialize/require-ready and typed nearest-discovery operations,
-  plus bounded `inspect_session_resources`, `list_session_resources`,
-  `provision_session_resources`, and `require_ready_session_resources` for the
-  future #455 composition. The module `__all__` is empty and neither the
-  workspace nor project facade exports them.
+  plus bounded `inspect_session_resources`, `inspect_session_history`,
+  `list_session_resources`, `provision_session_resources`, and
+  `require_ready_session_resources` for the future #455 composition. The
+  module `__all__` is empty and neither the workspace nor project facade
+  exports them.
 - **Direct internal dependencies:** `errors`, the public `git` facade,
-  `git.session_contracts`, `git.session_resources`, and `workspace.schema`.
+  `git.session_contracts`, `git.session_history`, `git.session_resources`, and
+  `workspace.schema`.
 - **State, resources, and side effects:** Classifies absent, empty,
   journal-backed initializing, exact ready-v2, unsupported, and recovery states
   without adopting unknown bytes. Initialization exclusively owns the open
@@ -5465,16 +5702,21 @@ every intermediate arrow. The current runtime graph is acyclic.
   immutable baseline/seed anchors without interpreting later history.
   Discovery returns the nearest typed main/session boundary and never skips a
   malformed or unsupported inner workspace. Its package-internal provision
-  wrapper is the sole non-data-driven session mutation authority; inspect,
-  list, reopen, and require-ready remain read-only. It creates no provider
-  state, artifact mutation, remote, later canonical commit, or import-time I/O.
+  wrapper is the sole non-data-driven session mutation authority;
+  `inspect_session_history` alone derives the canonical baseline manifest,
+  opens existing history with `create=False`, and returns only its stable
+  immutable snapshot. Inspect, list, reopen, history snapshot, and require-ready
+  remain read-only. It creates no provider state, artifact mutation, remote,
+  later canonical commit, or import-time I/O.
 - **Primary verification/documentation:**
   `tests/test_workspace_v2_initialization.py`,
   `tests/test_workspace_session_resources.py`,
+  `tests/test_workspace_session_history.py`,
   `tests/test_workspace_and_config.py`,
   `tests/test_cli_context.py`, and `tests/test_smoke_cli.py`;
   `docs/getting-started.md`,
-  `docs/guides/workspaces.md`, `docs/reference/workspace-api.md`,
+  `docs/guides/workspaces.md`,
+  `docs/reference/workspace-api.md#workspace-session-history-snapshot`,
   `docs/reference/git-adapter.md`,
   `docs/operations/filesystem-safety.md`, and
   `docs/operations/recovery-and-limitations.md` document its lifecycle.
@@ -5962,6 +6204,10 @@ every intermediate arrow. The current runtime graph is acyclic.
   `ArtifactApplicationStoreFailureCode`, and
   `ArtifactApplicationStoreFailure`, constructed or consumed only by
   `writing_artifacts.repository` and absent from both package facades. Its
+  `inspect_result(application_id)` recovers and audits the complete immutable
+  ledger and catalog before returning the exact original terminal result or
+  `None`; malformed identities fail with the public content-free invalid-ID
+  code and the lookup creates no application record or canonical artifact. Its
   `ensure_directories`
   method is the sole descriptor-safe bootstrap exception: the repository calls
   it after acquiring its process lock but before acquiring the workspace lease
@@ -5997,15 +6243,20 @@ every intermediate arrow. The current runtime graph is acyclic.
   as `unchanged`; correlation mismatch, drift, corruption, legacy nonempty
   `commits/`, and unsupported stored shapes fail closed. Manuscript rename
   lineage and deletion provenance remain durable and content-free; core rename
-  and delete are rejected by the relationship policy. The store borrows the
-  repository-owned secure storage adapter and opens no lock, Git, provider,
+  and delete are rejected by the relationship policy. Historical-result
+  inspection performs the same recovery and complete ledger/catalog audit and
+  never replays a request or coerces an applied result to `unchanged`. The
+  store borrows the repository-owned secure storage adapter and opens no lock,
+  Git, provider,
   agent, confirmation, context, process, clock, or application-startup
   resource. Import and construction perform no filesystem I/O.
 - **Primary verification/documentation:**
+  `tests/test_artifact_application_inspection.py`,
   `tests/test_artifact_application_seam.py`,
   `tests/test_artifact_application_store_lifecycle.py`,
   `tests/test_artifact_application_store_recovery.py`,
   `tests/test_writing_artifacts.py`,
+  `docs/reference/writing-artifacts.md#inspecting-one-historical-application`,
   `docs/reference/writing-artifacts.md#application-storage-and-recovery-mechanism`,
   the artifact-application persistence section in `docs/design/persistence.md`,
   and the writing-artifact section in
@@ -6116,6 +6367,7 @@ every intermediate arrow. The current runtime graph is acyclic.
 - **Supported surface:** Module-supported internal
   `WritingArtifactRepository`, with provenance-audited `catalog`, exact
   request-only `apply_artifact_changes`,
+  exact read-only `inspect_artifact_application(application_id)`,
   filesystem-authoritative sorted `list_paths`, complete bounded
   `list_paths_bounded`, ordered selective immutable
   `read_current`, verified `read_text`, and
@@ -6145,7 +6397,11 @@ every intermediate arrow. The current runtime graph is acyclic.
   lock and lease once, delegates once to the private application store, and
   returns its immutable terminal result. It maps typed drift, corruption, and
   recovery-required failures to the public content-free application codes
-  without parsing prose or exposing exception context.
+  without parsing prose or exposing exception context. Application inspection
+  validates the exact identity, acquires that same lock and lease once,
+  delegates once, and returns the original immutable historical result or
+  `None` without reconstructing or reapplying a request, creating an application
+  record, or inferring session ownership.
   `commit_consensus` retains its existing package-internal caller shape and
   author/revision/path validation, but now translates the manuscript plus ordered
   allowlisted core updates into one exact native change set and delegates all
@@ -6165,6 +6421,7 @@ every intermediate arrow. The current runtime graph is acyclic.
   no controller, terminal, provider, Git, lead, confirmation, or agent-context
   implementation and retains no viewer state or artifact bytes beyond a call.
 - **Primary verification/documentation:**
+  `tests/test_artifact_application_inspection.py`,
   `tests/test_artifact_application_seam.py`,
   `tests/test_writing_artifacts.py`,
   `tests/test_artifact_application_store_lifecycle.py`,
@@ -6175,6 +6432,7 @@ every intermediate arrow. The current runtime graph is acyclic.
   `tests/test_runtime_reference_integration.py`,
   `tests/test_smoke_cli.py`,
   `docs/guides/artifact-references.md#what-happens-when-an-attached-source-is-later-applied`,
+  `docs/reference/writing-artifacts.md#inspecting-one-historical-application`,
   `docs/reference/writing-artifacts.md#application-storage-and-recovery-mechanism`,
   `docs/reference/configuration/session-storage.md`,
   the artifact-application persistence section in
@@ -6184,8 +6442,8 @@ every intermediate arrow. The current runtime graph is acyclic.
 
 ## Consistency Notes
 
-- The inventory contains 117 modules. Static AST derivation over every module-
-  level and function-local import yields 424 unique direct internal edges and
+- The inventory contains 121 modules. Static AST derivation over every module-
+  level and function-local import yields 456 unique direct internal edges and
   no directed cycle. The v2 cutover contributes 97 modules and 362 edges;
   `writing_artifacts.change_sets` and `writing_artifacts.relationship_policy`
   add two pure modules and exactly five inward edges; application contracts
@@ -6197,6 +6455,24 @@ every intermediate arrow. The current runtime graph is acyclic.
   with six required inward dependencies, and repository delegation adds its
   store edge plus one direct application-contract edge, producing the current
   eight-edge increase without a facade export.
+  The pure `session_recovery` facade and contract owner add two modules and
+  exactly seven inward edges, producing its historical 119-module, 431-edge
+  acyclic graph without a project-root export. The immutable session-history
+  snapshot adds no module and only the workspace-initialization-to-history
+  composition edge, producing the historical 119-module, 432-edge acyclic
+  graph. The internal session-recovery reconciler adds one module with exactly
+  nine owner-facing inward edges, producing its historical 120-module,
+  441-edge acyclic graph without a facade export. The transition assessor adds
+  one internal module with exactly eight inward owner-contract and observation
+  edges, producing its historical 121-module, 449-edge acyclic graph without a
+  facade export. Session-transition integration adds seven orchestration-facing
+  edges from `backend` to `conversations`, `git.session_contracts`,
+  `session_recovery`, `session_recovery.transition_assessment`, and
+  `workspace.initialization`, from `cli` to
+  `session_recovery.transition_assessment`, and from
+  `interactive_controller._session_policy` to
+  `session_recovery.transition_assessment`, producing the current 121-module,
+  456-edge acyclic graph without an assessment facade export.
   Relative to the 360-edge pre-cutover graph, filesystem and
   SQLite storage each add one direct dependency on `conversations.events` for
   private legacy-row/file rejection values, smoke adds one dependency on
@@ -6210,7 +6486,7 @@ every intermediate arrow. The current runtime graph is acyclic.
   discovery binding adds no export. The 63-name conversation-storage facade
   exports contracts/composition/archive workflow only and no concrete
   filesystem or SQLite adapter.
-- The safe Git package facade contains exactly 22 names: 21 pure contract
+- The safe Git package facade contains exactly 24 names: 23 pure contract
   values plus the sole `GitRepositoryAdapter`. All remain absent from the
   project root. Internal `repository_lock`, `session_history_contracts`, and
   `session_history` add the shared repository lease, pure durable history
@@ -6224,7 +6500,9 @@ every intermediate arrow. The current runtime graph is acyclic.
   graph. #510 adds pure `session_checkpoint_contracts` plus the six-edge
   `session_checkpoints` service, yielding its historical 115-module, 413-edge
   graph. Its typed timestamp and durable checkpoint-intent refinements add no
-  edge. The 22-name Git facade remains closed, and Git retains no forbidden
+  edge. External-operation inspection later expanded the existing Git facade
+  to 24 names without adding a module or internal edge. The Git facade remains
+  closed, and Git retains no forbidden
   reverse dependency on workspace, provider, conversation, artifact, GitHub,
   or an entry point.
 - Schema-v2 workspace definition and resource ownership are split between the

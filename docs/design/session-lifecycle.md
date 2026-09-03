@@ -62,22 +62,74 @@ sequenceDiagram
 Identity and pre/post facts must correlate. Failure compensates only a newly
 acquired claim; it never deletes another process's claim.
 
+<a id="story-session-transition-assessment"></a>
+
+## Story-session transition assessment
+
+The package has one shared, content-safe assessment that the noninteractive
+lifecycle commands and interactive controller consume before entering a
+destination, leaving a source, or pausing a story session. The assessment is
+evidence, not authority: it never acquires or releases ownership, performs a
+transition, calls a provider, applies an artifact, changes Git, or reconstructs
+a confirmation capability. `AgentBackend.assess_session_transition()`
+validates the operation type, delegates once, and returns the assessor's exact
+result; each caller permits only an operation named by that result.
+
+Active and idle sessions use different evidence paths:
+
+1. With both an eligible persisted active conversation default and its
+   same-provenance collaboration store, the assessor delegates exactly once to
+   the recovery reconciler and preserves the exact nested recovery result.
+   Proposed, reviewed, awaiting-application, committed, and rejected work
+   permits all three transitions; applied-not-committed or staged work permits
+   destination attachment only, so the user can inspect it without releasing
+   or pausing its owner. An absent, missing, or archived persisted default is
+   not active evidence and falls through to the idle path.
+2. With neither active input, it first requires lifecycle `ready + held_here`.
+   It then observes session resources and complete history, followed by
+   external Git and linked-worktree status, and repeats the same four reads as
+   generation B. Only equal, clean, fully closed owner facts produce
+   `idle_ready`. First-read failure, owner uncertainty, second-read failure, or
+   drift fails closed with the responsible owner and no permitted operation.
+
+The orchestration keeps four responsibilities separate:
+
+| Owner boundary | Responsibility during a transition |
+| --- | --- |
+| Lifecycle (`AgentBackend`) | Read durable/access state, acquire or release the exact claim, and create/reopen/pause the manifest. |
+| Git resources (`workspace.initialization`) | Provision and verify Create's exact branch, sibling worktree, and internal ref; inspect existing resources/history for later assessment. |
+| Conversation (`cli_context` plus configured storage) | Resolve the persisted default, accept it only when its catalog record is active, and provide the same-provenance event store. |
+| Recovery (`SessionTransitionAssessor` / reconciler) | Classify active or idle facts, name the responsible failure owner, and return an ordered operation set without performing it. |
+
+The assessor does not claim access while checking and does not release access
+afterward; lifecycle ownership must already be held. Enter permission only
+means the caller may proceed with attachment. Leave and pause permission means
+the caller may proceed through the existing release mechanism. Runtime content
+writes still occur only after the existing lead/user confirmation path where
+that path requires confirmation. The assessor itself retains no proof path,
+digest, provider content, process identity, handle, confirmation choice, or
+capability. See the
+[canonical operation matrix and user examples](../operations/recovery-and-limitations.md#session-transition-assessment).
+
 ## Commands and next actions
 
 | Facts | Command | Next action |
 | --- | --- | --- |
-| Absent | `/session create NAME` or `story session create SESSION` | Create a session. |
-| Ready + claimable | `/session resume [NAME]` or `story session reopen [SESSION]` | Resume/attach it. |
-| Paused | Same resume/reopen forms | Make it ready and attach it. |
+| Absent | `/session create NAME` or `story session create SESSION` | Provision the exact Git resources, create the lifecycle, and assess entry. |
+| Ready + claimable | `/session resume [NAME]` or `story session reopen [SESSION]` | Acquire, assess entry, then attach/save the default only when allowed. |
+| Paused | Same resume/reopen forms | Reopen to ready, assess entry, then attach/save the default only when allowed. |
 | Live local owner | `session_access_blocked` | Close the owner normally, then retry. |
 | Unknown owner | `session_ownership_unknown` | Verify ownership; preserve the claim. |
 | Attached, no focus | `/conversation new` or `/conversation resume` | Create or choose a conversation for scoped reads. |
 | Attached and focused | Management/inspection ready | Use history/search/transcript/status; story execution remains unavailable. |
 
-Noninteractive create/reopen saves the default, releases its temporary access,
-and prints ready/claimable JSON. Pause retains the default and reports
-paused/claimable. Lifecycle commands have no `--session` option; their optional
-positional session uses the saved default where allowed.
+Noninteractive create/reopen saves the default only after entry is allowed,
+then releases temporary access and prints ready/claimable JSON with an
+`assessment`. Pause retains the default and reports paused/claimable only when
+`pause_session` is allowed. A denied assessment prints JSON and exits 2; a
+lifecycle-only denial has `assessment: null`. Lifecycle commands have no
+`--session` option; their optional positional session uses the saved default
+where allowed.
 
 <a id="shell-transitions-and-compensation"></a>
 
@@ -87,16 +139,42 @@ Bare `story` resumes a ready default and asks before reopening a paused default.
 `story chat SESSION` creates an absent session or resumes an existing one.
 Interactive `/session resume` never creates.
 
-Switching performs destination validation/acquisition, optional durable reopen,
-post-validation, destination-focus load, default persistence, source release,
-then in-memory attachment/focus commit. The sequence is not one transaction. A
-successful paused-to-ready transition is not rolled back if a later focus or
-default step fails. Later failure releases a newly acquired destination when
-possible and leaves in-memory scope unchanged; inspect persisted state because
-an atomic replacement can complete before a reported failure.
+Create performs lifecycle absence check, provider configuration validation,
+Git-resource provisioning/verification, lifecycle creation and correlated
+post-read, destination-focus load, entry assessment, default persistence, then
+in-memory attachment. Reopen performs lifecycle pre-read, configuration
+validation, acquire or durable reopen, correlated post-read, focus load, and
+entry assessment before persistence or attachment. No provider story turn runs
+during any assessment.
 
-`/quit` and EOF release without pausing. Confirmed `/session pause` persists
-paused, clears current scope, and releases. Both retain defaults.
+Switching first completes that destination path through `enter_destination`.
+It then rereads the still-attached source and assesses `leave_source`. Only
+after both permissions exist does it persist the destination default, release
+the source, and commit the in-memory attachment/focus. Destination acquisition,
+focus, assessment, or default-write failure releases the destination and
+preserves the source when release can be proved. A source denial releases only
+the destination, leaves the source attached, and preserves the source default.
+The destination default is never persisted before source leave permission.
+
+The sequence is not one transaction. A successful paused-to-ready destination
+transition is not rolled back if a later focus or default step fails. Inspect
+persisted state because an atomic default replacement can complete before a
+reported failure. Source-release failure after that replacement is fatal
+`cleanup_failed`; the controller does not roll the default back.
+
+For comparison, the noninteractive order is exact:
+
+| Command | Ordered boundary calls |
+| --- | --- |
+| Create | lifecycle absence read → configuration validation → Git-resource provision/verify → lifecycle create/acquire → correlated lifecycle read → idle entry assessment → default save if allowed → release |
+| Reopen | lifecycle pre-read → configuration validation → acquire ready or reopen paused → correlated lifecycle read → persisted active-default lookup → entry assessment → default save if allowed → release |
+| Pause | lifecycle pre-read → acquire only if claimable → persisted active-default lookup → pause assessment → durable pause/release if allowed; otherwise release only a newly acquired claim |
+| Interactive switch | destination acquire/reopen and correlated read → destination default/focus lookup → destination entry assessment → source held-state read → source leave assessment → destination-default save → source release → in-memory attachment/focus commit |
+
+`/quit` and EOF release without pausing. Confirmed `/session pause` rereads the
+held lifecycle, assesses the current focused conversation (or idle evidence),
+and only then persists paused, clears current scope, and releases. Denial leaves
+the source attached. Both paths retain defaults.
 
 ## Conversation compensation
 
