@@ -6,8 +6,8 @@ import hashlib
 import os
 import re
 import stat
-from collections.abc import Callable
-from contextlib import ExitStack
+from collections.abc import Callable, Iterator
+from contextlib import ExitStack, contextmanager
 from pathlib import Path
 
 from .contracts import (
@@ -718,19 +718,18 @@ class GitRepositoryAdapter:
         return completed
 
     def _status(self) -> GitStatus:
-        topology, identity = self._require_standalone()
-        del topology
-        branch_ref = self._symbolic_head(identity, allow_detached=True)
-        branch = None
-        if branch_ref is not None and branch_ref.startswith("refs/heads/"):
-            branch = branch_ref.removeprefix("refs/heads/")
-        head = self._head_id(identity, allow_absent=True)
-        entries, _ = self._repository_changes(identity, head)
-        return GitStatus(
-            branch=branch,
-            head_id=head,
-            entries=entries,
-        )
+        with self._guard_status_or_log_read() as identity:
+            branch_ref = self._symbolic_head(identity, allow_detached=True)
+            branch = None
+            if branch_ref is not None and branch_ref.startswith("refs/heads/"):
+                branch = branch_ref.removeprefix("refs/heads/")
+            head = self._head_id(identity, allow_absent=True)
+            entries, _ = self._repository_changes(identity, head)
+            return GitStatus(
+                branch=branch,
+                head_id=head,
+                entries=entries,
+            )
 
     def _diff_metadata(self) -> GitDiffMetadata:
         topology, identity = self._require_standalone()
@@ -923,27 +922,50 @@ class GitRepositoryAdapter:
         return entries, unmerged
 
     def _log_metadata(self) -> GitLogMetadata:
-        topology, identity = self._require_standalone()
-        del topology
-        head = self._head_id(identity, allow_absent=True)
-        if head is None:
-            return GitLogMetadata(commits=())
-        result = self._required_git(
-            ("rev-list", f"--max-count={_MAX_LOG_ENTRIES}", "HEAD"),
-            identity=identity,
-            read_only=True,
-        )
-        object_ids = tuple(line for line in result.stdout.splitlines() if line)
-        if len(object_ids) > _MAX_LOG_ENTRIES or any(
-            _OBJECT_ID.fullmatch(object_id) is None for object_id in object_ids
-        ):
-            raise _AdapterFailure(GitFailureCode.OUTPUT_INVALID)
-        return GitLogMetadata(
-            commits=tuple(
-                self._commit_metadata(object_id.decode("ascii"), identity)
-                for object_id in object_ids
+        with self._guard_status_or_log_read() as identity:
+            head = self._head_id(identity, allow_absent=True)
+            if head is None:
+                return GitLogMetadata(commits=())
+            result = self._required_git(
+                ("rev-list", f"--max-count={_MAX_LOG_ENTRIES}", "HEAD"),
+                identity=identity,
+                read_only=True,
             )
-        )
+            object_ids = tuple(line for line in result.stdout.splitlines() if line)
+            if len(object_ids) > _MAX_LOG_ENTRIES or any(
+                _OBJECT_ID.fullmatch(object_id) is None for object_id in object_ids
+            ):
+                raise _AdapterFailure(GitFailureCode.OUTPUT_INVALID)
+            return GitLogMetadata(
+                commits=tuple(
+                    self._commit_metadata(object_id.decode("ascii"), identity)
+                    for object_id in object_ids
+                )
+            )
+
+    @contextmanager
+    def _guard_status_or_log_read(self) -> Iterator[tuple[int, int]]:
+        """Guard status/log reads in only standalone or stable linked worktrees."""
+
+        topology, identity = self._inspect_topology()
+        if topology.kind is GitTopologyKind.STANDALONE:
+            yield identity
+            return
+        if topology.kind is not GitTopologyKind.LINKED_WORKTREE:
+            raise _AdapterFailure(GitFailureCode.UNSUPPORTED_TOPOLOGY)
+
+        opening = self._inspect_external_operation()
+        try:
+            yield identity
+        finally:
+            drifted = False
+            try:
+                closing = self._inspect_external_operation()
+                drifted = self._bind_root() != identity or closing != opening
+            except BaseException:
+                drifted = True
+            if drifted:
+                raise _external_operation_failure()
 
     def _require_standalone(
         self,

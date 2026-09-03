@@ -97,6 +97,33 @@ repository mutation: none
 See [External Git operation inspection](../reference/git-adapter.md#external-git-operation-inspection)
 for the exact accepted marker shapes and opaque identity binding.
 
+<a id="linked-worktree-read-recovery"></a>
+
+### Linked-worktree read recovery
+
+Direct `status()` and `log_metadata()` calls can safely observe a securely
+validated linked worktree. They inspect the external-operation markers and
+bind the root/administration identities before and after the bounded read,
+including after an ordinary failure or interruption. An unchanged merge,
+rebase, cherry-pick, revert, or sequencer marker may therefore coexist with a
+successful metadata read. That success is observation only: users must still
+resolve the external operation with trusted Git tooling before any later Story
+mutation.
+
+When the closing marker or identity observation differs, no successful result
+is returned. The public error is `recovery_required`, names `status` or
+`log_metadata` as the operation, and recommends `inspect_repository`; this
+guard failure takes precedence over a simultaneous body failure or
+interruption. Preserve the linked worktree, common Git administration,
+markers, index, refs, and working bytes, stop automated writers, and inspect
+offline. Do not retry merely because partial metadata may have been read.
+
+These reads never continue, abort, reset, clean, checkout, stage, commit, or
+repair Git. They also do not establish which story session owns the worktree.
+#527 will correlate the observations and #528 will enforce lifecycle blocking;
+#539 itself provides neither orchestration nor a user command. See the
+[linked-worktree read contract](../reference/git-adapter.md#linked-worktree-status-and-log).
+
 <a id="session-git-resource-recovery"></a>
 
 ## Session Git-resource recovery
