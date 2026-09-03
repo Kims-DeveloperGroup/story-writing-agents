@@ -1,15 +1,16 @@
 # Safe Git adapter and story baseline
 
 The `story_writing_agents.git` package is a direct Python API for inspecting one
-local repository and creating one exact initial story-workspace commit. It is
-provider-independent and uses only the Python standard library plus the local
-Git executable.
+local repository, detecting an external Git operation, and creating one exact
+initial story-workspace commit. It is provider-independent and uses only the
+Python standard library plus the local Git executable.
 
-This is the complete availability boundary for issue
-[#448](https://github.com/Kims-DeveloperGroup/story-writing-agents/issues/448):
+This is the complete availability boundary for the #448 baseline and #530
+external-operation inspection work:
 
 - Python callers can classify repository topology, inspect or create the fixed
-  baseline, and read bounded status, diff, and log metadata.
+  baseline, inspect external-operation metadata, and read bounded status, diff,
+  and log metadata.
 - `story init` now composes this adapter internally after it records the exact
   schema-v2 initialization journal and installs its exact 22-file scaffold.
   The CLI does not expose manifest selection or another Git operation.
@@ -41,6 +42,14 @@ commit, apply a story proposal, manage a session worktree, contact a remote, or
 repair an unexpected repository. Initialization authority covers only the one
 fixed root commit. The adapter reports a closed recovery state instead of
 guessing how to change an unexpected repository.
+
+A Python caller can now detect an externally started merge, rebase,
+cherry-pick, revert, or sequencer operation without running Git or exposing its
+administrative payload. Users can use that fact to stop before another owner
+mutates the repository. This inspection does not itself block a lifecycle
+action, identify a story session, or continue, abort, reset, clean, or repair
+the operation; #527 will correlate it and #528 will enforce the lifecycle
+decision.
 
 ## Fixed baseline contract
 
@@ -137,6 +146,7 @@ created = adapter.create_baseline(manifest)
 retried = adapter.create_baseline(manifest)
 
 # READ: these projections contain metadata, never file or commit-message bodies.
+external_operation = adapter.inspect_external_operation()
 status = adapter.status()
 diff = adapter.diff_metadata()
 log = adapter.log_metadata()
@@ -161,6 +171,11 @@ result = {
     "retry": {
         "same_commit": retried.commit_id == created.commit_id,
         "same_tree": retried.tree_id == created.tree_id,
+    },
+    "external_operation": {
+        "kind": external_operation.kind.value,
+        "repository_identity_digest": "<repository-identity-digest>",
+        "worktree_identity_digest": "<worktree-identity-digest>",
     },
     "status": {
         "branch": status.branch,
@@ -222,6 +237,11 @@ For the new workspace and exact bytes above, the sanitized output is:
   "retry": {
     "same_commit": true,
     "same_tree": true
+  },
+  "external_operation": {
+    "kind": "none",
+    "repository_identity_digest": "<repository-identity-digest>",
+    "worktree_identity_digest": "<worktree-identity-digest>"
   },
   "status": {
     "branch": "main",
@@ -304,6 +324,66 @@ For a non-standalone topology, baseline inspection reports
 `recovery_required`, baseline creation refuses it, and status/diff/log reads
 report `unsupported_topology`. A symlinked or replaced root fails as
 `unsafe_root`.
+
+<a id="external-git-operation-inspection"></a>
+
+## External Git operation inspection
+
+`GitRepositoryAdapter.inspect_external_operation()` directly inspects the
+bound Git administration directories without starting a Git process. It returns
+one frozen, content-free `GitExternalOperationInspection`:
+
+| `kind` | Exact unambiguous administrative shape | What the user should do |
+| --- | --- | --- |
+| `none` | None of the supported operation markers is present. | Continue only if separate topology, status, and workflow checks also allow it. `none` does not mean clean. |
+| `merge` | `MERGE_HEAD` alone. | Stop Story mutation and resolve or abort the merge with trusted Git tooling outside this API. |
+| `rebase` | Exactly one of `rebase-merge/` or `rebase-apply/`, alone. | Stop and finish or abort the rebase externally. |
+| `cherry_pick` | `CHERRY_PICK_HEAD`, alone or with `sequencer/`. | Stop and finish or abort the cherry-pick externally. |
+| `revert` | `REVERT_HEAD`, alone or with `sequencer/`. | Stop and finish or abort the revert externally. |
+| `sequencer` | `sequencer/` alone. | Stop and inspect the sequenced Git work externally before continuing. |
+
+The other two result fields are fresh 64-lowercase-hex SHA-256 identity
+digests. `repository_identity_digest` binds the common Git repository;
+`worktree_identity_digest` binds the exact worktree root plus its administrative
+directory. Repeated inspection of unchanged identities is stable. Linked
+worktrees share the repository digest but have different worktree digests, so a
+later #527 correlation can reject evidence observed from the wrong worktree.
+The values are opaque: they do not reveal paths, device/inode facts, marker
+contents, or story text, and they do not identify a session by themselves.
+
+Example explanatory output for a merge is:
+
+```json
+{
+  "kind": "merge",
+  "repository_identity_digest": "<64-lowercase-hex>",
+  "worktree_identity_digest": "<64-lowercase-hex>"
+}
+```
+
+`GitStatus` remains a separate observation. A repository can report
+`kind="none"` while status is dirty, staged, or unmerged; conversely an operation
+marker does not replace the literal index/worktree facts in `status()`. Callers
+must not infer an operation kind from status alone or infer cleanliness from
+this inspection.
+
+An absent or malformed Git administration root, dual or contradictory markers,
+two rebase directories, wrong marker types, symlinks, unreadable or replaced
+administration state, and metadata that races during inspection fail closed as
+`GitOperationError` with:
+
+```text
+code: recovery_required
+operation: inspect_external_operation
+repository_state: recovery_required
+recovery_action: inspect_repository
+```
+
+The fixed error contains no administrative payload. Preserve every repository,
+worktree, marker, index, ref, and working byte and inspect them with trusted
+local tools. This method never continues, aborts, resets, cleans, checks out, or
+otherwise mutates Git. #527 will correlate this fact with one session; #528 will
+later block lifecycle mutation. #530 itself owns neither behavior.
 
 ## Cancellation, retry, and failure recovery
 
@@ -827,7 +907,7 @@ commit-message bodies never cross the public boundary.
 
 ## Supported imports and methods
 
-Import the 22-name direct facade; none of these names is re-exported by
+Import the 24-name direct facade; none of these names is re-exported by
 `story_writing_agents`:
 
 ```python
@@ -841,6 +921,8 @@ from story_writing_agents.git import (
     GitDiffEntry,
     GitDiffMetadata,
     GitEffectiveIdentity,
+    GitExternalOperationInspection,
+    GitExternalOperationKind,
     GitFailureCode,
     GitIdentity,
     GitLogMetadata,
@@ -867,6 +949,7 @@ create_baseline(manifest: GitBaselineManifest) -> GitBaselineInspection
 status() -> GitStatus
 diff_metadata() -> GitDiffMetadata
 log_metadata() -> GitLogMetadata
+inspect_external_operation() -> GitExternalOperationInspection
 ```
 
 There is no migration or compatibility mode and no arbitrary process runner.

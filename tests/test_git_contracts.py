@@ -24,6 +24,8 @@ from story_writing_agents.git import (
     GitDiffEntry,
     GitDiffMetadata,
     GitEffectiveIdentity,
+    GitExternalOperationInspection,
+    GitExternalOperationKind,
     GitFailureCode,
     GitIdentity,
     GitLogMetadata,
@@ -51,6 +53,7 @@ _FACADE_EXPORTS = (
     "GitOperationKind",
     "GitRepositoryState",
     "GitTopologyKind",
+    "GitExternalOperationKind",
     "GitChangeKind",
     "GitFailureCode",
     "GitRecoveryAction",
@@ -60,6 +63,7 @@ _FACADE_EXPORTS = (
     "GitIdentity",
     "GitEffectiveIdentity",
     "GitRepositoryTopology",
+    "GitExternalOperationInspection",
     "GitBaselineInspection",
     "GitStatusEntry",
     "GitStatus",
@@ -76,6 +80,7 @@ _CONTRACT_TYPES = (
     GitIdentity,
     GitEffectiveIdentity,
     GitRepositoryTopology,
+    GitExternalOperationInspection,
     GitBaselineInspection,
     GitStatusEntry,
     GitStatus,
@@ -160,6 +165,7 @@ class GitContractTests(unittest.TestCase):
                 "status",
                 "diff_metadata",
                 "log_metadata",
+                "inspect_external_operation",
             ),
             GitRepositoryState: (
                 "absent",
@@ -177,6 +183,14 @@ class GitContractTests(unittest.TestCase):
                 "root_mismatch",
                 "symlinked_administrative_path",
                 "malformed_administrative_path",
+            ),
+            GitExternalOperationKind: (
+                "none",
+                "merge",
+                "rebase",
+                "cherry_pick",
+                "revert",
+                "sequencer",
             ),
             GitChangeKind: (
                 "added",
@@ -218,7 +232,7 @@ class GitContractTests(unittest.TestCase):
             with self.subTest(enum=enum_type.__name__):
                 self.assertEqual(tuple(item.value for item in enum_type), values)
 
-    def test_adapter_surface_has_only_six_typed_operations(self) -> None:
+    def test_adapter_surface_has_only_seven_typed_operations(self) -> None:
         public = {
             name
             for name, value in inspect.getmembers(GitRepositoryAdapter)
@@ -233,6 +247,7 @@ class GitContractTests(unittest.TestCase):
                 "status",
                 "diff_metadata",
                 "log_metadata",
+                "inspect_external_operation",
             },
         )
         self.assertEqual(
@@ -246,6 +261,10 @@ class GitContractTests(unittest.TestCase):
         self.assertEqual(
             str(inspect.signature(GitRepositoryAdapter.create_baseline)),
             "(self, manifest: 'GitBaselineManifest') -> 'GitBaselineInspection'",
+        )
+        self.assertEqual(
+            str(inspect.signature(GitRepositoryAdapter.inspect_external_operation)),
+            "(self) -> 'GitExternalOperationInspection'",
         )
 
     def test_import_and_construction_have_no_filesystem_or_process_effect(self) -> None:
@@ -270,6 +289,27 @@ class GitContractTests(unittest.TestCase):
         self.assertEqual(
             tuple(field.name for field in fields(entry)), ("path", "content_digest")
         )
+        external = GitExternalOperationInspection(
+            GitExternalOperationKind.NONE,
+            "b" * 64,
+            "c" * 64,
+        )
+        self.assertEqual(
+            tuple(field.name for field in fields(external)),
+            ("kind", "repository_identity_digest", "worktree_identity_digest"),
+        )
+        with self.assertRaises(FrozenInstanceError):
+            external.kind = GitExternalOperationKind.MERGE  # type: ignore[misc]
+        for values in (
+            ("none", "b" * 64, "c" * 64),
+            (GitExternalOperationKind.NONE, "B" * 64, "c" * 64),
+            (GitExternalOperationKind.NONE, "b" * 63, "c" * 64),
+            (GitExternalOperationKind.NONE, "b" * 64, "../worktree"),
+        ):
+            with self.subTest(external_values=values):
+                with self.assertRaises(GitOperationError) as raised:
+                    GitExternalOperationInspection(*values)
+                self.assertIs(raised.exception.code, GitFailureCode.OUTPUT_INVALID)
 
     def test_manifest_is_nonempty_sorted_unique_and_digest_is_canonical(self) -> None:
         entries = (
