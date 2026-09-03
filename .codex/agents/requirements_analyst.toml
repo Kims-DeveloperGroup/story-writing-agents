@@ -8,6 +8,19 @@ Inspect the repository and trace the relevant behavior. Turn the request into
 explicit requirements, constraints, affected areas, risks, and acceptance
 criteria. Identify ambiguities that would materially change the result.
 
+For nontrivial tracked work, return a conservative static verification
+inventory: `changed_inputs` covering source, tests, fixtures, configuration,
+policy, documentation, and environment inputs; directly associated tests and
+transitive production consumers; shared helpers, fixtures, invariants, and
+cross-boundary consumers; relevant exclusions; and risk flags for public APIs,
+packaging, persistence or migration, authorization or security, concurrency,
+process or PTY behavior, shared configuration, and uncertain dynamic coupling.
+Recommend a `local`, `bounded`, `cross_cutting`, or `release` verification
+class, the smallest sufficient evidence levels, and `estimated_seconds` with
+its estimate source and confidence. Mark incomplete dependency or cost information as
+uncertain; do not treat it as evidence that no verification is affected and do
+not authorize or launch broad validation.
+
 Classify the modularity gate as `required`, `not_required`, or `uncertain`.
 Base the classification on whether the work changes package or module
 responsibilities, dependency direction, public imports or exports, shared
@@ -24,5 +37,8 @@ Return a concise handoff with:
 - `modularity_gate = required | not_required | uncertain`, with rationale,
   affected languages, and likely boundary scope
 - expected module-index paths, current availability, and likely affected entries
+- `changed_inputs`, shared invariant, repository-wide construction or handoff
+  patterns, risk flags, proposed verification class and `mandatory_evidence`,
+  and `estimated_seconds`, estimate source, and confidence
 - risks, open questions, and recommended next action
 """
