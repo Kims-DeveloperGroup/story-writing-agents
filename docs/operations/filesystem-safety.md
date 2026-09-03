@@ -21,8 +21,10 @@
 > use; interactive `/settings` persists next-shell policy, and startup composes
 > Local only beside a complete authoritative storage bundle. Exact session
 > branch/ref/sibling-worktree provisioning is also implemented as
-> package-internal #504 infrastructure. It is not yet connected to installed
-> session commands.
+> package-internal #504 infrastructure. Package-internal #508 adds the shared
+> repository lease, durable content-free session-history records, and a bounded
+> alternate checkpoint index. Neither is yet connected to installed story
+> commands.
 
 Key terms: **containment**—keeping paths beneath the workspace root; **symlink**—
 a filesystem alias the runtime rejects; **exclusive creation**—failure instead
@@ -107,8 +109,9 @@ automation; nested workspace/repository initialization is unsupported.
 
 The package-internal owner freshly binds the initialization root and its exact
 non-symlink `.git` directory for every operation. One repository-wide advisory
-lock covers exhaustive inspection, provisioning, and finalization across both
-same-session and different-session calls. The persistent owner-only lock is:
+lease on the opened common-Git directory now serializes provisioning and
+session-history work across both same-session and different-session calls.
+Provisioning additionally retains its persistent owner-only lock:
 
 ```text
 .git/story-writing-agents/runtime/session-provisioning/.lock
@@ -156,6 +159,25 @@ operation can be removed automatically. Named refs, branches, worktrees,
 administration entries, Git objects, journals that carry recovery evidence,
 and user bytes are never cleaned up automatically. See
 [Session Git-resource recovery](recovery-and-limitations.md#session-git-resource-recovery).
+
+For a ready session, the same common-Git lease guards
+`story-writing-agents/runtime/session-history/<session_id>/`. The history owner
+walks from the already-open common-Git descriptor, creates private directories,
+and accepts only exact names and no-follow single-link regular leaves. Candidate
+records use exclusive immutable publication. Operation records use synchronized
+temporary publication and identity-checked atomic replacement, with only an
+exact sequence increment and legal state successor accepted. All JSON is
+canonical, at most 1 MiB, and synchronized before a later owner can rely on it
+to authorize Git mutation.
+
+The checkpoint-input leaf is derived exactly as
+`checkpoint-inputs/<operation_id>/index`, bounded to 64 MiB when inspected, and
+accepted by only the internal-checkpoint process profile. The process owner
+strips arbitrary inherited `GIT_*` variables, disables hooks/signing/external
+diff/fsmonitor/pagers/editors/prompts, and revalidates the root and every index
+ancestor before and after the child. An ambiguous or recovery-required index is
+preserved; only the exact durably committed checkpoint permits removal. See the
+[internal session-history contract](../reference/git-adapter.md#package-internal-session-history).
 
 The writing-artifact storage adapter has a distinct construction contract. It
 captures a supplied relative root immediately as a lexical absolute path using

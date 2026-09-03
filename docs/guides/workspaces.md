@@ -4,7 +4,9 @@
 > schema-v2 initialization root. It does not run an agent, write story content,
 > create a session resource, or authorize a later story commit. A separate
 > package-internal seam can now materialize exact session Git resources, but
-> current `story session` commands do not call it until #455.
+> current `story session` commands do not call it until #455. Another internal
+> seam can persist content-free evidence for later commits and checkpoints;
+> #509, #510, and #492 still own those operations and their confirmation UI.
 
 Key terms: **initialization root**—the pristine `main` baseline; **marker**—the
 strict `config/workspace.json` identity; **journal**—the temporary durable
@@ -137,9 +139,10 @@ worktree: <workspace-parent>/<workspace-name>.story-worktrees/novel
 
 `story init` records only this grammar. The package-internal #504 lifecycle can
 create the correlated triple; #455 owns its connection to the installed
-session commands, and #505 owns later confirmed story commits and internal
-checkpoints. The original `main` root remains the exact initialization
-baseline throughout.
+session commands. #505 coordinates later history work: #509 owns confirmed
+story commits, #510 owns internal checkpoints, and #492 owns their confirmation
+UI. The original `main` root remains the exact initialization baseline
+throughout.
 
 ## Session Git resources
 
@@ -232,6 +235,86 @@ Pause, release, close, and process exit do not remove a branch, ref, worktree,
 administration entry, seed object, or recovery journal. See
 [session Git recovery](../operations/recovery-and-limitations.md#session-git-resource-recovery)
 and the [internal Git-resource contract](../reference/git-adapter.md#package-internal-session-git-resources).
+
+<a id="durable-session-history-infrastructure"></a>
+
+## Durable session-history infrastructure
+
+This section explains infrastructure that future confirmed story commits and
+internal checkpoints will use. There is no `story commit` or checkpoint command
+in this revision, and the lead cannot trigger either operation yet.
+
+Before #508, an interrupted future Git operation would have had no dedicated,
+restart-safe record showing which candidate and repository tip it concerned.
+The runtime now has an internal, content-free evidence store and closed Git
+process profiles. The user-facing actions remain later work:
+
+```text
+Available internally now (#508)
+  ready session identity
+  -> durable candidate/operation facts
+  -> fixed monotonic state
+  -> safe process profile and shared repository serialization
+
+Future confirmed story commit (#492 + #509)
+  user: "Apply the approved outline change"
+  lead: proposes exact paths, impact, and commit message
+  user: confirms
+  runtime: records evidence -> stages -> commits -> reports the commit ID
+
+Future internal checkpoint (#510)
+  runtime: records evidence -> uses its isolated index -> advances internal ref
+  user files and the ordinary session index are not borrowed for the checkpoint
+```
+
+The future output will be based on the durable classification rather than a
+blind retry. For example, interruption after a Git process starts can produce
+`outcome_unknown`; restart must inspect the exact repository facts instead of
+reusing the user's confirmation. #508 supplies that classification, but does
+not currently execute or display this scenario.
+
+### What the recorded states mean
+
+| State | External meaning in the future workflow | Safe next action |
+| --- | --- | --- |
+| `prepared` | An immutable candidate describes exact affected paths and before/after digests. It is evidence, not confirmation and not a Git mutation. | Present/revalidate it through the future confirmation workflow; prepare a new candidate if its facts are stale. |
+| `running` | A later operation owner durably recorded that work started against one expected tip. Success is not proved. | If interrupted, inspect the operation and repository before any retry. Never infer that confirmation remains reusable. |
+| `staged` | A future story-commit operation recorded that staging completed, but no commit is proved. Checkpoints do not use this state. | Preserve the worktree/index and inspect; do not restage or commit blindly. |
+| `committed` | The terminal record includes the resulting story commit or checkpoint object ID. | Reverify the referenced object/tip and report success through the future owning workflow. |
+| `rejected` | A story-commit proposal was declined before execution. It is terminal and authorizes nothing. Checkpoints do not use this state. | Leave it as evidence; prepare a new candidate for a materially different proposal. |
+| `outcome_unknown` | Git may have mutated, but the result could not be proved. | Stop replay, preserve all evidence, and inspect. A later owner may classify the same operation as `committed` or `recovery_required`. |
+| `recovery_required` | The facts are unsafe, inconsistent, or cannot be reconciled automatically. This is terminal. | Stop writers, preserve the repository and history subtree, and use explicit operator recovery or a trusted backup. |
+
+Candidate records are immutable. Operation records advance by increasing
+sequence through only the accepted state graph; terminal results cannot move
+backward. The local records retain session/operation/proposal/correlation IDs,
+canonical relative paths, before/after SHA-256 digests, expected Git tips or
+trees, a bounded proposed commit message and impact labels, and whether author
+and committer identity came from environment, repository, global, or system
+configuration. They contain no core-document/manuscript bytes, provider
+prompt/reply, raw Git output, credential, descriptor, writable capability, or
+serialized confirmation authority. A later real Git commit will still retain
+its effective author/committer identity and message in ordinary Git history.
+
+The common-Git layout is local and per-session:
+
+```text
+.git/story-writing-agents/runtime/session-history/<session_id>/
+├── candidates/<candidate_sha256>.json
+├── commit-operations/<operation_id>.json
+├── checkpoint-operations/<operation_id>.json
+└── checkpoint-inputs/<operation_id>/index
+```
+
+The alternate index is not a general-purpose file path. Only the internal
+checkpoint process profile accepts the exact index derived from its ready
+repository, session ID, and operation ID. It is retained for
+`outcome_unknown` or `recovery_required`, and can be removed only after that
+exact checkpoint is durably `committed`. Candidate and operation evidence is
+not automatically deleted. See the
+[exact internal contract](../reference/git-adapter.md#package-internal-session-history),
+[recovery table](../operations/recovery-and-limitations.md#session-history-recovery),
+and [privacy implications](../operations/privacy-and-provider.md#session-history-exposure).
 
 ## Core documents and role files
 

@@ -23,7 +23,13 @@ class GitProcessContractTests(unittest.TestCase):
     def test_exports_result_and_failure_values_are_exact(self) -> None:
         self.assertEqual(
             tuple(process_module.__all__),
-            ("GitProcessFailure", "GitProcessResult", "GitProcessRunner"),
+            (
+                "GitAlternateIndex",
+                "GitProcessFailure",
+                "GitProcessProfile",
+                "GitProcessResult",
+                "GitProcessRunner",
+            ),
         )
         result = GitProcessResult(b"bounded", 7)
         self.assertTrue(is_dataclass(result))

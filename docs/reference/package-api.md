@@ -20,7 +20,7 @@ The stable inventories in this revision are:
 | `story_writing_agents.workspace` | 3 | `Workspace`, `initialize_workspace`, and `FilesystemConversationCatalog` |
 | `story_writing_agents.writing_artifacts` | 62 | Canonical artifact/reference values plus pure exact change-set and relationship-policy contracts |
 
-The production graph has 107 modules, 385 dependency edges, no cycles, and 104
+The production graph has 110 modules, 392 dependency edges, no cycles, and 104
 package-root exports. The conversations owners contribute 54 event exports and
 20 context exports; their facade bindings are identical to their owner
 bindings.
@@ -71,11 +71,16 @@ identity, topology, retry, security, and sample input/output contracts.
 
 Separate direct modules implement the package-internal #504 session-resource
 contracts, fixed Git process owner, and inspect/list/provision/require-ready
-operations. None is re-exported by the project, Git, or workspace facade; they
+operations. Three more direct modules own the common-Git repository lease,
+pure session-history contracts, and durable session-history storage; the fixed
+process owner also exposes closed profiles and the exact internal checkpoint
+index value. None is re-exported by the project, Git, or workspace facade; they
 do not expand the 104/22/3 export counts and are not a stable application API
-or arbitrary Git capability. #455 alone will compose them with explicit
-session commands, while #505 owns later commits and checkpoints. See
-[Package-internal session Git resources](git-adapter.md#package-internal-session-git-resources).
+or arbitrary Git capability. #455 will compose session resources, #509 will
+own story commits, #510 will own checkpoints, and #492 will own their
+confirmation UI. See
+[Package-internal session Git resources](git-adapter.md#package-internal-session-git-resources)
+and [session history](git-adapter.md#package-internal-session-history).
 
 The three-name `story_writing_agents.workspace` facade remains unchanged:
 

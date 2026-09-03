@@ -469,6 +469,113 @@ For user-oriented scenarios and illustrative typed values, see
 safe next actions, see
 [Session Git-resource recovery](../operations/recovery-and-limitations.md#session-git-resource-recovery).
 
+<a id="package-internal-session-history"></a>
+
+## Package-internal session history and process profiles
+
+Issue #508 adds infrastructure for #509 story commits and #510 internal
+checkpoints. It does not stage a file, create a commit/checkpoint, update a ref,
+consume confirmation, or expose a CLI/runtime/facade method. #492 owns the
+later confirmation UI.
+
+`git.session_history_contracts` owns the pure schema-v1 values and codecs;
+`git.session_history` owns descriptor-relative durable storage;
+`git.repository_lock` owns the identity-bound common-Git lease; and
+`git.process` owns the fixed process profiles. These modules are package-
+internal and add no name to `story_writing_agents`, `story_writing_agents.git`,
+or a workspace facade.
+
+Opening a history first requires the exact #504 session triple to be `ready`,
+then takes the same repository-wide lease used by provisioning and revalidates
+the session under that lease. The per-session namespace is:
+
+```text
+.git/story-writing-agents/runtime/session-history/<session_id>/
+├── candidates/<64-lowercase-hex-candidate-id>.json
+├── commit-operations/<32-lowercase-hex-operation-id>.json
+├── checkpoint-operations/<32-lowercase-hex-operation-id>.json
+└── checkpoint-inputs/<32-lowercase-hex-operation-id>/index
+```
+
+Directories request mode `0700`; JSON leaves request `0600`. JSON is bounded to
+1 MiB and must be one canonical sorted-key UTF-8 object plus a trailing newline.
+Reads and writes reject aliases, links, nonregular or multiply linked leaves,
+case-colliding names, oversized data, noncanonical encodings, unexpected
+fields, and identity substitution. Candidate publication is create-only and
+idempotent only for the identical canonical value. Operation replacement is
+atomic, synchronized, and accepted only for the exact next sequence and legal
+successor state.
+
+### Records and transitions
+
+A candidate ID is the SHA-256 of its canonical content excluding the ID itself.
+The record binds the ready session and branch, expected branch tip/tree,
+worktree identity digest, application/proposal/correlation IDs, sorted unique
+path operations with before/after SHA-256 digests, proposed commit message,
+sorted impact labels, and author/committer identity-source categories. It does
+not store the affected files' bytes or the effective identity values.
+
+A story-commit operation binds its candidate, correlation, expected branch tip,
+sequence, state, and optional terminal commit ID. A checkpoint operation binds
+its correlation, expected internal-ref tip, sequence, state, optional terminal
+checkpoint ID, and whether its alternate index is preserved. Neither operation
+record contains prompt/reply text, story bytes, raw Git output, a descriptor,
+credentials, or executable/confirmation authority.
+
+| Record/current state | Allowed next state |
+| --- | --- |
+| Candidate `prepared` | None; the candidate is immutable. |
+| New story-commit operation | `rejected` as a terminal pre-execution decision, or `running` to begin later execution. |
+| Story commit `running` | `staged`, `outcome_unknown`, or `recovery_required` |
+| Story commit `staged` | `committed`, `outcome_unknown`, or `recovery_required` |
+| Story commit `outcome_unknown` | `committed` or `recovery_required` |
+| New checkpoint operation | `running` |
+| Checkpoint `running` | `committed`, `outcome_unknown`, or `recovery_required` |
+| Checkpoint `outcome_unknown` | `committed` or `recovery_required` |
+| Any `committed`, `rejected`, or `recovery_required` operation | None; terminal. |
+
+`prepared` belongs only to the immutable candidate. `staged` and `rejected`
+belong only to story commits. `committed` requires the same-format Git object
+ID recorded in the operation. `outcome_unknown` can advance only to
+`committed` or terminal `recovery_required`; no terminal record reopens or
+moves backward. The store returns content-free failure/recovery facts and a
+bounded inventory of IDs, states, and preserved checkpoint indices.
+
+### Closed Git process profiles
+
+The four internal profiles are `read_only`, `mutation`, `identity_mutation`,
+and `internal_checkpoint`. Each process uses caller-fixed arguments,
+`shell=False`, `--no-pager`, bounded input/output and time, disabled hooks and
+signing, disabled external diff/fsmonitor/pagers/editors/prompts, and a freshly
+sanitized environment. Inherited Git directory/worktree/configuration/SSH/
+index controls and other arbitrary `GIT_*` variables do not pass through;
+the four standard author/committer identity variables are the only inherited
+Git-environment exceptions.
+
+`identity_mutation` accepts only a typed effective author/committer value. Only
+`internal_checkpoint` accepts a `GitAlternateIndex`, and that value derives the
+single exact operation-owned path shown above. The runner revalidates the main
+root and every alternate-index ancestor before and after the child process. It
+does not admit an arbitrary `GIT_INDEX_FILE`. Future real Git commits will
+retain the effective author/committer and message in Git history even though
+the session-history candidate stores only identity-source categories.
+
+### Cleanup and interruption
+
+The checkpoint index is allocated only after a durable `running` checkpoint
+record. It is preserved when the result is `outcome_unknown` or
+`recovery_required`; removal is allowed only for that exact operation after a
+durable `committed` record and synchronization. No cleanup routine removes
+candidate/operation records, Git objects/refs, provisioning journals, user
+files, an ambiguous index, or unrelated repository data.
+
+If process exit, cancellation, I/O failure, or lost process output leaves the
+result uncertain, the later operation owner must inspect the durable operation
+and repository facts. It must not replay a consumed confirmation or rerun Git
+from `running`/`staged` merely because no success was returned. See
+[session-history recovery](../operations/recovery-and-limitations.md#session-history-recovery)
+and [session-history privacy](../operations/privacy-and-provider.md#session-history-exposure).
+
 ## Safety and privacy boundary
 
 Every operation is local and synchronous. Internally the adapter uses fixed
@@ -486,8 +593,11 @@ Repository- or user-controlled execution extensions are blocked or bypassed:
 - external diff and text-conversion drivers;
 - clean/smudge filters, including required filters;
 - configurable aliases and credential helpers; and
-- inherited Git directory/worktree, configuration-path, SSH, and similar
-  `GIT_*` environment overrides, except the four validated identity fields.
+- inherited Git directory/worktree, configuration-path, SSH, index, and similar
+  `GIT_*` environment overrides, except the four standard author/committer
+  identity fields. Explicit identity overrides are typed; the sole alternate
+  index is admitted only by the validated internal-checkpoint profile described
+  above.
 
 Selected bytes are hashed and stored without filters. The API defines no
 remote or credential-bearing operation; terminal prompts and askpass are also

@@ -5,7 +5,7 @@ lead-led execution workflow. Public schema-v1 direct-run consumers are absent;
 generic provider, prompt, context, lifecycle, artifact, and terminal components
 remain available behind explicit module boundaries.
 
-The production graph contains 107 modules, 385 dependency edges, no cycles, and
+The production graph contains 110 modules, 392 dependency edges, no cycles, and
 104 package-root exports.
 
 ## Current user flow
@@ -17,6 +17,7 @@ flowchart LR
     WI --> WS[Marker + exact scaffold]
     WI --> G[One clean main baseline]
     WI --> GI[Exhaustive correlated Git-resource inventory]
+    GI --> GH[Internal content-free session history]
     CLI --> M[Session and conversation management]
     CLI --> I[History, search, transcript, status, inspection]
     CLI --> S[Settings and authentication]
@@ -56,8 +57,11 @@ Git composition. `workspace.core` owns the public `Workspace` object and generic
 persistence and delegates the lifecycle; it does not define a second schema or
 run Git directly. Package-internal `git.process`, `git.session_contracts`, and
 `git.session_resources` own the shared fixed-process lifecycle, pure session
-Git values, and serialized resource lifecycle respectively. They add no public
-facade exports.
+Git values, and serialized resource lifecycle respectively. The package-
+internal `git.repository_lock`, `git.session_history_contracts`, and
+`git.session_history` modules add one shared repository lease, pure durable
+history values, and descriptor-safe storage for later commits/checkpoints.
+They add no public facade exports.
 
 Externally, success means one standalone clean `main` root with exactly one
 parentless commit named `Initialize story workspace`. A clean rerun validates
@@ -72,7 +76,8 @@ policy. Initialization creates no session branch, internal ref, or sibling
 worktree. The package-internal #504 seam can inspect/list and provision or
 require-ready one exact correlated triple while the original root remains the
 pristine initialization baseline. #455 owns the installed command connection;
-#505 owns confirmed story commits and internal checkpoints.
+#505 coordinates confirmed history work; #509 owns story commits, #510 owns
+internal checkpoints, and #492 owns their confirmation UI.
 
 ### Session Git-resource lifecycle
 
@@ -93,6 +98,25 @@ main/session role and session identity. Inspect, list, and require-ready are
 read-only; provision is the only mutation authority and cannot be invoked by
 provider or lead text. See
 [the exact contract](../reference/git-adapter.md#package-internal-session-git-resources).
+
+### Durable session-history infrastructure
+
+One common-Git repository lease now serializes session provisioning and
+session-history work. For each ready session, the internal history owner stores
+immutable candidate metadata, monotonic story-commit operation metadata,
+monotonic checkpoint operation metadata, and any operation-owned alternate
+index that must survive an ambiguous result. Records contain identities,
+canonical paths, digests, correlations, and fixed states, not manuscript/core-
+document bytes, provider text, or executable authority.
+
+Closed Git process profiles suppress prompts and repository- or user-controlled
+execution extensions. Only the internal-checkpoint profile can receive the
+validated alternate index derived from an exact session/operation identity;
+callers cannot inject arbitrary `GIT_*` environment variables. #509 and #510
+will consume these seams to create story commits and checkpoints. #492 owns the
+user confirmation UI. This revision exposes no command, lead action, or public
+facade for the new infrastructure. See the
+[exact history contract](../reference/git-adapter.md#package-internal-session-history).
 
 Explicit `story smoke --workspace` constructs a fresh workspace verifier and
 performs no mutation or diagnostic submission. Disposable smoke uses the same

@@ -3,13 +3,19 @@
 from __future__ import annotations
 
 import os
+import re
 import stat
 import subprocess
 import threading
-from dataclasses import dataclass
+from dataclasses import dataclass, field
+from enum import StrEnum
 from pathlib import Path
 
-from .contracts import GitFailureCode
+from .contracts import (
+    GitEffectiveIdentity,
+    GitFailureCode,
+    GitIdentity,
+)
 
 
 _GIT_EXECUTABLE = "git"
@@ -37,6 +43,53 @@ _SAFE_CONFIG = (
     "-c",
     "pager.log=false",
 )
+_SAFE_IDENTIFIER = re.compile(r"[A-Za-z0-9][A-Za-z0-9_-]{0,63}")
+_OPERATION_ID = re.compile(r"[0-9a-f]{32}")
+
+
+class GitProcessProfile(StrEnum):
+    """Closed environment profiles for trusted package-internal Git operations."""
+
+    READ_ONLY = "read_only"
+    MUTATION = "mutation"
+    IDENTITY_MUTATION = "identity_mutation"
+    INTERNAL_CHECKPOINT = "internal_checkpoint"
+
+
+@dataclass(frozen=True, slots=True)
+class GitAlternateIndex:
+    """One exact operation-owned alternate index admitted only for checkpoints."""
+
+    common_git: Path = field(repr=False)
+    session_id: str
+    operation_id: str
+    path: Path = field(init=False, repr=False)
+
+    def __post_init__(self) -> None:
+        if (
+            not isinstance(self.common_git, Path)
+            or not self.common_git.is_absolute()
+            or Path(os.path.normpath(os.fspath(self.common_git))) != self.common_git
+            or self.common_git.name != ".git"
+            or type(self.session_id) is not str
+            or _SAFE_IDENTIFIER.fullmatch(self.session_id) is None
+            or type(self.operation_id) is not str
+            or _OPERATION_ID.fullmatch(self.operation_id) is None
+        ):
+            raise _process_failure(GitFailureCode.INVALID_REQUEST)
+        value = (
+            self.common_git
+            / "story-writing-agents"
+            / "runtime"
+            / "session-history"
+            / self.session_id
+            / "checkpoint-inputs"
+            / self.operation_id
+            / "index"
+        )
+        object.__setattr__(self, "path", value)
+
+
 _IDENTITY_ENVIRONMENT = frozenset(
     {
         "GIT_AUTHOR_NAME",
@@ -110,7 +163,10 @@ class GitProcessRunner:
         *,
         expected_identity: tuple[int, int],
         stdin: bytes = b"",
-        read_only: bool = False,
+        profile: GitProcessProfile | None = None,
+        effective_identity: GitEffectiveIdentity | None = None,
+        alternate_index: GitAlternateIndex | None = None,
+        read_only: bool | None = None,
         identity_environment: dict[str, str] | None = None,
     ) -> GitProcessResult:
         """Run one caller-fixed argv and retain no child or pipe afterwards."""
@@ -123,10 +179,20 @@ class GitProcessRunner:
             or len(stdin) > _MAX_STDIN_BYTES
         ):
             raise _process_failure(GitFailureCode.INVALID_REQUEST)
-        self._verify_root(expected_identity)
-        environment = _safe_environment(
+        selected_profile, selected_identity = _process_request(
+            profile=profile,
+            effective_identity=effective_identity,
+            alternate_index=alternate_index,
             read_only=read_only,
             identity_environment=identity_environment,
+        )
+        self._verify_root(expected_identity)
+        if alternate_index is not None:
+            self._verify_alternate_index(alternate_index)
+        environment = _safe_environment(
+            profile=selected_profile,
+            effective_identity=selected_identity,
+            alternate_index=alternate_index,
         )
         command = (_GIT_EXECUTABLE, "--no-pager", *_SAFE_CONFIG, *arguments)
         process: subprocess.Popen[bytes] | None = None
@@ -198,6 +264,8 @@ class GitProcessRunner:
                 if reader.is_alive():
                     reader.join(_PROCESS_STOP_TIMEOUT_SECONDS)
         self._verify_root(expected_identity)
+        if alternate_index is not None:
+            self._verify_alternate_index(alternate_index)
         if (
             any(reader.is_alive() for reader in readers)
             or stdout.failed
@@ -230,11 +298,153 @@ class GitProcessRunner:
         ):
             raise _process_failure(GitFailureCode.UNSAFE_ROOT)
 
+    def _verify_alternate_index(self, value: GitAlternateIndex) -> None:
+        reconstructed = _reconstruct_alternate_index(value)
+        if reconstructed.common_git != self._root / ".git":
+            raise _process_failure(GitFailureCode.INVALID_REQUEST)
+        current = reconstructed.common_git
+        expected_parts = reconstructed.path.relative_to(current).parts[:-1]
+        try:
+            common = os.lstat(current)
+            if (
+                not stat.S_ISDIR(common.st_mode)
+                or stat.S_ISLNK(common.st_mode)
+                or Path(os.path.realpath(current)) != current
+            ):
+                raise OSError
+            for part in expected_parts:
+                current /= part
+                observed = os.lstat(current)
+                if not stat.S_ISDIR(observed.st_mode) or stat.S_ISLNK(observed.st_mode):
+                    raise OSError
+            try:
+                opened = os.lstat(reconstructed.path)
+            except FileNotFoundError:
+                opened = None
+            if opened is not None and (
+                not stat.S_ISREG(opened.st_mode)
+                or stat.S_ISLNK(opened.st_mode)
+                or opened.st_nlink != 1
+            ):
+                raise OSError
+        except OSError:
+            raise _process_failure(GitFailureCode.INVALID_REQUEST) from None
+
+
+def _process_request(
+    *,
+    profile: GitProcessProfile | None,
+    effective_identity: GitEffectiveIdentity | None,
+    alternate_index: GitAlternateIndex | None,
+    read_only: bool | None,
+    identity_environment: dict[str, str] | None,
+) -> tuple[GitProcessProfile, GitEffectiveIdentity | None]:
+    if profile is not None:
+        if (
+            type(profile) is not GitProcessProfile
+            or read_only is not None
+            or identity_environment is not None
+        ):
+            raise _process_failure(GitFailureCode.INVALID_REQUEST)
+        selected = profile
+        identity = (
+            None
+            if effective_identity is None
+            else _reconstruct_effective_identity(effective_identity)
+        )
+    else:
+        if read_only is not None and type(read_only) is not bool:
+            raise _process_failure(GitFailureCode.INVALID_REQUEST)
+        if effective_identity is not None or alternate_index is not None:
+            raise _process_failure(GitFailureCode.INVALID_REQUEST)
+        identity = _legacy_identity(identity_environment)
+        selected = (
+            GitProcessProfile.READ_ONLY
+            if read_only is True
+            else (
+                GitProcessProfile.IDENTITY_MUTATION
+                if identity is not None
+                else GitProcessProfile.MUTATION
+            )
+        )
+    if selected is GitProcessProfile.INTERNAL_CHECKPOINT:
+        if alternate_index is None:
+            raise _process_failure(GitFailureCode.INVALID_REQUEST)
+        _reconstruct_alternate_index(alternate_index)
+    elif alternate_index is not None:
+        raise _process_failure(GitFailureCode.INVALID_REQUEST)
+    if selected is GitProcessProfile.IDENTITY_MUTATION and identity is None:
+        raise _process_failure(GitFailureCode.IDENTITY_INVALID)
+    if selected is GitProcessProfile.MUTATION and identity is not None:
+        raise _process_failure(GitFailureCode.IDENTITY_INVALID)
+    return selected, identity
+
+
+def _legacy_identity(value: dict[str, str] | None) -> GitEffectiveIdentity | None:
+    if value is None:
+        return None
+    if type(value) is not dict or set(value) != _IDENTITY_ENVIRONMENT:
+        raise _process_failure(GitFailureCode.IDENTITY_INVALID)
+    try:
+        result = GitEffectiveIdentity(
+            author=GitIdentity(
+                name=value["GIT_AUTHOR_NAME"],
+                email=value["GIT_AUTHOR_EMAIL"],
+            ),
+            committer=GitIdentity(
+                name=value["GIT_COMMITTER_NAME"],
+                email=value["GIT_COMMITTER_EMAIL"],
+            ),
+        )
+    except (KeyError, RuntimeError, TypeError):
+        raise _process_failure(GitFailureCode.IDENTITY_INVALID) from None
+    return result
+
+
+def _reconstruct_effective_identity(value: object) -> GitEffectiveIdentity:
+    try:
+        if type(value) is not GitEffectiveIdentity:
+            raise TypeError
+        result = GitEffectiveIdentity(
+            author=GitIdentity(value.author.name, value.author.email),
+            committer=GitIdentity(value.committer.name, value.committer.email),
+        )
+    except (AttributeError, RuntimeError, TypeError):
+        raise _process_failure(GitFailureCode.IDENTITY_INVALID) from None
+    return result
+
+
+def _identity_environment(value: GitEffectiveIdentity) -> dict[str, str]:
+    identity = _reconstruct_effective_identity(value)
+    return {
+        "GIT_AUTHOR_NAME": identity.author.name,
+        "GIT_AUTHOR_EMAIL": identity.author.email,
+        "GIT_COMMITTER_NAME": identity.committer.name,
+        "GIT_COMMITTER_EMAIL": identity.committer.email,
+    }
+
+
+def _reconstruct_alternate_index(value: object) -> GitAlternateIndex:
+    try:
+        if type(value) is not GitAlternateIndex:
+            raise TypeError
+        result = GitAlternateIndex(
+            common_git=value.common_git,
+            session_id=value.session_id,
+            operation_id=value.operation_id,
+        )
+        if value.path != result.path:
+            raise TypeError
+    except (AttributeError, RuntimeError, TypeError):
+        raise _process_failure(GitFailureCode.INVALID_REQUEST) from None
+    return result
+
 
 def _safe_environment(
     *,
-    read_only: bool,
-    identity_environment: dict[str, str] | None,
+    profile: GitProcessProfile,
+    effective_identity: GitEffectiveIdentity | None,
+    alternate_index: GitAlternateIndex | None,
 ) -> dict[str, str]:
     environment = {
         key: value
@@ -246,18 +456,22 @@ def _safe_environment(
             "GIT_TERMINAL_PROMPT": "0",
             "GIT_ASKPASS": os.devnull,
             "GIT_PAGER": "cat",
+            "GIT_EDITOR": "true",
+            "GIT_SEQUENCE_EDITOR": "true",
+            "GIT_MERGE_AUTOEDIT": "no",
             "GIT_FLUSH": "1",
             "GIT_NO_REPLACE_OBJECTS": "1",
             "LC_ALL": "C",
             "LANG": "C",
         }
     )
-    if read_only:
+    if profile is GitProcessProfile.READ_ONLY:
         environment["GIT_OPTIONAL_LOCKS"] = "0"
-    if identity_environment is not None:
-        if set(identity_environment) != _IDENTITY_ENVIRONMENT:
-            raise _process_failure(GitFailureCode.IDENTITY_INVALID)
-        environment.update(identity_environment)
+    if effective_identity is not None:
+        environment.update(_identity_environment(effective_identity))
+    if profile is GitProcessProfile.INTERNAL_CHECKPOINT:
+        assert alternate_index is not None
+        environment["GIT_INDEX_FILE"] = os.fspath(alternate_index.path)
     return environment
 
 
@@ -309,4 +523,10 @@ def _process_failure(
     return error
 
 
-__all__ = ["GitProcessFailure", "GitProcessResult", "GitProcessRunner"]
+__all__ = [
+    "GitAlternateIndex",
+    "GitProcessFailure",
+    "GitProcessProfile",
+    "GitProcessResult",
+    "GitProcessRunner",
+]

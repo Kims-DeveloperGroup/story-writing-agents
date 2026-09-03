@@ -67,6 +67,45 @@ memory. Pause, release, close, and process exit are not retention or secure-
 erase operations; there is no automatic deletion, migration, compatibility,
 push, or remote-cleanup path.
 
+<a id="session-history-exposure"></a>
+
+### Session-history exposure
+
+The package-internal #508 history beneath
+`.git/story-writing-agents/runtime/session-history/<session_id>/` is also local,
+provider-free plaintext. Its JSON records are content-free, but not necessarily
+anonymous: they retain session, operation, application, proposal, and
+correlation IDs; canonical relative artifact paths; before/after SHA-256
+digests; expected Git object IDs; a worktree identity digest; a bounded proposed
+commit message and impact labels; fixed state/sequence facts; and whether
+author/committer identity came from environment, repository, global, or system
+configuration. They do not retain effective names/emails, core-document or
+manuscript bytes, provider prompts/replies, raw Git output, credentials,
+descriptors, or serialized confirmation authority.
+
+Paths, identifiers, messages, labels, digests, object IDs, state transitions,
+and filesystem timestamps can still reveal project structure, intent, identity
+correlation, and operation timing. Hashes provide content identity, not secrecy,
+authentication, authorization, or proof that the original content can be
+restored. Protect these records with the repository and include them in a
+consistent operational-recovery backup; do not publish them as harmless
+telemetry.
+
+The optional `checkpoint-inputs/<operation_id>/index` is operation-owned Git
+metadata, not a redaction boundary. It can expose paths, object identities, and
+staging facts and is deliberately preserved after ambiguous or recovery-
+required outcomes. Only an exact durably committed checkpoint permits its
+narrow removal. Candidate and operation records have no expiry, compaction, or
+automatic cleanup.
+
+#508 itself creates no story commit or checkpoint. When #509/#510 later create
+Git objects, ordinary Git history/object storage will retain commit messages,
+effective author/committer identities, paths, and committed content according
+to Git's own reachability and retention behavior. Removing a session-history
+record or alternate index would neither securely erase those objects nor revoke
+a prior confirmation. Provider-free means no network/provider call is made by
+this substrate; it does not mean encryption, privacy, backup, or secure erase.
+
 <a id="conversation-archive-privacy"></a>
 
 ### Conversation archive exposure

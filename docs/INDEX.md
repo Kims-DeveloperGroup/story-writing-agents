@@ -3,9 +3,10 @@
 The runtime has one strict Git-backed schema-v2 workspace boundary and one
 active schema-v2 storage/inspection path. Initialization, management,
 structured history/search/transcript reads, and provider-free smoke are
-available. Exact session Git-resource provisioning exists as package-internal
-infrastructure for #455 but is not yet a user command; public story execution
-is not available. Start with the page that matches your task.
+available. Exact session Git resources and durable content-free
+commit/checkpoint operation evidence exist as package-internal infrastructure,
+but they are not yet user commands; public story execution is not available.
+Start with the page that matches your task.
 
 ## Start here
 
@@ -24,6 +25,8 @@ is not available. Start with the page that matches your task.
 | Recover an interrupted or rejected initialization | [Workspace recovery](operations/recovery-and-limitations.md#workspace-initialization-recovery) |
 | Understand exact session branches, worktrees, refs, and state | [Session Git resources](guides/workspaces.md#session-git-resources) |
 | Recover interrupted or inconsistent session Git resources | [Session Git-resource recovery](operations/recovery-and-limitations.md#session-git-resource-recovery) |
+| Understand future commit/checkpoint evidence and interruption states | [Durable session-history infrastructure](guides/workspaces.md#durable-session-history-infrastructure) |
+| Recover an interrupted future commit or checkpoint operation | [Session-history recovery](operations/recovery-and-limitations.md#session-history-recovery) |
 | Manage sessions and conversations | [Story sessions](guides/story-sessions.md) |
 | Understand why story instructions are unavailable | [Collaboration transition](guides/consensus-runs.md) |
 | Understand the lead's responsibilities and confirmation boundary | [Lead agent](guides/lead-agent.md) |
@@ -34,7 +37,7 @@ is not available. Start with the page that matches your task.
 | Select or transfer conversation storage | [SQLite conversation storage](guides/sqlite-conversation-storage.md) |
 | Inspect recorded provider exchanges | [Agent exchanges](guides/agent-exchanges.md) |
 | Understand artifact-reference syntax and current availability | [Artifact references](guides/artifact-references.md) |
-| Understand automatic initialization Git or use its closed Python adapter | [Safe Git adapter](reference/git-adapter.md) |
+| Understand automatic initialization Git and package-internal Git infrastructure | [Safe Git adapter](reference/git-adapter.md) |
 
 ## Exact reference
 
