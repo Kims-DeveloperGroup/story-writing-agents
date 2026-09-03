@@ -80,6 +80,235 @@ change set to the implemented
 lead-review and apply workflows may consume these values, but this API itself
 grants none of their authority.
 
+<a id="artifact-application-contracts"></a>
+
+## Exact artifact-application contracts
+
+> **Availability:** schema-v1 artifact-application requests and results are an
+> implemented, pure Python value/codec contract. This child does not read,
+> write, rename, or delete a file; persist a receipt; ask a user or agent for
+> confirmation; call a provider; stage Git; or authorize any of those actions.
+> #519 adds persistence and #520 adds the application seam later.
+
+In the later workflow, #491 creates an `ArtifactApplicationRequest` only after
+the user separately confirms **Apply** for one reviewed candidate. The request
+then carries the exact content-bearing `ArtifactChangeSet` that another
+component may apply. Possessing, constructing, or deserializing this value is
+not proof of confirmation and grants no write, repository, provider, agent, or
+Git authority.
+
+### Exact correlation
+
+The immutable provenance keeps the later application tied to the review facts:
+
+| Field | Meaning |
+| --- | --- |
+| `application_id` | Identity of this application attempt. |
+| `candidate_id` and `candidate_revision` | Exact reviewed candidate and its positive revision. |
+| `candidate_digest` | Tagged `sha256:<64-lowercase-hex>` identity of that candidate. |
+| `change_set_digest` | Untagged 64-lowercase-hex digest that must exactly equal the embedded change set's digest. |
+| `relationship_validation_digest` | Tagged `sha256:<64-lowercase-hex>` identity of the separate relationship-validation result. |
+
+The contract validates shapes and the embedded change-set correlation. It does
+not look up a candidate, validate the relationship result again, determine
+whether Apply was confirmed, or inspect a workspace; those are responsibilities
+of later owners.
+
+### Public Python surface
+
+The 14 additive names are exported from
+`story_writing_agents.writing_artifacts`, not the project-root facade:
+
+```python
+from story_writing_agents.writing_artifacts import (
+    ARTIFACT_APPLICATION_SCHEMA_VERSION,
+    ArtifactApplicationError,
+    ArtifactApplicationErrorCode,
+    ArtifactApplicationFinalArtifact,
+    ArtifactApplicationProvenance,
+    ArtifactApplicationRequest,
+    ArtifactApplicationResult,
+    ArtifactApplicationState,
+    ArtifactDeletionProvenance,
+    ArtifactRenameLineage,
+    deserialize_artifact_application_request,
+    deserialize_artifact_application_result,
+    serialize_artifact_application_request,
+    serialize_artifact_application_result,
+)
+```
+
+All values are frozen and slotted. The schema version is exactly `1`.
+
+### Sample input: all five operation representations
+
+This readable rendering shows one correlated request. The neutral text is
+fixture data. The actual serializer emits the same object with sorted keys,
+compact separators, strict UTF-8, and no trailing newline.
+
+```json
+{
+  "schema_version": 1,
+  "provenance": {
+    "application_id": "application-1",
+    "candidate_id": "candidate-1",
+    "candidate_revision": 2,
+    "candidate_digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "change_set_digest": "caf20a51e1a6616d71cc26f985d7cf52b7c121f04bf41c34289753bfd20ae48e",
+    "relationship_validation_digest": "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+  },
+  "change_set": {
+    "schema_version": 1,
+    "base_state_digest": "2296df72bad3d5e982a685cbbb0888a8340b4f38f8836bb923fb986dbb54cac9",
+    "projected_state_digest": "da05330a32cc957c6888f121f8cfdf7995c396d664cd8cd6d6340ae80f263d21",
+    "change_set_digest": "caf20a51e1a6616d71cc26f985d7cf52b7c121f04bf41c34289753bfd20ae48e",
+    "operations": [
+      {
+        "operation": "create",
+        "kind": "core_document",
+        "path": "core_documents/character_sheets.md",
+        "content": "created\n",
+        "projected_digest": "59134a4054b27a3fc30e1ac81d9b9168dc0561f65982151324a021fe8ce88d06"
+      },
+      {
+        "operation": "patch",
+        "kind": "core_document",
+        "path": "core_documents/global_outline.md",
+        "base_digest": "01d09d19c2139a46aebfb577780d123d7396e97201bc7ead210a2ebff8239dee",
+        "hunks": [{
+          "base_digest": "01d09d19c2139a46aebfb577780d123d7396e97201bc7ead210a2ebff8239dee",
+          "start_utf8_byte": 0,
+          "end_utf8_byte": 4,
+          "old_text": "old\n",
+          "new_text": "new\n"
+        }],
+        "projected_digest": "7aa7a5359173d05b63cfd682e3c38487f3cb4f7f1d60659fe59fab1505977d4c"
+      },
+      {
+        "operation": "rename",
+        "kind": "manuscript",
+        "source_path": "manuscript/part-01/move.md",
+        "destination_path": "manuscript/part-01/moved.md",
+        "base_digest": "c366d780a7cee327edc8444ea0b2ccecbf7f52422c3715061a440bff95914679",
+        "projected_digest": "c366d780a7cee327edc8444ea0b2ccecbf7f52422c3715061a440bff95914679"
+      },
+      {
+        "operation": "replace",
+        "kind": "manuscript",
+        "path": "manuscript/part-01/opening.md",
+        "base_digest": "9160d4be34c8695bd172a76c7c7966587ea5a4d991ad22c87b2b91af54aa9ebb",
+        "content": "after\n",
+        "projected_digest": "7b9a72466d3960eb2aacccfc848939453490db0678bd4725def3f789b891c919"
+      },
+      {
+        "operation": "delete",
+        "kind": "manuscript",
+        "path": "manuscript/part-01/retired.md",
+        "base_digest": "2ab99e684919afa1245556d366a2018d1dd0bd63b1b66fb92cde34ec5c4d60c6"
+      }
+    ]
+  }
+}
+```
+
+The order is the exact UTF-8 ordering of each operation's primary path. The
+serialized request intentionally contains create/replace bodies and patch
+old/new text. Treat those bytes as story content: do not log or expose the wire
+value merely because the provenance fields are content-free.
+
+### Sample output: applied repository facts
+
+After #520 eventually applies that request, its pure terminal result has no
+story bodies. An `applied` result means this invocation changed the affected
+paths. It identifies every final surviving artifact, represents both sides of
+a manuscript rename, and retains provenance for a separately deleted
+manuscript. This is a readable rendering; the result encoder emits the same
+facts as compact canonical JSON:
+
+```json
+{
+  "schema_version": 1,
+  "state": "applied",
+  "affected_paths": [
+    "core_documents/character_sheets.md",
+    "core_documents/global_outline.md",
+    "manuscript/part-01/move.md",
+    "manuscript/part-01/moved.md",
+    "manuscript/part-01/opening.md",
+    "manuscript/part-01/retired.md"
+  ],
+  "final_artifacts": [
+    {"artifact_kind": "core_document", "path": "core_documents/character_sheets.md", "sha256": "59134a4054b27a3fc30e1ac81d9b9168dc0561f65982151324a021fe8ce88d06"},
+    {"artifact_kind": "core_document", "path": "core_documents/global_outline.md", "sha256": "7aa7a5359173d05b63cfd682e3c38487f3cb4f7f1d60659fe59fab1505977d4c"},
+    {"artifact_kind": "manuscript", "path": "manuscript/part-01/moved.md", "sha256": "c366d780a7cee327edc8444ea0b2ccecbf7f52422c3715061a440bff95914679"},
+    {"artifact_kind": "manuscript", "path": "manuscript/part-01/opening.md", "sha256": "7b9a72466d3960eb2aacccfc848939453490db0678bd4725def3f789b891c919"}
+  ],
+  "rename_lineage": [{
+    "source_path": "manuscript/part-01/move.md",
+    "destination_path": "manuscript/part-01/moved.md",
+    "sha256": "c366d780a7cee327edc8444ea0b2ccecbf7f52422c3715061a440bff95914679"
+  }],
+  "deletion_provenance": [{
+    "path": "manuscript/part-01/retired.md",
+    "prior_sha256": "2ab99e684919afa1245556d366a2018d1dd0bd63b1b66fb92cde34ec5c4d60c6"
+  }],
+  "provenance": {
+    "application_id": "application-1",
+    "candidate_id": "candidate-1",
+    "candidate_revision": 2,
+    "candidate_digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "change_set_digest": "caf20a51e1a6616d71cc26f985d7cf52b7c121f04bf41c34289753bfd20ae48e",
+    "relationship_validation_digest": "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+  }
+}
+```
+
+`final_artifacts` excludes the retired rename source and deleted path.
+`rename_lineage` proves that the manuscript identity moved without changing
+bytes. `deletion_provenance` records the deleted manuscript's prior digest. The
+same result topology is required for both terminal states.
+
+`unchanged` does not mean that the reviewed change set was empty: change sets
+cannot be no-ops. It means this invocation was an idempotent retry and the exact
+application was already complete. Such a result returns the original affected
+paths, final artifacts, rename lineage, deletion provenance, and provenance;
+`applied_paths` is empty while `unchanged_paths` contains every affected path.
+This preserves historical truth without falsely claiming the retry rewrote a
+file.
+
+### Strict decoding, rejection, and privacy
+
+Both codecs accept only exact `bytes`, strict UTF-8, one canonical sorted-key
+JSON object, exact fields, unique keys, and no trailing newline. Unknown,
+missing, duplicate, pretty-printed, reordered, noncanonical-escape, `NaN`, or
+`Infinity` input is rejected. Requests also revalidate their complete embedded
+change set; results require sorted unique canonical paths and a complete,
+nonoverlapping final/rename/deletion topology.
+
+The closed error codes are `invalid_schema`, `invalid_serialization`,
+`invalid_utf8`, `invalid_identifier`, `invalid_digest`, `invalid_path`,
+`correlation_mismatch`, and `invalid_result`. They distinguish outer shape or
+version, wire encoding, identifier/digest/path facts, request correlation, and
+result topology without echoing the rejected bytes.
+
+For example, changing only the provenance value above to
+`change_set_digest="0000000000000000000000000000000000000000000000000000000000000000"`
+while leaving the embedded digest unchanged raises:
+
+```text
+error.code: correlation_mismatch
+message: artifact application correlation does not match
+filesystem writes: 0
+```
+
+The failure does not retain the rejected payload in its exception cause or
+context. Request representations, result serialization, result values, and all
+fixed errors are content-free; only explicit request serialization contains
+story text. The pure functions log nothing, persist nothing, and perform no
+filesystem, repository, Git, network, provider, agent, clock, or random action.
+There is no migration or compatibility format: schema `1` and its exact
+canonical encoding are the only accepted forms.
+
 <a id="story-commit-application-evidence"></a>
 
 ### Story-commit application evidence

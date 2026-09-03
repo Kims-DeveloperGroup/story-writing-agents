@@ -5,6 +5,34 @@ repository behavior is imported from ``writing_artifacts.repository`` by the
 runtime that owns it rather than re-exported here.
 """
 
+from .application_contracts import (
+    ARTIFACT_APPLICATION_SCHEMA_VERSION,
+    ArtifactApplicationError,
+    ArtifactApplicationErrorCode,
+    ArtifactApplicationFinalArtifact,
+    ArtifactApplicationProvenance,
+    ArtifactApplicationRequest,
+    ArtifactApplicationResult,
+    ArtifactApplicationState,
+    ArtifactDeletionProvenance,
+    ArtifactRenameLineage,
+    deserialize_artifact_application_request,
+    deserialize_artifact_application_result,
+    serialize_artifact_application_request,
+    serialize_artifact_application_result,
+)
+from .authorization import (
+    AuthorizedArtifactReference,
+    ReferenceAuthorizationError,
+    ReferenceAuthorizationErrorCode,
+    ReferenceEvidence,
+    ReferenceInvocationCorrelation,
+    ReferenceInvocationState,
+    ReferenceOperationFailure,
+    ReferenceOperationHistory,
+    ReferenceOperationManifest,
+    ReferenceOperationState,
+)
 from .catalog import (
     CORE_ARTIFACT_PATHS,
     ArtifactCatalog,
@@ -30,18 +58,6 @@ from .change_sets import (
     deserialize_artifact_change_set,
     project_artifact_change_set,
     serialize_artifact_change_set,
-)
-from .authorization import (
-    AuthorizedArtifactReference,
-    ReferenceAuthorizationError,
-    ReferenceAuthorizationErrorCode,
-    ReferenceEvidence,
-    ReferenceInvocationCorrelation,
-    ReferenceInvocationState,
-    ReferenceOperationFailure,
-    ReferenceOperationHistory,
-    ReferenceOperationManifest,
-    ReferenceOperationState,
 )
 from .directives import parse_artifact_references
 from .references import (
@@ -81,6 +97,7 @@ from .relationship_policy import (
 )
 
 __all__ = (
+    "ARTIFACT_APPLICATION_SCHEMA_VERSION",
     "ARTIFACT_CHANGE_SET_SCHEMA_VERSION",
     "ARTIFACT_RELATIONSHIP_COMPANION_RULES",
     "ARTIFACT_RELATIONSHIP_SCHEMA_VERSION",
@@ -94,6 +111,13 @@ __all__ = (
     "MAX_RELATIONSHIP_EDGES",
     "MAX_RELATIONSHIP_STATE_UTF8_BYTES",
     "MAX_VIEWER_UTF8_BYTES",
+    "ArtifactApplicationError",
+    "ArtifactApplicationErrorCode",
+    "ArtifactApplicationFinalArtifact",
+    "ArtifactApplicationProvenance",
+    "ArtifactApplicationRequest",
+    "ArtifactApplicationResult",
+    "ArtifactApplicationState",
     "ArtifactCatalog",
     "ArtifactCatalogEntry",
     "ArtifactChangeOperation",
@@ -104,6 +128,7 @@ __all__ = (
     "ArtifactContentSnapshot",
     "ArtifactCreateOperation",
     "ArtifactDeleteOperation",
+    "ArtifactDeletionProvenance",
     "ArtifactKind",
     "ArtifactLineRange",
     "ArtifactPatchOperation",
@@ -116,6 +141,7 @@ __all__ = (
     "ArtifactRelationshipKind",
     "ArtifactRelationshipValidation",
     "ArtifactRenameOperation",
+    "ArtifactRenameLineage",
     "ArtifactReplaceOperation",
     "ArtifactReviewDomain",
     "ArtifactReviewFact",
@@ -137,10 +163,14 @@ __all__ = (
     "ReferenceReadRequest",
     "build_artifact_change_set",
     "canonical_artifact_kind",
+    "deserialize_artifact_application_request",
+    "deserialize_artifact_application_result",
     "deserialize_artifact_change_set",
     "manuscript_artifact_path",
     "parse_artifact_references",
     "project_artifact_change_set",
+    "serialize_artifact_application_request",
+    "serialize_artifact_application_result",
     "serialize_artifact_change_set",
     "validate_artifact_relationships",
 )
