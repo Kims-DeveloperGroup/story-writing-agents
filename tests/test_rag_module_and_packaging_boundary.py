@@ -332,8 +332,8 @@ class RagModuleBoundaryTests(unittest.TestCase):
     ) -> None:
         modules = _module_inventory()
         edges = _internal_edges(modules)
-        self.assertEqual(len(modules), 107)
-        self.assertEqual(len(edges), 385)
+        self.assertEqual(len(modules), 115)
+        self.assertEqual(len(edges), 413)
         self.assertIsNone(_cycle_witness(modules, edges))
         conversation_dependencies = {
             "story_writing_agents.conversations": {
@@ -417,6 +417,7 @@ class RagModuleBoundaryTests(unittest.TestCase):
             "story_writing_agents.git.session_resources": {
                 "story_writing_agents.git.contracts",
                 "story_writing_agents.git.process",
+                "story_writing_agents.git.repository_lock",
                 "story_writing_agents.git.session_contracts",
             },
         }

@@ -67,6 +67,80 @@ memory. Pause, release, close, and process exit are not retention or secure-
 erase operations; there is no automatic deletion, migration, compatibility,
 push, or remote-cleanup path.
 
+<a id="session-history-exposure"></a>
+
+### Session-history exposure
+
+The package-internal #508 history beneath
+`.git/story-writing-agents/runtime/session-history/<session_id>/` is also local,
+provider-free plaintext. Its JSON records are content-free, but not necessarily
+anonymous: they retain session, operation, application, proposal, and
+correlation IDs; canonical relative artifact paths; before/after SHA-256
+digests; expected Git object IDs; a worktree identity digest; a bounded proposed
+commit message and impact labels; fixed state/sequence facts; and whether
+author/committer identity came from environment, repository, global, or system
+configuration. They do not retain effective names/emails, core-document or
+manuscript bytes, provider prompts/replies, raw Git output, credentials,
+descriptors, or serialized confirmation authority.
+
+Paths, identifiers, messages, labels, digests, object IDs, state transitions,
+and filesystem timestamps can still reveal project structure, intent, identity
+correlation, and operation timing. Hashes provide content identity, not secrecy,
+authentication, authorization, or proof that the original content can be
+restored. Protect these records with the repository and include them in a
+consistent operational-recovery backup; do not publish them as harmless
+telemetry.
+
+The optional `checkpoint-inputs/<operation_id>/index` is operation-owned Git
+metadata, not a redaction boundary. It can expose paths, object identities, and
+staging facts and is deliberately preserved after ambiguous or recovery-
+required outcomes. Only an exact durably committed checkpoint permits its
+narrow removal. Candidate and operation records have no expiry, compaction, or
+automatic cleanup.
+
+#508 itself creates no story commit or checkpoint. The package-internal #509
+service can create literal blobs/tree/commit objects and update one local
+session branch after receiving typed applied-change evidence and a fresh exact
+Commit decision. The package-internal #510 service can create literal runtime-
+state blobs/tree/commit objects and update only one local session internal ref
+from exact owner-supplied deltas. No installed command or lead UI invokes
+either service; #491 and #492 own story application/confirmation integration.
+
+Prepare persists only the content-free candidate metadata described above. A
+Commit authority remains process/service/thread-bound, nonserializable, and
+one-use; the user decision itself is not stored as reusable executable
+authority. Reject/Revise persist only a terminal operation correlation and
+state, not the confirmation payload or story bytes.
+
+During Commit, Git object storage receives the exact candidate file bytes as
+literal filter-free blobs before the branch update, and the real session index
+receives exact candidate path entries. An interruption can therefore leave
+unreachable blob/tree/commit objects or a staged index even when no successful
+result was returned. Recovery preserves these facts and never treats deletion
+as privacy cleanup. A completed commit permanently exposes its message,
+effective author/committer names and emails, paths, parent/tree IDs, and story
+content to local Git readers according to Git reachability/retention behavior.
+SHA-256 object IDs improve collision properties but do not encrypt content;
+SHA-1 and SHA-256 repositories have the same disclosure boundary.
+
+During a checkpoint, the content-free operation JSON stores session,
+correlation and operation IDs, expected internal tip/tree, salted commit-intent
+digest, state/sequence, optional checkpoint ID, and alternate-index preservation
+flag. It does not store the supplied runtime-state bodies or effective identity.
+Those bodies do enter local Git object storage as filter-free blobs, and the
+checkpoint commit permanently records their paths plus the fixed message,
+effective author/committer names and emails, and captured UTC timestamps. The
+operation-owned alternate index can reveal paths, object IDs, and staging facts.
+Provider-free and content-free history therefore do not make checkpointed
+runtime state encrypted, anonymous, remotely backed up, or securely erasable.
+
+Removing a session-history record, staged index entry, or alternate checkpoint
+index would neither securely erase Git objects nor revoke a prior confirmation.
+Provider-free means the service makes no network/provider call; it does not
+mean encryption, anonymity, backup, retention, or secure erase. Protect the
+main repository, sibling worktree, common Git object/index/ref storage, and
+session-history records as one sensitive recovery set.
+
 <a id="conversation-archive-privacy"></a>
 
 ### Conversation archive exposure

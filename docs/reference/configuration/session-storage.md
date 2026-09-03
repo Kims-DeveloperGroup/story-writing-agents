@@ -160,9 +160,10 @@ worktree: <workspace-parent>/<workspace-name>.story-worktrees/<id>
 The initial session set is empty. `story init` still creates none of these
 resources. The package-internal #504 provision operation can materialize one
 exact correlated triple while keeping the pristine `main` root invariant;
-#455 owns command wiring and #505 owns later story commits/checkpoints. The
-provisioning journal and lock are separate from both the root initialization
-journal and writing-artifact transaction journals.
+#455 owns command wiring. #508 provides internal content-free history evidence;
+#509 owns later story commits, #510 owns checkpoints, and #492 owns their
+confirmation UI. Session provisioning/history state is separate from both the
+root initialization journal and writing-artifact transaction journals.
 
 Artifact state appears only when its direct repository owner is accessed; no
 current public shell command publishes output. `recovery_blocked.json` appears

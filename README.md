@@ -22,13 +22,22 @@ provider-free inspection.
 | Use schema-v2 collaboration contracts, stores, archive/transfer, readable projection, search, and paging APIs. | Treat the active inspection path as an active lead/provider workflow. |
 | Run a disposable management/storage smoke or verify an existing workspace without changing it. | Use smoke as evidence of provider behavior or story quality. |
 
-The runtime also has a package-internal, provider-free Git-resource seam that
-can inspect, list, provision, and require one exact session branch, sibling
-worktree, and internal ref. It is ready for the later session composition, but
-it is not a user command: the installed `story session create` and
-`story session reopen` paths do not call it until issue #455. Their current
-`ready` result describes provider-session lifecycle only, not Git-resource
-readiness. Canonical story commits and runtime checkpoints remain issue #505.
+The runtime also has package-internal, provider-free Git infrastructure. It can
+inspect, list, provision, and require one exact session branch, sibling
+worktree, and internal ref. It can now durably record content-free candidates
+and monotonic commit/checkpoint operation states under the common Git
+directory, serialize them with provisioning, and run fixed Git operations
+through closed process profiles. The package-internal story-commit service can
+now prepare an exact content-free candidate and execute one literal local
+session-branch commit after a fresh structured Commit decision. A separate
+package-internal checkpoint service can commit exact owner-supplied runtime
+state deltas to only the session internal ref through an isolated index. None
+of this is a user command: installed
+`story session create` and `story session reopen` do not provision Git
+resources until #455, #491 still owns the application-evidence producer, and
+#492 owns the lead confirmation UI; no CLI or lead path invokes checkpoints.
+Current provider-session `ready` does not mean that any of those Git operations
+ran.
 
 When ordinary text, routed text, or a retired execution command is submitted in
 the shell, Story reports:
@@ -241,9 +250,11 @@ story content. See [artifact-reference status](docs/guides/artifact-references.m
   initialization journal. It never adopts, overwrites, upgrades, or migrates a
   legacy or arbitrary nonempty directory.
 - A dirty or drifted original `main` root is preserved and reported as requiring
-  recovery. Exact correlated session branches, sibling worktrees, and internal
-  refs are supported internally; installed command wiring remains #455 and
-  canonical commits/checkpoints remain #505.
+  recovery. Exact correlated session branches, sibling worktrees, internal
+  refs, content-free session history, exact confirmed story commits, and
+  closed-path internal checkpoints are supported internally; installed resource
+  wiring remains #455, application evidence remains #491, and confirmation UI
+  remains #492.
 - Smoke is intentionally provider-free and story-free.
 - Workspace configuration, histories, diagnostics, and artifacts are local
   plaintext unless the surrounding environment protects them.
@@ -263,7 +274,7 @@ story content. See [artifact-reference status](docs/guides/artifact-references.m
 - [Provider-free smoke](docs/guides/smoke-test.md)
 - [CLI reference](docs/reference/cli.md)
 - [Runtime API](docs/reference/runtime-api.md)
-- [Safe Git baseline and internal session resources](docs/reference/git-adapter.md)
+- [Safe Git baseline, session resources, and exact internal commits](docs/reference/git-adapter.md)
 - [System design](docs/design/overview.md)
 
 ## Development

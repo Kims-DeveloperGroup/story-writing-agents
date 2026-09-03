@@ -27,6 +27,12 @@ from .contracts import (
     GitOperationError,
 )
 from .process import GitProcessFailure, GitProcessResult, GitProcessRunner
+from .repository_lock import (
+    GitRepositoryLease,
+    GitRepositoryLockFailure,
+    GitRepositoryLockFailureCode,
+    lock_git_repository,
+)
 from .session_contracts import (
     GIT_SESSION_BRANCH_PREFIX,
     GIT_SESSION_INTERNAL_REF_PREFIX,
@@ -122,6 +128,49 @@ def require_ready_git_session_resources(
     failure: GitSessionResourceError | None = None
     try:
         result = inspect_git_session_resources(root, manifest, session_id)
+        if result.state is not GitSessionResourceState.READY:
+            raise _resource_error(
+                GitSessionFailureCode.RECOVERY_REQUIRED,
+                GitSessionOperationKind.REQUIRE_READY,
+                result.state,
+                result.recovery_action,
+            )
+        return result
+    except GitSessionResourceError as exc:
+        failure = _clear_resource_error(exc)
+    raise failure
+
+
+def inspect_locked_git_session_resources(
+    lease: GitRepositoryLease,
+    manifest: GitBaselineManifest,
+    session_id: str,
+) -> GitSessionResourceInspection:
+    """Inspect one session through an already-held shared repository lease."""
+
+    failure: GitSessionResourceError | None = None
+    try:
+        repository, expected_manifest, identity = _locked_request(
+            lease,
+            manifest,
+            session_id,
+        )
+        return repository.inspect(expected_manifest, identity)
+    except GitSessionResourceError as exc:
+        failure = _clear_resource_error(exc)
+    raise failure
+
+
+def require_ready_locked_git_session_resources(
+    lease: GitRepositoryLease,
+    manifest: GitBaselineManifest,
+    session_id: str,
+) -> GitSessionResourceInspection:
+    """Require one ready session through an already-held repository lease."""
+
+    failure: GitSessionResourceError | None = None
+    try:
+        result = inspect_locked_git_session_resources(lease, manifest, session_id)
         if result.state is not GitSessionResourceState.READY:
             raise _resource_error(
                 GitSessionFailureCode.RECOVERY_REQUIRED,
@@ -1006,46 +1055,63 @@ def _repository_lock(root: Path, *, create: bool) -> Iterator[_Repository]:
             GitSessionResourceState.RECOVERY_REQUIRED,
             GitSessionRecoveryAction.OPERATOR_RECOVERY,
         )
-    root_identity = _bind_directory(root)
-    common_git = root / ".git"
-    common_identity = _bind_directory(common_git)
-    common_descriptor = _open_bound_directory(common_git, common_identity)
     lock_descriptor = -1
     try:
-        _fcntl.flock(common_descriptor, _fcntl.LOCK_EX)
-        repository = _Repository(root, common_git, common_descriptor, root_identity)
-        directory = repository._open_provisioning_directory(create=create)
-        if directory is not None:
+        with lock_git_repository(root) as lease:
+            repository = _repository_from_lease(lease)
             try:
-                flags = (
-                    os.O_RDWR
-                    | (os.O_CREAT if create else 0)
-                    | getattr(os, "O_CLOEXEC", 0)
-                )
-                flags |= getattr(os, "O_NOFOLLOW", 0)
-                try:
-                    lock_descriptor = os.open(
-                        GIT_SESSION_PROVISIONING_LOCK_NAME,
-                        flags,
-                        0o600,
-                        dir_fd=directory,
-                    )
-                except FileNotFoundError:
-                    if create:
-                        raise
-                if lock_descriptor >= 0:
-                    opened = os.fstat(lock_descriptor)
-                    if not stat.S_ISREG(opened.st_mode):
-                        raise OSError
-                    _fcntl.flock(lock_descriptor, _fcntl.LOCK_EX)
-                    if create:
-                        os.fsync(lock_descriptor)
-                        os.fsync(directory)
+                directory = repository._open_provisioning_directory(create=create)
+                if directory is not None:
+                    try:
+                        flags = (
+                            os.O_RDWR
+                            | (os.O_CREAT if create else 0)
+                            | getattr(os, "O_CLOEXEC", 0)
+                        )
+                        flags |= getattr(os, "O_NOFOLLOW", 0)
+                        try:
+                            lock_descriptor = os.open(
+                                GIT_SESSION_PROVISIONING_LOCK_NAME,
+                                flags,
+                                0o600,
+                                dir_fd=directory,
+                            )
+                        except FileNotFoundError:
+                            if create:
+                                raise
+                        if lock_descriptor >= 0:
+                            opened = os.fstat(lock_descriptor)
+                            if not stat.S_ISREG(opened.st_mode):
+                                raise OSError
+                            _fcntl.flock(lock_descriptor, _fcntl.LOCK_EX)
+                            if create:
+                                os.fsync(lock_descriptor)
+                                os.fsync(directory)
+                    finally:
+                        os.close(directory)
+                yield repository
             finally:
-                os.close(directory)
-        yield repository
+                if lock_descriptor >= 0:
+                    try:
+                        _fcntl.flock(lock_descriptor, _fcntl.LOCK_UN)
+                    except OSError:
+                        pass
+                    os.close(lock_descriptor)
+                    lock_descriptor = -1
     except GitSessionResourceError:
         raise
+    except GitRepositoryLockFailure as exc:
+        code = (
+            GitSessionFailureCode.UNSAFE_ROOT
+            if exc.code is GitRepositoryLockFailureCode.UNSAFE_ROOT
+            else GitSessionFailureCode.LOCK_UNAVAILABLE
+        )
+        raise _resource_error(
+            code,
+            GitSessionOperationKind.INSPECT,
+            GitSessionResourceState.RECOVERY_REQUIRED,
+            GitSessionRecoveryAction.OPERATOR_RECOVERY,
+        ) from None
     except OSError:
         raise _resource_error(
             GitSessionFailureCode.LOCK_UNAVAILABLE,
@@ -1055,16 +1121,48 @@ def _repository_lock(root: Path, *, create: bool) -> Iterator[_Repository]:
         ) from None
     finally:
         if lock_descriptor >= 0:
-            try:
-                _fcntl.flock(lock_descriptor, _fcntl.LOCK_UN)
-            except OSError:
-                pass
             os.close(lock_descriptor)
-        try:
-            _fcntl.flock(common_descriptor, _fcntl.LOCK_UN)
-        except OSError:
-            pass
-        os.close(common_descriptor)
+
+
+def _repository_from_lease(lease: GitRepositoryLease) -> _Repository:
+    try:
+        if type(lease) is not GitRepositoryLease:
+            raise TypeError
+        lease.require_active()
+        return _Repository(
+            lease.main_root,
+            lease.common_git,
+            lease.common_descriptor,
+            lease.root_identity,
+        )
+    except (GitRepositoryLockFailure, TypeError):
+        raise _resource_error(
+            GitSessionFailureCode.LOCK_UNAVAILABLE,
+            GitSessionOperationKind.INSPECT,
+            GitSessionResourceState.RECOVERY_REQUIRED,
+            GitSessionRecoveryAction.OPERATOR_RECOVERY,
+        ) from None
+
+
+def _locked_request(
+    lease: GitRepositoryLease,
+    manifest: GitBaselineManifest,
+    session_id: str,
+) -> tuple[_Repository, GitBaselineManifest, GitSessionIdentity]:
+    repository = _repository_from_lease(lease)
+    main_root, expected_manifest, identity = _request(
+        repository.main_root,
+        manifest,
+        session_id,
+    )
+    if main_root != repository.main_root:
+        raise _resource_error(
+            GitSessionFailureCode.UNSAFE_ROOT,
+            GitSessionOperationKind.INSPECT,
+            GitSessionResourceState.RECOVERY_REQUIRED,
+            GitSessionRecoveryAction.OPERATOR_RECOVERY,
+        )
+    return repository, expected_manifest, identity
 
 
 def _request(
@@ -1587,7 +1685,9 @@ def _clear_resource_error(error: GitSessionResourceError) -> GitSessionResourceE
 
 __all__ = [
     "inspect_git_session_resources",
+    "inspect_locked_git_session_resources",
     "list_git_session_resources",
     "provision_git_session_resources",
     "require_ready_git_session_resources",
+    "require_ready_locked_git_session_resources",
 ]

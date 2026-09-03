@@ -21,8 +21,11 @@
 > use; interactive `/settings` persists next-shell policy, and startup composes
 > Local only beside a complete authoritative storage bundle. Exact session
 > branch/ref/sibling-worktree provisioning is also implemented as
-> package-internal #504 infrastructure. It is not yet connected to installed
-> session commands.
+> package-internal #504 infrastructure. Package-internal #508 adds the shared
+> repository lease, durable content-free session-history records, and a bounded
+> alternate checkpoint index. Package-internal #509 adds exact confirmed story
+> commits, and package-internal #510 adds exact closed-path checkpoints. None is
+> yet connected to installed story commands or lead confirmation UI.
 
 Key terms: **containment**—keeping paths beneath the workspace root; **symlink**—
 a filesystem alias the runtime rejects; **exclusive creation**—failure instead
@@ -107,8 +110,9 @@ automation; nested workspace/repository initialization is unsupported.
 
 The package-internal owner freshly binds the initialization root and its exact
 non-symlink `.git` directory for every operation. One repository-wide advisory
-lock covers exhaustive inspection, provisioning, and finalization across both
-same-session and different-session calls. The persistent owner-only lock is:
+lease on the opened common-Git directory now serializes provisioning and
+session-history work across both same-session and different-session calls.
+Provisioning additionally retains its persistent owner-only lock:
 
 ```text
 .git/story-writing-agents/runtime/session-provisioning/.lock
@@ -156,6 +160,68 @@ operation can be removed automatically. Named refs, branches, worktrees,
 administration entries, Git objects, journals that carry recovery evidence,
 and user bytes are never cleaned up automatically. See
 [Session Git-resource recovery](recovery-and-limitations.md#session-git-resource-recovery).
+
+For a ready session, the same common-Git lease guards
+`story-writing-agents/runtime/session-history/<session_id>/`. The history owner
+walks from the already-open common-Git descriptor, creates private directories,
+and accepts only exact names and no-follow single-link regular leaves. Candidate
+records use exclusive immutable publication. Operation records use synchronized
+temporary publication and identity-checked atomic replacement, with only an
+exact sequence increment and legal state successor accepted. All JSON is
+canonical, at most 1 MiB, and synchronized before a later owner can rely on it
+to authorize Git mutation.
+
+The checkpoint-input leaf is derived exactly as
+`checkpoint-inputs/<operation_id>/index`, bounded to 64 MiB when inspected, and
+accepted by only the internal-checkpoint process profile. The process owner
+strips arbitrary inherited `GIT_*` variables, disables hooks/signing/external
+diff/fsmonitor/pagers/editors/prompts, and revalidates the root and every index
+ancestor before and after the child. An ambiguous or recovery-required index is
+preserved; only the exact durably committed checkpoint permits removal. See the
+[internal session-history contract](../reference/git-adapter.md#package-internal-session-history).
+
+The package-internal checkpoint owner accepts only exact, same-session path
+families supplied as immutable create/update/delete snapshots by one of five
+matching runtime owners. It never scans a directory, treats omission as
+deletion, or accepts canonical, configuration, debug, SQLite/global,
+provider-private, temporary, cross-session, or unknown paths. Under the same
+lease, it initializes only the operation-owned alternate index from the current
+internal-ref tree, applies literal delta paths, validates the complete result,
+creates one parented commit, and compare-and-swap advances only
+`refs/story-writing-agents/runtime/sessions/<session_id>`. The story branch,
+real indexes, both `HEAD` values and working trees, canonical artifacts,
+unrelated bytes, and pristine main root are not mutation targets. Recovery
+preserves uncertain objects/indexes and never resets, cleans, replays, or
+contacts a remote. See the
+[exact checkpoint contract](../reference/git-adapter.md#package-internal-session-checkpoints).
+
+The package-internal story-commit owner takes this same repository lease. Its
+Prepare phase uses only fixed read operations against the session/main roots;
+the sole durable write is exclusive immutable candidate-history publication.
+It requires a clean real session index, an exact ready branch/tip/worktree,
+complete equality between current canonical files and typed successful
+application evidence, stable effective identity/source, stable internal ref and
+main-root facts, and no unreported canonical change. Canonical symlinks,
+aliases, unsafe paths, content drift, pre-staged entries, and moved identities
+fail closed. Noncanonical untracked files are omitted and preserved.
+
+Commit authority is nonserializable and consumed before I/O. Under the lease,
+the executor synchronizes `running` evidence before the first mutation, then
+uses only literal `hash-object -w --no-filters --stdin`, `update-index`
+cache-entry/removal, `write-tree`, `commit-tree`, and compare-and-swap
+`update-ref` operations. Durable `staged` evidence precedes `commit-tree`.
+Candidate paths are supplied after `--` where the Git command accepts a path;
+no glob, directory-wide add, checkout, reset, clean, hook, signing, filter,
+textconv, alias, pager/editor, credential prompt, remote, or provider input can
+widen the set.
+
+The verified tree must equal the prepared expected tree. The commit has exactly
+one prepared parent, exact message, and captured effective identity, and only
+the expected session branch can advance from the prepared tip. The internal
+ref, main root/head/index/status, and unrelated noncandidate files are never
+targets. On interruption, staged index/object state is preserved; recovery
+classifies it without reset, replay, cleanup, or duplicate commit. See the
+[exact story-commit contract](../reference/git-adapter.md#package-internal-exact-story-commits).
 
 The writing-artifact storage adapter has a distinct construction contract. It
 captures a supplied relative root immediately as a lexical absolute path using
