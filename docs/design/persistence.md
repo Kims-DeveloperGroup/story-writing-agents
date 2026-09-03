@@ -993,6 +993,27 @@ calls a provider or agent, nor stages or commits Git. Reject and Revise mean
 #491 does not invoke it. A later story-commit action must independently inspect
 the applied state and obtain fresh Git-specific authority.
 
+The additive `inspect_artifact_application(application_id)` method shares the
+same repository boundary but never calls the apply path. It validates one exact
+safe built-in string before locking, then acquires one process lock and lease,
+delegates once to the store, recovers pending journals, and audits the complete
+ordered record history against the schema-2 current catalog before lookup. An
+existing identity returns its original immutable `applied` result; it never
+converts that history to retry-state `unchanged`. A safe absent identity returns
+`None` only after the same recovery/audit succeeds. First access may bootstrap
+the standard repository lock/state directories. Recovery may finish an existing
+journal, but inspection never initiates a new application or reconstructs its
+content-bearing request; without pending recovery it creates no artifact,
+application record, journal, or catalog entry.
+
+Invalid IDs fail as `INVALID_IDENTIFIER` before the lease; malformed persisted
+authority maps to content-safe `CORRUPTION`; a block marker or unrecoverable
+journal maps to `RECOVERY_REQUIRED`. The result exposes content-free
+path/digest/correlation/lineage/delete facts. The method neither infers session
+ownership nor touches provider, context, confirmation, agent, or Git state. A
+later #527 owner must supply its own stored session/application correlation
+before using this application fact.
+
 Application records, catalog, and results contain paths, identifiers, digests,
 current membership, lineage, and delete provenance but no story bodies.
 Transaction journals and staging residue can contain exact plaintext story
