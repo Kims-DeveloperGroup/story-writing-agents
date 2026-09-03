@@ -72,9 +72,55 @@ Use the project agents when their focused expertise improves the result:
   project module indices synchronized with implementation.
 - `runtime_implementer`: implement approved production-code or configuration
   changes within an accepted boundary design.
-- `test_engineer`: design, add, update, and run tests for the change.
-- `documentation_maintainer`: update README files, policies, guides, and
-  examples after behavior and boundaries stabilize.
+- `test_engineer`: exclusively design, add, update, and run tests for the
+  change, including the final behavioral and coverage review.
+- `documentation_maintainer`: exclusively create or update README files,
+  policies, guides, and examples after behavior and boundaries stabilize.
+
+### Delegation-Gain Gate
+
+The main agent remains the critical-path hub and evaluates every candidate
+specialist dispatch before starting it. Record the estimates and calculate:
+
+`predicted_critical_path_savings_seconds = root_sequential_estimate - (parallel_critical_path + spawn_wait_handoff_synthesis_overhead)`
+
+Delegate only when the predicted savings are at least 20 seconds **and** at
+least 20 percent of `root_sequential_estimate`, unless the dispatch records a
+named `material_correctness_risk_reduction` or `mandatory_ownership_rule`.
+Mandatory ownership applies to documentation, tests, triggered modularity
+work, and production work outside the root fast path. An exception authorizes
+the specialist; it does not claim a time saving.
+
+The main agent may directly implement only a clear, localized change limited
+to one or two production-code or configuration files inside an established
+module responsibility and boundary. This root fast path excludes documentation,
+policies, guides, examples, tests, required or uncertain modularity work,
+substantial or unresolved ambiguity, and unknown failures. Companion
+documentation and tests retain their specialist owners even when production
+uses the fast path.
+
+Dispatch `requirements_analyst` only for substantial ambiguity and
+`regression_diagnostician` only for an unknown failure. Dispatch
+`modularity_maintainer` only when the existing Modularity Gate applies. Do not
+create a subagent merely to run a deterministic command. The main agent should
+batch safe, independent static reads through its tools when no specialist
+judgment or mandatory ownership is required.
+
+Use these dynamic model and reasoning-effort recommendations per dispatch:
+
+| Agent | Default | Escalation |
+| --- | --- | --- |
+| `requirements_analyst` | `gpt-5.6-terra`, `medium` | `gpt-5.6-sol`, `high` for multi-domain, security, migration, or deep ambiguity |
+| `regression_diagnostician` | `gpt-5.6-sol`, `high` | Already quality-oriented because dispatch is limited to unknown causal failures |
+| `modularity_maintainer` | `gpt-5.6-sol`, `high` | `gpt-5.6-terra`, `medium` only for an accepted index-only reconciliation |
+| `runtime_implementer` | `gpt-5.6-sol`, `medium` | `high` for security, concurrency, migration, public API, or difficult edge cases |
+| `test_engineer` | `gpt-5.6-terra`, `medium` | `gpt-5.6-sol`, `high` for security, concurrency, PTY/process, lifecycle, or complex risk coverage |
+| `documentation_maintainer` | `gpt-5.6-terra`, `medium` | `gpt-5.6-sol`, `high` for normative governance, security, compatibility, or migration policy |
+
+These are recommendations, not account-specific TOML pins. For every dispatch,
+the main agent records model availability, the selected model and effort, and
+any compatible fallback with its reason; it never silently assumes a model is
+available or lowers the required quality.
 
 ### Modularity Gate
 
@@ -115,12 +161,14 @@ make an incidental architecture decision silently.
 ### Orchestration Sequence
 
 1. The main agent classifies the request and records preliminary GitHub-planning
-   and modularity-gate decisions.
-2. For substantial or ambiguous work, `requirements_analyst` runs read-only.
-   For reported or observed failures, `regression_diagnostician` runs
-   read-only. Independent investigations may run in parallel. The main agent
-   must resolve `modularity_gate = uncertain` to `required` or `not_required`
-   before any writer starts.
+   and modularity-gate decisions, the affected inventory, and candidate
+   delegation estimates. It batches safe static reads and decides whether each
+   candidate passes the Delegation-Gain Gate or names an allowed exception.
+2. For substantial ambiguity, `requirements_analyst` runs read-only. For an
+   unknown failure, `regression_diagnostician` runs read-only. Independently
+   justified investigations may run in parallel. The main agent must resolve
+   `modularity_gate = uncertain` to `required` or `not_required` before any
+   writer starts.
 3. When the gate applies, `modularity_maintainer` runs in `analysis` mode after
    it receives relevant requirements and diagnosis results. It selects and
    verifies the relevant root-level `<LANGUAGE>_MODULE_INDEX.md` files.
@@ -131,10 +179,11 @@ make an incidental architecture decision silently.
    while the gate is `pending` or `blocked`. For tracked implementation, create
    and verify the Issue's native Development-linked task branch before handing
    its worktree to a writer.
-5. Exactly one agent owns production writes at a time. Use
-   `modularity_maintainer` for architecture-dominant splits, moves, merges, and
-   extractions. Use `runtime_implementer` for behavior-dominant work constrained
-   by an accepted boundary brief.
+5. The main agent selects either the root fast path or one production specialist
+   under the Delegation-Gain Gate. Exactly one owner writes production at a
+   time. Use `modularity_maintainer` for architecture-dominant splits, moves,
+   merges, and extractions. Use `runtime_implementer` for behavior-dominant work
+   outside the fast path or constrained by an accepted boundary brief.
 6. If both production specialists are necessary, assign explicit, nonoverlapping
    files or symbols and run them sequentially. Prefer one owner when separate
    passes would create an invalid intermediate state.
@@ -152,9 +201,12 @@ make an incidental architecture decision silently.
    resolved or an exception is explicitly accepted. A separate self-review is
    not required when `modularity_maintainer` performed the implementation; its
    implementation report and the main agent's review provide the gate.
-9. `test_engineer` performs test planning read-only when useful, then owns test
-   edits sequentially after production stabilizes. `documentation_maintainer`
-   follows after behavior, APIs, and boundaries are stable.
+9. After production stabilizes, `test_engineer` exclusively owns test work. When
+   safe, fuse test planning, test edits, exact execution, and final behavioral
+   and coverage review into one `implementation` turn. If a production or
+   documentation dependency requires a pause, reuse the same specialist thread
+   after that dependency stabilizes. `documentation_maintainer` exclusively
+   owns all documentation, policy, guide, and example writes.
 10. If test or documentation work changes an indexed verification or
    documentation reference, or reveals any other drift, run a final sequential
    `modularity_maintainer` index-only implementation pass followed by read-only
@@ -163,8 +215,9 @@ make an incidental architecture decision silently.
    reviews the complete diff, runs final checks, and owns the user-facing
    summary.
 
-Reuse the same specialist thread for follow-up phases when practical. The main
-agent remains the hub: it passes concise upstream decisions to the next agent,
+Reuse the same specialist thread for follow-up phases unless its context is
+stale or reuse creates an isolation risk; record either exception. The main
+agent remains the hub: it passes compact upstream decisions to the next agent,
 and specialists do not delegate to or coordinate directly with peers.
 
 ### Adaptive Verification
@@ -252,13 +305,24 @@ when the main agent proves the later change is disjoint and the digest and
 purpose remain unchanged. Any relevant or uncertain input or dependency change
 invalidates it; renaming the purpose does not create distinct evidence.
 
+Assign exactly one `evidence_execution_owner` to every evidence item before
+launch. Deduplicate evidence on exactly these key fields: `normalized_command`,
+`exact_ids`, `relevant_input_digest`, and `environment_class`. A different
+owner, label, purpose, venue, or wrapper does not justify an equivalent rerun.
+Normally run `exact` and `semantic_cluster` evidence locally and reserve
+`affected_suite` and `full_suite` for CI. Do not run equivalent broad evidence
+both locally and in CI unless the local environment is itself an acceptance
+criterion; record the distinct environment identities and required evidence in
+that case.
+
 When a selection is estimated above `max_shard_seconds`, partition it into
 deterministic, disjoint shards of exact portable test IDs. For Python
 `unittest`, use module, class, or method IDs. The shard union must equal the
 authorized selection and each ID must occur exactly once. Run risk-bearing and
 short-feedback shards first. Sequential execution is the portable default;
 parallel execution requires separate main-agent authorization, isolated
-resources, nonoverlapping IDs, and runner support.
+resources, nonoverlapping IDs, and runner support. At most two fast-fail shards
+may run concurrently; all other shard execution remains sequential.
 
 Record for every shard its manifest digest, ordinal, exact IDs,
 `relevant_input_digest`, result, duration, `completed_ids`, `failed_ids`,
@@ -319,37 +383,45 @@ sandbox and approval capabilities as separate runtime evidence.
 
 ### Handoff and Result Contracts
 
-Every subagent handoff must include:
+Use a bounded, self-contained fork or context by default. Every handoff sends a
+compact `task_packet` with exactly these top-level fields:
 
 - `mode`: `analysis`, `implementation`, or `review`;
-- objective and relevant evidence;
-- `github_planning_gate`, its rationale, and verified Issue, Project, and
-  Iteration evidence when applicable;
-- the native Development-linked branch or PR when implementation writes are
-  authorized;
-- approved scope and explicit out-of-scope work;
-- acceptance criteria and compatibility constraints;
-- the `modularity_gate` decision and accepted brief, when applicable;
-- applicable module-index paths, status, and accepted index delta;
-- read-only targets or exclusively owned files and symbols;
-- upstream findings and accepted decisions;
-- required checks and output; and
-- stop conditions, including missing or conflicting policies, breaking API
-  decisions, scope deviation, and unexpected structural work.
+- `objective`: the concrete outcome and relevant evidence;
+- `scope`: approved in-scope and out-of-scope targets;
+- `acceptance`: criteria and compatibility constraints;
+- `ownership`: read-only targets or exclusively owned files and symbols;
+- `gates`: GitHub-planning and modularity decisions, rationale, verified
+  evidence, accepted boundary brief, and module-index status and delta;
+- `identity`: repository, Issue, Project, Iteration, Development-linked branch
+  or PR, absolute worktree, and base and head identities as applicable;
+- `verification`: the authorized adaptive plan, compact evidence ledger,
+  required checks, budget, and expected output;
+- `upstream_decisions`: distilled findings and accepted decisions; and
+- `stop_conditions`: policy conflicts, breaking decisions, scope deviation,
+  unexpected structural work, and other explicit return conditions.
 
-When a handoff authorizes verification, it must also carry the applicable
-verification plan and current compact evidence ledger. A specialist result
-must distinguish `mandatory_evidence`, `completed_ids`, `failed_ids`,
-`accepted_skips`, invalidated evidence, and `unexecuted_ids`; report exact
-commands and `authorized_selection`, actual duration, spent and remaining
-budget, identities and digests, failure fingerprints, residual risk, and
-recommended next evidence; and return any proposed selection, concurrency,
-evidence-level, or budget expansion for main-agent authorization.
+Every specialist returns a compact `result_packet` with exactly these
+top-level fields:
 
-Every result must report findings, files inspected or changed, module indices
-consulted or updated, implementation/index consistency, checks run, blockers,
-and the recommended next action. Pass distilled decisions and evidence between
-agents rather than raw logs.
+- `outcome`: completed work or the precise blocked/stopped state;
+- `findings`: distilled findings, files inspected or changed, module indices
+  consulted or updated, and implementation/index consistency;
+- `changed_inputs`: relevant source, test, fixture, configuration, policy,
+  documentation, and environment changes;
+- `evidence`: `mandatory_evidence`, `authorized_selection`, exact commands,
+  `completed_ids`, `failed_ids`, `accepted_skips`, invalidated evidence,
+  `unexecuted_ids`, actual duration, spent and remaining budget, identities,
+  digests, failure fingerprints, checks, and recommended next evidence;
+- `risks`: blockers, ambiguity, residual risk, and any proposed selection,
+  concurrency, evidence-level, or budget expansion requiring main-agent
+  authorization; and
+- `next_action`: the recommended next owner and action.
+
+Keep each packet limited to context necessary for the assigned phase. Do not
+include raw logs, repeat the full Issue body, or restate the complete plan.
+Prefer specialist-thread reuse; create a fresh bounded context only when stale
+context or an isolation risk is recorded.
 
 If a required language policy is missing, the modularity agent returns the
 exact language and expected path. The main agent asks the user whether to
@@ -363,6 +435,25 @@ records the root index path and contents in the brief, and the main agent then
 runs the same specialist in an index-only `implementation` pass to create it.
 Structural work is not complete while an affected module index is missing or
 stale.
+
+### Prospective Orchestration Telemetry
+
+For comparable tracked tasks, capture `root_phase_wall_time_seconds`,
+`subagent_startup_seconds`, `subagent_wait_seconds`, `turn_count`,
+`tool_call_count`, `duplicate_read_count`, `verification_time_seconds`,
+`input_tokens`, and `output_tokens` when the execution environment exposes
+them. Every value records `measurement_kind` as `observed`, `estimated`, or
+`unavailable`; an unavailable value requires a reason, and an estimate must
+never be presented as an observation.
+
+Evaluate the policy prospectively against comparable baseline tasks. Targets
+are at least 25 percent lower median wall time, at least 15 percent lower P95
+wall time, at least 30 percent fewer root/subagent turns, at least 50 percent
+fewer duplicate broad-suite executions, and 25--35 percent fewer combined
+`task_packet` and `result_packet` tokens, with no regression in correctness,
+safety, ownership, verification sufficiency, the GitHub planning gate, or the
+modularity gate. Static policy tests establish contract shape, not runtime
+performance.
 
 ## Quality and Commits
 

@@ -55,6 +55,16 @@ class RepositoryAgentPolicyTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls) -> None:
         cls.agents_source = _AGENTS_PATH.read_text(encoding="utf-8")
+        cls.delegation_source = _markdown_section(
+            cls.agents_source,
+            "### Delegation-Gain Gate",
+        )
+        cls.delegation_normalized = _normalized(cls.delegation_source)
+        cls.orchestration_source = _markdown_section(
+            cls.agents_source,
+            "### Orchestration Sequence",
+        )
+        cls.orchestration_normalized = _normalized(cls.orchestration_source)
         cls.adaptive_source = _markdown_section(
             cls.agents_source,
             "### Adaptive Verification",
@@ -64,7 +74,14 @@ class RepositoryAgentPolicyTests(unittest.TestCase):
             cls.agents_source,
             "### Handoff and Result Contracts",
         )
+        cls.handoff_normalized = _normalized(cls.handoff_source)
+        cls.telemetry_source = _markdown_section(
+            cls.agents_source,
+            "### Prospective Orchestration Telemetry",
+        )
+        cls.telemetry_normalized = _normalized(cls.telemetry_source)
         cls.runbook_source = _RUNBOOK_PATH.read_text(encoding="utf-8")
+        cls.runbook_normalized = _normalized(cls.runbook_source)
         cls.agent_paths = sorted(_AGENT_DIRECTORY.glob("*.toml"))
         cls.agent_data = {
             path.stem: tomllib.loads(path.read_text(encoding="utf-8"))
@@ -85,6 +102,8 @@ class RepositoryAgentPolicyTests(unittest.TestCase):
                 self.assertEqual(definition["name"], path.stem)
                 self.assertTrue(definition["description"].strip())
                 self.assertTrue(definition["developer_instructions"].strip())
+                self.assertNotIn("model", definition)
+                self.assertNotIn("model_reasoning_effort", definition)
         self.assertNotIn("reviewer", self.agent_data)
 
     def test_existing_role_and_mode_boundaries_are_preserved(self) -> None:
@@ -98,12 +117,12 @@ class RepositoryAgentPolicyTests(unittest.TestCase):
         )
         expected_fragments = {
             "requirements_analyst": (
-                "Stay in analysis mode and do not modify files.",
-                "Do not design the final module boundary",
+                "Support only `mode = analysis`, remain read-only",
+                "Do not design the boundary or authorize broad verification",
             ),
             "regression_diagnostician": (
-                "Stay read-only.",
-                "Do not apply a fix.",
+                "Support only `mode = analysis`, remain read-only",
+                "Diagnose only; do not fix or design remediation",
             ),
             "modularity_maintainer": (
                 "`analysis`: Stay read-only.",
@@ -112,21 +131,19 @@ class RepositoryAgentPolicyTests(unittest.TestCase):
                 "module index",
             ),
             "runtime_implementer": (
-                "Require `mode = implementation`.",
-                "Do not edit project module indices",
-                "Do not edit files assigned to another writer.",
+                "Require `mode = implementation`; otherwise remain read-only",
+                "Never edit documentation, policies, guides, examples, tests, or project module indices",
+                "honor exclusive files",
             ),
             "test_engineer": (
-                "In `analysis` mode, stay read-only",
-                "In `implementation` mode, edit only assigned test files.",
-                "Do not modify production code to make a test pass",
-                "Do not edit module indices",
+                "In `analysis` mode, remain read-only",
+                "In `implementation` mode, edit only assigned tests.",
+                "Never edit production code, documentation, policies, examples, or indices",
             ),
             "documentation_maintainer": (
-                "In `analysis` mode, stay read-only",
-                "In `implementation` mode, edit only assigned",
-                "do not modify production code or tests",
-                "Do not edit project module indices",
+                "In `analysis` mode, remain read-only",
+                "edit only assigned README, documentation, policy, guide, and example files",
+                "Never edit production code, tests, or project module indices",
             ),
         }
         for name, fragments in expected_fragments.items():
@@ -137,21 +154,17 @@ class RepositoryAgentPolicyTests(unittest.TestCase):
                 for fragment in fragments:
                     self.assertIn(fragment, instructions)
 
-    def test_role_specific_adaptive_contracts_are_present(self) -> None:
+    def test_role_specific_routing_and_canonical_packets_are_present(self) -> None:
         expected_fragments = {
             "requirements_analyst": (
-                "`changed_inputs`",
-                "`local`, `bounded`, `cross_cutting`, or `release`",
-                "`mandatory_evidence`",
-                "`estimated_seconds`",
-                "do not authorize or launch broad validation",
+                "run only for substantial ambiguity",
+                "Do not design the boundary or authorize broad verification",
+                "Recommend the smallest sufficient evidence",
             ),
             "regression_diagnostician": (
-                "stable failure-family fingerprint",
-                "two or more distinct responsibility holders",
-                "inventory completeness",
-                "`estimated_seconds`",
-                "Do not launch a broad suite",
+                "run only for an unknown failure",
+                "stable family fingerprint",
+                "never broaden or launch a broad suite",
             ),
             "modularity_maintainer": (
                 "recurring failure alone does not create a modularity trigger",
@@ -160,22 +173,19 @@ class RepositoryAgentPolicyTests(unittest.TestCase):
                 "Do not independently broaden an authorized evidence level",
             ),
             "runtime_implementer": (
-                "repository-wide occurrence checklist",
-                "`changed_inputs`",
-                "`authorized_selection`",
-                "do not launch an unauthorized broad suite",
+                "outside the root fast path",
+                "Never edit documentation, policies, guides, examples, tests",
+                "never broaden or launch an unauthorized broad suite",
             ),
             "test_engineer": (
-                "root-supplied adaptive verification plan",
-                "`authorized_selection`",
-                "deterministic, disjoint exact-ID shards",
-                "`relevant_input_digest`",
-                "Reject autonomous evidence-level, selection, concurrency, or budget expansion.",
+                "fuse planning, test-only edits, authorized exact execution, and final behavioral/coverage review",
+                "resume this same thread after it stabilizes",
+                "Never broaden selection, level, concurrency, or budget",
             ),
             "documentation_maintainer": (
-                "keep `AGENTS.md` as the canonical contract",
-                "evidence catalog, budgets, objective full-suite triggers, reuse rules",
-                "Do not invent or independently broaden an evidence level",
+                "edit only assigned README, documentation, policy, guide, and example files",
+                "Keep `AGENTS.md` canonical for adaptive verification",
+                "never broaden verification",
             ),
         }
         for name, fragments in expected_fragments.items():
@@ -183,8 +193,110 @@ class RepositoryAgentPolicyTests(unittest.TestCase):
                 self.agent_data[name]["developer_instructions"]
             )
             with self.subTest(agent=name):
+                self.assertIn("`task_packet`", instructions)
+                self.assertIn("`result_packet`", instructions)
+                self.assertIn(
+                    "Do not delegate to or coordinate with",
+                    instructions,
+                )
                 for fragment in fragments:
                     self.assertIn(fragment, instructions)
+
+    def test_delegation_gain_gate_and_root_fast_path_are_exact(self) -> None:
+        self.assertContainsAll(
+            self.delegation_normalized,
+            (
+                "`predicted_critical_path_savings_seconds = root_sequential_estimate - (parallel_critical_path + spawn_wait_handoff_synthesis_overhead)`",
+                "predicted savings are at least 20 seconds **and** at least 20 percent of `root_sequential_estimate`",
+                "named `material_correctness_risk_reduction` or `mandatory_ownership_rule`",
+                "Mandatory ownership applies to documentation, tests, triggered modularity work, and production work outside the root fast path",
+                "directly implement only a clear, localized change limited to one or two production-code or configuration files inside an established module responsibility and boundary",
+                "root fast path excludes documentation, policies, guides, examples, tests, required or uncertain modularity work, substantial or unresolved ambiguity, and unknown failures",
+                "Dispatch `requirements_analyst` only for substantial ambiguity",
+                "`regression_diagnostician` only for an unknown failure",
+                "`modularity_maintainer` only when the existing Modularity Gate applies",
+                "Do not create a subagent merely to run a deterministic command",
+                "batch safe, independent static reads through its tools",
+            ),
+        )
+        self.assertContainsAll(
+            self.runbook_normalized,
+            (
+                "Dispatch only when both canonical gain thresholds pass",
+                "root fast path only for a clear one- or two-file production-code or configuration change within an established boundary",
+                "batch safe independent static reads in the main agent's tool calls",
+            ),
+        )
+
+    def test_dynamic_model_matrix_is_canonical_and_not_toml_pinned(self) -> None:
+        rows = {
+            match.group("name"): (
+                match.group("default").strip(),
+                match.group("escalation").strip(),
+            )
+            for match in re.finditer(
+                r"^\|\s*`(?P<name>[a-z_]+)`\s*"
+                r"\|\s*(?P<default>.*?)\s*"
+                r"\|\s*(?P<escalation>.*?)\s*\|$",
+                self.delegation_source,
+                flags=re.MULTILINE,
+            )
+        }
+        self.assertEqual(
+            rows,
+            {
+                "requirements_analyst": (
+                    "`gpt-5.6-terra`, `medium`",
+                    "`gpt-5.6-sol`, `high` for multi-domain, security, migration, or deep ambiguity",
+                ),
+                "regression_diagnostician": (
+                    "`gpt-5.6-sol`, `high`",
+                    "Already quality-oriented because dispatch is limited to unknown causal failures",
+                ),
+                "modularity_maintainer": (
+                    "`gpt-5.6-sol`, `high`",
+                    "`gpt-5.6-terra`, `medium` only for an accepted index-only reconciliation",
+                ),
+                "runtime_implementer": (
+                    "`gpt-5.6-sol`, `medium`",
+                    "`high` for security, concurrency, migration, public API, or difficult edge cases",
+                ),
+                "test_engineer": (
+                    "`gpt-5.6-terra`, `medium`",
+                    "`gpt-5.6-sol`, `high` for security, concurrency, PTY/process, lifecycle, or complex risk coverage",
+                ),
+                "documentation_maintainer": (
+                    "`gpt-5.6-terra`, `medium`",
+                    "`gpt-5.6-sol`, `high` for normative governance, security, compatibility, or migration policy",
+                ),
+            },
+        )
+        self.assertContainsAll(
+            self.delegation_normalized,
+            (
+                "recommendations, not account-specific TOML pins",
+                "records model availability, the selected model and effort, and any compatible fallback with its reason",
+            ),
+        )
+
+    def test_specialist_ownership_fusion_and_thread_reuse_are_explicit(self) -> None:
+        self.assertContainsAll(
+            self.orchestration_normalized,
+            (
+                "`test_engineer` exclusively owns test work",
+                "fuse test planning, test edits, exact execution, and final behavioral and coverage review into one `implementation` turn",
+                "`documentation_maintainer` exclusively owns all documentation, policy, guide, and example writes",
+                "Reuse the same specialist thread for follow-up phases unless its context is stale or reuse creates an isolation risk",
+            ),
+        )
+        runtime = _normalized(
+            self.agent_data["runtime_implementer"]["developer_instructions"]
+        )
+        self.assertIn(
+            "Never edit documentation, policies, guides, examples, tests, or project module indices",
+            runtime,
+        )
+        self.assertNotIn("reviewer", self.agent_data)
 
     def test_evidence_levels_are_selectable_and_complete_is_terminal(self) -> None:
         self.assertContainsAll(
@@ -321,6 +433,26 @@ class RepositoryAgentPolicyTests(unittest.TestCase):
             ),
         )
 
+    def test_evidence_has_one_owner_and_an_exact_deduplication_key(self) -> None:
+        self.assertContainsAll(
+            self.adaptive_normalized,
+            (
+                "Assign exactly one `evidence_execution_owner` to every evidence item before launch",
+                "Deduplicate evidence on exactly these key fields: `normalized_command`, `exact_ids`, `relevant_input_digest`, and `environment_class`",
+                "A different owner, label, purpose, venue, or wrapper does not justify an equivalent rerun",
+                "reserve `affected_suite` and `full_suite` for CI",
+                "Do not run equivalent broad evidence both locally and in CI unless the local environment is itself an acceptance criterion",
+            ),
+        )
+        self.assertContainsAll(
+            self.runbook_normalized,
+            (
+                "one `evidence_execution_owner` per evidence item",
+                "deduplicate every item on exactly `normalized_command`, `exact_ids`, `relevant_input_digest`, and `environment_class`",
+                "do not duplicate equivalent broad local and CI runs unless a local-environment acceptance criterion requires both",
+            ),
+        )
+
     def test_shards_are_disjoint_complete_and_resumable(self) -> None:
         self.assertContainsAll(
             self.adaptive_normalized,
@@ -328,6 +460,8 @@ class RepositoryAgentPolicyTests(unittest.TestCase):
                 "deterministic, disjoint shards of exact portable test IDs",
                 "shard union must equal the authorized selection",
                 "each ID must occur exactly once",
+                "parallel execution requires separate main-agent authorization, isolated resources, nonoverlapping IDs, and runner support",
+                "At most two fast-fail shards may run concurrently",
                 "manifest digest, ordinal, exact IDs",
                 "Aggregate success requires valid green or accepted-skip evidence for every authorized ID",
                 "timeout, user replacement, or interruption is neither a pass nor an assertion failure",
@@ -353,10 +487,9 @@ class RepositoryAgentPolicyTests(unittest.TestCase):
         self.assertContainsAll(
             test_instructions,
             (
-                "Reject autonomous evidence-level, selection, concurrency, or budget expansion",
-                "parallel shards require explicit root authorization",
-                "Do not launch `affected_suite` or `full_suite` without the root's exact authorization",
-                "final risk acceptance by the main agent",
+                "Execute only evidence assigned to this role using the root plan",
+                "Never broaden selection, level, concurrency, or budget",
+                "never launch an unauthorized affected or full suite",
             ),
         )
 
@@ -400,10 +533,94 @@ class RepositoryAgentPolicyTests(unittest.TestCase):
             ),
         )
 
-    def test_runbook_applies_the_canonical_adaptive_policy(self) -> None:
-        normalized = _normalized(self.runbook_source)
+    def test_packet_schemas_are_exact_and_compact(self) -> None:
+        task_schema, result_and_after = self.handoff_source.split(
+            "Every specialist returns a compact `result_packet`",
+            maxsplit=1,
+        )
+        result_schema = result_and_after.split(
+            "Keep each packet limited",
+            maxsplit=1,
+        )[0]
+        self.assertEqual(
+            tuple(re.findall(r"^- `([^`]+)`:", task_schema, re.MULTILINE)),
+            (
+                "mode",
+                "objective",
+                "scope",
+                "acceptance",
+                "ownership",
+                "gates",
+                "identity",
+                "verification",
+                "upstream_decisions",
+                "stop_conditions",
+            ),
+        )
+        self.assertEqual(
+            tuple(re.findall(r"^- `([^`]+)`:", result_schema, re.MULTILINE)),
+            (
+                "outcome",
+                "findings",
+                "changed_inputs",
+                "evidence",
+                "risks",
+                "next_action",
+            ),
+        )
         self.assertContainsAll(
-            normalized,
+            self.handoff_normalized,
+            (
+                "bounded, self-contained fork or context by default",
+                "Do not include raw logs, repeat the full Issue body, or restate the complete plan",
+                "Prefer specialist-thread reuse",
+            ),
+        )
+        self.assertContainsAll(
+            self.runbook_normalized,
+            (
+                "Use the exact canonical `task_packet` and `result_packet` schemas",
+                "Nest the planning-gate evidence",
+                "link stable evidence instead of copying raw logs, full Issue bodies, or the complete plan",
+            ),
+        )
+
+    def test_telemetry_is_prospective_and_distinguishes_measurement_kinds(self) -> None:
+        self.assertContainsAll(
+            self.telemetry_source,
+            tuple(
+                f"`{field}`"
+                for field in (
+                    "root_phase_wall_time_seconds",
+                    "subagent_startup_seconds",
+                    "subagent_wait_seconds",
+                    "turn_count",
+                    "tool_call_count",
+                    "duplicate_read_count",
+                    "verification_time_seconds",
+                    "input_tokens",
+                    "output_tokens",
+                )
+            ),
+        )
+        self.assertContainsAll(
+            self.telemetry_normalized,
+            (
+                "`measurement_kind` as `observed`, `estimated`, or `unavailable`",
+                "an unavailable value requires a reason",
+                "an estimate must never be presented as an observation",
+                "at least 25 percent lower median wall time",
+                "at least 15 percent lower P95 wall time",
+                "at least 30 percent fewer root/subagent turns",
+                "at least 50 percent fewer duplicate broad-suite executions",
+                "25--35 percent fewer combined `task_packet` and `result_packet` tokens",
+                "Static policy tests establish contract shape, not runtime performance",
+            ),
+        )
+
+    def test_runbook_applies_the_canonical_adaptive_policy(self) -> None:
+        self.assertContainsAll(
+            self.runbook_normalized,
             (
                 "AGENTS.md#adaptive-verification",
                 "`authorized_selection`",

@@ -180,6 +180,40 @@ gh project item-list 1 --owner Kims-DeveloperGroup --limit 100 --format json \
     .["linked pull requests"]'
 ```
 
+## Route Work on the Critical Path
+
+Apply the canonical [Delegation-Gain Gate](AGENTS.md#delegation-gain-gate) and
+[Orchestration Sequence](AGENTS.md#orchestration-sequence) before each
+specialist dispatch:
+
+1. Record `root_sequential_estimate`, `parallel_critical_path`,
+   `spawn_wait_handoff_synthesis_overhead`, the calculated
+   `predicted_critical_path_savings_seconds`, and its percentage. Dispatch only
+   when both canonical gain thresholds pass or the decision names
+   `material_correctness_risk_reduction` or `mandatory_ownership_rule`.
+2. Use the root fast path only for a clear one- or two-file production-code or
+   configuration change within an established boundary. It never includes
+   documentation or tests. Assign all README, policy, guide, and example writes
+   exclusively to `documentation_maintainer`, and all test work exclusively to
+   `test_engineer`; assign triggered modularity work to
+   `modularity_maintainer`.
+3. Dispatch `requirements_analyst` only for substantial ambiguity and
+   `regression_diagnostician` only for an unknown failure. Do not dispatch an
+   agent merely to run a deterministic command; batch safe independent static
+   reads in the main agent's tool calls.
+4. Select the model and effort dynamically from the canonical recommendation
+   table. Record availability, selection, and any reasoned compatible fallback;
+   do not depend on an account-specific TOML pin.
+5. Send the canonical compact `task_packet` in a bounded, self-contained
+   context. Reuse the same specialist thread for follow-up phases unless stale
+   context or isolation risk is recorded. Do not send raw logs, the full Issue
+   body, or a duplicate of the complete plan.
+
+Keep writers sequential. After production stabilizes, fuse test planning,
+editing, exact execution, and final behavioral/coverage review into one
+`test_engineer` implementation turn when its dependencies permit it; otherwise
+resume that same thread after the dependency stabilizes.
+
 ## Plan and Record Verification
 
 Apply [Adaptive Verification](AGENTS.md#adaptive-verification) as the canonical
@@ -188,11 +222,18 @@ verification begins, the main agent records a compact root-owned plan with the
 task's `verification_class` and risk rationale; each acceptance criterion's
 mandatory evidence; changed inputs, affected inventory, and justified
 exclusions; the exact checks or test IDs in `authorized_selection` and their
-selection rationale; `estimated_seconds`, estimate source and confidence;
+selection rationale; one `evidence_execution_owner` per evidence item;
+`estimated_seconds`, estimate source and confidence;
 `total_stage_budget_seconds`, `max_shard_seconds`, `spent_seconds`, and
 `remaining_seconds`; stop and escalation conditions; each objective full-suite
 trigger or an explicit record that none applies; reusable evidence and its
 invalidation analysis; and residual risk.
+
+Before launch, deduplicate every item on exactly `normalized_command`,
+`exact_ids`, `relevant_input_digest`, and `environment_class`. Normally execute
+exact and semantic-cluster evidence locally and affected or full suites in CI;
+do not duplicate equivalent broad local and CI runs unless a local-environment
+acceptance criterion requires both.
 
 Execute and ledger that plan as follows:
 
@@ -200,9 +241,9 @@ Execute and ledger that plan as follows:
    `remaining_seconds` before launch. If a selection is too large, partition it
    into deterministic, disjoint exact-ID shards whose union is the authorized
    selection and in which each ID occurs once. Run sequentially unless the main
-   agent separately authorizes safe parallel execution. Stop before starting a
-   shard that would exceed the remaining budget and return the decision to the
-   main agent.
+   agent separately authorizes isolated, disjoint fast-fail shards; no more than
+   two may run concurrently. Stop before starting a shard that would exceed the
+   remaining budget and return the decision to the main agent.
 2. For every selection or shard, record its purpose, evidence level, exact IDs
    and command, provenance, actual duration and result, manifest identity,
    `relevant_input_digest`, `completed_ids`, `failed_ids`, `accepted_skips`,
@@ -243,9 +284,10 @@ Execute and ledger that plan as follows:
    from the current parent commit, assign its owner, verify the link, and move
    it to `In progress` before tracked edits.
 4. **Implement and verify.** Change only the child scope. Follow the commit
-   policy, update tests and documentation, apply the verification plan and
-   evidence ledger above, run its authorized checks, and review the final diff
-   and worktree status.
+   policy and the routed ownership above; the root fast path never absorbs test
+   or documentation writes. Apply the verification plan and evidence ledger,
+   run its authorized checks through the assigned execution owner, and review
+   the final diff and worktree status.
 5. **Review the child.** Merge the latest parent branch into the child without
    rebasing, rerun affected checks, and open a draft PR whose base is the
    parent branch and whose head is the child branch. Use `Refs #<child>`. Mark
@@ -275,12 +317,10 @@ Execute and ledger that plan as follows:
    mark a child branch as Git-merged, verify PR and commit recoverability before
    deleting it. Retain the parent worktree until the parent reaches `main`.
 
-The handoff must include the planning-gate state and evidence, Issue and PR
-links, base/head branches and SHAs, resulting squash SHAs, worktree paths,
-Development and `Linked pull requests` evidence, Project metadata and
-Iteration, completed and remaining criteria, checks, blockers, cleanup, GitHub
-mutations, and the next owner or action. Include the compact adaptive
-verification plan and current evidence ledger, distinguishing completed,
-failed, accepted-skip, invalidated, and unexecuted evidence and identifying any
-selection, concurrency, evidence-level, or budget decision still owned by the
-main agent.
+Use the exact canonical `task_packet` and `result_packet` schemas in
+[Handoff and Result Contracts](AGENTS.md#handoff-and-result-contracts). Nest the
+planning-gate evidence, Issue and PR links, branches and SHAs, worktree,
+Development and Project metadata, Iteration, criteria, adaptive-verification
+ledger, blockers, GitHub mutations, cleanup, and next owner under their defined
+fields. Keep the packet compact; link stable evidence instead of copying raw
+logs, full Issue bodies, or the complete plan.
