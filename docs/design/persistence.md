@@ -890,8 +890,10 @@ artifact source content. Later operation and invocation events are
 create-only, canonically encoded records with contiguous sequences and
 contiguous invocation ordinals. A delivery event is durable before selected
 bytes leave the repository boundary. The same repository lease serializes
-these evidence writes with source reads and filesystem-identity revalidation;
-it does not load the publication catalog or run transaction recovery.
+these evidence writes with source reads, filesystem-identity revalidation, and
+artifact application recovery. Recovery runs before the authoritative
+source/reference observation, while reference evidence remains outside the
+application catalog and ledger.
 
 Durable evidence contains schema and operation/invocation identity,
 path/range, content-free filesystem source identity, hashes, counts,
@@ -918,37 +920,86 @@ its duplicated message list. Agent history remains owner-isolated and bounded,
 though provider output in visible fields may still be sensitive.
 
 Terminal result creation and lifecycle transition finish before terminal
-progress. Approved artifact publication is a separate recoverable transaction:
-one immutable schema-v2 journal records the exact catalog-before state,
-catalog-after image, commit, and ordered manuscript/core targets. It is not
-rewritten as publication advances. The repository publishes and verifies target
-bytes, writes immutable commit history, publishes the catalog last, then
-exclusively retires the unchanged completed journal to non-authoritative
-staging. The next artifact access rolls forward only from exact catalog-before
-or verifies an exact catalog-after state; any other catalog position or missing,
-replaced, or divergent authority writes a persistent block marker and fails all
-later artifact access closed. Retained `.tmp`, `.held`, `.retired`, and
-`.completed` staging files are ignored by recovery and catalog listing and may
-accumulate.
+progress. Artifact application is a separate recoverable transaction and still
+does not combine debate messages, lifecycle/result state, conversations,
+configuration, provider state, or Git into one transaction.
 
-Immutable commits are also the permanent manuscript-reservation ledger, not
-just history for current catalog rows. Each access globally audits exact commit
-records against the catalog. Each immutable commit file must equal the
-repository's canonical JSON bytes, catalog paths equal the union of every
-artifact path in all non-exempt commits, and each entry exactly matches its
-referenced commit. Reformatting is divergence, not a conversion input.
+Private `writing_artifacts._application_store` is the sole persistence
+interpreter for #519. `WritingArtifactRepository` owns one in-process lock and
+one permanent workspace lease; every authoritative source, explicit-reference,
+catalog, and application operation acquires both and runs recovery before it
+reads current artifact authority. The private store uses existing
+descriptor-safe storage and is not exported. #520 adds the module-supported
+internal `apply_artifact_changes(request)` repository seam; neither repository
+nor store is exported by a package facade. #491 will separately supply lead/user
+Apply-confirmation authority.
 
-Commit times are offset-aware instants. For a repeated core path, the catalog
-must select the unique newest normalized instant; an equal-newest tie or older
-projection fails closed. Generated timestamps are strictly later than every
-ledger instant even across wall-clock rollback, and an unrepresentable next
-instant fails before mutation. During exact catalog-before recovery, only the
-pending journal's already published byte-identical canonical commit is exempt:
-it contributes no paths or newest-core candidate, while all older established
-authority remains required. Projected and exact catalog-after audit the full
-commit set without an exemption. Catalog loss, subsets, malformed/noncanonical
-or extra commits, mismatches, and duplicate manuscript reservations fail closed
-instead of being rewritten, reconstructed, or converted.
+The seam accepts exactly one frozen `ArtifactApplicationRequest`, never prose,
+a mapping, a mutable wrapper, or a subclass. The request owns its exact
+content-bearing change set and sorted canonical `attached_core_paths`; those
+paths are review evidence, not implicit write targets. Before taking the lease,
+the repository revalidates the request shape and correlation. It then takes one
+process lock and lease and delegates once to the private store, which rereads
+the complete current state and recomputes change-set and relationship authority
+before journaling. The immutable result is `applied` for the first effective
+invocation or `unchanged` for an exact completed retry. The request/result pair,
+not the result alone, supplies operation classification plus affected, final,
+rename-lineage, and deletion facts; a result is not a complete catalog.
+
+One immutable schema-1 transaction journal contains the exact request and target
+bytes, catalog-before and schema-2 catalog-after images, and the immutable
+content-free application record. Under the same lease the store:
+
+```text
+revalidates current bytes, relationships, and all request correlations
+-> publishes the content-bearing journal
+-> publishes each ordered create/patch/replace/rename/delete target
+-> publishes the immutable content-free application record
+-> publishes the current-membership catalog last
+-> verifies the complete new authority
+-> retires the unchanged journal to non-authoritative staging
+```
+
+A rename has separate source and destination targets. Core identities allow
+create/patch/replace but never rename/delete. The application does not stage or
+commit Git. The catalog retains only current paths; immutable records retain the
+exact historical result, including manuscript rename lineage and deletion
+provenance.
+
+This is recovery-before-read atomicity, not simultaneous multi-file filesystem
+replacement. A raw external reader may see partial target publication after a
+crash. A repository reader first recovers: at exact catalog-before it permits
+only each target's recorded old/new value and rolls forward; at exact
+catalog-after it verifies all new targets and the record; any other position or
+divergent evidence creates/preserves `recovery_blocked.json` and returns no
+authoritative data. Recovery also precedes reference reads, so agent context
+cannot observe a repository-returned partial application.
+
+Failure after revalidation but before the journal leaves old authority and a
+fresh retry may apply once. Failure from journal publication through catalog or
+journal retirement is completed or verified by recovery. A byte-identical retry
+after a completed application or lost response returns `unchanged` with the
+original exact result facts and no republish. Reusing the application ID with
+different request bytes is correlation drift and fails without mutation.
+
+Immediate base-state drift maps to public content-free `drift`; malformed or
+unsafe durable state maps to `corruption`; a durable recovery-block marker maps
+to `recovery_required`. These errors do not expose story bytes or underlying
+exception context. A recoverable interruption with an exact journal is instead
+completed or verified before the next repository-owned authoritative access.
+
+This seam neither confirms nor rejects a proposal, refreshes prompt context,
+calls a provider or agent, nor stages or commits Git. Reject and Revise mean
+#491 does not invoke it. A later story-commit action must independently inspect
+the applied state and obtain fresh Git-specific authority.
+
+Application records, catalog, and results contain paths, identifiers, digests,
+current membership, lineage, and delete provenance but no story bodies.
+Transaction journals and staging residue can contain exact plaintext story
+bytes. A nonempty legacy `commits/` directory, catalog schema 1, transaction
+schema 2, malformed ledger, or noncanonical/aliased evidence is preserved and
+fails closed; there is no migration, compatibility, reconstruction, or
+normalization route.
 
 The permanent repository readiness triple has its own durability boundary:
 primary lock, anchor, and `ready` are exact hard-link names for one regular inode

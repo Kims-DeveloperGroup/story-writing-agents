@@ -308,10 +308,12 @@ Do not replace the guard pathname while a workspace may be used.
 For one nonempty parsed reference batch, `WritingArtifactRepository` creates
 the operation manifest and schema-v2 `requested` evidence under its repository
 lease before source-content reads. It then uses the same descriptor-relative,
-no-follow adapter as source discovery and prompt-context access without loading
-the publication catalog or running recovery. Each unique
-path is securely read once at initial capture; multiple ranges retain request
-order while sharing that immutable source snapshot.
+no-follow adapter as source discovery and prompt-context access. The repository
+runs pending application recovery first; with no pending journal, reference
+capture does not use the application catalog as its path source or require a
+catalog audit. Each unique path is securely read once at initial capture;
+multiple ranges retain request order while sharing that immutable source
+snapshot.
 
 The complete source must be strict UTF-8 without NUL. Universal CRLF, LF, and
 lone-CR records determine exact one-based range slices, including their line
@@ -1169,44 +1171,43 @@ safe. Failed `.tmp` bytes and successful `.held` prior bytes remain retained;
 name collisions are preserved while a different exclusive staging name is
 tried.
 
-The schema-v2 journal is one immutable prepared image: it contains the exact
-catalog-before state, catalog-after image, commit, and ordered targets, and is
-never replaced with a later phase. After all targets, the repository publishes
-immutable commit history and the current catalog last. Completed journal
-retirement compares its exact hash before an exclusive no-replace move to
-`.completed` staging.
+The schema-1 application journal is one immutable prepared image: it contains
+the content-bearing request, exact catalog-before state, schema-2 catalog-after
+image, immutable content-free application record, and ordered target facts. It
+is never replaced with a later phase. After publishing and verifying every
+target, the repository publishes the immutable application record, publishes
+the current-membership catalog last, and verifies both. Journal retirement
+compares its exact hash before an exclusive no-replace move to `.completed`
+staging.
 
-Outside recovery, every artifact read or commit audits the complete permanent
-commit ledger against the catalog before trusting an entry or publishing new
-bytes. The catalog path set must equal the union of every artifact path in every
-non-exempt commit, every entry must exactly match its referenced commit, and
-every immutable commit file must have the repository's exact canonical JSON
-bytes. Semantic reformatting is not repaired. Every ledger commit permanently
-reserves its one manuscript identity. For a repeated core path, the current
-entry must reference the unique newest offset-aware commit instant; an equal
-newest tie or older projection fails closed. Missing, subset, malformed, extra,
-duplicate-reservation, noncanonical, or otherwise mismatched ledger/catalog
-state also fails closed; catalog loss does not free paths and is never rewritten,
-reconstructed, or converted. See
+Outside recovery, an authoritative catalog or application lookup audits the
+complete ordered application-record history against the current catalog. It
+replays each record's final artifacts, manuscript rename lineage, and deletion
+provenance; the resulting current membership must equal the catalog exactly.
+Application record names, sequence, schema, canonical JSON, correlation,
+operation facts, and results must also agree. Missing catalogs beside records,
+sequence gaps, unexpected entries, noncanonical bytes, or any mismatch fail
+closed and are not reconstructed or converted. Historical lineage remains in
+immutable records even when a path is no longer a current catalog member. See
 [Canonical writing artifacts](../reference/writing-artifacts.md#provenance-and-work-history).
 
-At exact catalog-before recovery, an on-disk pending commit is exempt only when
-its canonical bytes exactly match the journal. It contributes no expected paths
-or newest-core candidate; paths and core authority from all older established
-commits remain required. Projected and stored catalog-after include that commit
-in the full path, exact-entry, and unique-newest audit.
+At exact catalog-before recovery, an application record that the journal
+describes may be absent or may already contain the journal's exact immutable
+bytes. Recovery publishes it only after every target has reached the new state.
+The projected and stored catalog-after image must then equal the complete
+ordered application history, including that record.
 
-On the next catalog or publication access, an exact catalog-before position rolls forward;
-an exact catalog-after position is verified without republishing. A catalog
-matching neither image, target divergence, changed or missing journal bytes,
-missing/divergent published commit, or invalid authoritative transaction state
-writes a persistent marker and blocks all later catalog/publication access.
-Safe filesystem-source discovery and reads remain independent. Every `.tmp`,
-`.held`, `.retired`, and `.completed` file is retained under non-authoritative
-staging, ignored by transaction recovery and catalog listing, and may accumulate.
-Only JSON entries in `transactions/` are authoritative; any unexpected entry
-there blocks recovery. This avoids partial eligibility but is not one
-transaction with logs, debate state, results, or provider state. See
+On the next repository-owned artifact access, an exact catalog-before position
+rolls forward; an exact catalog-after position is verified without
+republishing. A catalog matching neither image, target divergence, changed or
+missing journal bytes, a missing/divergent application record, or invalid
+authoritative transaction state writes a persistent marker and blocks later
+repository artifact access. Every `.tmp`, `.held`, `.retired`, and `.completed`
+file is retained under non-authoritative staging, ignored by transaction
+recovery and catalog listing, and may accumulate. Only JSON entries in
+`transactions/` are authoritative; any unexpected entry there blocks recovery.
+This avoids partial eligibility but is not one transaction with logs, debate
+state, results, or provider state. See
 [Canonical writing artifacts](../reference/writing-artifacts.md).
 
 Conversation identities still use exclusive creation, and their metadata and
