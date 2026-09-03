@@ -199,6 +199,20 @@ or mismatch before any other task read or write. This is observed fail-closed
 routing, not hard sandbox enforcement: prompts, TOMLs, and static tests express
 and check policy but cannot prove or enforce runtime isolation.
 
+Before its first tracked write, every writer reports and matches the handoff's
+physical `pwd -P`, Git top-level, expected branch, exact HEAD, approved-base SHA
+and ancestry, exclusive targets, and deterministic dirty state. Dirty-state
+evidence comprises the exact bytes from
+`git status --porcelain=v1 -z --untracked-files=all`, their SHA-256 fingerprint,
+and decoded paths. A handoff may accept upstream dirty state only by pinning
+all three; otherwise any repository, worktree, branch, HEAD, base, status, or
+ownership mismatch stops before mutation. Never reset, checkout, clean, or
+revert user changes to make preflight pass.
+
+After an upstream change, interruption, or invalidated identity, the root sends
+an updated identity and dirty-state fingerprint. The same writer repeats the
+complete preflight before resuming.
+
 Use bounded, self-contained context by default. Full-history inheritance is
 exceptional and requires a named reason, bounded relevant scope, assessed
 stale-context risk, explicit root approval, and all four facts in task evidence.
@@ -225,6 +239,33 @@ a failed control retry, the root may perform only its already-authorized static
 reads or fast-path work; otherwise it narrows, defers, or returns the blocker.
 Root fallback never absorbs mandatory documentation, test, or modularity
 ownership and never creates a reviewer role.
+
+### Worktree Disposition
+
+At task initialization, nest exactly one `worktree_disposition` under the
+existing task `identity` field:
+
+- `remove_after_integration` only when cleanup authorization is already granted;
+- `retain_with_reason`, including its reason and next owner; or
+- `authorization_required` when removal authority is absent or unresolved.
+
+Change the disposition only after recording the authority or lifecycle-state
+change. Completion evidence inventories the exact worktree path, branch, HEAD,
+porcelain bytes/fingerprint/paths, Issue/PR state, and commit/PR recoverability;
+whether cleanup authorization was requested and granted, denied, or
+not-required; and the actual `removed` or `retained` outcome, reason, and next
+owner.
+
+Removal requires granted authorization, clean porcelain status, completed
+integration verification, and recoverability. Use only non-forced removal and
+then verify the exact worktree is absent from both the worktree registry and
+filesystem. Branch deletion is separately authorized. Retain the parent worktree
+until the parent branch is integrated into `main`.
+
+Keep the `task_packet` and `result_packet` top-level schemas unchanged. Nest
+preflight and disposition under `identity`, cleanup/recoverability observations
+under `evidence`, and outcome, reason, risk, and next owner under the existing
+`findings`, `risks`, and `next_action` fields as applicable.
 
 ### Modularity Gate
 
