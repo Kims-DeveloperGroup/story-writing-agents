@@ -180,6 +180,35 @@ gh project item-list 1 --owner Kims-DeveloperGroup --limit 100 --format json \
     .["linked pull requests"]'
 ```
 
+## Preflight Every Writer
+
+Before a writer's first tracked mutation, its first action is the minimum
+capability/identity preflight. From the assigned worktree, capture:
+
+```bash
+pwd -P
+git rev-parse --show-toplevel
+git branch --show-current
+git rev-parse HEAD
+git merge-base HEAD <approved-base-sha>
+git merge-base --is-ancestor <approved-base-sha> HEAD
+git status --porcelain=v1 -z --untracked-files=all | od -An -tx1
+git status --porcelain=v1 -z --untracked-files=all | shasum -a 256
+```
+
+Report the exact porcelain bytes, SHA-256 fingerprint, decoded paths, and
+exclusive targets. Match every value to the handoff. Accepted upstream dirty
+state is valid only when its exact bytes, fingerprint, and paths were pinned
+there. Stop before mutation on any path, repository, branch, HEAD,
+approved-base identity or ancestry, status, capability, or ownership mismatch.
+Preserve the state; never reset, checkout, clean, or revert user changes to
+obtain a match.
+
+After upstream changes, interruption, or other identity invalidation, the root
+records the new expected identity/fingerprint and the same writer repeats this
+preflight before resuming. Before dispatch, also record exactly one canonical
+`worktree_disposition`; nest both records under existing packet fields.
+
 ## Route Work on the Critical Path
 
 Apply the canonical [Delegation-Gain Gate](AGENTS.md#delegation-gain-gate) and
@@ -240,6 +269,28 @@ editing, exact execution, and final behavioral/coverage review into one
 `test_engineer` implementation turn when its dependencies permit it; otherwise
 resume that same thread after the dependency stabilizes.
 
+## Dispose or Retain Worktrees
+
+At completion, capture the exact worktree path, branch, HEAD, porcelain
+bytes/fingerprint/paths, Issue/PR state, and commit/PR recoverability. Record
+whether cleanup authority was requested and granted, denied, or not required,
+plus the actual outcome, reason, and next owner.
+
+Retain when disposition requires it, authority is absent, or any removal gate
+is unmet. For authorized `remove_after_integration`, first prove clean status,
+completed integration verification, and recoverability. Then remove only the
+exact path without force and verify both registry and filesystem absence:
+
+```bash
+git worktree remove <exact-worktree-path>
+git worktree list --porcelain
+test ! -e <exact-worktree-path>
+```
+
+Branch deletion is a separate authorization and action. Retain the parent
+worktree until its branch reaches `main`. Change a disposition only after a
+recorded authority or lifecycle-state change.
+
 ## Plan and Record Verification
 
 Apply [Adaptive Verification](AGENTS.md#adaptive-verification) as the canonical
@@ -298,8 +349,9 @@ Execute and ledger that plan as follows:
 
 1. **Pass the planning gate.** Complete or verify the initialization above.
    Record the gate state, Issue graph, Project metadata, logical Iteration,
-   dependencies, approved base, and authorization. Stop before writing unless
-   the gate is `passed` or `not_required`.
+   dependencies, approved base, authorization, and exactly one worktree
+   disposition. Stop before writing unless the gate is `passed` or
+   `not_required`.
 2. **Prepare the parent.** Create or reuse its Development-linked branch and
    worktree at the recorded base commit, assign the integration owner, verify
    the link, and move the parent to the correct Project state. After the first
@@ -308,7 +360,8 @@ Execute and ledger that plan as follows:
 3. **Start one child.** Confirm that the child is `Ready`, assigned the root's
    Iteration, and unblocked. Create its Development-linked branch and worktree
    from the current parent commit, assign its owner, verify the link, and move
-   it to `In progress` before tracked edits.
+   it to `In progress`. Require the assigned writer to pass the exact preflight
+   above before tracked edits.
 4. **Implement and verify.** Change only the child scope. Follow the commit
    policy and the routed ownership above; the root fast path never absorbs test
    or documentation writes. Apply the verification plan and evidence ledger,
@@ -338,15 +391,18 @@ Execute and ledger that plan as follows:
    includes the resulting parent closure. Record and verify the final merge
    SHA, Issue closure, Project `Done`, and milestone state.
 8. **Clean up and hand off.** Remove a worktree only after its status is clean
-   and its integration is verified. Never use forced worktree removal. Branch
-   deletion requires separate authorization; because squash merging does not
-   mark a child branch as Git-merged, verify PR and commit recoverability before
-   deleting it. Retain the parent worktree until the parent reaches `main`.
+   and its integration and recoverability are verified, its disposition permits
+   removal, and cleanup is authorized. Follow the non-forced removal and
+   completion inventory above. Treat branch deletion separately and retain the
+   parent worktree until the parent reaches `main`.
 
 Use the exact canonical `task_packet` and `result_packet` schemas in
 [Handoff and Result Contracts](AGENTS.md#handoff-and-result-contracts). Nest the
 planning-gate evidence, Issue and PR links, branches and SHAs, worktree,
 Development and Project metadata, Iteration, criteria, adaptive-verification
-ledger, blockers, GitHub mutations, cleanup, and next owner under their defined
-fields. Keep the packet compact; link stable evidence instead of copying raw
-logs, full Issue bodies, or the complete plan.
+ledger, blockers, and GitHub mutations under their defined fields. Nest writer
+identity and disposition under `identity`; cleanup authorization,
+recoverability, and final inventory under `evidence`; and actual disposition,
+reason, risk, and next owner under `findings`, `risks`, and `next_action` as
+applicable. Keep the packet compact; link stable evidence instead of copying
+raw logs, full Issue bodies, or the complete plan.

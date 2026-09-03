@@ -11,6 +11,7 @@ from pathlib import Path
 _REPOSITORY_ROOT = Path(__file__).resolve().parents[1]
 _AGENTS_PATH = _REPOSITORY_ROOT / "AGENTS.md"
 _RUNBOOK_PATH = _REPOSITORY_ROOT / "AGENT_TASK_RUNBOOK.md"
+_WORKFLOW_PATH = _REPOSITORY_ROOT / "GITHUB_WORKFLOW.md"
 _AGENT_DIRECTORY = _REPOSITORY_ROOT / ".codex" / "agents"
 _EXPECTED_AGENTS = {
     "documentation_maintainer",
@@ -102,6 +103,11 @@ class RepositoryAgentPolicyTests(unittest.TestCase):
             "### Role, Mode, and Control Gate",
         )
         cls.control_normalized = _normalized(cls.control_source)
+        cls.disposition_source = _markdown_section(
+            cls.agents_source,
+            "### Worktree Disposition",
+        )
+        cls.disposition_normalized = _normalized(cls.disposition_source)
         cls.orchestration_source = _markdown_section(
             cls.agents_source,
             "### Orchestration Sequence",
@@ -124,6 +130,25 @@ class RepositoryAgentPolicyTests(unittest.TestCase):
         cls.telemetry_normalized = _normalized(cls.telemetry_source)
         cls.runbook_source = _RUNBOOK_PATH.read_text(encoding="utf-8")
         cls.runbook_normalized = _normalized(cls.runbook_source)
+        cls.preflight_source = _markdown_section(
+            cls.runbook_source,
+            "## Preflight Every Writer",
+        )
+        cls.preflight_normalized = _normalized(cls.preflight_source)
+        cls.cleanup_source = _markdown_section(
+            cls.runbook_source,
+            "## Dispose or Retain Worktrees",
+        )
+        cls.cleanup_normalized = _normalized(cls.cleanup_source)
+        cls.workflow_source = _WORKFLOW_PATH.read_text(encoding="utf-8")
+        cls.workflow_normalized = _normalized(cls.workflow_source)
+        cls.workflow_cleanup_source = _markdown_section(
+            cls.workflow_source,
+            "### Worktree Disposition and Cleanup",
+        )
+        cls.workflow_cleanup_normalized = _normalized(
+            cls.workflow_cleanup_source
+        )
         cls.agent_paths = sorted(_AGENT_DIRECTORY.glob("*.toml"))
         cls.agent_data = {
             path.stem: tomllib.loads(path.read_text(encoding="utf-8"))
@@ -625,6 +650,188 @@ class RepositoryAgentPolicyTests(unittest.TestCase):
                 "Do not retry policy, capability, scope, or schema failures",
                 "Resolve conflicts by evidence level and role ownership, never voting",
                 "Root fallback may use only existing root authority and never bypasses mandatory documentation, test, or modularity ownership",
+            ),
+        )
+
+    def test_writer_preflight_commands_and_identity_are_exact(self) -> None:
+        command_block = re.search(
+            r"```bash\n(?P<commands>.*?)\n```",
+            self.preflight_source,
+            flags=re.DOTALL,
+        )
+        self.assertIsNotNone(command_block)
+        assert command_block is not None
+        self.assertEqual(
+            tuple(command_block.group("commands").splitlines()),
+            (
+                "pwd -P",
+                "git rev-parse --show-toplevel",
+                "git branch --show-current",
+                "git rev-parse HEAD",
+                "git merge-base HEAD <approved-base-sha>",
+                "git merge-base --is-ancestor <approved-base-sha> HEAD",
+                "git status --porcelain=v1 -z --untracked-files=all | od -An -tx1",
+                "git status --porcelain=v1 -z --untracked-files=all | shasum -a 256",
+            ),
+        )
+        self.assertContainsAll(
+            self.control_normalized,
+            (
+                "Before its first tracked write, every writer reports and matches the handoff's physical `pwd -P`",
+                "Git top-level, expected branch, exact HEAD, approved-base SHA and ancestry, exclusive targets, and deterministic dirty state",
+                "exact bytes from `git status --porcelain=v1 -z --untracked-files=all`",
+                "their SHA-256 fingerprint, and decoded paths",
+            ),
+        )
+        self.assertContainsAll(
+            self.preflight_normalized,
+            (
+                "Report the exact porcelain bytes, SHA-256 fingerprint, decoded paths, and exclusive targets",
+                "Match every value to the handoff",
+            ),
+        )
+
+    def test_writer_preflight_is_pinned_fail_closed_and_repeatable(self) -> None:
+        self.assertContainsAll(
+            self.control_normalized,
+            (
+                "A handoff may accept upstream dirty state only by pinning all three",
+                "any repository, worktree, branch, HEAD, base, status, or ownership mismatch stops before mutation",
+                "Never reset, checkout, clean, or revert user changes to make preflight pass",
+                "After an upstream change, interruption, or invalidated identity, the root sends an updated identity and dirty-state fingerprint",
+                "The same writer repeats the complete preflight before resuming",
+            ),
+        )
+        self.assertContainsAll(
+            self.preflight_normalized,
+            (
+                "Accepted upstream dirty state is valid only when its exact bytes, fingerprint, and paths were pinned there",
+                "Stop before mutation on any path, repository, branch, HEAD, approved-base identity or ancestry, status, capability, or ownership mismatch",
+                "never reset, checkout, clean, or revert user changes to obtain a match",
+                "root records the new expected identity/fingerprint and the same writer repeats this preflight before resuming",
+            ),
+        )
+        self.assertContainsAll(
+            self.workflow_normalized,
+            (
+                "bind that owner to the exact identity and dirty state required by [AGENTS.md](AGENTS.md#role-mode-and-control-gate)",
+                "a mismatch never authorizes reset, checkout, cleaning, or reversion",
+            ),
+        )
+
+    def test_worktree_dispositions_are_exact_and_authority_bound(self) -> None:
+        dispositions = {
+            match.group("name"): match.group("condition").strip()
+            for match in re.finditer(
+                r"^- `(?P<name>[a-z_]+)`,? "
+                r"(?P<condition>.*?)(?:;(?: or)?|\.)$",
+                self.disposition_source,
+                flags=re.MULTILINE,
+            )
+        }
+        self.assertEqual(
+            dispositions,
+            {
+                "remove_after_integration": (
+                    "only when cleanup authorization is already granted"
+                ),
+                "retain_with_reason": (
+                    "including its reason and next owner"
+                ),
+                "authorization_required": (
+                    "when removal authority is absent or unresolved"
+                ),
+            },
+        )
+        self.assertContainsAll(
+            self.disposition_normalized,
+            (
+                "At task initialization, nest exactly one `worktree_disposition` under the existing task `identity` field",
+                "Change the disposition only after recording the authority or lifecycle-state change",
+            ),
+        )
+        self.assertContainsAll(
+            self.workflow_cleanup_normalized,
+            (
+                "record exactly one disposition defined by [AGENTS.md](AGENTS.md#worktree-disposition)",
+                "`remove_after_integration` requires existing cleanup authorization",
+                "otherwise retain with a reason or record `authorization_required`",
+                "Update it only for a recorded authority or lifecycle state change",
+            ),
+        )
+
+    def test_completion_inventory_and_removal_gates_are_complete(self) -> None:
+        self.assertContainsAll(
+            self.disposition_normalized,
+            (
+                "exact worktree path, branch, HEAD, porcelain bytes/fingerprint/paths, Issue/PR state, and commit/PR recoverability",
+                "cleanup authorization was requested and granted, denied, or not-required",
+                "actual `removed` or `retained` outcome, reason, and next owner",
+                "Removal requires granted authorization, clean porcelain status, completed integration verification, and recoverability",
+                "Use only non-forced removal",
+                "verify the exact worktree is absent from both the worktree registry and filesystem",
+                "Branch deletion is separately authorized",
+                "Retain the parent worktree until the parent branch is integrated into `main`",
+            ),
+        )
+        self.assertContainsAll(
+            self.cleanup_normalized,
+            (
+                "Record whether cleanup authority was requested and granted, denied, or not required",
+                "Retain when disposition requires it, authority is absent, or any removal gate is unmet",
+                "authorized `remove_after_integration`",
+                "prove clean status, completed integration verification, and recoverability",
+                "remove only the exact path without force",
+                "verify both registry and filesystem absence",
+                "Branch deletion is a separate authorization and action",
+                "Retain the parent worktree until its branch reaches `main`",
+            ),
+        )
+        cleanup_commands = re.search(
+            r"```bash\n(?P<commands>.*?)\n```",
+            self.cleanup_source,
+            flags=re.DOTALL,
+        )
+        self.assertIsNotNone(cleanup_commands)
+        assert cleanup_commands is not None
+        self.assertEqual(
+            tuple(cleanup_commands.group("commands").splitlines()),
+            (
+                "git worktree remove <exact-worktree-path>",
+                "git worktree list --porcelain",
+                "test ! -e <exact-worktree-path>",
+            ),
+        )
+
+    def test_lifecycle_links_and_packet_nesting_are_canonical(self) -> None:
+        self.assertContainsAll(
+            self.workflow_cleanup_normalized,
+            (
+                "[AGENTS.md](AGENTS.md#worktree-disposition)",
+                "Completion must inventory the final exact worktree/branch/HEAD and porcelain state",
+                "Removal requires clean status, completed integration verification, and recoverability",
+                "must be non-forced and verified absent afterward",
+                "Branch deletion is a separate authorized action",
+                "Retain the parent worktree until the parent branch is integrated into `main`",
+            ),
+        )
+        self.assertContainsAll(
+            self.disposition_normalized,
+            (
+                "Keep the `task_packet` and `result_packet` top-level schemas unchanged",
+                "Nest preflight and disposition under `identity`",
+                "cleanup/recoverability observations under `evidence`",
+                "outcome, reason, risk, and next owner under the existing `findings`, `risks`, and `next_action` fields",
+            ),
+        )
+        self.assertContainsAll(
+            self.runbook_normalized,
+            (
+                "## Preflight Every Writer",
+                "## Dispose or Retain Worktrees",
+                "Nest writer identity and disposition under `identity`",
+                "cleanup authorization, recoverability, and final inventory under `evidence`",
+                "actual disposition, reason, risk, and next owner under `findings`, `risks`, and `next_action`",
             ),
         )
 
