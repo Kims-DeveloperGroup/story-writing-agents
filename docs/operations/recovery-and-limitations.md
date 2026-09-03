@@ -160,6 +160,30 @@ common `.git` directory, and the complete session-history subtree together.
 Restoring only one JSON record, one index, one ref, or one worktree can destroy
 the correlation needed for safe classification.
 
+<a id="session-history-snapshot-recovery"></a>
+
+### Stable snapshot evidence
+
+Issue #536 can capture the complete candidate, commit-operation, and
+checkpoint-operation records behind one session-history inspection without
+creating or changing history. The first inventory is decoded under the
+existing repository lease, then independently re-inspected. The immutable
+result is returned only when both observations agree exactly; its complete
+record tuples are hidden from `repr`, while their bounded fields remain
+available to the later internal consumer.
+
+If operation `O4` disappears or changes before the second inspection, the
+snapshot attempt returns the existing typed `recovery_required` failure—never
+a partial result—and creates no replacement record. Stop writers and preserve
+the history, Git state, and any alternate checkpoint index. Later #527
+reconciliation can use a stable snapshot to surface the preserved recovery
+state; it must not duplicate the commit or checkpoint. #536 itself has no UI,
+lifecycle decision, replay, recovery mutation, provider call, or cleanup
+authority. An empty `create=False` inspection creates nothing, and this
+additive read path adds no persisted format, migration, or compatibility
+reader. See the [snapshot contract](../reference/git-adapter.md#package-internal-session-history-snapshot)
+and [workspace composition](../reference/workspace-api.md#workspace-session-history-snapshot).
+
 | State, result, or failure | Meaning | Safe response |
 | --- | --- | --- |
 | Candidate `prepared` | Exact path/digest/expected-tree evidence exists; no confirmation or Git index/object/ref mutation is implied. | Revalidate it. When #492 is available, request a fresh exact decision; if any candidate fact changed, `reprepare` from new successful application evidence. |

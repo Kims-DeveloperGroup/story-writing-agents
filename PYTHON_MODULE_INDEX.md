@@ -18,7 +18,7 @@ Package root: `src/story_writing_agents/`
 
 Importable production units indexed: 119.
 
-Direct internal dependency edges indexed: 431.
+Direct internal dependency edges indexed: 432.
 
 Directed internal dependency cycles indexed: 0.
 
@@ -227,7 +227,8 @@ workspace -> conversation_storage.filesystem/workspace.core
 workspace.core -> agents/conversations/errors/models
                -> workspace.initialization/workspace.schema/writing_artifacts
 workspace.initialization -> errors/git/git.session_contracts
-                         -> git.session_resources/workspace.schema
+                         -> git.session_history/git.session_resources
+                         -> workspace.schema
 workspace.schema -> agents/errors/git.session_contracts
 writing_artifacts -> writing_artifacts.application_contracts/authorization/catalog
                   -> writing_artifacts.change_sets/directives/read_actions
@@ -2047,42 +2048,52 @@ every intermediate arrow. The current runtime graph is acyclic.
 - **Source:** `src/story_writing_agents/git/session_history_contracts.py`
 - **Responsibility:** Define pure bounded records and monotonic transitions for
   one session's prepared candidates, story commits, and internal checkpoints.
-- **Supported surface:** Direct-module `__all__` contains five layout/schema
-  constants; the closed action, state, failure, recovery, identity-source, and
-  candidate-path enums; content-free error; immutable candidate-path,
-  candidate, commit-operation, checkpoint-operation, and inspection values;
-  candidate builder; legal transition functions; and strict canonical JSON
-  codecs. Nothing is re-exported by a facade.
+- **Supported surface:** Exactly 27 names in direct-module `__all__`: five
+  layout/schema constants; the closed action, state, failure, recovery,
+  identity-source, and candidate-path enums; content-free error; immutable
+  candidate-path, candidate, commit-operation, checkpoint-operation,
+  inspection, and `GitSessionHistorySnapshot` values; candidate builder; legal
+  transition functions; and strict canonical JSON codecs. Nothing is
+  re-exported by a package facade or the project root.
 - **Direct internal dependencies:** None.
 - **State, resources, and side effects:** Owns only immutable values, bounds,
   canonical strict-UTF-8 JSON with a trailing newline, SHA-256 candidate
   identity, unique UTF-8-byte-ordered candidate paths and impact boundaries,
-  defensive reconstruction, and closed transition graphs. Checkpoint records
-  additionally retain their exact expected tree and an operation-salted
-  content-free commit-intent digest invariant across transitions. Records may
-  retain bounded commit metadata, paths, digests, identity-source facts, and
-  opaque correlations, but no story bytes, provider response, raw Git output,
-  descriptor, writable capability, or serialized authority. Import and all
-  contract operations perform no I/O.
+  defensive reconstruction, and closed transition graphs. The snapshot binds
+  one exact inspection to complete, canonically ordered candidate,
+  commit-operation, and checkpoint-operation tuples; it rejects foreign,
+  duplicate, missing, extra, state-mismatched, or noncanonical records and
+  correlates preserved checkpoint indices exactly. Its three record tuples are
+  representation-hidden so their bounded nested paths and proposed message do
+  not appear in snapshot diagnostics. Checkpoint records additionally retain
+  their exact expected tree and an operation-salted content-free commit-intent
+  digest invariant across transitions. Records may retain bounded commit
+  metadata, paths, digests, identity-source facts, and opaque correlations, but
+  no story bytes, provider response, raw Git output, descriptor, writable
+  capability, or serialized authority. Import and all contract operations
+  perform no I/O.
 - **Primary verification/documentation:**
   `tests/test_git_session_history_contracts.py` directly verifies candidate
-  identity, ordering, bounds, state transitions, codecs, and defensive
-  reconstruction. `docs/reference/git-adapter.md`,
+  identity, ordering, bounds, state transitions, codecs, defensive
+  reconstruction, and complete snapshot invariants.
+  `docs/reference/git-adapter.md#package-internal-session-history-snapshot`,
   `docs/guides/workspaces.md`, and
-  `docs/operations/recovery-and-limitations.md` document the record meanings
-  and recovery states.
+  `docs/operations/recovery-and-limitations.md#session-history-snapshot-recovery`
+  document the record meanings and recovery states.
 
 ### `story_writing_agents.git.session_history`
 
 - **Source:** `src/story_writing_agents/git/session_history.py`
 - **Responsibility:** Persist one ready session's bounded Git-history evidence
   beneath its descriptor-bound common Git directory.
-- **Supported surface:** Internal-only `GitSessionHistory` and
-  `open_git_session_history` in direct-module `__all__`; no facade re-exports
-  them. The live transaction supports immutable candidate publication,
-  monotonic commit/checkpoint operation publication and reads, complete
-  content-free inspection, checkpoint-index allocation, and conservative
-  completed-index cleanup.
+- **Supported surface:** Exactly three internal-only direct-module `__all__`
+  names: `GitSessionHistory`, the identity-preserving
+  `GitSessionHistorySnapshot` contract re-export, and
+  `open_git_session_history`; no package facade or project-root facade
+  re-exports them. The live transaction supports immutable candidate
+  publication, monotonic commit/checkpoint operation publication and reads,
+  complete content-free inspection, one complete immutable `snapshot()`,
+  checkpoint-index allocation, and conservative completed-index cleanup.
 - **Direct internal dependencies:** `git.contracts`, `git.process`,
   `git.repository_lock`, `git.session_contracts`,
   `git.session_history_contracts`, and `git.session_resources`.
@@ -2095,21 +2106,25 @@ every intermediate arrow. The current runtime graph is acyclic.
   descriptor-relative, exact-spelling, no-follow, bounded, single-link,
   mode-limited, and fsynced. Filesystem failures are mapped at this storage
   boundary to content-free typed outcomes, while the shared repository lease
-  preserves caller-body error ownership. Alternate indices are isolated by
-  checkpoint operation and are preserved for uncertain/recoverable state;
-  cleanup accepts only a durably committed exact index. It never scans
-  workspace content or owns refs, objects, commits, provider state, story
-  bytes, or import-time I/O.
+  preserves caller-body error ownership. Snapshot capture decodes one complete
+  sorted inventory under that existing active lease, builds the immutable
+  result from the same capture, then performs a final exact reinspection;
+  drift fails recovery-required and no-create inspection leaves absent history
+  storage absent. Alternate indices are isolated by checkpoint operation and
+  are preserved for uncertain/recoverable state; cleanup accepts only a
+  durably committed exact index. It never scans workspace content or owns
+  refs, objects, commits, provider state, story bytes, or import-time I/O.
 - **Primary verification/documentation:**
   `tests/test_git_session_history.py` directly verifies real-repository,
   no-follow, fsync, concurrency, cleanup, fault-injection, exact-identifier,
-  and replacement-revalidation behavior;
+  replacement-revalidation, stable snapshot, drift, and no-create behavior;
   `tests/test_git_session_resources.py` retains shared-lease provisioning
-  regression coverage. `docs/reference/git-adapter.md`,
+  regression coverage.
+  `docs/reference/git-adapter.md#package-internal-session-history-snapshot`,
   `docs/guides/workspaces.md`, `docs/design/overview.md`,
   `docs/operations/filesystem-safety.md`, and
-  `docs/operations/recovery-and-limitations.md` document storage, external
-  state meaning, and recovery.
+  `docs/operations/recovery-and-limitations.md#session-history-snapshot-recovery`
+  document storage, external state meaning, and recovery.
 
 ### `story_writing_agents.git.session_resources`
 
@@ -5514,12 +5529,14 @@ every intermediate arrow. The current runtime graph is acyclic.
 - **Supported surface:** Internal-only `WorkspaceRootState`,
   `WorkspaceRootRole`, `WorkspaceRootInspection`, `WorkspaceRootDiscovery`,
   the inspect/initialize/require-ready and typed nearest-discovery operations,
-  plus bounded `inspect_session_resources`, `list_session_resources`,
-  `provision_session_resources`, and `require_ready_session_resources` for the
-  future #455 composition. The module `__all__` is empty and neither the
-  workspace nor project facade exports them.
+  plus bounded `inspect_session_resources`, `inspect_session_history`,
+  `list_session_resources`, `provision_session_resources`, and
+  `require_ready_session_resources` for the future #455 composition. The
+  module `__all__` is empty and neither the workspace nor project facade
+  exports them.
 - **Direct internal dependencies:** `errors`, the public `git` facade,
-  `git.session_contracts`, `git.session_resources`, and `workspace.schema`.
+  `git.session_contracts`, `git.session_history`, `git.session_resources`, and
+  `workspace.schema`.
 - **State, resources, and side effects:** Classifies absent, empty,
   journal-backed initializing, exact ready-v2, unsupported, and recovery states
   without adopting unknown bytes. Initialization exclusively owns the open
@@ -5540,16 +5557,21 @@ every intermediate arrow. The current runtime graph is acyclic.
   immutable baseline/seed anchors without interpreting later history.
   Discovery returns the nearest typed main/session boundary and never skips a
   malformed or unsupported inner workspace. Its package-internal provision
-  wrapper is the sole non-data-driven session mutation authority; inspect,
-  list, reopen, and require-ready remain read-only. It creates no provider
-  state, artifact mutation, remote, later canonical commit, or import-time I/O.
+  wrapper is the sole non-data-driven session mutation authority;
+  `inspect_session_history` alone derives the canonical baseline manifest,
+  opens existing history with `create=False`, and returns only its stable
+  immutable snapshot. Inspect, list, reopen, history snapshot, and require-ready
+  remain read-only. It creates no provider state, artifact mutation, remote,
+  later canonical commit, or import-time I/O.
 - **Primary verification/documentation:**
   `tests/test_workspace_v2_initialization.py`,
   `tests/test_workspace_session_resources.py`,
+  `tests/test_workspace_session_history.py`,
   `tests/test_workspace_and_config.py`,
   `tests/test_cli_context.py`, and `tests/test_smoke_cli.py`;
   `docs/getting-started.md`,
-  `docs/guides/workspaces.md`, `docs/reference/workspace-api.md`,
+  `docs/guides/workspaces.md`,
+  `docs/reference/workspace-api.md#workspace-session-history-snapshot`,
   `docs/reference/git-adapter.md`,
   `docs/operations/filesystem-safety.md`, and
   `docs/operations/recovery-and-limitations.md` document its lifecycle.
@@ -6276,7 +6298,7 @@ every intermediate arrow. The current runtime graph is acyclic.
 ## Consistency Notes
 
 - The inventory contains 119 modules. Static AST derivation over every module-
-  level and function-local import yields 431 unique direct internal edges and
+  level and function-local import yields 432 unique direct internal edges and
   no directed cycle. The v2 cutover contributes 97 modules and 362 edges;
   `writing_artifacts.change_sets` and `writing_artifacts.relationship_policy`
   add two pure modules and exactly five inward edges; application contracts
@@ -6289,8 +6311,10 @@ every intermediate arrow. The current runtime graph is acyclic.
   store edge plus one direct application-contract edge, producing the current
   eight-edge increase without a facade export.
   The pure `session_recovery` facade and contract owner add two modules and
-  exactly seven inward edges, producing the current 119-module, 431-edge
-  acyclic graph without a project-root export.
+  exactly seven inward edges, producing its historical 119-module, 431-edge
+  acyclic graph without a project-root export. The immutable session-history
+  snapshot adds no module and only the workspace-initialization-to-history
+  composition edge, producing the current 119-module, 432-edge acyclic graph.
   Relative to the 360-edge pre-cutover graph, filesystem and
   SQLite storage each add one direct dependency on `conversations.events` for
   private legacy-row/file rejection values, smoke adds one dependency on

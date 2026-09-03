@@ -194,9 +194,10 @@ runtime APIs; the first source list/read, catalog read, or artifact commit raise
 
 ## Internal session-resource composition
 
-`workspace.initialization` defines four package-internal typed operations for
+`workspace.initialization` defines five package-internal typed operations for
 #455: inspect one session, list the exhaustive correlated inventory, provision
-or resume one exact triple, and require one exact ready triple. They are absent
+or resume one exact triple, require one exact ready triple, and capture one
+complete session-history snapshot. They are absent
 from `story_writing_agents`, `story_writing_agents.workspace`, and
 `story_writing_agents.git`; direct application code must not treat them as a
 stable public API.
@@ -207,6 +208,34 @@ states, recovery actions, and object IDs—never descriptors, raw Git output,
 argv/environment, story content, or a reusable Git capability. Provider or
 lead text and serialized values cannot invoke the mutation owner. See the
 [internal Git-resource contract](git-adapter.md#package-internal-session-git-resources).
+
+<a id="workspace-session-history-snapshot"></a>
+
+### Session-history snapshot composition
+
+The package-internal composition seam is exact and read-only:
+
+```python
+from story_writing_agents.workspace.initialization import inspect_session_history
+
+# Exact signature: (root: Path, session_id: str) -> GitSessionHistorySnapshot
+snapshot = inspect_session_history(root, session_id)
+```
+
+It derives the baseline manifest from the canonical initializer scaffold,
+accepts either the exact main workspace root or an exact session worktree root,
+resolves the main repository, and opens the requested session's history with
+`create=False`.
+Consequently an empty history returns an immutable empty snapshot without
+creating `.git/story-writing-agents/runtime/session-history/<session_id>`.
+Existing history is captured under its repository lease and must pass the
+snapshot's independent stability reinspection.
+
+The helper returns no live history handle and performs no write, replay,
+provider call, reconciliation, index/ref/branch/worktree change, or UI action.
+The helper and snapshot type are absent from the root, workspace, and Git
+facades. #527 may consume the snapshot later; #536 itself does not decide or
+enforce session recovery. See the [complete snapshot contract](git-adapter.md#package-internal-session-history-snapshot).
 
 ## Directive utility
 
