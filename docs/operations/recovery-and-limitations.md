@@ -102,7 +102,50 @@ fact, or user byte. The lock file persists as coordination infrastructure.
 Pause, release, close, and process exit preserve durable session resources.
 There is no migration, compatibility, remote, reset, clean, prune, garbage
 collection, rebase, merge, or history-rewrite recovery route. #505, not #504,
-will define later story commits and internal checkpoints.
+coordinates that later work; #509 will define story commits and #510 internal
+checkpoints.
+
+<a id="session-history-recovery"></a>
+
+## Session-history recovery
+
+Issue #508 supplies package-internal evidence and classification only. No
+current command, lead action, or public API starts a story commit or checkpoint,
+and no current UI displays these states. #509, #510, and #492 own those future
+operations and confirmation flow.
+
+For any future interruption, first stop repository writers and preserve the
+main repository, sibling session worktree, common `.git` directory, and the
+complete session-history subtree together. Restoring only one JSON record, one
+index, one ref, or one worktree can destroy the correlation needed for safe
+classification.
+
+| Durable state or failure | Meaning | Safe response for the future owner |
+| --- | --- | --- |
+| Candidate `prepared` | Exact path/digest/expected-tree evidence exists; no confirmation or Git mutation is implied. | Revalidate the candidate against current files and tips. Ask for confirmation through #492 when available, or prepare a new candidate if any fact changed. |
+| Commit `rejected` | The proposed story commit was declined before execution. It is terminal and authorizes nothing. | Keep the record. A different proposal requires a new candidate/operation and new confirmation. |
+| Operation `running` | Intent was durably recorded before a later Git mutation, but success is unproved. | Inspect the exact operation plus branch/internal-ref/object facts. Do not replay a prior confirmation or blindly restart Git. |
+| Story commit `staged` | Staging was recorded, but no commit ID is proved. | Preserve the session worktree and index. Inspect staged/tree/tip facts before deciding whether explicit recovery is possible. |
+| Operation `committed` | The terminal record names the resulting story commit or checkpoint object. | Verify the object and expected current tip before reporting success. Do not rerun the operation. |
+| Operation `outcome_unknown` | Git may have mutated, but the runtime could not prove the outcome. | Preserve all records and any checkpoint index. Inspect; only exact proof may advance the same record to `committed`, otherwise advance it to `recovery_required`. |
+| Operation `recovery_required` | State is inconsistent, unsafe, substituted, or no longer automatically reconcilable. It is terminal. | Perform explicit operator recovery or restore a complete trusted backup. Never edit the record or delete evidence to force another transition. |
+| Missing/noncanonical/oversized record, unexpected entry, alias, symlink, hard link, or failed fsync | The store cannot trust the addressed history boundary. | Stop all writers, retain exact bytes and metadata, and investigate offline. Do not normalize, replace, or follow the rejected path. |
+| Repository lock unavailable or root/common-Git identity changed | Safe serialization or repository identity cannot be proved. | End the operation and retry only after the original exact repository is trustworthy and no competing writer remains. |
+
+An `outcome_unknown` checkpoint can retain
+`checkpoint-inputs/<operation_id>/index`; `recovery_required` may retain it as
+well. The runtime removes that leaf only after the exact checkpoint record is
+durably `committed`. Candidate and operation records have no automatic expiry
+or cleanup. Process exit, session pause/close, and a later successful operation
+do not erase earlier evidence.
+
+These records are content-free, so they are not a story-data backup. Conversely,
+a story-files-only backup is not recovery evidence. A useful recovery backup
+must preserve the repository, common Git administration/history namespace, and
+sibling worktree consistently. Ordinary Git commits produced later will also
+contain effective identity and commit-message metadata. See the
+[user-oriented state guide](../guides/workspaces.md#durable-session-history-infrastructure)
+and [exact internal contract](../reference/git-adapter.md#package-internal-session-history).
 
 ## Session access recovery
 
