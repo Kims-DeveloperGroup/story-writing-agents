@@ -18,7 +18,7 @@ Package root: `src/story_writing_agents/`
 
 Importable production units indexed: 117.
 
-Direct internal dependency edges indexed: 423.
+Direct internal dependency edges indexed: 424.
 
 Directed internal dependency cycles indexed: 0.
 
@@ -245,7 +245,8 @@ writing_artifacts.filesystem_sources -> errors/writing_artifacts._storage
                                      -> writing_artifacts.catalog/references
 writing_artifacts.repository -> agents/errors/writing_artifacts._reference_evidence
                              -> writing_artifacts._application_store/_storage
-                             -> writing_artifacts.authorization/catalog
+                             -> writing_artifacts.application_contracts/authorization
+                             -> writing_artifacts.catalog
                              -> writing_artifacts.filesystem_sources/read_actions/references
 writing_artifacts._storage -> errors
 ```
@@ -5532,9 +5533,10 @@ every intermediate arrow. The current runtime graph is acyclic.
   and the four pure build, project, serialize, and deserialize functions owned
   by `change_sets`; the application schema, closed terminal-state/error enums,
   content-free error, immutable proposal-correlation provenance, exact
-  content-bearing request, final-artifact, rename-lineage, deletion-provenance,
-  and terminal-result values, and four strict request/result codecs owned by
-  `application_contracts`; the relationship-policy schema, empty companion
+  content-bearing request with its exact attached-core evidence, final-artifact,
+  rename-lineage, deletion-provenance, and terminal-result values, and four
+  strict request/result codecs owned by `application_contracts`; the
+  relationship-policy schema, empty companion
   set, four exact resource-limit constants, closed relationship/error/review
   enums, content-free error, immutable edge/review/complete-validation values,
   and pure projected relationship validator owned by `relationship_policy`; plus
@@ -5589,10 +5591,14 @@ every intermediate arrow. The current runtime graph is acyclic.
   importing proposal or orchestration code. Results report the canonical
   affected identity set, exact current paths/kinds/digests, manuscript rename
   lineage and deletion provenance, plus deterministic applied-versus-unchanged
-  truth. Core paths cannot appear in rename or deletion evidence. Requests and
-  results use one canonical no-trailing-newline JSON representation, reject
-  recursive duplicate keys, unknown fields, alternate encodings, invalid
-  values, and mismatched embedded change-set correlation. Request
+  truth. Requests bind a sorted, unique tuple of canonical core paths whose
+  attached review evidence must be revalidated with the change set. The closed
+  error enum also classifies drift, corrupt persisted authority, and blocked
+  recovery without content-bearing diagnostics. Core paths cannot appear in
+  rename or deletion evidence. Requests and results use one canonical
+  no-trailing-newline JSON representation, reject recursive duplicate keys,
+  unknown fields, alternate encodings, invalid values, and mismatched embedded
+  change-set correlation. Request
   serialization intentionally contains proposed artifact text; ordinary
   representations, results, provenance, lineage, deletion facts, and complete
   error graphs do not.
@@ -5605,9 +5611,12 @@ every intermediate arrow. The current runtime graph is acyclic.
   process, environment, clock, entropy, thread, or application-startup
   resource. Importing it performs no operational side effect.
 - **Primary verification/documentation:**
-  `tests/test_artifact_application_contracts.py`, facade and clean-import
-  inventory in `tests/test_rag_module_and_packaging_boundary.py`, and
-  `docs/reference/writing-artifacts.md`.
+  `tests/test_artifact_application_contracts.py`,
+  `tests/test_artifact_application_seam.py`, facade and clean-import inventory
+  in `tests/test_rag_module_and_packaging_boundary.py`,
+  `docs/reference/writing-artifacts.md`, the artifact-application persistence
+  section in `docs/design/persistence.md`, and the writing-artifact section in
+  `docs/operations/recovery-and-limitations.md`.
 
 ### `story_writing_agents.writing_artifacts.change_sets`
 
@@ -5816,8 +5825,10 @@ every intermediate arrow. The current runtime graph is acyclic.
   or other operational side effect.
 - **Primary verification/documentation:**
   `tests/test_artifact_reference_authorization.py`,
+  `tests/test_artifact_application_seam.py`,
   `tests/test_writing_artifacts.py`,
   `tests/test_artifact_reference_directives.py`,
+  `docs/guides/artifact-references.md#what-happens-when-an-attached-source-is-later-applied`,
   `docs/reference/writing-artifacts.md`, `docs/design/persistence.md`,
   `docs/operations/filesystem-safety.md`,
   `docs/operations/privacy-and-provider.md`, and
@@ -5932,7 +5943,10 @@ every intermediate arrow. The current runtime graph is acyclic.
 - **Primary verification/documentation:**
   `tests/test_artifact_reference_evidence.py`,
   `tests/test_artifact_reference_authorization.py`,
-  `tests/test_writing_artifacts.py`, `docs/reference/writing-artifacts.md`,
+  `tests/test_artifact_application_seam.py`,
+  `tests/test_writing_artifacts.py`,
+  `docs/guides/artifact-references.md#what-happens-when-an-attached-source-is-later-applied`,
+  `docs/reference/writing-artifacts.md`,
   `docs/design/persistence.md`, `docs/operations/filesystem-safety.md`,
   `docs/operations/privacy-and-provider.md`,
   `docs/operations/recovery-and-limitations.md`, and
@@ -5944,17 +5958,25 @@ every intermediate arrow. The current runtime graph is acyclic.
   `src/story_writing_agents/writing_artifacts/_application_store.py`
 - **Responsibility:** Privately interpret exact five-operation artifact
   applications as one recoverable repository transaction.
-- **Supported surface:** Private `ArtifactApplicationStore`, constructed and
-  called only by `writing_artifacts.repository`. Its `ensure_directories`
+- **Supported surface:** Module-supported internal `ArtifactApplicationStore`,
+  `ArtifactApplicationStoreFailureCode`, and
+  `ArtifactApplicationStoreFailure`, constructed or consumed only by
+  `writing_artifacts.repository` and absent from both package facades. Its
+  `ensure_directories`
   method is the sole descriptor-safe bootstrap exception: the repository calls
   it after acquiring its process lock but before acquiring the workspace lease
   so the lease parent exists. Every other mutating or authoritative store call
   runs with both locks active. The module also owns the package-private fixed
   state paths and eight deterministic fault-injection checkpoints used by its
   focused recovery verification; it exports no public names. It consumes the
-  immutable application request/result contracts, reprojects each exact change
-  set over the immediate complete canonical state, and reruns the pure
-  relationship policy under the lease before any durable preparation.
+  immutable application request/result contracts, accepts only the request as
+  application authority, reprojects each exact change set over the immediate
+  complete canonical state, and reruns the pure relationship policy against
+  the request's attached-core paths under the lease before any durable
+  preparation. Base-state mismatch is normalized to the public content-free
+  drift code; the supported internal typed failure contract distinguishes
+  corrupt stored authority from recovery-required state without parsing
+  exception prose.
 - **Direct internal dependencies:** `errors`, `writing_artifacts._storage`,
   `writing_artifacts.application_contracts`, `writing_artifacts.catalog`,
   `writing_artifacts.change_sets`, and
@@ -5980,12 +6002,14 @@ every intermediate arrow. The current runtime graph is acyclic.
   agent, confirmation, context, process, clock, or application-startup
   resource. Import and construction perform no filesystem I/O.
 - **Primary verification/documentation:**
+  `tests/test_artifact_application_seam.py`,
   `tests/test_artifact_application_store_lifecycle.py`,
   `tests/test_artifact_application_store_recovery.py`,
   `tests/test_writing_artifacts.py`,
   `docs/reference/writing-artifacts.md#application-storage-and-recovery-mechanism`,
-  and the artifact-application persistence section in
-  `docs/design/persistence.md`.
+  the artifact-application persistence section in `docs/design/persistence.md`,
+  and the writing-artifact section in
+  `docs/operations/recovery-and-limitations.md`.
 
 ### `story_writing_agents.writing_artifacts._storage`
 
@@ -6044,7 +6068,8 @@ every intermediate arrow. The current runtime graph is acyclic.
   ambiguous traversal. The lease serializes supported repository writers;
   manual filesystem mutation is supported only while workspace processes are
   stopped, not as a hostile same-user live namespace writer.
-- **Primary verification/documentation:** `tests/test_writing_artifacts.py`,
+- **Primary verification/documentation:**
+  `tests/test_writing_artifacts.py`,
   `tests/test_workspace_and_config.py`,
   `docs/reference/writing-artifacts.md`, `docs/design/persistence.md`, and
   `docs/operations/filesystem-safety.md`.
@@ -6075,7 +6100,8 @@ every intermediate arrow. The current runtime graph is acyclic.
   Capture validates complete strict UTF-8 and NUL-free bytes and mints one
   immutable content snapshot carrying its full hash, size, and physical stamp.
   All descriptors remain call-local to `_storage`; import performs no I/O.
-- **Primary verification/documentation:** `tests/test_writing_artifacts.py`,
+- **Primary verification/documentation:**
+  `tests/test_writing_artifacts.py`,
   `tests/test_artifact_reference_authorization.py`, `tests/test_prompts.py`,
   `tests/test_runtime_reference_integration.py`,
   `docs/reference/writing-artifacts.md`,
@@ -6088,7 +6114,8 @@ every intermediate arrow. The current runtime graph is acyclic.
 - **Responsibility:** Coordinate canonical writing-artifact repository
   operations.
 - **Supported surface:** Module-supported internal
-  `WritingArtifactRepository`, with provenance-audited `catalog`,
+  `WritingArtifactRepository`, with provenance-audited `catalog`, exact
+  request-only `apply_artifact_changes`,
   filesystem-authoritative sorted `list_paths`, complete bounded
   `list_paths_bounded`, ordered selective immutable
   `read_current`, verified `read_text`, and
@@ -6103,6 +6130,7 @@ every intermediate arrow. The current runtime graph is acyclic.
 - **Direct internal dependencies:** `agents`, `errors`,
   `writing_artifacts._application_store`,
   `writing_artifacts._reference_evidence`, `writing_artifacts._storage`,
+  `writing_artifacts.application_contracts`,
   `writing_artifacts.authorization`, `writing_artifacts.catalog`,
   `writing_artifacts.filesystem_sources`, `writing_artifacts.read_actions`, and
   `writing_artifacts.references`.
@@ -6113,6 +6141,11 @@ every intermediate arrow. The current runtime graph is acyclic.
   repository lock modes acquire that same workspace lease and invoke application
   recovery before any authoritative catalog, source, or reference observation,
   so no caller observes a mixed multi-file transaction state.
+  `apply_artifact_changes` validates one exact immutable request, acquires that
+  lock and lease once, delegates once to the private application store, and
+  returns its immutable terminal result. It maps typed drift, corruption, and
+  recovery-required failures to the public content-free application codes
+  without parsing prose or exposing exception context.
   `commit_consensus` retains its existing package-internal caller shape and
   author/revision/path validation, but now translates the manuscript plus ordered
   allowlisted core updates into one exact native change set and delegates all
@@ -6131,14 +6164,17 @@ every intermediate arrow. The current runtime graph is acyclic.
   follows application recovery under the shared lease. The repository imports
   no controller, terminal, provider, Git, lead, confirmation, or agent-context
   implementation and retains no viewer state or artifact bytes beyond a call.
-- **Primary verification/documentation:** `tests/test_writing_artifacts.py`,
+- **Primary verification/documentation:**
+  `tests/test_artifact_application_seam.py`,
+  `tests/test_writing_artifacts.py`,
   `tests/test_artifact_application_store_lifecycle.py`,
   `tests/test_artifact_application_store_recovery.py`,
   `tests/test_artifact_reference_authorization.py`,
   `tests/test_artifact_reference_evidence.py`,
   `tests/test_artifact_reference_read_actions.py`,
   `tests/test_runtime_reference_integration.py`,
-  `tests/test_smoke_cli.py`, `docs/guides/artifact-references.md`,
+  `tests/test_smoke_cli.py`,
+  `docs/guides/artifact-references.md#what-happens-when-an-attached-source-is-later-applied`,
   `docs/reference/writing-artifacts.md#application-storage-and-recovery-mechanism`,
   `docs/reference/configuration/session-storage.md`,
   the artifact-application persistence section in
@@ -6149,7 +6185,7 @@ every intermediate arrow. The current runtime graph is acyclic.
 ## Consistency Notes
 
 - The inventory contains 117 modules. Static AST derivation over every module-
-  level and function-local import yields 423 unique direct internal edges and
+  level and function-local import yields 424 unique direct internal edges and
   no directed cycle. The v2 cutover contributes 97 modules and 362 edges;
   `writing_artifacts.change_sets` and `writing_artifacts.relationship_policy`
   add two pure modules and exactly five inward edges; application contracts
@@ -6158,8 +6194,9 @@ every intermediate arrow. The current runtime graph is acyclic.
   schema-v2 workspace lifecycle adds two modules and seven approved inward
   edges while removing `cli_context`'s former dependency on `agents`, for a net
   six-edge increase. The private artifact-application store adds one module
-  with six required inward dependencies, and repository delegation adds one
-  edge, producing the current seven-edge increase without a facade export.
+  with six required inward dependencies, and repository delegation adds its
+  store edge plus one direct application-contract edge, producing the current
+  eight-edge increase without a facade export.
   Relative to the 360-edge pre-cutover graph, filesystem and
   SQLite storage each add one direct dependency on `conversations.events` for
   private legacy-row/file rejection values, smoke adds one dependency on

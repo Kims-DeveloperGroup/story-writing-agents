@@ -79,6 +79,15 @@ _ERROR_MESSAGES = {
     ArtifactApplicationErrorCode.INVALID_RESULT: (
         "artifact application result is invalid"
     ),
+    ArtifactApplicationErrorCode.DRIFT: (
+        "artifact application authority has drifted"
+    ),
+    ArtifactApplicationErrorCode.CORRUPTION: (
+        "artifact application state is corrupt"
+    ),
+    ArtifactApplicationErrorCode.RECOVERY_REQUIRED: (
+        "artifact application recovery is required"
+    ),
 }
 _MODULE_EXPORTS = (
     "ARTIFACT_APPLICATION_SCHEMA_VERSION",
@@ -182,6 +191,7 @@ def _fixture():
         ARTIFACT_APPLICATION_SCHEMA_VERSION,
         provenance,
         change_set,
+        (_CORE_PATCH,),
     )
     affected = tuple(
         sorted(
@@ -295,6 +305,7 @@ class ArtifactApplicationSurfaceTests(ApplicationContractTestCase):
                 "schema_version",
                 "provenance",
                 "change_set",
+                "attached_core_paths",
             ),
             ArtifactApplicationFinalArtifact: (
                 "path",
@@ -367,6 +378,7 @@ class ArtifactApplicationRequestTests(ApplicationContractTestCase):
             request.relationship_validation_digest,
             _RELATIONSHIP_DIGEST,
         )
+        self.assertEqual(request.attached_core_paths, (_CORE_PATCH,))
 
     def test_request_rejects_invalid_values_and_change_set_correlation_drift(
         self,
@@ -406,12 +418,42 @@ class ArtifactApplicationRequestTests(ApplicationContractTestCase):
         )
         self.assert_application_error(
             ArtifactApplicationErrorCode.CORRELATION_MISMATCH,
-            lambda: ArtifactApplicationRequest(1, drift, request.change_set),
+            lambda: ArtifactApplicationRequest(
+                1,
+                drift,
+                request.change_set,
+                request.attached_core_paths,
+            ),
         )
         self.assert_application_error(
             ArtifactApplicationErrorCode.INVALID_SCHEMA,
-            lambda: ArtifactApplicationRequest(True, request.provenance, request.change_set),
+            lambda: ArtifactApplicationRequest(
+                True,
+                request.provenance,
+                request.change_set,
+                request.attached_core_paths,
+            ),
         )
+        invalid_attached_paths = (
+            ([_CORE_PATCH], ArtifactApplicationErrorCode.INVALID_SCHEMA),
+            ((_MANUSCRIPT_REPLACE,), ArtifactApplicationErrorCode.INVALID_PATH),
+            ((_CORE_PATCH, _CORE_PATCH), ArtifactApplicationErrorCode.INVALID_PATH),
+            (
+                ("core_documents/narrative_rules.md", _CORE_PATCH),
+                ArtifactApplicationErrorCode.INVALID_PATH,
+            ),
+        )
+        for attached_paths, code in invalid_attached_paths:
+            with self.subTest(attached_paths=attached_paths):
+                self.assert_application_error(
+                    code,
+                    lambda attached_paths=attached_paths: ArtifactApplicationRequest(
+                        1,
+                        request.provenance,
+                        request.change_set,
+                        attached_paths,
+                    ),
+                )
 
 
 class ArtifactApplicationResultTests(ApplicationContractTestCase):
@@ -486,6 +528,7 @@ class ArtifactApplicationCodecTests(ApplicationContractTestCase):
         request, result = _fixture()
         expected_request = _canonical_json(
             {
+                "attached_core_paths": list(request.attached_core_paths),
                 "change_set": json.loads(serialize_artifact_change_set(request.change_set)),
                 "provenance": {
                     "application_id": request.application_id,
@@ -611,6 +654,14 @@ class ArtifactApplicationCodecTests(ApplicationContractTestCase):
                 ArtifactApplicationErrorCode.INVALID_SERIALIZATION,
                 lambda value=value: deserialize_artifact_application_request(value),
             )
+        legacy_request = json.loads(request_bytes)
+        del legacy_request["attached_core_paths"]
+        self.assert_application_error(
+            ArtifactApplicationErrorCode.INVALID_SERIALIZATION,
+            lambda: deserialize_artifact_application_request(
+                _canonical_json(legacy_request)
+            ),
+        )
         self.assert_application_error(
             ArtifactApplicationErrorCode.INVALID_UTF8,
             lambda: deserialize_artifact_application_request(b"\xff"),
@@ -682,7 +733,7 @@ class ArtifactApplicationPrivacyTests(ApplicationContractTestCase):
             change_set.change_set_digest,
             _RELATIONSHIP_DIGEST,
         )
-        request = ArtifactApplicationRequest(1, provenance, change_set)
+        request = ArtifactApplicationRequest(1, provenance, change_set, ())
         self.assertNotIn(secret, repr(request))
         self.assertIn(content, serialize_artifact_application_request(request))
         with self.assertNoLogs():

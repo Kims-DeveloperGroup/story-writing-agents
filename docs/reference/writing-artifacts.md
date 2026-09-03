@@ -85,18 +85,18 @@ grants none of their authority.
 ## Exact artifact-application contracts
 
 > **Availability:** schema-v1 artifact-application requests and results are an
-> implemented, pure Python value/codec contract. This child does not read,
-> write, rename, or delete a file; persist a receipt; ask a user or agent for
-> confirmation; call a provider; stage Git; or authorize any of those actions.
-> The private #519 store now persists and recovers these values; #520 adds the
-> public repository seam later.
+> implemented, pure Python value/codec contract. The module-supported internal
+> `WritingArtifactRepository.apply_artifact_changes()` seam now accepts one
+> exact request and may persist it through the private #519 store. Neither the
+> value contract nor repository seam asks a user or agent for confirmation,
+> calls a provider, changes prompt context, or stages or commits Git. They are
+> not an installed CLI command or lead-agent action.
 
-In the later workflow, #491 creates an `ArtifactApplicationRequest` only after
+In the later workflow, #491 will create an `ArtifactApplicationRequest` only after
 the user separately confirms **Apply** for one reviewed candidate. The request
-then carries the exact content-bearing `ArtifactChangeSet` that another
-component may apply. Possessing, constructing, or deserializing this value is
-not proof of confirmation and grants no write, repository, provider, agent, or
-Git authority.
+then carries the exact content-bearing `ArtifactChangeSet` that the repository
+may apply. Possessing, constructing, or deserializing this value is not proof of
+confirmation and grants no provider, agent, or Git authority.
 
 ### Exact correlation
 
@@ -109,11 +109,13 @@ The immutable provenance keeps the later application tied to the review facts:
 | `candidate_digest` | Tagged `sha256:<64-lowercase-hex>` identity of that candidate. |
 | `change_set_digest` | Untagged 64-lowercase-hex digest that must exactly equal the embedded change set's digest. |
 | `relationship_validation_digest` | Tagged `sha256:<64-lowercase-hex>` identity of the separate relationship-validation result. |
+| `attached_core_paths` | Exact UTF-8-sorted, duplicate-free tuple of canonical core paths whose evidence informed review; it participates in relationship validation and its digest. |
 
 The contract validates shapes and the embedded change-set correlation. It does
-not look up a candidate, validate the relationship result again, determine
-whether Apply was confirmed, or inspect a workspace; those are responsibilities
-of later owners.
+not look up a candidate or determine whether Apply was confirmed. The repository
+does reread the complete canonical state and recompute the relationship result
+under its lease before writing; #491 remains responsible for creating authority
+only after confirmation.
 
 ### Public Python surface
 
@@ -141,6 +143,22 @@ from story_writing_agents.writing_artifacts import (
 
 All values are frozen and slotted. The schema version is exactly `1`.
 
+The application method is available only from the repository module; the
+repository class is not re-exported by either package facade:
+
+```python
+from story_writing_agents.writing_artifacts.repository import (
+    WritingArtifactRepository,
+)
+
+result = WritingArtifactRepository(workspace_root).apply_artifact_changes(request)
+```
+
+The method accepts exactly `ArtifactApplicationRequest`, not prose, a JSON
+dictionary, a mutable wrapper, or a subclass. It revalidates the frozen value
+before taking one repository lock and workspace lease, then delegates once to
+the private store. There is no alternate write method for Reject or Revise.
+
 ### Sample input: all five operation representations
 
 This readable rendering shows one correlated request. The neutral text is
@@ -149,6 +167,7 @@ compact separators, strict UTF-8, and no trailing newline.
 
 ```json
 {
+  "attached_core_paths": ["core_documents/narrative_rules.md"],
   "schema_version": 1,
   "provenance": {
     "application_id": "application-1",
@@ -219,8 +238,8 @@ value merely because the provenance fields are content-free.
 
 ### Sample output: applied repository facts
 
-When the private #519 store applies that request, its pure terminal result has
-no story bodies. #520 will expose the public repository seam later. An
+When `WritingArtifactRepository.apply_artifact_changes(request)` applies that
+request, its immutable terminal result has no story bodies. An
 `applied` result means this invocation changed the affected paths. It identifies
 every final surviving artifact, represents both sides of a manuscript rename,
 and retains provenance for a separately deleted manuscript. This is a readable
@@ -288,9 +307,11 @@ nonoverlapping final/rename/deletion topology.
 
 The closed error codes are `invalid_schema`, `invalid_serialization`,
 `invalid_utf8`, `invalid_identifier`, `invalid_digest`, `invalid_path`,
-`correlation_mismatch`, and `invalid_result`. They distinguish outer shape or
-version, wire encoding, identifier/digest/path facts, request correlation, and
-result topology without echoing the rejected bytes.
+`correlation_mismatch`, `invalid_result`, `drift`, `corruption`, and
+`recovery_required`. They distinguish outer shape or version, wire encoding,
+identifier/digest/path facts, request correlation, result topology, stale
+authority, invalid durable state, and operator recovery without echoing story
+bytes or retaining an underlying exception graph.
 
 For example, changing only the provenance value above to
 `change_set_digest="0000000000000000000000000000000000000000000000000000000000000000"`
@@ -305,10 +326,12 @@ filesystem writes: 0
 The failure does not retain the rejected payload in its exception cause or
 context. Request representations, result serialization, result values, and all
 fixed errors are content-free; only explicit request serialization contains
-story text. The pure functions log nothing, persist nothing, and perform no
-filesystem, repository, Git, network, provider, agent, clock, or random action.
-There is no migration or compatibility format: schema `1` and its exact
-canonical encoding are the only accepted forms.
+story text. The pure codec functions still log and persist nothing. The
+repository seam performs local artifact persistence only: it has no Git,
+network, provider, agent, confirmation, prompt-context, clock, or random
+responsibility. There is no migration or compatibility reader for the earlier
+request encoding without `attached_core_paths`; schema `1` with the current
+exact canonical fields is the only accepted form.
 
 <a id="story-commit-application-evidence"></a>
 
@@ -1382,7 +1405,7 @@ The retained `commit_consensus` method is now only a temporary native translator
 for its existing caller: it converts one new manuscript plus changed core
 documents into the new application request/store and writes only the new
 schemas. It does not preserve the former commit-ledger format and is not the
-future #520 application seam.
+exact request-only `apply_artifact_changes()` seam.
 
 The native store supports all five operations for manuscripts. Core documents
 keep four permanent identities: create, patch, and replace are allowed, while
@@ -1411,7 +1434,7 @@ identity in [Exact output paths](#exact-output-paths).
 
 | State | Source behavior | Publication behavior |
 | --- | --- | --- |
-| Absent | The path is not listed, viewable, referenceable, or available to contextual source capture. | A future #520 application or the temporary native caller may create it when the exact request and policy permit. |
+| Absent | The path is not listed, viewable, referenceable, or available to contextual source capture. | `apply_artifact_changes()` or the temporary native caller may create it when an exact request and policy permit. No installed UI invokes that seam yet. |
 | Present and safe | The path is listed. Opening captures current bytes with strict UTF-8/NUL and 8 MiB checks; role-allowlisted core files can enter contextual P2 selection. Empty whole-file references are valid. | If catalog/application-ledger metadata matches, it may also be a current applied artifact. Source use alone does not establish that fact. |
 | Manual, pre-provenance, or hash-divergent | It has the same source behavior as any other present safe file. A changed core file changes its context revision and can force delta/bootstrap. | No provenance is fabricated or adopted. Its current bytes can make an exact create/update/delete request stale before journaling. |
 | Unsafe or unsupported | It is excluded during metadata discovery when the failure is entry-local; an exact open fails closed. A listed file whose bytes later prove oversized, invalid UTF-8, or NUL-containing fails when opened. | It cannot be published through the unsafe identity. |
@@ -1436,12 +1459,13 @@ canonical story sources.
 
 ## Application storage and recovery mechanism
 
-The #519 implementation is a private persistence owner beneath
-`WritingArtifactRepository`. It is not exported and has no direct user, CLI,
-lead, provider, confirmation, or Git entry point. #491 will supply the separate
-Apply confirmation authority, and #520 will expose the repository application
-seam. The retained `commit_consensus` method is only a temporary translator for
-its existing native caller.
+The #519 private persistence owner now sits beneath the #520
+`WritingArtifactRepository.apply_artifact_changes()` seam. The repository is a
+module-supported internal component, not a package-facade export or installed
+CLI command. It accepts application authority but does not obtain it: #491 will
+supply the separate lead/user Apply-confirmation workflow. It has no provider,
+agent, context, or Git entry point. The retained `commit_consensus` method is
+only a temporary translator for its existing native caller.
 
 Repository construction remains I/O-free. Every authoritative catalog,
 canonical-source, explicit-reference, and application operation then uses one
@@ -1531,6 +1555,42 @@ exact journal forward to new authority, verifies already-complete new
 authority, or fails closed without returning data. The catalog is published
 last, so it never intentionally advertises a partial new set.
 
+### User and runtime scenarios
+
+The exact request identifies the intended operations; the result reports only
+terminal repository facts. Read the pair together. A result does not contain
+story text, a complete catalog, confirmation evidence, or automatic context/Git
+effects. Call `catalog()` separately when current membership is needed.
+
+| User intent and exact request | Repository-visible output |
+| --- | --- |
+| Repair one incomplete core document with a patch to `core_documents/character_sheets.md`, with that core path attached to the reviewed evidence. | `applied`; one affected path and one final core path/kind/SHA-256 fact. The repository does not claim that a lead obtained confirmation. |
+| Replace `manuscript/part-01/opening.md` after review against the sorted attached paths `core_documents/character_sheets.md` and `core_documents/narrative_rules.md`. | `applied`; the manuscript path and final digest. Attached core paths are relationship-review facts, not implicit write targets. |
+| Repair multi-file consistency in one request by patching `global_outline.md`, replacing `opening.md`, and patching every affected inbound manuscript link. | `applied`; every operation path appears in the affected/final/rename/delete facts. Omitting a path from the request is not deletion. |
+| Reject the proposal or request a revision before Apply. | #491 must not call this method. There is no result, journal, catalog change, or artifact write. A revised candidate needs a fresh exact request and confirmation. |
+
+For example, after #491 eventually records confirmation it may pass an
+already-built request to the repository:
+
+```text
+input: ArtifactApplicationRequest(
+  application_id="application-1",
+  operations=(patch core character sheet, replace manuscript),
+  attached_core_paths=("core_documents/character_sheets.md",)
+)
+call: repository.apply_artifact_changes(request)
+output: ArtifactApplicationResult(
+  state="applied",
+  affected_paths=("core_documents/character_sheets.md",
+                  "manuscript/part-01/opening.md"),
+  final_artifacts=(path/kind/SHA-256 facts for those two paths),
+  rename_lineage=(), deletion_provenance=()
+)
+```
+
+This is readable shorthand for the typed values; callers do not pass that text
+or a dictionary to the method.
+
 ### Explicit outcomes
 
 **Success.** The sample request returns the exact `applied` result shown above.
@@ -1539,12 +1599,13 @@ destination. It omits the rename source and deleted manuscript; their immutable
 lineage/deletion facts remain in the application record. This operation does not
 stage a Git index, create a Git commit, move `HEAD`, or update a ref.
 
-**Stale or drifted input.** Suppose
+**Immediate drift.** Suppose
 `manuscript/part-01/opening.md` changes after the request was built. Base-state
-projection or relationship/correlation revalidation fails before the journal:
+projection fails before the journal and the seam raises a content-free
+`ArtifactApplicationError` with `code == drift`:
 
 ```text
-result: content-free validation/application/workspace error
+result: error.code = drift
 canonical target writes: 0
 application records: 0
 catalog changes: 0
@@ -1561,6 +1622,13 @@ or new state; recovery idempotently publishes the remaining new targets, record,
 and catalog, verifies them, and retires the journal. The caller then observes
 the complete new state, never a repository-returned partial state.
 
+```text
+input after interruption: apply the same exact request again
+internal first step: recover and finalize the existing journal
+output: unchanged with the original affected/final/rename/delete facts
+new application publication: none
+```
+
 **Crash after catalog publication.** Recovery accepts only the exact catalog-
 after image with every new target and immutable record already matching. It
 verifies and retires the same journal; it does not replay or invent another
@@ -1573,6 +1641,12 @@ provenance with state `unchanged`. It writes no target, record, catalog, or
 journal again. These are the original historical result facts even if later
 applications have since changed current membership.
 
+**Corruption.** Malformed/noncanonical catalog or application records, unsafe
+repository metadata, or another persistent format/security failure maps to
+`error.code = corruption`. The error contains no story text or raw internal
+exception. Preserve the workspace and restore verified exact metadata; do not
+retry the request as though it were merely stale.
+
 **Recovery blocked.** A changed journal, target matching neither old nor new,
 catalog matching neither exact before nor after image, missing/divergent
 application record, alias/link substitution, or invalid ledger sequence during
@@ -1581,6 +1655,27 @@ authoritative reads and writes. Stop all workspace processes and restore one
 complete trusted application state. Do not hand-edit or delete the marker or
 partial evidence to force a retry. An independent catalog/ledger audit failure
 without a pending journal also fails closed but need not create this marker.
+
+At the repository seam the durable marker maps to
+`error.code = recovery_required`. Preserve every target, journal, application
+record, catalog, and marker; stop writers and perform operator recovery. An
+automatic retry, reset, cleanup, or replay is unsafe.
+
+### Reference and later-Git consequences
+
+Application does not mutate captured reference bytes or silently refresh an
+agent's context. If a captured source is patched, replaced, renamed, or deleted,
+later `revalidate_reference_operation(..., checkpoint="after_application")`
+fails with reference `drift`. Existing evidence and invocation events are
+retained, and one terminal operation event is appended with that checkpoint and
+outcome. The old authorization cannot continue; capture a new reference after
+the new artifact state is accepted. Here “checkpoint” is a caller-named
+reference revalidation point, not a Git/session checkpoint.
+
+Application also does not stage or commit Git. A later confirmed story-commit
+workflow must separately prepare exact Git evidence from the applied state and
+obtain its own fresh Commit decision. The application result alone is neither
+Git authority nor proof that the user confirmed Commit.
 
 <a id="provenance-and-work-history"></a>
 
@@ -1642,8 +1737,9 @@ manual or tool-driven filesystem changes only after every workspace process has
 stopped, then restart and let source and publication validation report the result.
 
 The catalog, private application store, and repository are module-supported
-internals used by the runtime; the store is not re-exported. #520 will add the
-public repository application seam. Exact run signatures are in
+internals used by the runtime; neither repository nor store is re-exported.
+`apply_artifact_changes()` is the one exact request-only repository application
+seam. Exact run signatures are in
 [Runtime API](runtime-api.md), workspace topology in
 [Session storage](configuration/session-storage.md), filesystem consequences in
 [Filesystem safety](../operations/filesystem-safety.md), and debate sequencing

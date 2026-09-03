@@ -573,6 +573,24 @@ guessing. Users may see an infrastructure failure followed by successful
 recovery on the next repository artifact access; inspect the associated debate
 because its result and lifecycle are outside the artifact transaction.
 
+The `apply_artifact_changes(request)` seam exposes only fixed content-free
+outcomes:
+
+| What happened | External result and safe next action |
+| --- | --- |
+| The exact first application completes. | Immutable `applied` result. Inspect its affected/final/rename/delete facts; call `catalog()` separately for complete current membership. |
+| The same completed request is retried after a lost response. | Immutable `unchanged` result with the original historical facts and no republish. |
+| Current artifact bytes no longer match the request before journaling. | `error.code == ArtifactApplicationErrorCode.DRIFT` (`"drift"`); reread, rebuild, review, and obtain fresh Apply confirmation. No target was written. |
+| Durable catalog/application state is malformed or unsafe without a recovery block. | `error.code == ArtifactApplicationErrorCode.CORRUPTION` (`"corruption"`); stop writers, preserve evidence, and restore verified exact metadata. |
+| Journal recovery cannot establish exact old/new authority and records a block marker. | `error.code == ArtifactApplicationErrorCode.RECOVERY_REQUIRED` (`"recovery_required"`); do not retry, reset, clean, or delete evidence. Perform operator recovery from a complete trusted state. |
+
+A recoverable crash is not reported as a partial application on the next
+authoritative call: that call completes or verifies the existing journal first.
+Reject and Revise are not repository outcomes; #491 must leave this seam
+uninvoked. Recovery does not infer confirmation, refresh agent context, call a
+provider, or stage/commit Git. Any later Git operation has separate evidence
+and confirmation.
+
 Application temporaries live under the repository's separate `staging/`
 directory rather than `transactions/`. Failed `.tmp` bytes, prior `.held`
 bytes, failed published `.retired` bytes, and finished `.completed` journals are

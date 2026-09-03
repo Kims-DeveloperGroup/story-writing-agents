@@ -929,8 +929,22 @@ interpreter for #519. `WritingArtifactRepository` owns one in-process lock and
 one permanent workspace lease; every authoritative source, explicit-reference,
 catalog, and application operation acquires both and runs recovery before it
 reads current artifact authority. The private store uses existing
-descriptor-safe storage and is not exported. #520 will add the public repository
-application seam, and #491 will supply separate Apply confirmation authority.
+descriptor-safe storage and is not exported. #520 adds the module-supported
+internal `apply_artifact_changes(request)` repository seam; neither repository
+nor store is exported by a package facade. #491 will separately supply lead/user
+Apply-confirmation authority.
+
+The seam accepts exactly one frozen `ArtifactApplicationRequest`, never prose,
+a mapping, a mutable wrapper, or a subclass. The request owns its exact
+content-bearing change set and sorted canonical `attached_core_paths`; those
+paths are review evidence, not implicit write targets. Before taking the lease,
+the repository revalidates the request shape and correlation. It then takes one
+process lock and lease and delegates once to the private store, which rereads
+the complete current state and recomputes change-set and relationship authority
+before journaling. The immutable result is `applied` for the first effective
+invocation or `unchanged` for an exact completed retry. The request/result pair,
+not the result alone, supplies operation classification plus affected, final,
+rename-lineage, and deletion facts; a result is not a complete catalog.
 
 One immutable schema-1 transaction journal contains the exact request and target
 bytes, catalog-before and schema-2 catalog-after images, and the immutable
@@ -967,6 +981,17 @@ journal retirement is completed or verified by recovery. A byte-identical retry
 after a completed application or lost response returns `unchanged` with the
 original exact result facts and no republish. Reusing the application ID with
 different request bytes is correlation drift and fails without mutation.
+
+Immediate base-state drift maps to public content-free `drift`; malformed or
+unsafe durable state maps to `corruption`; a durable recovery-block marker maps
+to `recovery_required`. These errors do not expose story bytes or underlying
+exception context. A recoverable interruption with an exact journal is instead
+completed or verified before the next repository-owned authoritative access.
+
+This seam neither confirms nor rejects a proposal, refreshes prompt context,
+calls a provider or agent, nor stages or commits Git. Reject and Revise mean
+#491 does not invoke it. A later story-commit action must independently inspect
+the applied state and obtain fresh Git-specific authority.
 
 Application records, catalog, and results contain paths, identifiers, digests,
 current membership, lineage, and delete provenance but no story bodies.
