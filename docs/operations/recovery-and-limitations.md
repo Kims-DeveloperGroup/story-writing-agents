@@ -16,8 +16,8 @@
 > repair, live switching, automation picker UI, and Windows console emulation
 > are not available.
 > Package-internal session Git-resource inspection, provisioning, exact-prefix
-> resume, and require-ready validation are available for #455 composition, but
-> are not wired to current `story session` commands.
+> resume, and require-ready validation are wired into explicit session Create;
+> Reopen and Pause assess existing correlated resources without provisioning.
 > Explicit SQLite provisioning recognizes only one exact
 > interrupted-publication alias shape.
 
@@ -34,7 +34,7 @@ migrates, upgrades, or resets other state.
 
 | Observation or failure | Meaning | Safe response |
 | --- | --- | --- |
-| Success JSON and no journal | The marker, exact 22-file scaffold, one parentless `main` commit, index/tree, and clean status were verified after journal removal. | Keep the original root pristine. Later mutable session and runtime state belongs in the exact sibling/internal resources after #455 composition. |
+| Success JSON and no journal | The marker, exact 22-file scaffold, one parentless `main` commit, index/tree, and clean status were verified after journal removal. | Keep the original root pristine. Mutable session and runtime state belongs in the exact sibling/internal resources provisioned by session Create. |
 | `ConfigurationError: effective Git identity is unavailable or invalid` | The runtime did not invent an author/committer. Exact scaffold/journal bytes may exist, but an absent Git repository was not created. | Configure a valid effective Git author and committer under normal host policy, then run the same init command in a fresh process. |
 | Exact `.story-writing-agents-initialize-v2.json` remains | Initialization stopped after durable progress. The failed `Workspace` object is terminal. | Preserve all bytes and rerun with a fresh object/process. It will validate every present byte and continue only missing exact steps. |
 | `WorkspaceVersionUnsupportedError` | A recognizable markerless/pre-v2 root or unsupported numeric marker/journal was found. | Preserve it and create a separate new workspace. Migration and compatibility are unsupported. |
@@ -64,9 +64,9 @@ initializes.
 ## External Git operation recovery
 
 The direct Git facade can inspect an externally started operation without
-running Git or mutating the repository. This observation is not yet wired to a
-session command or lifecycle guard; the internal #527 reconciler can now
-correlate it with session evidence, while #528 will enforce lifecycle blocking.
+running Git or mutating the repository. Session transition assessment now
+correlates that observation with active or idle owner evidence and blocks
+enter, leave, and pause when a stable external operation is present.
 
 | Observed kind | User meaning and one safe response |
 | --- | --- |
@@ -120,22 +120,25 @@ offline. Do not retry merely because partial metadata may have been read.
 
 These reads never continue, abort, reset, clean, checkout, stage, commit, or
 repair Git. They also do not establish which story session owns the worktree.
-#527 now correlates those observations internally, and #528 will enforce
-lifecycle blocking; #539 itself provides neither orchestration nor a user
-command. See the
+The recovery reconciler and transition assessor correlate those observations
+internally, while the CLI/controller consume the resulting operation
+permissions. The linked-read boundary itself provides neither orchestration nor
+a user command. See the
 [linked-worktree read contract](../reference/git-adapter.md#linked-worktree-status-and-log).
 
 <a id="session-git-resource-recovery"></a>
 
 ## Session Git-resource recovery
 
-This recovery contract belongs to the package-internal #504 seam. Current
-`story session create` and `story session reopen` do not invoke it; their
-provider-session state is not evidence that these Git resources are ready.
+This recovery contract belongs to the package-internal session-resource seam.
+`story session create` and interactive Create now provision and verify the
+exact resource triple before lifecycle creation. Reopen never provisions a
+missing triple; after acquiring lifecycle access it relies on transition
+assessment to prove the existing resources and history.
 
 | Observation or result | Meaning | Safe response |
 | --- | --- | --- |
-| `absent` / `create` | No journal, requested branch/ref, or registered worktree exists. Provision still performs a separate sibling-path collision preflight. | #455 may invoke explicit Create when available. Reopen remains read-only and fails rather than creating. |
+| `absent` / `create` | No journal, requested branch/ref, or registered worktree exists. Provision still performs a separate sibling-path collision preflight. | Explicit Create may provision it. Reopen remains read-only and fails rather than creating. |
 | `provisioning` / `retry_create` | The immutable journal and an exact ordered prefix exist. This includes a complete triple whose journal removal or post-removal verification did not finish. | Preserve all facts and retry the same Create operation. It reinspects before attempting only the next missing exact step. |
 | `ready` / `reopen` | The journal is absent and the exact correlated branch, ref, worktree, baseline root, and seed root passed final verification. | Reopen or repeat Create may return the same identity. Neither creates a duplicate. |
 | `outcome_unknown` / `operator_recovery` | A mutation may have happened, but subsequent inspection could not prove whether it did. | Stop automatic replay and all workspace writers. Inspect the complete repository and sibling path with trusted local tools before deciding a recovery. |
@@ -277,12 +280,11 @@ and [checkpoint contract](../reference/git-adapter.md#package-internal-session-c
 
 ## Correlated session-recovery projection
 
-Issue #526 adds a pure package API that converts already gathered, immutable
-owner facts for one active story workflow into one content-free state and one
-safe next-action label. The internal #527 reconciler now gathers stable owner
-facts and delegates to it, but neither component is wired to the installed
-CLI or performs the projected action. #528 will own lifecycle presentation and
-enforcement.
+The pure package API converts already gathered, immutable owner facts for one
+active story workflow into one content-free state and one safe next-action
+label. The internal reconciler gathers stable owner facts and delegates to it;
+the transition assessor preserves that exact result for lifecycle commands.
+Neither component performs the projected action.
 
 <a id="session-recovery-owner-reconciliation"></a>
 
@@ -343,8 +345,8 @@ cleans evidence, or performs `next_action`.
 | `outcome_unknown` | One authoritative owner is still running, provisioning, ownership-unknown, or otherwise cannot prove its outcome. A session-history operation summary is sufficient even when its optional detailed record is absent. | `inspect_owner_outcome` |
 | `recovery_required` | An owner or session-history summary already requires recovery, external Git is active, a predecessor is missing, or cross-owner/repository facts contradict one another. | `operator_recovery` |
 
-The action names are instructions for a later controller, not callable
-authority. Users can use the projection to understand which exact decision or
+The action names are instructions consumed by the lifecycle controller, not
+callable authority. Users can use the projection to understand which exact decision or
 inspection should happen next. They cannot use it to call a provider, apply an
 artifact, stage or commit Git data, reconstruct a capability, retry an
 operation, or continue/abort/reset/clean a repository. For
@@ -501,25 +503,36 @@ codec, migration, or compatibility reader. See the
 
 ## Story-session transition assessment
 
-The package-internal `SessionTransitionAssessor` gives a later controller one
-content-safe answer about entering a destination, leaving a source, or pausing
-a session. It does not perform or authorize the transition. In particular,
-`enter_destination` means only that a controller may proceed with attachment;
-it grants no provider, artifact Apply, staging, or commit authority. A permitted
-leave or pause lets that controller proceed through the existing ownership-
-release path, but this assessment itself neither acquires nor releases a claim.
+The package-internal `SessionTransitionAssessor` gives the backend, CLI, and
+interactive controller one content-safe answer about entering a destination,
+leaving a source, or pausing a session. It does not perform or authorize the
+transition. In particular, `enter_destination` means only that a controller may
+proceed with attachment; it grants no provider, artifact Apply, staging, or
+commit authority. A permitted leave or pause lets that controller proceed
+through the existing ownership-release path, but this assessment itself
+neither acquires nor releases a claim.
 
 This is the canonical permission matrix:
 
-| Assessment / nested recovery state | `next_action` | Enter destination | Leave source | Pause session |
-| --- | --- | --- | --- | --- |
-| `idle_ready` | `begin_with_lead` | Yes | Yes | Yes |
-| Active `proposed`, `reviewed`, `awaiting_application`, `committed`, or `rejected` | `follow_active_recovery` | Yes | Yes | Yes |
-| Active `applied_not_committed` or `staged` | `follow_active_recovery` | Yes | No | No |
-| `outcome_unknown` | `inspect_owner_outcome` | No | No | No |
-| `recovery_required` | `operator_recovery` | No | No | No |
+The outer `scope` is exactly `idle` when no active conversation evidence is
+accepted and `active` when a conversation/store pair is reconciled.
+The ordered operation tokens are exactly `enter_destination`, `leave_source`,
+and `pause_session`; “enter, leave, pause” below abbreviates those values.
 
-For active work, the assessment contains the exact nested #527 recovery result.
+| Nested/idle state | Outer state and next action | Outer owner / failure | Nested owner and next action | Allowed operations |
+| --- | --- | --- | --- | --- |
+| `idle_ready` | `idle_ready` / `begin_with_lead` | null / `none` | no nested result | enter, leave, pause |
+| `proposed` | `active` / `follow_active_recovery` | null / `none` | `lead` / `continue_with_lead` | enter, leave, pause |
+| `reviewed` | `active` / `follow_active_recovery` | null / `none` | `lead` / `request_application_confirmation` | enter, leave, pause |
+| `awaiting_application` | `active` / `follow_active_recovery` | null / `none` | `lead` / `submit_application_decision` | enter, leave, pause |
+| `applied_not_committed` | `active` / `follow_active_recovery` | null / `none` | `artifact_application` / `request_commit_confirmation` | enter only |
+| `staged` | `active` / `follow_active_recovery` | null / `none` | `story_commit` / `inspect_story_commit` | enter only |
+| `committed` | `active` / `follow_active_recovery` | null / `none` | `story_commit` / `continue_with_lead` | enter, leave, pause |
+| `rejected` | `active` / `follow_active_recovery` | null / `none` | `collaboration_history` or `story_commit` / `continue_with_lead` | enter, leave, pause |
+| `outcome_unknown` | `outcome_unknown` / `inspect_owner_outcome` | copied nested owner / `owner_outcome_unknown` | same owner / `inspect_owner_outcome` | none |
+| `recovery_required` | `recovery_required` / `operator_recovery` | copied nested owner / exact non-`none` failure | same owner / `operator_recovery` | none |
+
+For active work, the assessment contains the exact nested recovery result.
 Normal active progress has outer state `active`; its allowed operations come
 only from the nested state. Uncertainty or required recovery copies the nested
 `owner` and `failure_code` and allows nothing. Safe known recovery takes
@@ -610,10 +623,43 @@ output: {scope: idle, state: outcome_unknown,
          failure_code: owner_outcome_unknown, allowed_operations: []}
 ```
 
-The installed CLI and controller do not yet consume this evidence. #528 owns
-future presentation and lifecycle enforcement; until then, no command is made
-safe merely by constructing an assessment. The exact internal imports and
-signatures are in the
+The installed CLI and controller now consume this evidence immediately before
+their lifecycle mutations. Noninteractive commands serialize the full fixed
+assessment projection, including the nested active result; the interactive
+controller presents only `Scope`, `State`, `Next action`, `Owner`, `Failure`,
+and `Allowed operations` on denial. For example, a staged pause denial appears
+semantically as:
+
+```text
+session transition
+Scope: active
+State: active
+Next action: follow_active_recovery
+Owner: none
+Failure: none
+Allowed operations: enter_destination
+```
+
+The requested `pause_session` is absent, so the session stays ready and
+attached. On a destination-entry denial, the destination claim is released,
+the source is preserved, and no source-leave assessment occurs. On a
+source-leave denial, only the destination is released; the source attachment
+and default are preserved. Neither path resets, aborts, cleans, or deletes
+recovery evidence.
+
+Create/Reopen assessment follows resource/lifecycle mutation. A later denial
+does not delete a provisioned triple or roll a reopened session back to paused;
+the resulting lifecycle is released when possible and must be inspected before
+retry. Pause assessment precedes durable pause, so its denial does not write
+`paused`.
+
+Assessment invokes no provider, reconstructs or exposes no confirmation
+capability/content, and performs no projected recovery action. Allowed
+lifecycle movement does not bypass the existing lead/user confirmation path
+for later artifact or commit writes. `outcome_unknown` and
+`recovery_required` cannot be cleared by reset, abort, cleanup, default changes,
+or a lifecycle retry; preserve the evidence and follow the named owner/action.
+The exact internal imports and signatures are in the
 [package reference](../reference/package-api.md#session-transition-assessment-api).
 
 ## Session access recovery

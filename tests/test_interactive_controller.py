@@ -128,6 +128,17 @@ from story_writing_agents.session_lifecycle import (
     SessionDurableState,
     SessionLifecycleState,
 )
+from story_writing_agents.session_recovery import (
+    SessionRecoveryFailureCode,
+    SessionRecoveryOwner,
+)
+from story_writing_agents.session_recovery.transition_assessment import (
+    SessionTransitionAssessment,
+    SessionTransitionAssessmentState,
+    SessionTransitionNextAction,
+    SessionTransitionOperation,
+    SessionTransitionScope,
+)
 from story_writing_agents.workspace import (
     Workspace,
 )
@@ -146,6 +157,38 @@ _UPDATED = "2026-01-02T00:00:00+00:00"
 _COLLIDING_A = "c_0123456789" + ("a" * 22)
 _COLLIDING_B = "c_0123456789" + ("b" * 22)
 _UNIQUE_C = "c_fedcba9876" + ("c" * 22)
+
+
+def _idle_transition_assessment(
+    session_id: str,
+    *,
+    allowed: bool,
+) -> SessionTransitionAssessment:
+    """Build one exact idle transition result for controller ordering tests."""
+
+    return SessionTransitionAssessment(
+        session_id=session_id,
+        conversation_id=None,
+        scope=SessionTransitionScope.IDLE,
+        state=(
+            SessionTransitionAssessmentState.IDLE_READY
+            if allowed
+            else SessionTransitionAssessmentState.RECOVERY_REQUIRED
+        ),
+        next_action=(
+            SessionTransitionNextAction.BEGIN_WITH_LEAD
+            if allowed
+            else SessionTransitionNextAction.OPERATOR_RECOVERY
+        ),
+        owner=None if allowed else SessionRecoveryOwner.REPOSITORY_STATUS,
+        failure_code=(
+            SessionRecoveryFailureCode.NONE
+            if allowed
+            else SessionRecoveryFailureCode.REPOSITORY_STATE_MISMATCH
+        ),
+        allowed_operations=tuple(SessionTransitionOperation) if allowed else (),
+        recovery_result=None,
+    )
 
 
 def _confirmation_prompt(message: str, *, default: bool) -> str:
@@ -11627,6 +11670,14 @@ class ControllerSwitchTests(ControllerTestCase):
             ),
             mock.patch.object(backend, "close", side_effect=record_close),
             mock.patch.object(
+                backend,
+                "assess_session_transition",
+                side_effect=lambda **kwargs: _idle_transition_assessment(
+                    kwargs["lifecycle_state"].session_id,
+                    allowed=True,
+                ),
+            ),
+            mock.patch.object(
                 controller_core_module,
                 "save_default_session",
                 side_effect=record_select,
@@ -11646,6 +11697,7 @@ class ControllerSwitchTests(ControllerTestCase):
                 "attach:destination",
                 "get:destination",
                 "get:destination",
+                "get:source",
                 "select:destination",
                 "detach:source",
                 "get:source",
@@ -11703,6 +11755,105 @@ class ControllerSwitchTests(ControllerTestCase):
         self.assertNotIn("secret-owner-token", rendered)
         self.assertEqual(rendered.count("Session: source (opened)\n"), 1)
 
+    def test_destination_enter_denial_never_assesses_or_releases_source(self) -> None:
+        workspace, backend, controller, callbacks = self.prepare_switch()
+        operations: list[tuple[str, SessionTransitionOperation]] = []
+        original_detach = backend.release_session_access
+
+        def assess(**kwargs: object) -> SessionTransitionAssessment:
+            lifecycle = kwargs["lifecycle_state"]
+            operation = kwargs["requested_operation"]
+            assert type(lifecycle) is SessionLifecycleState
+            assert type(operation) is SessionTransitionOperation
+            operations.append((lifecycle.session_id, operation))
+            return _idle_transition_assessment(
+                lifecycle.session_id,
+                allowed=lifecycle.session_id != "destination",
+            )
+
+        with (
+            mock.patch.object(
+                backend,
+                "assess_session_transition",
+                side_effect=assess,
+            ),
+            mock.patch.object(
+                backend,
+                "release_session_access",
+                wraps=original_detach,
+            ) as detach,
+        ):
+            self.assertEqual(controller.run_session_lobby(), 0)
+
+        self.assertEqual(
+            operations,
+            [
+                ("source", SessionTransitionOperation.ENTER_DESTINATION),
+                ("destination", SessionTransitionOperation.ENTER_DESTINATION),
+            ],
+        )
+        self.assertEqual(
+            [call.args[0] for call in detach.call_args_list],
+            ["destination", "source"],
+        )
+        self.assertEqual(load_cli_context(workspace).default_session_id, "source")
+        rendered = "".join(callbacks.records)
+        self.assertIn("State: recovery_required", rendered)
+        self.assertNotIn("Session: destination (opened)", rendered)
+
+    def test_source_leave_denial_releases_only_destination_and_preserves_source(
+        self,
+    ) -> None:
+        workspace, backend, controller, callbacks = self.prepare_switch()
+        operations: list[tuple[str, SessionTransitionOperation]] = []
+        original_detach = backend.release_session_access
+
+        def assess(**kwargs: object) -> SessionTransitionAssessment:
+            lifecycle = kwargs["lifecycle_state"]
+            operation = kwargs["requested_operation"]
+            assert type(lifecycle) is SessionLifecycleState
+            assert type(operation) is SessionTransitionOperation
+            operations.append((lifecycle.session_id, operation))
+            denied = (
+                lifecycle.session_id == "source"
+                and operation is SessionTransitionOperation.LEAVE_SOURCE
+            )
+            return _idle_transition_assessment(
+                lifecycle.session_id,
+                allowed=not denied,
+            )
+
+        with (
+            mock.patch.object(
+                backend,
+                "assess_session_transition",
+                side_effect=assess,
+            ),
+            mock.patch.object(
+                backend,
+                "release_session_access",
+                wraps=original_detach,
+            ) as detach,
+        ):
+            self.assertEqual(controller.run_session_lobby(), 0)
+
+        self.assertEqual(
+            operations,
+            [
+                ("source", SessionTransitionOperation.ENTER_DESTINATION),
+                ("destination", SessionTransitionOperation.ENTER_DESTINATION),
+                ("source", SessionTransitionOperation.LEAVE_SOURCE),
+            ],
+        )
+        self.assertEqual(
+            [call.args[0] for call in detach.call_args_list],
+            ["destination", "source"],
+        )
+        self.assertEqual(load_cli_context(workspace).default_session_id, "source")
+        rendered = "".join(callbacks.records)
+        self.assertIn("State: recovery_required", rendered)
+        self.assertNotIn("Session: destination (opened)", rendered)
+
     def test_default_failure_releases_destination_before_source_cleanup(self) -> None:
         cases = (
             (SessionIdError("selection-secret"), 0),
@@ -11726,6 +11877,14 @@ class ControllerSwitchTests(ControllerTestCase):
                     return original_detach(session_id)
 
                 with (
+                    mock.patch.object(
+                        backend,
+                        "assess_session_transition",
+                        side_effect=lambda **kwargs: _idle_transition_assessment(
+                            kwargs["lifecycle_state"].session_id,
+                            allowed=True,
+                        ),
+                    ),
                     mock.patch.object(
                         controller_core_module,
                         "save_default_session",
@@ -11924,11 +12083,21 @@ class ControllerEndAndCleanupTests(ControllerTestCase):
             "yes",
             "/quit",
         )
-        with mock.patch.object(
-            backend,
-            "release_session_access",
-            wraps=backend.release_session_access,
-        ) as detach:
+        with (
+            mock.patch.object(
+                backend,
+                "assess_session_transition",
+                side_effect=lambda **kwargs: _idle_transition_assessment(
+                    kwargs["lifecycle_state"].session_id,
+                    allowed=True,
+                ),
+            ),
+            mock.patch.object(
+                backend,
+                "release_session_access",
+                wraps=backend.release_session_access,
+            ) as detach,
+        ):
             self.assertEqual(controller.run_session_lobby(), 0)
         detach.assert_not_called()
         self.assertEqual(

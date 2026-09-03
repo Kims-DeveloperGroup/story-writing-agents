@@ -21,10 +21,11 @@ The stable inventories in this revision are:
 | `story_writing_agents.workspace` | 3 | `Workspace`, `initialize_workspace`, and `FilesystemConversationCatalog` |
 | `story_writing_agents.writing_artifacts` | 76 | Canonical artifact/reference values plus pure exact change-set, relationship-policy, and artifact-application contracts |
 
-The production graph has 119 modules, 431 dependency edges, no cycles, and 104
-package-root exports. The conversations owners contribute 54 event exports and
-20 context exports; their facade bindings are identical to their owner
-bindings.
+The production graph has 121 modules, 456 dependency edges, no cycles, and 104
+package-root exports. Session-transition integration contributes seven
+accepted orchestration-facing edges without adding an assessment facade
+export. The conversations owners contribute 54 event exports and 20 context
+exports; their facade bindings are identical to their owner bindings.
 
 Import the management facade explicitly:
 
@@ -83,8 +84,9 @@ exact internal-ref checkpoint execution/recovery; they reuse the shared
 history, lease, and typed internal-checkpoint process profile.
 None is re-exported by the project, Git, or workspace facade; they do not
 expand the 104/22/3 export counts and are not a stable application API or
-arbitrary Git capability. #455 will compose session resources, #491 will
-produce applied-change evidence, and #492 will own the confirmation UI. See
+arbitrary Git capability. Installed session Create now composes exact resource
+provisioning through `AgentBackend`; application evidence and confirmation
+remain owned by their existing workflow boundaries. See
 [Package-internal session Git resources](git-adapter.md#package-internal-session-git-resources),
 [exact story commits](git-adapter.md#package-internal-exact-story-commits), and
 [session checkpoints](git-adapter.md#package-internal-session-checkpoints).
@@ -252,10 +254,10 @@ operation state from the index.
 This contract classifies active correlated workflows only and rejects an idle
 shape as `unsupported_shape`. The separate package-internal transition
 assessor described below supplies the stable idle proof. There is no codec,
-pre-v2 reader, migration, or legacy compatibility path. Issue #527 now gathers
-and reconciles active owner facts through an internal direct module, while
-#528 will decide how a runtime lifecycle or CLI presents and enforces a
-result. Neither behavior is exported by this facade. See
+pre-v2 reader, migration, or legacy compatibility path. The internal
+reconciler gathers active owner facts; lifecycle integration preserves its
+result and enforces the returned operation set. Neither behavior is exported
+by this facade. See
 [Correlated session-recovery projection](../operations/recovery-and-limitations.md#correlated-session-recovery-projection)
 for every state, safe action, and sample input/output.
 
@@ -375,6 +377,24 @@ inspect(
 ) -> SessionTransitionAssessment
 ```
 
+The package-supported backend consumes this direct-module boundary through:
+
+```text
+AgentBackend.assess_session_transition(
+    *, lifecycle_state: SessionLifecycleState,
+    requested_operation: SessionTransitionOperation,
+    conversation_id: str | None = None,
+    collaboration_store: CollaborationEventStore | None = None,
+    reviewed_proposal: SessionReviewedProposalEvidence | None = None,
+    artifact_application: SessionArtifactApplicationEvidence | None = None,
+) -> SessionTransitionAssessment
+```
+
+The method validates the exact operation enum, constructs one call-local
+assessor, delegates once, requires matching session identity, and returns the
+same assessment object. The operation is then consumed by the CLI/controller
+against `allowed_operations`; it is not forwarded as execution authority.
+
 Construction accepts one normalized absolute `Path`, retains only that root,
 and performs no I/O. Active inspection requires both `conversation_id` and
 `collaboration_store`. It creates one call-local `SessionRecoveryReconciler`,
@@ -396,11 +416,20 @@ running, uncertain, recovery-required, staged, or preserved-index operation.
 ref, proof or repository/worktree identity digest, process identity, live
 handle, or executable capability. Inspection does not acquire or release a
 claim, call a provider, apply an artifact, run a Git command that mutates
-state, pause a session, or
-perform any allowed operation or process-lifecycle action. It adds no codec or
-persisted format, so there is no migration or compatibility reader. The result
-is evidence for #528's future controller enforcement, not transition
-authority. See the
+state, pause a session, or perform any allowed operation or process-lifecycle
+action. It adds no codec or persisted format, so there is no migration or
+compatibility reader.
+
+Installed Create/Reopen and interactive destination attachment consume
+`enter_destination`; interactive switching additionally consumes
+`leave_source`; Pause consumes `pause_session`. An eligible persisted active
+conversation default supplies the conversation/store pair. Missing or archived
+defaults use idle evidence. Noninteractive JSON exposes only the fixed outer
+fields and the fixed nested `SessionRecoveryResult`; interactive denial exposes
+only the six content-safe presentation fields. Neither path reconstructs
+reviewed evidence, confirmation choices, story bytes, or a capability, and no
+provider runs during assessment. The result remains transition evidence, not
+Apply, commit, or provider authority. See the
 [canonical permission matrix and examples](../operations/recovery-and-limitations.md#session-transition-assessment).
 
 <a id="structured-collaboration-history-boundary"></a>

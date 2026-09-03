@@ -83,27 +83,138 @@ story session pause [SESSION] [--workspace PATH]
 ```
 
 Create requires a new explicit ID. Reopen and pause may use the saved default.
-Create/reopen temporarily acquire the session, validate lifecycle state, save
-the default, then release access. Pause persists `paused` and releases access.
+Create verifies absence, validates provider configuration, provisions and
+verifies the exact session Git resources, creates/acquires the lifecycle,
+correlates a post-read, assesses `enter_destination`, saves the default only
+when allowed, then releases access. Reopen pre-reads an existing lifecycle,
+validates configuration, acquires ready state or durably reopens paused state,
+correlates a post-read, resolves active/default conversation evidence, assesses
+`enter_destination`, saves the default only when allowed, then releases.
 
-Success prints:
+Pause pre-reads lifecycle state and acquires access only when needed. It
+resolves the same active/default conversation evidence, assesses
+`pause_session`, and persists `paused` plus release only when allowed. A denied
+pause releases only a claim acquired by that command; a claim already held by
+the caller is retained. Lifecycle assessment calls no story provider.
+
+An eligible persisted active conversation default and the configured catalog's
+same-provenance event store produce active evidence. A missing default, missing
+catalog record, or archived default produces idle evidence without rewriting
+the saved selection. Create deliberately assesses its newly created session as
+idle. Active assessment includes the exact nested recovery result; idle
+assessment requires stable clean resource/history/Git observations.
+
+<a id="session-transition-json"></a>
+
+### Session-transition JSON
+
+Successful Create with stable idle evidence prints:
 
 ```json
 {
   "access_state": "claimable",
+  "assessment": {
+    "allowed_operations": [
+      "enter_destination",
+      "leave_source",
+      "pause_session"
+    ],
+    "conversation_id": null,
+    "failure_code": "none",
+    "next_action": "begin_with_lead",
+    "owner": null,
+    "recovery_result": null,
+    "scope": "idle",
+    "session_id": "novel",
+    "state": "idle_ready"
+  },
   "durable_state": "ready",
   "session_id": "novel"
 }
 ```
 
-Pause reports `durable_state:"paused"`.
+Pause success has the same top-level shape and reports
+`durable_state: "paused"`. Reopen of an active awaiting-application workflow
+retains request `R9` and every fixed nested field; it does not expose revisions,
+digests, confirmation choices, story content, or capability:
 
-This JSON is provider-session lifecycle output. In the current revision it
-does not prove or trigger creation of the #504 Git branch, sibling worktree, or
-internal ref. Those resources have a separate package-internal lifecycle;
-#455 owns command wiring. Their five-state and recovery contract is documented
-in [Workspaces](../guides/workspaces.md#session-git-resources). #505 later owns
-confirmed story commits and internal checkpoints.
+```json
+{
+  "access_state": "claimable",
+  "assessment": {
+    "allowed_operations": [
+      "enter_destination",
+      "leave_source",
+      "pause_session"
+    ],
+    "conversation_id": "review_1",
+    "failure_code": "none",
+    "next_action": "follow_active_recovery",
+    "owner": null,
+    "recovery_result": {
+      "application_id": null,
+      "checkpoint_operation_id": null,
+      "collaboration_tail_sequence": 9,
+      "commit_id": null,
+      "confirmation_request_id": "R9",
+      "conversation_id": "review_1",
+      "correlation_id": "correlation-9",
+      "failure_code": "none",
+      "next_action": "submit_application_decision",
+      "owner": "lead",
+      "proposal_id": "proposal-9",
+      "reviewed_candidate_id": null,
+      "session_id": "story_review",
+      "state": "awaiting_application",
+      "story_commit_candidate_id": null,
+      "story_commit_operation_id": null
+    },
+    "scope": "active",
+    "session_id": "story_review",
+    "state": "active"
+  },
+  "durable_state": "ready",
+  "session_id": "story_review"
+}
+```
+
+An assessment denial also prints JSON and exits 2. Its `assessment` contains
+the state, next action, owner, failure, allowed operations, and any nested
+active recovery facts; `transition_denial` is null. For example, active
+`staged` permits only `enter_destination`, so Pause is denied while leaving the
+durable/default/conversation state unchanged.
+
+Create/Reopen assessment occurs after their lifecycle/resource work. That work
+is preserved rather than rolled back: a denied Create can leave verified
+resources and a ready lifecycle, and a denied Reopen of a paused session can
+leave it ready after release, although the new default is not saved. Read the
+reported durable/access fields and inspect recovery evidence before retrying.
+
+A lifecycle-only denial happens before transition assessment. For example,
+Reopen against a ready session held by another live local owner exits 2 with no
+stderr and prints:
+
+```json
+{
+  "access_state": "blocked_by_live_local_owner",
+  "assessment": null,
+  "durable_state": "ready",
+  "session_id": "novel",
+  "transition_denial": "lifecycle_not_ready_held_here"
+}
+```
+
+The same fixed `transition_denial` covers another lifecycle state that cannot
+reach the required local `ready + held_here` precondition; the exact
+`access_state` and `durable_state` explain which fact blocked it. No default is
+changed, no assessment is fabricated, and no provider runs.
+
+These JSON fields report lifecycle and transition evidence; they do not grant
+Apply, stage, commit, reset, abort, cleanup, or provider authority. Create now
+provisions the exact Git branch, sibling worktree, and internal ref. Reopen and
+Pause assess the existing correlated resources and never create missing ones.
+Runtime content writes still occur only through the existing lead/user
+confirmation path. See the [complete operation matrix and recovery behavior](../operations/recovery-and-limitations.md#session-transition-assessment).
 
 ## Directives and inspection
 
