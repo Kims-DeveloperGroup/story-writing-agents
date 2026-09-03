@@ -35,6 +35,9 @@ class ArtifactApplicationErrorCode(StrEnum):
     INVALID_PATH = "invalid_path"
     CORRELATION_MISMATCH = "correlation_mismatch"
     INVALID_RESULT = "invalid_result"
+    DRIFT = "drift"
+    CORRUPTION = "corruption"
+    RECOVERY_REQUIRED = "recovery_required"
 
 
 _ERROR_MESSAGES = {
@@ -59,6 +62,11 @@ _ERROR_MESSAGES = {
     ),
     ArtifactApplicationErrorCode.INVALID_RESULT: (
         "artifact application result is invalid"
+    ),
+    ArtifactApplicationErrorCode.DRIFT: ("artifact application authority has drifted"),
+    ArtifactApplicationErrorCode.CORRUPTION: ("artifact application state is corrupt"),
+    ArtifactApplicationErrorCode.RECOVERY_REQUIRED: (
+        "artifact application recovery is required"
     ),
 }
 
@@ -121,6 +129,7 @@ class ArtifactApplicationRequest:
     schema_version: int
     provenance: ArtifactApplicationProvenance
     change_set: ArtifactChangeSet = field(repr=False)
+    attached_core_paths: tuple[str, ...]
 
     def __post_init__(self) -> None:
         _schema_version(self.schema_version)
@@ -130,6 +139,7 @@ class ArtifactApplicationRequest:
         if type(self.change_set) is not ArtifactChangeSet:
             raise ArtifactApplicationError(ArtifactApplicationErrorCode.INVALID_SCHEMA)
         _revalidate_change_set(self.change_set)
+        _attached_core_paths(self.attached_core_paths)
         if self.provenance.change_set_digest != self.change_set.change_set_digest:
             raise ArtifactApplicationError(
                 ArtifactApplicationErrorCode.CORRELATION_MISMATCH
@@ -298,6 +308,7 @@ def serialize_artifact_application_request(
         _raise_failure(ArtifactApplicationErrorCode.INVALID_SCHEMA)
     return _canonical_json(
         {
+            "attached_core_paths": list(request.attached_core_paths),
             "change_set": change_set,
             "provenance": _provenance_value(request.provenance),
             "schema_version": request.schema_version,
@@ -312,7 +323,15 @@ def deserialize_artifact_application_request(
 
     value = _decode_canonical_json(data)
     try:
-        root = _object(value, {"change_set", "provenance", "schema_version"})
+        root = _object(
+            value,
+            {
+                "attached_core_paths",
+                "change_set",
+                "provenance",
+                "schema_version",
+            },
+        )
         change_set = deserialize_artifact_change_set(
             _canonical_json(root["change_set"])
         )
@@ -320,6 +339,9 @@ def deserialize_artifact_application_request(
             schema_version=_integer(root["schema_version"]),
             provenance=_decode_provenance(root["provenance"]),
             change_set=change_set,
+            attached_core_paths=_decode_attached_core_paths(
+                root["attached_core_paths"]
+            ),
         )
     except ArtifactApplicationError as failure:
         _raise_failure(failure.code)
@@ -462,6 +484,19 @@ def _canonical_path(value: object) -> ArtifactKind:
 def _artifact_identity(path: object, kind: object) -> None:
     if type(kind) is not ArtifactKind or _canonical_path(path) is not kind:
         raise ArtifactApplicationError(ArtifactApplicationErrorCode.INVALID_PATH)
+
+
+def _attached_core_paths(value: object) -> tuple[str, ...]:
+    if type(value) is not tuple:
+        raise ArtifactApplicationError(ArtifactApplicationErrorCode.INVALID_SCHEMA)
+    for path in value:
+        if _canonical_path(path) is not ArtifactKind.CORE_DOCUMENT:
+            raise ArtifactApplicationError(ArtifactApplicationErrorCode.INVALID_PATH)
+    if len(set(value)) != len(value) or value != tuple(
+        sorted(value, key=lambda item: item.encode("utf-8"))
+    ):
+        raise ArtifactApplicationError(ArtifactApplicationErrorCode.INVALID_PATH)
+    return value
 
 
 def _path_tuple(value: object) -> tuple[str, ...]:
@@ -616,6 +651,10 @@ def _decode_final_artifacts(
             )
         )
     return tuple(result)
+
+
+def _decode_attached_core_paths(value: object) -> tuple[str, ...]:
+    return tuple(_string(item) for item in _array(value))
 
 
 def _decode_lineages(value: object) -> tuple[ArtifactRenameLineage, ...]:

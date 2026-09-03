@@ -6,7 +6,7 @@ import hashlib
 import re
 import threading
 from pathlib import Path
-from typing import Mapping
+from typing import Mapping, NoReturn
 from uuid import uuid4
 
 from ..agents import CORE_DOCUMENTS, EXECUTION_SPECIALIST, LEAD_ORCHESTRATOR
@@ -22,6 +22,14 @@ from ._application_store import (
     ARTIFACT_SNAPSHOTS_DIRECTORY,
     ARTIFACT_STAGING_DIRECTORY,
     ArtifactApplicationStore,
+    ArtifactApplicationStoreFailure,
+    ArtifactApplicationStoreFailureCode,
+)
+from .application_contracts import (
+    ArtifactApplicationError,
+    ArtifactApplicationErrorCode,
+    ArtifactApplicationRequest,
+    ArtifactApplicationResult,
 )
 from .authorization import (
     ArtifactReferenceDelivery,
@@ -61,6 +69,23 @@ from .read_actions import (
 
 
 _SAFE_IDENTITY = re.compile(r"[A-Za-z0-9][A-Za-z0-9_-]{0,127}")
+_STORE_FAILURE_CODES = {
+    ArtifactApplicationStoreFailureCode.CORRUPTION: (
+        ArtifactApplicationErrorCode.CORRUPTION
+    ),
+    ArtifactApplicationStoreFailureCode.RECOVERY_REQUIRED: (
+        ArtifactApplicationErrorCode.RECOVERY_REQUIRED
+    ),
+}
+
+
+def _raise_application_failure(code: ArtifactApplicationErrorCode) -> NoReturn:
+    try:
+        raise ArtifactApplicationError(code) from None
+    except ArtifactApplicationError as failure:
+        failure.__cause__ = None
+        failure.__context__ = None
+        raise
 
 
 class WritingArtifactRepository:
@@ -97,6 +122,28 @@ class WritingArtifactRepository:
                 if hashlib.sha256(content).hexdigest() == entry.sha256:
                     current[path] = entry
             return ArtifactCatalog(current)
+
+    def apply_artifact_changes(
+        self,
+        request: ArtifactApplicationRequest,
+    ) -> ArtifactApplicationResult:
+        """Apply one exact immutable request under the repository lease."""
+
+        if type(request) is not ArtifactApplicationRequest:
+            _raise_application_failure(ArtifactApplicationErrorCode.INVALID_SCHEMA)
+        try:
+            request.__post_init__()
+        except ArtifactApplicationError as exc:
+            _raise_application_failure(exc.code)
+        except Exception:
+            _raise_application_failure(ArtifactApplicationErrorCode.INVALID_SCHEMA)
+        try:
+            with self._locked_repository():
+                return self._applications.apply(request)
+        except ArtifactApplicationStoreFailure as exc:
+            _raise_application_failure(_STORE_FAILURE_CODES[exc.code])
+        except (WorkspaceFormatError, WorkspaceSecurityError):
+            _raise_application_failure(ArtifactApplicationErrorCode.CORRUPTION)
 
     def list_paths(self) -> tuple[str, ...]:
         """Return every safe current canonical filesystem identity."""

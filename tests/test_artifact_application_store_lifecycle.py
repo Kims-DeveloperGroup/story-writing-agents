@@ -75,13 +75,14 @@ def _request(
     *,
     application_id: str,
     candidate_revision: int = 1,
+    attached_core_paths: tuple[str, ...] = (),
 ) -> ArtifactApplicationRequest:
     base = _current_state(repository)
     change_set = build_artifact_change_set(base, tuple(operation_factory(base)))
     validation = validate_artifact_relationships(
         base,
         change_set,
-        attached_core_paths=(),
+        attached_core_paths=attached_core_paths,
     )
     provenance = ArtifactApplicationProvenance(
         application_id=application_id,
@@ -97,6 +98,7 @@ def _request(
         ARTIFACT_APPLICATION_SCHEMA_VERSION,
         provenance,
         change_set,
+        attached_core_paths,
     )
 
 
@@ -104,8 +106,7 @@ def _apply(
     repository: WritingArtifactRepository,
     request: ArtifactApplicationRequest,
 ):
-    with repository._locked_repository():
-        return repository._applications.apply(request, attached_core_paths=())
+    return repository.apply_artifact_changes(request)
 
 
 def _seed_five_operation_state(root: Path) -> None:
@@ -421,7 +422,7 @@ class ArtifactApplicationLifecycleTests(_ApplicationStoreTestCase):
                     change_set_digest=change_set.change_set_digest,
                     relationship_validation_digest="sha256:" + "b" * 64,
                 )
-                request = ArtifactApplicationRequest(1, provenance, change_set)
+                request = ArtifactApplicationRequest(1, provenance, change_set, ())
                 with self.assertRaises(ArtifactRelationshipError):
                     _apply(repository, request)
                 self.assertEqual((root / path).read_bytes(), b"before")

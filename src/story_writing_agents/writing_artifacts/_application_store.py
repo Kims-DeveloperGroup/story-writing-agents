@@ -8,6 +8,9 @@ import json
 import re
 from collections.abc import Callable, Mapping
 from dataclasses import replace
+from enum import StrEnum
+from functools import wraps
+from typing import NoReturn
 from uuid import uuid4
 
 from ..errors import WorkspaceFormatError, WorkspaceSecurityError
@@ -39,6 +42,8 @@ from .catalog import (
 from .change_sets import (
     ArtifactChangeOperation,
     ArtifactChangeSet,
+    ArtifactChangeSetError,
+    ArtifactChangeSetErrorCode,
     ArtifactCreateOperation,
     ArtifactDeleteOperation,
     ArtifactPatchOperation,
@@ -86,6 +91,70 @@ _SHA256 = re.compile(r"[0-9a-f]{64}")
 _IDENTIFIER = re.compile(r"[A-Za-z0-9][A-Za-z0-9_-]{0,127}")
 
 
+class ArtifactApplicationStoreFailureCode(StrEnum):
+    CORRUPTION = "corruption"
+    RECOVERY_REQUIRED = "recovery_required"
+
+
+_STORE_FAILURE_MESSAGES = {
+    ArtifactApplicationStoreFailureCode.CORRUPTION: (
+        "artifact application state is corrupt"
+    ),
+    ArtifactApplicationStoreFailureCode.RECOVERY_REQUIRED: (
+        "artifact application recovery is required"
+    ),
+}
+
+
+class ArtifactApplicationStoreFailure(WorkspaceFormatError):
+    """Private fixed-message classification for persisted application state."""
+
+    def __init__(self, code: ArtifactApplicationStoreFailureCode) -> None:
+        if type(code) is not ArtifactApplicationStoreFailureCode:
+            raise TypeError("code must be an application store failure code")
+        self.code = code
+        super().__init__(_STORE_FAILURE_MESSAGES[code])
+
+
+def _raise_store_failure(
+    code: ArtifactApplicationStoreFailureCode,
+) -> NoReturn:
+    try:
+        raise ArtifactApplicationStoreFailure(code) from None
+    except ArtifactApplicationStoreFailure as failure:
+        failure.__cause__ = None
+        failure.__context__ = None
+        raise
+
+
+def _raise_application_failure(code: ArtifactApplicationErrorCode) -> NoReturn:
+    try:
+        raise ArtifactApplicationError(code) from None
+    except ArtifactApplicationError as failure:
+        failure.__cause__ = None
+        failure.__context__ = None
+        raise
+
+
+def _typed_store_failures(operation):
+    """Keep persistence classifications typed and their exception graphs safe."""
+
+    @wraps(operation)
+    def wrapped(*args, **kwargs):
+        try:
+            return operation(*args, **kwargs)
+        except ArtifactApplicationStoreFailure:
+            raise
+        except ArtifactChangeSetError as exc:
+            if exc.code is ArtifactChangeSetErrorCode.BASE_STATE_MISMATCH:
+                _raise_application_failure(ArtifactApplicationErrorCode.DRIFT)
+            raise
+        except (WorkspaceFormatError, WorkspaceSecurityError):
+            _raise_store_failure(ArtifactApplicationStoreFailureCode.CORRUPTION)
+
+    return wrapped
+
+
 class ArtifactApplicationStore:
     """Own the application ledger, journals, catalog projection, and recovery.
 
@@ -120,11 +189,12 @@ class ArtifactApplicationStore:
         ):
             self._storage.ensure_directory(path)
 
+    @_typed_store_failures
     def recover(self) -> None:
         """Complete every authoritative prepared application journal."""
 
         if self._storage.read_bytes_if_exists(ARTIFACT_RECOVERY_BLOCK_PATH) is not None:
-            raise WorkspaceFormatError("writing-artifact recovery is blocked")
+            _raise_store_failure(ArtifactApplicationStoreFailureCode.RECOVERY_REQUIRED)
         self._reject_legacy_commit_records()
         try:
             names = self._storage.list_names(ARTIFACT_TRANSACTIONS_DIRECTORY)
@@ -144,6 +214,7 @@ class ArtifactApplicationStore:
                     cause=exc,
                 )
 
+    @_typed_store_failures
     def catalog(self) -> ArtifactCatalog:
         """Return the exact ledger-audited current catalog image."""
 
@@ -151,6 +222,7 @@ class ArtifactApplicationStore:
         self._audit_catalog(catalog, records)
         return catalog
 
+    @_typed_store_failures
     def current_state(self) -> dict[str, bytes]:
         """Read one complete bounded canonical artifact state under the lease."""
 
@@ -196,11 +268,10 @@ class ArtifactApplicationStore:
             state[path] = content
         return dict(sorted(state.items(), key=lambda item: item[0].encode("utf-8")))
 
+    @_typed_store_failures
     def apply(
         self,
         request: ArtifactApplicationRequest,
-        *,
-        attached_core_paths: tuple[str, ...],
     ) -> ArtifactApplicationResult:
         """Apply or identify one exact request under the repository lease."""
 
@@ -224,13 +295,13 @@ class ArtifactApplicationStore:
         return self._apply_new(
             request,
             request_sha256=request_sha256,
-            attached_core_paths=attached_core_paths,
             base_state=base_state,
             catalog=catalog,
             catalog_raw=catalog_raw,
             records=records,
         )
 
+    @_typed_store_failures
     def apply_consensus(
         self,
         *,
@@ -315,13 +386,13 @@ class ArtifactApplicationStore:
             ARTIFACT_APPLICATION_SCHEMA_VERSION,
             provenance,
             change_set,
+            (),
         )
         return self._apply_new(
             request,
             request_sha256=hashlib.sha256(
                 serialize_artifact_application_request(request)
             ).hexdigest(),
-            attached_core_paths=(),
             base_state=base_state,
             catalog=catalog,
             catalog_raw=catalog_raw,
@@ -334,7 +405,6 @@ class ArtifactApplicationStore:
         request: ArtifactApplicationRequest,
         *,
         request_sha256: str,
-        attached_core_paths: tuple[str, ...],
         base_state: Mapping[str, bytes],
         catalog: ArtifactCatalog,
         catalog_raw: bytes | None,
@@ -345,12 +415,10 @@ class ArtifactApplicationStore:
         validation = relationship or validate_artifact_relationships(
             base_state,
             request.change_set,
-            attached_core_paths=attached_core_paths,
+            attached_core_paths=request.attached_core_paths,
         )
         if not validation.is_valid:
-            raise WorkspaceFormatError(
-                "artifact application relationships are not complete"
-            )
+            raise ArtifactApplicationError(ArtifactApplicationErrorCode.INVALID_SCHEMA)
         if _relationship_digest(validation) != request.relationship_validation_digest:
             raise ArtifactApplicationError(
                 ArtifactApplicationErrorCode.CORRELATION_MISMATCH
@@ -941,10 +1009,7 @@ class ArtifactApplicationStore:
                 self._write_new_json(ARTIFACT_RECOVERY_BLOCK_PATH, marker)
         except Exception:
             pass
-        error = WorkspaceFormatError("writing-artifact recovery is blocked")
-        if cause is not None:
-            raise error from cause
-        raise error
+        _raise_store_failure(ArtifactApplicationStoreFailureCode.RECOVERY_REQUIRED)
 
 
 def _target_specs(
