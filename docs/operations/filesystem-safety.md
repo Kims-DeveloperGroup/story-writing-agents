@@ -23,8 +23,9 @@
 > branch/ref/sibling-worktree provisioning is also implemented as
 > package-internal #504 infrastructure. Package-internal #508 adds the shared
 > repository lease, durable content-free session-history records, and a bounded
-> alternate checkpoint index. Neither is yet connected to installed story
-> commands.
+> alternate checkpoint index. Package-internal #509 now adds exact confirmed
+> story commits. None is yet connected to installed story commands or lead
+> confirmation UI.
 
 Key terms: **containment**—keeping paths beneath the workspace root; **symlink**—
 a filesystem alias the runtime rejects; **exclusive creation**—failure instead
@@ -178,6 +179,34 @@ diff/fsmonitor/pagers/editors/prompts, and revalidates the root and every index
 ancestor before and after the child. An ambiguous or recovery-required index is
 preserved; only the exact durably committed checkpoint permits removal. See the
 [internal session-history contract](../reference/git-adapter.md#package-internal-session-history).
+
+The package-internal story-commit owner takes this same repository lease. Its
+Prepare phase uses only fixed read operations against the session/main roots;
+the sole durable write is exclusive immutable candidate-history publication.
+It requires a clean real session index, an exact ready branch/tip/worktree,
+complete equality between current canonical files and typed successful
+application evidence, stable effective identity/source, stable internal ref and
+main-root facts, and no unreported canonical change. Canonical symlinks,
+aliases, unsafe paths, content drift, pre-staged entries, and moved identities
+fail closed. Noncanonical untracked files are omitted and preserved.
+
+Commit authority is nonserializable and consumed before I/O. Under the lease,
+the executor synchronizes `running` evidence before the first mutation, then
+uses only literal `hash-object -w --no-filters --stdin`, `update-index`
+cache-entry/removal, `write-tree`, `commit-tree`, and compare-and-swap
+`update-ref` operations. Durable `staged` evidence precedes `commit-tree`.
+Candidate paths are supplied after `--` where the Git command accepts a path;
+no glob, directory-wide add, checkout, reset, clean, hook, signing, filter,
+textconv, alias, pager/editor, credential prompt, remote, or provider input can
+widen the set.
+
+The verified tree must equal the prepared expected tree. The commit has exactly
+one prepared parent, exact message, and captured effective identity, and only
+the expected session branch can advance from the prepared tip. The internal
+ref, main root/head/index/status, and unrelated noncandidate files are never
+targets. On interruption, staged index/object state is preserved; recovery
+classifies it without reset, replay, cleanup, or duplicate commit. See the
+[exact story-commit contract](../reference/git-adapter.md#package-internal-exact-story-commits).
 
 The writing-artifact storage adapter has a distinct construction contract. It
 captures a supplied relative root immediately as a lexical absolute path using

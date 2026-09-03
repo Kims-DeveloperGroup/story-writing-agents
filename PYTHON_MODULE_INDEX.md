@@ -16,9 +16,9 @@ Source root: `src/`
 
 Package root: `src/story_writing_agents/`
 
-Importable production units indexed: 110.
+Importable production units indexed: 113.
 
-Direct internal dependency edges indexed: 392.
+Direct internal dependency edges indexed: 407.
 
 Directed internal dependency cycles indexed: 0.
 
@@ -202,6 +202,14 @@ git.session_history -> git.contracts/git.process/git.repository_lock
                      -> git.session_resources
 git.session_resources -> git.contracts/git.process/git.repository_lock
                       -> git.session_contracts
+git.story_commit_contracts -> writing_artifacts
+git.story_commit_candidates -> git.contracts/git.process/git.session_history
+                            -> git.session_history_contracts/git.session_resources
+                            -> git.story_commit_contracts/writing_artifacts
+                            -> writing_artifacts.repository
+git.story_commits -> git.contracts/git.process/git.session_history
+                  -> git.session_history_contracts/git.story_commit_candidates
+                  -> git.story_commit_contracts
 session_lifecycle -> (standard library only)
 conversations -> conversations.catalog/context/events
 conversations.catalog -> errors
@@ -2039,6 +2047,121 @@ every intermediate arrow. The current runtime graph is acyclic.
   `docs/operations/filesystem-safety.md`, and
   `docs/operations/recovery-and-limitations.md` document lifecycle and
   operational recovery.
+
+### `story_writing_agents.git.story_commit_contracts`
+
+- **Source:** `src/story_writing_agents/git/story_commit_contracts.py`
+- **Responsibility:** Define the typed application, candidate, confirmation,
+  projection, result, and failure contracts for exact confirmed story commits.
+- **Supported surface:** Direct-module `__all__` contains the two message and
+  impact bounds; successful application evidence; normalized path, candidate,
+  projection, structured confirmation, and result values; the closed decision,
+  state, failure, recovery, path-operation, and identity-source enums; the
+  content-free error; and `project_story_commit_candidate`. Nothing is
+  re-exported by the Git or project facade. Candidate and projection values
+  contain exact paths, digests, message, impact, branch/tree identities,
+  identity-source categories, and opaque correlations but no story bytes or
+  executable authority.
+- **Direct internal dependencies:** `writing_artifacts`.
+- **State, resources, and side effects:** Owns only immutable validation and
+  lead-facing value semantics, closed diagnostics, and defensive reconstruction
+  of future application evidence. It retains no mutable state and performs no
+  filesystem, Git, process, environment, provider, network, or import-time I/O.
+  Application change-set bytes are excluded from representations; public
+  errors are fixed and content-free.
+- **Primary verification/documentation:**
+  `tests/test_git_story_commit_contracts.py` verifies exact exports, immutable
+  shapes, canonical candidate values, defensive content-free projection,
+  structured decisions/results/failures, and facade absence;
+  `tests/test_git_story_commit_candidates.py` retains application-operation
+  mapping coverage. `docs/reference/git-adapter.md`,
+  `docs/guides/workspaces.md`, and `docs/reference/writing-artifacts.md`
+  document the direct-module contracts, lead-facing candidate meaning, and
+  typed successful-application boundary.
+
+### `story_writing_agents.git.story_commit_candidates`
+
+- **Source:** `src/story_writing_agents/git/story_commit_candidates.py`
+- **Responsibility:** Prepare, load, and revalidate one exact canonical
+  story-commit candidate without mutating Git state.
+- **Supported surface:** Exactly `StoryCommitCandidateBinding`,
+  `StoryCommitRevalidation`, `load_story_commit_candidate`,
+  `prepare_story_commit_candidate`, and
+  `revalidate_story_commit_candidate` in direct-module `__all__`; none is
+  re-exported by a facade. The two process-local internal values hide roots,
+  manifests, effective identities, applied change sets, and staging bytes from
+  representations. Public functions expose only the typed boundary; no raw
+  argv, environment, descriptor, repository lease, or reusable Git capability
+  crosses it.
+- **Direct internal dependencies:** `git.contracts`, `git.process`,
+  `git.session_history`, `git.session_history_contracts`,
+  `git.session_resources`, `git.story_commit_contracts`,
+  `writing_artifacts`, and `writing_artifacts.repository`.
+- **State, resources, and side effects:** Borrows #508's ready-session/shared-
+  lease and durable-history interfaces, the process owner's read-only profile,
+  and the writing-artifact repository's supported source reads. Preparation
+  verifies the exact symbolic session branch and tip, clean real index,
+  effective identity/source, complete canonical HEAD and applied states, every
+  and only normalized change-set path, internal ref, original root, and stable
+  worktree identity. It computes SHA-1/SHA-256 blob and recursive tree IDs
+  locally, so it writes no Git index, object, ref, commit, or working file;
+  only the session-history owner publishes the immutable candidate. Loading is
+  content-free. Revalidation repeats all facts under the caller's live history
+  lease and returns exact hidden bytes solely for literal staging.
+- **Primary verification/documentation:**
+  `tests/test_git_story_commit_candidates.py` verifies exact exports,
+  operation normalization, read-only preparation, immutable publication,
+  restart loading, revalidation, noncanonical-file preservation, and closed
+  pre-staging/drift/symlink/limit failures;
+  `tests/test_git_story_commit_process.py` verifies the resulting exact literal
+  staging plan. `docs/reference/git-adapter.md`,
+  `docs/guides/workspaces.md`, `docs/reference/writing-artifacts.md`, and
+  `docs/operations/filesystem-safety.md` document candidate preparation,
+  application evidence, resource ownership, and read-only safety.
+
+### `story_writing_agents.git.story_commits`
+
+- **Source:** `src/story_writing_agents/git/story_commits.py`
+- **Responsibility:** Execute and conservatively recover one exact local story
+  commit after fresh structured user confirmation.
+- **Supported surface:** Exactly `StoryCommitAuthority` and
+  `StoryCommitService` in direct-module `__all__`; neither is re-exported by a
+  facade. The service's fixed methods are `prepare`, `authorize`, `reject`,
+  `revise`, `execute`, `inspect`, and `recover`. Authority construction is
+  sentinel-closed; each instance is process-, service-, thread-, candidate-,
+  confirmation-, and operation-bound, noncopyable, nonpickleable, and consumed
+  once before execution I/O.
+- **Direct internal dependencies:** `git.contracts`, `git.process`,
+  `git.session_history`, `git.session_history_contracts`,
+  `git.story_commit_candidates`, and `git.story_commit_contracts`.
+- **State, resources, and side effects:** Construction retains only validated
+  lexical request values and performs no I/O. Prepare delegates read-only
+  capture and retains process-local bindings. Reject records a terminal
+  decision without Git mutation while preserving the candidate; any later
+  Commit requires a fresh confirmation and authority rather than replay.
+  Revise records a deterministic rejection marker that prevents later
+  authority for the old candidate. Execute holds the
+  shared session-history lease, revalidates all candidate facts, durably records
+  RUNNING before mutation and STAGED before commit creation, writes only exact
+  no-filter blobs and literal index entries/removals, verifies the expected
+  tree, creates one captured-identity commit with one exact parent, and CAS-
+  updates only the session branch before durable COMMITTED evidence. It verifies
+  the internal ref and original main-root state remain invariant. Interrupted
+  states are preserved as outcome-unknown; recovery never resets, cleans,
+  unstages, replays, or creates a second commit and finalizes only an exact
+  parent/tree/message-correlated current tip. Errors and authority
+  representations disclose no paths, bytes, identities, or raw Git output.
+- **Primary verification/documentation:**
+  `tests/test_git_story_commit_process.py` verifies durable RUNNING/STAGED
+  ordering, literal fixed Git commands, repository-controlled extension
+  suppression, content-free failures, and interrupted-index preservation;
+  `tests/test_git_story_commits.py` verifies authority confinement,
+  confirmation replay rejection, Reject/Revise behavior, exact SHA-1/SHA-256
+  commits, invariants, and restart recovery. `docs/reference/git-adapter.md`,
+  `docs/guides/workspaces.md`, `docs/operations/filesystem-safety.md`,
+  `docs/operations/privacy-and-provider.md`, and
+  `docs/operations/recovery-and-limitations.md` document the exact mutation
+  sequence, user-visible decisions, plaintext exposure, and safe recovery.
 
 ### `story_writing_agents.conversation_rag_composition`
 
@@ -5917,8 +6040,8 @@ every intermediate arrow. The current runtime graph is acyclic.
 
 ## Consistency Notes
 
-- The inventory contains 110 modules. Static AST derivation over every module-
-  level and function-local import yields 392 unique direct internal edges and
+- The inventory contains 113 modules. Static AST derivation over every module-
+  level and function-local import yields 407 unique direct internal edges and
   no directed cycle. The v2 cutover contributes 97 modules and 362 edges;
   `writing_artifacts.change_sets` and `writing_artifacts.relationship_policy`
   add two pure modules and exactly five inward edges; the safe `git` facade,
@@ -5945,8 +6068,12 @@ every intermediate arrow. The current runtime graph is acyclic.
   `session_history` add the shared repository lease, pure durable history
   records, and the descriptor-bound session-history owner without facade
   expansion. `session_resources` now borrows that lock while retaining its
-  provisioning-specific journal lock. The three modules plus seven exact
-  inward edges yield the 392-edge graph. Git retains no
+  provisioning-specific journal lock. Those three #508 modules plus seven
+  exact inward edges yielded its historical 110-module, 392-edge graph. #509
+  adds `story_commit_contracts`, `story_commit_candidates`, and
+  `story_commits`, whose one, eight, and six direct internal edges respectively
+  add three modules and 15 edges to yield the current 113-module, 407-edge
+  graph. The 22-name Git facade remains closed, and Git retains no forbidden
   reverse dependency on workspace, provider, conversation, artifact, GitHub,
   or an entry point.
 - Schema-v2 workspace definition and resource ownership are split between the

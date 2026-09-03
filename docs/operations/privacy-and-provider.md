@@ -98,13 +98,35 @@ required outcomes. Only an exact durably committed checkpoint permits its
 narrow removal. Candidate and operation records have no expiry, compaction, or
 automatic cleanup.
 
-#508 itself creates no story commit or checkpoint. When #509/#510 later create
-Git objects, ordinary Git history/object storage will retain commit messages,
-effective author/committer identities, paths, and committed content according
-to Git's own reachability and retention behavior. Removing a session-history
-record or alternate index would neither securely erase those objects nor revoke
-a prior confirmation. Provider-free means no network/provider call is made by
-this substrate; it does not mean encryption, privacy, backup, or secure erase.
+#508 itself creates no story commit or checkpoint. The package-internal #509
+service can now create literal blobs/tree/commit objects and update one local
+session branch after receiving typed applied-change evidence and a fresh exact
+Commit decision. No installed command or lead UI invokes it; #491 and #492 own
+those integrations, while #510 owns checkpoints.
+
+Prepare persists only the content-free candidate metadata described above. A
+Commit authority remains process/service/thread-bound, nonserializable, and
+one-use; the user decision itself is not stored as reusable executable
+authority. Reject/Revise persist only a terminal operation correlation and
+state, not the confirmation payload or story bytes.
+
+During Commit, Git object storage receives the exact candidate file bytes as
+literal filter-free blobs before the branch update, and the real session index
+receives exact candidate path entries. An interruption can therefore leave
+unreachable blob/tree/commit objects or a staged index even when no successful
+result was returned. Recovery preserves these facts and never treats deletion
+as privacy cleanup. A completed commit permanently exposes its message,
+effective author/committer names and emails, paths, parent/tree IDs, and story
+content to local Git readers according to Git reachability/retention behavior.
+SHA-256 object IDs improve collision properties but do not encrypt content;
+SHA-1 and SHA-256 repositories have the same disclosure boundary.
+
+Removing a session-history record, staged index entry, or alternate checkpoint
+index would neither securely erase Git objects nor revoke a prior confirmation.
+Provider-free means the service makes no network/provider call; it does not
+mean encryption, anonymity, backup, retention, or secure erase. Protect the
+main repository, sibling worktree, common Git object/index/ref storage, and
+session-history records as one sensitive recovery set.
 
 <a id="conversation-archive-privacy"></a>
 

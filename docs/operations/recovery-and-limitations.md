@@ -102,17 +102,18 @@ fact, or user byte. The lock file persists as coordination infrastructure.
 Pause, release, close, and process exit preserve durable session resources.
 There is no migration, compatibility, remote, reset, clean, prune, garbage
 collection, rebase, merge, or history-rewrite recovery route. #505, not #504,
-coordinates that later work; #509 will define story commits and #510 internal
-checkpoints.
+coordinates that later work; #509 now supplies internal story commits and #510
+owns internal checkpoints.
 
 <a id="session-history-recovery"></a>
 
 ## Session-history recovery
 
-Issue #508 supplies package-internal evidence and classification only. No
-current command, lead action, or public API starts a story commit or checkpoint,
-and no current UI displays these states. #509, #510, and #492 own those future
-operations and confirmation flow.
+Issue #508 supplies package-internal evidence and classification. #509 now
+supplies internal exact story-commit execution and conservative recovery. No
+current command, lead action, or public facade starts it, and no current UI
+displays these states: #491 still owns application evidence, #492 owns the lead
+confirmation UI, and #510 owns checkpoints.
 
 For any future interruption, first stop repository writers and preserve the
 main repository, sibling session worktree, common `.git` directory, and the
@@ -120,15 +121,15 @@ complete session-history subtree together. Restoring only one JSON record, one
 index, one ref, or one worktree can destroy the correlation needed for safe
 classification.
 
-| Durable state or failure | Meaning | Safe response for the future owner |
+| Durable state or failure | Meaning | Safe response |
 | --- | --- | --- |
-| Candidate `prepared` | Exact path/digest/expected-tree evidence exists; no confirmation or Git mutation is implied. | Revalidate the candidate against current files and tips. Ask for confirmation through #492 when available, or prepare a new candidate if any fact changed. |
-| Commit `rejected` | The proposed story commit was declined before execution. It is terminal and authorizes nothing. | Keep the record. A different proposal requires a new candidate/operation and new confirmation. |
-| Operation `running` | Intent was durably recorded before a later Git mutation, but success is unproved. | Inspect the exact operation plus branch/internal-ref/object facts. Do not replay a prior confirmation or blindly restart Git. |
-| Story commit `staged` | Staging was recorded, but no commit ID is proved. | Preserve the session worktree and index. Inspect staged/tree/tip facts before deciding whether explicit recovery is possible. |
-| Operation `committed` | The terminal record names the resulting story commit or checkpoint object. | Verify the object and expected current tip before reporting success. Do not rerun the operation. |
-| Operation `outcome_unknown` | Git may have mutated, but the runtime could not prove the outcome. | Preserve all records and any checkpoint index. Inspect; only exact proof may advance the same record to `committed`, otherwise advance it to `recovery_required`. |
-| Operation `recovery_required` | State is inconsistent, unsafe, substituted, or no longer automatically reconcilable. It is terminal. | Perform explicit operator recovery or restore a complete trusted backup. Never edit the record or delete evidence to force another transition. |
+| Candidate `prepared` | Exact path/digest/expected-tree evidence exists; no confirmation or Git index/object/ref mutation is implied. | Revalidate it. When #492 is available, request a fresh exact decision; if any candidate fact changed, `reprepare` from new successful application evidence. |
+| Commit `rejected` / `none` | One Reject or Revise decision was recorded before execution. It is terminal and authorizes nothing. Reject preserves the candidate; Revise invalidates it. | After Reject, keep the candidate and require a fresh confirmation for another decision. After Revise, apply/prepare a new candidate and request new confirmation. |
+| Story commit `running` / `inspect` | Commit authority was consumed and intent was durable before staging, but the resulting index/branch state is not yet proved. | Call the internal recovery classifier once writers are stopped. Do not replay confirmation or execute again. It may classify exact staging, an exact committed tip, ambiguity, or recovery-required state. |
+| Story commit `staged` / `operator_recovery` | The branch remains at the old tip and index/worktree exactly match the candidate tree, but no commit is proved. | Preserve worktree, index, objects, and records. Inspect and recover explicitly; the service never automatically commits, resets, cleans, or restages. |
+| Story commit `committed` / `none` | The terminal record names the exact commit and branch tip. Recovery can reach this state when a correlated commit was already CAS-installed but result persistence/reporting failed. | Treat the returned existing object as the result after verification. Do not create a duplicate commit. |
+| Operation `outcome_unknown` / `inspect` | Git may have mutated, or the branch/index/result cannot be classified exactly. | Preserve all records, index, refs, and objects. Inspect; only an exact correlated tip may advance the same record to `committed`. Otherwise retain ambiguity or require operator recovery. |
+| Operation `recovery_required` / `operator_recovery` | State is inconsistent, unsafe, substituted, or no longer automatically reconcilable. It is terminal. | Perform explicit operator recovery or restore a complete trusted backup. Never edit the record or delete/reset evidence to force another transition. |
 | Missing/noncanonical/oversized record, unexpected entry, alias, symlink, hard link, or failed fsync | The store cannot trust the addressed history boundary. | Stop all writers, retain exact bytes and metadata, and investigate offline. Do not normalize, replace, or follow the rejected path. |
 | Repository lock unavailable or root/common-Git identity changed | Safe serialization or repository identity cannot be proved. | End the operation and retry only after the original exact repository is trustworthy and no competing writer remains. |
 
@@ -139,13 +140,28 @@ durably `committed`. Candidate and operation records have no automatic expiry
 or cleanup. Process exit, session pause/close, and a later successful operation
 do not erase earlier evidence.
 
+For story commits specifically:
+
+- If interruption leaves `running` but the old branch tip and exact candidate
+  index/worktree are present, `recover()` records/returns `staged` with
+  `operator_recovery`; it does not continue to `commit-tree`.
+- If the branch points at a commit with the candidate's exact tree, sole parent,
+  and literal message, `recover()` advances the existing operation to
+  `committed` and returns that same object ID. It creates no second object or
+  branch update.
+- If the branch remains old but index/worktree match neither the parent nor
+  candidate tree, recovery records terminal `recovery_required`. A staged
+  record whose expected index was lost is likewise recovery-required.
+- A foreign or otherwise unproved new branch tip remains `outcome_unknown`.
+  Recovery does not reset it or inspect provider history to guess intent.
+
 These records are content-free, so they are not a story-data backup. Conversely,
 a story-files-only backup is not recovery evidence. A useful recovery backup
 must preserve the repository, common Git administration/history namespace, and
 sibling worktree consistently. Ordinary Git commits produced later will also
 contain effective identity and commit-message metadata. See the
-[user-oriented state guide](../guides/workspaces.md#durable-session-history-infrastructure)
-and [exact internal contract](../reference/git-adapter.md#package-internal-session-history).
+[user-oriented scenarios](../guides/workspaces.md#exact-confirmed-story-commits)
+and [exact internal contract](../reference/git-adapter.md#package-internal-exact-story-commits).
 
 ## Session access recovery
 
