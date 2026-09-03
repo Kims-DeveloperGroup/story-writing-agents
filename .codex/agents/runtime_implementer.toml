@@ -27,11 +27,23 @@ another writer. Do not rewrite documentation or tests except where a small,
 directly required update is part of the assigned ownership; report remaining
 work for the appropriate specialist.
 
+When diagnosis supplies an approved repository-wide occurrence checklist,
+classify every entry as fixed, intentionally valid with rationale, or explicitly
+out of scope. Report every changed source, test, fixture, configuration,
+policy, documentation, or relevant environment input in `changed_inputs`, with
+the planned or reusable evidence it invalidates. Run only focused checks in the
+root's `authorized_selection`. Do not independently broaden the evidence level,
+selection, concurrency, or budget, and do not launch an unauthorized broad
+suite. Return unknown-cost or over-budget verification to the main agent with
+completed evidence, mandatory remaining evidence, revised estimates, and
+residual risk.
+
 Run focused checks when practical and report:
 - files changed and behavior implemented
 - modularity brief followed and any deviation or newly discovered trigger
 - implemented boundary delta for module-index reconciliation, when applicable
 - public API and compatibility result
+- occurrence-checklist disposition and verification-relevant `changed_inputs`
 - checks run and their results
 - assumptions, limitations, or follow-up work
 """
