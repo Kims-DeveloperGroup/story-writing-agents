@@ -18,7 +18,7 @@ Package root: `src/story_writing_agents/`
 
 Importable production units indexed: 130.
 
-Direct internal dependency edges indexed: 505.
+Direct internal dependency edges indexed: 506.
 
 Directed internal dependency cycles indexed: 0.
 
@@ -184,6 +184,7 @@ orchestrator -> artifact_proposals/backend/config/consensus.contracts/consensus.
              -> conversation_rag_runtime/debug_log/directives
              -> conversation_storage.composition/contracts
              -> errors/git.story_commit_contracts/git.story_commits
+             -> models
              -> prompts/workspace/workspace.initialization
              -> writing_artifacts/repository/runtime_references
 models -> conversations/agents/errors
@@ -1713,7 +1714,7 @@ every intermediate arrow. The current runtime graph is acyclic.
 - **Responsibility:** Provide the package-level facade for provider-independent,
   phase-confirmed consensus contracts, execution, runtime adaptation,
   serialization, and projection.
-- **Supported surface:** Package `__all__` exports exactly 39 consensus
+- **Supported surface:** Package `__all__` exports exactly 41 consensus
   contract, execution, runtime-adapter, serialization, projection, enum,
   capability, digest, and preparation names.
   These names are intentionally absent from the project-root facade.
@@ -1724,7 +1725,8 @@ every intermediate arrow. The current runtime graph is acyclic.
   resource. Importing only binds immutable domain definitions and performs no
   filesystem, provider, network, subprocess, or import-time operational I/O.
 - **Primary verification/documentation:**
-  `tests/test_consensus_projection.py` and
+  `tests/test_consensus_projection.py`,
+  `tests/test_consensus_deadlock_continuation.py`, and
   `docs/design/consensus-workflow.md`.
 
 ### `story_writing_agents.consensus.execution`
@@ -1738,14 +1740,18 @@ every intermediate arrow. The current runtime graph is acyclic.
   and outcome types. The consensus package facade re-exports them.
 - Provider invocation is asynchronous and transports opaque material handles;
   provider output is classified by the closed `ConsensusPhaseOutputKind` enum,
-  including explicit conflict audit outcomes.
+  including explicit conflict audit outcomes whose critique bytes are retained
+  only through immutable content-addressed material handles. Continuation
+  lineage is forwarded to every provider assignment without becoming execution
+  authority.
 - **Direct internal dependencies:** `agents`, `consensus.contracts`, and
   `consensus.projection`.
 - **State, resources, and side effects:** Retains only injected ports and
   owner identity. Provider and event-persistence effects are delegated through
   those ports; importing performs no operational I/O.
 - **Primary verification/documentation:**
-  `tests/test_consensus_execution.py` and
+  `tests/test_consensus_execution.py`,
+  `tests/test_consensus_deadlock_continuation.py`, and
   `docs/design/consensus-workflow.md`.
 
 ### `story_writing_agents.consensus.runtime_adapter`
@@ -1754,14 +1760,17 @@ every intermediate arrow. The current runtime graph is acyclic.
 - **Responsibility:** Bridge stepwise phase-confirmed consensus operations to
   explicit StoryRuntime-owned persistence, provider, identity, and interruption
   ports.
-- **Supported surface:** Direct-module `__all__` exports exactly ten input,
+- **Supported surface:** Direct-module `__all__` exports exactly eleven input,
   runtime-adapter, decision, inspection, port, stored-workflow, and submission
   names. The consensus package facade re-exports them.
 - Submission and decision inputs carry opaque material handles rather than
   content bytes, and provider invocation/confirmed decisions are asynchronous.
   Execution identity correlates every request, decision, result, and durable
   event to one session/conversation; `request_next_phase` creates the next
-  separately confirmed request from a terminal tail.
+  separately confirmed request from a terminal tail. `continue_deadlock`
+  validates one exact terminal source and its durable candidate/conflict
+  materials before either appending an in-place repair request or creating a
+  source-linked workflow; both modes require fresh process-local confirmation.
 - **Direct internal dependencies:** `consensus.contracts`,
   `consensus.execution`, `consensus.projection`, and `consensus.serialization`.
 - **State, resources, and side effects:** Retains only injected runtime ports
@@ -1769,7 +1778,8 @@ every intermediate arrow. The current runtime graph is acyclic.
   provider effects are delegated through the port; importing performs no
   operational I/O.
 - **Primary verification/documentation:**
-  `tests/test_consensus_runtime_adapter.py` and
+  `tests/test_consensus_runtime_adapter.py`,
+  `tests/test_consensus_deadlock_continuation.py`, and
   `docs/design/consensus-workflow.md`.
 
 ### `story_writing_agents.consensus.serialization`
@@ -1782,21 +1792,23 @@ every intermediate arrow. The current runtime graph is acyclic.
 - **Supported surface:** Direct-module `__all__` exports exactly three names:
   `CONSENSUS_SERIALIZATION_SCHEMA_VERSION`,
   `deserialize_consensus_workflow`, and `serialize_consensus_workflow`. The
-  consensus package facade re-exports them. The current schema version is 2
-  and serializes the execution identity alongside workflow events.
+  consensus package facade re-exports them. The current schema version is 3
+  and serializes execution identity, immutable conflict handles, continuation
+  lineage, ruling digest, and revision-round budget alongside workflow events.
 - **Direct internal dependencies:** `consensus.contracts` and
   `consensus.projection`.
 - **State, resources, and side effects:** Pure immutable value validation and
   codec over validated values; it owns no retained external state and performs
   no filesystem, provider, network, subprocess, or import-time operational I/O.
 - **Primary verification/documentation:**
-  `tests/test_consensus_projection.py` and
+  `tests/test_consensus_projection.py`,
+  `tests/test_consensus_deadlock_continuation.py`, and
   `docs/design/consensus-workflow.md`.
 
 ### `story_writing_agents.consensus.material_store`
 
 - **Source:** `src/story_writing_agents/consensus/material_store.py`
-- **Responsibility:** Own unpublished immutable UTF-8 candidate material beneath
+- **Responsibility:** Own unpublished immutable UTF-8 consensus material beneath
   the workspace, addressed by verified content digest and opaque candidate
   locator.
 - **Supported surface:** No package-facade export and no module `__all__`;
@@ -1818,7 +1830,7 @@ every intermediate arrow. The current runtime graph is acyclic.
 
 - **Source:** `src/story_writing_agents/consensus/event_store.py`
 - **Responsibility:** Own durable compare-and-append persistence for
-  identity-bound schema-v2 consensus workflows, including create collision,
+  identity-bound schema-versioned consensus workflows, including create collision,
   expected-tail conflict, and outcome-unknown handling.
 - **Supported surface:** Direct-module `__all__` exports exactly eleven
   store, workflow, event, input-kind, and typed persistence error names. The
@@ -1841,10 +1853,10 @@ every intermediate arrow. The current runtime graph is acyclic.
 
 - **Source:** `src/story_writing_agents/consensus/contracts.py`
 - **Responsibility:** Define immutable provider-independent phase, decision,
-  material-handle, execution-identity, audit, result, digest, and
+  material-handle, execution-identity, audit, continuation, result, digest, and
   confirmation-capability contracts for one consensus lineage, including
   canonical artifact/candidate locators and next-phase request preparation.
-- **Supported surface:** Direct-module `__all__` exports exactly 17
+- **Supported surface:** Direct-module `__all__` exports exactly 19
   consensus contract names and preparation/digest functions; the package
   facade re-exports the existing package-level subset.
 - **Direct internal dependencies:** `agents` and `writing_artifacts.catalog`.
@@ -1853,14 +1865,16 @@ every intermediate arrow. The current runtime graph is acyclic.
   lock. It performs no filesystem, provider, network, subprocess, or
   import-time operational I/O.
 - **Primary verification/documentation:**
-  `tests/test_consensus_projection.py` and
+  `tests/test_consensus_projection.py`,
+  `tests/test_consensus_deadlock_continuation.py`, and
   `docs/design/consensus-workflow.md`.
 
 ### `story_writing_agents.consensus.projection`
 
 - **Source:** `src/story_writing_agents/consensus/projection.py`
 - **Responsibility:** Validate sequenced consensus events and derive the
-  content-free current state and safe next action.
+  content-free current state, continuation lineage and budget, terminal status,
+  and safe next action.
 - **Supported surface:** Direct-module `__all__` exports exactly five
   projection event, payload, state, and function names; the package facade
   re-exports them.
@@ -1868,7 +1882,8 @@ every intermediate arrow. The current runtime graph is acyclic.
 - **State, resources, and side effects:** Pure deterministic projection with
   no retained mutable or external resource and no import-time operational I/O.
 - **Primary verification/documentation:**
-  `tests/test_consensus_projection.py` and
+  `tests/test_consensus_projection.py`,
+  `tests/test_consensus_deadlock_continuation.py`, and
   `docs/design/consensus-workflow.md`.
 
 ### `story_writing_agents.conversation_rag_cli`
@@ -5762,9 +5777,10 @@ every intermediate arrow. The current runtime graph is acyclic.
   artifact-write, Apply-authority, and Git-action flags; it does not apply or
   authorize an artifact change.
   The same runtime facade implements the existing consensus runtime port and
-  exposes stepwise submit, inspect, decide/confirm, interrupt, resume, and
-  next-phase operations; `RuntimeSession` provides session-bound wrappers for
-  those operations without adding another owner or public package export.
+  exposes stepwise submit, inspect, decide/confirm, interrupt, resume,
+  next-phase, and deadlock-continuation operations; `RuntimeSession` provides
+  session-bound wrappers for those operations without adding another owner or
+  public package export.
 - **Direct internal dependencies:** `agent_context.accounting`,
   `agent_context.manifest`, `agent_context.planning`, `agent_context.service`,
   `agent_context.sources`, `agents`, `artifact_proposals`, `backend`, `config`,
@@ -5773,7 +5789,7 @@ every intermediate arrow. The current runtime graph is acyclic.
   `git.story_commit_contracts`, `git.story_commits`,
   `conversation_rag_runtime`, `conversation_storage.composition`,
   `conversation_storage.contracts`, `debug_log`, `directives`, `errors`,
-  `prompts`, `workspace`, `workspace.initialization`,
+  `models`, `prompts`, `workspace`, `workspace.initialization`,
   `writing_artifacts`, `writing_artifacts.repository`, and
   `writing_artifacts.runtime_references`.
 - **State, resources, and side effects:** Retains workspace, prompt/config, one
@@ -5807,8 +5823,10 @@ every intermediate arrow. The current runtime graph is acyclic.
   orchestration. Consensus submissions persist digest-addressed material;
   confirmed phases resolve candidate handles only through the material store,
   authorize artifact handles through call-local runtime-reference operations,
-  invoke an exact bound agent, persist draft/repair reply text as unpublished
-  material, and cancel only tasks owned by the exact phase request.
+  invoke an exact bound agent, persist draft/repair reply text and conflict
+  critiques as unpublished immutable material, and provide verified
+  continuation ruling/conflict material to every later phase. It cancels only
+  tasks owned by the exact phase request.
 - **Primary verification/documentation:** `tests/test_lead_orchestration.py`,
   `tests/test_artifact_proposal_orchestration.py`,
   `tests/test_lead_artifact_application.py`,
@@ -5818,6 +5836,7 @@ every intermediate arrow. The current runtime graph is acyclic.
   `tests/test_runtime_reference_integration.py`,
   `tests/test_consensus_runtime_adapter.py`,
   `tests/test_consensus_runtime_correlation.py`,
+  `tests/test_consensus_deadlock_continuation.py`,
   `tests/test_interactive_management.py`,
   `tests/test_interactive_cancellation.py`, and
   `tests/test_session_lifecycle.py`; `docs/guides/lead-agent.md`,

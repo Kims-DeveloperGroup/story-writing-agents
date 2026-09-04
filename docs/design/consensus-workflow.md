@@ -22,7 +22,10 @@ flowchart TD
     P --> T[Durable terminal result]
     T -->|completed with successor| N2[Explicit next-phase request]
     T -->|finalization completed| H[Read-only reviewed handoff]
-    T -->|deadlocked or failure| Z[No publication]
+    T -->|deadlocked| C[Explicit continuation choice and ruling]
+    C -->|resume in place or linked workflow| CR[Fresh REPAIR request]
+    CR --> A
+    T -->|failure| Z[No publication]
     H --> AP[Separate confirmed artifact Apply]
     AP --> GC[Separate confirmed Git Commit]
 ```
@@ -57,6 +60,47 @@ different candidate digest. Finalization retains the candidate lineage and
 identifies an already reviewed proposal; it cannot grant Apply or Git
 authority.
 
+## Durable deadlock continuation
+
+A synthesis deadlock is terminal but resumable by an explicit new operation.
+`continue_deadlock()` accepts the exact source workflow, deadlock-result event,
+and expected tail; a closed continuation mode; an immutable ruling handle; and
+a positive added-repair-round budget. It validates that the source is still an
+exact terminal synthesis deadlock and that the current candidate plus every
+unresolved conflict material remains available.
+
+`resume_in_place` appends a REPAIR request to the existing workflow and keeps
+its proposal identity. `linked_workflow` creates a distinct workflow/proposal
+with `input_kind=continuation`; its submission points to the source deadlock.
+Both modes reuse content-addressed candidate and critique handles, so no caller
+passes candidate or critique text and no candidate copy becomes a new source
+of truth. The request digest binds the complete continuation provenance,
+including mode, ruling digest, source identities, conflicts, and budget.
+
+Preparing either mode stores a request and a process-local one-use capability;
+it performs no provider or artifact call. REPAIR, REAUDIT, and SYNTHESIS then
+use the ordinary request/decision/running/result protocol, each with fresh user
+confirmation. A completed REPAIR consumes one added round. Reject or Revise
+does not consume one, and a replacement REPAIR request remains possible while
+the budget permits. A requested REPAIR after exhaustion fails before execution.
+
+Projection carries content-free continuation facts:
+`continuation_mode`, `source_workflow_id`, `source_result_event_id`,
+`source_revision_id`, `source_candidate_digest`, `ruling_digest`,
+`ruling_present`, `added_revision_rounds`, and
+`remaining_revision_rounds`. A deadlock projects
+`next_action=continue_deadlock`; a continuation request projects the ordinary
+`request_decision`. Repeated deadlock remains terminal and nonpublishing, and
+may be continued only by another explicit exact operation.
+
+Consensus workflow serialization is strict format version 3. No v2
+compatibility reader or migration exists. Malformed, stale, cross-session, foreign-result,
+or unavailable-material continuation input fails closed before provider or
+artifact mutation. Linked creation revalidates the source tail immediately
+before creating its content-free workflow; the event-store port does not
+provide a cross-workflow transaction, so a concurrent source append can only
+leave a harmless unexecuted linked request, never publish or invoke a provider.
+
 ## Provider and material boundary
 
 Runtime converts a `ConsensusPhaseInvocation` into an `AgentRequest` whose
@@ -86,7 +130,8 @@ digest, last sequence, and one safe `next_action`:
   next request is explicit and does not execute it.
 - `inspect_failure`: interruption or definite failure is terminal.
 - `operator_recovery`: outcome or durability is uncertain; automation stops.
-- `none`: finalization, rejection, or deadlock has no consensus successor.
+- `continue_deadlock`: offer an explicit deadlock continuation or stop.
+- `none`: finalization or rejection has no consensus successor.
 
 The user meanings of all states and sample calls are in
 [Consensus runs](../guides/consensus-runs.md).

@@ -83,6 +83,13 @@ class ConsensusAuditVerdict(StrEnum):
     CONFLICT = "conflict"
 
 
+class ConsensusContinuationMode(StrEnum):
+    """Closed ways to continue one terminal deadlock."""
+
+    RESUME_IN_PLACE = "resume_in_place"
+    LINKED_WORKFLOW = "linked_workflow"
+
+
 @dataclass(frozen=True, slots=True)
 class ConsensusMaterialHandle:
     """Opaque runtime-owned locator bound to immutable material bytes."""
@@ -123,6 +130,7 @@ class ConsensusAudit:
     candidate_digest: str
     verdict: ConsensusAuditVerdict
     audit_digest: str
+    conflict_material: ConsensusMaterialHandle | None = None
 
     def __post_init__(self) -> None:
         if self.specialist_id not in CONSENSUS_AUDITORS:
@@ -132,6 +140,59 @@ class ConsensusAudit:
         if type(self.verdict) is not ConsensusAuditVerdict:
             raise TypeError("consensus audit verdict is invalid")
         _digest(self.audit_digest)
+        if self.verdict is ConsensusAuditVerdict.CONFLICT:
+            if (
+                type(self.conflict_material) is not ConsensusMaterialHandle
+                or not self.conflict_material.locator.startswith("candidate:")
+            ):
+                raise ValueError(
+                    "consensus conflict audit requires immutable critique material"
+                )
+        elif self.conflict_material is not None:
+            raise ValueError("consensus approval cannot carry critique material")
+
+
+@dataclass(frozen=True, slots=True)
+class ConsensusContinuation:
+    """Content-free authority lineage for continuing one exact deadlock."""
+
+    mode: ConsensusContinuationMode
+    source_workflow_id: str
+    source_result_event_id: str
+    source_revision_id: str
+    source_candidate_material: ConsensusMaterialHandle
+    conflict_materials: tuple[ConsensusMaterialHandle, ...]
+    ruling_material: ConsensusMaterialHandle
+    added_revision_rounds: int
+
+    def __post_init__(self) -> None:
+        if type(self.mode) is not ConsensusContinuationMode:
+            raise TypeError("consensus continuation mode is invalid")
+        _identifier(self.source_workflow_id)
+        _identifier(self.source_result_event_id)
+        _revision(self.source_revision_id)
+        if (
+            type(self.conflict_materials) is not tuple
+            or not 1 <= len(self.conflict_materials) <= len(CONSENSUS_AUDITORS)
+            or len(set(self.conflict_materials)) != len(self.conflict_materials)
+        ):
+            raise ValueError("consensus continuation conflicts are invalid")
+        for handle in (
+            self.source_candidate_material,
+            *self.conflict_materials,
+            self.ruling_material,
+        ):
+            if type(
+                handle
+            ) is not ConsensusMaterialHandle or not handle.locator.startswith(
+                "candidate:"
+            ):
+                raise ValueError("consensus continuation material is invalid")
+        if (
+            type(self.added_revision_rounds) is not int
+            or self.added_revision_rounds < 1
+        ):
+            raise ValueError("consensus continuation revision budget must be positive")
 
 
 @dataclass(frozen=True, slots=True)
@@ -150,6 +211,7 @@ class ConsensusPhaseRequest:
     base_tail_sequence: int
     previous_result_event_id: str | None
     request_digest: str
+    continuation: ConsensusContinuation | None = None
 
     def __post_init__(self) -> None:
         for value in (self.workflow_id, self.phase_request_id, self.proposal_id):
@@ -174,6 +236,21 @@ class ConsensusPhaseRequest:
         if type(self.base_tail_sequence) is not int or self.base_tail_sequence < 0:
             raise ValueError("consensus base tail is invalid")
         _optional_identifier(self.previous_result_event_id)
+        if self.continuation is not None:
+            if type(self.continuation) is not ConsensusContinuation:
+                raise TypeError("consensus continuation is invalid")
+            if self.candidate_material is None:
+                raise ValueError("consensus continuation requires candidate lineage")
+            if (
+                self.continuation.mode is ConsensusContinuationMode.RESUME_IN_PLACE
+                and self.continuation.source_workflow_id != self.workflow_id
+            ):
+                raise ValueError("in-place continuation changed workflow identity")
+            if (
+                self.continuation.mode is ConsensusContinuationMode.LINKED_WORKFLOW
+                and self.continuation.source_workflow_id == self.workflow_id
+            ):
+                raise ValueError("linked continuation reused source workflow identity")
         _digest(self.request_digest)
         if self.request_digest != consensus_request_digest(
             workflow_id=self.workflow_id,
@@ -191,6 +268,11 @@ class ConsensusPhaseRequest:
             candidate_digest=self.candidate_digest,
             base_tail_sequence=self.base_tail_sequence,
             previous_result_event_id=self.previous_result_event_id,
+            **(
+                {}
+                if self.continuation is None
+                else {"continuation": _continuation_digest_value(self.continuation)}
+            ),
         ):
             raise ValueError("consensus phase request digest is invalid")
 
@@ -375,6 +457,7 @@ def prepare_consensus_phase(
     candidate_material: ConsensusMaterialHandle | None,
     base_tail_sequence: int,
     previous_result_event_id: str | None = None,
+    continuation: ConsensusContinuation | None = None,
 ) -> tuple[ConsensusPhaseRequest, ConsensusConfirmationCapability]:
     """Create one durable request and its separate process-local capability."""
 
@@ -400,6 +483,7 @@ def prepare_consensus_phase(
         candidate_material=candidate_material,
         base_tail_sequence=base_tail_sequence,
         previous_result_event_id=previous_result_event_id,
+        continuation=continuation,
         request_digest=consensus_request_digest(
             workflow_id=workflow_id,
             phase_request_id=phase_request_id,
@@ -418,6 +502,11 @@ def prepare_consensus_phase(
             ),
             base_tail_sequence=base_tail_sequence,
             previous_result_event_id=previous_result_event_id,
+            **(
+                {}
+                if continuation is None
+                else {"continuation": _continuation_digest_value(continuation)}
+            ),
         ),
     )
     return request, ConsensusConfirmationCapability(_AUTHORITY_SENTINEL, owner, request)
@@ -487,6 +576,7 @@ def prepare_next_consensus_phase(
         candidate_material=candidate,
         base_tail_sequence=terminal_sequence,
         previous_result_event_id=terminal_event_id,
+        continuation=current_request.continuation,
     )
 
 
@@ -563,11 +653,39 @@ def _json_default(value: object) -> str:
     raise TypeError(f"unsupported consensus digest value: {type(value).__name__}")
 
 
+def _continuation_digest_value(
+    value: ConsensusContinuation | None,
+) -> dict[str, object] | None:
+    if value is None:
+        return None
+    return {
+        "mode": value.mode.value,
+        "source_workflow_id": value.source_workflow_id,
+        "source_result_event_id": value.source_result_event_id,
+        "source_revision_id": value.source_revision_id,
+        "source_candidate": {
+            "locator": value.source_candidate_material.locator,
+            "digest": value.source_candidate_material.digest,
+        },
+        "conflicts": [
+            {"locator": item.locator, "digest": item.digest}
+            for item in value.conflict_materials
+        ],
+        "ruling": {
+            "locator": value.ruling_material.locator,
+            "digest": value.ruling_material.digest,
+        },
+        "added_revision_rounds": value.added_revision_rounds,
+    }
+
+
 __all__ = [
     "CONSENSUS_AUDITORS",
     "ConsensusAudit",
     "ConsensusAuditVerdict",
     "ConsensusConfirmationCapability",
+    "ConsensusContinuation",
+    "ConsensusContinuationMode",
     "ConsensusDecision",
     "ConsensusExecutionIdentity",
     "ConsensusMaterialHandle",

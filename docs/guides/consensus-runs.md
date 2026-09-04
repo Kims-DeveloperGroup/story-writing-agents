@@ -38,6 +38,10 @@ submit prompt or supplied draft
        conflicts -> REPAIR -> REAUDIT -> SYNTHESIS (repeat)
        approvals -> FINALIZATION
        irreconcilable conflict -> deadlocked
+  -> choose resume-in-place or linked-workflow continuation
+  -> supply an operator ruling and a positive repair-round budget
+  -> review and Confirm the new REPAIR request
+  -> REAUDIT -> SYNTHESIS (repeat within the added budget)
   -> Confirm FINALIZATION -> completed read-only handoff
   -> separately propose and Confirm artifact Apply
   -> separately propose and Confirm Git Commit
@@ -66,7 +70,7 @@ does not grant authority.
 | `failed` | Inspect diagnostics; retry only with a new workflow after correction. | Execution definitely failed; nothing was published. |
 | `outcome_unknown` | Stop automation and perform operator recovery. | Provider outcome cannot be proved; replay may duplicate work. |
 | `recovery_required` | Reconcile durable storage before proceeding. | Runtime cannot prove a safe append/interruption boundary. |
-| `deadlocked` | Review unresolved conflicts; start a later workflow if requirements change. | Lead selected no safe successor; nothing was published. |
+| `deadlocked` | Review the unresolved critiques, then either stop or explicitly prepare a continuation. | Lead selected no safe successor; the candidate and conflict provenance remain immutable and nothing was published. |
 
 `capability_available=True` means this process holds private one-use authority
 for the exact pending request. After restart, `awaiting_confirmation` may be
@@ -168,17 +172,147 @@ revalidates the path and digest and gives the provider an authorized read
 coordinator. Canonical bytes are not embedded in durable consensus events and
 the agent cannot bypass the reference.
 
+## Continue a deadlock without copying the candidate
+
+A terminal synthesis deadlock exposes `next_action=continue_deadlock`. The
+application may offer two choices:
+
+- `resume_in_place` appends the continuation to the same workflow and proposal.
+- `linked_workflow` creates a new workflow and proposal that point back to the
+  exact deadlocked result.
+
+Neither choice asks the user to copy, paste, or re-author the candidate or the
+specialists' critiques. Runtime resolves the candidate and every unresolved
+conflict from immutable content-addressed handles. The user supplies only an
+operator ruling that explains how to resolve the deadlock and a positive
+number of additional completed repair rounds. Preparing the continuation does
+not call a provider. The resulting REPAIR request must be shown to the user and
+confirmed like every other phase.
+
+First capture the exact terminal identity from the same inspection and stored
+workflow:
+
+```python
+from story_writing_agents.consensus import ConsensusContinuationMode
+
+deadlocked = session.inspect_consensus(conversation_id, workflow_id)
+assert deadlocked.projection.state.value == "deadlocked"
+assert deadlocked.projection.next_action.value == "continue_deadlock"
+
+stored = runtime.load_workflow("novel", conversation_id, workflow_id)
+deadlock_event = stored.events[-1]
+continued = session.continue_consensus_deadlock(
+    conversation_id,
+    workflow_id,
+    deadlock_event.event_id,
+    deadlocked.projection.last_sequence,
+    mode=ConsensusContinuationMode.RESUME_IN_PLACE,
+    ruling="Preserve the midpoint reveal; move the disputed clue to chapter 3.",
+    added_revision_rounds=2,
+)
+print(
+    continued.projection.phase.value,
+    continued.projection.state.value,
+    continued.projection.continuation_mode.value,
+    continued.projection.remaining_revision_rounds,
+)
+# repair awaiting_confirmation resume_in_place 2
+```
+
+No provider has run at this point. Build a fresh `ConsensusRuntimeDecision`
+from this new request event and call `confirm_consensus()` only after the user
+chooses Confirm. A completed REPAIR consumes one added round; choosing Revise
+and preparing its replacement consumes none. After the repair, REAUDIT and
+SYNTHESIS are also explicit requests with fresh confirmations.
+
+After that Confirm becomes durable, runtime resolves the immutable handles and
+constructs provider input equivalent to:
+
+```python
+AgentRequest(
+    session_id="novel",
+    debate_id="consensus-workflow:...",
+    agent_id="execution_specialist",
+    phase=Phase.PROPOSE_REVISION,
+    round_number=0,
+    revision_id="r0",
+    task="Execute confirmed consensus repair phase.",
+    user_payload=(
+        "<original workflow input>\n\n"
+        "Continuation ruling:\n<operator ruling>\n\n"
+        "Unresolved conflict 1:\n<immutable critique>\n\n..."
+    ),
+    candidate_payload="<exact source candidate>",
+)
+```
+
+Those bytes are resolved only for the authorized provider invocation. Durable
+events retain their handles and digests, not the ruling, critiques, or
+candidate content.
+
+To preserve the deadlocked workflow as an unchanged record, use a linked
+continuation instead:
+
+```python
+linked = session.continue_consensus_deadlock(
+    conversation_id,
+    workflow_id,
+    deadlock_event.event_id,
+    deadlocked.projection.last_sequence,
+    mode=ConsensusContinuationMode.LINKED_WORKFLOW,
+    ruling="Treat the timeline constraint as canonical and revise the scene order.",
+    added_revision_rounds=1,
+)
+print(linked.submission.workflow_id == workflow_id)
+# False
+print(
+    linked.submission.input_kind.value,
+    linked.projection.source_workflow_id,
+    linked.projection.source_result_event_id,
+)
+# continuation <original-workflow-id> <deadlock-result-event-id>
+```
+
+The original workflow remains terminal and unchanged. The linked workflow
+starts at a separately confirmed REPAIR request and carries the same source
+candidate and unresolved critique handles. Inspection exposes only provenance
+facts—`continuation_mode`, source workflow/result/revision, source candidate
+digest, ruling digest/presence, added rounds, and remaining rounds—not the
+ruling, candidate, or critique text.
+
+If another synthesis deadlocks while rounds remain, the user can prepare
+another continuation from that exact new deadlock. If no repair round remains,
+runtime rejects another repair request. Every deadlock and repeated deadlock
+remains nonpublishing. Consensus workflow serialization uses strict format
+version 3; older consensus workflow bytes are rejected rather than migrated.
+
 ## Interruption and recovery
 
 - Stale request/tail/digest values and reused confirmations fail before work.
+- Continuation rejects a stale tail, wrong session or conversation, foreign
+  result, changed candidate lineage, missing conflict/ruling material, or an
+  invalid budget before provider or artifact mutation.
 - `resume_consensus()` only reloads and inspects; it never recreates authority
   or replays provider work.
 - `interrupt_consensus()` targets a currently running phase. If cancellation
   cannot be proved, the result requires recovery rather than claiming success.
 - A nonfinal phase advances only through an explicit next-phase request and a
   new confirmation.
-- Rejection, interruption, failure, unknown outcome, recovery requirement, and
-  deadlock never publish an artifact.
+- Restart after preparing but before confirming a continuation retains its
+  inspection and provenance but loses the process-local capability. Never
+  reconstruct confirmation authority or replay the repair. A linked source
+  remains an exact terminal deadlock and can support a newly prepared linked
+  continuation after reinspection; an in-place pending request requires
+  operator/application recovery or a separate new workflow.
+- Interruption after a provider call follows the normal exact interruption or
+  outcome-unknown recovery rules. It never automatically repeats a repair.
+- Rejection, interruption, failure, unknown outcome, recovery requirement,
+  deadlock, and budget exhaustion never publish an artifact.
+
+There is no direct-run CLI or interactive command for continuation.
+Applications must use the Python API above. Eventual FINALIZATION is still a
+read-only handoff; artifact Apply and Git Commit remain later, separately
+confirmed runtime operations.
 
 See [Runtime API](../reference/runtime-api.md) for exact signatures and
 [Consensus workflow](../design/consensus-workflow.md) for the mechanism.

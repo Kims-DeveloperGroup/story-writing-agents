@@ -88,6 +88,10 @@ class ConsensusRuntimeCorrelationTests(unittest.TestCase):
         authored = candidate_material_handle(
             hashlib.sha256(candidate_text.encode()).hexdigest()
         )
+        conflict_text = "continuity conflict"
+        conflict = candidate_material_handle(
+            hashlib.sha256(conflict_text.encode()).hexdigest()
+        )
         reviewed = _reviewed_artifact_proposal()
         routes = (
             (
@@ -116,17 +120,15 @@ class ConsensusRuntimeCorrelationTests(unittest.TestCase):
             ),
             (
                 _invocation(ConsensusPhase.REAUDIT, CHARACTER_CUSTODIAN, 2),
-                AgentReply.conflict("r0", "continuity conflict"),
-                None,
+                AgentReply.conflict("r0", conflict_text),
+                conflict,
                 ConsensusPhaseOutputKind.CONFLICT,
                 ConsensusAuditVerdict.CONFLICT,
                 None,
             ),
             (
                 _invocation(ConsensusPhase.SYNTHESIS, LEAD_ORCHESTRATOR, 1),
-                AgentReply.synthesis(
-                    "r0", "repair", AgentReplyNextPhase.REPAIR
-                ),
+                AgentReply.synthesis("r0", "repair", AgentReplyNextPhase.REPAIR),
                 None,
                 ConsensusPhaseOutputKind.SYNTHESIS,
                 None,
@@ -156,13 +158,16 @@ class ConsensusRuntimeCorrelationTests(unittest.TestCase):
                 self.assertEqual(result.result_digest, _reply_digest(reply))
                 self.assertEqual(
                     result.candidate_material,
-                    material if material is not None else _CANDIDATE,
+                    (
+                        authored
+                        if invocation.phase
+                        in {ConsensusPhase.DRAFT, ConsensusPhase.REPAIR}
+                        else _CANDIDATE
+                    ),
                 )
 
     def test_synthesis_next_phase_deadlock_and_mismatches_are_fail_closed(self) -> None:
-        invocation = _invocation(
-            ConsensusPhase.SYNTHESIS, LEAD_ORCHESTRATOR, 1
-        )
+        invocation = _invocation(ConsensusPhase.SYNTHESIS, LEAD_ORCHESTRATOR, 1)
         finalization = AgentReply.synthesis(
             "r0", "ready", AgentReplyNextPhase.FINALIZATION
         )
@@ -200,9 +205,7 @@ class ConsensusRuntimeCorrelationTests(unittest.TestCase):
 
     def test_finalization_handoff_exposes_review_only_lineage(self) -> None:
         reviewed = _reviewed_artifact_proposal()
-        invocation = _invocation(
-            ConsensusPhase.FINALIZATION, LEAD_ORCHESTRATOR, 1
-        )
+        invocation = _invocation(ConsensusPhase.FINALIZATION, LEAD_ORCHESTRATOR, 1)
         reply = AgentReply.finalization(
             "r0", reviewed.proposal_id, reviewed.proposal_digest
         )

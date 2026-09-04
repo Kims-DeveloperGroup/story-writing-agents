@@ -51,11 +51,15 @@
   semantic result records are separate. See the
   [interactive design contract](design/interactive-cli-design-system.md#submitted-input-lifecycle).
 
-- **Consensus and deadlock.** Phase-confirmed consensus moves one unpublished
-  candidate through current-revision audits, nonvoting lead synthesis, optional
-  repair/re-audit, and read-only finalization. Deadlock closes the lineage
-  without publication. Artifact Apply and Git Commit are later, separately
-  confirmed operations. See [Consensus runs](guides/consensus-runs.md).
+- **Consensus, deadlock, and continuation.** Phase-confirmed consensus moves one
+  unpublished candidate through current-revision audits, nonvoting lead
+  synthesis, optional repair/re-audit, and read-only finalization. Deadlock is
+  terminal and nonpublishing, but an explicit continuation can resume the same
+  lineage or create a linked workflow by referencing the exact candidate and
+  unresolved critique material—never by copying their text. The continuation
+  requires an operator ruling, a positive repair-round budget, and fresh user
+  confirmation for every phase. Artifact Apply and Git Commit are later,
+  separately confirmed operations. See [Consensus runs](guides/consensus-runs.md).
 
 - **Conversation.** An immutable session-scoped identity with mutable display
   subject/status and authoritative schema-v2 collaboration history.
