@@ -186,6 +186,7 @@ class ArtifactProposalOrchestrationTests(LeadOrchestrationTestCase):
         assessment: str = "supports",
         decision: str = "propose",
     ):
+        self.workspace.path(_RULES).unlink(missing_ok=True)
         self.backend.enqueue(
             _artifact_outcome(
                 operations=[
@@ -221,6 +222,7 @@ class ArtifactProposalOrchestrationTests(LeadOrchestrationTestCase):
         self,
     ) -> None:
         conversation_id = self.conversation("Complete missing core")
+        self.workspace.path(_RULES).unlink(missing_ok=True)
         before = self.artifact_snapshot()
         self.backend.enqueue(
             _artifact_outcome(
@@ -732,6 +734,7 @@ class ArtifactProposalOrchestrationTests(LeadOrchestrationTestCase):
             start=1,
         ):
             mismatch_id = self.conversation(f"Synthesis mismatch {ordinal}")
+            self.workspace.path(_RULES).unlink(missing_ok=True)
             self.backend.enqueue(
                 _artifact_outcome(
                     operations=[

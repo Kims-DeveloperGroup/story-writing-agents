@@ -99,6 +99,7 @@ from .conversations import (
     CollaborationAssignmentDispatchPayload,
     CollaborationAssignmentOutcome,
     CollaborationAssignmentOutcomeKind,
+    CollaborationAppendStatus,
     CollaborationBudget,
     CollaborationConfirmationDecision,
     CollaborationConfirmationPayload,
@@ -148,6 +149,14 @@ from .conversations import (
     ArtifactReviewReply,
     ArtifactReviewSynthesisPayload,
     ArtifactReviewedProposal,
+    ArtifactApplicationDecision,
+    ArtifactApplicationDecisionKind,
+    ArtifactApplicationDecisionPayload,
+    ArtifactApplicationDecisionResult,
+    ArtifactApplicationNextAction,
+    ArtifactApplicationOutcomeKind,
+    ArtifactApplicationRequestPayload,
+    ArtifactApplicationResultPayload,
     ConversationStatus,
     LeadAssignmentIntent,
     LeadDecisionResult,
@@ -178,6 +187,12 @@ from .writing_artifacts import (
     MAX_REFERENCE_UTF8_BYTES,
     ArtifactChangeSetError,
     ArtifactReviewDomain,
+    ArtifactReviewReason,
+    ArtifactApplicationError,
+    ArtifactApplicationErrorCode,
+    build_artifact_application_request,
+    serialize_artifact_application_request,
+    validate_artifact_relationships,
     ReferenceOperationHistory,
     parse_artifact_references,
     project_artifact_change_set,
@@ -285,6 +300,31 @@ class _ConfirmedStepCapability:
     def consume(self) -> None:
         if self._consumed:
             raise BackendProtocolError("confirmed-step capability is already consumed")
+        self._consumed = True
+        for index in range(len(self._secret)):
+            self._secret[index] = 0
+
+
+class _ArtifactApplicationCapability:
+    """Process-local, nonserializable, single-use artifact write authority."""
+
+    __slots__ = ("_consumed", "_secret", "request_digest", "tail_event_id")
+
+    def __init__(self, request_digest: str, tail_event_id: str) -> None:
+        self.request_digest = request_digest
+        self.tail_event_id = tail_event_id
+        self._secret = bytearray(uuid.uuid4().bytes + uuid.uuid4().bytes)
+        self._consumed = False
+
+    def __repr__(self) -> str:
+        return "_ArtifactApplicationCapability(<content hidden>)"
+
+    def __reduce__(self) -> object:
+        raise TypeError("artifact-application capability cannot be serialized")
+
+    def consume(self) -> None:
+        if self._consumed:
+            raise BackendProtocolError("artifact-application capability is consumed")
         self._consumed = True
         for index in range(len(self._secret)):
             self._secret[index] = 0
@@ -634,6 +674,9 @@ class StoryRuntime:
         self._agent_context_service = AgentContextService(self.workspace)
         self._confirmed_capabilities: dict[
             tuple[str, str, str], _ConfirmedStepCapability
+        ] = {}
+        self._artifact_application_capabilities: dict[
+            tuple[str, str, str], _ArtifactApplicationCapability
         ] = {}
         self._live_execution_markers: set[tuple[str, str, str, str]] = set()
 
@@ -1575,6 +1618,271 @@ class StoryRuntime:
                 decision.kind,
                 proposal,
                 revised_turn,
+            )
+
+    async def decide_artifact_application(
+        self,
+        decision: ArtifactApplicationDecision,
+    ) -> ArtifactApplicationDecisionResult:
+        """Consume one exact structured decision for the current reviewed request."""
+
+        if type(decision) is not ArtifactApplicationDecision:
+            raise TypeError("decision must be an ArtifactApplicationDecision")
+        self._validate_lead_identity(decision.session_id, decision.conversation_id)
+        lock = self._conversation_lock(decision.session_id, decision.conversation_id)
+        async with lock:
+            events = self.conversation_storage_services.event_store.read(
+                decision.session_id, decision.conversation_id
+            )
+            projection = project_collaboration_history(events)
+            request = projection.current_artifact_application_request
+            if (
+                request is None
+                or projection.current_artifact_application_result is not None
+                or not events
+                or type(events[-1].payload) is not ArtifactApplicationRequestPayload
+                or events[-1].payload != request
+            ):
+                raise ValueError(
+                    "artifact application has no authoritative request tail"
+                )
+            reviewed = request.reviewed_proposal
+            application = request.application_request
+            exact = (
+                decision.session_id == events[-1].session_id
+                and decision.conversation_id == events[-1].conversation_id
+                and decision.step_id == events[-1].step_id == reviewed.step_id
+                and decision.confirmation_request_id == request.confirmation_request_id
+                and decision.reviewed_proposal_id == reviewed.proposal_id
+                and decision.reviewed_proposal_revision == reviewed.proposal_revision
+                and decision.reviewed_proposal_digest == reviewed.proposal_digest
+                and decision.candidate_id == application.candidate_id
+                and decision.candidate_revision == application.candidate_revision
+                and decision.candidate_digest == application.candidate_digest
+                and decision.application_id == application.application_id
+                and decision.application_request_digest
+                == request.application_request_digest
+            )
+            if not exact:
+                raise ValueError("artifact application decision does not match tail")
+
+            decision_event_id = self._new_id("e")
+            decision_payload = ArtifactApplicationDecisionPayload(
+                confirmation_request_id=request.confirmation_request_id,
+                confirmation_request_event_id=events[-1].event_id,
+                reviewed_proposal_id=reviewed.proposal_id,
+                reviewed_proposal_revision=reviewed.proposal_revision,
+                reviewed_proposal_digest=reviewed.proposal_digest,
+                candidate_id=application.candidate_id,
+                candidate_revision=application.candidate_revision,
+                candidate_digest=application.candidate_digest,
+                application_id=application.application_id,
+                application_request_digest=request.application_request_digest,
+                decision=decision.kind,
+                revision_request=decision.revision_request,
+            )
+            self._append_drafts(
+                projection.last_sequence,
+                (self._draft_with_id(
+                    event_id=decision_event_id,
+                    session_id=decision.session_id,
+                    conversation_id=decision.conversation_id,
+                    turn_id=self._new_id("t"),
+                    step_id=decision.step_id,
+                    kind=CollaborationEventKind.ARTIFACT_APPLICATION_DECISION,
+                    sender=_USER_ACTOR,
+                    recipient=_RUNTIME_ACTOR,
+                    payload=decision_payload,
+                ),),
+            )
+
+            outcome: ArtifactApplicationOutcomeKind
+            next_action: ArtifactApplicationNextAction
+            application_result = None
+            key = (decision.session_id, decision.conversation_id, decision.step_id)
+            if decision.kind is ArtifactApplicationDecisionKind.REJECT:
+                self._artifact_application_capabilities.pop(key, None)
+                outcome = ArtifactApplicationOutcomeKind.REJECTED
+                next_action = ArtifactApplicationNextAction.CONTINUE_WITH_LEAD
+                message = (
+                    "The reviewed artifact application was rejected. "
+                    "No artifact or Git state changed."
+                )
+            elif decision.kind is ArtifactApplicationDecisionKind.REVISE:
+                self._artifact_application_capabilities.pop(key, None)
+                outcome = ArtifactApplicationOutcomeKind.SUPERSEDED
+                next_action = ArtifactApplicationNextAction.CONTINUE_WITH_LEAD
+                message = (
+                    "The reviewed artifact application was superseded for revision. "
+                    "No artifact or Git state changed."
+                )
+            else:
+                capability = self._artifact_application_capabilities.pop(key, None)
+                if capability is None:
+                    outcome = ArtifactApplicationOutcomeKind.STALE
+                    next_action = (
+                        ArtifactApplicationNextAction.REGENERATE_AND_REVIEW
+                    )
+                    message = (
+                        "This runtime did not produce the reviewed application "
+                        "request. No write occurred; regenerate and review it."
+                    )
+                else:
+                    persisted = self.conversation_storage_services.event_store.read(
+                        decision.session_id, decision.conversation_id
+                    )
+                    current = project_collaboration_history(persisted)
+                    tail = persisted[-1]
+                    authority_matches = not (
+                        current.current_artifact_application_request != request
+                        or current.current_artifact_application_result is not None
+                        or type(tail.payload) is not ArtifactApplicationDecisionPayload
+                        or tail.payload != decision_payload
+                        or capability.tail_event_id
+                        != decision_payload.confirmation_request_event_id
+                        or capability.request_digest
+                        != request.application_request_digest
+                    )
+                    capability.consume()
+                    if not authority_matches:
+                        outcome = ArtifactApplicationOutcomeKind.STALE
+                        next_action = (
+                            ArtifactApplicationNextAction.REGENERATE_AND_REVIEW
+                        )
+                        message = (
+                            "The reviewed artifact application authority drifted. "
+                            "No write occurred; regenerate and review it."
+                        )
+                    else:
+                        try:
+                            reviewed.__post_init__()
+                            reviewed.candidate.__post_init__()
+                            snapshots = self.artifacts.capture_complete_state()
+                            base_state = {item.path: item.content for item in snapshots}
+                            project_artifact_change_set(
+                                base_state, application.change_set
+                            )
+                            relationship = validate_artifact_relationships(
+                                base_state,
+                                application.change_set,
+                                attached_core_paths=application.attached_core_paths,
+                            )
+                            if (
+                                relationship
+                                != reviewed.candidate.relationship_validation
+                            ):
+                                raise ArtifactApplicationError(
+                                    ArtifactApplicationErrorCode.DRIFT
+                                )
+                            application_result = self.artifacts.apply_artifact_changes(
+                                application
+                            )
+                        except ArtifactChangeSetError:
+                            outcome = ArtifactApplicationOutcomeKind.STALE
+                            next_action = (
+                                ArtifactApplicationNextAction.REGENERATE_AND_REVIEW
+                            )
+                            message = (
+                                "The reviewed artifact application is stale. No "
+                                "application was started; regenerate and review it."
+                            )
+                        except ArtifactApplicationError as exc:
+                            if exc.code is ArtifactApplicationErrorCode.RECOVERY_REQUIRED:
+                                outcome = (
+                                    ArtifactApplicationOutcomeKind.RECOVERY_REQUIRED
+                                )
+                                next_action = (
+                                    ArtifactApplicationNextAction.OPERATOR_RECOVERY
+                                )
+                                message = (
+                                    "Artifact application recovery is required. "
+                                    "Do not retry the write."
+                                )
+                            elif exc.code in {
+                                ArtifactApplicationErrorCode.DRIFT,
+                                ArtifactApplicationErrorCode.CORRELATION_MISMATCH,
+                            }:
+                                outcome = ArtifactApplicationOutcomeKind.STALE
+                                next_action = (
+                                    ArtifactApplicationNextAction.REGENERATE_AND_REVIEW
+                                )
+                                message = (
+                                    "The reviewed artifact application drifted. No "
+                                    "new write was authorized; regenerate and review it."
+                                )
+                            else:
+                                outcome = (
+                                    ArtifactApplicationOutcomeKind.OUTCOME_UNKNOWN
+                                )
+                                next_action = (
+                                    ArtifactApplicationNextAction.INSPECT_AND_RESOLVE_OUTCOME
+                                )
+                                message = (
+                                    "The artifact application outcome is uncertain. "
+                                    "Inspect the exact application before any new write."
+                                )
+                        else:
+                            outcome = ArtifactApplicationOutcomeKind(
+                                application_result.state.value
+                            )
+                            next_action = (
+                                ArtifactApplicationNextAction.REQUEST_COMMIT_CONFIRMATION
+                            )
+                            message = (
+                                "The exact reviewed artifact changes were applied "
+                                "atomically. No Git staging or commit occurred."
+                            )
+
+            result_payload = ArtifactApplicationResultPayload(
+                confirmation_request_id=request.confirmation_request_id,
+                decision_event_id=decision_event_id,
+                reviewed_proposal_id=reviewed.proposal_id,
+                reviewed_proposal_digest=reviewed.proposal_digest,
+                application_id=application.application_id,
+                application_request_digest=request.application_request_digest,
+                outcome=outcome,
+                next_action=next_action,
+                result=application_result,
+            )
+            post_decision = self.conversation_storage_services.event_store.read(
+                decision.session_id, decision.conversation_id
+            )
+            try:
+                self._append_drafts(
+                    post_decision[-1].sequence,
+                    (self._draft(
+                        session_id=decision.session_id,
+                        conversation_id=decision.conversation_id,
+                        turn_id=post_decision[-1].turn_id,
+                        step_id=decision.step_id,
+                        kind=CollaborationEventKind.ARTIFACT_APPLICATION_RESULT,
+                        sender=CollaborationActor(CollaborationActorKind.ARTIFACT),
+                        recipient=_USER_ACTOR,
+                        payload=result_payload,
+                    ),),
+                )
+            except Exception:
+                result_payload = ArtifactApplicationResultPayload(
+                    confirmation_request_id=request.confirmation_request_id,
+                    decision_event_id=decision_event_id,
+                    reviewed_proposal_id=reviewed.proposal_id,
+                    reviewed_proposal_digest=reviewed.proposal_digest,
+                    application_id=application.application_id,
+                    application_request_digest=request.application_request_digest,
+                    outcome=ArtifactApplicationOutcomeKind.OUTCOME_UNKNOWN,
+                    next_action=(
+                        ArtifactApplicationNextAction.INSPECT_AND_RESOLVE_OUTCOME
+                    ),
+                )
+                message = (
+                    "The decision is durable but its visible result could not be "
+                    "persisted. Inspect the exact application; do not retry it."
+                )
+            return ArtifactApplicationDecisionResult(
+                request=request,
+                decision=decision.kind,
+                outcome=result_payload,
+                message=message,
             )
 
     async def _execute_confirmed_step_locked(
@@ -3009,6 +3317,7 @@ class StoryRuntime:
         )
         state = ArtifactProposalState.FAILED
         reviewed_proposal: ArtifactReviewedProposal | None = None
+        application_payload: ArtifactApplicationRequestPayload | None = None
         message = (
             "Artifact review did not complete. Every knowable reviewer result was "
             "preserved and no artifact was changed."
@@ -3097,6 +3406,56 @@ class StoryRuntime:
                             candidate.candidate.grounding_evidence_ids
                         ),
                     )
+                    attached_core_paths = tuple(
+                        fact.artifact_path
+                        for fact in (
+                            candidate.candidate.relationship_validation.review_facts
+                        )
+                        if fact.reason is ArtifactReviewReason.ATTACHED_CORE_EVIDENCE
+                    )
+                    application_request = build_artifact_application_request(
+                        application_id=self._deterministic_id(
+                            "aa", reviewed_proposal.proposal_id,
+                            reviewed_proposal.proposal_digest,
+                        ),
+                        candidate_id=candidate.candidate.candidate_id,
+                        candidate_revision=candidate.candidate.candidate_revision,
+                        candidate_digest=candidate.candidate.candidate_digest,
+                        change_set=candidate.candidate.change_set,
+                        relationship_validation=(
+                            candidate.candidate.relationship_validation
+                        ),
+                        attached_core_paths=attached_core_paths,
+                    )
+                    application_payload = ArtifactApplicationRequestPayload(
+                        confirmation_request_id=self._deterministic_id(
+                            "ar", reviewed_proposal.proposal_id,
+                            reviewed_proposal.proposal_digest,
+                        ),
+                        reviewed_proposal=reviewed_proposal,
+                        application_request=application_request,
+                        application_request_digest=(
+                            "sha256:"
+                            + hashlib.sha256(
+                                serialize_artifact_application_request(
+                                    application_request
+                                )
+                            ).hexdigest()
+                        ),
+                        base_tail_sequence=projection.last_sequence,
+                        choices=(
+                            ArtifactApplicationDecisionKind.APPLY,
+                            ArtifactApplicationDecisionKind.REJECT,
+                            ArtifactApplicationDecisionKind.REVISE,
+                        ),
+                        side_effects=(CollaborationSideEffect.ARTIFACT_MUTATION,),
+                        prohibited_side_effects=(
+                            CollaborationSideEffect.GIT_INDEX_MUTATION,
+                            CollaborationSideEffect.GIT_COMMIT,
+                            CollaborationSideEffect.GIT_REMOTE_MUTATION,
+                            CollaborationSideEffect.GIT_MERGE,
+                        ),
+                    )
 
         final_drafts: list[CollaborationEventDraft] = [
             self._draft_with_id(
@@ -3181,11 +3540,42 @@ class StoryRuntime:
                 state=core_state,
             )
         )
-        self._append_drafts(
+        if application_payload is not None:
+            final_drafts.append(
+                self._draft_with_id(
+                    event_id=self._deterministic_id(
+                        "e", result_event_id, "artifact_application_request"
+                    ),
+                    session_id=events[-1].session_id,
+                    conversation_id=events[-1].conversation_id,
+                    turn_id=turn_id,
+                    step_id=proposal.step_id,
+                    kind=CollaborationEventKind.ARTIFACT_APPLICATION_REQUEST,
+                    sender=_LEAD_ACTOR,
+                    recipient=_USER_ACTOR,
+                    payload=application_payload,
+                )
+            )
+        append_receipt = self._append_drafts(
             projection.last_sequence,
             tuple(final_drafts),
             batch_id=self._deterministic_id("b", result_event_id, "finalize"),
         )
+        if (
+            application_payload is not None
+            and append_receipt.status is CollaborationAppendStatus.APPENDED
+        ):
+            request_event = final_drafts[-1]
+            self._artifact_application_capabilities[
+                (
+                    request_event.session_id,
+                    request_event.conversation_id,
+                    request_event.step_id,
+                )
+            ] = _ArtifactApplicationCapability(
+                application_payload.application_request_digest,
+                request_event.event_id,
+            )
         return LeadTurnResult(
             events[-1].session_id,
             events[-1].conversation_id,
@@ -3196,9 +3586,14 @@ class StoryRuntime:
             None,
             core_state,
             None,
-            CollaborationNextAction.CONTINUE_WITH_LEAD,
+            (
+                CollaborationNextAction.SUBMIT_APPLICATION_DECISION
+                if application_payload is not None
+                else CollaborationNextAction.CONTINUE_WITH_LEAD
+            ),
             None,
             ArtifactProposalResult(state, candidate, reviewed_proposal),
+            application_payload,
         )
 
     def _terminal_state_draft(
@@ -6865,3 +7260,15 @@ class RuntimeSession:
         if decision.session_id != self.session_id:
             raise ValueError("lead decision does not belong to this session")
         return await self.runtime.decide_lead_step(decision)
+
+    async def decide_artifact_application(
+        self,
+        decision: ArtifactApplicationDecision,
+    ) -> ArtifactApplicationDecisionResult:
+        """Apply an exact pending artifact decision owned by this session."""
+
+        if type(decision) is not ArtifactApplicationDecision:
+            raise TypeError("decision must be an ArtifactApplicationDecision")
+        if decision.session_id != self.session_id:
+            raise ValueError("artifact decision does not belong to this session")
+        return await self.runtime.decide_artifact_application(decision)
