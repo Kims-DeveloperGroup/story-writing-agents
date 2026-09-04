@@ -1,4 +1,4 @@
-"""Fast structural contracts for repository-development agent policy."""
+"""Structural contracts for the compact repository-development policy."""
 
 from __future__ import annotations
 
@@ -22,20 +22,19 @@ EXPECTED_AGENTS = {
     "test_engineer",
 }
 
-# Issue #553 approved-base counts and their independent half-size ceilings.
 AGENTS_APPROVED_BASE_WORDS = 4_538
 RUNBOOK_APPROVED_BASE_WORDS = 2_807
-AGENTS_WORD_CEILING = 2_269
-RUNBOOK_WORD_CEILING = 1_403
+AGENTS_WORD_CEILING = 999
+RUNBOOK_WORD_CEILING = 999
 
 
 def markdown_section(source: str, heading: str) -> str:
     """Return one Markdown section through the next peer/parent heading."""
 
-    heading_match = re.fullmatch(r"(#{1,6})\s+(.+)", heading)
-    if heading_match is None:
+    match = re.fullmatch(r"(#{1,6})\s+(.+)", heading)
+    if match is None:
         raise ValueError(f"invalid Markdown heading: {heading!r}")
-    level = len(heading_match.group(1))
+    level = len(match.group(1))
     lines = source.splitlines()
     try:
         start = lines.index(heading) + 1
@@ -81,7 +80,7 @@ def declared_supported_modes(instructions: str) -> set[str]:
 
 
 class RepositoryAgentPolicyTests(unittest.TestCase):
-    """Prevent semantic drift without pinning canonical prose paragraphs."""
+    """Prevent semantic drift without coupling to full prose paragraphs."""
 
     @classmethod
     def setUpClass(cls) -> None:
@@ -95,6 +94,7 @@ class RepositoryAgentPolicyTests(unittest.TestCase):
                 "### Root-Capability Routing",
                 "### Role, Mode, and Control Gate",
                 "### Worktree Disposition",
+                "### Modularity Gate",
                 "### Orchestration Sequence",
                 "### Adaptive Verification",
                 "### Handoff and Result Contracts",
@@ -110,7 +110,7 @@ class RepositoryAgentPolicyTests(unittest.TestCase):
                 "## Plan and Record Verification",
             )
         }
-        cls.workflow_cleanup_source = markdown_section(
+        cls.workflow_cleanup = markdown_section(
             cls.workflow_source, "### Worktree Disposition and Cleanup"
         )
         cls.agent_paths = sorted(AGENT_DIRECTORY.glob("*.toml"))
@@ -154,11 +154,9 @@ class RepositoryAgentPolicyTests(unittest.TestCase):
                 "`analysis`: Stay read-only",
                 "`implementation`: Require an accepted modularity brief",
                 "`review`: Stay read-only",
-                "module index",
             ),
             "runtime_implementer": (
                 "Require `mode = implementation`; otherwise remain read-only",
-                "honor exclusive files",
                 "Never edit documentation, policies, guides, examples, tests",
             ),
             "test_engineer": (
@@ -177,37 +175,18 @@ class RepositoryAgentPolicyTests(unittest.TestCase):
                 self.assertTerms(self.agent_data[name]["developer_instructions"], *terms)
 
     def test_role_specific_routing_and_canonical_packets_are_present(self) -> None:
-        expected_terms = {
-            "requirements_analyst": (
-                "run only for substantial ambiguity",
-                "Recommend the smallest sufficient evidence",
-            ),
-            "regression_diagnostician": (
-                "run only for an unknown failure",
-                "stable family fingerprint",
-            ),
-            "modularity_maintainer": (
-                "recurring failure alone does not create a modularity trigger",
-                "all known responsibility holders and consumers",
-            ),
-            "runtime_implementer": (
-                "outside the root fast path",
-                "never broaden or launch an unauthorized broad suite",
-            ),
-            "test_engineer": (
-                "fuse planning, test-only edits, authorized exact execution, and final behavioral/coverage review",
-                "Never broaden selection, level, concurrency, or budget",
-            ),
-            "documentation_maintainer": (
-                "Keep `AGENTS.md` canonical for adaptive verification",
-                "never broaden verification",
-            ),
+        role_terms = {
+            "requirements_analyst": ("substantial ambiguity", "smallest sufficient evidence"),
+            "regression_diagnostician": ("unknown failure", "stable family fingerprint"),
+            "modularity_maintainer": ("module index", "canonical deduplication"),
+            "runtime_implementer": ("outside the root fast path", "authorized evidence"),
+            "test_engineer": ("behavioral/coverage review", "Never broaden selection"),
+            "documentation_maintainer": ("documentation impact", "never broaden verification"),
         }
-        for name, terms in expected_terms.items():
-            instructions = self.agent_data[name]["developer_instructions"]
+        for name, terms in role_terms.items():
             with self.subTest(agent=name):
                 self.assertTerms(
-                    instructions,
+                    self.agent_data[name]["developer_instructions"],
                     "`task_packet`",
                     "`result_packet`",
                     "Do not delegate to or coordinate with",
@@ -226,100 +205,49 @@ class RepositoryAgentPolicyTests(unittest.TestCase):
         )
         self.assertTerms(
             section,
-            "savings >=20 seconds and >=20% of `root_sequential_estimate`",
-            "`material_correctness_risk_reduction`/`mandatory_ownership_rule`",
-            "Mandatory ownership covers docs, tests, triggered modularity, and production outside root fast path",
-            "one/two-file production/config change in an established responsibility/boundary",
-            "never docs, tests, required/uncertain modularity, substantial/unresolved ambiguity, or unknown failures",
-            "never for a deterministic command",
-            "Batch safe root reads",
-        )
-        self.assertTerms(
-            self.runbook_sections["## Route Work on the Critical Path"],
-            "[Delegation-Gain Gate](AGENTS.md#delegation-gain-gate)",
-            "Enforce exclusive docs/tests/modularity ownership",
-            "one production writer",
+            "savings >=20 seconds and >=20%",
+            "`material_correctness_risk_reduction|mandatory_ownership_rule`",
+            "docs/tests/triggered-modularity/production outside fast path",
+            "<=2-file production/config work",
+            "excludes mandatory ownership, ambiguity, unknown failure",
+            "Never dispatch for deterministic commands",
+            "batch safe root reads",
         )
 
     def test_root_capability_context_and_complexity_are_canonical(self) -> None:
         section = self.sections["### Root-Capability Routing"]
-        rows = {
-            match.group("name"): match.group("tokens").strip()
-            for match in re.finditer(
-                r"^\| `(?P<name>compact|moderate|large|oversized)` "
-                r"\| (?P<tokens>.*?) \|$",
-                section,
-                flags=re.MULTILINE,
-            )
-        }
-        self.assertEqual(
-            rows,
-            {
-                "compact": "<=8,192",
-                "moderate": "8,193--32,768",
-                "large": "32,769--131,072",
-                "oversized": ">131,072, or no verified output/reasoning fit",
-            },
-        )
         self.assertTerms(
             section,
-            "`dispatch_context_tokens` includes only the `task_packet`",
-            "`observed|estimated|unavailable`, method, and confidence",
-            "Unknown fit is `oversized`; narrow/split",
-            "Context cannot relax ceilings",
-            "Risk controls effort",
+            "packet+intentional-history+attachments/preloads+irreducible child",
+            "`observed|estimated|unavailable`, method/confidence",
+            "`compact <=8,192`",
+            "`moderate 8,193--32,768`",
+            "`large 32,769--131,072`",
+            "`oversized >131,072|unverified-fit`",
+            "narrow/split",
+            "never root ceilings",
         )
 
     def test_root_capability_quality_and_role_targets_are_canonical(self) -> None:
         section = self.sections["### Root-Capability Routing"]
-        rows = {
-            match.group("name"): (
-                match.group("trigger").strip(),
-                match.group("model").strip(),
-                match.group("effort").strip(),
-            )
-            for match in re.finditer(
-                r"^\| `(?P<name>routine|standard|complex|critical)` "
-                r"\| (?P<trigger>.*?) \| (?P<model>.*?) "
-                r"\| (?P<effort>.*?) \|$",
-                section,
-                flags=re.MULTILINE,
-            )
-        }
-        self.assertEqual(
-            rows,
-            {
-                "routine": (
-                    "mechanical/reversible; no unresolved judgment/material risk",
-                    "`gpt-5.6-terra`",
-                    "`medium`",
-                ),
-                "standard": (
-                    "bounded semantic work; one established responsibility",
-                    "`gpt-5.6-sol`",
-                    "`high`",
-                ),
-                "complex": (
-                    "ambiguity/unknown cause; multi-domain/boundary/public API/compatibility/migration/security/authorization/concurrency/process/PTY/lifecycle/persistence/resource ownership/difficult nonlocal edges",
-                    "`gpt-5.6-sol`",
-                    "`xhigh`",
-                ),
-                "critical": (
-                    "two interacting complex triggers, or explicitly high-consequence security/data-loss/irreversible-migration/breaking-compatibility",
-                    "`gpt-5.6-sol`",
-                    "`max`",
-                ),
-            },
+        expected_rows = (
+            "| `routine` | `gpt-5.6-terra`/`medium` | mechanical/reversible/no-material-risk |",
+            "| `standard` | `gpt-5.6-sol`/`high` | bounded semantic/one responsibility |",
+            "| `complex` | `gpt-5.6-sol`/`xhigh` | ambiguity/cause/boundary/API/compatibility/migration/security/authorization/concurrency/process/PTY/lifecycle/persistence/resource/nonlocal |",
+            "| `critical` | `gpt-5.6-sol`/`max` | two complex triggers or high-consequence security/data-loss/irreversible-migration/breaking-compatibility |",
         )
+        for row in expected_rows:
+            with self.subTest(row=row):
+                self.assertIn(row, section)
         self.assertTerms(
             section,
-            "requirements/diagnosis for substantial ambiguity/unknown cause",
-            "modularity for boundary work (index-only keeps actual class)",
-            "runtime for security/concurrency/migration/public API/difficult edges",
-            "tests for security/concurrency/PTY/process/lifecycle/complex coverage",
-            "docs for normative governance/security/compatibility/migration",
-            "Compact/moderate context floors model at Luna; large raises it to Sol",
-            "Roles default `routine`",
+            "Roles default routine",
+            "requirements/diagnosis ambiguity/unknown-cause",
+            "modularity boundary",
+            "runtime security/concurrency/migration/API/nonlocal",
+            "tests security/concurrency/PTY/process/lifecycle/complex-risk",
+            "docs governance/security/compatibility/migration",
+            "Index-only stays actual class",
         )
 
     def test_root_capability_clamps_and_orders_each_axis_independently(self) -> None:
@@ -328,43 +256,42 @@ class RepositoryAgentPolicyTests(unittest.TestCase):
         self.assertEqual(
             tuple(code.group("body").splitlines()) if code else (),
             (
-                "desired_model = max(task_model_target, role_model_target, context_model_target)",
-                "desired_effort = max(task_effort_target, role_effort_target)",
-                "capped_model = min(desired_model, root_effective_model)",
-                "capped_effort = min(desired_effort, root_effective_effort)",
+                "desired_model=max(task_model_target,role_model_target,context_model_target)",
+                "desired_effort=max(task_effort_target,role_effort_target)",
+                "capped_model=min(desired_model,root_effective_model)",
+                "capped_effort=min(desired_effort,root_effective_effort)",
             ),
         )
         self.assertTerms(
             section,
-            "Derive independently",
-            "`gpt-5.6-luna < gpt-5.6-terra < gpt-5.6-sol`",
-            "Effort is `none < low < medium < high < xhigh < max`",
-            "each selected axis must also be <=root",
+            "`gpt-5.6-luna<gpt-5.6-terra<gpt-5.6-sol`",
+            "`none<low<medium<high<xhigh<max`",
+            "within each root ceiling",
         )
 
     def test_root_capability_selection_and_inheritance_are_canonical(self) -> None:
         self.assertTerms(
             self.sections["### Root-Capability Routing"],
-            "The cap is minimum quality",
-            "Choose exact cap, else nearest stronger compatible pair within root",
-            "fewest upward steps; tie: smaller model, then effort increase",
-            "Never auto-select below cap",
-            "Set both overrides or neither",
-            "Unresolved root/order/availability/support requires exact inheritance",
-            "`ceiling_limited` means either cap is below desired",
-            "high-consequence work must narrow/require stronger root",
+            "Select exact cap, else nearest stronger within each root ceiling",
+            "fewest upward steps; tie smaller model then effort",
+            "Never select weaker",
+            "weaker-only returns root",
+            "Override both axes or neither",
+            "model-only may default effort",
+            "unresolved root/order/availability/support inherits",
+            "`ceiling_limited` high-consequence work narrows/requires stronger root",
         )
 
     def test_root_capability_routing_evidence_is_complete(self) -> None:
         self.assertTerms(
             self.sections["### Root-Capability Routing"],
-            "Record root/source; context count/class/method/confidence; complexity/triggers; role target; desired/capped/selected/compatible pairs; limitation; fallback/inheritance reason",
-            "exclusions, decisions, observable criteria",
-            "`observed|inferred|proposed|unknown`",
-            "uncertainty stops",
+            "Record root/source, context measurement/class, triggers/role target, desired/capped/selected/compatible pairs, limitation/fallback",
+            "Packets bound decisions/exclusions/criteria",
+            "`observed>inferred>proposed>unknown` evidence",
         )
         self.assertTerms(
             self.runbook_sections["## Route Work on the Critical Path"],
+            "root/context/risk/role targets",
             "independently desired/capped/selected axes",
             "compatibility/ceiling/fallback",
             "Use bounded packets",
@@ -372,52 +299,46 @@ class RepositoryAgentPolicyTests(unittest.TestCase):
 
     def test_role_mode_capability_matrix_matches_toml_declarations(self) -> None:
         section = self.sections["### Role, Mode, and Control Gate"]
-        matrix: dict[str, set[str]] = {}
-        capabilities: dict[tuple[str, str], str] = {}
-        for match in re.finditer(
-            r"^\| `(?P<role>[a-z_]+)` \| (?P<modes>.*?) "
-            r"\| (?P<capability>.*?) \|$",
-            section,
-            flags=re.MULTILINE,
-        ):
-            role = match.group("role")
-            modes = set(
-                re.findall(
-                    r"`(analysis|implementation|review)`", match.group("modes")
-                )
-            )
-            matrix.setdefault(role, set()).update(modes)
-            for mode in modes:
-                capabilities[(role, mode)] = match.group("capability")
-        toml_modes = {
-            role: declared_supported_modes(
-                self.agent_data[role]["developer_instructions"]
-            )
-            for role in EXPECTED_AGENTS
+        expected_rows = (
+            "| requirements/diagnosis | `analysis` | read-only filesystem; no approval-enabled writes |",
+            "| modularity | `analysis|review` / `implementation` | read-only / assigned-worktree writes |",
+            "| runtime | `implementation` | assigned-worktree writes |",
+            "| tests/docs | `analysis` / `implementation` | read-only / assigned-worktree writes |",
+        )
+        for row in expected_rows:
+            with self.subTest(row=row):
+                self.assertIn(row, section)
+        expected_modes = {
+            "requirements_analyst": {"analysis"},
+            "regression_diagnostician": {"analysis"},
+            "modularity_maintainer": {"analysis", "implementation", "review"},
+            "runtime_implementer": {"implementation"},
+            "test_engineer": {"analysis", "implementation"},
+            "documentation_maintainer": {"analysis", "implementation"},
         }
-        self.assertEqual(matrix, toml_modes)
-        for (role, mode), capability in capabilities.items():
-            with self.subTest(role=role, mode=mode):
-                if mode in {"analysis", "review"}:
-                    self.assertRegex(capability, r"read-only|same read-only")
-                else:
-                    self.assertEqual(capability, "assigned-worktree writes")
+        self.assertEqual(
+            {
+                role: declared_supported_modes(
+                    self.agent_data[role]["developer_instructions"]
+                )
+                for role in EXPECTED_AGENTS
+            },
+            expected_modes,
+        )
 
     def test_control_gate_preflight_is_observed_and_fail_closed(self) -> None:
         self.assertTerms(
             self.sections["### Role, Mode, and Control Gate"],
-            "Child first performs only minimum identity/capability preflight",
-            "reports filesystem/sandbox, writes, and approval path",
-            "Reject unsupported mode, unavailable evidence, or mismatch before other reads/writes",
-            "observed fail-closed routing, not isolation enforcement by prompts/TOMLs/tests",
+            "Child first reports observed filesystem/sandbox/write/approval capability and identity",
+            "unavailable/mismatched role-mode-capability stops before other reads/writes",
+            "exact bytes/SHA-256/decoded paths",
         )
 
     def test_full_history_exception_is_bounded_and_evidenced(self) -> None:
-        section = self.sections["### Role, Mode, and Control Gate"]
         self.assertTerms(
-            section,
-            "Use bounded self-contained context",
-            "Full history requires named reason, bounded relevant scope, stale-context risk, explicit root approval, and all four in task evidence",
+            self.sections["### Role, Mode, and Control Gate"],
+            "Use bounded context",
+            "full history requires reason/bound/stale-risk/root-approval evidence",
         )
         self.assertTerms(
             self.runbook_sections["## Route Work on the Critical Path"],
@@ -427,34 +348,33 @@ class RepositoryAgentPolicyTests(unittest.TestCase):
     def test_join_retry_and_partial_writer_controls_are_explicit(self) -> None:
         self.assertTerms(
             self.sections["### Role, Mode, and Control Gate"],
-            "Root records every result ID and role/mode",
-            "join only when none is running/missing and every exact `result_packet` validates",
-            "Retry a transient spawn/delivery/join failure exactly once",
-            "proving no write and recording its fingerprint",
-            "Possible writer mutation requires state inspection, diff preservation, and same-thread resume",
-            "Policy/capability/scope/schema failures are non-transient",
+            "Pre-record result IDs+role/mode",
+            "join only when all valid/finished",
+            "Retry transient spawn/delivery/join once after no-write proof/fingerprint",
+            "possible writer mutation requires inspect/preserve/same-thread resume",
+            "Never retry policy/capability/scope/schema failures",
         )
 
     def test_conflicts_and_root_fallback_preserve_role_ownership(self) -> None:
         self.assertTerms(
             self.sections["### Role, Mode, and Control Gate"],
-            "Resolve conflicts by `observed > inferred > proposed > unknown` within role ownership, never vote",
-            "escalate to owner, root, then user",
-            "After failed retry root may only do authorized static reads/fast-path work",
-            "never absorbs mandatory ownership or creates a reviewer role",
+            "Resolve conflicts by evidence/role ownership",
+            "escalating owner→root→user",
+            "Root never absorbs mandatory ownership/adds reviewer roles",
+            "specialists never delegate/coordinate",
         )
 
     def test_runbook_applies_role_mode_and_control_gate(self) -> None:
         section = self.runbook_sections["## Route Work on the Critical Path"]
         self.assertTerms(
             section,
+            "[Delegation-Gain Gate](AGENTS.md#delegation-gain-gate)",
+            "[Root-Capability Routing](AGENTS.md#root-capability-routing)",
             "[Role, Mode, and Control Gate](AGENTS.md#role-mode-and-control-gate)",
-            "Record estimates/formula/percentage and exception",
-            "result IDs and roles/modes",
-            "cross the join barrier only with all valid results",
-            "Retry eligible control failure once",
-            "inspect/resume possible partial writers",
-            "never bypass ownership or conflict escalation",
+            "[Orchestration Sequence](AGENTS.md#orchestration-sequence)",
+            "result IDs+role/mode",
+            "validated join barrier",
+            "authorized retry/resume/conflict escalation",
         )
 
     def test_writer_preflight_commands_and_identity_are_exact(self) -> None:
@@ -462,7 +382,6 @@ class RepositoryAgentPolicyTests(unittest.TestCase):
         command_block = re.search(
             r"```bash\n(?P<commands>.*?)\n```", preflight, re.DOTALL
         )
-        self.assertIsNotNone(command_block)
         self.assertEqual(
             tuple(command_block.group("commands").splitlines())
             if command_block
@@ -480,31 +399,32 @@ class RepositoryAgentPolicyTests(unittest.TestCase):
         )
         self.assertTerms(
             self.sections["### Role, Mode, and Control Gate"],
-            "physical `pwd -P`, Git root, branch, exact HEAD, approved-base SHA/ancestry, exclusive targets",
-            "exact bytes, SHA-256, and decoded paths",
+            "`pwd -P`, Git root/branch/exact HEAD/base/ancestry, exclusive targets",
+            "exact bytes/SHA-256/decoded paths",
             "`git status --porcelain=v1 -z --untracked-files=all`",
         )
 
     def test_writer_preflight_is_pinned_fail_closed_and_repeatable(self) -> None:
         self.assertTerms(
             self.sections["### Role, Mode, and Control Gate"],
-            "Accept dirty state only if all three were pinned",
-            "Any mismatch stops without reset/checkout/clean/revert",
-            "After upstream change, interruption, or invalidated identity, root sends updated identity/fingerprint and the same writer repeats full preflight",
+            "dirty state requires all three pinned",
+            "Never reset/checkout/clean/revert",
+            "Identity invalidation requires root update and same-writer re-preflight",
         )
         self.assertTerms(
             self.runbook_sections["## Preflight Every Writer"],
-            "Report/match observed capability/approval path, every identity, exact porcelain bytes/hash/decoded paths, and exclusive targets",
-            "Dirty state is accepted only when all three were pinned",
-            "Any mismatch stops without reset/checkout/clean/revert",
+            "Report/match capability/approval path, identity, exclusive targets, exact porcelain bytes/hash/decoded paths",
+            "Dirty state requires all three pinned",
+            "Mismatch stops without reset/checkout/clean/revert",
+            "root updates identity/hash and same writer repeats",
         )
 
     def test_worktree_dispositions_are_exact_and_authority_bound(self) -> None:
         section = self.sections["### Worktree Disposition"]
-        disposition_sentence = section.split("Completion evidence", 1)[0]
+        first_sentence = section.split("; change only", 1)[0]
         names = tuple(
             name
-            for name in re.findall(r"`([a-z_]+)`", disposition_sentence)
+            for name in re.findall(r"`([a-z_]+)`", first_sentence)
             if name != "identity"
         )
         self.assertEqual(
@@ -517,184 +437,165 @@ class RepositoryAgentPolicyTests(unittest.TestCase):
         )
         self.assertTerms(
             section,
-            "Nest exactly one under task `identity`",
-            "`remove_after_integration` only with cleanup authorization",
-            "`retain_with_reason` plus reason/next owner",
+            "`remove_after_integration` (pre-authorized)",
+            "`retain_with_reason` (reason/next owner)",
             "`authorization_required`",
-            "Change only after recorded authority/lifecycle change",
+            "change only after recorded authority/state change",
         )
 
     def test_completion_inventory_and_removal_gates_are_complete(self) -> None:
-        section = self.sections["### Worktree Disposition"]
         self.assertTerms(
-            section,
-            "exact path, branch, HEAD, porcelain bytes/hash/paths, Issue/PR state, commit/PR recoverability",
-            "cleanup authorization state",
-            "actual removal/retention",
-            "Removal requires authorization, clean status, completed integration verification, recoverability, non-forced removal, and verified absence from registry/filesystem",
-            "Branch deletion is separate",
-            "Retain parent until integrated into `main`",
+            self.sections["### Worktree Disposition"],
+            "Completion inventories path/branch/HEAD/porcelain/Issue-PR/recoverability/authority/outcome",
+            "Removal requires authorization+clean+integrated+recoverable",
+            "non-force",
+            "verified registry/filesystem absence",
+            "branch deletion is separate",
+            "retain parent until `main`",
         )
         cleanup = self.runbook_sections["## Dispose or Retain Worktrees"]
         commands = re.search(
             r"```bash\n(?P<commands>.*?)\n```", cleanup, re.DOTALL
         )
-        self.assertIsNotNone(commands)
         self.assertEqual(
             tuple(commands.group("commands").splitlines()) if commands else (),
             (
-                "git worktree remove <exact-worktree-path>",
+                "git worktree remove <exact-path>",
                 "git worktree list --porcelain",
-                "test ! -e <exact-worktree-path>",
+                "test ! -e <exact-path>",
             ),
         )
 
     def test_lifecycle_links_and_packet_nesting_are_canonical(self) -> None:
         self.assertTerms(
-            self.workflow_cleanup_source,
+            self.workflow_cleanup,
             "[AGENTS.md](AGENTS.md#worktree-disposition)",
             "Removal requires clean status, completed integration verification, and recoverability",
             "non-forced and verified absent afterward",
             "Branch deletion is a separate authorized action",
-            "Retain the parent worktree until the parent branch is integrated into `main`",
         )
         self.assertTerms(
-            self.sections["### Worktree Disposition"],
-            "Keep packet schemas unchanged",
-            "preflight/disposition under `identity`",
+            self.sections["### Handoff and Result Contracts"],
+            "Nest preflight/disposition under `identity`",
             "cleanup/recoverability under `evidence`",
-            "outcome, reason, risk, next owner under `findings`, `risks`, `next_action`",
+            "disposition outcome/reason/risk/owner under findings/risks/next action",
         )
 
     def test_specialist_ownership_fusion_and_thread_reuse_are_explicit(self) -> None:
         self.assertTerms(
             self.sections["### Orchestration Sequence"],
-            "one production writer at a time",
-            "After stable code, modularity owner updates indices",
-            "modularity reviews code/indices before tests/docs",
-            "test owner exclusively plans/edits/runs/reviews",
-            "preferably one turn",
-            "pause/resume same thread for dependencies",
-            "Docs remain documentation owner's exclusive work",
-            "Reuse specialist threads unless stale/isolation risk",
-            "specialists neither delegate nor coordinate",
+            "one production owner",
+            "nonoverlapping sequential ownership",
+            "stabilize code then modularity reconciles indices",
+            "stabilize then exclusive test and docs owners work",
+            "resuming threads after pauses",
+            "Reuse threads unless stale/isolation-risk",
         )
 
     def test_evidence_levels_are_selectable_and_complete_is_terminal(self) -> None:
         section = self.sections["### Adaptive Verification"]
-        first_part = section.split("| `verification_class`", 1)[0]
-        level_set = {
+        prefix = section.split("| Class |", 1)[0]
+        expected = (
             "static_inventory",
             "exact",
             "semantic_cluster",
             "affected_suite",
             "full_suite",
             "complete",
-        }
-        levels = tuple(
-            name for name in re.findall(r"`([a-z_]+)`", first_part) if name in level_set
         )
-        self.assertEqual(
-            levels,
-            (
-                "static_inventory",
-                "exact",
-                "semantic_cluster",
-                "affected_suite",
-                "full_suite",
-                "complete",
-            ),
+        observed = tuple(
+            name for name in re.findall(r"`([a-z_]+)`", prefix) if name in expected
         )
+        self.assertEqual(observed, expected)
         self.assertTerms(
-            first_part,
-            "Selectable partial order",
-            "`complete` is terminal, not level six",
-            "A pass never authorizes the next level",
+            prefix,
+            "Partial-order levels",
+            "`complete` is terminal only with current mandatory green/accepted-skips",
+            "resolved failures",
+            "sufficient inventory",
+            "accepted residual risk",
         )
 
     def test_verification_class_budgets_and_shard_limits_are_exact(self) -> None:
-        rows = {
-            match.group("name"): (match.group("budget"), match.group("shard"))
-            for match in re.finditer(
-                r"^\| `(?P<name>local|bounded|cross_cutting|release)` "
-                r"\| (?P<budget>[\w-]+) \| (?P<shard>[\w-]+) \|",
-                self.sections["### Adaptive Verification"],
-                flags=re.MULTILINE,
-            )
-        }
-        self.assertEqual(
-            rows,
-            {
-                "local": ("300", "180"),
-                "bounded": ("900", "300"),
-                "cross_cutting": ("1800", "600"),
-                "release": ("Issue-defined", "Issue-defined"),
-            },
+        section = self.sections["### Adaptive Verification"]
+        expected_rows = (
+            "| `local` | 300/180 | inventory+exact/static |",
+            "| `bounded` | 900/300 | +required semantic |",
+            "| `cross_cutting` | 1800/600 | selected cluster/affected |",
+            "| `release` | Issue-defined | named gates |",
         )
+        for row in expected_rows:
+            with self.subTest(row=row):
+                self.assertIn(row, section)
 
     def test_root_plan_and_result_fields_are_identifiable(self) -> None:
         section = self.sections["### Adaptive Verification"]
         self.assertTerms(
             section,
-            "criteria-to-`mandatory_evidence`",
-            "all changed inputs and affected inventory/exclusions",
-            "exact `authorized_selection`/rationale",
-            "one `evidence_execution_owner` per item",
-            "estimates/source/confidence",
+            "Plan criteria→evidence",
+            "changed/affected inputs/exclusions/risks",
+            "exact selection+owner",
+            "estimates/confidence",
             "total/max/spent/remaining",
-            "escalation/full-suite triggers",
-            "reuse/invalidation",
-            "residual risk",
-            "repository, absolute worktree, baseline/HEAD, dirty hash",
-            "purpose, level, selection/command, outcome/duration, fingerprint",
+            "stops/triggers/reuse/risk",
+            "Ledger provenance/digests/duration",
+            "`completed_ids|failed_ids|accepted_skips|unexecuted_ids`",
         )
         self.assertTerms(
             self.runbook_sections["## Plan and Record Verification"],
             "class/rationale",
             "criteria→mandatory evidence",
-            "exact authorized checks/IDs/rationale",
-            "estimates/source/confidence",
-            "total/max/spent/remaining budget",
+            "changed/affected inventory/exclusions/risks",
+            "exact selection/rationale/one owner",
+            "estimates/confidence/budget",
+            "stops/triggers/reuse/risk",
         )
 
     def test_sha_is_provenance_but_digest_controls_reuse(self) -> None:
         self.assertTerms(
             self.sections["### Adaptive Verification"],
-            "conservative `relevant_input_digest`",
-            "Reuse after HEAD change only when root proves disjointness and digest/purpose remain",
-            "relevant/uncertain changes invalidate it",
+            "`normalized_command,exact_ids,relevant_input_digest,environment_class`",
+            "reuse only root-proven disjoint changes with stable purpose/digest",
+        )
+        self.assertTerms(
+            self.runbook_sections["## Plan and Record Verification"],
+            "provenance/manifest/input-digest",
+            "Reuse only root-proven disjoint, purpose/digest-stable evidence",
         )
 
     def test_evidence_has_one_owner_and_an_exact_deduplication_key(self) -> None:
         self.assertTerms(
             self.sections["### Adaptive Verification"],
-            "Assign one `evidence_execution_owner` per item",
-            "Deduplicate exactly on `normalized_command`, `exact_ids`, `relevant_input_digest`, `environment_class`",
-            "owner/label/purpose/venue/wrapper cannot justify rerun",
-            "exact/cluster run locally, affected/full in CI",
-            "duplicate broad local+CI only for a local-environment criterion",
+            "exact selection+owner",
+            "Deduplicate exactly by `normalized_command,exact_ids,relevant_input_digest,environment_class`",
+            "specialists only propose expansion",
+        )
+        self.assertTerms(
+            self.runbook_sections["## Plan and Record Verification"],
+            "exact selection/rationale/one owner",
+            "exact dedup key",
+            "No specialist broadens selection/level/concurrency/budget",
         )
 
     def test_shards_are_disjoint_complete_and_resumable(self) -> None:
         self.assertTerms(
             self.sections["### Adaptive Verification"],
-            "deterministic disjoint portable exact-ID shards",
-            "union exactly selection, each ID once",
-            "Sequential is default",
-            "at most two fast-fail shards",
-            "manifest digest, ordinal, IDs, input digest, result, duration",
-            "`completed_ids`, `failed_ids`, `accepted_skips`, `unexecuted_ids`",
-            "Timeout/replacement/interruption is neither pass nor assertion failure",
-            "Partial evidence is never complete",
+            "Shards are deterministic/disjoint/exhaustive exact IDs",
+            "sequential unless root authorizes isolated nonoverlap",
+            "maximum two fast-fail",
+            "`completed_ids|failed_ids|accepted_skips|unexecuted_ids`",
+            "interruption is no verdict",
+            "resume valid remainder",
         )
 
     def test_root_alone_controls_escalation_and_risk_acceptance(self) -> None:
+        section = self.sections["### Adaptive Verification"]
         self.assertTerms(
-            self.sections["### Adaptive Verification"],
-            "Root exclusively selects, authorizes, budgets, deduplicates, reuses, escalates, and accepts sufficiency",
-            "never broaden level, selection, concurrency, or budget",
-            "root accepts residual risk",
-            "parallel needs root authorization",
+            section,
+            "Root owns selection/authorization/budget/reuse/escalation/sufficiency",
+            "specialists only propose expansion",
+            "accepted residual risk",
+            "root authorizes isolated nonoverlap",
         )
         self.assertTerms(
             self.agent_data["test_engineer"]["developer_instructions"],
@@ -705,77 +606,42 @@ class RepositoryAgentPolicyTests(unittest.TestCase):
 
     def test_full_suite_has_objective_triggers_and_no_default_gate(self) -> None:
         section = self.sections["### Adaptive Verification"]
-        trigger_source = section.split("`full_suite` requires:", 1)[1].split(
-            "Implementation/review/suite availability", 1
-        )[0]
-        triggers = tuple(
-            item.removeprefix("or ").strip()
-            for item in trigger_source.strip().rstrip(".").split(";")
-        )
-        self.assertEqual(len(triggers), 6)
-        expected_markers = (
-            "Issue/parent/release criterion",
-            "unbounded static inventory",
-            "package-wide/public/cross-domain invariant",
-            "global discovery/bootstrap/packaging/harness",
+        expected_triggers = (
+            "explicit Issue/release criterion",
+            "unbounded inventory",
+            "changed package/public/cross-domain invariant",
+            "unreliable global harness",
             "unknown out-of-cluster failure",
-            "uncovered concrete residual risk",
+            "uncovered concrete risk",
         )
-        for marker in expected_markers:
-            with self.subTest(marker=marker):
-                self.assertTrue(any(marker in item for item in triggers))
-        self.assertTerms(
-            section,
-            "Implementation/review/suite availability is insufficient",
-            "return the decision, never omit/claim completion",
-            "Docs/prompt/TOML/policy-only work may use static parsing, exact policy tests, link/format, and diff checks",
-        )
+        for trigger in expected_triggers:
+            with self.subTest(trigger=trigger):
+                self.assertIn(trigger, normalized(section))
+        self.assertTerms(section, "Run `full_suite` only for")
 
     def test_failures_route_without_restarting_broad_verification(self) -> None:
         self.assertTerms(
             self.sections["### Adaptive Verification"],
-            "For known failure repair then rerun invalid evidence",
-            "one fingerprint occurs in >=2 responsibility holders",
-            "stop broad reruns and inventory repository-wide occurrences",
-            "Cross-boundary capability/ownership defects apply one modularity gate",
-            "Unknown failures go to diagnosis",
-            "Unknown cost/exhaustion returns completed/remaining evidence, estimates, risk, and root choices",
+            "Unknown failure→diagnosis",
+            "cross-boundary defect→modularity",
+            "budget/cost exhaustion returns remaining evidence/options, never completion",
         )
 
     def test_policy_does_not_claim_capability_level_sandbox_enforcement(self) -> None:
         section = self.sections["### Role, Mode, and Control Gate"]
         self.assertTerms(
             section,
-            "reports filesystem/sandbox, writes, and approval path",
-            "observed fail-closed routing, not isolation enforcement by prompts/TOMLs/tests",
+            "observed filesystem/sandbox/write/approval capability",
+            "unavailable/mismatched role-mode-capability stops",
         )
         self.assertNotIn("prompts enforce runtime isolation", normalized(section))
 
     def test_packet_schemas_are_exact_and_compact(self) -> None:
         section = self.sections["### Handoff and Result Contracts"]
-        task_sentence = next(
-            line
-            for line in section.splitlines()
-            if line.startswith("Every compact `task_packet`")
-        )
-        result_sentence = next(
-            line
-            for line in section.splitlines()
-            if line.startswith("Every compact `result_packet`")
-        )
-        task_fields = tuple(
-            token
-            for token in re.findall(r"`([a-z_]+)`", task_sentence)
-            if token != "task_packet"
-            and token not in {"analysis", "implementation", "review"}
-        )
-        result_fields = tuple(
-            token
-            for token in re.findall(r"`([a-z_]+)`", result_sentence)
-            if token != "result_packet"
-        )
+        task = re.search(r"Exact `task_packet`: `(?P<fields>[^`]+)`", section)
+        result = re.search(r"Exact `result_packet`: `(?P<fields>[^`]+)`", section)
         self.assertEqual(
-            task_fields,
+            tuple(task.group("fields").split(",")) if task else (),
             (
                 "mode",
                 "objective",
@@ -790,7 +656,7 @@ class RepositoryAgentPolicyTests(unittest.TestCase):
             ),
         )
         self.assertEqual(
-            result_fields,
+            tuple(result.group("fields").split(",")) if result else (),
             (
                 "outcome",
                 "findings",
@@ -800,70 +666,50 @@ class RepositoryAgentPolicyTests(unittest.TestCase):
                 "next_action",
             ),
         )
-        self.assertTerms(
-            section,
-            "Do not copy raw logs/full Issues/plans",
-            "Thread reuse does not authorize history",
-        )
+        self.assertTerms(section, "Keep packets bounded", "no logs/full Issues/plans")
 
     def test_telemetry_is_prospective_and_distinguishes_measurement_kinds(self) -> None:
         section = self.sections["### Prospective Orchestration Telemetry"]
-        fields = (
-            "root_phase_wall_time_seconds",
-            "subagent_startup_seconds",
-            "subagent_wait_seconds",
-            "turn_count",
-            "tool_call_count",
-            "duplicate_read_count",
-            "verification_time_seconds",
-            "input_tokens",
-            "output_tokens",
-        )
-        for field in fields:
-            with self.subTest(field=field):
-                self.assertIn(f"`{field}`", section)
         self.assertTerms(
             section,
+            "wall/startup/wait/turn/tool/duplicate-read/verification/token metrics",
             "`observed|estimated|unavailable`",
-            "unavailable needs reason",
-            "estimates are never observations",
-            ">=25% lower median wall time",
-            ">=15% lower P95",
-            ">=30% fewer turns",
-            ">=50% fewer duplicate broad-suite executions",
-            "25--35% fewer combined packet tokens",
-            "Static policy tests prove shape, not performance",
+            "median -25%",
+            "P95 -15%",
+            "turns -30%",
+            "duplicate suites -50%",
+            "packet tokens -25--35%",
+            "without correctness/safety/ownership/gate regression",
         )
 
     def test_runbook_applies_the_canonical_adaptive_policy(self) -> None:
         self.assertTerms(
             self.runbook_sections["## Plan and Record Verification"],
             "[Adaptive Verification](AGENTS.md#adaptive-verification)",
-            "one owner/item",
-            "exact deduplication key",
-            "Ledger each selection/shard's level, purpose, IDs/command, provenance, manifest/input digest, duration/result",
-            "Deterministically shard above maximum",
-            "Interruptions are not passes/failures",
-            "Run `full_suite` only for recorded objective trigger",
-            "Complete only with all current mandatory green/accepted-skip evidence",
+            "exact dedup key",
+            "Ledger level/purpose/IDs/command/provenance/manifest/input-digest/duration/result/completed/failed/skipped/unexecuted/budget",
+            "Shard deterministically above maximum",
+            "Interruptions preserve state, never pass/fail",
+            "`full_suite` needs objective trigger",
+            "Complete only with current mandatory green/accepted-skip evidence",
         )
 
     def test_compact_policy_files_meet_independent_half_baseline_limits(self) -> None:
-        self.assertEqual(
-            AGENTS_WORD_CEILING,
-            AGENTS_APPROVED_BASE_WORDS // 2,
-        )
-        self.assertEqual(
-            RUNBOOK_WORD_CEILING,
-            RUNBOOK_APPROVED_BASE_WORDS // 2,
-        )
         counts = {
             "AGENTS.md": len(self.agents_source.split()),
             "AGENT_TASK_RUNBOOK.md": len(self.runbook_source.split()),
         }
+        self.assertEqual(AGENTS_WORD_CEILING, 999)
+        self.assertEqual(RUNBOOK_WORD_CEILING, 999)
         self.assertLessEqual(counts["AGENTS.md"], AGENTS_WORD_CEILING)
         self.assertLessEqual(
             counts["AGENT_TASK_RUNBOOK.md"], RUNBOOK_WORD_CEILING
+        )
+        self.assertLessEqual(
+            AGENTS_WORD_CEILING, AGENTS_APPROVED_BASE_WORDS // 2
+        )
+        self.assertLessEqual(
+            RUNBOOK_WORD_CEILING, RUNBOOK_APPROVED_BASE_WORDS // 2
         )
 
 
