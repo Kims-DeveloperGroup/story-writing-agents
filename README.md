@@ -322,7 +322,10 @@ Without a usable POSIX PTY, the focused suite skips with an explicit reason; it 
 
 <a id="contribution-guidelines"></a>
 
-Contributors should read [GITHUB_WORKFLOW.md](GITHUB_WORKFLOW.md), [AGENT_TASK_RUNBOOK.md](AGENT_TASK_RUNBOOK.md), and [COMMIT_POLICY.md](COMMIT_POLICY.md).
+Contributors should read [AGENTS.md](AGENTS.md),
+[GITHUB_WORKFLOW.md](GITHUB_WORKFLOW.md), and
+[COMMIT_POLICY.md](COMMIT_POLICY.md). For tracked work, load
+[`$github-task-lifecycle`](.agents/skills/github-task-lifecycle/SKILL.md).
 
 <a id="project-structure"></a>
 

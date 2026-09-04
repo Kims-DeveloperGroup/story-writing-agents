@@ -2,103 +2,154 @@
 
 ## Project Role
 
-Read governing `README.md` first. Maintain runtime; fiction requires task-requested examples/fixtures/tests.
+Read `README.md` first; it governs objective, language, contribution guidance, and
+structure. Develop, maintain, test, and document this Python novel-writing runtime. Write
+fiction only for requested examples, fixtures, or tests.
 
 ## Working Method
 
-Inspect behavior; define requirements/inventory/constraints/acceptance/gates; pass gates; minimally implement/verify/diff-review. Explain/review/diagnose/plan is read-only. Preserve unrelated work; avoid speculation/dependencies/scope creep; ask ambiguity.
+1. Inspect behavior and define requirements, inventory, constraints, scope, acceptance,
+   and both gates.
+2. Explanation, review, diagnosis, and planning authorize no change. Build, change, and
+   fix authorize only their approved scope.
+3. Make the smallest complete change, preserve unrelated work, verify, and
+   inspect the diff.
+
+Avoid speculative abstractions, unnecessary dependencies, and scope creep. Ask the user
+when a missing requirement would materially change the design or result.
+
+Skills supply focused procedures. They never override this file,
+[GITHUB_WORKFLOW.md](GITHUB_WORKFLOW.md), [COMMIT_POLICY.md](COMMIT_POLICY.md), or
+[DEPENDENCY_POLICY.md](DEPENDENCY_POLICY.md).
 
 ## GitHub Planning Gate
 
-Before branches/worktrees/write-capable-agents/tracked-edits, record `github_planning_gate = not_required | pending | passed | blocked`/reason. Pending permits only read-only inspection/requirements/diagnosis/test-planning/modularity-analysis. Large means Size `L|XL`, >=2 independent slices/parent criteria, >=3 production modules, >=2 domains, modularity/migration/dependency sequencing, multiple owners/worktrees/phases, or parent integration; companion tests/docs excluded; uncertainty defaults large. Per [GITHUB_WORKFLOW.md](GITHUB_WORKFLOW.md), verify root/all descendants/native relations/Project items/metadata before writers. Missing/new scope stops writes for diff preservation/reporting/initialization.
+- Record `github_planning_gate=not_required|pending|passed|blocked` and its reason before
+  branches, worktrees, writers, or tracked edits.
+- Permit only read-only work while the gate is pending or blocked.
+- Classify work as large for `L` or `XL`; two independent slices or parent criteria; three
+  production modules; two domains; modularity/migration coordination; dependency
+  sequencing; multiple owners/worktrees/phases; or parent integration.
+- Exclude companion tests and documentation. Treat uncertainty as large.
+- Follow [GITHUB_WORKFLOW.md](GITHUB_WORKFLOW.md). Stop writes when missing or new scope
+  appears; preserve the diff and initialize that scope.
+- Before a large-work writer, verify the root, every known descendant, native relationships,
+  canonical Project items, and required metadata.
+- Load `$github-task-lifecycle` for every GitHub-tracked task.
 
 ## Subagent Delegation
 
-Six `.codex/agents/` development roles never join four `config/agents/` story roles:
+Exactly six `.codex/agents/` development roles exist. They never join the four
+`config/agents/` story roles. Never create a reviewer role.
 
-| Role | Exclusive/primary duty |
+|Role|Ownership|
 |---|---|
-| `requirements_analyst` | read-only substantial ambiguity/acceptance/gate advice |
-| `regression_diagnostician` | read-only unknown-failure cause/boundary impact |
-| `modularity_maintainer` | boundaries; exclusive module-index semantics |
-| `runtime_implementer` | approved production/config implementation |
-| `test_engineer` | exclusive tests/execution/behavioral-coverage review |
-| `documentation_maintainer` | exclusive README/policy/guide/example edits after stabilization |
+|`requirements_analyst`|Read-only requirements/acceptance and modularity-gate advice|
+|`regression_diagnostician`|Read-only reproduction/cause and boundary impact|
+|`modularity_maintainer`|Boundaries and exclusive index semantics|
+|`runtime_implementer`|Approved production/configuration changes|
+|`test_engineer`|Exclusive test design/edits/execution and behavioral/coverage review|
+|`documentation_maintainer`|Exclusive documentation/skills after behavior/boundaries stabilize|
 
 ### Delegation-Gain Gate
 
-Root hub records estimates and
-`predicted_critical_path_savings_seconds = root_sequential_estimate - (parallel_critical_path + spawn_wait_handoff_synthesis_overhead)`.
-Dispatch only when savings >=20 seconds and >=20%, or record `material_correctness_risk_reduction|mandatory_ownership_rule` (docs/tests/triggered-modularity/production outside fast path). Root fast path is only clear localized <=2-file production/config work inside established responsibility/boundary; it excludes mandatory ownership, ambiguity, unknown failure. Never dispatch for deterministic commands; batch safe root reads.
+Load `$subagent-routing` before evaluating or dispatching any subagent. It contains the
+mandatory gain calculation, exceptions, fast path, and ownership rules.
 
 ### Root-Capability Routing
 
-Resolve root model/effort after aliases/defaults/session/child settings; TOMLs unpinned. Count packet+intentional-history+attachments/preloads+irreducible child; record `observed|estimated|unavailable`, method/confidence. Context: `compact <=8,192`; `moderate 8,193--32,768`; `large 32,769--131,072`; `oversized >131,072|unverified-fit` (narrow/split). Context changes model only and never root ceilings.
+Load `$subagent-routing` before choosing child context, model, effort, or inheritance.
+Root capability independently caps both model and effort.
 
-| Class | Model/effort | Trigger |
-|---|---|---|
-| `routine` | `gpt-5.6-terra`/`medium` | mechanical/reversible/no-material-risk |
-| `standard` | `gpt-5.6-sol`/`high` | bounded semantic/one responsibility |
-| `complex` | `gpt-5.6-sol`/`xhigh` | ambiguity/cause/boundary/API/compatibility/migration/security/authorization/concurrency/process/PTY/lifecycle/persistence/resource/nonlocal |
-| `critical` | `gpt-5.6-sol`/`max` | two complex triggers or high-consequence security/data-loss/irreversible-migration/breaking-compatibility |
+Resolve effective root model/effort after aliases, defaults, session overrides, and runtime
+child settings/pairs. Keep TOMLs unpinned.
 
-Roles default routine. Complex uplift: requirements/diagnosis ambiguity/unknown-cause; modularity boundary; runtime security/concurrency/migration/API/nonlocal; tests security/concurrency/PTY/process/lifecycle/complex-risk; docs governance/security/compatibility/migration. Index-only stays actual class. Compact/moderate floor `gpt-5.6-luna`; large floor `gpt-5.6-sol`.
+Oversized means no verified output/reasoning fit. Critical requires two interacting complex
+triggers. Requirements uplift needs substantial ambiguity.
 
-```text
-desired_model=max(task_model_target,role_model_target,context_model_target)
-desired_effort=max(task_effort_target,role_effort_target)
-capped_model=min(desired_model,root_effective_model)
-capped_effort=min(desired_effort,root_effective_effort)
-```
-
-Comparable: `gpt-5.6-luna<gpt-5.6-terra<gpt-5.6-sol`; effort `none<low<medium<high<xhigh<max` (`ultra` only if runtime-comparable). Select exact cap, else nearest stronger within each root ceiling (fewest upward steps; tie smaller model then effort). Never select weaker; weaker-only returns root. Override both axes or neither; model-only may default effort; unresolved root/order/availability/support inherits. `ceiling_limited` high-consequence work narrows/requires stronger root; otherwise record risk. Record root/source, context measurement/class, triggers/role target, desired/capped/selected/compatible pairs, limitation/fallback. Packets bound decisions/exclusions/criteria with `observed>inferred>proposed>unknown` evidence.
+Sources: [subagents](https://learn.chatgpt.com/docs/agent-configuration/subagents) and
+[model guidance](https://developers.openai.com/api/docs/guides/latest-model).
 
 ### Role, Mode, and Control Gate
 
-| Role | Mode | Capability |
-|---|---|---|
-| requirements/diagnosis | `analysis` | read-only filesystem; no approval-enabled writes |
-| modularity | `analysis|review` / `implementation` | read-only / assigned-worktree writes |
-| runtime | `implementation` | assigned-worktree writes |
-| tests/docs | `analysis` / `implementation` | read-only / assigned-worktree writes |
+Load `$subagent-routing` before preflight, handoff, join, retry, interruption, or conflict
+handling. Reject unsupported roles, modes, capabilities, identities, or ownership before
+other task work.
 
-Child first reports observed filesystem/sandbox/write/approval capability and identity; unavailable/mismatched role-mode-capability stops before other reads/writes. Before first tracked write match `pwd -P`, Git root/branch/exact HEAD/base/ancestry, exclusive targets, and exact bytes/SHA-256/decoded paths of `git status --porcelain=v1 -z --untracked-files=all`; dirty state requires all three pinned. Never reset/checkout/clean/revert. Identity invalidation requires root update and same-writer re-preflight.
-
-Use bounded context; full history requires reason/bound/stale-risk/root-approval evidence. Pre-record result IDs+role/mode; join only when all valid/finished. Retry transient spawn/delivery/join once after no-write proof/fingerprint; possible writer mutation requires inspect/preserve/same-thread resume. Never retry policy/capability/scope/schema failures. Resolve conflicts by evidence/role ownership, escalating owner→root→user. Root never absorbs mandatory ownership/adds reviewer roles; specialists never delegate/coordinate.
+Child first performs only minimum identity/capability preflight before other task reads or
+writes. Writers match exact porcelain bytes, SHA-256, and decoded paths; accept dirty state
+only when all three are pinned.
 
 ### Worktree Disposition
 
-Task `identity` contains exactly one: `remove_after_integration` (pre-authorized), `retain_with_reason` (reason/next owner), or `authorization_required`; change only after recorded authority/state change. Completion inventories path/branch/HEAD/porcelain/Issue-PR/recoverability/authority/outcome. Removal requires authorization+clean+integrated+recoverable, non-force, verified registry/filesystem absence; branch deletion is separate; retain parent until `main`.
+Record exactly one disposition under task `identity`: `remove_after_integration`,
+`retain_with_reason`, or `authorization_required` when removal authority is absent or
+unresolved. Load `$subagent-routing` for identity rules and `$github-task-lifecycle` for
+tracked recoverability, removal, and branch-deletion safeguards.
 
 ### Modularity Gate
 
-Use modularity for package/module add/remove/rename/move/split/merge; responsibility/state/resource/lifecycle redistribution; dependency direction/cycles/private-boundary access; shared abstraction/adapter/facade/protocol/export/public-import changes; multi-consumer extraction; structural compatibility/migration; architectural-coupling regression. Exclude localized unchanged-contract refactors, tests/docs/format/comments/typing/config/data/dependency-metadata/story execution. Modes: `analysis` before writers, exclusive `implementation` for approved architecture-dominant work, `review` after another boundary writer. Unexpected triggers stop for analysis. Missing language policy requires user decision; missing index is derived then created index-only; structural work never completes with stale/missing indices.
+- Require `modularity_maintainer` for importable structure changes; redistributed feature,
+  state, resource, or lifecycle ownership; dependency-direction or cycle changes; or
+  private cross-boundary access.
+- Also require it for material shared abstractions, adapters, facades, protocols, exports,
+  public imports, multi-consumer extraction, structural migration, or architectural
+  coupling defects.
+- Exclude localized unchanged-contract refactors, tests, documentation, formatting,
+  comments, typing, ordinary configuration or data, dependency metadata, and story runs.
+- Use `analysis` before writers, exclusive `implementation` for architecture-dominant
+  work, and `review` after another owner changes a boundary.
+- Stop an unexpected trigger. Load `$subagent-routing` for missing-policy, index, mode,
+  and reconciliation procedures.
 
 ### Orchestration Sequence
 
-Root: (1) classify scope/gates/inventory/delegation; resolve uncertain modularity; (2) run requirements/diagnosis only when triggered; (3) accept modularity brief/index delta; (4) pass planning and verify Development branch; (5) choose fast path or one production owner; (6) if two production specialists are necessary, give nonoverlapping sequential ownership; (7) stabilize code then modularity reconciles indices; (8) review runtime boundary work and iterate deviations; (9) stabilize then exclusive test and docs owners work, resuming threads after pauses; (10) reconcile/review index drift from tests/docs; (11) integrate, verify, summarize. Reuse threads unless stale/isolation-risk.
+1. Root classifies scope, gates, inventory, delegation, and uncertain modularity.
+2. Run required read-only analysis; justified independent investigations may parallelize.
+3. Modularity analysis selects and verifies root `<LANGUAGE>_MODULE_INDEX.md`; accept its
+   boundary brief and index delta.
+4. Pass planning and verify the Development-linked branch before writers.
+5. Use the root fast path or exactly one production owner at a time.
+6. After runtime work, reconcile indices index-only before boundary review.
+7. Run tests preferably in one turn; pause/resume that thread for dependency changes.
+8. Run documentation after tests. Later test/documentation index drift requires index-only
+   implementation, then read-only review.
+9. Root validates, integrates, verifies, and summarizes.
+
+Load `$subagent-routing` for ordering, review loops, ownership, and thread reuse.
 
 ### Adaptive Verification
 
-Root owns selection/authorization/budget/reuse/escalation/sufficiency; specialists only propose expansion. Partial-order levels: `static_inventory` (mandatory nontrivial: inputs/tests/consumers/helpers/fixtures/invariants/risks/exclusions), `exact` (acceptance/known-failures), `semantic_cluster` (shared-invariant/contract/fixture/family), `affected_suite` (bounded-blast-radius if narrower insufficient), `full_suite` (triggered below). `complete` is terminal only with current mandatory green/accepted-skips, resolved failures, sufficient inventory, accepted residual risk.
-
-| Class | Total/max-shard seconds | Floor |
-|---|---|---|
-| `local` | 300/180 | inventory+exact/static |
-| `bounded` | 900/300 | +required semantic |
-| `cross_cutting` | 1800/600 | selected cluster/affected |
-| `release` | Issue-defined | named gates |
-
-Plan criteria→evidence, changed/affected inputs/exclusions/risks, exact selection+owner, estimates/confidence, total/max/spent/remaining, stops/triggers/reuse/risk. Deduplicate exactly by `normalized_command,exact_ids,relevant_input_digest,environment_class`; reuse only root-proven disjoint changes with stable purpose/digest. Shards are deterministic/disjoint/exhaustive exact IDs; sequential unless root authorizes isolated nonoverlap, maximum two fast-fail. Ledger provenance/digests/duration and `completed_ids|failed_ids|accepted_skips|unexecuted_ids`; interruption is no verdict; resume valid remainder. Run `full_suite` only for explicit Issue/release criterion, unbounded inventory, changed package/public/cross-domain invariant, unreliable global harness, unknown out-of-cluster failure, or uncovered concrete risk. Unknown failure→diagnosis; cross-boundary defect→modularity; budget/cost exhaustion returns remaining evidence/options, never completion.
+Load `$adaptive-verification` before planning, executing, reusing, escalating, or accepting
+evidence for any nontrivial tracked change. Root alone authorizes selection, budget,
+concurrency, reuse, escalation, and final sufficiency.
 
 ### Handoff and Result Contracts
 
-Exact `task_packet`: `mode,objective,scope,acceptance,ownership,gates,identity,verification,upstream_decisions,stop_conditions`. Exact `result_packet`: `outcome,findings,changed_inputs,evidence,risks,next_action`. Nest preflight/disposition under `identity`; cleanup/recoverability under `evidence`; disposition outcome/reason/risk/owner under findings/risks/next action. Keep packets bounded; no logs/full Issues/plans.
+Load `$subagent-routing` before creating or validating any `task_packet` or
+`result_packet`. Thread reuse never authorizes full-history inheritance.
+
+Packet `identity` enumerates repository, Issue, Project, Iteration, Development branch/PR,
+worktree, base, and HEAD. Preserve the skill's exact result evidence and nesting meanings.
+
+Result findings include files inspected/changed, indices consulted/updated, and
+implementation/index consistency. `changed_inputs` covers relevant source, tests, fixtures,
+configuration, policy, documentation, and environment changes. Evidence includes mandatory
+evidence, authorized selection, commands, completion sets, invalidation, duration/budget,
+identities, digests, fingerprints, checks, and next evidence. Risks include blockers,
+ambiguity, residual risk, and proposed expansion requiring root authorization.
+
+Nest preflight/disposition under task `identity`, cleanup/recoverability under result
+`evidence`, and outcomes, reasons, risks, and next owners in their result fields.
 
 ### Prospective Orchestration Telemetry
 
-Record wall/startup/wait/turn/tool/duplicate-read/verification/token metrics as `observed|estimated|unavailable`. Targets: median -25%, P95 -15%, turns -30%, duplicate suites -50%, packet tokens -25--35%, without correctness/safety/ownership/gate regression.
+Load `$subagent-routing` before recording or comparing orchestration telemetry.
 
 ## Quality and Commits
 
-Follow [GITHUB_WORKFLOW.md](GITHUB_WORKFLOW.md), [AGENT_TASK_RUNBOOK.md](AGENT_TASK_RUNBOOK.md), focused/complete [COMMIT_POLICY.md](COMMIT_POLICY.md), modularity language policy, and [DEPENDENCY_POLICY.md](DEPENDENCY_POLICY.md) before Python dependency/packaging changes; update tests/docs and report diff/checks.
+Follow [COMMIT_POLICY.md](COMMIT_POLICY.md). Inspect and report the diff and verification.
+Before structural changes, use the
+[modularity policy selector](.codex/agents/modularity_maintainer.toml); packaged defaults
+live in `.codex/agents/modularity_maintainer/`. Follow and verify
+[DEPENDENCY_POLICY.md](DEPENDENCY_POLICY.md) for dependency or packaging changes.

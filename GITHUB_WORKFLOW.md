@@ -2,8 +2,9 @@
 
 This policy defines how contributors and coding agents use GitHub. It
 supplements [AGENTS.md](AGENTS.md) and
-[COMMIT_POLICY.md](COMMIT_POLICY.md). Agents execute it with
-[AGENT_TASK_RUNBOOK.md](AGENT_TASK_RUNBOOK.md).
+[COMMIT_POLICY.md](COMMIT_POLICY.md). For tracked work, agents load the
+[`$github-task-lifecycle` skill](.agents/skills/github-task-lifecycle/SKILL.md),
+which supplies procedure without overriding this policy.
 
 ## Authority and Authorization
 
@@ -135,8 +136,9 @@ Use `issue-<number>-<short-slug>` for nontrivial work. A standalone branch
 identifies its leaf Issue. For a parent initiative, its branch is the
 integration base for child Issue branches. Child PRs target the parent branch
 and use **Squash and merge**; the final parent PR targets `main` and uses a
-merge commit. Follow [AGENT_TASK_RUNBOOK.md](AGENT_TASK_RUNBOOK.md) for the
-branch and worktree procedure.
+merge commit. Follow the
+[`$github-task-lifecycle` skill](.agents/skills/github-task-lifecycle/SKILL.md)
+for the branch and worktree procedure.
 
 Every Issue with implementation activity must have native GitHub Development
 traceability. Create its task branch from the Issue's Development section (or
@@ -202,5 +204,6 @@ explicitly.
 
 ## Agent Handoff
 
-Follow the runbook handoff contract. Report the planning-gate state and
-evidence, Issue and Project mutations, and preserved unrelated worktree changes.
+Follow the [AGENTS.md handoff contract](AGENTS.md#handoff-and-result-contracts).
+Report the planning-gate state and evidence, Issue and Project mutations, and
+preserved unrelated worktree changes.
