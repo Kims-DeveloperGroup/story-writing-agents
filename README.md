@@ -68,9 +68,10 @@ storage, archive/transfer, and the sole active storage/inspection service.
 adds specialist execution, typed synthesis, results, and restart-safe local
 finalization. #454 owns whole-workspace rejection of unsupported history.
 
-See [Lead agent: story workflows and reviewed artifact proposals](docs/guides/lead-agent.md)
-for responsibilities, authority limits, four concrete story workflows,
-provider-call examples, visible states, and recovery behavior.
+See [Collaborate with the Lead Agent](docs/guides/lead-agent-collaboration.md)
+for responsibilities, authority limits, concrete story workflows,
+provider-call examples, visible states, and recovery behavior. The exact API
+contract remains in [Lead agent workflows and reviewed artifact proposals](docs/guides/lead-agent.md).
 
 ## Install
 

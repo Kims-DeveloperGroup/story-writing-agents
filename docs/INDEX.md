@@ -18,6 +18,7 @@ that matches your task.
 - [Project status and quick start](../README.md)
 - [Getting started](getting-started.md)
 - [Story sessions and conversations](guides/story-sessions.md)
+- [Collaborate with the Lead Agent](guides/lead-agent-collaboration.md)
 - [Lead story workflows and reviewed artifact proposals](guides/lead-agent.md)
 - [Glossary](glossary.md)
 - [Core concepts](concepts.md)
@@ -36,7 +37,7 @@ that matches your task.
 | Recover an interrupted internal story commit or checkpoint | [Session-history recovery](operations/recovery-and-limitations.md#session-history-recovery) |
 | Manage sessions and conversations | [Story sessions](guides/story-sessions.md) |
 | Understand why shell story instructions are unavailable | [Collaboration transition](guides/consensus-runs.md) |
-| Converse with the Python lead, review story-file candidates, consult specialists, and decide proposals | [Lead agent workflows](guides/lead-agent.md) |
+| Converse with the Python lead, review story-file candidates, consult specialists, and decide proposals | [Collaborate with the Lead Agent](guides/lead-agent-collaboration.md) |
 | Run disposable smoke or read-only workspace verification | [Provider-free smoke](guides/smoke-test.md) |
 | Apply session directives | [Directives](guides/directives.md) |
 | Inspect and recover local state | [Inspection and recovery](guides/inspection-and-recovery.md) |
