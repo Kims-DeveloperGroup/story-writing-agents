@@ -18,7 +18,7 @@ Package root: `src/story_writing_agents/`
 
 Importable production units indexed: 122.
 
-Direct internal dependency edges indexed: 470.
+Direct internal dependency edges indexed: 477.
 
 Directed internal dependency cycles indexed: 0.
 
@@ -173,7 +173,8 @@ conversation_storage.sqlite -> conversation_literal_search/conversation_search
 orchestrator -> artifact_proposals/backend/config
              -> conversation_rag_runtime/debug_log/directives
              -> conversation_storage.composition/contracts
-             -> errors/prompts/workspace
+             -> errors/git.story_commit_contracts/git.story_commits
+             -> prompts/workspace/workspace.initialization
              -> writing_artifacts/repository/runtime_references
 models -> conversations/agents/errors
 agent_context -> agent_context.accounting
@@ -240,16 +241,17 @@ session_recovery.transition_assessment -> conversations/git/git.session_contract
                                        -> session_recovery.reconciliation
                                        -> workspace.initialization
 session_lifecycle -> (standard library only)
-conversations -> conversations.catalog/context/events
+conversations -> conversations.catalog/context/events/git.story_commit_contracts
 conversations.catalog -> errors
-conversations.context -> conversations.events/errors
-conversations.events -> agents/artifact_proposals/errors/writing_artifacts
+conversations.context -> conversations.events/errors/git.story_commit_contracts
+conversations.events -> agents/artifact_proposals/errors/git.story_commit_contracts
+                     -> writing_artifacts
 artifact_proposals -> agents/writing_artifacts
 workspace -> conversation_storage.filesystem/workspace.core
 workspace.core -> agents/conversations/errors/models
                -> workspace.initialization/workspace.schema/writing_artifacts
 workspace.initialization -> errors/git/git.session_contracts
-                         -> git.session_history/git.session_resources
+                         -> git.session_history/git.session_resources/git.story_commits
                          -> workspace.schema
 workspace.schema -> agents/errors/git.session_contracts
 writing_artifacts -> writing_artifacts.application_contracts/authorization/catalog
@@ -3666,7 +3668,7 @@ every intermediate arrow. The current runtime graph is acyclic.
 - **Source:** `src/story_writing_agents/conversations/__init__.py`
 - **Responsibility:** Provide the stable subject-conversation and schema-v2
   collaboration contract import boundary.
-- **Supported surface:** Exactly 125 names in `__all__`: the retained immutable
+- **Supported surface:** Exactly 134 names in `__all__`: the retained immutable
   conversation metadata, visible-event, and bounded-context value contracts;
   the immutable schema-v2 lead intent/result/decision, provider-call accounting,
   event, proposal, state, readable-field/record/context, error, projection, and
@@ -3689,6 +3691,11 @@ every intermediate arrow. The current runtime graph is acyclic.
   `ArtifactApplicationDecisionPayload`, `ArtifactApplicationDecisionResult`,
   `ArtifactApplicationNextAction`, `ArtifactApplicationOutcomeKind`,
   `ArtifactApplicationRequestPayload`, and `ArtifactApplicationResultPayload`;
+  the nine exact story-commit contract, request/decision/result, and builder
+  additions `StoryCommitDecision`, `StoryCommitDecisionRequest`,
+  `StoryCommitDecisionResult`, `StoryCommitDecisionPayload`,
+  `StoryCommitNextAction`, `StoryCommitOutcomeKind`, `StoryCommitRequestPayload`,
+  `StoryCommitResultPayload`, and `build_story_commit_request_payload`;
   `CollaborationPayload`; the
   five `COLLABORATION_*` constants; the
   two digest functions; the eight strict canonical proposal/event/draft/batch
@@ -3700,7 +3707,8 @@ every intermediate arrow. The current runtime graph is acyclic.
   value subset and exports no schema-v2 collaboration name, append contract,
   or store protocol.
 - **Direct internal dependencies:** `conversations.catalog`,
-  `conversations.context`, and `conversations.events`.
+  `conversations.context`, `conversations.events`, and
+  `git.story_commit_contracts`.
 - **State, resources, and side effects:** Owns no mutable state or external
   resource. Import loads the three pure contract leaves and deterministically
   binds their public object metadata to the canonical facade identity; it
@@ -3748,12 +3756,12 @@ every intermediate arrow. The current runtime graph is acyclic.
 - **Source:** `src/story_writing_agents/conversations/context.py`
 - **Responsibility:** Define pure collaboration interaction and history-
   projection contracts.
-- **Supported surface:** Exactly 26 owning-module names in `__all__`: the five
+- **Supported surface:** Exactly 28 owning-module names in `__all__`: the five
   retained immutable context names plus `CollaborationEventStore`,
   `CollaborationHistoryProjection`, `CollaborationNextAction`,
   `ArtifactProposalResult`, `ArtifactApplicationDecision`,
   `ArtifactApplicationDecisionResult`, `LeadDecisionResult`, `LeadStepDecision`,
-  `LeadTurnResult`,
+  `LeadTurnResult`, `StoryCommitDecisionRequest`, `StoryCommitDecisionResult`,
   `project_collaboration_history`, `validate_collaboration_candidate_batch`,
   and `validate_collaboration_transition`; plus
   `COLLABORATION_READABLE_CONTEXT_POLICY`,
@@ -3810,7 +3818,8 @@ every intermediate arrow. The current runtime graph is acyclic.
   remain attribution only. The conversations facade exposes
   the same defining objects, while the project-root facade exposes only the
   retained immutable value subset.
-- **Direct internal dependencies:** `conversations.events` and `errors`.
+- **Direct internal dependencies:** `conversations.events`, `errors`, and
+  `git.story_commit_contracts`.
 - **State, resources, and side effects:** Immutable policy, window, and
   projection/readable values; immutable closed field and transition metadata;
   the immutable legacy context values and active v2 storage-neutral port; pure
@@ -3844,7 +3853,7 @@ every intermediate arrow. The current runtime graph is acyclic.
 - **Source:** `src/story_writing_agents/conversations/events.py`
 - **Responsibility:** Define immutable visible conversation, lead-intent, and
   collaboration event schemas.
-- **Supported surface:** Exactly 92 owning-module names in `__all__`: the three
+- **Supported surface:** Exactly 98 owning-module names in `__all__`: the three
   retained immutable visible-event names; five schema-v2 constants; the closed
   `Lead*` semantic outcome/proposal-intent values; the closed `Collaboration*`
   actors, kinds, directions, inputs, profiles, basis, budget, assignments,
@@ -3861,11 +3870,13 @@ every intermediate arrow. The current runtime graph is acyclic.
   The six artifact-application additions define closed decision, outcome, and
   next-action enums plus exact request, decision, and result payloads, all
   exposed through the conversations facade.
+  The six story-commit additions define closed outcome/next-action enums,
+  exact request/decision/result payloads, and the canonical request builder.
   `LeadProviderOutcome` may carry exactly one consultation intent or one
   provider-neutral artifact intent. The conversations facade exposes every defining object, while
   the project-root facade retains only the three immutable visible-event names.
 - **Direct internal dependencies:** `agents`, `artifact_proposals`, `errors`,
-  and `writing_artifacts`.
+  `git.story_commit_contracts`, and `writing_artifacts`.
 - **State, resources, and side effects:** Immutable v1 and v2 values plus
   deterministic identifier, strict UTF-8/size/privacy, actor direction,
   lead-result closure, the strict workflow-meta/story-specific
@@ -5493,7 +5504,7 @@ every intermediate arrow. The current runtime graph is acyclic.
   Directive/override management, async prepare/commit/discard, session/debate/
   context/reference inspection, and quiescent provider-binding release remain.
   Both runtime facades expose async `lead_turn`, `decide_lead_step`,
-  `decide_artifact_application`, and the
+  `decide_artifact_application`, `decide_story_commit`, and the
   separately confirmed one-specialist `propose_specialist_advisory` without a
   general agent selector. Ordinary turns persist user input before the lead
   invocation, can supersede an exact pending request, and return one strict
@@ -5561,10 +5572,10 @@ every intermediate arrow. The current runtime graph is acyclic.
 - **Direct internal dependencies:** `agent_context.accounting`,
   `agent_context.manifest`, `agent_context.planning`, `agent_context.service`,
   `agent_context.sources`, `agents`, `artifact_proposals`, `backend`, `config`,
-  `conversations`,
+  `conversations`, `git.story_commit_contracts`, `git.story_commits`,
   `conversation_rag_runtime`, `conversation_storage.composition`,
   `conversation_storage.contracts`, `debug_log`, `directives`, `errors`,
-  `prompts`, `workspace`,
+  `prompts`, `workspace`, `workspace.initialization`,
   `writing_artifacts`, `writing_artifacts.repository`, and
   `writing_artifacts.runtime_references`.
 - **State, resources, and side effects:** Retains workspace, prompt/config, one
@@ -5589,8 +5600,11 @@ every intermediate arrow. The current runtime graph is acyclic.
   text only in their explicit durable content-bearing payloads; public result
   values expose identity and state without granting execution authority.
   An exact current Apply decision may atomically mutate the artifact repository;
-  it neither stages nor commits the result. No path invokes Git, starts
-  consensus, or exposes provider-native agent orchestration.
+  successful Apply/unchanged outcomes may disclose one exact local commit
+  request. A matching single-use Commit decision delegates staging and the
+  literal local commit to the established story-commit service. No path
+  performs a remote Git mutation or merge, starts consensus, or exposes
+  provider-native agent orchestration.
 - **Primary verification/documentation:** `tests/test_lead_orchestration.py`,
   `tests/test_artifact_proposal_orchestration.py`,
   `tests/test_lead_artifact_application.py`,
@@ -5950,13 +5964,14 @@ every intermediate arrow. The current runtime graph is acyclic.
   `WorkspaceRootRole`, `WorkspaceRootInspection`, `WorkspaceRootDiscovery`,
   the inspect/initialize/require-ready and typed nearest-discovery operations,
   plus bounded `inspect_session_resources`, `inspect_session_history`,
+  `compose_story_commit_service`,
   `list_session_resources`, `provision_session_resources`, and
   `require_ready_session_resources` for the future #455 composition. The
   module `__all__` is empty and neither the workspace nor project facade
   exports them.
 - **Direct internal dependencies:** `errors`, the public `git` facade,
-  `git.session_contracts`, `git.session_history`, `git.session_resources`, and
-  `workspace.schema`.
+  `git.session_contracts`, `git.session_history`, `git.session_resources`,
+  `git.story_commits`, and `workspace.schema`.
 - **State, resources, and side effects:** Classifies absent, empty,
   journal-backed initializing, exact ready-v2, unsupported, and recovery states
   without adopting unknown bytes. Initialization exclusively owns the open
@@ -5980,7 +5995,9 @@ every intermediate arrow. The current runtime graph is acyclic.
   wrapper is the sole non-data-driven session mutation authority;
   `inspect_session_history` alone derives the canonical baseline manifest,
   opens existing history with `create=False`, and returns only its stable
-  immutable snapshot. Inspect, list, reopen, history snapshot, and require-ready
+  immutable snapshot. The composition helper constructs the established local
+  story-commit service from the ready root and session manifest. Inspect, list,
+  reopen, history snapshot, and require-ready
   remain read-only. It creates no provider state, artifact mutation, remote,
   later canonical commit, or import-time I/O.
 - **Primary verification/documentation:**
@@ -6726,7 +6743,7 @@ every intermediate arrow. The current runtime graph is acyclic.
 ## Consistency Notes
 
 - The inventory contains 122 modules. Static AST derivation over every module-
-  level and function-local import yields 470 unique direct internal edges and
+  level and function-local import yields 477 unique direct internal edges and
   no directed cycle. The v2 cutover contributes 97 modules and 362 edges;
   `writing_artifacts.change_sets` and `writing_artifacts.relationship_policy`
   add two pure modules and exactly five inward edges; application contracts
@@ -6772,7 +6789,11 @@ every intermediate arrow. The current runtime graph is acyclic.
   `conversations.events` to the writing-artifact facade and from
   `writing_artifacts.application_contracts` to
   `writing_artifacts.relationship_policy`, producing the current 122-module,
-  470-edge acyclic graph without a project-root export or new module.
+  470-edge acyclic graph without a project-root export or new module. Confirmed
+  local story commit adds seven edges from the three conversation units to the
+  commit contracts, from orchestrator to the commit contracts, commit service,
+  and workspace initializer, and from workspace initialization to the commit
+  service, producing the current 122-module, 477-edge acyclic graph.
 - The project-root facade contains exactly 104 unique exports. It removes the
   active schema-v1 store, search/page/service, and transcript-retrieval surface;
   adds only `ConversationRetrievalHistoryRecord`; and exports no concrete v2
@@ -6783,8 +6804,8 @@ every intermediate arrow. The current runtime graph is acyclic.
   filesystem or SQLite adapter. `agent_context.actions` contains 25 and
   `agent_context.service` contains 26 direct-module-only exports, while
   `agent_context.sources` remains at 13 and the project-root surface remains
-  unchanged. The conversations facade contains exactly 125 exports; its
-  context and events owners contain 26 and 92 respectively. The direct-only
+  unchanged. The conversations facade contains exactly 134 exports; its
+  context and events owners contain 28 and 98 respectively. The direct-only
   `artifact_proposals` owner contains exactly 16 exports and is absent from the
   project root and writing-artifact facade.
 - The safe Git package facade contains exactly 24 names: 23 pure contract

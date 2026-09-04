@@ -1317,6 +1317,12 @@ class CollaborationPackageBoundaryTests(unittest.TestCase):
                 "ArtifactApplicationOutcomeKind",
                 "ArtifactApplicationRequestPayload",
                 "ArtifactApplicationResultPayload",
+                "StoryCommitDecisionPayload",
+                "StoryCommitNextAction",
+                "StoryCommitOutcomeKind",
+                "StoryCommitRequestPayload",
+                "StoryCommitResultPayload",
+                "build_story_commit_request_payload",
             )
             + COLLABORATION_EVENT_EXPORTS[1:]
         )
@@ -1325,12 +1331,14 @@ class CollaborationPackageBoundaryTests(unittest.TestCase):
             + (
                 "ArtifactApplicationDecision",
                 "ArtifactApplicationDecisionResult",
+                "StoryCommitDecisionRequest",
+                "StoryCommitDecisionResult",
             )
             + COLLABORATION_CONTEXT_EXPORTS[17:]
         )
         self.assertEqual(tuple(events_owner.__all__), expected_event_exports)
         self.assertEqual(tuple(context_owner.__all__), expected_context_exports)
-        self.assertEqual(len(conversations.__all__), 125)
+        self.assertEqual(len(conversations.__all__), 134)
         self.assertNotIn("__getattr__", vars(events_owner))
         self.assertNotIn("__getattr__", vars(context_owner))
         self.assertNotIn("__getattr__", vars(conversations))

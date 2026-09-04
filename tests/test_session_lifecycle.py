@@ -500,7 +500,7 @@ class SessionLifecycleContractTests(unittest.TestCase):
             encoding="utf-8"
         )
         self.assertIn("Importable production units indexed: 122.", index)
-        self.assertIn("Direct internal dependency edges indexed: 468.", index)
+        self.assertIn("Direct internal dependency edges indexed: 477.", index)
         self.assertIn("Directed internal dependency cycles indexed: 0.", index)
         headings = tuple(re.findall(r"^### `([^`]+)`$", index, flags=re.MULTILINE))
         expected_modules: set[str] = set()
@@ -513,10 +513,10 @@ class SessionLifecycleContractTests(unittest.TestCase):
         self.assertEqual(len(headings), 122)
         self.assertEqual(len(set(headings)), 122)
         self.assertEqual(set(headings), expected_modules)
-        self.assertIn("facade contains exactly 117 exports", index)
-        self.assertIn("context and events owners contain 24 and 86 respectively", index)
-        self.assertIn("Exactly 24 owning-module names in `__all__`", index)
-        self.assertIn("Exactly 86 owning-module names in `__all__`", index)
+        self.assertIn("facade contains exactly 134 exports", index)
+        self.assertIn("context and events owners contain 28 and 98 respectively", index)
+        self.assertIn("Exactly 28 owning-module names in `__all__`", index)
+        self.assertIn("Exactly 98 owning-module names in `__all__`", index)
         self.assertIn(
             "`artifact_proposals` owner contains exactly 16 exports",
             index,
