@@ -25,7 +25,13 @@ from story_writing_agents.consensus import (
     prepare_consensus_phase,
     project_consensus,
 )
-from story_writing_agents.consensus.contracts import ConsensusMaterialHandle
+from story_writing_agents.consensus.contracts import (
+    ConsensusExecutionIdentity,
+    ConsensusMaterialHandle,
+    artifact_material_handle,
+    candidate_material_handle,
+    prepare_next_consensus_phase,
+)
 from story_writing_agents.consensus.serialization import (
     deserialize_consensus_workflow,
     serialize_consensus_workflow,
@@ -35,8 +41,11 @@ from story_writing_agents.consensus.serialization import (
 _INPUT = "1" * 64
 _CANDIDATE = "2" * 64
 _REPAIRED = "3" * 64
-_INPUT_MATERIAL = ConsensusMaterialHandle("material-input", _INPUT)
-_CANDIDATE_MATERIAL = ConsensusMaterialHandle("material-candidate", _CANDIDATE)
+_IDENTITY = ConsensusExecutionIdentity("session-1", "conversation-1")
+_INPUT_MATERIAL = artifact_material_handle(
+    "core_documents/global_outline.md", _INPUT
+)
+_CANDIDATE_MATERIAL = candidate_material_handle(_CANDIDATE)
 
 
 class ConsensusProjectionTests(unittest.TestCase):
@@ -58,6 +67,7 @@ class ConsensusProjectionTests(unittest.TestCase):
             workflow_id="workflow-1",
             phase_request_id=request_id,
             proposal_id="proposal-1",
+            execution_identity=_IDENTITY,
             phase=phase,
             revision_id=revision_id,
             input_material=_INPUT_MATERIAL,
@@ -80,6 +90,7 @@ class ConsensusProjectionTests(unittest.TestCase):
             request_event_id=request_event.event_id,
             request_event_sequence=request_event.sequence,
             proposal_id=request.proposal_id,
+            execution_identity=request.execution_identity,
             revision_id=request.revision_id,
             request_digest=request.request_digest,
             decision=choice,
@@ -103,6 +114,7 @@ class ConsensusProjectionTests(unittest.TestCase):
             decision_event_id=decision_event.event_id,
             decision_event_sequence=decision_event.sequence,
             proposal_id=request.proposal_id,
+            execution_identity=request.execution_identity,
             phase=request.phase,
             revision_id=request.revision_id,
             request_digest=request.request_digest,
@@ -145,6 +157,8 @@ class ConsensusProjectionTests(unittest.TestCase):
                 workflow_id="workflow-1",
                 phase_request_id="request-1",
                 proposal_id="proposal-1",
+                session_id="session-1",
+                conversation_id="conversation-1",
                 phase=ConsensusPhase.DRAFT,
                 revision_id="r0",
                 input_material_locator=_INPUT_MATERIAL.locator,
@@ -346,8 +360,7 @@ class ConsensusProjectionTests(unittest.TestCase):
         request, _ = self.request()
         workflow = ConsensusStoredWorkflow(
             ConsensusWorkflowSubmission(
-                session_id="session-1",
-                conversation_id="conversation-1",
+                execution_identity=_IDENTITY,
                 workflow_id=request.workflow_id,
                 proposal_id=request.proposal_id,
                 input_kind=ConsensusInputKind.PROMPT,
@@ -358,12 +371,110 @@ class ConsensusProjectionTests(unittest.TestCase):
         encoded = serialize_consensus_workflow(workflow)
         self.assertEqual(serialize_consensus_workflow(workflow), encoded)
         self.assertEqual(deserialize_consensus_workflow(encoded), workflow)
-        self.assertIn(b'"locator":"material-input"', encoded)
+        self.assertIn(
+            b'"locator":"artifact:core_documents/global_outline.md"', encoded
+        )
+        self.assertIn(b'"schema_version":2', encoded)
+        self.assertIn(
+            b'"execution_identity":{"conversation_id":"conversation-1",'
+            b'"session_id":"session-1"}',
+            encoded,
+        )
         self.assertNotIn(b"capability", encoded)
         with self.assertRaisesRegex(ValueError, "duplicate fields"):
             deserialize_consensus_workflow(
                 encoded.replace(b'{"events":', b'{"events":[],"events":', 1)
             )
+
+    def test_material_locator_factories_accept_only_canonical_candidate_and_artifact_locations(self) -> None:
+        self.assertEqual(
+            candidate_material_handle(_CANDIDATE),
+            ConsensusMaterialHandle(f"candidate:{_CANDIDATE}", _CANDIDATE),
+        )
+        self.assertEqual(
+            artifact_material_handle("manuscript/part-1/chapter-01.md", _INPUT).locator,
+            "artifact:manuscript/part-1/chapter-01.md",
+        )
+        for path in (
+            "config/workspace.json",
+            "/manuscript/chapter.md",
+            "manuscript/../escape.md",
+            "core_documents\\outline.md",
+        ):
+            with self.subTest(path=path):
+                with self.assertRaisesRegex(ValueError, "artifact path"):
+                    artifact_material_handle(path, _INPUT)
+        with self.assertRaisesRegex(ValueError, "material locator"):
+            ConsensusMaterialHandle("material-input", _INPUT)
+
+    def test_next_phase_preparation_preserves_identity_tail_and_revision_rules(self) -> None:
+        draft, _ = self.request()
+        draft_request_event = ConsensusEvent("draft-request", 1, draft)
+        draft_decision = ConsensusEvent(
+            "draft-decision", 2, self.decision(draft, draft_request_event)
+        )
+        draft_result = self.result(
+            draft,
+            draft_decision,
+            ConsensusPhaseState.COMPLETED,
+            candidate_digest=_CANDIDATE,
+            next_phase=ConsensusPhase.AUDIT,
+        )
+        audit, _ = prepare_next_consensus_phase(
+            owner=self.owner,
+            current_request=draft,
+            terminal_result=draft_result,
+            terminal_event_id=draft_result.result_id,
+            terminal_sequence=3,
+            phase_request_id="request-audit",
+        )
+        self.assertEqual(
+            (
+                audit.execution_identity,
+                audit.phase,
+                audit.revision_id,
+                audit.base_tail_sequence,
+                audit.previous_result_event_id,
+                audit.candidate_material,
+            ),
+            (
+                _IDENTITY,
+                ConsensusPhase.AUDIT,
+                "r0",
+                3,
+                draft_result.result_id,
+                candidate_material_handle(_CANDIDATE),
+            ),
+        )
+
+        repair, _ = self.request(
+            phase=ConsensusPhase.REPAIR,
+            candidate_material=_CANDIDATE_MATERIAL,
+            tail=8,
+            previous="synthesis-result",
+            request_id="request-repair",
+        )
+        repair_request_event = ConsensusEvent("repair-request", 9, repair)
+        repair_decision = ConsensusEvent(
+            "repair-decision", 10, self.decision(repair, repair_request_event)
+        )
+        repair_result = self.result(
+            repair,
+            repair_decision,
+            ConsensusPhaseState.COMPLETED,
+            candidate_digest=_REPAIRED,
+            next_phase=ConsensusPhase.REAUDIT,
+        )
+        reaudit, _ = prepare_next_consensus_phase(
+            owner=self.owner,
+            current_request=repair,
+            terminal_result=repair_result,
+            terminal_event_id=repair_result.result_id,
+            terminal_sequence=11,
+            phase_request_id="request-reaudit",
+        )
+        self.assertEqual(reaudit.revision_id, "r1")
+        self.assertEqual(reaudit.candidate_material, candidate_material_handle(_REPAIRED))
 
 
 if __name__ == "__main__":

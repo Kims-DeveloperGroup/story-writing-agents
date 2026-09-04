@@ -25,18 +25,22 @@ from story_writing_agents.consensus import (
     prepare_consensus_phase,
     project_consensus,
 )
-from story_writing_agents.consensus.contracts import ConsensusMaterialHandle
+from story_writing_agents.consensus.contracts import (
+    ConsensusExecutionIdentity,
+    ConsensusMaterialHandle,
+    artifact_material_handle,
+    candidate_material_handle,
+)
 from story_writing_agents.consensus.execution import ConsensusPhaseOutputKind
 
 
 _INPUT = "1" * 64
 _CANDIDATE = "2" * 64
 _NEW_CANDIDATE = "3" * 64
-_INPUT_MATERIAL = ConsensusMaterialHandle("material-input", _INPUT)
-_CANDIDATE_MATERIAL = ConsensusMaterialHandle("material-candidate", _CANDIDATE)
-_NEW_CANDIDATE_MATERIAL = ConsensusMaterialHandle(
-    "material-new-candidate", _NEW_CANDIDATE
-)
+_IDENTITY = ConsensusExecutionIdentity("session-1", "conversation-1")
+_INPUT_MATERIAL = artifact_material_handle("manuscript/part-1/source.md", _INPUT)
+_CANDIDATE_MATERIAL = candidate_material_handle(_CANDIDATE)
+_NEW_CANDIDATE_MATERIAL = candidate_material_handle(_NEW_CANDIDATE)
 
 
 class ConsensusExecutionTests(unittest.IsolatedAsyncioTestCase):
@@ -59,6 +63,7 @@ class ConsensusExecutionTests(unittest.IsolatedAsyncioTestCase):
             workflow_id="workflow-1",
             phase_request_id=request_id,
             proposal_id="proposal-1",
+            execution_identity=_IDENTITY,
             phase=phase,
             revision_id="r0",
             input_material=_INPUT_MATERIAL,
@@ -76,6 +81,7 @@ class ConsensusExecutionTests(unittest.IsolatedAsyncioTestCase):
             request_event_id=request_event.event_id,
             request_event_sequence=request_event.sequence,
             proposal_id=request.proposal_id,
+            execution_identity=request.execution_identity,
             revision_id=request.revision_id,
             request_digest=request.request_digest,
             decision=ConsensusDecision.CONFIRM,
@@ -174,6 +180,7 @@ class ConsensusExecutionTests(unittest.IsolatedAsyncioTestCase):
                             invocation.workflow_id,
                             invocation.phase_request_id,
                             invocation.proposal_id,
+                            invocation.execution_identity,
                             invocation.phase,
                             invocation.revision_id,
                             invocation.input_digest,
@@ -183,6 +190,7 @@ class ConsensusExecutionTests(unittest.IsolatedAsyncioTestCase):
                             request.workflow_id,
                             request.phase_request_id,
                             request.proposal_id,
+                            request.execution_identity,
                             request.phase,
                             request.revision_id,
                             request.input_digest,
@@ -244,7 +252,11 @@ class ConsensusExecutionTests(unittest.IsolatedAsyncioTestCase):
 
         async def invoke(invocation):
             return ConsensusProviderResult(
-                kind=ConsensusPhaseOutputKind.AUDIT,
+                kind=(
+                    ConsensusPhaseOutputKind.CONFLICT
+                    if invocation.agent_id == CHARACTER_CUSTODIAN
+                    else ConsensusPhaseOutputKind.AUDIT
+                ),
                 result_digest=f"{invocation.ordinal + 3}" * 64,
                 candidate_material=invocation.candidate_material,
                 audit_verdict=(

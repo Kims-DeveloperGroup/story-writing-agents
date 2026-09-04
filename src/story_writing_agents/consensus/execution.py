@@ -13,6 +13,7 @@ from .contracts import (
     ConsensusAudit,
     ConsensusAuditVerdict,
     ConsensusConfirmationCapability,
+    ConsensusExecutionIdentity,
     ConsensusMaterialHandle,
     ConsensusPhase,
     ConsensusPhaseDecision,
@@ -40,6 +41,7 @@ class ConsensusPhaseOutputKind(StrEnum):
 
     CANDIDATE = "candidate"
     AUDIT = "audit"
+    CONFLICT = "conflict"
     SYNTHESIS = "synthesis"
     FINALIZATION = "finalization"
     DEADLOCK = "deadlock"
@@ -53,12 +55,17 @@ class ConsensusPhaseInvocation:
     workflow_id: str
     phase_request_id: str
     proposal_id: str
+    execution_identity: ConsensusExecutionIdentity
     phase: ConsensusPhase
     revision_id: str
     input_material: ConsensusMaterialHandle
     candidate_material: ConsensusMaterialHandle | None
     agent_id: str
     ordinal: int
+
+    def __post_init__(self) -> None:
+        if type(self.execution_identity) is not ConsensusExecutionIdentity:
+            raise TypeError("consensus invocation execution identity is invalid")
 
     @property
     def input_digest(self) -> str:
@@ -89,8 +96,20 @@ class ConsensusProviderResult:
             raise TypeError("consensus provider audit verdict is invalid")
         if self.next_phase is not None and type(self.next_phase) is not ConsensusPhase:
             raise TypeError("consensus provider next phase is invalid")
-        if self.kind is ConsensusPhaseOutputKind.AUDIT:
-            if self.candidate_material is None or self.audit_verdict is None or self.next_phase is not None:
+        if self.kind in {
+            ConsensusPhaseOutputKind.AUDIT,
+            ConsensusPhaseOutputKind.CONFLICT,
+        }:
+            expected_verdict = (
+                ConsensusAuditVerdict.APPROVE
+                if self.kind is ConsensusPhaseOutputKind.AUDIT
+                else ConsensusAuditVerdict.CONFLICT
+            )
+            if (
+                self.candidate_material is None
+                or self.audit_verdict is not expected_verdict
+                or self.next_phase is not None
+            ):
                 raise ValueError("consensus audit output is incomplete")
         elif self.kind is ConsensusPhaseOutputKind.SYNTHESIS:
             if self.candidate_material is None or self.audit_verdict is not None or self.next_phase not in {ConsensusPhase.REPAIR, ConsensusPhase.FINALIZATION}:
@@ -330,6 +349,7 @@ class ConsensusExecutionCoordinator:
                 workflow_id=request.workflow_id,
                 phase_request_id=request.phase_request_id,
                 proposal_id=request.proposal_id,
+                execution_identity=request.execution_identity,
                 phase=request.phase,
                 revision_id=request.revision_id,
                 input_material=request.input_material,
@@ -363,6 +383,7 @@ class ConsensusExecutionCoordinator:
                 decision_event_id=decision_event.event_id,
                 decision_event_sequence=decision_event.sequence,
                 proposal_id=request.proposal_id,
+                execution_identity=request.execution_identity,
                 phase=request.phase,
                 revision_id=request.revision_id,
                 request_digest=request.request_digest,
@@ -385,6 +406,7 @@ class ConsensusExecutionCoordinator:
             decision_event_id=decision_event.event_id,
             decision_event_sequence=decision_event.sequence,
             proposal_id=request.proposal_id,
+            execution_identity=request.execution_identity,
             phase=request.phase,
             revision_id=request.revision_id,
             request_digest=request.request_digest,
@@ -410,6 +432,7 @@ class ConsensusExecutionCoordinator:
             decision_event_id=decision_event.event_id,
             decision_event_sequence=decision_event.sequence,
             proposal_id=request.proposal_id,
+            execution_identity=request.execution_identity,
             phase=request.phase,
             revision_id=request.revision_id,
             request_digest=request.request_digest,
@@ -433,7 +456,11 @@ def _validate_provider_result(
         return
     if request.phase in {ConsensusPhase.AUDIT, ConsensusPhase.REAUDIT}:
         if (
-            result.kind is not ConsensusPhaseOutputKind.AUDIT
+            result.kind
+            not in {
+                ConsensusPhaseOutputKind.AUDIT,
+                ConsensusPhaseOutputKind.CONFLICT,
+            }
             or result.candidate_material != request.candidate_material
             or result.audit_verdict is None
             or result.next_phase is not None

@@ -22,16 +22,23 @@ from story_writing_agents.consensus import (
     ConsensusWorkflowSubmission,
     prepare_consensus_phase,
 )
-from story_writing_agents.consensus.contracts import ConsensusMaterialHandle
+from story_writing_agents.consensus.contracts import (
+    ConsensusExecutionIdentity,
+    artifact_material_handle,
+    candidate_material_handle,
+)
 from story_writing_agents.consensus.execution import ConsensusPhaseOutputKind
 
 
 _PROMPT = "1" * 64
 _DRAFT = "2" * 64
 _CANDIDATE = "3" * 64
-_PROMPT_MATERIAL = ConsensusMaterialHandle("material-prompt", _PROMPT)
-_DRAFT_MATERIAL = ConsensusMaterialHandle("material-draft", _DRAFT)
-_CANDIDATE_MATERIAL = ConsensusMaterialHandle("material-candidate", _CANDIDATE)
+_IDENTITY = ConsensusExecutionIdentity("session-1", "conversation-1")
+_PROMPT_MATERIAL = candidate_material_handle(_PROMPT)
+_DRAFT_MATERIAL = artifact_material_handle(
+    "manuscript/part-1/supplied-draft.md", _DRAFT
+)
+_CANDIDATE_MATERIAL = candidate_material_handle(_CANDIDATE)
 
 
 class FakeConsensusPort:
@@ -103,9 +110,8 @@ class ConsensusRuntimeAdapterTests(unittest.IsolatedAsyncioTestCase):
         request_event = stored.events[-1]
         request = request_event.payload
         return ConsensusRuntimeDecision(
-            session_id=inspection.submission.session_id,
-            conversation_id=inspection.submission.conversation_id,
             workflow_id=inspection.submission.workflow_id,
+            execution_identity=inspection.submission.execution_identity,
             phase_request_id=request.phase_request_id,
             proposal_id=request.proposal_id,
             revision_id=request.revision_id,
@@ -141,6 +147,7 @@ class ConsensusRuntimeAdapterTests(unittest.IsolatedAsyncioTestCase):
             (ConsensusInputKind.SUPPLIED_DRAFT, _DRAFT),
         )
         for inspection in (prompt, supplied):
+            self.assertEqual(inspection.submission.execution_identity, _IDENTITY)
             self.assertEqual(inspection.projection.phase, ConsensusPhase.DRAFT)
             self.assertEqual(inspection.projection.revision_id, "r0")
             self.assertIsNone(inspection.projection.candidate_digest)
@@ -165,18 +172,53 @@ class ConsensusRuntimeAdapterTests(unittest.IsolatedAsyncioTestCase):
             (
                 invocation.workflow_id,
                 invocation.proposal_id,
+                invocation.execution_identity,
                 invocation.revision_id,
-                invocation.input_digest,
-                invocation.candidate_digest,
+                invocation.input_material,
+                invocation.candidate_material,
             ),
             (
                 submitted.submission.workflow_id,
                 submitted.submission.proposal_id,
+                _IDENTITY,
                 "r0",
-                _PROMPT,
+                _PROMPT_MATERIAL,
                 None,
             ),
         )
+
+    async def test_request_next_phase_creates_separate_exact_confirmation(self) -> None:
+        submitted = self.submit_prompt()
+        completed = await self.adapter.confirm(self.exact_decision(submitted))
+        next_inspection = self.adapter.request_next_phase(
+            session_id="session-1",
+            conversation_id="conversation-1",
+            workflow_id=submitted.submission.workflow_id,
+        )
+        stored = self.port.load_workflow(
+            "session-1", "conversation-1", submitted.submission.workflow_id
+        )
+        next_request = stored.events[-1].payload
+        self.assertEqual(next_inspection.projection.phase, ConsensusPhase.AUDIT)
+        self.assertEqual(next_inspection.projection.state, ConsensusPhaseState.AWAITING_CONFIRMATION)
+        self.assertTrue(next_inspection.capability_available)
+        self.assertEqual(next_request.execution_identity, _IDENTITY)
+        self.assertEqual(next_request.input_material, _PROMPT_MATERIAL)
+        self.assertEqual(next_request.candidate_material, _CANDIDATE_MATERIAL)
+        self.assertEqual(
+            next_request.previous_result_event_id,
+            completed.execution.terminal_event.event_id,
+        )
+        self.assertEqual(
+            next_request.base_tail_sequence,
+            completed.execution.terminal_event.sequence,
+        )
+        with self.assertRaisesRegex(ValueError, "cannot request"):
+            self.adapter.request_next_phase(
+                session_id="session-1",
+                conversation_id="conversation-1",
+                workflow_id=submitted.submission.workflow_id,
+            )
 
     async def test_reject_and_revise_append_terminal_state_without_provider(self) -> None:
         expected = {
@@ -219,6 +261,15 @@ class ConsensusRuntimeAdapterTests(unittest.IsolatedAsyncioTestCase):
                         workflow_id=inspection.submission.workflow_id,
                     ).capability_available
                 )
+        cross_identity = replace(
+            exact,
+            execution_identity=ConsensusExecutionIdentity(
+                "other-session", "conversation-1"
+            ),
+        )
+        with self.assertRaisesRegex(ValueError, "workflow does not exist"):
+            await self.adapter.confirm(cross_identity)
+        self.assertEqual(self.port.provider_calls, [])
         self.assertEqual(
             (await self.adapter.confirm(exact)).execution.state,
             ConsensusPhaseState.COMPLETED,
@@ -320,6 +371,9 @@ class ConsensusRuntimeAdapterTests(unittest.IsolatedAsyncioTestCase):
                 workflow_id="deadlock-workflow",
                 phase_request_id=f"request-{phase.value}",
                 proposal_id="deadlock-proposal",
+                execution_identity=ConsensusExecutionIdentity(
+                    "deadlock-session", "deadlock-conversation"
+                ),
                 phase=phase,
                 revision_id="r0",
                 input_material=_PROMPT_MATERIAL,
@@ -334,6 +388,7 @@ class ConsensusRuntimeAdapterTests(unittest.IsolatedAsyncioTestCase):
                 request_event_id=request_event.event_id,
                 request_event_sequence=request_event.sequence,
                 proposal_id=request.proposal_id,
+                execution_identity=request.execution_identity,
                 revision_id=request.revision_id,
                 request_digest=request.request_digest,
                 decision=ConsensusDecision.CONFIRM,
@@ -380,8 +435,9 @@ class ConsensusRuntimeAdapterTests(unittest.IsolatedAsyncioTestCase):
                 candidate = _CANDIDATE_MATERIAL
 
         submission = ConsensusWorkflowSubmission(
-            session_id="deadlock-session",
-            conversation_id="deadlock-conversation",
+            execution_identity=ConsensusExecutionIdentity(
+                "deadlock-session", "deadlock-conversation"
+            ),
             workflow_id="deadlock-workflow",
             proposal_id="deadlock-proposal",
             input_kind=ConsensusInputKind.PROMPT,
