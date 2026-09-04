@@ -1,4 +1,4 @@
-"""Pure phase-confirmed consensus contracts and projection."""
+"""Phase-confirmed consensus contracts, projection, and execution."""
 
 from .contracts import (
     CONSENSUS_AUDITORS,
@@ -14,6 +14,17 @@ from .contracts import (
     consensus_request_digest,
     prepare_consensus_phase,
 )
+from .execution import (
+    ConsensusDurability,
+    ConsensusEventAppender,
+    ConsensusEventIdFactory,
+    ConsensusExecutionCoordinator,
+    ConsensusExecutionReceipt,
+    ConsensusPhaseInvocation,
+    ConsensusProviderInvoker,
+    ConsensusProviderOutcomeUnknown,
+    ConsensusProviderResult,
+)
 from .projection import (
     ConsensusEvent,
     ConsensusNextAction,
@@ -28,15 +39,24 @@ __all__ = [
     "ConsensusAuditVerdict",
     "ConsensusConfirmationCapability",
     "ConsensusDecision",
+    "ConsensusDurability",
     "ConsensusEvent",
+    "ConsensusEventAppender",
+    "ConsensusEventIdFactory",
+    "ConsensusExecutionCoordinator",
+    "ConsensusExecutionReceipt",
     "ConsensusNextAction",
     "ConsensusPayload",
     "ConsensusPhase",
+    "ConsensusPhaseInvocation",
     "ConsensusPhaseDecision",
     "ConsensusPhaseRequest",
     "ConsensusPhaseResult",
     "ConsensusPhaseState",
     "ConsensusProjection",
+    "ConsensusProviderInvoker",
+    "ConsensusProviderOutcomeUnknown",
+    "ConsensusProviderResult",
     "consensus_request_digest",
     "prepare_consensus_phase",
     "project_consensus",
