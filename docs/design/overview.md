@@ -6,7 +6,7 @@ artifact/Git execution layers. Public schema-v1 direct-run consumers are absent;
 prompt, context, lifecycle, artifact, and terminal components remain behind
 explicit module boundaries.
 
-The production graph contains 122 modules, 468 dependency edges, no cycles, and
+The production graph contains 132 modules, 514 dependency edges, no cycles, and
 104 package-root exports.
 
 ## Current user flow
@@ -62,7 +62,7 @@ consultation; it does not modify an artifact or operate Git.
 ```text
 missing/empty root
   -> strict initializing journal
-  -> exact 22-file scaffold, including four empty core documents
+  -> exact 25-file scaffold, including four empty core documents
   -> fixed #448 main root commit with effective Git identity
   -> verification with journal
   -> journal removal
@@ -96,8 +96,9 @@ worktree. The package-internal #504 seam can inspect/list and provision or
 require-ready one exact correlated triple while the original root remains the
 pristine initialization baseline. Installed session transitions consume that
 seam through stable recovery assessment. #505 coordinates confirmed history work. Exact story commits now exist as
-package-internal #509 infrastructure; #491 still owns application production,
-#492 owns the lead confirmation UI. Exact closed-path internal checkpoints now
+package-internal #509 infrastructure; the integrated runtime now owns separately
+confirmed artifact application and local story-commit execution. Exact
+closed-path internal checkpoints now
 exist as package-internal #510 infrastructure.
 
 ### Session Git-resource lifecycle
@@ -210,9 +211,9 @@ facade. It owns:
   specialist execution/synthesis, supersession, and restart-safe recovery.
 
 `RuntimeSession` binds the same operations to one validated session ID. Both
-classes expose confirmed consultations and direct advisory proposals; neither
-starts a debate or performs story-artifact/Git mutation. Broad root aliases are
-absent.
+classes expose confirmed consultations and direct advisory proposals. Runtime
+code alone executes separately confirmed artifact writes and local Git commits;
+agent prose cannot authorize either operation. Broad root aliases are absent.
 
 `session_lifecycle` owns provider-neutral durable/access facts and pure
 readiness. `AgentBackend` still owns claims, manifests, provider routes,
@@ -298,8 +299,8 @@ behavior. Specialist execution owns result, finalization, and outcome-unknown
 behavior. Whole-workspace rejection of unsupported history is implemented at
 the strict workspace-v2 readiness boundary, not deferred to a provider call.
 The integrated runtime uses the sole v2 store. Artifact Apply and Git Commit
-are later, separately confirmed runtime-executed operations; the lead remains
-their semantic trigger and user-facing coordinator.
+are separate, non-reusable, runtime-executed operations; the lead remains their
+semantic trigger and user-facing coordinator.
 
 ## Dependency direction
 
