@@ -91,6 +91,7 @@ def project_collaboration_event(
     show_details: bool = False,
     input_references: Mapping[str, str] | None = None,
     candidate_paths: Mapping[str, tuple[str, ...]] | None = None,
+    proposals: Mapping[str, CollaborationProposal] | None = None,
 ) -> Panel:
     """Return one complete semantic view for one validated durable event."""
 
@@ -100,6 +101,7 @@ def project_collaboration_event(
         raise TypeError("show_details must be a bool")
     references = {} if input_references is None else input_references
     paths = {} if candidate_paths is None else candidate_paths
+    proposal_index = {} if proposals is None else proposals
 
     items: list[Section | Field | Notice | Message | Record | ListView] = [
         Field("Sequence", str(event.sequence)),
@@ -107,7 +109,7 @@ def project_collaboration_event(
         Field("To", _actor(event.recipient.kind.value, event.recipient.agent_id)),
         Field("Step", event.step_id),
     ]
-    items.extend(_payload_items(event.payload, references, paths))
+    items.extend(_payload_items(event.payload, references, paths, proposal_index))
     if show_details:
         items.append(
             Section(
@@ -150,15 +152,23 @@ def validate_collaboration_event_order(
 
 def collaboration_view_context(
     events: tuple[CollaborationEvent, ...],
-) -> tuple[dict[str, str], dict[str, tuple[str, ...]]]:
+) -> tuple[
+    dict[str, str],
+    dict[str, tuple[str, ...]],
+    dict[str, CollaborationProposal],
+]:
     """Derive visible source and candidate-path context from the same history."""
 
     validate_collaboration_event_order(events)
     references: dict[str, str] = {}
     candidates: dict[str, tuple[str, ...]] = {}
+    proposals: dict[str, CollaborationProposal] = {}
     for event in events:
         payload = event.payload
         if type(payload) is CollaborationProposal:
+            existing_proposal = proposals.setdefault(payload.proposal_id, payload)
+            if existing_proposal != payload:
+                raise ValueError("collaboration proposal identity changed in history")
             for item in payload.basis.inputs:
                 reference = _range_reference(
                     item.locator,
@@ -172,13 +182,14 @@ def collaboration_view_context(
             candidates[payload.candidate.candidate_id] = _operation_path_tuple(
                 payload.candidate.change_set.operations
             )
-    return references, candidates
+    return references, candidates, proposals
 
 
 def _payload_items(
     payload: object,
     input_references: Mapping[str, str],
     candidate_paths: Mapping[str, tuple[str, ...]],
+    proposals: Mapping[str, CollaborationProposal],
 ) -> tuple[Section | Field | Notice | Message | Record | ListView, ...]:
     if type(payload) is CollaborationMessagePayload:
         return (_message("Message", payload.content),)
@@ -245,6 +256,12 @@ def _payload_items(
             fields.append(Field("Attempt", payload.execution_attempt_id))
         if payload.execution_result_event_id is not None:
             fields.append(Field("Result event", payload.execution_result_event_id))
+        proposal = proposals.get(payload.proposal_id)
+        if payload.state in {
+            CollaborationStepState.AWAITING_CONFIRMATION,
+            CollaborationStepState.RECONFIRMATION_REQUIRED,
+        } and proposal is not None:
+            fields.append(_confirmation_summary(proposal))
         fields.append(Notice(_STATE_GUIDANCE[payload.state], label="next action"))
         return tuple(fields)
     if type(payload) is CollaborationConfirmationPayload:
@@ -504,6 +521,35 @@ def _assignment_items(assignment: CollaborationAssignment) -> tuple[Field | Noti
     )
 
 
+def _confirmation_summary(proposal: CollaborationProposal) -> Section:
+    budget = proposal.budget
+    return Section(
+        "Confirmation summary",
+        (
+            Field(
+                "Affected agents",
+                _joined(tuple(item.specialist_id for item in proposal.assignments)),
+            ),
+            Field(
+                "Affected sources",
+                _joined(
+                    tuple(
+                        _range_reference(item.locator, item.start_line, item.end_line)
+                        for item in proposal.basis.inputs
+                    )
+                ),
+            ),
+            Field("Bounded round", f"{budget.rounds_spent + 1}/{budget.round_limit}"),
+            Field(
+                "Bounded provider calls",
+                f"{budget.max_additional_physical_calls} additional; {budget.physical_call_limit} total limit",
+            ),
+            Field("Side effects", _values(proposal.side_effects)),
+            Field("User impact", proposal.user_impact),
+        ),
+    )
+
+
 def _operation_list(operations: Iterable[object], title: str) -> ListView:
     records = tuple(_operation_record(operation) for operation in operations)
     return ListView(title, records)
@@ -579,10 +625,11 @@ def _actor(kind: str, agent_id: str | None) -> str:
 
 
 def _range_reference(locator: str, start: int | None, end: int | None) -> str:
+    base = locator if locator.startswith("${") and locator.endswith("}") else f"${{{locator}}}"
     if start is None:
-        return f"${{{locator}}}"
+        return base
     suffix = f"#L{start}" if start == end else f"#L{start}-L{end}"
-    return f"${{{locator}}}{suffix}"
+    return f"{base}{suffix}"
 
 
 def _values(values: Iterable[StrEnum]) -> str:

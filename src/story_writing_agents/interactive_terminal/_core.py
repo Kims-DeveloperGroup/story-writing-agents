@@ -1123,7 +1123,7 @@ class InteractiveTerminal:
         if type(show_details) is not bool:
             raise TypeError("show_details must be a bool")
         validate_collaboration_event_order(events)
-        input_references, candidate_paths = collaboration_view_context(events)
+        input_references, candidate_paths, proposals = collaboration_view_context(events)
         cursor = after_sequence
         for event in events:
             if event.sequence <= after_sequence:
@@ -1134,6 +1134,7 @@ class InteractiveTerminal:
                     show_details=show_details,
                     input_references=input_references,
                     candidate_paths=candidate_paths,
+                    proposals=proposals,
                 )
             )
             cursor = event.sequence

@@ -51,7 +51,7 @@ class CollaborationViewTests(unittest.TestCase):
             self.assertIn(assignment.instruction, rendered)
         for source in proposal.basis.inputs:
             self.assertIn(source.input_id, rendered)
-            self.assertIn(f"${{{source.locator}}}", rendered)
+            self.assertIn(source.locator, rendered)
         self.assertIn("Maximum additional calls", rendered)
         self.assertIn("Confirm, Reject, or Revise", rendered)
 
@@ -152,8 +152,8 @@ class CollaborationViewTests(unittest.TestCase):
                 assessment=CollaborationSpecialistAssessment.CONFLICT,
             ),
         )
-        references, candidates = _collaboration_view.collaboration_view_context(
-            history
+        references, candidates, proposals = (
+            _collaboration_view.collaboration_view_context(history)
         )
 
         rendered = render_component(
@@ -161,6 +161,7 @@ class CollaborationViewTests(unittest.TestCase):
                 conflict,
                 input_references=references,
                 candidate_paths=candidates,
+                proposals=proposals,
             ),
             _capability(CapabilityProfile.LINE, width=120),
         ).text
@@ -169,6 +170,25 @@ class CollaborationViewTests(unittest.TestCase):
         self.assertIn("Affected sources", rendered)
         self.assertIn("${core_documents/", rendered)
         self.assertIn("The Lead must preserve this conflict", rendered)
+
+    def test_awaiting_confirmation_repeats_exact_scope_cost_and_impact(self) -> None:
+        history, proposal = awaiting_history()
+        records: list[str] = []
+
+        InteractiveTerminal(input, records.append).write_collaboration_events(history)
+        rendered = next(
+            record for record in records if "State: awaiting_confirmation" in record
+        )
+
+        self.assertIn("Confirmation summary", rendered)
+        for assignment in proposal.assignments:
+            self.assertIn(assignment.specialist_id, rendered)
+        compact_rendered = "".join(rendered.split())
+        for source in proposal.basis.inputs:
+            self.assertIn("".join(source.locator.split()), compact_rendered)
+        self.assertIn(proposal.user_impact, rendered)
+        self.assertIn("Bounded provider calls", rendered)
+        self.assertIn("Side effects", rendered)
 
 
 class ArtifactAndGitCollaborationViewTests(unittest.IsolatedAsyncioTestCase):
