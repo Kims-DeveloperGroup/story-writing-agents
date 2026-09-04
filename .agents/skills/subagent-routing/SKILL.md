@@ -28,62 +28,10 @@ predicted_critical_path_savings_seconds=root_sequential_estimate-(parallel_criti
 - Use requirements only for substantial ambiguity, diagnosis only for unknown failure, and
   modularity only when triggered. Batch safe reads.
 
-## Routing
+## Model Selection
 
-Resolve root model/effort after aliases, defaults, overrides, and child settings/pairs;
-TOMLs remain unpinned.
-
-`dispatch_context_tokens` counts only packet, intentional history, attachments, preloads,
-and irreducible child material. Record `observed|estimated|unavailable`, method, confidence.
-
-|Context|Tokens|
-|---|---:|
-|`compact`|<=8,192|
-|`moderate`|8,193--32,768|
-|`large`|32,769--131,072|
-|`oversized`|>131,072 or unverified fit|
-
-Unknown fit is oversized; narrow/split within root ceilings.
-
-|Class|Trigger|Model|Effort|
-|---|---|---|---|
-|`routine`|Mechanical/reversible; no unresolved judgment/material risk|`gpt-5.6-terra`|`medium`|
-|`standard`|Bounded semantics; one responsibility|`gpt-5.6-sol`|`high`|
-|`complex`|Ambiguity/unknown cause; multi-domain/boundary/API/compatibility/migration/security/authorization/concurrency/process/PTY/lifecycle/persistence/resource ownership/difficult nonlocal edges|`gpt-5.6-sol`|`xhigh`|
-|`critical`|Two interacting complex triggers or high-consequence security/data-loss/irreversible-migration/breaking-compatibility|`gpt-5.6-sol`|`max`|
-
-Roles default routine; index-only keeps actual class.
-
-|Role|Complex uplift|
-|---|---|
-|Requirements/diagnosis|Substantial ambiguity/unknown cause|
-|Modularity|Boundaries|
-|Runtime|Security/concurrency/migration/API/nonlocal edges|
-|Tests|Security/concurrency/PTY/process/lifecycle/complex coverage|
-|Documentation|Governance/security/compatibility/migration|
-
-Compact/moderate floor Luna; large floors Sol. Risk controls effort.
-
-```text
-desired_model=max(task_model_target,role_model_target,context_model_target)
-desired_effort=max(task_effort_target,role_effort_target)
-capped_model=min(desired_model,root_effective_model)
-capped_effort=min(desired_effort,root_effective_effort)
-```
-
-- Compare only `gpt-5.6-luna < gpt-5.6-terra < gpt-5.6-sol`; assume no other order. Effort
-  is `none < low < medium < high < xhigh < max`; use runtime-comparable/selectable `ultra`.
-- Select exact cap, else nearest stronger compatible pair within root. Minimize upward
-  steps; ties prefer smaller model, then effort increase. Weaker-only returns to root.
-- Caps are minimum quality; selected axes stay <=root.
-- Set both overrides or neither. Unresolved root/order/availability/support requires exact
-  inheritance; model-only may default effort.
-- `ceiling_limited` means either cap is below desired. High-consequence work must narrow or
-  require stronger root; otherwise proceed compatibly only with recorded residual risk.
-- Record root/source; context count/class/method/confidence; complexity/triggers; role target;
-  desired/capped/selected/compatible pairs; limitation; fallback/inheritance reason.
-- Packets include exclusions, decisions, observable criteria,
-  `observed|inferred|proposed|unknown` evidence, and uncertainty stops.
+Load `$subagent-model-selection` before any dispatch model, effort, or context decision.
+That skill exclusively defines the algorithm.
 
 ## Control
 

@@ -20,6 +20,7 @@ SKILL_PATHS = {
     for name in (
         "adaptive-verification",
         "github-task-lifecycle",
+        "subagent-model-selection",
         "subagent-routing",
     )
 }
@@ -116,16 +117,26 @@ class RepositoryAgentPolicyTests(unittest.TestCase):
             for name, path in SKILL_PATHS.items()
         }
         cls.routing_source = cls.skill_sources["subagent-routing"]
+        cls.selection_source = cls.skill_sources["subagent-model-selection"]
         cls.verification_source = cls.skill_sources["adaptive-verification"]
         cls.lifecycle_source = cls.skill_sources["github-task-lifecycle"]
         cls.routing_sections = {
             heading: markdown_section(cls.routing_source, heading)
             for heading in (
                 "## Delegation",
-                "## Routing",
+                "## Model Selection",
                 "## Control",
                 "## Modularity",
                 "## Packets",
+            )
+        }
+        cls.selection_sections = {
+            heading: markdown_section(cls.selection_source, heading)
+            for heading in (
+                "## Resolve Inputs",
+                "## Classify Work",
+                "## Derive and Select",
+                "## Record the Decision",
             )
         }
         cls.verification_sections = {
@@ -251,51 +262,51 @@ class RepositoryAgentPolicyTests(unittest.TestCase):
         )
 
     def test_root_capability_context_and_complexity_are_canonical(self) -> None:
-        section = self.routing_sections["## Routing"]
+        section = self.selection_sections["## Resolve Inputs"]
         expected_rows = (
             "|`compact`|<=8,192|",
             "|`moderate`|8,193--32,768|",
             "|`large`|32,769--131,072|",
-            "|`oversized`|>131,072 or unverified fit|",
+            "|`oversized`|>131,072 or no verified output/reasoning fit|",
         )
         for row in expected_rows:
             with self.subTest(row=row):
                 self.assertIn(row, section)
         self.assertTerms(
             section,
-            "`dispatch_context_tokens` counts only packet, intentional history, attachments, preloads, and irreducible child material",
-            "`observed|estimated|unavailable`, method, confidence",
-            "Unknown fit is oversized; narrow/split within root ceilings",
+            "`dispatch_context_tokens` counts only the task packet, intentionally inherited turns, attachments, preloads, and irreducible child material",
+            "`observed|estimated|unavailable`, method, and confidence",
+            "Unknown fit is oversized. Narrow or split it without relaxing root ceilings",
         )
 
     def test_root_capability_quality_and_role_targets_are_canonical(self) -> None:
-        section = self.routing_sections["## Routing"]
+        section = self.selection_sections["## Classify Work"]
         expected_rows = (
             "|`routine`|Mechanical/reversible; no unresolved judgment/material risk|`gpt-5.6-terra`|`medium`|",
-            "|`standard`|Bounded semantics; one responsibility|`gpt-5.6-sol`|`high`|",
+            "|`standard`|Bounded semantics; one established responsibility|`gpt-5.6-sol`|`high`|",
             "|`complex`|Ambiguity/unknown cause; multi-domain/boundary/API/compatibility/migration/security/authorization/concurrency/process/PTY/lifecycle/persistence/resource ownership/difficult nonlocal edges|`gpt-5.6-sol`|`xhigh`|",
             "|`critical`|Two interacting complex triggers or high-consequence security/data-loss/irreversible-migration/breaking-compatibility|`gpt-5.6-sol`|`max`|",
             "|Requirements/diagnosis|Substantial ambiguity/unknown cause|",
             "|Modularity|Boundaries|",
-            "|Runtime|Security/concurrency/migration/API/nonlocal edges|",
+            "|Runtime|Security/concurrency/migration/API/difficult nonlocal edges|",
             "|Tests|Security/concurrency/PTY/process/lifecycle/complex coverage|",
-            "|Documentation|Governance/security/compatibility/migration|",
+            "|Documentation|Normative governance/security/compatibility/migration|",
         )
         for row in expected_rows:
             with self.subTest(row=row):
                 self.assertIn(row, section)
         self.assertTerms(
             section,
-            "Roles default routine; index-only keeps actual class",
-            "Compact/moderate floor Luna; large floors Sol",
-            "Risk controls effort",
+            "Roles default routine; index-only work keeps its actual class",
+            "Context affects only model: compact/moderate floor Luna; large floors Sol",
+            "Complexity and risk alone control effort",
         )
 
     def test_root_capability_clamps_and_orders_each_axis_independently(self) -> None:
-        section = self.routing_sections["## Routing"]
+        section = self.selection_sections["## Derive and Select"]
         blocks = re.findall(r"```text\n(?P<body>.*?)\n```", section, re.DOTALL)
         self.assertEqual(
-            blocks[-1].splitlines(),
+            blocks[0].splitlines(),
             [
                 "desired_model=max(task_model_target,role_model_target,context_model_target)",
                 "desired_effort=max(task_effort_target,role_effort_target)",
@@ -306,32 +317,86 @@ class RepositoryAgentPolicyTests(unittest.TestCase):
         self.assertTerms(
             section,
             "`gpt-5.6-luna < gpt-5.6-terra < gpt-5.6-sol`",
-            "assume no other order",
-            "`none < low < medium < high < xhigh < max`",
-            "selected axes stay <=root",
+            "assume no other model order",
+            "Order effort `none < low < medium < high < xhigh < max`",
+            "every selected axis must stay <=root",
         )
 
     def test_root_capability_selection_and_inheritance_are_canonical(self) -> None:
         self.assertTerms(
-            self.routing_sections["## Routing"],
-            "Select exact cap, else nearest stronger compatible pair within root",
+            self.selection_sections["## Derive and Select"],
+            "Select the exact cap, otherwise the nearest stronger compatible pair within root",
             "Minimize upward steps; ties prefer smaller model, then effort increase",
-            "Weaker-only returns to root",
-            "Caps are minimum quality",
+            "Never select below cap. Weaker-only availability returns to root",
+            "Treat caps as minimum quality",
             "Set both overrides or neither",
             "Unresolved root/order/availability/support requires exact inheritance",
-            "model-only may default effort",
-            "`ceiling_limited` means either cap is below desired",
-            "High-consequence work must narrow or require stronger root",
+            "model-only selection may default effort",
+            "Define `ceiling_limited` when either cap is below desired",
+            "High-consequence work must narrow or require a stronger root",
         )
 
     def test_root_capability_routing_evidence_is_complete(self) -> None:
         self.assertTerms(
-            self.routing_sections["## Routing"],
-            "Record root/source; context count/class/method/confidence; complexity/triggers; role target; desired/capped/selected/compatible pairs; limitation; fallback/inheritance reason",
-            "exclusions, decisions, observable criteria",
+            self.selection_sections["## Record the Decision"],
+            "Record root/source; context count/class/method/confidence; complexity/triggers; role target; desired/capped/selected/compatible pairs; limitation; and fallback/inheritance reason",
+            "exclusions, accepted decisions, observable criteria",
             "`observed|inferred|proposed|unknown` evidence",
             "uncertainty stops",
+        )
+
+    def test_model_selection_precedence_and_enforcement_limits_are_exact(self) -> None:
+        section = self.selection_sections["## Derive and Select"]
+        self.assertTerms(
+            section,
+            "Explicit spawn model/effort values implement the selection",
+            "file-level `model` or `model_reasoning_effort` takes precedence over explicit spawn selection",
+            "Keep role TOMLs unpinned",
+            "OpenAI does not natively enforce this task classification or child<=root policy",
+            "A full-history fork cannot take model/effort overrides",
+            "Dynamic selection must use no or bounded inherited history",
+            "otherwise inherit both axes and record the reason",
+        )
+        for definition in self.agent_data.values():
+            self.assertNotIn("model", definition)
+            self.assertNotIn("model_reasoning_effort", definition)
+
+    def test_model_selection_contract_is_exclusive_to_selector(self) -> None:
+        selector_only_terms = (
+            "dispatch_context_tokens",
+            "|`compact`|<=8,192|",
+            "|`moderate`|8,193--32,768|",
+            "|`large`|32,769--131,072|",
+            "|`oversized`|>131,072 or no verified output/reasoning fit|",
+            "|`routine`|Mechanical/reversible; no unresolved judgment/material risk|`gpt-5.6-terra`|`medium`|",
+            "|`standard`|Bounded semantics; one established responsibility|`gpt-5.6-sol`|`high`|",
+            "|`complex`|Ambiguity/unknown cause; multi-domain/boundary/API/compatibility/migration/security/authorization/concurrency/process/PTY/lifecycle/persistence/resource ownership/difficult nonlocal edges|`gpt-5.6-sol`|`xhigh`|",
+            "|`critical`|Two interacting complex triggers",
+            "desired_model=max(task_model_target,role_model_target,context_model_target)",
+            "desired_effort=max(task_effort_target,role_effort_target)",
+            "capped_model=min(desired_model,root_effective_model)",
+            "capped_effort=min(desired_effort,root_effective_effort)",
+            "gpt-5.6-luna < gpt-5.6-terra < gpt-5.6-sol",
+            "none < low < medium < high < xhigh < max",
+            "ceiling_limited",
+            "nearest stronger compatible pair within root",
+            "Weaker-only availability returns to root",
+            "Set both overrides or neither",
+            "Unresolved root/order/availability/support requires exact inheritance",
+            "file-level `model` or `model_reasoning_effort` takes precedence",
+            "OpenAI does not natively enforce this task classification or child<=root policy",
+            "A full-history fork cannot take model/effort overrides",
+            "Dynamic selection must use no or bounded inherited history",
+            "desired/capped/selected/compatible pairs",
+        )
+        self.assertTerms(self.selection_source, *selector_only_terms)
+        for term in selector_only_terms:
+            with self.subTest(term=term):
+                self.assertNotIn(term, self.routing_source)
+        self.assertTerms(
+            self.routing_sections["## Model Selection"],
+            "Load `$subagent-model-selection` before any dispatch model, effort, or context decision",
+            "That skill exclusively defines the algorithm",
         )
 
     def test_role_mode_capability_matrix_matches_toml_declarations(self) -> None:
@@ -405,9 +470,19 @@ class RepositoryAgentPolicyTests(unittest.TestCase):
         self.assertTerms(
             self.agents_source,
             "Load `$subagent-routing` before evaluating or dispatching any subagent",
-            "Load `$subagent-routing` before choosing child context, model, effort, or inheritance",
             "Load `$subagent-routing` before preflight, handoff, join, retry, interruption, or conflict handling",
             "Load `$subagent-routing` before creating or validating any `task_packet` or `result_packet`",
+        )
+
+    def test_model_selector_load_boundaries_are_exact(self) -> None:
+        self.assertTerms(
+            self.agents_source,
+            "Load `$subagent-model-selection` before choosing, requesting, overriding, or inheriting a child context, model, or reasoning effort",
+        )
+        self.assertTerms(
+            self.routing_sections["## Model Selection"],
+            "Load `$subagent-model-selection` before any dispatch model, effort, or context decision",
+            "That skill exclusively defines the algorithm",
         )
 
     def test_writer_preflight_commands_and_identity_are_exact(self) -> None:
@@ -743,6 +818,7 @@ class RepositoryAgentPolicyTests(unittest.TestCase):
         headings = {
             "adaptive-verification": "# Adaptive Verification",
             "github-task-lifecycle": "# GitHub Task Lifecycle",
+            "subagent-model-selection": "# Subagent Model Selection",
             "subagent-routing": "# Subagent Routing",
         }
         for name, source in self.skill_sources.items():
@@ -755,6 +831,10 @@ class RepositoryAgentPolicyTests(unittest.TestCase):
 
     def test_agents_loads_skills_at_positive_and_negative_boundaries(self) -> None:
         expected_descriptions = {
+            "subagent-model-selection": (
+                "Use before selecting, requesting, overriding, or inheriting a subagent model, reasoning effort, or dispatch context",
+                "Excludes root-session configuration and story-runtime agents",
+            ),
             "subagent-routing": (
                 "Use for subagent evaluation, dispatch, join, retry, or acceptance",
                 "Excludes story agents and root-only commands",
@@ -776,6 +856,7 @@ class RepositoryAgentPolicyTests(unittest.TestCase):
             self.agents_source,
             "Load `$github-task-lifecycle` for every GitHub-tracked task",
             "Load `$subagent-routing` before evaluating or dispatching any subagent",
+            "Load `$subagent-model-selection` before choosing, requesting, overriding, or inheriting a child context, model, or reasoning effort",
             "Load `$adaptive-verification` before planning, executing, reusing, escalating, or accepting evidence for any nontrivial tracked change",
         )
         self.assertTerms(

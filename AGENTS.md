@@ -58,17 +58,8 @@ mandatory gain calculation, exceptions, fast path, and ownership rules.
 
 ### Root-Capability Routing
 
-Load `$subagent-routing` before choosing child context, model, effort, or inheritance.
-Root capability independently caps both model and effort.
-
-Resolve effective root model/effort after aliases, defaults, session overrides, and runtime
-child settings/pairs. Keep TOMLs unpinned.
-
-Oversized means no verified output/reasoning fit. Critical requires two interacting complex
-triggers. Requirements uplift needs substantial ambiguity.
-
-Sources: [subagents](https://learn.chatgpt.com/docs/agent-configuration/subagents) and
-[model guidance](https://developers.openai.com/api/docs/guides/latest-model).
+Load `$subagent-model-selection` before choosing, requesting, overriding, or inheriting a
+child context, model, or reasoning effort.
 
 ### Role, Mode, and Control Gate
 
