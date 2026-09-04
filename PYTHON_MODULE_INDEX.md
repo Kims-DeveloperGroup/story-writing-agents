@@ -16,9 +16,9 @@ Source root: `src/`
 
 Package root: `src/story_writing_agents/`
 
-Importable production units indexed: 128.
+Importable production units indexed: 129.
 
-Direct internal dependency edges indexed: 494.
+Direct internal dependency edges indexed: 496.
 
 Directed internal dependency cycles indexed: 0.
 
@@ -71,6 +71,7 @@ consensus.execution -> agents/consensus.contracts/consensus.projection
 consensus.projection -> consensus.contracts
 consensus.runtime_adapter -> consensus.contracts/consensus.execution/consensus.projection
 consensus.serialization -> consensus.contracts/consensus.projection/consensus.runtime_adapter
+consensus.material_store -> consensus.contracts/errors
 
 interactive_controller._core -> interactive_controller._session_policy
                              -> interactive_controller._conversation_policy
@@ -1778,6 +1779,27 @@ every intermediate arrow. The current runtime graph is acyclic.
   network, subprocess, or import-time operational I/O.
 - **Primary verification/documentation:**
   `tests/test_consensus_projection.py` and
+  `docs/design/consensus-workflow.md`.
+
+### `story_writing_agents.consensus.material_store`
+
+- **Source:** `src/story_writing_agents/consensus/material_store.py`
+- **Responsibility:** Own unpublished immutable UTF-8 candidate material beneath
+  the workspace, addressed by verified content digest and opaque candidate
+  locator.
+- **Supported surface:** No package-facade export and no module `__all__`;
+  the internal surface is `ConsensusMaterialStore`,
+  `ConsensusMaterialMetadata`, `ConsensusMaterialStoreError`,
+  `ConsensusMaterialStoreSecurityError`, `CONSENSUS_MATERIAL_DIRECTORY`, and
+  `MAX_CONSENSUS_MATERIAL_BYTES`.
+- **Direct internal dependencies:** `consensus.contracts` and `errors`.
+- **State, resources, and side effects:** Construction is I/O-free. Store
+  operations use descriptor-relative no-follow traversal, locked atomic
+  publication, strict UTF-8 and digest verification, content-free metadata
+  inspection, reading, and explicit deletion. It performs no provider,
+  network, subprocess, or import-time operational I/O.
+- **Primary verification/documentation:**
+  `tests/test_consensus_material_store.py` and
   `docs/design/consensus-workflow.md`.
 
 ### `story_writing_agents.consensus.contracts`
