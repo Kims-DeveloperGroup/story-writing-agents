@@ -1,115 +1,86 @@
 ---
 name: subagent-routing
 description: >-
-  Use for subagent evaluation, dispatch, join, retry, or acceptance. Excludes story agents
-  and root-only commands.
+  Use for development-subagent evaluation/dispatch/control/handoff/join/retry; excludes
+  story/root-only work.
 ---
 
-# Subagent Routing
+`predicted_critical_path_savings_seconds=root_sequential_estimate-(parallel_critical_path+spawn_wait_handoff_synthesis_overhead)`
 
-[AGENTS.md](../../../AGENTS.md) is authoritative; never override it.
+Require >=20s and >=20% of root estimate, or name
+`material_correctness_risk_reduction|mandatory_ownership_rule`; exceptions authorize, not
+savings. Mandatory owners: docs/tests/triggered-modularity/production outside fast path.
+Fast path permits clear one/two-file production/configuration within established
+responsibility/boundary;
+excludes mandatory owners/ambiguity/unknown failures. Never dispatch deterministic commands.
+Load `$subagent-model-selection` for model/effort.
 
-## Delegation
-
-Calculate recorded estimates:
-
-```text
-predicted_critical_path_savings_seconds=root_sequential_estimate-(parallel_critical_path+spawn_wait_handoff_synthesis_overhead)
-```
-
-- Require savings >=20 seconds and >=20% of `root_sequential_estimate`, or name
-  `material_correctness_risk_reduction` or `mandatory_ownership_rule`.
-- Exceptions authorize, not claim savings. Mandatory owners cover documentation, tests,
-  triggered modularity, and production outside fast path.
-- Root fast path permits one- or two-file production/configuration changes only within
-  established responsibility/boundary.
-- Exclude documentation, tests, modularity, substantial ambiguity, and unknown failures.
-  Never dispatch for a deterministic command.
-- Use requirements only for substantial ambiguity, diagnosis only for unknown failure, and
-  modularity only when triggered. Batch safe reads.
-
-## Model Selection
-
-Load `$subagent-model-selection` before any dispatch model or effort decision.
-That skill exclusively defines the algorithm.
-
-## Control
-
-|Role|Mode|Capability|
-|---|---|---|
-|Requirements/diagnosis|`analysis`|RO|
-|`modularity_maintainer`|`analysis`,`review`|RO|
-|Modularity/runtime/tests/docs|`implementation`|RW|
-|Tests/docs|`analysis`|RO|
-
-- RO means read-only with no approval-enabled writes; RW means assigned-worktree writes.
-  Child first reports filesystem/sandbox, write access, approval path, and identity.
-- Reject unsupported mode, unavailable evidence, or mismatch before other work. Observations
-  route fail-closed; prompts, TOMLs, and tests cannot enforce isolation.
-- Writers match physical path, Git root, branch, HEAD, base/ancestry, targets, and porcelain
-  bytes/SHA-256/paths. Pin dirty state; never reset, checkout, clean, or revert. Re-preflight
-  after upstream changes, interruption, or invalidation.
-- Full history requires named reason, bounded scope, stale-risk assessment, root approval;
-  record all four in task evidence.
-- Pre-record result IDs and role/mode. Join only when none runs/is missing and every exact
-  result validates.
-- Retry transient spawn/delivery/join failure once after no-write proof/fingerprint.
-  Possible writes require state inspection, preserved diff, and same-thread resume.
-- Never retry policy/capability/scope/schema failures. After failed retry, root may perform
-  only authorized static reads or fast-path work; never absorb mandatory ownership.
-- Resolve conflicts by `observed > inferred > proposed > unknown` within role ownership;
-  never vote. Escalate owner, root, then user for required external decisions.
-
-Task `identity` contains one disposition: `remove_after_integration` requires cleanup
-authority; `retain_with_reason` includes reason/next owner; or `authorization_required`.
-Change only after recorded authority/lifecycle change. For tracked work,
-follow `$github-task-lifecycle`.
-
-## Modularity
-
-- Stop unexpected modularity triggers before writing. Modes are pre-writer `analysis`,
-  architecture-dominant `implementation`, and post-writer `review`.
-- Missing policy: report exact language/path; root asks about packaged creation, resumes this
-  thread, and records any declined-decision general-judgment exception.
-- Missing index needs no separate permission. Derive full inventory/path/content, then create it
-  index-only in this thread. Structural work never completes with drift.
-- Root accepts analysis and any brief/index delta, passes planning, then assigns one
-  production owner. Run necessary nonoverlapping owners sequentially; avoid invalid state.
-- After runtime implements a brief, modularity reviews code/indices before tests/docs.
-  Return deviations/drift to their owners until resolved or accepted.
-- Modularity implementation needs no separate self-review beyond its report/root review. Tests precede
-  documentation; reconcile drift. Root integrates/verifies.
-- Specialists never delegate or coordinate. Reuse threads unless stale/unsafe; reuse never
-  authorizes history.
-
-## Packets
-
-|`task_packet` field|Contents|
+|Role|Dispatch|
 |---|---|
-|`mode`|Analysis/implementation/review|
-|`objective`|Outcome/evidence|
-|`scope`|In/out targets|
+|`requirements_analyst`|Substantial-ambiguity-only|
+|`regression_diagnostician`|Unknown-failure-only|
+
+RO: requirements/diagnosis `analysis`; modularity `analysis|review`; tests/docs `analysis`.
+RW: modularity/runtime/tests/docs `implementation`.
+
+RO means read-only without approval-enabled writes; RW means assigned-worktree writes. Child
+first reports filesystem/sandbox/write availability/approval path/identity; reject unsupported
+mode, missing evidence, or mismatch before other work. Route observed capability fail-closed;
+prompts/TOMLs/tests cannot enforce isolation.
+
+Writers match physical path/Git root/branch/HEAD/base ancestry/targets and exact porcelain
+bytes/SHA-256/decoded paths; pin all three. Never reset/checkout/clean/revert.
+Re-preflight after change/interruption/invalidation. Full-history requires recorded
+reason/bounded scope/stale-risk assessment/root approval.
+
+Pre-record result IDs/role/mode; join after none runs/missing and all packets validate.
+Retry transient spawn/delivery/join once with fingerprint/no-write proof. Possible writes
+require inspection/diff preservation/same-thread resume; policy/capability/scope/schema never
+retry. After failed retry, root does only authorized static/fast-path work. Resolve
+`observed>inferred>proposed>unknown` within ownership; never vote; escalate owner/root/user.
+
+|Disposition|Meaning|
+|---|---|
+|`remove_after_integration`|Cleanup-authority-granted|
+|`retain_with_reason`|Reason/next-owner|
+|`authorization_required`|Removal-authority-absent/unresolved|
+
+Nest under task `identity`; change only after recorded authority/state.
+
+Missing policy: report language/path; root asks about packaged creation, resumes thread,
+records declined general-judgment exceptions. Missing
+index needs no permission: derive inventory/path/content; same-thread index-only creation.
+Select/verify root `<LANGUAGE>_MODULE_INDEX.md`.
+Runtime boundary work needs index reconciliation/review before tests/docs; return deviations
+until resolved/accepted. Modularity implementation needs its report plus root review. Tests
+precede docs; reconcile drift. Specialists never coordinate/delegate; reuse unless stale/unsafe.
+
+|`task_packet` field|Content|
+|---|---|
+|`mode`|`analysis/implementation/review`|
+|`objective`|Concrete-outcome/relevant-evidence|
+|`scope`|Approved-in/out-targets|
 |`acceptance`|Criteria/compatibility|
-|`ownership`|Read-only/exclusive targets|
-|`gates`|Decisions/rationale/evidence/brief/index|
-|`identity`|Repository/GitHub/worktree/base/head|
-|`verification`|Plan/ledger/checks/budget/output|
-|`upstream_decisions`|Distilled findings/accepted decisions|
-|`stop_conditions`|Policy/breaking/scope/structural stops|
+|`ownership`|Read-only/exclusive-targets|
+|`gates`|GitHub/modularity-decisions/rationale/evidence/accepted-boundary/index-status/delta|
+|`identity`|Repository/Issue/Project/Iteration/Development-linked-branch-or-PR/worktree/base/head/preflight/disposition|
+|`verification`|Authorized-adaptive-plan/compact-ledger/required-checks/budget/expected-output|
+|`upstream_decisions`|Distilled-findings/accepted-decisions|
+|`stop_conditions`|Policy-conflict/breaking-decision/scope-deviation/unexpected-structure/other-explicit-returns|
 
-|`result_packet` field|Contents|
+|`result_packet` field|Content|
 |---|---|
-|`outcome`|Completed/blocked state|
-|`findings`|Files/index consistency|
-|`changed_inputs`|Relevant input changes|
-|`evidence`|Mandatory/selected checks; commands; completion sets; invalidation; duration/budget; identities/digests/fingerprints; next checks|
-|`risks`|Ambiguity/residual risk; expansion needing root authorization|
-|`next_action`|Next owner/action|
+|`outcome`|Completed-work/precise-blocked-or-stopped-state|
+|`findings`|Distilled-findings/files/indices/implementation-index-consistency|
+|`changed_inputs`|Relevant-source/test/fixture/config/policy/docs/environment|
+|`evidence`|`mandatory_evidence,authorized_selection,exact_commands,completed_ids,failed_ids,accepted_skips,invalidated_evidence,unexecuted_ids,actual_duration,spent_and_remaining_budget,identities,digests,failure_fingerprints,checks,recommended_next_evidence`;cleanup/recoverability|
+|`risks`|Blockers/ambiguity/residual/proposed-expansions-requiring-root-authorization|
+|`next_action`|Recommended-owner/action|
 
-Exclude raw logs and full Issues/plans. Nest preflight/disposition under `identity`,
-cleanup/recoverability under `evidence`, and disposition results in their fields.
+Exclude logs/full Issues/plans; reuse never authorizes history.
 
-Record `root_phase_wall_time_seconds,subagent_startup_seconds,subagent_wait_seconds,turn_count,tool_call_count,duplicate_read_count,verification_time_seconds,input_tokens,output_tokens`.
-Mark each `observed|estimated|unavailable`; explain unavailable; estimates never count as
-observations. Targets: median >=25% lower; P95 >=15% lower; turns >=30% fewer; duplicate
-broad suites >=50% fewer; packet tokens 25--35% fewer. Static tests prove no performance.
+Record `root_phase_wall_time_seconds,subagent_startup_seconds,subagent_wait_seconds,turn_count,tool_call_count,duplicate_read_count,verification_time_seconds,input_tokens,output_tokens`
+as `observed|estimated|unavailable`; explain unavailable; estimates aren't observations.
+Reduction targets:
+`median>=25%,P95>=15%,turns>=30%,duplicate-broad-suites>=50%,packet-tokens=25--35%`.
+Static tests don't prove performance.

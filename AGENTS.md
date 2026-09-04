@@ -2,145 +2,99 @@
 
 ## Project Role
 
-Read `README.md` first; it governs objective, language, contribution guidance, and
-structure. Develop, maintain, test, and document this Python novel-writing runtime. Write
-fiction only for requested examples, fixtures, or tests.
+Read `README.md` first; it governs objective/language/contributions/structure. Maintain this
+Python novel-writing runtime; write fiction only for requested examples/fixtures/tests.
 
 ## Working Method
 
-1. Inspect behavior and define requirements, inventory, constraints, scope, acceptance,
-   and both gates.
-2. Explanation, review, diagnosis, and planning authorize no change. Build, change, and
-   fix authorize only their approved scope.
-3. Make the smallest complete change, preserve unrelated work, verify, and
-   inspect the diff.
+1. Inspect behavior; define requirements/inventory/constraints/scope/criteria/gates.
+2. Explanation/review/diagnosis/planning authorize no change; implementation only approved
+   scope.
+3. Change minimally; preserve unrelated work; verify/diff-review.
 
-Avoid speculative abstractions, unnecessary dependencies, and scope creep. Ask the user
-when a missing requirement would materially change the design or result.
-
-Skills supply focused procedures. They never override this file,
-[GITHUB_WORKFLOW.md](GITHUB_WORKFLOW.md), [COMMIT_POLICY.md](COMMIT_POLICY.md), or
-[DEPENDENCY_POLICY.md](DEPENDENCY_POLICY.md).
+Ask when missing requirements materially change design/results. Skills supply procedures but
+never override this file or linked policies.
 
 ## GitHub Planning Gate
 
-- Record `github_planning_gate=not_required|pending|passed|blocked` and its reason before
-  branches, worktrees, writers, or tracked edits.
-- Permit only read-only work while the gate is pending or blocked.
-- Classify work as large for `L` or `XL`; two independent slices or parent criteria; three
-  production modules; two domains; modularity/migration coordination; dependency
-  sequencing; multiple owners/worktrees/phases; or parent integration.
-- Exclude companion tests and documentation. Treat uncertainty as large.
-- Follow [GITHUB_WORKFLOW.md](GITHUB_WORKFLOW.md). Stop writes when missing or new scope
-  appears; preserve the diff and initialize that scope.
-- Before a large-work writer, verify the root, every known descendant, native relationships,
-  canonical Project items, and required metadata.
-- Load `$github-task-lifecycle` for every GitHub-tracked task.
+Before branches, worktrees, writers, or edits, record
+`github_planning_gate=not_required|pending|passed|blocked` plus reason. Pending/blocked
+permits read-only work only. Load `$github-task-lifecycle` for GitHub-tracked work and obey
+[GITHUB_WORKFLOW.md](GITHUB_WORKFLOW.md).
+
+Large means `L|XL`; two independent slices/parent criteria; three production modules; two
+domains; modularity/migration coordination; dependency sequencing; multiple
+owners/worktrees/phases; or parent integration. Tests/docs do not count; uncertainty is
+large. Before its writer, verify root/descendants, native relations, canonical Project
+items, and metadata. New scope stops writes; preserve the diff and initialize it.
 
 ## Subagent Delegation
 
-Exactly six `.codex/agents/` development roles exist. They never join the four
-`config/agents/` story roles. Never create a reviewer role.
+Six `.codex/agents/` development roles never join four `config/agents/` story roles. Never
+add a reviewer role.
 
 |Role|Ownership|
 |---|---|
-|`requirements_analyst`|Read-only requirements/acceptance and modularity-gate advice|
-|`regression_diagnostician`|Read-only reproduction/cause and boundary impact|
-|`modularity_maintainer`|Boundaries and exclusive index semantics|
-|`runtime_implementer`|Approved production/configuration changes|
-|`test_engineer`|Exclusive test design/edits/execution and behavioral/coverage review|
-|`documentation_maintainer`|Exclusive documentation/skills after behavior/boundaries stabilize|
+|`requirements_analyst`|Read-only requirements/acceptance/modularity advice|
+|`regression_diagnostician`|Read-only reproduction/cause/boundary impact|
+|`modularity_maintainer`|Boundaries; exclusive index semantics|
+|`runtime_implementer`|Approved production/configuration|
+|`test_engineer`|Exclusive test design/edit/run/behavior/coverage|
+|`documentation_maintainer`|Exclusive docs/skills after stabilization|
 
 ### Delegation-Gain Gate
 
-Load `$subagent-routing` before evaluating or dispatching any subagent. It contains the
-mandatory gain calculation, exceptions, fast path, and ownership rules.
+Load `$subagent-routing` before evaluating/dispatching subagents.
 
 ### Root-Capability Routing
 
-Load `$subagent-model-selection` before choosing, requesting, overriding, or inheriting a
-child model or reasoning effort.
+Load `$subagent-model-selection` before selecting, requesting, overriding, or inheriting a
+child model/reasoning effort.
 
 ### Role, Mode, and Control Gate
 
-Load `$subagent-routing` before preflight, handoff, join, retry, interruption, or conflict
-handling. Reject unsupported roles, modes, capabilities, identities, or ownership before
-other task work.
-
-Child first performs only minimum identity/capability preflight before other task reads or
-writes. Writers match exact porcelain bytes, SHA-256, and decoded paths; accept dirty state
-only when all three are pinned.
+Load `$subagent-routing` before capability/identity preflight, handoff, join, retry,
+interruption, or conflict handling.
 
 ### Worktree Disposition
 
-Record exactly one disposition under task `identity`: `remove_after_integration`,
-`retain_with_reason`, or `authorization_required` when removal authority is absent or
-unresolved. Load `$subagent-routing` for identity rules and `$github-task-lifecycle` for
-tracked recoverability, removal, and branch-deletion safeguards.
+Nest one `remove_after_integration|retain_with_reason|authorization_required` under task
+`identity`. Load routing for identity and GitHub lifecycle for tracked cleanup.
 
 ### Modularity Gate
 
-- Require `modularity_maintainer` for importable structure changes; redistributed feature,
-  state, resource, or lifecycle ownership; dependency-direction or cycle changes; or
-  private cross-boundary access.
-- Also require it for material shared abstractions, adapters, facades, protocols, exports,
-  public imports, multi-consumer extraction, structural migration, or architectural
-  coupling defects.
-- Exclude localized unchanged-contract refactors, tests, documentation, formatting,
-  comments, typing, ordinary configuration or data, dependency metadata, and story runs.
-- Use `analysis` before writers, exclusive `implementation` for architecture-dominant
-  work, and `review` after another owner changes a boundary.
-- Stop an unexpected trigger. Load `$subagent-routing` for missing-policy, index, mode,
-  and reconciliation procedures.
+Require modularity for importable structure; responsibility/state/resource/lifecycle
+ownership; dependency direction/cycles/private access; shared abstractions/adapters/
+facades/protocols/exports/public imports; multi-consumer extraction/migration; or
+architectural coupling. Exclude unchanged-contract local refactors, tests/docs, formatting,
+typing, ordinary configuration/data, dependency metadata, and story runs.
+
+Use pre-writer `analysis`, architecture-dominant `implementation`, or post-writer `review`.
+Unexpected triggers stop writers. Load routing for policy/index procedures.
 
 ### Orchestration Sequence
 
-1. Root classifies scope, gates, inventory, delegation, and uncertain modularity.
-2. Run required read-only analysis; justified independent investigations may parallelize.
-3. Modularity analysis selects and verifies root `<LANGUAGE>_MODULE_INDEX.md`; accept its
-   boundary brief and index delta.
-4. Pass planning and verify the Development-linked branch before writers.
-5. Use the root fast path or exactly one production owner at a time.
-6. After runtime work, reconcile indices index-only before boundary review.
-7. Run tests preferably in one turn; pause/resume that thread for dependency changes.
-8. Run documentation after tests. Later test/documentation index drift requires index-only
-   implementation, then read-only review.
-9. Root validates, integrates, verifies, and summarizes.
-
-Load `$subagent-routing` for ordering, review loops, ownership, and thread reuse.
+1. Root resolves scope, gates, inventory, delegation, requirements/diagnosis, then any
+   boundary brief/index delta.
+2. Pass planning; use one production owner at a time; reconcile indices and boundary review.
+3. Run exclusive tests before exclusive docs; reconcile later index drift.
+4. Root validates packets, integrates, verifies, and summarizes.
 
 ### Adaptive Verification
 
-Load `$adaptive-verification` before planning, executing, reusing, escalating, or accepting
-evidence for any nontrivial tracked change. Root alone authorizes selection, budget,
-concurrency, reuse, escalation, and final sufficiency.
+Load `$adaptive-verification` before planning, running, reusing, escalating, or accepting
+evidence for nontrivial tracked changes. Root owns authorization and sufficiency.
 
 ### Handoff and Result Contracts
 
-Load `$subagent-routing` before creating or validating any `task_packet` or
-`result_packet`. Thread reuse never authorizes full-history inheritance.
-
-Packet `identity` enumerates repository, Issue, Project, Iteration, Development branch/PR,
-worktree, base, and HEAD. Preserve the skill's exact result evidence and nesting meanings.
-
-Result findings include files inspected/changed, indices consulted/updated, and
-implementation/index consistency. `changed_inputs` covers relevant source, tests, fixtures,
-configuration, policy, documentation, and environment changes. Evidence includes mandatory
-evidence, authorized selection, commands, completion sets, invalidation, duration/budget,
-identities, digests, fingerprints, checks, and next evidence. Risks include blockers,
-ambiguity, residual risk, and proposed expansion requiring root authorization.
-
-Nest preflight/disposition under task `identity`, cleanup/recoverability under result
-`evidence`, and outcomes, reasons, risks, and next owners in their result fields.
+Load `$subagent-routing` for exact packets. Thread reuse never authorizes history.
 
 ### Prospective Orchestration Telemetry
 
-Load `$subagent-routing` before recording or comparing orchestration telemetry.
+Load `$subagent-routing` before telemetry.
 
 ## Quality and Commits
 
-Follow [COMMIT_POLICY.md](COMMIT_POLICY.md). Inspect and report the diff and verification.
-Before structural changes, use the
-[modularity policy selector](.codex/agents/modularity_maintainer.toml); packaged defaults
-live in `.codex/agents/modularity_maintainer/`. Follow and verify
-[DEPENDENCY_POLICY.md](DEPENDENCY_POLICY.md) for dependency or packaging changes.
+Follow [COMMIT_POLICY.md](COMMIT_POLICY.md). Before structural changes use the
+[modularity selector](.codex/agents/modularity_maintainer.toml) and packaged defaults.
+Follow/verify [DEPENDENCY_POLICY.md](DEPENDENCY_POLICY.md) for dependency/packaging work.

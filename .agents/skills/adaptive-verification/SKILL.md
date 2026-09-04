@@ -1,119 +1,80 @@
 ---
 name: adaptive-verification
 description: >-
-  Use before planning, running, reusing, escalating, or accepting evidence for nontrivial
-  tracked changes. Excludes untracked conversation and story-runtime execution.
+  Use for nontrivial tracked-change evidence planning/running/reuse/escalation/acceptance;
+  excludes conversation/story execution.
 ---
 
-# Adaptive Verification
+[AGENTS.md](../../../AGENTS.md) governs. Root exclusively owns selection/authorization/budget/
+concurrency/dedup/reuse/escalation/sufficiency; specialists propose, never broaden.
+Unknown-cost/exhaustion returns completed/mandatory-remaining evidence,revised estimates,
+residual risk,and root-decision alternatives: `split|narrow|defer|stop|approved-budget-increase`.
 
-[AGENTS.md](../../../AGENTS.md) controls ownership/authorization; this procedure never
-overrides policy.
+## Levels/Budgets
 
-Root owns selection, authorization, budgets, deduplication, reuse, escalation, and
-sufficiency. Specialists only propose; they never broaden level, selection, concurrency,
-or budget. Unknown or excessive cost returns `split|narrow|defer|stop` or needs explicit
-maintainer budget approval.
+- `static_inventory` maps inputs/tests/consumers/helpers/fixtures/invariants/risks/exclusions;
+  require it for every nontrivial tracked change.
+- `exact` covers changed acceptance and every known failure ID.
+- `semantic_cluster` covers a shared invariant/contract/fixture/failure family.
+- `affected_suite` covers a bounded subsystem only when narrower evidence is insufficient.
+- `full_suite` requires an objective trigger below.
 
-## Evidence Levels
+`complete` is terminal, not level six: mandatory/exact evidence is current green/accepted-skip, failures
+resolved, inventory sufficient, and root accepts risk. Passing never authorizes escalation.
 
-Select minimally:
-
-- `static_inventory`: map inputs, direct tests, transitive consumers, helpers, fixtures,
-  invariants, risks, and exclusions. Require it for every nontrivial tracked change.
-- `exact`: cover changed acceptance and every known failing test ID.
-- `semantic_cluster`: cover a shared invariant, collaborator contract, fixture, or family.
-- `affected_suite`: cover a bounded subsystem only when narrower evidence is insufficient.
-- `full_suite`: use only for an objective trigger below.
-
-`complete` is terminal, not level six. Require current green or accepted-skip mandatory
-evidence, resolved failures, sufficient inventory, and root-accepted risk. A pass never
-requires or authorizes escalation. Complete criteria only with current exact evidence.
-
-|Class|Total seconds|Maximum shard|Normal floor|
+|Class|Total|Shard|Floor|
 |---|---:|---:|---|
-|`local`|300|180|Inventory plus exact or static|
-|`bounded`|900|300|Inventory, exact, required semantic|
-|`cross_cutting`|1800|600|Inventory plus selected cluster or affected|
-|`release`|Issue-defined|Issue-defined|Named integration or release gates|
+|`local`|300|180|Inventory+exact/static|
+|`bounded`|900|300|Inventory+exact+semantic|
+|`cross_cutting`|1800|600|Inventory+cluster/affected|
+|`release`|Issue-defined|Issue-defined|Named gates|
 
-Accepted criteria may override defaults. Budgets authorize work, never correctness waivers
-or unsafe kills. Do not start a shard estimated above remaining budget.
-If running work exceeds estimate, allow safe completion or a runner-supported preserving
-interrupt. Exhaustion never excuses mandatory evidence.
+Criteria may override. Budgets never waive evidence/permit unsafe kills. Do not start work
+estimated above remaining budget; on overrun safely finish or runner-interrupt preserving results.
 
-## Plan and Provenance
+## Plan, Provenance, and Reuse
 
-Before commands, record:
+Record class/rationale; each-criterion/`mandatory_evidence`; changed inputs; tests/consumers/helpers/fixtures/
+invariants/exclusions; API/packaging/persistence/migration/auth/security/concurrency/process/
+PTY/config/dynamic-coupling risks; exact-`authorized_selection`/rationale/owner; estimate/source/confidence;
+total/max/spent/remaining; triggers/stops/reuse/invalidation/risk. Unknown dependencies need
+inventory/diagnosis.
 
-- class and risk rationale; each criterion mapped to `mandatory_evidence`;
-- changed source, tests, fixtures, configuration, policy, documentation, and environment;
-- direct tests, transitive consumers, helpers, fixtures, invariants, cross-boundary
-  consumers, and justified exclusions;
-- flags for API, packaging, persistence, migration, authorization, security, concurrency,
-  process, PTY, shared configuration, and uncertain dynamic coupling;
-- exact `authorized_selection`, rationale, owner, estimates/source/confidence, total,
-  maximum, spent, remaining, triggers, stops, reuse/invalidation, and residual risk.
+Results record repository/absolute-worktree, baseline/HEAD, dirty fingerprint, environment-
+capabilities, purpose, level, exact-selection/IDs/command, outcome/duration/stable-failure-fingerprint. Conservative
+`relevant_input_digest` covers selected tests, shared helpers/fixtures, runner configuration,
+transitive production closure, and environment. Reuse after HEAD change requires proven
+disjointness plus unchanged digest/purpose; uncertainty invalidates.
 
-Incomplete dependency knowledge is uncertainty. Broaden inventory or diagnose before work
-whose affected set or cost cannot be bounded.
+Assign one `evidence_execution_owner`; deduplicate exactly by
+`normalized_command,exact_ids,relevant_input_digest,environment_class`; owner/label/purpose/
+venue/wrapper never justify reruns. Run exact/cluster locally, affected/full in CI; duplicate
+broad venues only for an environment criterion.
 
-Every result records repository, absolute worktree, baseline, HEAD, dirty fingerprint,
-environment capabilities, purpose, level, exact selection and command, outcome, duration,
-and stable failure fingerprint. Its conservative `relevant_input_digest` covers selected
-tests, shared helpers and fixtures, runner configuration, transitive production closure,
-and relevant environment.
+## Execution
 
-Reuse after HEAD changes only when root proves disjointness and unchanged digest and
-purpose. Relevant or uncertain changes invalidate evidence; renaming purpose does not.
+Above `max_shard_seconds`, partition deterministic disjoint portable IDs: union equals
+selection; each occurs once; risk/fast-feedback first. Sequential is default.
+Parallel requires root authorization, isolation, nonoverlap, runner support; maximum two
+fast-fail shards.
 
-Assign one `evidence_execution_owner` per item. Deduplicate exactly on
-`normalized_command`, `exact_ids`, `relevant_input_digest`, and `environment_class`.
-Different owner, label, purpose, venue, or wrapper never justifies rerunning equivalents.
-Normally run exact and cluster locally, affected and full in CI. Duplicate broad local and
-CI evidence only for an environment criterion; record both identities and requirements.
+Per shard record manifest digest/ordinal/IDs/input digest/result/duration and
+`completed_ids,failed_ids,accepted_skips,unexecuted_ids`. Success covers every ID. After
+repair rerun exact failures/invalidated shards only. Timeout/replacement/interruption is
+neither pass nor assertion-failure: classify; stop only owned process; preserve
+completed/failed/accepted-skip/unexecuted sets; resume
+valid unexecuted/invalidated IDs. Partial evidence
+never completes; one bounded repeat may diagnose flakiness; relabeling cannot evade dedup.
 
-## Shards and Interruptions
+Full-suite triggers: explicit Issue/parent/release criterion; unbounded inventory; changed
+package-wide/public/cross-domain invariant; unreliable global discovery/bootstrap/packaging/
+harness; unknown out-of-cluster family; uncovered concrete risk. Implementation/review/suite
+availability is insufficient. Over-budget required breadth returns the decision, never a
+completion claim. Prompt/TOML/policy/docs-only work may use static/exact-policy/link/format/
+diff evidence absent runtime/full-suite triggers.
 
-- Split selections estimated above `max_shard_seconds` into deterministic, disjoint,
-  portable exact IDs. Their union equals selection and each ID appears once.
-- For Python unittest, use module, class, or method IDs. Run risky and fast-feedback shards
-  first.
-- Default sequentially. Parallel work requires root authorization, isolation, nonoverlap,
-  and runner support. At most two fast-fail shards may run concurrently.
-- Record manifest digest, ordinal, exact IDs, input digest, result, duration,
-  `completed_ids`, `failed_ids`, `accepted_skips`, and `unexecuted_ids` for every shard.
-- Aggregate success requires green or accepted-skip evidence for every authorized ID.
-  After repair, rerun exact failures and only invalidated shards.
-- Timeout, replacement, or interruption is neither pass nor assertion failure. Stop only
-  the owned process; classify and preserve every result set.
-- Resume only valid unexecuted or invalidated IDs. Partial evidence never completes work.
-  One bounded recorded repeat may diagnose flakiness; relabeling cannot evade deduplication.
-
-## Full Suite and Failures
-
-Authorize `full_suite` only for:
-
-- an explicit Issue, parent-integration, or release criterion;
-- static inventory that cannot conservatively bound the affected set;
-- a changed package-wide, public, or cross-domain invariant;
-- global discovery, bootstrap, packaging, or harness behavior making narrower evidence
-  unreliable;
-- an unknown out-of-cluster failure family; or
-- concrete residual risk not covered by affected selections.
-
-Implementation, final review, or suite availability is insufficient. When required broad
-work exceeds budget, return the decision; never omit it or claim completion. Prompt, TOML,
-policy, or documentation-only work may use static parsing, exact policy tests, link and
-format checks, and diff inspection when no runtime or full-suite trigger exists.
-
-- Repair a known family and rerun exact invalidated evidence.
-- When one stable fingerprint appears in >=2 responsibility holders, stop broad reruns.
-  Inventory repository-wide occurrences with roots, exclusions, patterns,
-  classifications, and limitations.
-- Apply the existing modularity gate once for cross-boundary ownership or capability
-  defects. Send unknown failures to `regression_diagnostician`.
-- On unknown cost or exhaustion, return completed and mandatory remaining evidence,
-  revised estimates, residual risk, and root choices.
-- Keep six roles: tests own evidence and coverage; diagnosis owns causes; modularity owns
-  boundary review; root owns final risk.
+Repair known families and rerun invalidated evidence. One fingerprint in >=2 responsibility
+holders stops broad reruns for repository occurrence inventory with roots/exclusions/
+patterns/classifications/limits. Route cross-boundary defects once through modularity and
+unknown failures to diagnosis. Tests own evidence/coverage; diagnosis causes; modularity
+boundary review; root risk.
