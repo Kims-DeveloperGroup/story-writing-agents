@@ -98,6 +98,8 @@ _MODULE_EXPORTS = (
     "ArtifactApplicationRequest",
     "ArtifactApplicationResult",
     "ArtifactApplicationState",
+    "artifact_relationship_validation_digest",
+    "build_artifact_application_request",
     "ArtifactDeletionProvenance",
     "ArtifactRenameLineage",
     "deserialize_artifact_application_request",
@@ -272,8 +274,8 @@ class ArtifactApplicationSurfaceTests(ApplicationContractTestCase):
     def test_exact_public_surface_schemas_enums_signatures_and_facade(self) -> None:
         self.assertEqual(ARTIFACT_APPLICATION_SCHEMA_VERSION, 1)
         self.assertEqual(tuple(application_module.__all__), _MODULE_EXPORTS)
-        self.assertEqual(len(writing_artifacts.__all__), 76)
-        self.assertEqual(len(set(writing_artifacts.__all__)), 76)
+        self.assertEqual(len(writing_artifacts.__all__), 78)
+        self.assertEqual(len(set(writing_artifacts.__all__)), 78)
         for name in _MODULE_EXPORTS:
             with self.subTest(name=name):
                 self.assertIs(
@@ -780,10 +782,21 @@ class ArtifactApplicationBoundaryTests(ApplicationContractTestCase):
             for node in ast.walk(tree)
             if isinstance(node, ast.ImportFrom) and not node.level
         }
-        self.assertEqual(relative_imports, {"catalog", "change_sets"})
+        self.assertEqual(
+            relative_imports,
+            {"catalog", "change_sets", "relationship_policy"},
+        )
         self.assertEqual(
             absolute_roots,
-            {"__future__", "dataclasses", "enum", "json", "re", "typing"},
+            {
+                "__future__",
+                "dataclasses",
+                "enum",
+                "hashlib",
+                "json",
+                "re",
+                "typing",
+            },
         )
         forbidden = {
             "agents",
@@ -793,7 +806,6 @@ class ArtifactApplicationBoundaryTests(ApplicationContractTestCase):
             "git",
             "orchestrator",
             "provider_adapter",
-            "relationship_policy",
             "repository",
             "runtime_references",
             "workspace",
@@ -815,7 +827,7 @@ from story_writing_agents.writing_artifacts import application_contracts
 assert writing_artifacts.ArtifactApplicationRequest is application_contracts.ArtifactApplicationRequest
 assert not hasattr(story_writing_agents, 'ArtifactApplicationRequest')
 assert tuple(application_contracts.__all__) == tuple(sys.argv[2].split(','))
-assert len(writing_artifacts.__all__) == len(set(writing_artifacts.__all__)) == 76
+assert len(writing_artifacts.__all__) == len(set(writing_artifacts.__all__)) == 78
 """
         completed = subprocess.run(
             (

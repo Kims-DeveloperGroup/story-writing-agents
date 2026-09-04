@@ -8,7 +8,11 @@ import re
 from dataclasses import fields, is_dataclass
 from pathlib import Path
 
-from ..conversations import CollaborationEventStore, CollaborationHistoryProjection
+from ..conversations import (
+    CollaborationEventStore,
+    CollaborationHistoryProjection,
+    CollaborationNextAction,
+)
 from ..git import (
     GitCommitMetadata,
     GitExternalOperationInspection,
@@ -136,7 +140,17 @@ class SessionRecoveryReconciler:
         if isinstance(history_a, SessionRecoveryResult):
             return history_a
         tail = history_a.last_sequence
-        if (
+        empty_history = _is_canonical_empty_history(history_a)
+        if empty_history and (reviewed is not None or application is not None):
+            return _blocked(
+                session_id,
+                conversation,
+                tail,
+                SessionRecoveryState.RECOVERY_REQUIRED,
+                SessionRecoveryOwner.COLLABORATION_HISTORY,
+                SessionRecoveryFailureCode.MISSING_PREDECESSOR,
+            )
+        if not empty_history and (
             history_a.session_id is None
             or history_a.conversation_id is None
             or history_a.current_proposal is None
@@ -151,7 +165,7 @@ class SessionRecoveryReconciler:
                 SessionRecoveryOwner.COLLABORATION_HISTORY,
                 SessionRecoveryFailureCode.MISSING_PREDECESSOR,
             )
-        if (
+        if not empty_history and (
             history_a.session_id != session_id
             or history_a.conversation_id != conversation
         ):
@@ -397,6 +411,17 @@ class SessionRecoveryReconciler:
         if status_a != status_b:
             return _owner_outcome(session_id, conversation, tail, SessionRecoveryOwner.REPOSITORY_STATUS)
 
+        if empty_history:
+            return SessionRecoveryResult(
+                session_id=session_id,
+                conversation_id=conversation,
+                collaboration_tail_sequence=0,
+                state=SessionRecoveryState.READY,
+                next_action=SessionRecoveryNextAction.CONTINUE_WITH_LEAD,
+                owner=SessionRecoveryOwner.LEAD,
+                failure_code=SessionRecoveryFailureCode.NONE,
+            )
+
         selected_b = _select_history(
             snapshot_b,
             resources_b,
@@ -634,6 +659,26 @@ class SessionRecoveryReconciler:
                 )
             )
         return value
+
+
+def _is_canonical_empty_history(history: CollaborationHistoryProjection) -> bool:
+    """Return whether every collaboration-owned field is at its empty value."""
+
+    return history == CollaborationHistoryProjection(
+        session_id=None,
+        conversation_id=None,
+        last_sequence=0,
+        current_turn_id=None,
+        current_step_id=None,
+        current_proposal=None,
+        current_state=None,
+        confirmation_request_id=None,
+        confirmation_decision=None,
+        execution_attempt_id=None,
+        execution_result_event_id=None,
+        execution_result=None,
+        next_safe_action=CollaborationNextAction.NONE,
+    )
 
 
 def _resource_blocker(

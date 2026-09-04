@@ -129,10 +129,17 @@ def _proposal() -> CollaborationProposal:
         basis=CollaborationProposalBasis(
             "plot-review",
             _tagged("1"),
-            (CollaborationAgentProfile("plot_architect", _tagged("2")),),
+            (
+                CollaborationAgentProfile(
+                    "plot_architect",
+                    _tagged("2"),
+                    _tagged("3"),
+                ),
+            ),
             _tagged("3"),
             _tagged("4"),
             (input_revision,),
+            None,
         ),
     )
 
@@ -390,7 +397,7 @@ class SessionRecoverySurfaceTests(unittest.TestCase):
         )
         self.assertEqual(recovery_facade.__all__, expected)
         self.assertEqual(tuple(item.value for item in SessionRecoveryState), (
-            "proposed", "reviewed", "awaiting_application",
+            "ready", "proposed", "reviewed", "awaiting_application",
             "applied_not_committed", "staged", "committed", "rejected",
             "outcome_unknown", "recovery_required",
         ))
@@ -575,7 +582,7 @@ class SessionRecoveryEvidenceTests(unittest.TestCase):
 
 
 class SessionRecoveryProjectionTests(unittest.TestCase):
-    def test_all_nine_states_project_their_exact_safe_next_action(self) -> None:
+    def test_all_ten_states_project_their_exact_safe_next_action(self) -> None:
         reviewed, _ = _artifact_facts()
         awaiting = replace(
             reviewed,

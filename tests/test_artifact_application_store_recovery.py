@@ -10,8 +10,10 @@ import unittest
 from pathlib import Path
 from unittest import mock
 
-from story_writing_agents.errors import WorkspaceFormatError, WorkspaceSecurityError
+from story_writing_agents.errors import WorkspaceFormatError
 from story_writing_agents.writing_artifacts import (
+    ArtifactApplicationError,
+    ArtifactApplicationErrorCode,
     ArtifactApplicationState,
     ArtifactCreateOperation,
     ArtifactKind,
@@ -221,8 +223,9 @@ class ArtifactApplicationSecurityTests(_ApplicationStoreTestCase):
             outside.write_bytes(b"outside")
             (root / _CREATE).parent.mkdir(parents=True, exist_ok=True)
             (root / _CREATE).symlink_to(outside)
-            with self.assertRaises(WorkspaceSecurityError):
+            with self.assertRaises(ArtifactApplicationError) as raised:
                 _apply(repository, request)
+            self.assertIs(raised.exception.code, ArtifactApplicationErrorCode.CORRUPTION)
             self.assertEqual(outside.read_bytes(), b"outside")
 
         with self.subTest(case="journal_hardlink"):
@@ -253,8 +256,9 @@ class ArtifactApplicationSecurityTests(_ApplicationStoreTestCase):
             state = _state_root(root)
             state.mkdir(parents=True, exist_ok=True)
             state.joinpath("Catalog.json").write_bytes(b"alias")
-            with self.assertRaises(WorkspaceSecurityError):
+            with self.assertRaises(ArtifactApplicationError) as raised:
                 _apply(repository, request)
+            self.assertIs(raised.exception.code, ArtifactApplicationErrorCode.CORRUPTION)
 
         with self.subTest(case="root_replacement"):
             root, repository = self.new_repository()
@@ -267,8 +271,12 @@ class ArtifactApplicationSecurityTests(_ApplicationStoreTestCase):
             root.rename(detached)
             root.mkdir()
             try:
-                with self.assertRaises(WorkspaceSecurityError):
+                with self.assertRaises(ArtifactApplicationError) as raised:
                     _apply(repository, request)
+                self.assertIs(
+                    raised.exception.code,
+                    ArtifactApplicationErrorCode.CORRUPTION,
+                )
                 self.assertFalse(tuple(root.iterdir()))
             finally:
                 root.rmdir()

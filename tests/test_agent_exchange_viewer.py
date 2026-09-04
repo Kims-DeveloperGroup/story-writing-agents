@@ -1083,6 +1083,11 @@ class AgentExchangeControllerIntegrationTests(ControllerTestCase):
         workspace = self.make_workspace()
         controller, _backend, callbacks = self.make_controller(workspace)
         controller._attached_session_id = "session_1"
+        session_state = workspace.path(
+            "agent_states/orchestrator_state/sessions/session_1.json"
+        )
+        session_state.parent.mkdir(parents=True, exist_ok=True)
+        session_state.write_text("{}\n", encoding="utf-8")
         private = "PRIVATE_RESPONSE /tmp/private TOKEN=secret"
 
         failures = (

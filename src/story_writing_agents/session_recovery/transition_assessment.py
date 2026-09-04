@@ -446,6 +446,7 @@ def _active_operations(
     state: SessionRecoveryState,
 ) -> tuple[SessionTransitionOperation, ...]:
     if state in {
+        SessionRecoveryState.READY,
         SessionRecoveryState.PROPOSED,
         SessionRecoveryState.REVIEWED,
         SessionRecoveryState.AWAITING_APPLICATION,

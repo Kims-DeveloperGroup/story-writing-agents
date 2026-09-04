@@ -144,7 +144,7 @@ from story_writing_agents.workspace import (
 )
 
 from tests.collaboration_contract_fixture import contract_batches
-from tests.helpers import initialized_workspace
+from tests.helpers import pristine_initialized_workspace
 
 
 _SESSION_DIRECTORY = "agent_states/orchestrator_state/provider_sessions"
@@ -717,13 +717,7 @@ class ControllerTestCase(unittest.TestCase):
     def make_workspace(self) -> Workspace:
         """Create one initialized workspace registered for test cleanup."""
 
-        workspace = initialized_workspace(self)
-        configuration = ConfigManager(workspace).load_configuration_snapshot()
-        settings_module.reconcile_provider_route_generations(
-            workspace,
-            configuration,
-        )
-        return workspace
+        return pristine_initialized_workspace(self)
 
     def make_backend(self, workspace: Workspace) -> AgentBackend:
         """Create a provider-free lifecycle backend using Python as executable."""
@@ -743,6 +737,7 @@ class ControllerTestCase(unittest.TestCase):
 
         backend = AgentBackend(workspace, executable=sys.executable)
         try:
+            backend.provision_session_resources(session_id)
             backend.create_session_with_access(session_id)
             if durable_state is SessionDurableState.PAUSED:
                 backend.pause_session_and_release_access(session_id)

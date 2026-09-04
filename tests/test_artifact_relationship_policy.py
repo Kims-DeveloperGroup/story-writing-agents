@@ -293,7 +293,7 @@ class ArtifactRelationshipSurfaceTests(RelationshipTestCase):
         self.assertEqual(MAX_RELATIONSHIP_STATE_UTF8_BYTES, 64 * 1024 * 1024)
         self.assertEqual(MAX_RELATIONSHIP_EDGES, 65_536)
         self.assertEqual(tuple(relationship_module.__all__), _MODULE_EXPORTS)
-        self.assertEqual(len(writing_artifacts.__all__), 62)
+        self.assertEqual(len(writing_artifacts.__all__), 78)
         for name in _MODULE_EXPORTS:
             with self.subTest(name=name):
                 self.assertIs(
