@@ -163,6 +163,108 @@ def _tree_snapshot(directory: Path) -> dict[str, tuple[bytes, int]]:
     }
 
 
+def _module_name_from_source_path(source_path: str) -> str:
+    """Map one indexed ``src`` Python path to its canonical module name."""
+
+    relative = Path(source_path).relative_to("src").with_suffix("")
+    parts = list(relative.parts)
+    if parts[-1] == "__init__":
+        parts.pop()
+    return ".".join(parts)
+
+
+def _resolve_import_from_base(
+    source_module: str,
+    source_path: str,
+    node: ast.ImportFrom,
+) -> str:
+    """Resolve one ``from`` import's base with normal package semantics."""
+
+    if node.level == 0:
+        return node.module or ""
+    package = (
+        source_module
+        if Path(source_path).name == "__init__.py"
+        else source_module.rpartition(".")[0]
+    )
+    package_parts = package.split(".")
+    parent_count = node.level - 1
+    if parent_count > len(package_parts):
+        return ""
+    base_parts = package_parts[: len(package_parts) - parent_count]
+    if node.module:
+        base_parts.extend(node.module.split("."))
+    return ".".join(base_parts)
+
+
+def _internal_module_graph(
+    repository_root: Path,
+    source_paths: set[str],
+) -> dict[str, set[str]]:
+    """Build unique direct internal edges without importing production code."""
+
+    modules_by_path = {
+        path: _module_name_from_source_path(path) for path in source_paths
+    }
+    module_names = set(modules_by_path.values())
+    if len(module_names) != len(modules_by_path):
+        raise AssertionError("multiple indexed paths resolve to one module")
+    graph = {module: set() for module in module_names}
+    for source_path, source_module in sorted(modules_by_path.items()):
+        tree = ast.parse(
+            (repository_root / source_path).read_text(encoding="utf-8"),
+            filename=source_path,
+        )
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Import):
+                targets = (alias.name for alias in node.names)
+            elif isinstance(node, ast.ImportFrom):
+                targets = (
+                    _resolve_import_from_base(
+                        source_module,
+                        source_path,
+                        node,
+                    ),
+                )
+            else:
+                continue
+            graph[source_module].update(
+                target for target in targets if target in module_names
+            )
+    return graph
+
+
+def _first_directed_cycle(graph: dict[str, set[str]]) -> tuple[str, ...] | None:
+    """Return the deterministic first directed cycle, including its closure."""
+
+    state: dict[str, int] = {}
+    stack: list[str] = []
+    positions: dict[str, int] = {}
+
+    def visit(module: str) -> tuple[str, ...] | None:
+        state[module] = 1
+        positions[module] = len(stack)
+        stack.append(module)
+        for dependency in sorted(graph[module]):
+            if state.get(dependency, 0) == 0:
+                cycle = visit(dependency)
+                if cycle is not None:
+                    return cycle
+            elif state[dependency] == 1:
+                return tuple(stack[positions[dependency] :] + [dependency])
+        stack.pop()
+        positions.pop(module)
+        state[module] = 2
+        return None
+
+    for module in sorted(graph):
+        if state.get(module, 0) == 0:
+            cycle = visit(module)
+            if cycle is not None:
+                return cycle
+    return None
+
+
 def _debug_records(workspace: Any) -> list[dict[str, Any]]:
     """Return every currently persisted diagnostic record."""
 

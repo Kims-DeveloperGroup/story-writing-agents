@@ -2,148 +2,58 @@
 
 ## Project Role
 
-Before beginning work, read `README.md` first. Treat it as the source of truth
-for the project objective, language, contribution guidelines, and folder
-structure.
-
-This repository contains a Python multi-agent runtime that supports writing
-novels. Your role in this repository is to develop, maintain, test, and
-document the runtime. Do not write novel content unless the task explicitly
-requires it for an example, fixture, or test.
+Read `README.md` first; it governs objective, language, contribution guidance, and structure. Maintain runtime; write fiction only when tasks explicitly require examples/fixtures/tests.
 
 ## Working Method
 
-For every change:
-
-1. Inspect the repository and the relevant existing behavior.
-2. Clarify the requirement, affected components, constraints, and acceptance
-   criteria, then classify the GitHub and modularity gates.
-3. Pass the GitHub planning gate when required.
-4. Make the smallest complete change that satisfies the requirement.
-5. Run relevant tests or checks and review the final diff.
-
-For requests to explain, review, diagnose, or plan, do not make changes unless
-the request also authorizes implementation. For requests to build, change, or
-fix, make the requested in-scope local changes and verify them.
-
-Preserve unrelated user changes. Avoid speculative abstractions, unnecessary
-dependencies, and changes to behavior outside the requested scope. Ask when a
-missing requirement would materially change the design or result.
+For every change, inspect behavior; clarify requirements/inventory/constraints/acceptance and gates; pass gates; make the smallest complete change; run authorized checks; inspect the diff. Explain/review/diagnose/plan requests authorize no changes; build/change/fix authorizes only scope. Preserve unrelated work; avoid speculation, unnecessary dependencies, and scope creep; ask about material ambiguity.
 
 ## GitHub Planning Gate
 
-Before a task branch, worktree, write-capable agent, or tracked-file edit,
-record `github_planning_gate = not_required | pending | passed | blocked` with
-the classification reason. Read-only repository and GitHub inspection,
-requirements, diagnosis, test planning, and modularity analysis may run while
-the gate is pending.
+Before any task branch, worktree, write-capable agent, or tracked edit, record `github_planning_gate = not_required | pending | passed | blocked` and reason. Read-only inspection, requirements, diagnosis, test planning, and modularity analysis may proceed while pending.
 
-Classify work as large when any of these applies: estimated Size `L` or `XL`;
-two or more independently complete implementation slices or parent integration
-criteria; at least three production modules or two responsibility domains;
-modularity or migration coordination; dependency sequencing; multiple owners,
-worktrees, or delivery phases; or a parent integration branch. Companion tests
-and documentation do not count toward the thresholds. Treat uncertainty as
-large unless a maintainer records a smaller classification.
-
-Large work must pass the initial planning gate in
-[GITHUB_WORKFLOW.md](GITHUB_WORKFLOW.md). Do not dispatch a writer until the
-root Issue, all known descendants, native relationships, canonical Project
-items, and required metadata have been created or reused and verified. If a
-missing gate or new scope is discovered after writing starts, stop further
-writes, preserve and report the existing diff, and initialize that scope before
-continuing.
+Work is large if Size `L`/`XL`; it has two independently complete implementation slices or parent criteria; at least three production modules or two responsibility domains; modularity/migration coordination; dependency sequencing; multiple owners/worktrees/phases; or a parent integration branch. Companion tests/docs do not count. Uncertainty is large unless a maintainer records otherwise. Large work must pass [GITHUB_WORKFLOW.md](GITHUB_WORKFLOW.md): create/reuse and verify the root Issue, all known descendants, native relations, canonical Project items, and metadata before dispatching a writer. If missing/new scope appears after writing, stop writes, preserve/report the diff, and initialize it.
 
 ## Subagent Delegation
 
-The agents in `.codex/agents/` develop this repository. They are distinct from
-the four story-runtime agents under `config/agents/` and must not participate
-in novel-writing debates.
+`.codex/agents/` contains the six development roles, distinct from the four `config/agents/` story roles:
 
-Use the project agents when their focused expertise improves the result:
-
-- `requirements_analyst`: inspect the repository, clarify requirements, and
-  define acceptance criteria before substantial or ambiguous work; report
-  whether the modularity gate is required.
-- `regression_diagnostician`: reproduce failures, trace regressions, and report
-  whether the cause crosses a package or module boundary.
-- `modularity_maintainer`: analyze, implement, or review cohesive package and
-  module boundaries under the applicable language policy, and keep the
-  project module indices synchronized with implementation.
-- `runtime_implementer`: implement approved production-code or configuration
-  changes within an accepted boundary design.
-- `test_engineer`: exclusively design, add, update, and run tests for the
-  change, including the final behavioral and coverage review.
-- `documentation_maintainer`: exclusively create or update README files,
-  policies, guides, and examples after behavior and boundaries stabilize.
+- `requirements_analyst`: read-only requirements/acceptance; modularity-gate advice.
+- `regression_diagnostician`: read-only reproduction/cause and boundary impact.
+- `modularity_maintainer`: boundary analysis/implementation/review and exclusive semantic ownership of module indices.
+- `runtime_implementer`: approved production/configuration implementation.
+- `test_engineer`: exclusive test design/edits/execution and behavioral/coverage review.
+- `documentation_maintainer`: exclusive README/policy/guide/example edits after behavior and boundaries stabilize.
 
 ### Delegation-Gain Gate
 
-The main agent remains the critical-path hub and evaluates every candidate
-specialist dispatch before starting it. Record the estimates and calculate:
+For every candidate, the main-agent critical-path hub records:
 
 `predicted_critical_path_savings_seconds = root_sequential_estimate - (parallel_critical_path + spawn_wait_handoff_synthesis_overhead)`
 
-Delegate only when the predicted savings are at least 20 seconds **and** at
-least 20 percent of `root_sequential_estimate`, unless the dispatch records a
-named `material_correctness_risk_reduction` or `mandatory_ownership_rule`.
-Mandatory ownership applies to documentation, tests, triggered modularity
-work, and production work outside the root fast path. An exception authorizes
-the specialist; it does not claim a time saving.
-
-The main agent may directly implement only a clear, localized change limited
-to one or two production-code or configuration files inside an established
-module responsibility and boundary. This root fast path excludes documentation,
-policies, guides, examples, tests, required or uncertain modularity work,
-substantial or unresolved ambiguity, and unknown failures. Companion
-documentation and tests retain their specialist owners even when production
-uses the fast path.
-
-Dispatch `requirements_analyst` only for substantial ambiguity and
-`regression_diagnostician` only for an unknown failure. Dispatch
-`modularity_maintainer` only when the existing Modularity Gate applies. Do not
-create a subagent merely to run a deterministic command. The main agent should
-batch safe, independent static reads through its tools when no specialist
-judgment or mandatory ownership is required.
+Dispatch only for savings >=20 seconds and >=20% of `root_sequential_estimate`, or named `material_correctness_risk_reduction`/`mandatory_ownership_rule`. Mandatory ownership covers docs, tests, triggered modularity, and production outside root fast path; exceptions authorize, not imply savings. Root may implement only a clear localized one/two-file production/config change in an established responsibility/boundary—never docs, tests, required/uncertain modularity, substantial/unresolved ambiguity, or unknown failures. Dispatch requirements only for substantial ambiguity, diagnosis only for unknown failure, modularity only when applicable; never for a deterministic command. Batch safe root reads.
 
 ### Root-Capability Routing
 
-At dispatch, resolve root effective model/effort after aliases/defaults/session
-overrides and runtime child settings/pairs. TOMLs remain unpinned.
-
-`dispatch_context_tokens` counts only `task_packet`, intentional inherited
-turns, attachments/preloads, and irreducible child material. Record
-`observed|estimated|unavailable`, method, and confidence.
+Resolve root effective model/effort after aliases, defaults, session overrides, and child settings/pairs; TOMLs stay unpinned. `dispatch_context_tokens` includes only the `task_packet`, intentional inherited turns, attachments/preloads, and irreducible child material; record `observed|estimated|unavailable`, method, and confidence.
 
 | Context | Tokens |
 | --- | --- |
 | `compact` | <=8,192 |
 | `moderate` | 8,193--32,768 |
 | `large` | 32,769--131,072 |
-| `oversized` | >131,072, or cannot fit verified output/reasoning reserve |
+| `oversized` | >131,072, or no verified output/reasoning fit |
 
-Unknown/unverified fit is `oversized`; narrow/split. Context never relaxes
-root ceilings. Classify complexity/risk separately and target:
+Unknown fit is `oversized`; narrow/split. Context cannot relax ceilings.
 
 | Class | Trigger | Model | Effort |
 | --- | --- | --- | --- |
-| `routine` | literal/mechanical/reversible; no unresolved judgment/material risk | `gpt-5.6-terra` | `medium` |
+| `routine` | mechanical/reversible; no unresolved judgment/material risk | `gpt-5.6-terra` | `medium` |
 | `standard` | bounded semantic work; one established responsibility | `gpt-5.6-sol` | `high` |
-| `complex` | substantial ambiguity/unknown cause; multi-domain synthesis; boundary/public API; compatibility/migration; security/authorization; concurrency/process/PTY; lifecycle/persistence/resource ownership; difficult nonlocal edges | `gpt-5.6-sol` | `xhigh` |
-| `critical` | two interacting complex triggers; explicitly high-consequence security/data-loss/irreversible-migration/breaking-compatibility | `gpt-5.6-sol` | `max` |
+| `complex` | ambiguity/unknown cause; multi-domain/boundary/public API/compatibility/migration/security/authorization/concurrency/process/PTY/lifecycle/persistence/resource ownership/difficult nonlocal edges | `gpt-5.6-sol` | `xhigh` |
+| `critical` | two interacting complex triggers, or explicitly high-consequence security/data-loss/irreversible-migration/breaking-compatibility | `gpt-5.6-sol` | `max` |
 
-Role defaults `routine` and only raises task class:
-
-| Role | `complex` uplift |
-| --- | --- |
-| `requirements_analyst`/`regression_diagnostician` | substantial ambiguity/unknown causal failure |
-| `modularity_maintainer` | boundary work; accepted index-only keeps actual class |
-| `runtime_implementer` | security/concurrency/migration/public API/difficult nonlocal edges |
-| `test_engineer` | security/concurrency/PTY/process/lifecycle/complex-risk coverage |
-| `documentation_maintainer` | normative governance/security/compatibility/migration policy |
-
-Context affects only model: compact/moderate floor Luna; large raises to Sol.
-Complexity/risk controls effort. Derive/clamp independently:
+Roles default `routine`; uplift to `complex`: requirements/diagnosis for substantial ambiguity/unknown cause; modularity for boundary work (index-only keeps actual class); runtime for security/concurrency/migration/public API/difficult edges; tests for security/concurrency/PTY/process/lifecycle/complex coverage; docs for normative governance/security/compatibility/migration. Compact/moderate context floors model at Luna; large raises it to Sol. Risk controls effort. Derive independently:
 
 ```text
 desired_model = max(task_model_target, role_model_target, context_model_target)
@@ -152,472 +62,93 @@ capped_model = min(desired_model, root_effective_model)
 capped_effort = min(desired_effort, root_effective_effort)
 ```
 
-Only `gpt-5.6-luna < gpt-5.6-terra < gpt-5.6-sol` is initially comparable;
-never assume cross-family/alias/future order. Portable effort:
-`none < low < medium < high < xhigh < max`; `ultra` applies only when runtime-
-exposed as comparable/selectable.
-
-Capped is minimum quality; selected child model/effort independently stay
-<=root. Choose exact cap, else nearest stronger compatible pair within root
-(fewest upward steps; tie: smaller model then effort increase). Never auto-select
-below cap for availability/cost; weaker-only returns to root. Set both
-overrides or neither. Unresolved root/order/availability/support means omit both
-for exact inheritance; model-only may default effort.
-
-`ceiling_limited` means either cap is below desired. Non-high-consequence may
-proceed compatibly only with recorded residual risk; high-consequence must
-narrow or require stronger root. Record root/source; context count/
-class/method/confidence; complexity/triggers; role target; desired/capped/
-selected/compatible pairs; limitation; fallback/inheritance reason. Packets
-stay narrow: exclusions, accepted decisions, observable criteria,
-`observed|inferred|proposed|unknown` evidence, uncertainty stops.
-
-Sources: [subagents](https://learn.chatgpt.com/docs/agent-configuration/subagents),
-[model guidance](https://developers.openai.com/api/docs/guides/latest-model).
+Only `gpt-5.6-luna < gpt-5.6-terra < gpt-5.6-sol` is initially comparable; never assume other ordering. Effort is `none < low < medium < high < xhigh < max`; `ultra` only when runtime-exposed as comparable/selectable. The cap is minimum quality; each selected axis must also be <=root. Choose exact cap, else nearest stronger compatible pair within root (fewest upward steps; tie: smaller model, then effort increase). Never auto-select below cap; weaker-only returns to root. Set both overrides or neither. Unresolved root/order/availability/support requires exact inheritance; model-only may default effort. `ceiling_limited` means either cap is below desired: high-consequence work must narrow/require stronger root; otherwise proceed compatibly only with residual risk. Record root/source; context count/class/method/confidence; complexity/triggers; role target; desired/capped/selected/compatible pairs; limitation; fallback/inheritance reason. Keep packets narrow, with exclusions, decisions, observable criteria, evidence level `observed|inferred|proposed|unknown`, and uncertainty stops. Sources: [subagents](https://learn.chatgpt.com/docs/agent-configuration/subagents), [models](https://developers.openai.com/api/docs/guides/latest-model).
 
 ### Role, Mode, and Control Gate
 
-Before task work, validate the selected project role, requested mode, and
-runtime-observed effective capability against this matrix:
+Validate role, mode, and observed effective capability:
 
 | Role | Supported mode | Required observed effective capability |
 | --- | --- | --- |
-| `requirements_analyst` | `analysis` | repository/worktree reads; effective filesystem is read-only and no approval path can enable writes |
-| `regression_diagnostician` | `analysis` | repository/worktree reads; effective filesystem is read-only and no approval path can enable writes |
-| `modularity_maintainer` | `analysis`, `review` | repository/worktree reads; effective filesystem is read-only and no approval path can enable writes |
-| `modularity_maintainer` | `implementation` | assigned-worktree writes are available |
-| `runtime_implementer` | `implementation` | assigned-worktree writes are available |
-| `test_engineer` | `analysis` | repository/worktree reads; effective filesystem is read-only and no approval path can enable writes |
-| `test_engineer` | `implementation` | assigned-worktree writes are available |
-| `documentation_maintainer` | `analysis` | repository/worktree reads; effective filesystem is read-only and no approval path can enable writes |
-| `documentation_maintainer` | `implementation` | assigned-worktree writes are available |
+| `requirements_analyst` | `analysis` | repository/worktree reads; effectively read-only filesystem; no approval-enabled writes |
+| `regression_diagnostician` | `analysis` | same read-only capability |
+| `modularity_maintainer` | `analysis`, `review` | same read-only capability |
+| `modularity_maintainer` | `implementation` | assigned-worktree writes |
+| `runtime_implementer` | `implementation` | assigned-worktree writes |
+| `test_engineer` | `analysis` | same read-only capability |
+| `test_engineer` | `implementation` | assigned-worktree writes |
+| `documentation_maintainer` | `analysis` | same read-only capability |
+| `documentation_maintainer` | `implementation` | assigned-worktree writes |
 
-The child first performs only the minimum capability and identity preflight and
-reports its observed filesystem/sandbox, write availability, and approval path.
-The root and child reject an unsupported mode, unavailable capability evidence,
-or mismatch before any other task read or write. This is observed fail-closed
-routing, not hard sandbox enforcement: prompts, TOMLs, and static tests express
-and check policy but cannot prove or enforce runtime isolation.
+Child first performs only minimum identity/capability preflight and reports filesystem/sandbox, writes, and approval path. Reject unsupported mode, unavailable evidence, or mismatch before other reads/writes. This is observed fail-closed routing, not isolation enforcement by prompts/TOMLs/tests.
 
-Before its first tracked write, every writer reports and matches the handoff's
-physical `pwd -P`, Git top-level, expected branch, exact HEAD, approved-base SHA
-and ancestry, exclusive targets, and deterministic dirty state. Dirty-state
-evidence comprises the exact bytes from
-`git status --porcelain=v1 -z --untracked-files=all`, their SHA-256 fingerprint,
-and decoded paths. A handoff may accept upstream dirty state only by pinning
-all three; otherwise any repository, worktree, branch, HEAD, base, status, or
-ownership mismatch stops before mutation. Never reset, checkout, clean, or
-revert user changes to make preflight pass.
+Before first tracked write, match physical `pwd -P`, Git root, branch, exact HEAD, approved-base SHA/ancestry, exclusive targets, and exact bytes, SHA-256, and decoded paths from `git status --porcelain=v1 -z --untracked-files=all`. Accept dirty state only if all three were pinned. Any mismatch stops without reset/checkout/clean/revert. After upstream change, interruption, or invalidated identity, root sends updated identity/fingerprint and the same writer repeats full preflight.
 
-After an upstream change, interruption, or invalidated identity, the root sends
-an updated identity and dirty-state fingerprint. The same writer repeats the
-complete preflight before resuming.
-
-Use bounded, self-contained context by default. Full-history inheritance is
-exceptional and requires a named reason, bounded relevant scope, assessed
-stale-context risk, explicit root approval, and all four facts in task evidence.
-
-Before dispatch, the root records every requested child result identifier and
-its expected role/mode. A join barrier validates each returned packet against
-the exact `result_packet` schema below. The root must not synthesize while any
-requested result is running, missing, or invalid.
-
-Retry exactly once only for a transient control-plane spawn, delivery, or join
-failure when evidence establishes that no task write occurred. Record the
-failure fingerprint and retry. A writer timeout or interruption after a
-possible write requires process/worktree/task-state inspection, diff
-preservation, and same-thread resume from the known state—never blind retry or
-duplicate dispatch. Policy, capability, scope, and result-schema failures are
-non-transient and are not retried.
-
-Resolve conflicting child findings by evidence level
-(`observed > inferred > proposed > unknown`) within the applicable role's
-ownership, never by vote. Route unresolved material conflicts to the owning
-specialist, then to the root for cross-role synthesis or risk acceptance, and
-to the user for required scope, breaking-policy, or external decisions. After
-a failed control retry, the root may perform only its already-authorized static
-reads or fast-path work; otherwise it narrows, defers, or returns the blocker.
-Root fallback never absorbs mandatory documentation, test, or modularity
-ownership and never creates a reviewer role.
+Use bounded self-contained context. Full history requires named reason, bounded relevant scope, stale-context risk, explicit root approval, and all four in task evidence. Root records every result ID and role/mode; join only when none is running/missing and every exact `result_packet` validates. Retry a transient spawn/delivery/join failure exactly once only after proving no write and recording its fingerprint. Possible writer mutation requires state inspection, diff preservation, and same-thread resume—never blind retry. Policy/capability/scope/schema failures are non-transient. Resolve conflicts by `observed > inferred > proposed > unknown` within role ownership, never vote; escalate to owner, root, then user for required scope/breaking/external decisions. After failed retry root may only do authorized static reads/fast-path work; it never absorbs mandatory ownership or creates a reviewer role.
 
 ### Worktree Disposition
 
-At task initialization, nest exactly one `worktree_disposition` under the
-existing task `identity` field:
-
-- `remove_after_integration` only when cleanup authorization is already granted;
-- `retain_with_reason`, including its reason and next owner; or
-- `authorization_required` when removal authority is absent or unresolved.
-
-Change the disposition only after recording the authority or lifecycle-state
-change. Completion evidence inventories the exact worktree path, branch, HEAD,
-porcelain bytes/fingerprint/paths, Issue/PR state, and commit/PR recoverability;
-whether cleanup authorization was requested and granted, denied, or
-not-required; and the actual `removed` or `retained` outcome, reason, and next
-owner.
-
-Removal requires granted authorization, clean porcelain status, completed
-integration verification, and recoverability. Use only non-forced removal and
-then verify the exact worktree is absent from both the worktree registry and
-filesystem. Branch deletion is separately authorized. Retain the parent worktree
-until the parent branch is integrated into `main`.
-
-Keep the `task_packet` and `result_packet` top-level schemas unchanged. Nest
-preflight and disposition under `identity`, cleanup/recoverability observations
-under `evidence`, and outcome, reason, risk, and next owner under the existing
-`findings`, `risks`, and `next_action` fields as applicable.
+Nest exactly one under task `identity`: `remove_after_integration` only with cleanup authorization; `retain_with_reason` plus reason/next owner; or `authorization_required`. Change only after recorded authority/lifecycle change. Completion evidence inventories exact path, branch, HEAD, porcelain bytes/hash/paths, Issue/PR state, commit/PR recoverability, cleanup authorization state, and actual removal/retention. Removal requires authorization, clean status, completed integration verification, recoverability, non-forced removal, and verified absence from registry/filesystem. Branch deletion is separate. Retain parent until integrated into `main`. Keep packet schemas unchanged: preflight/disposition under `identity`; cleanup/recoverability under `evidence`; outcome, reason, risk, next owner under `findings`, `risks`, `next_action`.
 
 ### Modularity Gate
 
-Call `modularity_maintainer` when a change does any of the following:
+Use `modularity_maintainer` when adding/removing/renaming/moving/splitting/merging an importable package/module; redistributing feature/state/resource/lifecycle ownership; changing dependency direction/cycles/private boundary access; materially changing shared abstraction/adapter/facade/protocol/export/public import; extracting for multiple consumers; requiring structural compatibility/migration; or fixing architectural coupling/boundary violations. Exclude localized established-responsibility/internal refactors with unchanged imports/exports/ownership/contracts; tests/docs; formatting/comments/typing; ordinary config/data; dependency metadata alone; story execution.
 
-- adds, removes, renames, moves, splits, or merges an importable package or
-  module;
-- redistributes feature responsibility, state, resource, or lifecycle
-  ownership;
-- changes dependency direction, introduces or resolves a cycle, or replaces
-  private cross-boundary access;
-- adds or materially changes a shared abstraction, adapter, facade, protocol,
-  package export, or public import path;
-- extracts code for multiple consumers or requires a structural compatibility
-  or migration decision; or
-- fixes a regression whose diagnosed cause is architectural coupling or a
-  boundary-policy violation.
-
-Do not call it for a localized change inside an established module
-responsibility; an internal function refactor with unchanged imports, exports,
-ownership, and contracts; tests-only or docs-only work; formatting, comments,
-or typing cleanup; ordinary configuration or data edits; dependency metadata
-alone; or story-runtime execution.
-
-When the gate applies, call the custom agent by the name
-`modularity_maintainer` and set `mode` in the handoff:
-
-- `analysis`: read-only boundary design before any writer starts;
-- `implementation`: exclusive ownership of an approved architecture-dominant
-  structural change; or
-- `review`: read-only compliance review after another agent implements a
-  boundary-affecting change.
-
-If a writer discovers an unapproved gate trigger, stop that writer and run
-modularity analysis before continuing. Do not allow an implementation agent to
-make an incidental architecture decision silently.
+Modes: `analysis` for read-only design before writers; `implementation` for exclusive approved architecture-dominant change; `review` after another agent's boundary change. An unapproved trigger stops its writer for analysis; no incidental architecture decisions.
 
 ### Orchestration Sequence
 
-1. The main agent classifies the request and records preliminary GitHub-planning
-   and modularity-gate decisions, the affected inventory, and candidate
-   delegation estimates. It batches safe static reads and decides whether each
-   candidate passes the Delegation-Gain Gate or names an allowed exception.
-2. For substantial ambiguity, `requirements_analyst` runs read-only. For an
-   unknown failure, `regression_diagnostician` runs read-only. Independently
-   justified investigations may run in parallel. The main agent must resolve
-   `modularity_gate = uncertain` to `required` or `not_required` before any
-   writer starts.
-3. When the gate applies, `modularity_maintainer` runs in `analysis` mode after
-   it receives relevant requirements and diagnosis results. It selects and
-   verifies the relevant root-level `<LANGUAGE>_MODULE_INDEX.md` files.
-   The main agent resolves user decisions and accepts the resulting boundary
-   brief, including its index delta, before writing begins.
-4. After requirements and any boundary brief are accepted, the main agent
-   passes the GitHub planning gate or records `not_required`. No writer starts
-   while the gate is `pending` or `blocked`. For tracked implementation, create
-   and verify the Issue's native Development-linked task branch before handing
-   its worktree to a writer.
-5. The main agent selects either the root fast path or one production specialist
-   under the Delegation-Gain Gate. Exactly one owner writes production at a
-   time. Use `modularity_maintainer` for architecture-dominant splits, moves,
-   merges, and extractions. Use `runtime_implementer` for behavior-dominant work
-   outside the fast path or constrained by an accepted boundary brief.
-6. If both production specialists are necessary, assign explicit, nonoverlapping
-   files or symbols and run them sequentially. Prefer one owner when separate
-   passes would create an invalid intermediate state.
-7. `modularity_maintainer` owns the semantic accuracy of module indices. When
-   it owns the structural implementation, it updates affected indices after the
-   code is stable. When `runtime_implementer` owns production code, run a
-   sequential `modularity_maintainer` implementation pass that owns only the
-   affected indices and reconciles them to the completed production diff.
-8. When `runtime_implementer` implements a boundary brief,
-   `modularity_maintainer` then reviews the completed production diff and
-   reconciled indices in `review` mode before test or documentation edits.
-   Return production deviations to the assigned production owner and index
-   drift to `modularity_maintainer`, then repeat the affected implementation,
-   index-reconciliation, and review passes until material violations are
-   resolved or an exception is explicitly accepted. A separate self-review is
-   not required when `modularity_maintainer` performed the implementation; its
-   implementation report and the main agent's review provide the gate.
-9. After production stabilizes, `test_engineer` exclusively owns test work. When
-   safe, fuse test planning, test edits, exact execution, and final behavioral
-   and coverage review into one `implementation` turn. If a production or
-   documentation dependency requires a pause, reuse the same specialist thread
-   after that dependency stabilizes. `documentation_maintainer` exclusively
-   owns all documentation, policy, guide, and example writes.
-10. If test or documentation work changes an indexed verification or
-   documentation reference, or reveals any other drift, run a final sequential
-   `modularity_maintainer` index-only implementation pass followed by read-only
-   review.
-11. The main agent integrates all results, verifies module-index consistency,
-   reviews the complete diff, runs final checks, and owns the user-facing
-   summary.
+1. Root classifies request, gates, inventory, delegation estimates; resolves modularity `uncertain` before writers.
+2. Run requirements for ambiguity and diagnosis for unknown failure; justified independent investigations may parallelize.
+3. If modularity applies, analysis selects/verifies root `<LANGUAGE>_MODULE_INDEX.md`; root resolves decisions and accepts boundary brief/index delta.
+4. Accept requirements/brief; pass planning gate or record `not_required`; verify native Development-linked branch. Never write while pending/blocked.
+5. Choose root fast path or one production specialist; one production writer at a time. Modularity owns architecture-dominant structure; runtime owns behavior.
+6. If both are needed, assign nonoverlapping files/symbols sequentially; prefer one owner when separation creates invalid intermediate state.
+7. After stable code, modularity owner updates indices; after runtime work, sequential index-only modularity reconciles them.
+8. After runtime implements a brief, modularity reviews code/indices before tests/docs. Return code deviations to production owner and index drift to modularity; repeat until resolved/accepted. Modularity implementer needs no self-review; its report plus root review suffice.
+9. After production stability, test owner exclusively plans/edits/runs/reviews, preferably one turn; pause/resume same thread for dependencies. Docs remain documentation owner's exclusive work.
+10. If tests/docs change indexed references or expose drift, run sequential index-only modularity implementation then read-only review.
+11. Root integrates results, checks index consistency/diff/final checks, and owns user summary.
 
-Reuse the same specialist thread for follow-up phases unless its context is
-stale or reuse creates an isolation risk; record either exception. The main
-agent remains the hub: it passes compact upstream decisions to the next agent,
-and specialists do not delegate to or coordinate directly with peers.
+Reuse specialist threads unless stale/isolation risk, recording exceptions. Root passes compact decisions; specialists neither delegate nor coordinate.
 
 ### Adaptive Verification
 
-The main agent owns verification selection, authorization, budgeting, evidence
-reuse, escalation, and the final sufficiency decision. Specialists may propose
-narrower or additional evidence, but they must not independently broaden an
-authorized evidence level, selection, concurrency, or budget. Unknown-cost or
-over-budget work returns to the main agent for `split`, `narrow`, `defer`,
-`stop`, or an explicit maintainer-approved budget increase.
+Root exclusively selects, authorizes, budgets, deduplicates, reuses, escalates, and accepts sufficiency. Specialists may propose but never broaden level, selection, concurrency, or budget. Unknown/over-budget cost returns `split|narrow|defer|stop` or requires explicit maintainer budget approval.
 
-Verification is a partial order of selectable evidence, not a mandatory
-ladder. Select the smallest complete set justified by the accepted criteria and
-risks:
-
-1. `static_inventory`: map changed inputs, directly associated tests,
-   transitive production consumers, shared helpers and fixtures, invariants,
-   risks, and exclusions. Require it for every nontrivial tracked change.
-2. `exact`: check new or changed acceptance behavior and every known failing
-   test ID.
-3. `semantic_cluster`: check tests that share the changed invariant,
-   collaborator contract, fixture, or failure family.
-4. `affected_suite`: check a bounded subsystem or accepted blast radius only
-   when narrower evidence cannot cover it.
-5. `full_suite`: collect exceptional repository-wide evidence only when an
-   objective trigger below applies.
-
-`complete` is a terminal state, not a sixth required evidence step. It may
-follow any selected level when every item of mandatory evidence is current and
-green or an accepted skip, failures are resolved, the inventory is sufficient,
-and the main agent explicitly accepts the recorded residual risk. Passing one
-level neither requires nor authorizes the next. Mark an acceptance checklist
-item complete only after its exact mandatory evidence is recorded and current.
-
-Classify each task before executing verification and apply these default
-cumulative command budgets and maximum shard sizes:
+Selectable partial order: `static_inventory` (mandatory for every nontrivial tracked change: inputs, direct tests, transitive consumers, helpers/fixtures, invariants, risks, exclusions); `exact` (changed acceptance and known failures); `semantic_cluster` (shared invariant/contract/fixture/family); `affected_suite` (bounded subsystem only when narrower is insufficient); `full_suite` (only an objective trigger below). `complete` is terminal, not level six: all mandatory evidence current green/accepted-skip, failures resolved, inventory sufficient, and root accepts residual risk. A pass never authorizes the next level; complete checklist items only with current exact mandatory evidence.
 
 | `verification_class` | `total_stage_budget_seconds` | `max_shard_seconds` | Normal evidence floor |
 | --- | ---: | ---: | --- |
-| `local` | 300 | 180 | inventory plus exact or static evidence |
-| `bounded` | 900 | 300 | inventory, exact, and required semantic evidence |
-| `cross_cutting` | 1800 | 600 | inventory plus selected cluster or affected evidence |
-| `release` | Issue-defined | Issue-defined | named integration or release gates |
+| `local` | 300 | 180 | inventory + exact/static |
+| `bounded` | 900 | 300 | inventory + exact + required semantic |
+| `cross_cutting` | 1800 | 600 | inventory + selected cluster/affected |
+| `release` | Issue-defined | Issue-defined | named integration/release gates |
 
-An accepted task criterion may override a default. These values authorize
-launch and continuation; they are not correctness waivers or unsafe process
-kill deadlines. Do not start the next shard when its estimate exceeds the
-remaining budget. If an already-running command exceeds its estimate, allow a
-safe completion or use a runner-supported interrupt that preserves completed
-evidence. Budget exhaustion never makes incomplete mandatory evidence
-optional.
+Accepted criteria may override. Budgets authorize work, never waive correctness or impose unsafe kills. Do not start a shard estimated above remaining budget; allow safe completion/runner-supported preserving interrupt if over estimate. Budget exhaustion never excuses mandatory evidence.
 
-Before authorizing a verification command, record a plan containing:
+Before commands, root records class/rationale; criteria-to-`mandatory_evidence`; all changed inputs and affected inventory/exclusions; flags for API, packaging, persistence/migration, auth/security, concurrency, process/PTY, shared config, dynamic coupling; exact `authorized_selection`/rationale; estimates/source/confidence; total/max/spent/remaining; escalation/full-suite triggers; stops; reuse/invalidation; residual risk. Unknown dependencies require broader inventory or diagnosis, not an assumption of no impact.
 
-- `verification_class` and its risk rationale;
-- each acceptance criterion mapped to `mandatory_evidence`;
-- `changed_inputs` covering source, tests, fixtures, configuration, policy,
-  documentation, and environment inputs;
-- directly associated tests, transitive production consumers, shared helpers,
-  fixtures, invariants, cross-boundary consumers, and justified exclusions;
-- risk flags for public APIs, packaging, persistence or migration,
-  authorization or security, concurrency, process or PTY behavior, shared
-  configuration, and uncertain dynamic coupling;
-- `authorized_selection` containing the exact test IDs or static checks and
-  their selection rationale;
-- `estimated_seconds`, `estimate_source`, and `estimate_confidence`;
-- `total_stage_budget_seconds`, `max_shard_seconds`, `spent_seconds`, and
-  `remaining_seconds`;
-- escalation and full-suite triggers, stop conditions, reusable evidence and
-  its invalidation analysis, and residual risk.
+Every result records repository, absolute worktree, baseline/HEAD, dirty hash, environment capability, purpose, level, selection/command, outcome/duration, fingerprint, and conservative `relevant_input_digest` over tests, helpers/fixtures, runner config, transitive production closure, and environment. Reuse after HEAD change only when root proves disjointness and digest/purpose remain; relevant/uncertain changes invalidate it. Assign one `evidence_execution_owner` per item. Deduplicate exactly on `normalized_command`, `exact_ids`, `relevant_input_digest`, `environment_class`; owner/label/purpose/venue/wrapper cannot justify rerun. Normally exact/cluster run locally, affected/full in CI; duplicate broad local+CI only for a local-environment criterion, recording both.
 
-Incomplete dependency knowledge is uncertainty, not evidence that no test is
-affected. Broaden the inventory or stop for diagnosis before authorizing work
-whose affected set or cost cannot be bounded.
+Selections above max shard become deterministic disjoint portable exact-ID shards (unittest module/class/method), union exactly selection, each ID once; risk-bearing/fast feedback first. Sequential is default; parallel needs root authorization, isolation, nonoverlap, runner support, and at most two fast-fail shards. Record manifest digest, ordinal, IDs, input digest, result, duration, `completed_ids`, `failed_ids`, `accepted_skips`, `unexecuted_ids`; aggregate success covers every ID. After repair rerun exact failures and invalidated shards. Timeout/replacement/interruption is neither pass nor assertion failure: stop only owned process, classify/preserve IDs, resume only valid unexecuted/invalidated IDs. Partial evidence is never complete. A bounded recorded repeat may diagnose flakiness; relabeling cannot evade deduplication.
 
-For provenance, every result records repository, absolute worktree, baseline
-and HEAD SHAs, dirty-state fingerprint, relevant environment capabilities,
-purpose, evidence level, exact selection and command, outcome, actual duration,
-and any stable failure fingerprint. Whole-repository identity does not by
-itself decide reuse. Each selection also has a conservative
-`relevant_input_digest` covering its selected tests, shared fixtures and
-helpers, runner configuration, transitive production dependency closure, and
-relevant environment capabilities. Reuse evidence after a HEAD change only
-when the main agent proves the later change is disjoint and the digest and
-purpose remain unchanged. Any relevant or uncertain input or dependency change
-invalidates it; renaming the purpose does not create distinct evidence.
+`full_suite` requires: explicit Issue/parent/release criterion; unbounded static inventory; changed package-wide/public/cross-domain invariant; global discovery/bootstrap/packaging/harness making narrow checks unreliable; unknown out-of-cluster failure; or uncovered concrete residual risk. Implementation/review/suite availability is insufficient. If required broad work exceeds budget, return the decision, never omit/claim completion. Docs/prompt/TOML/policy-only work may use static parsing, exact policy tests, link/format, and diff checks.
 
-Assign exactly one `evidence_execution_owner` to every evidence item before
-launch. Deduplicate evidence on exactly these key fields: `normalized_command`,
-`exact_ids`, `relevant_input_digest`, and `environment_class`. A different
-owner, label, purpose, venue, or wrapper does not justify an equivalent rerun.
-Normally run `exact` and `semantic_cluster` evidence locally and reserve
-`affected_suite` and `full_suite` for CI. Do not run equivalent broad evidence
-both locally and in CI unless the local environment is itself an acceptance
-criterion; record the distinct environment identities and required evidence in
-that case.
-
-When a selection is estimated above `max_shard_seconds`, partition it into
-deterministic, disjoint shards of exact portable test IDs. For Python
-`unittest`, use module, class, or method IDs. The shard union must equal the
-authorized selection and each ID must occur exactly once. Run risk-bearing and
-short-feedback shards first. Sequential execution is the portable default;
-parallel execution requires separate main-agent authorization, isolated
-resources, nonoverlapping IDs, and runner support. At most two fast-fail shards
-may run concurrently; all other shard execution remains sequential.
-
-Record for every shard its manifest digest, ordinal, exact IDs,
-`relevant_input_digest`, result, duration, `completed_ids`, `failed_ids`,
-`accepted_skips`, and `unexecuted_ids`. Aggregate success requires valid green
-or accepted-skip evidence for every authorized ID. After a repair, rerun exact
-failures and only invalidated shards. A timeout, user replacement, or
-interruption is neither a pass nor an assertion failure: stop only the owned
-process, classify the termination, preserve `completed_ids`, `failed_ids`,
-`accepted_skips`, and `unexecuted_ids`, and resume only unexecuted or invalidated
-IDs whose inputs remain valid. Partial evidence never establishes `complete`.
-A bounded, recorded repeat may diagnose a suspected flaky failure; changing a
-label or purpose cannot bypass reuse and deduplication rules.
-
-Authorize `full_suite` only when at least one objective trigger is recorded:
-
-- an Issue, parent integration criterion, or release gate explicitly requires
-  it;
-- static inventory cannot conservatively bound the affected set;
-- a package-wide, public, or cross-domain invariant changed;
-- global discovery, bootstrap, packaging, or test-harness behavior makes
-  narrower evidence unreliable;
-- narrower verification reveals an unknown out-of-cluster failure family; or
-- a concrete residual risk cannot be covered by affected selections.
-
-Tracked implementation, final review, or the existence of `full_suite` is not
-a trigger. If required broad evidence exceeds the accepted budget, return the
-decision to the main agent; do not silently omit it or claim completion.
-Prompt, TOML, policy, or documentation-only work may complete with static
-parsing, exact policy tests, link or formatting checks, and diff inspection
-when no runtime-relevant change or full-suite trigger exists.
-
-Handle failures without restarting broad verification:
-
-- For a known failure family, repair it and rerun the exact invalidated
-  evidence.
-- When the same stable fingerprint appears in two or more distinct
-  responsibility holders, stop broad reruns and perform one repository-wide
-  occurrence inventory with explicit roots, exclusions, patterns,
-  classifications, and limitations.
-- For a cross-boundary ownership or capability defect, apply the existing
-  modularity gate once across all holders and consumers.
-- For an unknown failure, run `regression_diagnostician` instead of launching
-  broad validation.
-- When cost is unknown or budget is exhausted, return completed and mandatory
-  remaining evidence, revised estimates, residual risk, and root decision
-  alternatives.
-
-The six existing project roles remain sufficient. Verification evidence and
-behavioral coverage review belong to `test_engineer`; failure diagnosis belongs
-to `regression_diagnostician`; boundary review belongs to
-`modularity_maintainer`; the main agent retains final risk acceptance. Do not
-create another reviewer role.
+For known failure repair then rerun invalid evidence. If one fingerprint occurs in >=2 responsibility holders, stop broad reruns and inventory repository-wide occurrences with roots/exclusions/patterns/classifications/limits. Cross-boundary capability/ownership defects apply one modularity gate. Unknown failures go to diagnosis. Unknown cost/exhaustion returns completed/remaining evidence, estimates, risk, and root choices. Existing six roles suffice: tests own evidence/coverage, diagnosis owns causes, modularity owns boundary review, root owns risk.
 
 ### Handoff and Result Contracts
 
-Every handoff sends a compact `task_packet` with exactly these top-level fields:
+Every compact `task_packet` has exactly: `mode` (`analysis|implementation|review`); `objective` (outcome/evidence); `scope` (in/out targets); `acceptance` (criteria/compatibility); `ownership` (read-only/exclusive targets); `gates` (planning/modularity rationale, evidence, brief/index delta); `identity` (repository, Issue/Project/Iteration, Development branch/PR, worktree, base/head); `verification` (authorized plan/ledger/checks/budget/output); `upstream_decisions`; `stop_conditions` (policy/breaking/scope/structural stops).
 
-- `mode`: `analysis`, `implementation`, or `review`;
-- `objective`: the concrete outcome and relevant evidence;
-- `scope`: approved in-scope and out-of-scope targets;
-- `acceptance`: criteria and compatibility constraints;
-- `ownership`: read-only targets or exclusively owned files and symbols;
-- `gates`: GitHub-planning and modularity decisions, rationale, verified
-  evidence, accepted boundary brief, and module-index status and delta;
-- `identity`: repository, Issue, Project, Iteration, Development-linked branch
-  or PR, absolute worktree, and base and head identities as applicable;
-- `verification`: the authorized adaptive plan, compact evidence ledger,
-  required checks, budget, and expected output;
-- `upstream_decisions`: distilled findings and accepted decisions; and
-- `stop_conditions`: policy conflicts, breaking decisions, scope deviation,
-  unexpected structural work, and other explicit return conditions.
+Every compact `result_packet` has exactly: `outcome`, `findings`, `changed_inputs`, `evidence`, `risks`, `next_action`. Findings include files and index consistency. Evidence includes mandatory evidence, authorized selection, commands, completed/failed/skipped/invalidated/unexecuted IDs, duration/budget, identities/digests/fingerprints/checks/next evidence. Risks include blockers, ambiguity, residual risk, and proposed expansion requiring root authorization. Do not copy raw logs/full Issues/plans. Thread reuse does not authorize history.
 
-Every specialist returns a compact `result_packet` with exactly these
-top-level fields:
-
-- `outcome`: completed work or the precise blocked/stopped state;
-- `findings`: distilled findings, files inspected or changed, module indices
-  consulted or updated, and implementation/index consistency;
-- `changed_inputs`: relevant source, test, fixture, configuration, policy,
-  documentation, and environment changes;
-- `evidence`: `mandatory_evidence`, `authorized_selection`, exact commands,
-  `completed_ids`, `failed_ids`, `accepted_skips`, invalidated evidence,
-  `unexecuted_ids`, actual duration, spent and remaining budget, identities,
-  digests, failure fingerprints, checks, and recommended next evidence;
-- `risks`: blockers, ambiguity, residual risk, and any proposed selection,
-  concurrency, evidence-level, or budget expansion requiring main-agent
-  authorization; and
-- `next_action`: the recommended next owner and action.
-
-Keep each packet limited to context necessary for the assigned phase. Do not
-include raw logs, repeat the full Issue body, or restate the complete plan.
-Prefer specialist-thread reuse; reuse does not authorize full-history
-inheritance.
-
-If a required language policy is missing, the modularity agent returns the
-exact language and expected path. The main agent asks the user whether to
-create the packaged policy, then resumes the same agent thread. If creation is
-declined, proceeding under general engineering judgment requires that user
-decision and the lack of a governing policy to be recorded in the result.
-
-A missing module index does not block read-only analysis or require separate
-user permission. The modularity agent derives the complete current inventory,
-records the root index path and contents in the brief, and the main agent then
-runs the same specialist in an index-only `implementation` pass to create it.
-Structural work is not complete while an affected module index is missing or
-stale.
+Missing language policy: modularity reports language/path; root asks whether to create packaged policy and resumes same thread. If declined, general judgment requires recording user decision and missing policy. Missing index does not block analysis/need separate permission: derive full inventory/path/content, then same specialist creates it index-only. Structural work cannot complete with stale/missing index.
 
 ### Prospective Orchestration Telemetry
 
-For comparable tracked tasks, capture `root_phase_wall_time_seconds`,
-`subagent_startup_seconds`, `subagent_wait_seconds`, `turn_count`,
-`tool_call_count`, `duplicate_read_count`, `verification_time_seconds`,
-`input_tokens`, and `output_tokens` when the execution environment exposes
-them. Every value records `measurement_kind` as `observed`, `estimated`, or
-`unavailable`; an unavailable value requires a reason, and an estimate must
-never be presented as an observation.
-
-Evaluate the policy prospectively against comparable baseline tasks. Targets
-are at least 25 percent lower median wall time, at least 15 percent lower P95
-wall time, at least 30 percent fewer root/subagent turns, at least 50 percent
-fewer duplicate broad-suite executions, and 25--35 percent fewer combined
-`task_packet` and `result_packet` tokens, with no regression in correctness,
-safety, ownership, verification sufficiency, the GitHub planning gate, or the
-modularity gate. Static policy tests establish contract shape, not runtime
-performance.
+For comparable tracked tasks capture `root_phase_wall_time_seconds`, `subagent_startup_seconds`, `subagent_wait_seconds`, `turn_count`, `tool_call_count`, `duplicate_read_count`, `verification_time_seconds`, `input_tokens`, `output_tokens`, each as `observed|estimated|unavailable`; unavailable needs reason and estimates are never observations. Prospectively target >=25% lower median wall time, >=15% lower P95, >=30% fewer turns, >=50% fewer duplicate broad-suite executions, and 25--35% fewer combined packet tokens, without correctness, safety, ownership, verification, GitHub, or modularity regression. Static policy tests prove shape, not performance.
 
 ## Quality and Commits
 
-Add or update tests when behavior changes. Update documentation when public
-behavior, setup, or workflow changes. Before finishing, check the diff for
-unintended changes and report what was verified.
-
-For work tracked on GitHub, read and follow
-[GITHUB_WORKFLOW.md](GITHUB_WORKFLOW.md). It defines Issue readiness, Project
-status, milestones, iterations, labels, branch and pull-request traceability,
-and completion rules. Execute tracked tasks with
-[AGENT_TASK_RUNBOOK.md](AGENT_TASK_RUNBOOK.md), including its parent/child
-branch, squash-merge, and worktree procedure.
-
-The commit policy is a repository workflow document at
-[COMMIT_POLICY.md](COMMIT_POLICY.md). A commit is a unit of a complete function
-or logic; keep commits focused, complete, and reviewable.
-
-Before adding, moving, splitting, merging, or materially changing an internal
-package or module, use `modularity_maintainer` and follow the language-policy
-selection process in
-[its agent definition](.codex/agents/modularity_maintainer.toml). Packaged
-language defaults live under `.codex/agents/modularity_maintainer/`.
-
-Before adding, updating, or removing a third-party Python dependency, or
-changing project packaging metadata, read and follow
-[DEPENDENCY_POLICY.md](DEPENDENCY_POLICY.md). Dependency and packaging changes
-must comply with that policy and include the required verification.
+Update tests for behavior and docs for public/setup/workflow changes; inspect/report diff and verification. Tracked work follows [GITHUB_WORKFLOW.md](GITHUB_WORKFLOW.md) and [AGENT_TASK_RUNBOOK.md](AGENT_TASK_RUNBOOK.md). [COMMIT_POLICY.md](COMMIT_POLICY.md) requires focused/complete/reviewable commits. Before structural module/package change use `modularity_maintainer` and its [language-policy selection](.codex/agents/modularity_maintainer.toml); defaults live under `.codex/agents/modularity_maintainer/`. Third-party Python dependency/packaging changes follow [DEPENDENCY_POLICY.md](DEPENDENCY_POLICY.md), including verification.
