@@ -96,6 +96,12 @@ from .consensus.execution import (
     ConsensusPhaseOutputKind,
     ConsensusProviderResult,
 )
+from .consensus.event_store import (
+    ConsensusEvent,
+    ConsensusEventStore,
+    ConsensusStoredWorkflow,
+    ConsensusWorkflowSubmission,
+)
 from .conversation_rag_runtime import ConversationRagRuntimeService
 from .conversation_storage.composition import compose_filesystem_conversation_storage
 from .conversation_storage.contracts import ConversationStorageServices
@@ -739,6 +745,7 @@ class StoryRuntime:
             tuple[str, str, str], StoryCommitService
         ] = {}
         self._live_execution_markers: set[tuple[str, str, str, str]] = set()
+        self._consensus_event_store = ConsensusEventStore(self.workspace)
 
     def _trace_debug(
         self,
@@ -917,6 +924,50 @@ class StoryRuntime:
             ConsensusPhaseOutputKind.FINALIZATION,
             digest,
             candidate,
+        )
+
+    def create_workflow(
+        self,
+        submission: ConsensusWorkflowSubmission,
+        request_event: ConsensusEvent,
+        /,
+    ) -> None:
+        """Create one durable consensus workflow through the runtime owner."""
+
+        self._consensus_event_store.create_workflow(submission, request_event)
+
+    def load_workflow(
+        self,
+        session_id: str,
+        conversation_id: str,
+        workflow_id: str,
+        /,
+    ) -> ConsensusStoredWorkflow | None:
+        """Load one exact runtime-owned consensus workflow."""
+
+        return self._consensus_event_store.load_workflow(
+            session_id,
+            conversation_id,
+            workflow_id,
+        )
+
+    def append_event(
+        self,
+        session_id: str,
+        conversation_id: str,
+        workflow_id: str,
+        expected_tail_sequence: int,
+        event: ConsensusEvent,
+        /,
+    ) -> None:
+        """Compare and append one consensus event through the runtime owner."""
+
+        self._consensus_event_store.append_event(
+            session_id,
+            conversation_id,
+            workflow_id,
+            expected_tail_sequence,
+            event,
         )
 
     def consensus_artifact_review_handoff(

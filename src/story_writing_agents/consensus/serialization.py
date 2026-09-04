@@ -3,6 +3,9 @@
 from __future__ import annotations
 
 import json
+import re
+from dataclasses import dataclass
+from enum import StrEnum
 from typing import Any
 
 from .contracts import (
@@ -17,12 +20,88 @@ from .contracts import (
     ConsensusPhaseResult,
     ConsensusPhaseState,
 )
-from .projection import ConsensusEvent
-from .runtime_adapter import (
-    ConsensusInputKind,
-    ConsensusStoredWorkflow,
-    ConsensusWorkflowSubmission,
-)
+from .projection import ConsensusEvent, project_consensus
+
+
+_ID = re.compile(r"[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}")
+
+
+class ConsensusInputKind(StrEnum):
+    """The two accepted durable consensus input sources."""
+
+    PROMPT = "prompt"
+    SUPPLIED_DRAFT = "supplied_draft"
+
+
+class ConsensusRuntimeConflict(RuntimeError):
+    """The durable workflow no longer has the caller's expected tail."""
+
+
+class ConsensusRuntimeOutcomeUnknown(RuntimeError):
+    """A port mutation may be durable and must not be replayed."""
+
+
+@dataclass(frozen=True, slots=True)
+class ConsensusWorkflowSubmission:
+    """Durable input identity stored beside a consensus event history."""
+
+    execution_identity: ConsensusExecutionIdentity
+    workflow_id: str
+    proposal_id: str
+    input_kind: ConsensusInputKind
+    input_material: ConsensusMaterialHandle
+
+    def __post_init__(self) -> None:
+        if any(
+            type(value) is not str or _ID.fullmatch(value) is None
+            for value in (self.workflow_id, self.proposal_id)
+        ):
+            raise ValueError("consensus submission identifier is invalid")
+        if type(self.execution_identity) is not ConsensusExecutionIdentity:
+            raise TypeError("consensus submission execution identity is invalid")
+        if type(self.input_kind) is not ConsensusInputKind:
+            raise TypeError("consensus input kind is invalid")
+        if type(self.input_material) is not ConsensusMaterialHandle:
+            raise TypeError("consensus submission material handle is invalid")
+
+    @property
+    def input_digest(self) -> str:
+        return self.input_material.digest
+
+    @property
+    def session_id(self) -> str:
+        return self.execution_identity.session_id
+
+    @property
+    def conversation_id(self) -> str:
+        return self.execution_identity.conversation_id
+
+
+@dataclass(frozen=True, slots=True)
+class ConsensusStoredWorkflow:
+    """One submission and its complete authoritative event history."""
+
+    submission: ConsensusWorkflowSubmission
+    events: tuple[ConsensusEvent, ...]
+
+    def __post_init__(self) -> None:
+        if type(self.submission) is not ConsensusWorkflowSubmission:
+            raise TypeError("consensus stored submission is invalid")
+        projection = project_consensus(self.events)
+        if not self.events or type(self.events[0].payload) is not ConsensusPhaseRequest:
+            raise ValueError("consensus stored workflow has no initial request")
+        request = self.events[0].payload
+        if (
+            projection.workflow_id != self.submission.workflow_id
+            or projection.proposal_id != self.submission.proposal_id
+            or request.input_material != self.submission.input_material
+            or request.execution_identity != self.submission.execution_identity
+            or any(
+                event.payload.execution_identity != self.submission.execution_identity
+                for event in self.events
+            )
+        ):
+            raise ValueError("consensus stored workflow identity is inconsistent")
 
 
 CONSENSUS_SERIALIZATION_SCHEMA_VERSION = 2

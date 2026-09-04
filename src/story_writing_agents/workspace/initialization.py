@@ -436,7 +436,12 @@ def _verify_ready(
         allowed_files[WORKSPACE_INITIALIZATION_JOURNAL_PATH] = journal_bytes
     elif WORKSPACE_INITIALIZATION_JOURNAL_PATH in snapshot:
         raise WorkspaceFormatError("workspace initialization requires recovery")
-    if snapshot != allowed_files:
+    scaffold_snapshot = {
+        path: content
+        for path, content in snapshot.items()
+        if not _is_consensus_runtime_file(path)
+    }
+    if scaffold_snapshot != allowed_files:
         raise WorkspaceFormatError("workspace scaffold requires recovery")
     if not journal_present:
         try:
@@ -579,7 +584,18 @@ def _snapshot_relative_files(descriptor: int) -> dict[str, bytes]:
                     "workspace scaffold cannot be inspected"
                 ) from None
             if stat.S_ISDIR(value.st_mode):
-                if relative not in allowed_directories:
+                candidate_shard = (
+                    prefix
+                    == (
+                        "agent_states",
+                        "orchestrator_state",
+                        "consensus_materials",
+                        "v1",
+                    )
+                    and len(name) == 2
+                    and all(character in "0123456789abcdef" for character in name)
+                )
+                if relative not in allowed_directories and not candidate_shard:
                     raise WorkspaceFormatError(
                         "workspace contains an undeclared directory"
                     )
@@ -595,6 +611,35 @@ def _snapshot_relative_files(descriptor: int) -> dict[str, bytes]:
 
     visit(descriptor, ())
     return result
+
+
+def _is_consensus_runtime_file(path: str) -> bool:
+    """Recognize only canonical runtime-owned consensus storage leaves."""
+
+    workflow_prefix = "agent_states/orchestrator_state/consensus_workflows/v2/"
+    if path.startswith(workflow_prefix):
+        name = path.removeprefix(workflow_prefix)
+        return name == ".store.lock" or (
+            len(name) == 69
+            and name.endswith(".json")
+            and all(character in "0123456789abcdef" for character in name[:-5])
+        )
+    material_prefix = "agent_states/orchestrator_state/consensus_materials/v1/"
+    if not path.startswith(material_prefix):
+        return False
+    relative = path.removeprefix(material_prefix)
+    parts = relative.split("/")
+    if len(parts) != 2 or len(parts[0]) != 2 or any(
+        character not in "0123456789abcdef" for character in parts[0]
+    ):
+        return False
+    if parts[1] == ".lock":
+        return True
+    return (
+        len(parts[1]) == 67
+        and parts[1].endswith(".utf8")
+        and all(character in "0123456789abcdef" for character in parts[1][:-5])
+    )
 
 
 def _workspace_marker_present(descriptor: int) -> bool:
