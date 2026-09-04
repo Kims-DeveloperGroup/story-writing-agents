@@ -3,8 +3,12 @@
 > **Availability:** these models are Python APIs. Debate requests can carry an
 > optional conversation snapshot; one-step and retrieval turns use separate,
 > compatible request families. Content-free explicit-reference read contracts
-> remain available at the direct repository/backend boundary. The current
-> `StoryRuntime` does not construct them for a public provider call.
+> remain available at the direct repository/backend boundary. Python
+> `StoryRuntime.lead_turn()` constructs them for lead references; confirmed
+> consultations construct a fresh read contract for each specialist and lead
+> synthesis invocation. A lead artifact intent is resolved by runtime into one
+> exact immutable candidate; confirmed reviewers receive that same candidate,
+> and the resulting reviewed proposal grants no write or Git authority.
 
 Key terms: **definition**—stable context bound to one agent; **request**—dynamic
 data for one provider call; **blackboard**—public debate messages;
@@ -32,6 +36,12 @@ authority: `read_text()` decodes the captured bytes, and provider binding does
 not reread the path. A definition's fingerprint covers the agent, backend,
 language, component identities, and hashes. Runtime bindings are cached by
 `(agent_id, fingerprint)`.
+
+Collaboration proposals persist both a definition fingerprint and a separate
+content-free execution-profile fingerprint. The latter binds the selected
+backend/provider execution profile without embedding credentials, prompt
+bytes, model output, or provider-native state. Confirm rederives both; drift
+rejects execution instead of silently changing the disclosed participant.
 
 | Agent | Contextual P2 core sources in the built-in runtime |
 | --- | --- |
@@ -92,6 +102,158 @@ they are not fields of `AgentRequest`, `ConversationRequest`, or
 candidate, messages, agent state, conversation history, or retrieval
 observations. See the
 [backend boundary](backend-and-sessions.md#referenced-invocation-boundary).
+
+For confirmed collaboration, an assignment receives exactly its ordered input
+IDs and a fresh reference operation for the artifact subset among them. Its
+writing-artifact source adapter has an immutable allowed-path set, so inventory,
+SEARCH, and READ cannot borrow sibling-only evidence. Synthesis is a separate
+lead invocation with the direct story-artifact inputs and all typed replies.
+
+## Lead judgment and evidence contracts
+
+Import the public values from `story_writing_agents.conversations`:
+
+```python
+LeadOutcomeScope                 # story_specific | workflow_meta
+LeadEvidenceStatus               # not_applicable | verified | missing |
+                                 # empty | incomplete | conflicting
+CollaborationEvidenceAcquisition # attached_reference | core_status |
+                                 # zero_hit_search | read
+CollaborationEvidenceReceipt(...)
+CollaborationLeadEvidence(
+    scope: LeadOutcomeScope,
+    status: LeadEvidenceStatus,
+    receipts: tuple[CollaborationEvidenceReceipt, ...],
+)
+CollaborationLeadJudgmentPayload(
+    kind: LeadOutcomeKind,
+    message: str,
+    evidence: CollaborationLeadEvidence,
+)
+CollaborationLeadOutcomeFailurePayload(
+    code: CollaborationLeadOutcomeFailureCode,
+    invocation_id: str,
+    call_id: str,
+)
+```
+
+Receipts are content-free, invocation-local facts. An attached-reference or
+READ receipt retains source identity, locator, revision/content digest, size,
+and exact boundary. A core-status receipt records present, empty, or absent
+state for one canonical core path. A complete zero-hit SEARCH receipt records
+the query digest/count, authorized source identities/kinds, optional canonical
+path prefix, and an authorized-source fingerprint; it does not store query or
+source text. All receipts in one `CollaborationLeadEvidence` share the same
+operation, result correlation, and manifest.
+
+`CollaborationLeadJudgmentPayload` enforces the closed evidence matrix described
+in the [lead-agent guide](../guides/lead-agent.md#how-a-lead-judgment-is-grounded).
+Runtime does not perform semantic classification. It maps provider-selected
+IDs only when they are current, canonical, unique, ordered, and authorized.
+An evidence-validation rejection persists the content-free failure payload and
+returns `retry_lead_turn`; the rejected provider result is not a judgment and
+is not replay authority.
+
+## Specialist reply and lead synthesis
+
+Import the public semantic values from `story_writing_agents.conversations`:
+
+```python
+CollaborationSpecialistAssessment
+CollaborationSpecialistReplyPayload(
+    proposal_id: str,
+    proposal_revision: int,
+    proposal_digest: str,
+    execution_attempt_id: str,
+    assignment_id: str,
+    dispatch_event_id: str,
+    assessment: CollaborationSpecialistAssessment,
+    message: str,
+    input_ids: tuple[str, ...],
+)
+CollaborationLeadSynthesisPayload(
+    proposal_id: str,
+    proposal_revision: int,
+    proposal_digest: str,
+    execution_attempt_id: str,
+    message: str,
+    reply_event_ids: tuple[str, ...],
+    unresolved_input_ids: tuple[str, ...],
+    evidence: CollaborationLeadEvidence,
+    next_intent: LeadProposalIntent | None = None,
+)
+```
+
+Assessment is exactly `supports`, `concern`, `conflict`, or
+`insufficient_evidence`. The reply must repeat its assignment ID and exact
+ordered input IDs. Synthesis must cite every successful reply event in order
+and cannot omit an input from a non-supporting reply. A non-null `next_intent`
+must be `continue_lineage`, cover the original and reply-event inputs exactly,
+and is accepted only after round one. Round two cannot continue again.
+Synthesis also preserves the proposal's exact story-specific evidence; reply
+events are attribution and cannot replace story evidence.
+
+## Reviewed artifact proposal contracts
+
+Provider-neutral construction values are a direct-module API:
+
+```python
+from story_writing_agents.artifact_proposals import (
+    ArtifactCreateIntent,
+    ArtifactDeleteIntent,
+    ArtifactIntentEvidence,
+    ArtifactPatchIntent,
+    ArtifactProposalIntent,
+    ArtifactRenameIntent,
+    ArtifactReplaceIntent,
+    ArtifactReviewCandidate,
+    artifact_review_specialists,
+    build_artifact_review_candidate,
+    deserialize_artifact_review_candidate,
+    serialize_artifact_review_candidate,
+)
+```
+
+An intent requests one or more `create`, evidence-bound `patch`, whole-source
+`replace`, whole-source `rename`, or whole-source `delete` operations plus an
+optional canonical tuple of added review domains. Runtime-issued
+`ArtifactIntentEvidence` binds an evidence ID to the current canonical path,
+full-source digest, selected-boundary digest, and optional line range. These
+values are semantic input only; they contain no capability or authority.
+
+`build_artifact_review_candidate()` resolves that intent against one complete
+canonical `base_state`, builds the exact change set, validates projected
+artifact relationships, derives mandatory review domains, and unions added
+domains in canonical order. The frozen result binds candidate identity and
+revision, the content-bearing change set, relationship facts, grounding
+evidence IDs, mandatory/disclosed domains, and digest. Its canonical codec is
+strict and intentionally content-bearing. Every disclosed reviewer receives
+the same serialized candidate.
+
+The public durable/review values are exported by
+`story_writing_agents.conversations`:
+
+```python
+ArtifactReviewCandidatePayload
+ArtifactProposalState
+ArtifactProposalStatePayload
+ArtifactReviewDecision          # propose | revise | reject
+ArtifactReviewSynthesisPayload
+ArtifactReviewReply
+ArtifactReviewedProposal
+ArtifactReviewFailureCode
+ArtifactReviewFailurePayload
+ArtifactProposalResult
+```
+
+The artifact synthesis repeats exact candidate/consultation/attempt identity,
+preserves every reply event and unresolved non-supporting input, and adds
+visible `rationale`, `user_impact`, and `limitations`. Only `decision=propose`
+creates `ArtifactReviewedProposal`. That immutable value closes over the exact
+candidate, every disclosed review, evidence and synthesis identities, and the
+review tail, while requiring `artifact_write_occurred=false`,
+`apply_authority_granted=false`, and `git_action_occurred=false`. It is review
+evidence, not a filesystem or Git capability.
 
 ## Debate request
 

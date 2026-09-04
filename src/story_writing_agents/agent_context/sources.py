@@ -38,6 +38,7 @@ from ..writing_artifacts.filesystem_sources import (
     ArtifactSourceInventoryLimitError,
     ArtifactSourceNulError,
 )
+from ..writing_artifacts.catalog import CORE_ARTIFACT_PATHS
 from ..writing_artifacts.references import (
     ArtifactContentSnapshot,
     reference_source_kind,
@@ -49,6 +50,8 @@ from .actions import (
     ContextSearchQuery,
     ContextSourceBoundary,
     ContextSourceBoundaryKind,
+    ContextSourceStatusKind,
+    ContextSourceStatusReceipt,
 )
 from .manifest import (
     ContextAuthorityKind,
@@ -800,13 +803,26 @@ class WritingArtifactSourceAdapter:
         self,
         repository: WritingArtifactRepository,
         scope: ContextScope,
+        allowed_paths: frozenset[str] | None = None,
     ) -> None:
         if not isinstance(repository, WritingArtifactRepository):
             raise _source_error(ContextSourceErrorCode.INVALID_VALUE)
         if type(scope) is not ContextScope:
             raise _source_error(ContextSourceErrorCode.INVALID_VALUE)
+        if allowed_paths is not None:
+            if type(allowed_paths) is not frozenset:
+                raise _source_error(ContextSourceErrorCode.INVALID_VALUE)
+            try:
+                validated_paths = frozenset(
+                    self._validate_locator(path) for path in allowed_paths
+                )
+            except ContextSourceError:
+                raise
+            if validated_paths != allowed_paths:
+                raise _source_error(ContextSourceErrorCode.INVALID_VALUE)
         self._repository = repository
         self.scope = scope
+        self._allowed_paths = allowed_paths
 
     def inventory(
         self,
@@ -839,6 +855,103 @@ class WritingArtifactSourceAdapter:
                 return tuple(descriptors)
         raise _source_error(ContextSourceErrorCode.SOURCE_DRIFT)
 
+    def canonical_core_statuses(
+        self,
+        manifest_digest: str,
+        policy: ContextSourcePolicy,
+    ) -> tuple[ContextSourceStatusReceipt, ...]:
+        """Capture the four canonical core statuses under one stable inventory."""
+
+        policy = _require_source_policy(policy)
+        _safe_digest(manifest_digest)
+        if self._allowed_paths is not None:
+            raise _source_error(ContextSourceErrorCode.AUTHORITY_MISMATCH)
+
+        def capture_once(
+            paths: tuple[str, ...],
+        ) -> tuple[ContextSourceStatusReceipt, ...]:
+            present_paths = frozenset(paths)
+            receipts: list[ContextSourceStatusReceipt] = []
+            for ordinal, locator in enumerate(CORE_ARTIFACT_PATHS, start=1):
+                if locator not in present_paths:
+                    self._require_absent_core(locator, policy)
+                    receipts.append(
+                        ContextSourceStatusReceipt(
+                            evidence_id=f"status_{ordinal}",
+                            source_id=writing_artifact_source_id(locator),
+                            locator=locator,
+                            status=ContextSourceStatusKind.ABSENT,
+                            ordinal=ordinal,
+                            manifest_digest=manifest_digest,
+                            revision=None,
+                            source_digest=None,
+                            source_utf8_bytes=0,
+                        )
+                    )
+                    continue
+                snapshot = self.capture(locator, policy)
+                descriptor = snapshot.descriptor
+                receipts.append(
+                    ContextSourceStatusReceipt(
+                        evidence_id=f"status_{ordinal}",
+                        source_id=descriptor.source_id,
+                        locator=locator,
+                        status=(
+                            ContextSourceStatusKind.EMPTY
+                            if descriptor.utf8_bytes == 0
+                            else ContextSourceStatusKind.PRESENT
+                        ),
+                        ordinal=ordinal,
+                        manifest_digest=manifest_digest,
+                        revision=descriptor.revision,
+                        source_digest=descriptor.content_digest,
+                        source_utf8_bytes=descriptor.utf8_bytes,
+                    )
+                )
+            return tuple(receipts)
+
+        for _attempt in range(2):
+            first_paths = self._list_paths(policy)
+            try:
+                first = capture_once(first_paths)
+                second_paths = self._list_paths(policy)
+                second = capture_once(second_paths)
+                final_paths = self._list_paths(policy)
+            except ContextSourceError as error:
+                if error.code in {
+                    ContextSourceErrorCode.SOURCE_DRIFT,
+                    ContextSourceErrorCode.SOURCE_MISSING,
+                }:
+                    continue
+                raise
+            if first_paths == second_paths == final_paths and first == second:
+                return second
+        raise _source_error(ContextSourceErrorCode.SOURCE_DRIFT)
+
+    def _require_absent_core(
+        self,
+        locator: str,
+        policy: ContextSourcePolicy,
+    ) -> None:
+        """Distinguish an exact absence from an unsafe or corrupt core entry."""
+
+        try:
+            self._repository.read_text(
+                locator,
+                max_bytes=policy.max_source_utf8_bytes,
+            )
+        except FileNotFoundError:
+            return
+        except ArtifactSourceInvalidUtf8Error:
+            raise _source_error(ContextSourceErrorCode.SOURCE_INVALID_UTF8) from None
+        except ArtifactSourceNulError:
+            raise _source_error(ContextSourceErrorCode.SOURCE_NUL) from None
+        except WorkspaceSecurityError:
+            raise _source_error(ContextSourceErrorCode.SOURCE_UNSAFE) from None
+        except WorkspaceFormatError:
+            raise _source_error(ContextSourceErrorCode.SOURCE_UNAVAILABLE) from None
+        raise _source_error(ContextSourceErrorCode.SOURCE_DRIFT)
+
     def _list_paths(self, policy: ContextSourcePolicy) -> tuple[str, ...]:
         paths: tuple[str, ...] | None = None
         try:
@@ -850,7 +963,12 @@ class WritingArtifactSourceAdapter:
             pass
         if paths is None:
             raise _source_error(ContextSourceErrorCode.INVENTORY_LIMIT_EXCEEDED)
-        return paths
+        if self._allowed_paths is None:
+            return paths
+        missing = self._allowed_paths.difference(paths)
+        if missing:
+            raise _source_error(ContextSourceErrorCode.SOURCE_MISSING)
+        return tuple(path for path in paths if path in self._allowed_paths)
 
     @staticmethod
     def _validate_locator(locator: object) -> str:
@@ -952,6 +1070,8 @@ class WritingArtifactSourceAdapter:
     ) -> ContextSourceSnapshot:
         policy = _require_source_policy(policy)
         locator = self._validate_locator(locator)
+        if self._allowed_paths is not None and locator not in self._allowed_paths:
+            raise _source_error(ContextSourceErrorCode.AUTHORITY_MISMATCH)
         for _attempt in range(2):
             first = self._capture_once(locator, policy)
             second = self._capture_once(locator, policy)
@@ -1056,6 +1176,7 @@ class FocusedConversationSourceAdapter:
         conversation_id: str | None,
         *,
         include_same_session_active: bool = False,
+        include_searchable_history: bool = False,
         captured_context: CollaborationReadableContext | None = None,
     ) -> None:
         if type(scope) is not ContextScope:
@@ -1066,7 +1187,10 @@ class FocusedConversationSourceAdapter:
                 scope.subject_id != conversation_id
             ):
                 raise _source_error(ContextSourceErrorCode.SCOPE_MISMATCH)
-        if type(include_same_session_active) is not bool:
+        if (
+            type(include_same_session_active) is not bool
+            or type(include_searchable_history) is not bool
+        ):
             raise _source_error(ContextSourceErrorCode.INVALID_VALUE)
         if include_same_session_active and conversation_id is None:
             raise _source_error(ContextSourceErrorCode.INVALID_VALUE)
@@ -1075,6 +1199,7 @@ class FocusedConversationSourceAdapter:
                 type(captured_context) is not CollaborationReadableContext
                 or conversation_id is None
                 or include_same_session_active
+                or include_searchable_history
             ):
                 raise _source_error(ContextSourceErrorCode.INVALID_VALUE)
             bootstrap = captured_context.bootstrap
@@ -1095,7 +1220,12 @@ class FocusedConversationSourceAdapter:
         self.scope = scope
         self._conversation_id = conversation_id
         self._include_same_session_active = include_same_session_active
+        self._include_searchable_history = include_searchable_history
         self._captured_context = captured_context
+        self._snapshot_conversation_ids: tuple[str, ...] | None = None
+        self._snapshots: dict[
+            tuple[str, ContextSourcePolicy], ContextSourceSnapshot
+        ] = {}
 
     def inventory(
         self, policy: ContextSourcePolicy
@@ -1111,8 +1241,17 @@ class FocusedConversationSourceAdapter:
         return f"conversation/{conversation_id}"
 
     def _active_conversation_ids(self) -> tuple[str, ...]:
+        if self._include_searchable_history and (
+            self._snapshot_conversation_ids is not None
+        ):
+            return self._snapshot_conversation_ids
         if self._captured_context is not None or not self._include_same_session_active:
-            return () if self._conversation_id is None else (self._conversation_id,)
+            identifiers = (
+                () if self._conversation_id is None else (self._conversation_id,)
+            )
+            if self._include_searchable_history:
+                self._snapshot_conversation_ids = identifiers
+            return identifiers
         try:
             raw = self._catalog.list(self.scope.session_id, include_archived=False)
         except (StoryWritingAgentsError, OSError, TypeError, ValueError):
@@ -1132,7 +1271,10 @@ class FocusedConversationSourceAdapter:
             raise _source_error(ContextSourceErrorCode.ADAPTER_CONTRACT_VIOLATION)
         if self._conversation_id not in identifiers:
             raise _source_error(ContextSourceErrorCode.SOURCE_MISSING)
-        return tuple(identifiers)
+        captured = tuple(identifiers)
+        if self._include_searchable_history:
+            self._snapshot_conversation_ids = captured
+        return captured
 
     def _authorized_conversation_id(self, locator: str) -> str:
         prefix = "conversation/"
@@ -1158,7 +1300,14 @@ class FocusedConversationSourceAdapter:
             metadata = self._catalog.get(self.scope.session_id, conversation_id)
             if self._captured_context is None:
                 events = self._event_store.read(self.scope.session_id, conversation_id)
-                context = select_bounded_collaboration_context(events)
+                context = select_bounded_collaboration_context(
+                    events,
+                    event_ids=(
+                        tuple(event.event_id for event in events)
+                        if self._include_searchable_history
+                        else ()
+                    ),
+                )
             else:
                 context = self._captured_context
         except ConversationNotFoundError:
@@ -1224,10 +1373,17 @@ class FocusedConversationSourceAdapter:
     ) -> ContextSourceSnapshot:
         policy = _require_source_policy(policy)
         self._authorized_conversation_id(locator)
+        cache_key = (locator, policy)
+        if self._include_searchable_history:
+            cached = self._snapshots.get(cache_key)
+            if cached is not None:
+                return cached
         for _attempt in range(2):
             first = self._capture_once(locator, policy)
             second = self._capture_once(locator, policy)
             if first == second:
+                if self._include_searchable_history:
+                    self._snapshots[cache_key] = second
                 return second
         raise _source_error(ContextSourceErrorCode.SOURCE_DRIFT)
 
@@ -1583,6 +1739,15 @@ class ContextSourceRegistry:
         self.scope = adapters[0].scope
         self._adapters = adapters
         self._by_kind = {adapter.source_kind: adapter for adapter in adapters}
+
+    def canonical_core_statuses(
+        self,
+        manifest_digest: str,
+        policy: ContextSourcePolicy = CONTEXT_SOURCE_POLICY,
+    ) -> tuple[ContextSourceStatusReceipt, ...]:
+        """Return exact core statuses from the writing-artifact authority."""
+
+        return self._adapters[0].canonical_core_statuses(manifest_digest, policy)
 
     def inventory(
         self,

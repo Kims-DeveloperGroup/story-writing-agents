@@ -21,6 +21,8 @@ from story_writing_agents.conversations import (
     CollaborationBudget,
     CollaborationConfirmationDecision,
     CollaborationConfirmationPayload,
+    CollaborationEvidenceAcquisition,
+    CollaborationEvidenceReceipt,
     CollaborationEvent,
     CollaborationEventBatch,
     CollaborationEventDraft,
@@ -31,17 +33,28 @@ from story_writing_agents.conversations import (
     CollaborationInputRevision,
     CollaborationInputState,
     CollaborationInterruptionPayload,
+    CollaborationInvocationKind,
+    CollaborationLeadEvidence,
+    CollaborationLeadJudgmentPayload,
+    CollaborationLeadSynthesisPayload,
     CollaborationMessagePayload,
     CollaborationProposal,
     CollaborationProposalBasis,
+    CollaborationProviderCallKind,
+    CollaborationProviderCallPayload,
+    CollaborationProviderCallState,
     CollaborationSideEffect,
     CollaborationSpecialistReplyPayload,
+    CollaborationSpecialistAssessment,
     CollaborationStepKind,
     CollaborationStepState,
     CollaborationStepStatePayload,
     CollaborationSynthesisOutcomeKind,
     CollaborationTerminalOutcomePayload,
     CollaborationTerminalScope,
+    LeadEvidenceStatus,
+    LeadOutcomeKind,
+    LeadOutcomeScope,
     collaboration_batch_digest,
     validate_collaboration_candidate_batch,
 )
@@ -59,6 +72,7 @@ DIGEST_A = "sha256:" + "1" * 64
 DIGEST_B = "sha256:" + "2" * 64
 
 COLLABORATION_EVENT_EXPORTS = (
+    "ARTIFACT_REVIEW_SCHEMA_VERSION",
     "COLLABORATION_EVENT_SCHEMA_VERSION",
     "COLLABORATION_PHYSICAL_CALL_LIMIT",
     "COLLABORATION_ROUND_LIMIT",
@@ -79,6 +93,8 @@ COLLABORATION_EVENT_EXPORTS = (
     "CollaborationConfirmationDecision",
     "CollaborationConfirmationPayload",
     "CollaborationDirection",
+    "CollaborationEvidenceAcquisition",
+    "CollaborationEvidenceReceipt",
     "CollaborationEvent",
     "CollaborationEventBatch",
     "CollaborationEventDraft",
@@ -89,12 +105,22 @@ COLLABORATION_EVENT_EXPORTS = (
     "CollaborationInputRevision",
     "CollaborationInputState",
     "CollaborationInterruptionPayload",
+    "CollaborationInvocationKind",
+    "CollaborationLeadSynthesisPayload",
+    "CollaborationLeadEvidence",
+    "CollaborationLeadJudgmentPayload",
+    "CollaborationLeadOutcomeFailureCode",
+    "CollaborationLeadOutcomeFailurePayload",
     "CollaborationMessagePayload",
     "CollaborationPayload",
     "CollaborationProposal",
     "CollaborationProposalBasis",
+    "CollaborationProviderCallKind",
+    "CollaborationProviderCallPayload",
+    "CollaborationProviderCallState",
     "CollaborationSideEffect",
     "CollaborationSpecialistReplyPayload",
+    "CollaborationSpecialistAssessment",
     "CollaborationStepKind",
     "CollaborationStepState",
     "CollaborationStepStatePayload",
@@ -103,16 +129,35 @@ COLLABORATION_EVENT_EXPORTS = (
     "CollaborationTerminalScope",
     "ConversationEvent",
     "ConversationEventKind",
+    "LeadAssignmentIntent",
+    "LeadOutcomeKind",
+    "LeadOutcomeScope",
+    "LeadEvidenceStatus",
+    "LeadProposalIntent",
+    "LeadProposalRelation",
+    "LeadProviderOutcome",
+    "ArtifactProposalState",
+    "ArtifactProposalStatePayload",
+    "ArtifactReviewCandidatePayload",
+    "ArtifactReviewDecision",
+    "ArtifactReviewFailureCode",
+    "ArtifactReviewFailurePayload",
+    "ArtifactReviewReply",
+    "ArtifactReviewSynthesisPayload",
+    "ArtifactReviewedProposal",
+    "artifact_reviewed_proposal_digest",
     "collaboration_batch_digest",
     "collaboration_proposal_digest",
     "decode_collaboration_batch",
     "decode_collaboration_event",
     "decode_collaboration_event_draft",
     "decode_collaboration_proposal",
+    "decode_artifact_reviewed_proposal",
     "encode_collaboration_batch",
     "encode_collaboration_event",
     "encode_collaboration_event_draft",
     "encode_collaboration_proposal",
+    "encode_artifact_reviewed_proposal",
 )
 
 COLLABORATION_CONTEXT_EXPORTS = (
@@ -127,8 +172,12 @@ COLLABORATION_CONTEXT_EXPORTS = (
     "CollaborationReadableField",
     "CollaborationReadableFieldKey",
     "CollaborationReadableRecord",
+    "LeadDecisionResult",
+    "LeadStepDecision",
+    "LeadTurnResult",
     "ConversationContextPolicy",
     "ConversationContextWindow",
+    "ArtifactProposalResult",
     "project_collaboration_history",
     "project_collaboration_readable_history",
     "select_bounded_collaboration_context",
@@ -139,6 +188,7 @@ COLLABORATION_CONTEXT_EXPORTS = (
 )
 
 CONVERSATION_FACADE_EXPORTS = (
+    "ARTIFACT_REVIEW_SCHEMA_VERSION",
     "COLLABORATION_EVENT_SCHEMA_VERSION",
     "COLLABORATION_PHYSICAL_CALL_LIMIT",
     "COLLABORATION_ROUND_LIMIT",
@@ -149,6 +199,16 @@ CONVERSATION_FACADE_EXPORTS = (
     "CONVERSATION_METADATA_SCHEMA_VERSION",
     "CONVERSATION_SUBJECT_NORMALIZATION_VERSION",
     "MAX_CONVERSATION_SUBJECT_LENGTH",
+    "ArtifactProposalResult",
+    "ArtifactProposalState",
+    "ArtifactProposalStatePayload",
+    "ArtifactReviewCandidatePayload",
+    "ArtifactReviewDecision",
+    "ArtifactReviewFailureCode",
+    "ArtifactReviewFailurePayload",
+    "ArtifactReviewReply",
+    "ArtifactReviewSynthesisPayload",
+    "ArtifactReviewedProposal",
     "CollaborationActor",
     "CollaborationActorKind",
     "CollaborationAgentProfile",
@@ -165,6 +225,8 @@ CONVERSATION_FACADE_EXPORTS = (
     "CollaborationConfirmationPayload",
     "CollaborationContextBootstrap",
     "CollaborationDirection",
+    "CollaborationEvidenceAcquisition",
+    "CollaborationEvidenceReceipt",
     "CollaborationEvent",
     "CollaborationEventBatch",
     "CollaborationEventDraft",
@@ -177,11 +239,20 @@ CONVERSATION_FACADE_EXPORTS = (
     "CollaborationInputRevision",
     "CollaborationInputState",
     "CollaborationInterruptionPayload",
+    "CollaborationInvocationKind",
+    "CollaborationLeadSynthesisPayload",
+    "CollaborationLeadEvidence",
+    "CollaborationLeadJudgmentPayload",
+    "CollaborationLeadOutcomeFailureCode",
+    "CollaborationLeadOutcomeFailurePayload",
     "CollaborationMessagePayload",
     "CollaborationNextAction",
     "CollaborationPayload",
     "CollaborationProposal",
     "CollaborationProposalBasis",
+    "CollaborationProviderCallKind",
+    "CollaborationProviderCallPayload",
+    "CollaborationProviderCallState",
     "CollaborationReadableContext",
     "CollaborationReadableContextPolicy",
     "CollaborationReadableField",
@@ -189,6 +260,7 @@ CONVERSATION_FACADE_EXPORTS = (
     "CollaborationReadableRecord",
     "CollaborationSideEffect",
     "CollaborationSpecialistReplyPayload",
+    "CollaborationSpecialistAssessment",
     "CollaborationStepKind",
     "CollaborationStepState",
     "CollaborationStepStatePayload",
@@ -202,13 +274,26 @@ CONVERSATION_FACADE_EXPORTS = (
     "ConversationEventKind",
     "ConversationMetadata",
     "ConversationStatus",
+    "LeadAssignmentIntent",
+    "LeadDecisionResult",
+    "LeadOutcomeKind",
+    "LeadOutcomeScope",
+    "LeadEvidenceStatus",
+    "LeadProposalIntent",
+    "LeadProposalRelation",
+    "LeadProviderOutcome",
+    "LeadStepDecision",
+    "LeadTurnResult",
     "collaboration_batch_digest",
+    "artifact_reviewed_proposal_digest",
     "collaboration_proposal_digest",
     "decode_collaboration_batch",
+    "decode_artifact_reviewed_proposal",
     "decode_collaboration_event",
     "decode_collaboration_event_draft",
     "decode_collaboration_proposal",
     "encode_collaboration_batch",
+    "encode_artifact_reviewed_proposal",
     "encode_collaboration_event",
     "encode_collaboration_event_draft",
     "encode_collaboration_proposal",
@@ -232,6 +317,39 @@ CHARACTER = CollaborationActor(
     CollaborationActorKind.SPECIALIST,
     CHARACTER_CUSTODIAN,
 )
+
+
+def make_lead_evidence(
+    *,
+    status: LeadEvidenceStatus = LeadEvidenceStatus.VERIFIED,
+) -> CollaborationLeadEvidence:
+    """Return one content-free, story-specific attached-reference receipt."""
+
+    receipt = CollaborationEvidenceReceipt(
+        evidence_id="input_outline",
+        acquisition=CollaborationEvidenceAcquisition.ATTACHED_REFERENCE,
+        operation_id=f"lead_{TURN_ID}",
+        result_correlation_id=f"outcome_{TURN_ID}",
+        manifest_digest=DIGEST_A,
+        source_id="source_outline",
+        source_kind=CollaborationInputKind.CORE_DOCUMENT,
+        locator="${core_documents/outline.md}",
+        source_state=CollaborationInputState.PRESENT,
+        revision_digest=DIGEST_A,
+        content_digest=DIGEST_B,
+        utf8_bytes=10,
+        boundary_kind="artifact_lines",
+        boundary_start=3,
+        boundary_end=12,
+        start_line=3,
+        end_line=12,
+        ordinal=1,
+    )
+    return CollaborationLeadEvidence(
+        LeadOutcomeScope.STORY_SPECIFIC,
+        status,
+        (receipt,),
+    )
 
 
 def make_input(
@@ -288,7 +406,7 @@ def make_proposal(
     assignments: tuple[CollaborationAssignment, ...] | None = None,
     inputs: tuple[CollaborationInputRevision, ...] | None = None,
     rounds_spent: int = 0,
-    physical_calls_spent: int = 0,
+    physical_calls_spent: int = 1,
     synthesis_max_physical_calls: int = 1,
     profile_ids: tuple[str, ...] | None = None,
     purpose: str = "Consult specialists before recommending the next action.",
@@ -300,6 +418,7 @@ def make_proposal(
     route_fingerprint: str = DIGEST_A,
     context_policy_fingerprint: str = DIGEST_A,
     budget_policy_fingerprint: str = DIGEST_A,
+    evidence: CollaborationLeadEvidence | None = None,
 ) -> CollaborationProposal:
     """Create one canonical proposal with a recomputed digest."""
 
@@ -316,6 +435,7 @@ def make_proposal(
         )
     if assignments is None:
         if step_kind is CollaborationStepKind.SPECIALIST_ADVISORY:
+            physical_calls_spent = 0
             assignments = (
                 make_assignment(
                     input_ids=tuple(item.input_id for item in inputs),
@@ -337,8 +457,11 @@ def make_proposal(
         profile_ids = tuple(item.specialist_id for item in assignments)
         if synthesis_max_physical_calls:
             profile_ids += (LEAD_ORCHESTRATOR,)
+    if evidence is None and step_kind is not CollaborationStepKind.SPECIALIST_ADVISORY:
+        evidence = make_lead_evidence()
     profiles = tuple(
-        CollaborationAgentProfile(agent_id, DIGEST_A) for agent_id in profile_ids
+        CollaborationAgentProfile(agent_id, DIGEST_A, DIGEST_B)
+        for agent_id in profile_ids
     )
     max_additional = sum(item.max_physical_calls for item in assignments)
     max_additional += synthesis_max_physical_calls
@@ -358,6 +481,7 @@ def make_proposal(
         context_policy_fingerprint=context_policy_fingerprint,
         budget_policy_fingerprint=budget_policy_fingerprint,
         inputs=inputs,
+        evidence=evidence,
     )
     return CollaborationProposal.create(
         step_id=STEP_ID,
@@ -434,6 +558,50 @@ def make_batch(
     )
 
 
+def provider_call_drafts(
+    *,
+    invocation_id: str,
+    call_id: str,
+    role: str,
+    recipient: CollaborationActor,
+    invocation_kind: CollaborationInvocationKind,
+    ordinal: int = 1,
+    call_kind: CollaborationProviderCallKind = (CollaborationProviderCallKind.INITIAL),
+) -> tuple[CollaborationEventDraft, CollaborationEventDraft]:
+    """Return exact durable preparation/submission facts for one physical call."""
+
+    common = {
+        "invocation_id": invocation_id,
+        "call_id": call_id,
+        "ordinal": ordinal,
+        "role": role,
+        "invocation_kind": invocation_kind,
+        "call_kind": call_kind,
+    }
+    return (
+        make_draft(
+            f"prepared_{call_id}",
+            CollaborationEventKind.PROVIDER_CALL_ACCOUNTING,
+            RUNTIME,
+            recipient,
+            CollaborationProviderCallPayload(
+                **common,
+                state=CollaborationProviderCallState.PREPARED,
+            ),
+        ),
+        make_draft(
+            f"submitted_{call_id}",
+            CollaborationEventKind.PROVIDER_CALL_ACCOUNTING,
+            RUNTIME,
+            recipient,
+            CollaborationProviderCallPayload(
+                **common,
+                state=CollaborationProviderCallState.SUBMITTED,
+            ),
+        ),
+    )
+
+
 def store_batch(
     history: tuple[CollaborationEvent, ...],
     batch: CollaborationEventBatch,
@@ -481,24 +649,51 @@ def awaiting_history(
         CollaborationStepState.AWAITING_CONFIRMATION,
         confirmation_request_id=REQUEST_ID,
     )
-    batch = make_batch(
-        (),
-        "batch_proposal",
-        make_draft(
-            "proposal_event",
-            CollaborationEventKind.MESSAGE,
-            LEAD,
-            USER,
-            proposal,
-        ),
-        make_draft(
-            REQUEST_EVENT_ID,
-            CollaborationEventKind.STEP_STATE,
-            RUNTIME,
-            USER,
-            awaiting,
-        ),
+    drafts: list[CollaborationEventDraft] = []
+    if proposal.step_kind is CollaborationStepKind.LEAD_SPECIALIST_CONSULTATION:
+        if proposal.basis.evidence is None:
+            raise ValueError("confirmed lead proposals require evidence")
+        drafts.extend(
+            provider_call_drafts(
+                invocation_id="invocation_lead",
+                call_id="call_lead",
+                role=LEAD_ORCHESTRATOR,
+                recipient=LEAD,
+                invocation_kind=CollaborationInvocationKind.LEAD,
+            )
+        )
+        drafts.append(
+            make_draft(
+                "judgment_event",
+                CollaborationEventKind.MESSAGE,
+                LEAD,
+                USER,
+                CollaborationLeadJudgmentPayload(
+                    LeadOutcomeKind.PROPOSAL,
+                    "Specialist review is recommended before the next action.",
+                    proposal.basis.evidence,
+                ),
+            )
+        )
+    drafts.extend(
+        (
+            make_draft(
+                "proposal_event",
+                CollaborationEventKind.MESSAGE,
+                LEAD,
+                USER,
+                proposal,
+            ),
+            make_draft(
+                REQUEST_EVENT_ID,
+                CollaborationEventKind.STEP_STATE,
+                RUNTIME,
+                USER,
+                awaiting,
+            ),
+        )
     )
+    batch = make_batch((), "batch_proposal", *drafts)
     return store_batch((), batch), proposal
 
 
@@ -539,16 +734,18 @@ def confirmed_history(
 
 def running_history(
     proposal: CollaborationProposal | None = None,
+    *,
+    include_synthesis_call: bool = True,
 ) -> tuple[tuple[CollaborationEvent, ...], CollaborationProposal]:
-    """Return history through atomic running plus ordered dispatches."""
+    """Return an atomic start followed by durable physical-call facts."""
 
     history, proposal = confirmed_history(proposal)
-    drafts: list[CollaborationEventDraft] = [
+    start_drafts: list[CollaborationEventDraft] = [
         make_draft(
             "running_event",
             CollaborationEventKind.STEP_STATE,
             RUNTIME,
-            LEAD,
+            USER,
             proposal_state(
                 proposal,
                 CollaborationStepState.RUNNING,
@@ -561,7 +758,7 @@ def running_history(
         CHARACTER_CUSTODIAN: CHARACTER,
     }
     for assignment in proposal.assignments:
-        drafts.append(
+        start_drafts.append(
             make_draft(
                 f"dispatch_{assignment.assignment_id}",
                 CollaborationEventKind.ASSIGNMENT_DISPATCH,
@@ -576,7 +773,37 @@ def running_history(
                 ),
             )
         )
-    return store_batch(history, make_batch(history, "batch_running", *drafts)), proposal
+    history = store_batch(
+        history,
+        make_batch(history, "batch_running", *start_drafts),
+    )
+    call_drafts: list[CollaborationEventDraft] = []
+    for assignment in proposal.assignments:
+        call_drafts.extend(
+            provider_call_drafts(
+                invocation_id=f"invocation_{assignment.assignment_id}",
+                call_id=f"call_{assignment.assignment_id}",
+                role=assignment.specialist_id,
+                recipient=actors[assignment.specialist_id],
+                invocation_kind=CollaborationInvocationKind.SPECIALIST_ASSIGNMENT,
+            )
+        )
+    if include_synthesis_call and proposal.budget.synthesis_max_physical_calls:
+        call_drafts.extend(
+            provider_call_drafts(
+                invocation_id="invocation_synthesis",
+                call_id="call_synthesis",
+                role=LEAD_ORCHESTRATOR,
+                recipient=LEAD,
+                invocation_kind=CollaborationInvocationKind.LEAD_SYNTHESIS,
+            )
+        )
+    if call_drafts:
+        history = store_batch(
+            history,
+            make_batch(history, "batch_calls", *call_drafts),
+        )
+    return history, proposal
 
 
 def result_batch(
@@ -594,6 +821,8 @@ def result_batch(
         CHARACTER_CUSTODIAN: CHARACTER,
     }
     advisory = proposal.step_kind is CollaborationStepKind.SPECIALIST_ADVISORY
+    if not advisory and proposal.basis.evidence is None:
+        raise ValueError("lead synthesis requires proposal evidence")
     for assignment in proposal.assignments:
         if assignment.assignment_id == failed_assignment_id:
             outcome = CollaborationAssignmentOutcome(
@@ -617,7 +846,9 @@ def result_batch(
                         ATTEMPT_ID,
                         assignment.assignment_id,
                         f"dispatch_{assignment.assignment_id}",
+                        CollaborationSpecialistAssessment.SUPPORTS,
                         f"Visible reply from {assignment.specialist_id}.",
+                        assignment.input_ids,
                     ),
                 )
             )
@@ -651,10 +882,23 @@ def result_batch(
         drafts.append(
             make_draft(
                 synthesis_result_id,
-                CollaborationEventKind.MESSAGE,
+                CollaborationEventKind.LEAD_SYNTHESIS,
                 LEAD,
                 USER,
-                CollaborationMessagePayload("Visible lead synthesis."),
+                CollaborationLeadSynthesisPayload(
+                    proposal.proposal_id,
+                    proposal.proposal_revision,
+                    proposal.proposal_digest,
+                    ATTEMPT_ID,
+                    "Visible lead synthesis.",
+                    tuple(
+                        f"reply_{assignment.assignment_id}"
+                        for assignment in proposal.assignments
+                    ),
+                    (),
+                    proposal.basis.evidence,
+                    None,
+                ),
             )
         )
         drafts.append(
@@ -716,7 +960,10 @@ def executed_history(
 ]:
     """Return history through one authoritative execution result."""
 
-    history, proposal = running_history(proposal)
+    history, proposal = running_history(
+        proposal,
+        include_synthesis_call=failed_assignment_id is None,
+    )
     batch, result = result_batch(
         history,
         proposal,
@@ -745,7 +992,7 @@ def retarget_batch(
 def contract_batches(
     conversation_id: str,
 ) -> dict[str, CollaborationEventBatch]:
-    """Return the six atomic collaboration families shared by store adapters."""
+    """Return atomic collaboration families shared by store adapters."""
 
     awaiting, proposal = awaiting_history()
     confirmed, _ = confirmed_history(proposal)
@@ -807,6 +1054,9 @@ def contract_batches(
         ),
         "running": retarget_batch(
             batch_from_history(running, "batch_running"), conversation_id
+        ),
+        "calls": retarget_batch(
+            batch_from_history(running, "batch_calls"), conversation_id
         ),
         "result": retarget_batch(
             batch_from_history(executed, "batch_result"), conversation_id

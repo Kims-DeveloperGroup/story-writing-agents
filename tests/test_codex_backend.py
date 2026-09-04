@@ -1299,6 +1299,36 @@ class CodexBackendDefaultsTests(unittest.TestCase):
             strict=True,
         ):
             self.assertIs(backend.execution_profile(profile.agent_id), active)
+            body = json.dumps(
+                {
+                    "effort": profile.effort,
+                    "effort_source": profile.effort_source.value,
+                    "model": profile.model,
+                    "model_source": profile.model_source.value,
+                    "provider": profile.provider,
+                    "provider_source": profile.provider_source.value,
+                },
+                allow_nan=False,
+                ensure_ascii=False,
+                separators=(",", ":"),
+                sort_keys=True,
+            ).encode("utf-8")
+            fingerprint = backend.execution_profile_fingerprint(profile.agent_id)
+            self.assertEqual(
+                fingerprint,
+                f"sha256:{hashlib.sha256(body).hexdigest()}",
+            )
+            self.assertEqual(
+                fingerprint,
+                AgentBackend._execution_profile_fingerprint(profile),
+            )
+        changed = replace(expected[0], effort="changed-effort")
+        self.assertNotEqual(
+            AgentBackend._execution_profile_fingerprint(expected[0]),
+            AgentBackend._execution_profile_fingerprint(changed),
+        )
+        with self.assertRaisesRegex(TypeError, "execution profile"):
+            AgentBackend._execution_profile_fingerprint(object())  # type: ignore[arg-type]
 
         explicit = AgentBackend(
             self.workspace,
@@ -2824,7 +2854,7 @@ class CodexBackendTestCase(unittest.IsolatedAsyncioTestCase):
                         scope,
                         policy,
                         "context-call-1",
-                        ProviderCallKind.CONVERSATION_RETRIEVAL_INITIAL,
+                        ProviderCallKind.COLLABORATION_INITIAL,
                         schema,
                         payload,
                         {("i",): ContextComponentKind.CURRENT_INPUT},
@@ -2840,7 +2870,7 @@ class CodexBackendTestCase(unittest.IsolatedAsyncioTestCase):
                         scope,
                         policy,
                         "context-call-2",
-                        ProviderCallKind.CONVERSATION_RETRIEVAL_CONTINUATION,
+                        ProviderCallKind.COLLABORATION_CONTINUATION,
                         schema,
                         {
                             "c": "B" * 43,
@@ -2965,8 +2995,8 @@ class CodexBackendTestCase(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(
             [content["call_kind"] for content in request_contents],
             [
-                "conversation_retrieval_initial",
-                "conversation_retrieval_continuation",
+                "collaboration_initial",
+                "collaboration_continuation",
                 "writing_artifact_reference_read",
                 "conversation_retrieval_continuation",
                 "conversation_retrieval_continuation",

@@ -1,9 +1,9 @@
 # Glossary
 
-> **Availability:** with a session attached, the shell manages conversations,
-> search, transcripts, history, and inspection. Public advisory turns and
-> consensus are unavailable in this integration stage. See
-> [Story sessions](guides/story-sessions.md).
+> **Availability:** the shell manages conversations, search, transcripts,
+> history, and inspection. Python callers can run lead advisory/proposal turns
+> and exact decisions. Specialist execution and consensus are unavailable. See
+> [Lead agent](guides/lead-agent.md).
 
 ## A–W
 
@@ -14,6 +14,11 @@
 - **Agent, role, and binding.** An agent is a fixed team member; its role defines
   responsibility and instructions, and a binding connects it to a backend. See
   [Agent contracts](reference/agent-contracts.md).
+
+- **Lead front channel.** The Lead Orchestrator is the only story agent users
+  address directly. It can answer, question, critique, recommend, or propose;
+  runtime—not provider prose—owns proposal and confirmation authority. See
+  [Lead agent](guides/lead-agent.md).
 
 - **Writing artifact.** Agent-produced story output at one of four exact core
   paths or beneath `manuscript/PART/`. Runtime internals are not writing
@@ -124,8 +129,8 @@
   [Session storage](reference/configuration/session-storage.md).
 
 - **Manuscript.** Create-only story output at
-  `manuscript/PART/PATH.md`. Direct repository components and the future
-  confirmed collaboration workflow preserve distinct part-scoped revision
+  `manuscript/PART/PATH.md`. Direct repository components and the later
+  execution workflow preserve distinct part-scoped revision
   paths. See [Consensus runs](guides/consensus-runs.md).
 
 - **Owner-isolated state.** Concise persisted outcomes supplied only to their

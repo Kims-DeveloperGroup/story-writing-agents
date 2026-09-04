@@ -1,8 +1,8 @@
 # Inspect and recover work
 
-Inspection remains available for management state and any already persisted
-debate/reference records. The current public runtime cannot create a new story
-turn or debate.
+Inspection remains available for management state and persisted collaboration,
+debate, and reference records. The Python runtime can create lead turns and
+decisions; it cannot create a debate or specialist execution.
 
 ## Noninteractive inspection
 
@@ -78,6 +78,6 @@ validates stored JSON/JSONL and does not repair malformed bytes.
 6. Do not alter a publication journal or persisted debate by hand. Filesystem
    recovery validates and rolls forward only its documented safe states.
 
-See [Runtime management API](../reference/runtime-api.md),
+See [Runtime and lead-orchestration API](../reference/runtime-api.md),
 [Story sessions](story-sessions.md), and
 [Recovery and limitations](../operations/recovery-and-limitations.md).

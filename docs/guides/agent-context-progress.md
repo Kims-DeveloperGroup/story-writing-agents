@@ -1,8 +1,8 @@
 # Agent-context progress
 
-The typed agent-context lifecycle remains a generic execution component. The
-current public shell has no provider-bound story operation, so it emits no
-agent-context progress for ordinary input.
+The typed agent-context lifecycle is used by Python lead turns. The public shell
+has no provider-bound story operation, so it emits no progress for ordinary
+input.
 
 ## Lifecycle meaning
 
@@ -25,10 +25,9 @@ Events are content-free identities, fixed states, booleans, and bounded
 counters. They do not contain prompts, queries, excerpts, reference paths,
 provider responses, private agent state, or credentials.
 
-## Target user presentation
+## Python application presentation
 
-When the later lead/specialist workflow connects this component, a terminal can
-render compact lines such as:
+A Python application may render compact lines from the callback:
 
 ```text
 [context] bootstrap: 2 selected / 1,024 bytes; 1 searchable
@@ -38,9 +37,8 @@ render compact lines such as:
 [context] checkpoint advanced
 ```
 
-These examples describe component projection, not current shell output. Today
-an ordinary line receives the direct-execution-unavailable guidance before any
-context plan or callback is created.
+These examples are not current shell output. An ordinary shell line receives
+direct-execution-unavailable guidance before any context plan is created.
 
 ## Direct types
 
@@ -55,15 +53,14 @@ from story_writing_agents.agent_context.service import (
 ```
 
 They are not exported from the package root or
-`story_writing_agents.agent_context` facade. A low-level contextual executor
-may accept a synchronous sink that returns exactly `None`. Coroutine,
+`story_writing_agents.agent_context` facade. A low-level contextual executor or
+`lead_turn(context_event_sink=...)` may accept a synchronous sink that returns
+exactly `None`. Coroutine,
 async-generator, asynchronously callable, exception-raising, awaitable-returning,
 or non-`None` observers fail under the component's validation rules.
 
-`StoryRuntime` and `RuntimeSession` no longer expose provider-bound methods on
-which an application can pass this observer. Direct integrators must use the
-generic context/backend components they explicitly compose; they must not
-recreate a removed runtime entry point.
+`StoryRuntime` and `RuntimeSession` expose this observer only on `lead_turn()`.
+It does not authorize specialist execution or artifact mutation.
 
 <a id="privacy-references-and-limits"></a>
 

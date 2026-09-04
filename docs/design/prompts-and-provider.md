@@ -1,10 +1,10 @@
 # Prompts and provider boundary
 
-> **Status:** this page documents retained prompt/provider/context components
-> and historical execution accounting. Codex and Antigravity bindings, thread
-> continuity, reference coordinators, and exchange capture remain implemented,
-> but the current `StoryRuntime` and shell expose no provider-bound story call.
-> `$`/`$$` activation has no current main-input scope.
+> **Status:** this page documents prompt/provider/context components and
+> historical execution accounting. `StoryRuntime.lead_turn()` and confirmed
+> specialist consultations use the current Codex/Antigravity binding, context,
+> reference, and exchange-capture path. The shell has no provider-bound story
+> call, and `$`/`$$` has no main-input scope.
 
 Key terms: **definition**—stable context for one role; **fingerprint**—its
 hash-derived identity; **binding**—the provider object for a definition;
@@ -168,22 +168,52 @@ mutable story bytes as a new built-in definition.
 ## Binding resource lifecycle
 
 The runtime still owns desired/current/retiring bindings and leases one exact
-binding through each operation. A contextual bootstrap always starts a distinct
-provider-thread epoch; a compatible READY checkpoint and provider thread permit
-a delta. Missing, corrupt, mismatched, stale, tainted, or excessive-depth state
-cannot authorize omission and forces bootstrap. Provider-native cache/history
-may accelerate a call but is not authoritative context.
+binding through each operation. Collaboration proposals bind both the stable
+definition fingerprint and the backend's content-free execution-profile
+fingerprint; confirmation rejects either kind of drift. A contextual bootstrap
+always starts a distinct provider-thread epoch; a compatible READY checkpoint
+and provider thread permit a delta. Missing, corrupt, mismatched, stale,
+tainted, or excessive-depth state cannot authorize omission and forces
+bootstrap. Provider-native cache/history may accelerate a call but is not
+authoritative context.
 
 <a id="conversation-turn-flow"></a>
 
 ## Provider-context component
 
-A future structured workflow can pass focused identity, route, input, optional
-conversation-RAG context, and current storage authorities into the
-provider-neutral context service. The service captures current source material,
-builds a content-free manifest, and plans bootstrap/delta. If selected material
-is insufficient, wire-v5 SEARCH/READ actions can add exact authorized evidence
+A Python lead turn or confirmed specialist/synthesis invocation passes focused
+identity, route, input, and current storage authorities into the
+provider-neutral context service. It does not consume the optional
+conversation-RAG collaborator. The service captures current material, builds a
+content-free manifest, and plans bootstrap/delta. If selected material is
+insufficient, wire-v5 SEARCH/READ actions can add exact authorized evidence
 from route-permitted sources. The current shell does not enter this flow.
+
+The dynamic workflow material is role-specific. A specialist assignment
+receives one disclosed instruction, exact ordered input IDs, typed assessment
+contract, and only its assignment-local story references. `lead_synthesis`
+receives every typed reply in canonical order, direct story-artifact inputs,
+mandatory unresolved IDs, and at most one same-lineage continuation contract.
+Provider output never supplies confirmation, runtime IDs/budgets, write/Git
+authority, or a call to another agent.
+
+`lead_front_channel` receives the current command, identity, content-free input
+aliases, a strict six-field semantic answer contract, and four canonical-core
+status rows. Inventory alone supplies no story body. The lead must classify the
+turn as `story_specific` or `workflow_meta`; runtime performs no NLP relabeling.
+For story-specific results the provider selects the minimum ordered current
+evidence IDs supporting `verified`, `missing`, `empty`, `incomplete`, or
+`conflicting`. For workflow/meta it must use `not_applicable`, no IDs, and no
+proposal. Ambiguous scope is handled by the role prompt—choose story-specific
+and ask a grounded question—not by runtime inference.
+
+The lead role prompt never grants tool or agent-dispatch authority. Provider
+SEARCH/READ/ANSWER values are requests to the context service. A proposal in
+the final answer is semantic intent; runtime validates evidence, creates the
+authoritative proposal, and waits for the user's exact structured decision.
+Only then does runtime call selected specialists. Synthesis receives the
+proposal's scope/status/evidence IDs as an unchanged answer contract and keeps
+them separate from specialist reply-event attribution.
 
 Established conversation retrieval remains responsible for its cited
 conversation observations. Optional `rag_context` is independent semantic RAG
@@ -220,10 +250,17 @@ contextual payload then carries those values as
 `untrusted_writing_artifact_context`.
 
 Reference bodies remain outside ambient selection, candidate delta, checkpoint
-suppression, and SEARCH/READ authority. Every addressed debate invocation
-performs its own prelude/read/receipt/revalidation. A checkpoint, previous
-provider copy, or another agent's receipt cannot satisfy the reference. See
+suppression, and SEARCH/READ authority. Every addressed debate, specialist, and
+synthesis invocation performs its own prelude/read/receipt/revalidation. A
+checkpoint, previous provider copy, or another agent's receipt cannot satisfy
+the reference. See
 [Mandatory-reference separation](agent-context.md#mandatory-reference-separation).
+
+An explicit missing `${path}` fails the reference operation before the
+substantive lead call; it is not converted into provider-declared `missing`.
+Exploratory absence instead requires an absent canonical-core status or a
+complete non-truncated zero-hit SEARCH over a scope that includes writing
+artifacts.
 
 ## Debate context
 

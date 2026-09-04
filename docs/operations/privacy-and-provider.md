@@ -13,9 +13,10 @@
 > and the separate bounded store for eligible rejected provider responses.
 > They do not make either provider, its executable, the workspace, or the
 > terminal trusted.
-> The current shell and `StoryRuntime` expose no provider-bound story span.
-> Inline references and `$`/`$$` main-input activation are therefore inactive;
-> direct components retain the data boundaries documented below.
+> `StoryRuntime.lead_turn()` and confirmed specialist/synthesis invocations are
+> provider-bound Python story spans. The shell, inline-reference parsing in
+> main input, and `$`/`$$` activation remain inactive. Python lead and
+> consultation references follow the data boundaries documented below.
 > Settings Model/Effort catalog discovery is also bounded and local; only a
 > user's selected opaque value can be persisted, never provider catalog data.
 
@@ -459,8 +460,8 @@ activity is not sent to a provider and creates no durable reference-operation
 evidence. Current main input does not activate that viewer or submit the
 indicator to a provider. Component error output is fixed and content-free.
 
-For a caller-composed referenced backend call, the first provider payload contains
-only fixed rules, exact operation/invocation correlation, and the complete
+For a referenced lead, specialist, or synthesis call, the first provider
+payload contains only fixed rules, exact operation/invocation correlation, and the complete
 ordered canonical path/range indicators. The capability object is never
 serialized, and its repository-private identifier is absent from provider
 requests, replies, validated public history, and diagnostics. After the
@@ -475,20 +476,84 @@ backend path. The backend records `result_received` only after a structurally
 valid substantive result, performs final revalidation, records `accepted`, and
 then returns the reply. This proves the exact request, delivery sequence,
 result, and acceptance—not provider comprehension, obedience, or correct use.
-Baseline core context cannot satisfy explicit-reference evidence.
+Baseline core context cannot satisfy explicit-reference evidence. Confirmed
+collaboration creates a separate reference operation for each addressed
+invocation. A specialist receives only its assignment's ordered reference
+subset and cannot inventory, SEARCH, or READ a sibling-only artifact path.
+Lead synthesis receives fresh direct reference authority rather than borrowing
+a specialist receipt.
 
 Closing local authorization, delivery, and result carriers drops their Python
 references but offers neither secure memory erasure nor provider erasure. Once
 the substantive request is sent, provider-private or remote systems may retain
-its context under their own policy. The current `StoryRuntime` and interactive
-controller do not construct this path; a future structured collaboration
-consumer must integrate it explicitly.
+its context under their own policy. `StoryRuntime.lead_turn()`, confirmed
+consultation execution, and `propose_specialist_advisory()` construct this
+path; the interactive controller does not.
+
+### Lead-evidence retention
+
+Fresh lead judgments add content-free evidence to canonical collaboration
+history. A receipt can retain relative locator/source identity, state,
+revision/content/manifest digests, UTF-8 size, exact line or record boundary,
+and action ordinal. A zero-hit receipt retains a query digest and count,
+authorized source identities/kinds, optional artifact prefix, and a
+deterministic fingerprint of the authorized source snapshot. It does not
+retain the query, snippet, excerpt, or source body. The typed lead message and
+later specialist replies/synthesis remain visible plaintext story analysis.
+
+These receipts disclose topology and change facts even though they are
+content-free. Protect them like other workspace metadata. They prove only that
+runtime authorized and revalidated the cited acquisition. They do not prove
+provider comprehension, semantic relevance, exhaustive search outside the
+authorized scope, or story consistency. Runtime does not inspect prose to
+correct a provider's `story_specific`/`workflow_meta` classification.
+
+An evidence-validation rejection writes only a closed failure code plus the
+submitted invocation/call IDs to canonical history. The rejected response may
+still exist in the separate bounded provider-exchange or rejected-response
+diagnostic stores under their documented best-effort policies; the failure
+event does not copy that response into collaboration history.
+
+### Artifact-candidate and review retention
+
+A valid non-null lead `artifact_intent` contains proposed story text. Runtime
+resolves it against a complete in-process capture of all canonical artifacts.
+That capture is used to build and validate the candidate; it is not copied as
+a second complete-workspace blob into collaboration history. The resulting
+`ArtifactReviewCandidate`, however, deliberately contains the exact proposed
+change set and projected relationship facts and is stored in the typed
+`artifact_review_candidate` event. A successful `propose` synthesis stores the
+same candidate inside `ArtifactReviewedProposal` so restart and storage
+transfer can prove what every reviewer assessed.
+
+After exact confirmation, each disclosed specialist and the lead synthesis
+provider receive the same content-bearing candidate in their runtime input.
+They may also receive separately authorized reference bytes through the
+ordinary reference boundary. Candidate text can therefore be retained by the
+configured provider under its policy and by local provider-exchange diagnostics
+under their documented limits. The candidate is hidden from `repr`, but that
+is only accidental-display reduction, not encryption or erasure.
+
+Readable collaboration projection exposes only artifact review message,
+decision, state, and closed failure code. Candidate and reviewed-proposal bytes
+are not searchable readable fields and are not automatically selected into
+bounded agent context. Direct event-store/API readers and canonical
+filesystem/SQLite/archive/transfer bytes can still access them; protect those
+stores as story content.
+
+If non-null artifact intent is malformed or claims Apply/Git authority,
+canonical collaboration history records only content-free
+`artifact_intent_rejected` and `intent_rejected` failures. The rejected raw
+provider response may still appear in the separate rejected-response or
+provider-exchange diagnostic boundary. No artifact write, Apply authority, or
+Git action occurs for candidate construction, review, or reviewed-proposal
+finalization.
 
 <a id="agent-context-progress-privacy"></a>
 
 ## Agent-context progress privacy
 
-The optional context lifecycle observer and a future shell projection contain
+The optional context lifecycle observer and any caller projection contain
 only validated scope and operation identities, fixed lifecycle kinds,
 nonnegative counters, and an optional truncation boolean. They have no field
 for prompts, search queries, candidates, excerpts, mandatory-reference bodies,
@@ -537,6 +602,12 @@ source bodies, focused record changes, content-free catalog facts, and
 applicable mandatory-reference bodies. Continuations expose only the newly
 authorized SEARCH/READ observation.
 
+The lead initial payload also exposes four content-free canonical-core status
+rows and the strict scope/status/evidence answer contract. Status inventory
+does not itself expose core bytes. With no explicit reference and no provider
+SEARCH/READ, a workflow/meta answer receives no story body through this
+evidence path.
+
 SEARCH/READ is route-restricted to canonical writing artifacts, focused
 same-session conversation, active debate, and the invoking agent's own state.
 Provider-visible evidence deliberately contains relative source identity,
@@ -545,6 +616,16 @@ untrusted content so the agent can reason from exact evidence. It excludes
 absolute paths, internal files, another agent's state, and incompatible scopes.
 These evidence facts are provider input; public progress and the ledger remain
 content-free.
+
+A specialist-assignment payload also exposes its visible instruction, exact
+input aliases/revisions, and strict assessment/message contract. A synthesis
+payload exposes every successful specialist's assessment, message, ordered
+input IDs, reply-event attribution, all direct story inputs, mandatory
+unresolved IDs, and the optional round-two contract. Those values can contain
+sensitive story analysis and are captured as plaintext provider input/output
+and canonical collaboration events as applicable. The provider receives no
+write/Git capability, credential, absolute path, sibling-only artifact source,
+or API for calling another agent.
 
 `StorySessionContext` remains an internal capture and direct-request
 compatibility value, not the current built-in provider envelope. Direct eager

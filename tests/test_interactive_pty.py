@@ -5359,7 +5359,7 @@ print(
         self.assertIn("Citation: conversation", search_output)
 
         mark = process.output_mark()
-        process.send_line(f"/transcript {selected.conversation_id} 2")
+        process.send_line(f"/transcript {selected.conversation_id} 2 --from 4")
         process.wait_for_text("Transcript (1/2)", after=mark)
         process.wait_for_text("Consult specialists", after=mark)
         transcript_output = process.wait_for_text("awaiting_confirmation", after=mark)
@@ -5369,7 +5369,7 @@ print(
 
         process.send_text("/quit\n\n")
         self.assertEqual(process.wait_for_exit(), 0, process.normalized_text)
-        self.assertEqual(len(store.read("alpha", selected.conversation_id)), 2)
+        self.assertEqual(len(store.read("alpha", selected.conversation_id)), 5)
         self.assertEqual(
             load_default_conversation(self.workspace, "alpha"),
             selected.conversation_id,

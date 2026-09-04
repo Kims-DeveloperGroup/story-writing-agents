@@ -61,8 +61,10 @@ from story_writing_agents.agent_context.service import (
     ContextExecutionEventSink,
     ContextExecutionError,
     ContextExecutionErrorCode,
+    ContextInvocationKind,
     ContextInvocationRequest,
     ContextInvocationResult,
+    ContextJsonObjectResultContract,
     ContextProviderCallRequest,
     ContextProviderCallResult,
     ContextProviderFailureFacts,
@@ -198,7 +200,7 @@ def _read_search_hit(
 ) -> str:
     framed = call.payload["o"]
     assert isinstance(framed, list) and framed[0] == "s"
-    handle = framed[2][0][5]
+    handle = framed[3][0][5]
     provider.used_handles = (handle,)
     return json.dumps(
         {
@@ -219,6 +221,50 @@ def _answer_with_read(
     assert isinstance(framed, list) and framed[0] == "r"
     assert framed[1][0][4] == provider.used_handles[0]
     return _answer(call, provider, used_handles=provider.used_handles)
+
+
+def _lead_answer(
+    call: ContextProviderCallRequest,
+    _provider: "_ScriptedProvider",
+) -> str:
+    return json.dumps(
+        {
+            "a": "a",
+            "c": _correlation(call),
+            "d": [
+                {
+                    "kind": "answer",
+                    "message": "Visible lead answer.",
+                    "proposal": None,
+                }
+            ],
+            "u": [],
+        },
+        separators=(",", ":"),
+    )
+
+
+def _lead_answer_with_read(
+    call: ContextProviderCallRequest,
+    provider: "_ScriptedProvider",
+) -> str:
+    framed = call.payload["o"]
+    assert isinstance(framed, list) and framed[0] == "r"
+    return json.dumps(
+        {
+            "a": "a",
+            "c": _correlation(call),
+            "d": [
+                {
+                    "kind": "answer",
+                    "message": "Visible grounded lead answer.",
+                    "proposal": None,
+                }
+            ],
+            "u": list(provider.used_handles),
+        },
+        separators=(",", ":"),
+    )
 
 
 _Response = (
@@ -555,6 +601,10 @@ class ContextExecutionValueTests(ContextExecutionTestCase):
                 "mandatory_references",
                 "fresh",
                 "allowed_search_source_kinds",
+                "invocation_kind",
+                "result_contract",
+                "physical_call_limit",
+                "include_core_statuses",
             ),
         )
         request = self.request()
@@ -567,15 +617,72 @@ class ContextExecutionValueTests(ContextExecutionTestCase):
             self.assertNotIn("PRIVATE", repr(failure))
             self.assertIsNone(failure.__cause__)
 
+    def test_lead_contract_pair_and_physical_call_limit_are_strict(self) -> None:
+        contract = ContextJsonObjectResultContract("outcome-v1")
+        request = self.request(
+            invocation_kind=ContextInvocationKind.LEAD,
+            result_contract=contract,
+            physical_call_limit=3,
+        )
+        self.assertIs(request.invocation_kind, ContextInvocationKind.LEAD)
+        self.assertEqual(request.result_contract, contract)
+        self.assertEqual(request.physical_call_limit, 3)
+        invalid = (
+            {"invocation_kind": ContextInvocationKind.LEAD},
+            {"result_contract": contract},
+            {"physical_call_limit": 0},
+            {"physical_call_limit": 6},
+            {"physical_call_limit": True},
+        )
+        for overrides in invalid:
+            with self.subTest(overrides=overrides):
+                with self.assertRaises(ContextExecutionError) as caught:
+                    self.request(**overrides)
+                self.assertIs(
+                    caught.exception.code,
+                    ContextExecutionErrorCode.INVALID_VALUE,
+                )
+
     def test_provider_failure_facts_are_exact_optional_and_chainless(self) -> None:
         failure = RuntimeError("PRIVATE_PROVIDER_EXCEPTION")
-        facts = ContextProviderFailureFacts(timed_out=True, taint_existing_thread=True)
+        encoded, payload = account_provider_payload(
+            {"type": "object"},
+            {"value": "bounded"},
+            call_kind=ProviderCallKind.COLLABORATION_INITIAL,
+        )
+        submitted = ProviderCallAccounting(
+            payload,
+            state=ProviderCallState.SUBMITTED,
+            actual_transport_utf8_bytes=len(encoded),
+        )
+        facts = ContextProviderFailureFacts(
+            accounting=submitted,
+            timed_out=True,
+            taint_existing_thread=True,
+            submitted_accountings=(submitted,),
+            submission_uncertain=True,
+        )
         record_context_provider_failure(failure, facts)
         self.assertIs(context_provider_failure_facts(failure), facts)
         self.assertEqual(
             context_provider_failure_facts(ValueError()), ContextProviderFailureFacts()
         )
         self.assertNotIn("PRIVATE_PROVIDER_EXCEPTION", repr(facts))
+        prepared = replace(
+            submitted,
+            state=ProviderCallState.PREPARED,
+            actual_transport_utf8_bytes=None,
+        )
+        for changes in (
+            {"submitted_accountings": (prepared,)},
+            {"submitted_accountings": [submitted]},
+            {"submission_uncertain": 1},
+        ):
+            with (
+                self.subTest(changes=changes),
+                self.assertRaises(ContextExecutionError),
+            ):
+                replace(facts, **changes)
 
     def test_conditional_source_classification_is_exact(
         self,
@@ -704,6 +811,78 @@ class ContextExecutionValueTests(ContextExecutionTestCase):
 
 
 class ContextExecutionLifecycleTests(ContextExecutionTestCase):
+    async def test_lead_search_read_json_answer_uses_exact_dynamic_contract_and_limit(
+        self,
+    ) -> None:
+        self.publish()
+        request = self.request(
+            invocation_kind=ContextInvocationKind.LEAD,
+            result_contract=ContextJsonObjectResultContract("outcome-v1"),
+            physical_call_limit=3,
+        )
+        provider = _ScriptedProvider(
+            (_search, _read_search_hit, _lead_answer_with_read)
+        )
+
+        result = await self.invoke(provider, request)
+
+        self.assertEqual(len(provider.calls), 3)
+        self.assertEqual(
+            result.answer,
+            '{"kind":"answer","message":"Visible grounded lead answer.",'
+            '"proposal":null}',
+        )
+        self.assertEqual(
+            tuple(call.payload["q"][0] for call in provider.calls),
+            ("lead", "lead", "lead"),
+        )
+        self.assertEqual(
+            tuple(tuple(call.payload["q"][-1]) for call in provider.calls),
+            (("lead", "outcome-v1"),) * 3,
+        )
+        self.assertEqual(
+            tuple(call.payload["q"][1] for call in provider.calls),
+            ("sa", "sra", "a"),
+        )
+        self.assertEqual(
+            tuple(call.payload["q"][3][0] for call in provider.calls),
+            (2, 1, 0),
+        )
+
+    async def test_reference_prelude_is_subordinate_to_lead_physical_limit(
+        self,
+    ) -> None:
+        reference = MandatoryReferenceReservation(
+            1,
+            "reference-lead",
+            "artifact-lead",
+            "revision-lead",
+            ContextProvenance(
+                ContextAuthorityKind.REFERENCE_AUTHORIZATION,
+                "core_documents/global_outline.md",
+            ),
+            _digest(b"reference"),
+            9,
+        )
+        request = self.request(
+            invocation_kind=ContextInvocationKind.LEAD,
+            result_contract=ContextJsonObjectResultContract("outcome-v1"),
+            physical_call_limit=2,
+            reference_operation_id="reference-operation",
+            mandatory_references=(reference,),
+        )
+        provider = _ScriptedProvider(
+            (_lead_answer,),
+            reference_operation_id="reference-operation",
+        )
+
+        result = await self.invoke(provider, request)
+
+        self.assertEqual(len(result.provider_calls), 2)
+        self.assertEqual(len(provider.calls), 1)
+        self.assertEqual(provider.calls[0].payload["q"][1], "a")
+        self.assertEqual(provider.calls[0].payload["q"][3][0], 0)
+
     async def test_no_action_reserves_before_provider_and_commits_exact_call(
         self,
     ) -> None:

@@ -353,6 +353,39 @@ class RealAuthorityAdapterTests(_SourceFixture):
             b"",
         )
 
+    def test_assignment_local_artifact_allowlist_filters_inventory_and_capture(
+        self,
+    ) -> None:
+        allowed = "core_documents/global_outline.md"
+        blocked = "core_documents/character_sheets.md"
+        self.publish(core_updates={"global_outline.md": "bounded outline"})
+        adapter = WritingArtifactSourceAdapter(
+            self.repository,
+            _scope(),
+            allowed_paths=frozenset({allowed}),
+        )
+
+        inventory = adapter.inventory(CONTEXT_SOURCE_POLICY)
+
+        self.assertEqual(
+            tuple(item.provenance.locator for item in inventory),
+            (allowed,),
+        )
+        self.assertEqual(
+            adapter.capture(allowed, CONTEXT_SOURCE_POLICY).descriptor,
+            inventory[0],
+        )
+        with self.assertRaises(ContextSourceError) as caught:
+            adapter.capture(blocked, CONTEXT_SOURCE_POLICY)
+        self.assertIs(caught.exception.code, ContextSourceErrorCode.AUTHORITY_MISMATCH)
+        for invalid in ({allowed}, frozenset({"../escape.md"})):
+            with self.subTest(invalid=invalid), self.assertRaises(ContextSourceError):
+                WritingArtifactSourceAdapter(
+                    self.repository,
+                    _scope(),
+                    allowed_paths=invalid,  # type: ignore[arg-type]
+                )
+
     def test_artifact_capture_retries_once_then_reports_persistent_drift(self) -> None:
         adapter = WritingArtifactSourceAdapter(self.repository, _scope())
         first = _artifact_snapshot(_scope(), revision_seed=b"first")
@@ -526,6 +559,15 @@ class RealAuthorityAdapterTests(_SourceFixture):
     ) -> None:
         services = compose_filesystem_conversation_storage(self.workspace)
         metadata = services.catalog.create("session", "Fresh conversation")
+        batch = contract_batches(metadata.conversation_id)["proposal"]
+        services.event_store.append_batch(
+            replace(
+                batch,
+                events=tuple(
+                    replace(event, session_id="session") for event in batch.events
+                ),
+            )
+        )
         adapter = FocusedConversationSourceAdapter(
             services.catalog,
             services.event_store,
@@ -544,6 +586,76 @@ class RealAuthorityAdapterTests(_SourceFixture):
         value = json.loads(snapshot.content)
         self.assertEqual(value["records"], [])
         self.assertEqual(value["bootstrap"]["retained_records"], 0)
+        self.assertEqual(value["bootstrap"]["total_records"], 5)
+
+    def test_searchable_history_is_opt_in_same_session_active_and_frozen(self) -> None:
+        services = compose_filesystem_conversation_storage(self.workspace)
+        focused = services.catalog.create("session", "Focused")
+        sibling = services.catalog.create("session", "Sibling")
+        archived = services.catalog.create("session", "Archived")
+        cross_session = services.catalog.create("other-session", "Other")
+        for metadata in (focused, sibling, archived, cross_session):
+            batch = contract_batches(metadata.conversation_id)["proposal"]
+            services.event_store.append_batch(
+                replace(
+                    batch,
+                    events=tuple(
+                        replace(event, session_id=metadata.session_id)
+                        for event in batch.events
+                    ),
+                )
+            )
+        services.catalog.archive("session", archived.conversation_id)
+        adapter = FocusedConversationSourceAdapter(
+            services.catalog,
+            services.event_store,
+            _scope(subject_id=focused.conversation_id),
+            focused.conversation_id,
+            include_same_session_active=True,
+            include_searchable_history=True,
+        )
+
+        inventory = adapter.inventory(CONTEXT_SOURCE_POLICY)
+
+        self.assertEqual(
+            tuple(item.provenance.locator for item in inventory),
+            (
+                f"conversation/{focused.conversation_id}",
+                f"conversation/{sibling.conversation_id}",
+            ),
+        )
+        focused_snapshot = adapter.capture(
+            f"conversation/{focused.conversation_id}", CONTEXT_SOURCE_POLICY
+        )
+        self.assertEqual(
+            tuple(record.record_id for record in focused_snapshot.records),
+            (
+                "prepared_call_lead",
+                "submitted_call_lead",
+                "judgment_event",
+                "proposal_event",
+                "request_event",
+            ),
+        )
+        self.assertIs(
+            adapter.capture(
+                f"conversation/{focused.conversation_id}", CONTEXT_SOURCE_POLICY
+            ),
+            focused_snapshot,
+        )
+        services.catalog.create("session", "Created after snapshot")
+        self.assertEqual(adapter.inventory(CONTEXT_SOURCE_POLICY), inventory)
+        for excluded in (archived, cross_session):
+            with self.subTest(excluded=excluded.conversation_id):
+                with self.assertRaises(ContextSourceError) as caught:
+                    adapter.capture(
+                        f"conversation/{excluded.conversation_id}",
+                        CONTEXT_SOURCE_POLICY,
+                    )
+                self.assertEqual(
+                    caught.exception.code,
+                    ContextSourceErrorCode.AUTHORITY_MISMATCH,
+                )
 
     def test_active_debate_and_all_four_owner_states_are_public_exact_and_isolated(
         self,

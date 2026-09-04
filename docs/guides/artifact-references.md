@@ -1,7 +1,7 @@
 # Canonical artifact references
 
-Artifact reference indicators remain part of the collaboration design, but no
-current public command attaches one to an agent call.
+Artifact reference indicators tell the Python lead which canonical source it
+must read. They contain a locator, not file content.
 
 ## Indicator format
 
@@ -13,8 +13,8 @@ ${core_documents/global_outline.md}
 ${manuscript/part-01/scenes/opening.md}#L12-L24
 ```
 
-It never embeds the file body. Multiple indicators can appear in one future
-request and preserve their order.
+It never embeds the file body. Multiple indicators can appear in one lead input
+and preserve their order.
 
 Canonical reference sources are:
 
@@ -25,16 +25,42 @@ Manuscripts are grouped under part-dedicated directories. Publication paths
 and reference-source paths are related but separate validation boundaries; see
 [Canonical writing artifacts](../reference/writing-artifacts.md).
 
-## Current behavior
+## Python lead behavior
 
-Issue #478 removed every public provider-bound input span. Therefore:
+Pass indicators inside `StoryRuntime.lead_turn()` text. The runtime parses every
+active reference, creates a content-free operation record, requires one exact
+ordered provider read action, securely reads the current whole file or range,
+and attaches only those selected bytes to the substantive call as untrusted
+mandatory context. It revalidates the source before accepting the response.
+Another agent's read, a checkpoint, or SEARCH/READ evidence cannot satisfy this
+obligation.
+
+For example:
+
+```python
+result = await runtime.lead_turn(
+    "novel",
+    "conversation_a",
+    "Check ${core_documents/narrative_rules.md} and "
+    "${manuscript/part-01/scenes/opening.md}#L12-L24, then advise me.",
+)
+assert result.message
+```
+
+The repository records content-free operation evidence, but
+`LeadTurnResult` does not expose an operation ID or selected bytes. A proposal
+may disclose only the canonical input locator, range, state, and revision
+digest.
+
+## Shell behavior
+
+Issue #478 removed the provider-bound shell input span. Therefore:
 
 - `$` does not open an artifact picker in the current main prompt;
 - `$$` does not open the ranged-source picker/viewer workflow;
 - typing a completed indicator does not trigger a read;
 - ordinary or routed input is rejected before reference parsing; and
-- no `reference_operation_id` is created by the installed CLI or management
-  runtime.
+- no `reference_operation_id` is created by the installed CLI.
 
 For example:
 
@@ -45,20 +71,13 @@ Direct story execution is unavailable in this integration stage. Session, conver
 
 The file is not opened and its bytes are not sent anywhere.
 
-## Preserved internal contract
+## Enforcement boundary
 
-The writing-artifact repository, authorization types, content-free operation
-history, and terminal viewer components remain available to the forthcoming
-collaboration integration. The sole schema-v2 storage/inspection service is
-active; it does not own lead/specialist triggering or artifact reads. The
-#452/#453 workflows must make
-the addressed lead or specialist read the attached ordered reference batch
-before its answer is accepted. A path-plus-range remains an instruction to read
-exactly that source range, not prompt content copied by the UI.
-
-This guide does not promise that future activation will use an earlier
-schema-v1 command. The active workflow must connect references to schema-v2
-collaboration history and the lead-owned confirmation boundary.
+The Python lead performs the #452 read. #453 must repeat enforcement for every
+later addressed specialist; the lead's receipt cannot be reused. A path plus
+range remains an instruction to read exactly that range, not prompt content
+copied by a UI. References grant read-only context: they do not authorize an
+artifact change, specialist execution, or Git operation.
 
 ## What happens when an attached source is later applied
 

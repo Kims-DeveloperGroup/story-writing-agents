@@ -2,9 +2,9 @@
 
 > **Availability:** the `writing_artifacts` subpackage retains canonical path,
 > source discovery/read, reference authorization/evidence, provenance,
-> publication, and recovery components. The current CLI and management runtime
-> do not start a consensus publication or attach a reference to an agent call.
-> Main-input `$`/`$$` activation is unavailable. Existing artifacts and
+> publication, and recovery components. The Python lead runtime attaches
+> `${path}` references but does not publish or mutate artifacts. Main-input
+> `$`/`$$` activation is unavailable. Existing artifacts and
 > reference-operation evidence remain inspectable through direct components.
 > The pure exact change-set and relationship-policy contracts documented below
 > remain available independently of those inactive runtime workflows.
@@ -689,7 +689,7 @@ it does not produce a user-facing answer itself.
 | Project the exact change set over the caller-supplied complete base state. | The result describes what the artifacts would look like; no workspace changed. |
 | Parse the base and projected canonical link graphs and compare them. | A caller can show every added, removed, retained, or still-dangling link instead of silently accepting a broken rename or delete. |
 | Reject rename/delete operations on the four permanent core identities. | A missing core document may be created and a present one may be patched or replaced, but its canonical identity cannot be moved or removed. |
-| Derive content-free domain/reason facts. | A future lead workflow can explain which kinds of review are relevant, but this layer names no agent and dispatches nobody. |
+| Derive content-free domain/reason facts. | The reviewed-candidate workflow can explain which kinds of review are relevant, but this layer names no agent and dispatches nobody. |
 
 ### Public Python surface and limits
 
@@ -849,9 +849,10 @@ Review facts are exact artifact facts, not routing decisions:
 
 Facts are deduplicated and deterministically sorted. Relevance is direct only:
 the policy performs no transitive graph walk and no natural-language inference.
-The later proposal-mapping workflow planned in Issue #490 may map these domains
-to specialist consultation choices. This API deliberately exposes no agent ID
-and cannot silently choose, trigger, or attribute a specialist.
+The implemented `story_writing_agents.artifact_proposals` layer maps the
+candidate's canonical domains to specialists. This relationship API itself
+still exposes no agent ID and cannot silently choose, trigger, or attribute a
+specialist.
 
 ### Provider-free scenario harness
 
@@ -903,7 +904,8 @@ def validate(base, operations, attached=()):
 ```
 
 These are library examples. The quoted lead replies are illustrative outputs
-for the future lead workflow, not strings returned by this validator.
+for the current lead workflow, not strings returned by this validator or
+guaranteed provider wording.
 
 #### 1. Create a missing core document
 
@@ -931,8 +933,8 @@ True
 ```
 
 The same absent/create rule applies to each of the four core identities;
-patch and replace are valid only when that identity is present and exact. A
-future lead can say, “The missing global outline can be created, and the
+patch and replace are valid only when that identity is present and exact. The
+lead can say, “The missing global outline can be created, and the
 proposal requires plot/structure review. Shall I proceed to that review?” The
 file is still absent: no write or confirmation occurred.
 
@@ -956,8 +958,8 @@ except ArtifactRelationshipError as error:
 protected_core_operation 0
 ```
 
-All four core identities have the same permanent rule, including rename. A
-future lead can reject the destructive form and offer an exact patch or
+All four core identities have the same permanent rule, including rename. The
+lead can reject the destructive form and offer an exact patch or
 replacement instead. The current core bytes remain unchanged.
 
 #### 3. Detect every blocker in a broken manuscript rename
@@ -987,7 +989,7 @@ False 2
 [('manuscript/part-01/chapter-list.md', 'manuscript/part-01/opening.md'), ('manuscript/part-01/index.md', 'manuscript/part-01/opening.md')]
 ```
 
-A future lead can say, “I cannot advance this rename as proposed: both
+The lead can say, “I cannot advance this rename as proposed: both
 `chapter-list.md` and `index.md` would still point to the removed identity.”
 That is a proposal critique only; the source file has not moved.
 
@@ -1017,7 +1019,7 @@ True 2 2 0
 ```
 
 This is the relationship-checked form of the exact change-set workflow above.
-A future lead can say, “The atomic proposal removes both old links, adds both
+The lead can say, “The atomic proposal removes both old links, adds both
 new links, and has no dangling target. It is ready for the later review step.”
 Validation still did not apply or confirm any operation.
 
@@ -1058,7 +1060,7 @@ tone_execution manuscript_operation manuscript/part-01/review.md 0
 tone_execution relationship_core_evidence core_documents/narrative_rules.md 0
 ```
 
-A future lead can say, “The artifact facts indicate character/world and
+The lead can say, “The artifact facts indicate character/world and
 tone/execution review. May I dispatch those consultations?” The fact list does
 not choose agents, prove that the attachment was read, or authorize a write.
 
@@ -1083,7 +1085,7 @@ print(cycle.is_valid, len(cycle.added_edges), cycle.projected_dangling_edges)
 True 4 ()
 ```
 
-A future lead can report that every canonical target exists and the cycle is
+The lead can report that every canonical target exists and the cycle is
 structurally valid. That is not a judgment about story quality and does not
 create the three files.
 
@@ -1095,7 +1097,7 @@ There is no proposed artifact operation, so the application should not invent
 a no-op change set or call relationship validation. There is no validation
 value and no review fact to display. Plain words such as “opening,” a filename,
 or a core-document name do not create relationships or select a specialist.
-A future lead can clarify the question, answer directly, or separately propose
+The lead can clarify the question, answer directly, or separately propose
 a consultation according to the later orchestration workflow. Nothing is
 written, staged, or committed.
 
@@ -1124,12 +1126,62 @@ set when those bytes changed. For `is_valid == False`, the caller can use every
 returned dangling edge to construct one revised proposal. Neither path grants
 confirmation or write authority.
 
+## Lead-reviewed artifact proposals
+
+`StoryRuntime.lead_turn()` now connects evidence-grounded lead intent to the
+pure change-set and relationship contracts without connecting them to a writer.
+For `kind=proposal`, the lead provider may return exactly one provider-neutral
+artifact intent instead of an ordinary consultation intent:
+
+| Operation | Provider names | Runtime requirement |
+| --- | --- | --- |
+| create | canonical `suggested_path`, `new_text` | Path must be canonical and complete-state projection must permit creation. |
+| patch | current artifact `evidence_id`, `replacement_text` | Evidence must identify one exact whole or ranged boundary. |
+| replace | current artifact `evidence_id`, `new_text` | Evidence must identify a whole artifact. |
+| rename | current artifact `evidence_id`, canonical `suggested_destination` | Evidence must identify a whole artifact; projected links/policies must remain valid. |
+| delete | current artifact `evidence_id` | Evidence must identify a whole artifact; protected core and relationship rules still apply. |
+
+The lead also may name additional affected review domains. Runtime, not the
+provider, performs `capture_complete_state()` under the source lease, resolves
+the evidence-bound operations, calls `build_artifact_change_set()`, calls
+`validate_artifact_relationships()`, derives mandatory domains from the
+returned review facts, adds the requested domains in canonical order, maps
+them to specialists, and computes the candidate digest. Invalid or stale
+intent produces no partial candidate.
+
+The candidate is immutable and content-bearing. It contains the exact change
+set, projected relationship validation, grounding evidence IDs,
+mandatory/disclosed review domains, identity/revision, and digest. Exact user
+confirmation authorizes only consultation about that candidate. Every
+disclosed reviewer and the final lead synthesis receive the same serialized
+candidate. Reviewers return attributed assessments; the lead preserves all
+non-supporting inputs and chooses `propose`, `revise`, or `reject`. These views
+are evidence, not a vote.
+
+Only `propose` produces an immutable `ArtifactReviewedProposal`. That value
+contains visible rationale, user impact, limitations, every review, unresolved
+inputs, and exact candidate/history identity, while requiring all of these to
+remain false:
+
+```text
+artifact_write_occurred = false
+apply_authority_granted = false
+git_action_occurred = false
+```
+
+Before review and again before reviewed-proposal finalization, runtime checks
+the candidate against current complete state. Drift yields `stale`; revision
+yields a fresh candidate and permanently supersedes the old one. No migration
+or legacy proposal form is used. See the
+[lead-agent scenarios](../guides/lead-agent.md#explicit-story-writing-scenarios)
+and [runtime API](runtime-api.md#leadturnresult).
+
 ## Reference directive parser
 
 > **Availability:** the pure parser remains I/O-free. Parsing alone is not proof
-> of an eligible read. The current public runtime has no provider-bound
-> operation that consumes the result; terminal picker/viewer components are not
-> active from main input.
+> of an eligible read. `StoryRuntime.lead_turn()` consumes the result and adds
+> repository authorization/provider steps; terminal picker/viewer components
+> are not active from main input.
 
 One directive is a content-free indicator containing either an eligible source
 path or that path followed by a one-based inclusive line range:
@@ -1214,20 +1266,19 @@ artifact bytes. Invalid directive input raises
 messages do not echo a rejected path or artifact content. Parsing performs no
 filesystem, repository, provider, controller, terminal, or network I/O.
 
-At this stage, Python callers can validate directive grammar, preserve the
-original input, compute the provider-text escape projection, and inspect
-ordered canonical path/range indicators. This parser API alone does not
+The parser API lets callers validate directive grammar, preserve the original
+input, compute the provider-text escape projection, and inspect ordered
+canonical path/range indicators. This parser alone does not
 establish artifact eligibility, read content, supply it to a provider, or
-require an agent read. A future structured collaboration consumer must add
-those authorization and provider steps for `${...}`. Current main input does
-not activate `$`/`$$` before parser submission.
+require an agent read. `lead_turn()` adds those steps for `${...}`. Shell main
+input does not activate `$`/`$$` before parser submission.
 
 ## Authorized reads and lifecycle evidence
 
 > **Availability:** repository authorization, transient delivery, durable
-> content-free evidence, and exact provider-read enforcement remain direct
-> components. `StoryRuntime` has no current provider-bound consumer for them,
-> and main input does not activate `$` completion or `$$` ranged viewing.
+> content-free evidence, and exact provider-read enforcement are used by
+> Python lead turns. Main input does not activate `$` completion or `$$`
+> ranged viewing.
 
 The `${canonical/path.md}` and `${canonical/path.md}#Lx-Ly` values remain
 content-free indicators. A caller holding `WritingArtifactRepository` can use
@@ -1360,11 +1411,14 @@ evidence namespace are safe.
 
 ## What a user can change
 
-No current public command asks story agents to change an artifact. Users can
-prepare or inspect safe canonical files directly while no workspace process is
-active, but a manual file has no agent-produced provenance.
+No current public command changes an artifact. Users can ask the Python lead to
+critique or recommend a change, construct an exact artifact candidate, confirm
+its specialist review, and inspect an immutable reviewed proposal. Users can
+also prepare or inspect safe canonical files directly while no workspace
+process is active. A lead decision authorizes only the disclosed review; it
+does not apply the candidate. A manual file has no agent-produced provenance.
 
-The later confirmed lead/specialist workflow is expected to support:
+The later execution/publication workflow is expected to support:
 
 - an outline request can lead the lead orchestrator to publish full replacements
   for `global_outline.md` or `part_outlines.md`;
@@ -1389,9 +1443,10 @@ currently executable shell input:
 - A manuscript revision can read the earlier manuscript and relevant Part
   outline, then propose an exact create, patch, replace, rename, or delete.
 
-After the structured workflow is integrated, each addressed invocation must
-complete its own independently correlated ordered read. The current shell
-instead rejects the surrounding story instruction before parsing references.
+The current lead invocation completes its independently correlated ordered
+read. Each later addressed specialist must do the same; the lead's receipt
+cannot be reused. The shell rejects the surrounding story instruction before
+parsing references.
 
 See the [artifact-reference guide](../guides/artifact-references.md) for exact
 syntax, limits, work-history inspection, and complete user scenarios.

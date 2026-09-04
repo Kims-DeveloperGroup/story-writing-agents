@@ -1,7 +1,8 @@
 # Getting started
 
-This revision prepares and inspects writing workspaces. It does not yet send
-story work to the lead agent or specialists.
+This revision prepares and inspects writing workspaces and exposes a Python
+lead conversation and confirmed specialist-consultation API. It does not send
+shell input to the lead or modify story artifacts.
 
 ## 1. Install
 
@@ -78,17 +79,17 @@ creates no directive, catalog record, diagnostic, or other residue.
 ## 4. Manage a session and conversation
 
 The v2 marker records exact session names, but `story init` does not create a
-session branch, sibling worktree, or internal runtime ref. The package-internal
-#504 seam now owns that isolation while #455 owns its connection to installed
-session commands. The original `main` root must remain the pristine
+session branch, sibling worktree, or internal runtime ref. Session Create and
+Reopen use the package-internal resource seam to provision or verify that
+isolation before attaching a destination. The original `main` root remains the pristine
 initialization baseline; it is not the location or authorization for later
 story/runtime writes.
 
 The retained management commands below describe the installed management
-surface. Their current provider-session `ready` result does not mean the #504
-Git triple is ready. Use them through the session-worktree composition after
-#455 connects it; writing mutable state directly into the original baseline
-makes a fresh v2 readiness check fail closed.
+surface. A provider-session `ready` result is distinct from Git transition
+assessment and does not authorize Apply, commit, or checkpoint work. Writing
+mutable state directly into the original baseline makes a fresh v2 readiness
+check fail closed.
 
 ```bash
 story
@@ -147,15 +148,41 @@ The same guidance applies to routed text and every removed direct-execution
 form. Rejection occurs before provider binding, transcript append, RAG,
 artifact-reference work, progress, or artifact mutation.
 
-There is no noninteractive story-execution command and no public
-`StoryRuntime` method for an advisory turn or debate. Do not build automation
-around an earlier direct path. The selected filesystem or SQLite bundle now
-uses the sole schema-v2 collaboration event store and provider-free inspection
-service. Open #452 later owns lead proposal/confirmation writes and #453 owns
-specialist execution/result writes. Strict workspace-v2 readiness already
-rejects unsupported whole-workspace state before these services activate.
+There is no noninteractive story-execution command and no public runtime method
+for a debate or raw/unconfirmed specialist dispatch. Do not build automation
+around an earlier direct path. The selected filesystem or SQLite bundle uses
+the sole schema-v2 collaboration event store for provider-free inspection and
+Python lead/consultation writes. #454 owns whole-workspace rejection of
+unsupported history.
+Strict workspace-v2 readiness rejects unsupported whole-workspace state before
+these services activate.
 
-## 6. Continue
+## 6. Use the Python lead API
+
+With an active conversation and a configured ready backend, an application can
+address the lead without choosing an agent:
+
+```python
+result = await runtime.lead_turn(
+    "first_novel",
+    conversation_id,
+    "Critique the opening against ${core_documents/global_outline.md}.",
+)
+```
+
+The result is one answer, question, critique, recommendation, or proposal. A
+proposal discloses complete assignments, content-free input revisions, user
+impact, side effects, and work limits. Only a matching structured
+`LeadStepDecision` can Confirm, Reject, or Revise it. Free-form `Yes` is an
+ordinary new lead turn and supersedes the pending proposal.
+
+Confirming records the exact decision, executes the disclosed one-to-three
+specialist consultation, and returns the authoritative terminal or round-two
+turn. It cannot authorize an artifact change or Git commit. See the
+[lead-agent guide](guides/lead-agent.md) for complete examples and the
+[runtime API](reference/runtime-api.md) for exact signatures.
+
+## 7. Continue
 
 - [Story sessions and conversations](guides/story-sessions.md)
 - [Lead agent and collaboration status](guides/lead-agent.md)

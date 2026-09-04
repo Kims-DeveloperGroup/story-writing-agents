@@ -30,10 +30,11 @@ flowchart TD
     Q --> P[Exact event/field citation and page]
 ```
 
-In the target workflow, work narrows from workspace to session to collaboration
-steps and a debate, then moves through candidate revisions toward at most one
-committed manuscript. The current public runtime stops at management and
-inspection. Conversation identity is scoped by the same story session but
+Work narrows from workspace to session to a lead conversation and collaboration
+step. The current Python runtime stops after direct lead advice or the user's
+exact decision on one proposal; later execution may enter a debate and move
+through candidate revisions toward at most one committed manuscript.
+Conversation identity is scoped by the same story session but
 remains separate from debate execution. Its catalog owns subject/archive
 status. The selected service stores schema-v2 collaboration events and derives
 readable records, event-field search hits, exact citations, state, and bounded
@@ -46,14 +47,14 @@ not searched. See
 
 | Role | Responsibility | Votes? |
 | --- | --- | --- |
-| `lead_orchestrator` | Moderates, synthesizes, and finalizes | No |
+| `lead_orchestrator` | Sole user front channel; advises, critiques, recommends, watches constraints, and proposes specialist routing | No |
 | `plot_architect` | Plot, structure, flow, and pacing | Yes |
 | `character_custodian` | Character, relationships, world, and continuity | Yes |
 | `execution_specialist` | Drafting, prose, POV, tone, grammar, and format | Yes |
 
-For future debates, runtime components own phase ordering and consensus
-validation. For a future advisory turn, the structured workflow owns preflight,
-event/provider ordering, and reply validation.
+For later debates, runtime components own phase ordering and consensus
+validation. For the current advisory turn, the structured workflow owns
+preflight, event/provider ordering, proposal authority, and reply validation.
 The three specialists audit the same debate revision; the lead cannot vote or
 erase a conflict. Context manifests and route-specific source authority limit
 each agent to role-relevant current material and only its own private state.

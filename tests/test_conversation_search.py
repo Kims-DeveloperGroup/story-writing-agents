@@ -387,7 +387,11 @@ class CollaborationReadableSearchContractTests(unittest.TestCase):
 
     def test_document_identity_binds_event_field_and_metadata_revision(self) -> None:
         history, _ = awaiting_history()
-        record = project_collaboration_readable_history(history)[0]
+        record = next(
+            item
+            for item in project_collaboration_readable_history(history)
+            if item.fields
+        )
         field = record.fields[0]
         base = collaboration_readable_document_id(
             workspace_id="workspace_a",

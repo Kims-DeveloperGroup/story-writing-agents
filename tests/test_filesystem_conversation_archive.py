@@ -208,7 +208,7 @@ class FilesystemConversationArchiveRoundTripTests(unittest.TestCase):
             serialize_conversation_archive(payload),
         )
         self.assertEqual(event_images(first), event_images(payload))
-        self.assertEqual(len(event_images(first)), 25)
+        self.assertEqual(len(event_images(first)), 43)
         for session in payload.sessions:
             for conversation in session.conversations:
                 metadata = workspace.path(

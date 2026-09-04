@@ -610,10 +610,13 @@ class ConversationStorageServicesTests(unittest.TestCase):
         )
 
         self.assertEqual(len(result.hits), 1)
+        proposal = next(
+            event for event in history if event.event_id == "proposal_event"
+        )
         self.assertEqual(
             result.hits[0].citation.conversation_id, metadata.conversation_id
         )
-        self.assertEqual(result.hits[0].citation.sequence, history[0].sequence)
+        self.assertEqual(result.hits[0].citation.sequence, proposal.sequence)
         self.assertEqual(
             event_store.read("session_a", metadata.conversation_id),
             history,
@@ -645,11 +648,14 @@ class ConversationStorageServicesTests(unittest.TestCase):
         )
 
         self.assertEqual(len(result.hits), 1)
+        proposal = next(
+            event for event in history if event.event_id == "proposal_event"
+        )
         self.assertEqual(
             result.hits[0].citation.conversation_id,
             metadata.conversation_id,
         )
-        self.assertEqual(result.hits[0].citation.sequence, history[0].sequence)
+        self.assertEqual(result.hits[0].citation.sequence, proposal.sequence)
         self.assertEqual(
             services.event_store.read("session_a", metadata.conversation_id)[0],
             history[0],

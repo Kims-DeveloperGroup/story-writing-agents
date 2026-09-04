@@ -321,7 +321,7 @@ class FilesystemCollaborationEventStorePersistenceTests(unittest.TestCase):
                     self.assertIs(raised.exception.failure, expected)
                     self.assertEqual(value.history_path.read_bytes(), committed)
 
-    def test_all_six_required_co_batches_append_and_split_forms_are_atomic(
+    def test_all_required_co_batches_append_and_split_forms_are_atomic(
         self,
     ) -> None:
         with _harness() as value:
@@ -329,7 +329,14 @@ class FilesystemCollaborationEventStorePersistenceTests(unittest.TestCase):
             _append_prefix(
                 value.store,
                 batches,
-                ("proposal", "confirmation", "running", "result", "completion"),
+                (
+                    "proposal",
+                    "confirmation",
+                    "running",
+                    "calls",
+                    "result",
+                    "completion",
+                ),
             )
             self.assertIs(
                 value.store.read_context(
@@ -343,7 +350,7 @@ class FilesystemCollaborationEventStorePersistenceTests(unittest.TestCase):
             _append_prefix(
                 value.store,
                 batches,
-                ("proposal", "confirmation", "running", "unknown"),
+                ("proposal", "confirmation", "running", "calls", "unknown"),
             )
             self.assertIs(
                 value.store.read_context(
@@ -356,13 +363,21 @@ class FilesystemCollaborationEventStorePersistenceTests(unittest.TestCase):
             ((), "proposal", slice(0, 1)),
             (("proposal",), "confirmation", slice(0, 1)),
             (("proposal", "confirmation"), "running", slice(0, -1)),
-            (("proposal", "confirmation", "running"), "result", slice(-1, None)),
             (
-                ("proposal", "confirmation", "running", "result"),
+                ("proposal", "confirmation", "running", "calls"),
+                "result",
+                slice(-1, None),
+            ),
+            (
+                ("proposal", "confirmation", "running", "calls", "result"),
                 "completion",
                 slice(-1, None),
             ),
-            (("proposal", "confirmation", "running"), "unknown", slice(-1, None)),
+            (
+                ("proposal", "confirmation", "running", "calls"),
+                "unknown",
+                slice(-1, None),
+            ),
         )
         for prefix, name, selected in split_cases:
             with self.subTest(batch=name), _harness() as value:
@@ -374,10 +389,23 @@ class FilesystemCollaborationEventStorePersistenceTests(unittest.TestCase):
                     else None
                 )
                 source = batches[name]
+                partial_events = source.events[selected]
+                if name == "proposal":
+                    partial_events = tuple(
+                        event
+                        for event in source.events
+                        if event.event_id == "proposal_event"
+                    )
+                if name == "running":
+                    partial_events = tuple(
+                        event
+                        for event in source.events
+                        if event.event_id != "dispatch_assignment_character"
+                    )
                 partial = CollaborationEventBatch(
                     f"partial_{name}",
                     source.expected_last_sequence,
-                    source.events[selected],
+                    partial_events,
                 )
                 with self.assertRaises(CollaborationAppendError) as raised:
                     value.store.append_batch(partial)
@@ -418,7 +446,8 @@ class FilesystemCollaborationEventStoreCorruptionTests(unittest.TestCase):
             with self.subTest(corruption=name), _harness() as value:
                 batch = contract_batches(value.conversation_id)["proposal"]
                 value.store.append_batch(batch)
-                first, second = value.store.read(SESSION_ID, value.conversation_id)
+                history = value.store.read(SESSION_ID, value.conversation_id)
+                first, second = history[:2]
                 v1 = ConversationEvent(
                     schema_version=1,
                     session_id=SESSION_ID,
@@ -449,13 +478,13 @@ class FilesystemCollaborationEventStoreCorruptionTests(unittest.TestCase):
                     ),
                     "partial_batch": _encode_history((first,)),
                     "sequence_gap": _encode_history(
-                        (replace(first, sequence=2), second)
+                        (replace(first, sequence=2), *history[1:])
                     ),
                     "duplicate_ordinal": _encode_history(
-                        (first, replace(second, batch_ordinal=0))
+                        (first, replace(second, batch_ordinal=0), *history[2:])
                     ),
                     "size_drift": _encode_history(
-                        (replace(first, batch_size=3), second)
+                        (replace(first, batch_size=3), *history[1:])
                     ),
                     "digest_drift": _encode_history(
                         (
@@ -463,14 +492,22 @@ class FilesystemCollaborationEventStoreCorruptionTests(unittest.TestCase):
                                 first,
                                 batch_digest="sha256:" + "0" * 64,
                             ),
-                            second,
+                            *history[1:],
                         )
                     ),
                     "event_reuse": _encode_history(
-                        (first, replace(second, event_id=first.event_id))
+                        (
+                            first,
+                            replace(second, event_id=first.event_id),
+                            *history[2:],
+                        )
                     ),
                     "batch_drift": _encode_history(
-                        (first, replace(second, batch_id="different_batch"))
+                        (
+                            first,
+                            replace(second, batch_id="different_batch"),
+                            *history[2:],
+                        )
                     ),
                     "wrong_identity": _encode_history(
                         (
@@ -478,7 +515,7 @@ class FilesystemCollaborationEventStoreCorruptionTests(unittest.TestCase):
                                 first,
                                 conversation_id="different_conversation",
                             ),
-                            second,
+                            *history[1:],
                         )
                     ),
                 }
@@ -546,7 +583,7 @@ class FilesystemCollaborationEventStoreConcurrencyTests(unittest.TestCase):
                     event.sequence
                     for event in value.store.read(SESSION_ID, value.conversation_id)
                 ),
-                (1, 2),
+                tuple(range(1, len(first.events) + 1)),
             )
             return observed
 

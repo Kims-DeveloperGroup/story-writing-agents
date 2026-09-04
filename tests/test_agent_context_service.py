@@ -42,8 +42,10 @@ from story_writing_agents.agent_context.planning import (
 )
 from story_writing_agents.agent_context.service import (
     ContextInvocationBinding,
+    ContextInvocationKind,
     ContextInvocationSession,
     ContextInvocationState,
+    ContextJsonObjectResultContract,
 )
 from story_writing_agents.agent_context.sources import (
     CONTEXT_SOURCE_POLICY,
@@ -290,10 +292,12 @@ class ServiceSurfaceAndBindingTests(unittest.TestCase):
                 "ContextExecutionEventKind",
                 "ContextExecutionEventSink",
                 "ContextInvocationBinding",
+                "ContextInvocationKind",
                 "ContextInvocationRequest",
                 "ContextInvocationResult",
                 "ContextInvocationSession",
                 "ContextInvocationState",
+                "ContextJsonObjectResultContract",
                 "ContextProvider",
                 "ContextProviderCallFinalizer",
                 "ContextProviderCallRequest",
@@ -354,6 +358,20 @@ class ServiceSurfaceAndBindingTests(unittest.TestCase):
             ("open", "searching", "reading", "answer_authorized", "failed"),
         )
         self.assertEqual(
+            tuple(item.value for item in ContextInvocationKind),
+            (
+                "lead",
+                "specialist_assignment",
+                "lead_synthesis",
+                "specialist_advisory",
+            ),
+        )
+        result_contract = ContextJsonObjectResultContract("outcome-v1")
+        self.assertEqual(result_contract.contract_id, "outcome-v1")
+        self.assertFalse(hasattr(result_contract, "__dict__"))
+        with self.assertRaises((FrozenInstanceError, TypeError)):
+            result_contract.contract_id = "changed"  # type: ignore[misc]
+        self.assertEqual(
             tuple(item.value for item in service_module.ContextProviderTerminalCode),
             (
                 "malformed_structured_response",
@@ -368,6 +386,8 @@ class ServiceSurfaceAndBindingTests(unittest.TestCase):
         for facade in (story_writing_agents, agent_context_package):
             self.assertFalse(hasattr(facade, "ContextProviderCallFinalizer"))
             self.assertFalse(hasattr(facade, "ContextProviderTerminalCode"))
+            self.assertFalse(hasattr(facade, "ContextInvocationKind"))
+            self.assertFalse(hasattr(facade, "ContextJsonObjectResultContract"))
         self.assertEqual(
             tuple(
                 field.name for field in fields(service_module.ContextProviderCallResult)
@@ -616,6 +636,31 @@ class CompactWireDecoderTests(unittest.TestCase):
                 self.assertEqual(
                     decoded.used_handles,
                     (answer_handle,) if contract == "text" else (),
+                )
+
+        object_contract = ContextJsonObjectResultContract("outcome-v1")
+        structured = self.decode(
+            {
+                "a": "a",
+                "c": self.token,
+                "d": [{"proposal": None, "message": "Visible.", "kind": "answer"}],
+                "u": [],
+            },
+            allowed=("answer",),
+            contract=object_contract,
+        )
+        self.assertIsInstance(structured, ContextAnswerAction)
+        assert isinstance(structured, ContextAnswerAction)
+        self.assertEqual(
+            structured.answer,
+            '{"kind":"answer","message":"Visible.","proposal":null}',
+        )
+        for invalid in ([], "text", 1, None, True):
+            with self.subTest(json_object_invalid=invalid):
+                self.assert_malformed(
+                    {"a": "a", "c": self.token, "d": [invalid], "u": []},
+                    allowed=("answer",),
+                    contract=object_contract,
                 )
 
     def test_search_wire_supports_shared_artifact_prefix_and_kind_matrix(self) -> None:
@@ -1840,9 +1885,10 @@ class SearchAndAnswerLifecycleTests(unittest.TestCase):
         search_serialized = session.serialize_observation(search)
         search_wire = json.loads(search_serialized)
         self.assertEqual(search_wire[:2], ["s", False])
-        self.assertEqual(len(search_wire[2]), 4)
+        self.assertIsNone(search_wire[2])
+        self.assertEqual(len(search_wire[3]), 4)
         for expected_index, (hit, expected) in enumerate(
-            zip(search_wire[2], cases, strict=True),
+            zip(search_wire[3], cases, strict=True),
             start=1,
         ):
             kind, authority, locator, boundary, content = expected
@@ -1918,14 +1964,13 @@ class SearchAndAnswerLifecycleTests(unittest.TestCase):
         read_wire = json.loads(read_serialized)
         self.assertEqual(read_wire[0], "r")
         self.assertEqual(len(read_wire[1]), 4)
-        for search_hit, evidence, expected in zip(
-            search_wire[2],
-            read_wire[1],
-            cases,
-            strict=True,
+        for expected_index, (search_hit, evidence, expected) in enumerate(
+            zip(search_wire[3], read_wire[1], cases, strict=True),
+            start=1,
         ):
             self.assertEqual(evidence[:5], search_hit[1:6])
-            self.assertEqual(evidence[5], expected[4])
+            self.assertEqual(evidence[5], f"read_2_{expected_index}")
+            self.assertEqual(evidence[6], expected[4])
         session.complete_read(receipt)
         authorization = session.authorize_answer(
             ContextAnswerAction(

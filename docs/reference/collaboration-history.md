@@ -5,23 +5,29 @@
 > one `CollaborationEventStore`; `/history`, `/search`, `/transcript`, and
 > `/status` use its provider-free readable projections. Concrete store adapters
 > are direct-module-only, while contracts and pure context/event projections
-> are available from their documented facades. Public lead/specialist provider
-> execution remains unavailable.
+> are available from their documented facades. Python lead turns, structured
+> decisions, confirmed specialist execution, lead synthesis, and reviewed
+> artifact proposals write the same contract.
 
 Key terms: **proposal**—the complete disclosure for one possible step;
 **decision**—one structured `confirm`, `reject`, or `revise` response to the
 exact current request; **physical call**—one submitted provider invocation,
 including a retry; **batch**—one all-or-nothing ordered append candidate;
-**projection**—a validated summary that is evidence, never execution authority.
+**projection**—a validated summary that is evidence, never execution authority;
+**artifact candidate**—one immutable complete-state-bound proposed change;
+**reviewed artifact proposal**—that exact candidate plus complete attributed
+review, with no Apply/write/Git authority.
 
 ## What changes for a user
 
-The contract can represent a future lead-led conversation without losing which
-actor said or did what. It can record typed user, lead, specialist, runtime,
+The contract represents the active Python lead conversation without losing
+which actor said or did what. It records typed user, lead, specialist, runtime,
 artifact, and Git actors; disclose the exact proposed work before it starts;
 bind a structured decision to that proposal; retain successful sibling results
 when another assignment fails; and expose a deterministic recovery state after
-a restart.
+a restart. A story-specific lead judgment is stored with its exact content-free
+runtime evidence. An invalid submitted judgment is closed by a typed failure,
+so the user can retry without replaying that provider result.
 
 The same exact v2 history is readable without weakening it. A Python caller or
 the current shell can project one complete typed record per event, search only the
@@ -29,8 +35,13 @@ closed public field set, resolve a hit to the exact original Unicode substring,
 page one unchanged snapshot, derive a stable lookup-document ID, and explicitly
 select bounded records for possible later provider context.
 
-It cannot yet run a lead or specialist, change a story artifact, or mutate
-Git. The active filesystem and SQLite compositions persist exact batches and
+The contract and its pure projections run nothing. `StoryRuntime.lead_turn()`
+uses it while binding the lead, and `decide_lead_step()` records exact
+decisions and executes a confirmed consultation through runtime-owned
+capabilities. This path can call specialists and the lead for read-only
+synthesis, construct and review an exact artifact candidate, and persist the
+review result; it cannot change a story artifact or mutate Git. The active
+filesystem and SQLite compositions persist exact batches and
 read them after restart. They do not reinterpret free text as permission or
 turn a stored confirmation or projected `next_safe_action` into executable
 authority. Archive and backend transfer carry the same canonical events.
@@ -49,7 +60,7 @@ never be separated are appended as one atomic batch.
 
 ## Explicit readable-history scenario
 
-Suppose a future application has already obtained a complete canonical v2
+Suppose a Python application has obtained a complete canonical v2
 history and the user asks, “Where did we discuss the outline range?” The
 application can, without invoking a provider:
 
@@ -73,16 +84,16 @@ input. These pure readable operations do not persist history, authorize
 retrieval, or start a provider call. The selected filesystem or SQLite bundle
 supplies the canonical history; archive/transfer uses the same event contract.
 
-## Illustrative future interaction
+## Current Python lead interaction
 
-The following is a presentation example only. No such UI, buttons, provider
-calls, or lead workflow are active yet.
+The following is a human-readable projection of a current Python lead result.
+It is not an installed shell UI or set of buttons.
 
 ```text
 Lead proposal
 Purpose: Ask the plot architect to review outline lines 3-12.
 Assignment: plot_architect, round 1, at most 2 physical calls
-Input: ${core_documents/outline.md}, lines 3-12,
+Input: ${core_documents/global_outline.md}, lines 3-12,
        revision sha256:1111...1111 (content is not embedded)
 Impact: Read-only provider work; no artifact or Git mutation.
 Budget: round 1 of 2; at most 2 additional calls; 12-call lineage ceiling
@@ -90,11 +101,11 @@ Budget: round 1 of 2; at most 2 additional calls; 12-call lineage ceiling
 [Confirm]  [Reject]  [Revise]
 ```
 
-A future application must submit an exact structured decision, not the visible
-button label or conversational text. For example, this input:
+A Python application must submit an exact `LeadStepDecision`, not the visible
+label or conversational text. For example:
 
 ```json
-{"confirmation_request_event_id":"request_event","confirmation_request_id":"request_a","decision":"confirm","proposal_digest":"sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","proposal_id":"proposal_a","proposal_revision":1}
+{"confirmation_request_id":"request_a","session_id":"novel","conversation_id":"conversation_a","step_id":"step_a","proposal_id":"proposal_a","proposal_revision":1,"proposal_digest":"sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","kind":"confirm","revision_request":null}
 ```
 
 must identify the authoritative request at the current history tail and the
@@ -114,10 +125,36 @@ message such as `Yes`, even when stored after the request, is non-authorizing
 and makes that older request ineligible because it is no longer the exact tail.
 
 Confirmation evidence proves only what was decided about a disclosed snapshot.
-Before execution, an application must reacquire its own live capabilities and
-validate current route, profile, policy, input, and resource facts. History
-decoding or projection never recreates a provider, filesystem lease, Git
-capability, credential, or other authority.
+Before execution, runtime revalidates current route, definition/execution
+profiles, policy, input, and resource facts, then creates and consumes one
+process-local start capability. History decoding or projection never recreates
+a provider, filesystem lease, Git capability, credential, or other authority.
+
+### Artifact-candidate review in history
+
+When a valid lead artifact intent is accepted, runtime atomically records the
+typed lead judgment, `artifact_review_candidate`, ordinary consultation
+proposal, `artifact_proposal_state=awaiting_consultation_confirmation`, and
+`step_state=awaiting_confirmation`. The candidate payload contains the exact
+content-bearing candidate plus its lead-judgment and consultation identity,
+mandatory reviewers, and disclosed reviewers.
+
+Exact Confirm first revalidates the candidate. If current evidence/base state
+drifted, history records `artifact_proposal_state=stale` and supersedes the
+step with no reviewer call. Otherwise confirmation and durable start record
+`artifact_proposal_state=reviewing`, and every disclosed reviewer receives the
+same candidate. When all succeed, `artifact_review_synthesis` stores the lead's
+`propose`, `revise`, or `reject` decision, message, rationale, user impact,
+limitations, every reply event ID, and every unresolved input ID.
+
+Only `propose` records `artifact_reviewed_proposal` and artifact state
+`reviewed`. The immutable reviewed proposal closes over candidate,
+consultation, evidence, review, synthesis, and history-tail identity and fixes
+`artifact_write_occurred`, `apply_authority_granted`, and
+`git_action_occurred` to false. `revise` records `revision_required`; `reject`
+records `rejected`; incomplete review records `failed`; invalid non-null intent
+records `artifact_review_failure=intent_rejected`. None is filesystem or Git
+authority.
 
 ## Proposal closure and limits
 
@@ -130,7 +167,7 @@ capability, credential, or other authority.
 | `assignments` | Ordered, unique specialist assignments |
 | `user_impact`, `side_effects` | Visible consequence and closed side-effect set |
 | `budget` | Whole-lineage and whole-next-step physical-call reservation |
-| `basis` | Route and policy fingerprints, participant profiles, and closed input revisions |
+| `basis` | Route and policy fingerprints, participant profiles, closed input revisions, and exact lead evidence when applicable |
 | `proposal_digest` | SHA-256 digest over every other proposal field, including order |
 
 The supported step kinds are `lead_specialist_consultation`,
@@ -155,7 +192,7 @@ Every proposal input is content-free identity and revision evidence:
 ```text
 input_id = "input_outline"
 kind = "core_document"
-locator = "${core_documents/outline.md}"
+locator = "${core_documents/global_outline.md}"
 state = "present"
 revision_digest = "sha256:1111...1111"
 start_line = 3
@@ -163,9 +200,11 @@ end_line = 12
 ```
 
 Input kinds are `user_input`, `conversation_event`, `core_document`,
-`manuscript`, `agent_state`, and `writing_artifact`; state is `present` or
-`absent`. A locator, optional inclusive line range, and digest can identify the
-source revision. They never carry file bytes. Assignments' `input_ids` must
+`manuscript`, `agent_state`, `writing_artifact`, and `artifact_candidate`;
+state is `present` or `absent`. A locator, optional inclusive line range, and
+digest can identify the source revision. Ordinary inputs never carry file
+bytes; an `artifact_candidate` assignment input deliberately adds the exact
+content-bearing canonical candidate. Assignments' `input_ids` must
 close exactly over the proposal inputs: no declared input may be unassigned and
 no assignment may cite an undeclared input. `agent_profiles` similarly close
 over every called specialist and, when synthesis is budgeted, the lead.
@@ -198,21 +237,49 @@ Actors have one of the exact kinds `user`, `lead`, `specialist`, `runtime`,
 ID; other actor kinds cannot. Sender/recipient pairs derive one of the closed
 directions, so direction is not a second stored claim.
 
-The eight event kinds are `message`, `assignment_dispatch`,
-`specialist_reply`, `step_state`, `confirmation`, `execution_result`,
-`interruption`, and `terminal_outcome`. Each stored event carries schema,
+The sixteen event kinds are `message`, `lead_outcome_failure`,
+`assignment_dispatch`, `specialist_reply`, `lead_synthesis`, `step_state`,
+`confirmation`, `execution_result`, `interruption`, `terminal_outcome`, and
+`provider_call_accounting`, plus `artifact_review_candidate`,
+`artifact_review_synthesis`, `artifact_reviewed_proposal`,
+`artifact_proposal_state`, and `artifact_review_failure`. Each stored
+event carries schema,
 event/session/conversation/turn/step identity, contiguous sequence, canonical
 UTC timestamp, atomic-batch metadata, typed actors, and its kind-specific
 payload. Visible message and reply content is capped at 32,768 strict-UTF-8
-bytes and cannot contain surrogate code points. Payloads contain visible facts,
-not hidden reasoning.
+bytes and cannot contain surrogate code points. A lead-authored message uses a
+typed visible kind/message plus exact `CollaborationLeadEvidence`. That
+evidence holds only ordered receipts for attached references, canonical-core
+statuses, complete zero-hit searches, or final-answer-used READs. A
+`lead_outcome_failure` instead stores the closed failure code and submitted
+invocation/call IDs. Payloads contain visible facts, not hidden reasoning.
+
+`provider_call_accounting` contains no request or response content. It records
+one invocation/call identity, contiguous ordinal, canonical agent role,
+invocation kind (`lead`, `specialist_assignment`, `lead_synthesis`, or
+`specialist_advisory`), physical-call position
+(`reference_prelude`, `initial`, or `continuation`), and state (`prepared` or
+`submitted`). PREPARED records intent before a provider boundary; only the
+matching unique SUBMITTED record spends one of the twelve lineage calls.
+Submitted failures, timeouts, and cancellations still count.
 
 A running attempt dispatches assignments in proposal order. Every reply binds
 the exact proposal ID/revision/digest, execution attempt, assignment, and
 dispatch event. Each provider-facing invocation records a terminal outcome with
-its scope, submitted-call count, and assignment ID where applicable. The
-execution result then correlates all proposal assignments in their original
-order and contains:
+its scope, submitted-call count, and assignment ID where applicable.
+
+A specialist reply also carries one closed assessment (`supports`, `concern`,
+`conflict`, or `insufficient_evidence`), a visible message, and the exact
+ordered assignment input IDs. A `lead_synthesis` payload binds every successful
+reply event in order, preserves required unresolved input IDs from every
+non-supporting reply, and optionally carries one strict same-lineage round-two
+intent. It separately preserves the proposal's story-specific evidence;
+specialist replies remain attribution rather than replacement story evidence.
+Synthesis is absent after any assignment failure and for direct
+advisories.
+
+The execution result then correlates all proposal assignments in their
+original order and contains:
 
 ```text
 proposal_id = "proposal_a"
@@ -263,7 +330,10 @@ order, are:
 
 ```text
 message.content
+lead_outcome.failure
 specialist_reply.content
+specialist_reply.assessment
+lead_synthesis.message
 proposal.purpose
 proposal.user_impact
 proposal.assignment.instruction
@@ -285,6 +355,10 @@ execution.synthesis.call_usage
 terminal.scope
 terminal.outcome
 terminal.call_usage
+artifact_review.decision
+artifact_review.message
+artifact_proposal.state
+artifact_review.failure
 ```
 
 Proposal ranges render as `whole` or `lines:START-END`; call fields use fixed
@@ -342,7 +416,7 @@ authorization to reread or execute anything.
 See [Conversation search](conversation-search.md#schema-v2-readable-collaboration-history)
 for signatures, page/search limits, and focused examples.
 
-## State projection versus possible provider context
+## State projection versus bounded provider context
 
 These similarly named values have different jobs:
 
@@ -350,7 +424,7 @@ These similarly named values have different jobs:
 | --- | --- | --- | --- |
 | `CollaborationHistoryProjection` from `project_collaboration_history()` or a direct `CollaborationEventStore.read_context()` | What proposal/state/decision/attempt/result is current, and what action is safe to consider? | State and recovery summary | Evidence only |
 | `tuple[CollaborationReadableRecord, ...]` from `project_collaboration_readable_history()` | What complete typed public events and closed searchable fields exist? | Every validated event record | Evidence only |
-| `CollaborationReadableContext` from `select_bounded_collaboration_context()` | Which explicitly named records fit a possible later provider-context budget? | Content-free `CollaborationContextBootstrap`; zero records | Evidence only |
+| `CollaborationReadableContext` from `select_bounded_collaboration_context()` | Which explicitly named records fit a bounded provider-context budget? | Content-free `CollaborationContextBootstrap`; zero records | Evidence only |
 
 The bootstrap contains schema version, optional history identity, record count,
 last sequence, and tail batch digest. Only unique, known `event_ids` explicitly
@@ -361,9 +435,12 @@ Requested/retained/omitted counts and `truncated` report the result.
 
 The selector has no `current_input` parameter. The current user input remains
 separate, and the selected value still does not invoke a provider or establish
-retrieval authorization. #452 later owns lead proposal/confirmation writes,
-#453 owns specialist execution/results, and #454 owns whole-workspace
-unsupported-history rejection.
+retrieval authorization. The lead runtime explicitly opts its focused source
+adapter into a bounded searchable-history snapshot over active same-session
+conversations; it still sends zero eager history records and adds bodies only
+after SEARCH and READ. Confirmed specialist and synthesis invocations use the
+same bounded component with assignment-local source restrictions. #454 owns
+whole-workspace unsupported-history rejection.
 
 ## Atomic batch flow
 
@@ -374,14 +451,30 @@ Storage assigns contiguous sequences, canonical UTC timestamps, ordinal/size,
 and the digest of the exact caller-owned batch.
 
 ```text
-proposal + awaiting_confirmation (request is last)
+user message
+    -> provider_call_accounting PREPARED/SUBMITTED pairs
+    -> evidence-bound lead message
+       + optional proposal + awaiting_confirmation (request is last)
+       OR lead_outcome_failure -> retry_lead_turn (no proposal state)
     -> structured decision + confirmed/rejected/superseded
     -> running + every assignment_dispatch in proposal order
-    -> replies/messages + every terminal_outcome + execution_result (last)
+    -> replies + optional lead_synthesis + every terminal_outcome
+       + execution_result (last)
     -> visible terminal notice + completed/failed/interrupted
+       OR completed round-one notice + revision-2 proposal
+          + awaiting_confirmation
 
 running + interruption + outcome_unknown
+
+pending proposal + ordinary user message + superseded (one batch)
+    -> next lead provider call on a new step
 ```
+
+Evidence IDs are valid only for their deterministic lead operation/result
+correlation. Projection rejects a successful outcome from another invocation
+even when its receipts are internally consistent. The failure event closes the
+exact submitted call; later recovery starts a fresh turn rather than reusing
+its provider output.
 
 The paired facts above must be co-batched. An interrupted finalization also
 co-batches its interruption record. A store must expose only the entire batch
@@ -605,7 +698,7 @@ application, never permission to perform the action.
 | --- | --- | --- | --- |
 | `awaiting_confirmation` | A complete proposal and fresh request are the durable tail | A proposal is waiting for your confirmation. | `submit_confirmation`: Review the proposal and submit a confirmation decision. |
 | `reconfirmation_required` | Previously confirmed proposal is retained, but fresh authority is required | The earlier confirmation is no longer sufficient; review and confirm the updated proposal. | `submit_confirmation`: Review the proposal and submit a confirmation decision. |
-| `confirmed` | One exact structured confirm decision is durable | You confirmed the proposal; execution has not started yet. | `start_or_reconfirm`: Start confirmed work, or reconfirm if its basis changed. |
+| `confirmed` | One exact structured confirm decision is durable; the live runtime normally crosses immediately into `running` | You confirmed the proposal; the runtime is starting the disclosed work. | `start_or_reconfirm`: Start with the live single-use authority, or reconfirm after that authority is lost. |
 | `running` | One execution attempt and every ordered dispatch are durable | The confirmed work is currently being executed. | `none` while no result exists; with a result, `finalize_result`: Record the terminal result for the running work. |
 | `completed` | Known successful result and visible terminal notice are durable | The confirmed work completed and its result is recorded. | `none`: No history-derived action is pending. |
 | `rejected` | Structured reject decision is durable; no work started | You rejected the proposal; that work will not execute. | `continue_with_lead`: Continue the conversation with the lead agent. |
@@ -618,6 +711,33 @@ application, never permission to perform the action.
 Legal state transitions are deliberately narrower than conversational intent.
 In particular, only `confirmed` can enter `running`; `outcome_unknown` can only
 enter `recovery_required`; and `recovery_required` is terminal in this contract.
+
+Artifact proposal state is projected separately and correlated to the current
+candidate and consultation:
+
+| Artifact state | Durable meaning |
+| --- | --- |
+| `awaiting_consultation_confirmation` | Exact candidate/reviewers/request are disclosed; review has not started. |
+| `reviewing` | One correlated confirmed review attempt is running or awaiting finalization. |
+| `reviewed` | Complete review plus immutable zero-authority reviewed proposal is durable. |
+| `revision_required` | Complete synthesis selected `revise`; no reviewed proposal exists. |
+| `rejected` | User or lead rejected this candidate; no reviewed proposal exists. |
+| `superseded` | A replacement turn/candidate permanently retired this candidate. |
+| `stale` | Evidence or complete base state drift prevented safe review/finalization. |
+| `failed` | Review or synthesis did not close successfully. |
+| `recovery_required` | Artifact-review history requires external repair. |
+
+The readable projection intentionally exposes only artifact review message,
+decision, state, and closed failure code. Candidate bytes and complete reviewed
+proposal are present in the typed event payload/history codec, but they are not
+search fields and are not automatically selected into bounded provider
+context.
+
+`retry_lead_turn` is a next action without a durable step state. It appears
+when runtime rejected a submitted lead result's evidence and successfully
+appended `lead_outcome_failure`. The visible result is a recommendation with no
+proposal, confirmation request, or evidence. If failure closure itself cannot
+be appended safely, runtime returns `recovery_required` instead.
 
 ## Restart and no-replay cases
 
@@ -921,18 +1041,20 @@ Canonical v2 history may contain user-visible proposal text, instructions,
 messages, specialist replies, notices, and interruption text. Applications must
 treat those values as sensitive conversation data and apply their own storage,
 access, retention, and deletion policy. File inputs contribute locator, range,
-state, and digest only—never bytes. Provider credentials, capabilities, raw
-provider protocol bodies, hidden reasoning, and reconstructed authorization do
-not belong in any payload.
+state, and digest only. Artifact candidate and reviewed-proposal payloads are a
+deliberate exception: they contain the exact proposed artifact text/change set
+needed to prove that every reviewer saw the same candidate. Provider
+credentials, capabilities, raw provider protocol bodies, hidden reasoning, and
+reconstructed authorization do not belong in any payload.
 
 The direct filesystem and SQLite adapters define their v2 persistence and
 durability boundaries above. Archive schema 2 and backend transfer consume
-their canonical histories, but this contract still defines no provider call,
-lead-agent behavior, artifact/Git executor, credential model, complete
+their canonical histories. Runtime composes provider calls from these values,
+but this contract still defines no artifact/Git executor, credential model, complete
 workspace backup, or recovery tool. The installed shell wires only
-provider-free readable records, search, pages, and state inspection. Open #452
-owns the lead-facing proposal/confirmation workflow, open #453 owns specialist
-execution/results, and #454 owns whole-workspace rejection. See the dedicated
+provider-free readable records, search, pages, and state inspection. The Python
+runtime owns lead proposal/confirmation and confirmed specialist/synthesis
+behavior; #454 owns whole-workspace rejection. See the dedicated
 [lead-agent guide](../guides/lead-agent.md),
 [conversation transcripts](conversation-transcripts.md) for the active readable
 path, [persistence](../design/persistence.md) for authority ownership,

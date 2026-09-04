@@ -51,7 +51,10 @@ from story_writing_agents.errors import (
     WorkspaceSecurityError,
 )
 from story_writing_agents.workspace import core as workspace_module
-from story_writing_agents.workspace.schema import DEFAULT_SYSTEM_CONFIG
+from story_writing_agents.workspace.schema import (
+    DEFAULT_AGENT_PROMPTS,
+    DEFAULT_SYSTEM_CONFIG,
+)
 
 from tests.helpers import initialized_workspace
 
@@ -164,6 +167,24 @@ class AgentRosterTests(unittest.TestCase):
 
 class WorkspaceContractTests(unittest.TestCase):
     """Verify the intentionally breaking v2 public facade."""
+
+    def test_all_default_prompts_are_checked_in_byte_identical_for_fresh_workspace(
+        self,
+    ) -> None:
+        repository_root = Path(__file__).resolve().parents[1]
+        checked_in = {
+            agent_id: (
+                repository_root / AGENT_SPECS[agent_id].system_prompt_file
+            ).read_text(encoding="utf-8")
+            for agent_id in ROSTER
+        }
+        self.assertTrue(all(prompt.endswith("\n") for prompt in checked_in.values()))
+        self.assertEqual(DEFAULT_AGENT_PROMPTS, checked_in)
+        with tempfile.TemporaryDirectory(prefix="lead-default-prompt-") as temporary:
+            workspace = Workspace(temporary).initialize()
+            for agent_id in ROSTER:
+                relative = AGENT_SPECS[agent_id].system_prompt_file
+                self.assertEqual(workspace.read_text(relative), checked_in[agent_id])
 
     def test_workspace_facade_exports_and_signatures_are_exact(self) -> None:
         self.assertEqual(

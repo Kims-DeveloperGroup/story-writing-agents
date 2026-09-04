@@ -413,12 +413,13 @@ class SQLiteCollaborationEventStoreFirstSliceTests(unittest.TestCase):
         self.assertTrue(callable(services.event_store.append_batch))
         self.assertFalse(hasattr(services.event_store, "append"))
 
-    def test_all_six_batch_families_append_and_every_split_rolls_back(self) -> None:
+    def test_all_batch_families_append_and_every_split_rolls_back(self) -> None:
         completed = contract_batches(self.metadata.conversation_id)
         completed_names = (
             "proposal",
             "confirmation",
             "running",
+            "calls",
             "result",
             "completion",
         )
@@ -447,7 +448,7 @@ class SQLiteCollaborationEventStoreFirstSliceTests(unittest.TestCase):
 
         unknown_workspace, unknown_metadata, unknown_store = self.fresh_store()
         unknown = contract_batches(unknown_metadata.conversation_id)
-        unknown_names = ("proposal", "confirmation", "running", "unknown")
+        unknown_names = ("proposal", "confirmation", "running", "calls", "unknown")
         for name in unknown_names:
             receipt = unknown_store.append_batch(unknown[name])
             self.assertIs(receipt.status, CollaborationAppendStatus.APPENDED)
@@ -476,17 +477,17 @@ class SQLiteCollaborationEventStoreFirstSliceTests(unittest.TestCase):
             (("proposal",), "confirmation", slice(0, 1)),
             (("proposal", "confirmation"), "running", slice(0, -1)),
             (
-                ("proposal", "confirmation", "running"),
+                ("proposal", "confirmation", "running", "calls"),
                 "result",
                 slice(-1, None),
             ),
             (
-                ("proposal", "confirmation", "running", "result"),
+                ("proposal", "confirmation", "running", "calls", "result"),
                 "completion",
                 slice(-1, None),
             ),
             (
-                ("proposal", "confirmation", "running"),
+                ("proposal", "confirmation", "running", "calls"),
                 "unknown",
                 slice(-1, None),
             ),
@@ -500,10 +501,23 @@ class SQLiteCollaborationEventStoreFirstSliceTests(unittest.TestCase):
                     self.assertIs(receipt.status, CollaborationAppendStatus.APPENDED)
                 before = self.database_state(workspace)
                 source = batches[name]
+                partial_events = source.events[selected]
+                if name == "proposal":
+                    partial_events = tuple(
+                        event
+                        for event in source.events
+                        if event.event_id == "proposal_event"
+                    )
+                if name == "running":
+                    partial_events = tuple(
+                        event
+                        for event in source.events
+                        if event.event_id != "dispatch_assignment_character"
+                    )
                 partial = CollaborationEventBatch(
                     batch_id=f"partial_{name}",
                     expected_last_sequence=source.expected_last_sequence,
-                    events=source.events[selected],
+                    events=partial_events,
                 )
 
                 with self.assertRaises(CollaborationAppendError) as raised:
@@ -640,7 +654,11 @@ class SQLiteCollaborationEventStoreFirstSliceTests(unittest.TestCase):
                 workspace, metadata, store = self.fresh_store()
                 batches = contract_batches(metadata.conversation_id)
                 if corruption == "invalid_transition":
-                    draft = batches["proposal"].events[0]
+                    draft = next(
+                        event
+                        for event in batches["proposal"].events
+                        if event.event_id == "proposal_event"
+                    )
                     invalid_batch = CollaborationEventBatch(
                         batch_id="stored_invalid_transition",
                         expected_last_sequence=0,
@@ -694,7 +712,7 @@ class SQLiteCollaborationEventStoreFirstSliceTests(unittest.TestCase):
                             )
                         elif corruption == "gapped_sequence":
                             connection.execute(
-                                "UPDATE collaboration_events SET sequence = 3 "
+                                "UPDATE collaboration_events SET sequence = 6 "
                                 "WHERE sequence = 2"
                             )
                         elif corruption == "ordinal_drift":
@@ -914,7 +932,14 @@ class SQLiteCollaborationEventStoreFirstSliceTests(unittest.TestCase):
                 with self.subTest(runner=runner.__name__, identical=identical):
                     outcomes, workspace = runner(identical=identical)
                     rows = self.collaboration_rows(workspace)
-                    self.assertEqual(len(rows), 2)
+                    self.assertEqual(
+                        len(rows),
+                        len(
+                            contract_batches(self.metadata.conversation_id)[
+                                "proposal"
+                            ].events
+                        ),
+                    )
                     self.assertEqual(len({row[8] for row in rows}), 1)
                     if identical:
                         receipts = [

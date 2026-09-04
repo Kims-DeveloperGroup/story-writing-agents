@@ -116,9 +116,9 @@ source capture. Although it can physically read a canonical file, callers must
 not treat that result as the immutable snapshot used for story-agent context.
 `Workspace.read_core_documents()` has been removed with no forwarding alias.
 Low-level contextual execution selects trusted story context through the
-artifact repository. The current management runtime does not start that
-provider path. Generic raw reads remain appropriate for noncanonical inputs and
-internal workspace files.
+artifact repository. Python lead turns start that read-only provider path;
+shell management does not. Generic raw reads remain appropriate for
+noncanonical inputs and internal workspace files.
 
 `write_text` and `write_json` atomically replace one file when overwrite is
 allowed, except that both reject the four canonical core-document paths, every

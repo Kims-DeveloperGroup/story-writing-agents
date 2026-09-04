@@ -332,8 +332,8 @@ class RagModuleBoundaryTests(unittest.TestCase):
     ) -> None:
         modules = _module_inventory()
         edges = _internal_edges(modules)
-        self.assertEqual(len(modules), 115)
-        self.assertEqual(len(edges), 413)
+        self.assertEqual(len(modules), 122)
+        self.assertEqual(len(edges), 468)
         self.assertIsNone(_cycle_witness(modules, edges))
         conversation_dependencies = {
             "story_writing_agents.conversations": {
@@ -346,6 +346,7 @@ class RagModuleBoundaryTests(unittest.TestCase):
             },
             "story_writing_agents.conversations.events": {
                 "story_writing_agents.agents",
+                "story_writing_agents.artifact_proposals",
                 "story_writing_agents.errors",
             },
             "story_writing_agents.conversations.context": {
@@ -377,6 +378,7 @@ class RagModuleBoundaryTests(unittest.TestCase):
                 "story_writing_agents.errors",
                 "story_writing_agents.git",
                 "story_writing_agents.git.session_contracts",
+                "story_writing_agents.git.session_history",
                 "story_writing_agents.git.session_resources",
                 "story_writing_agents.workspace.schema",
             },
@@ -645,6 +647,7 @@ class RagModuleBoundaryTests(unittest.TestCase):
                 "story_writing_agents.errors",
                 "story_writing_agents.models",
                 "story_writing_agents.workspace",
+                "story_writing_agents.writing_artifacts.catalog",
                 "story_writing_agents.writing_artifacts.filesystem_sources",
                 "story_writing_agents.writing_artifacts.references",
                 "story_writing_agents.writing_artifacts.repository",
@@ -1018,6 +1021,7 @@ class RagPackagingBoundaryTests(unittest.TestCase):
             filesystem_owner_path = (
                 "story_writing_agents/conversation_storage/filesystem.py"
             )
+            artifact_proposals_path = "story_writing_agents/artifact_proposals.py"
             for names in (wheel_names, sdist_names):
                 for package_path in conversation_package_paths:
                     self.assertTrue(
@@ -1032,6 +1036,10 @@ class RagPackagingBoundaryTests(unittest.TestCase):
                 self.assertTrue(
                     any(name.endswith(filesystem_owner_path) for name in names),
                     filesystem_owner_path,
+                )
+                self.assertTrue(
+                    any(name.endswith(artifact_proposals_path) for name in names),
+                    artifact_proposals_path,
                 )
                 self.assertFalse(
                     any(
@@ -1113,9 +1121,9 @@ class RagPackagingBoundaryTests(unittest.TestCase):
                 import story_writing_agents.workspace.core as workspace_core
                 from story_writing_agents.agent_exchanges import AgentExchangeScopeKind
                 assert len(story_writing_agents.__all__) == 104
-                assert len(conversations.__all__) == 81
-                assert len(conversation_events.__all__) == 54
-                assert len(conversation_context.__all__) == 20
+                assert len(conversations.__all__) == 117
+                assert len(conversation_events.__all__) == 86
+                assert len(conversation_context.__all__) == 24
                 assert conversations.CollaborationProposal is conversation_events.CollaborationProposal
                 assert conversations.CollaborationEventStore is conversation_context.CollaborationEventStore
                 assert conversations.CollaborationProposal.__module__ == "story_writing_agents.conversations"
@@ -1359,9 +1367,9 @@ class RagPackagingBoundaryTests(unittest.TestCase):
                 import story_writing_agents.conversations.context as context
                 import story_writing_agents.conversations.events as events
                 assert len(story_writing_agents.__all__) == 104
-                assert len(conversations.__all__) == 81
-                assert len(events.__all__) == 54
-                assert len(context.__all__) == 20
+                assert len(conversations.__all__) == 117
+                assert len(events.__all__) == 86
+                assert len(context.__all__) == 24
                 assert catalog.ConversationCatalog is conversations.ConversationCatalog
                 assert events.ConversationEvent is conversations.ConversationEvent
                 assert not hasattr(context, "ConversationEventStore")

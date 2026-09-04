@@ -421,6 +421,19 @@ class AgentContextBoundaryTests(unittest.TestCase):
 
     def test_exact_internal_facade_and_public_facades_are_unchanged(self) -> None:
         self.assertEqual(
+            tuple(item.value for item in ProviderCallKind),
+            (
+                "unclassified",
+                "debate",
+                "conversation",
+                "conversation_retrieval_initial",
+                "conversation_retrieval_continuation",
+                "collaboration_initial",
+                "collaboration_continuation",
+                "writing_artifact_reference_read",
+            ),
+        )
+        self.assertEqual(
             tuple(agent_context.__all__),
             (
                 "ContextComponentBytes",

@@ -62,14 +62,14 @@ EMPTY_GOLDEN = (
     b'"value":"d5820aa0c81591e89e32ab06f83181f74e5d6bb68a450e0d255d26227c848e68"}}\n'
 )
 NONEMPTY_WIRE_SHA256 = (
-    "2be9d5c4da6b4cc4eb120d3819de11fd270a71652d2e05855fde205f8af3460d"
+    "2c36858c8a2c39eb5fc51d60bd1ebd916310d7e439932aab92ffe305b9592220"
 )
-NONEMPTY_DIGEST = "61a215736205af6e6848d8501934902263b763c23119eb2624c8c3746645116d"
+NONEMPTY_DIGEST = "82f17b11cd047eeb58b7e5dd670003208a3cc927b83f919bc96d33fe31bbd97c"
 REPRESENTATIVE_WIRE_SHA256 = (
-    "379b70dda9c5dd9b0360d8fb58c68acd36b81d0ab5dabffffad0e774afd44c26"
+    "02694f2f154242af401d370af19fe4635191f2b15739a1288034ad63e71d508e"
 )
 REPRESENTATIVE_DIGEST = (
-    "fd191502088704bdc08539628da67723912c8ad17aaf52bf864728114a42c8fb"
+    "c579338b685667fd1aff19ca1388b0df991de2ac29746a399aaf239af17fc932"
 )
 
 
@@ -227,14 +227,14 @@ class ConversationArchiveValueTests(unittest.TestCase):
             {item.schema_version for item in conversations.values()},
             {CONVERSATION_METADATA_SCHEMA_VERSION},
         )
-        self.assertEqual(len(conversations["conversation_completed"].events), 16)
-        self.assertEqual(len(conversations["conversation_unknown"].events), 9)
+        self.assertEqual(len(conversations["conversation_completed"].events), 25)
+        self.assertEqual(len(conversations["conversation_unknown"].events), 18)
         self.assertEqual(conversations["conversation_empty"].events, ())
         self.assertIs(
             conversations["conversation_unknown"].status,
             ConversationStatus.ARCHIVED,
         )
-        self.assertEqual(len(event_images(archive)), 25)
+        self.assertEqual(len(event_images(archive)), 43)
         self.assertEqual(
             {
                 event.batch_id
@@ -245,6 +245,7 @@ class ConversationArchiveValueTests(unittest.TestCase):
                 "batch_proposal",
                 "batch_confirmation",
                 "batch_running",
+                "batch_calls",
                 "batch_result",
                 "batch_completed",
                 "batch_unknown",

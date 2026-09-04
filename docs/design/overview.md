@@ -1,11 +1,12 @@
 # System design overview
 
-The current integration separates management/inspection from the forthcoming
-lead-led execution workflow. Public schema-v1 direct-run consumers are absent;
-generic provider, prompt, context, lifecycle, artifact, and terminal components
-remain available behind explicit module boundaries.
+The current integration separates the Python lead conversation/confirmed-
+consultation layer from the shell's management/inspection layer and future
+artifact/Git execution layers. Public schema-v1 direct-run consumers are absent; generic provider,
+prompt, context, lifecycle, artifact, and terminal components remain behind
+explicit module boundaries.
 
-The production graph contains 113 modules, 407 dependency edges, no cycles, and
+The production graph contains 122 modules, 468 dependency edges, no cycles, and
 104 package-root exports.
 
 ## Current user flow
@@ -13,6 +14,7 @@ The production graph contains 113 modules, 407 dependency edges, no cycles, and
 ```mermaid
 flowchart LR
     U[User] --> CLI[CLI / TTY controller]
+    U --> APP[Python application]
     CLI --> WI[Strict v2 workspace readiness]
     WI --> WS[Marker + exact scaffold]
     WI --> G[One clean main baseline]
@@ -29,13 +31,29 @@ flowchart LR
     X -. no call .-> P[Provider components]
     X -. no append .-> CS
     X -. no read/write .-> A[Writing artifacts]
-    M -. #455 not yet connected .-> GR[Internal session Git-resource seam]
+    APP --> LT[StoryRuntime.lead_turn]
+    LT --> CTX[Bounded context and provider]
+    CTX --> L[Lead answer, question, critique, recommendation, or proposal]
+    L --> D[Structured confirm / reject / revise]
+    D --> R[Durable running + ordered dispatches]
+    R --> E[1-3 isolated specialists in parallel]
+    E --> Y[Typed lead synthesis after all success]
+    Y --> O[Terminal result or fresh round-two proposal]
+    LT -. read-only mandatory references .-> A
+    E -. assignment-local reference reads .-> A
+    M --> GR[Internal session Git-resource seam]
 ```
 
 The controller reads ordinary main input with the terminal's plain management
 scope. The parser returns a typed rejection for ordinary/routed/removed
 execution forms. The controller does not bind an agent, append an event, run
 RAG/reference handling, report provider progress, or publish an artifact.
+
+A Python application can instead call `lead_turn()`. The lead is the sole
+user-facing agent, may search/read bounded authorized context, and either
+answers directly or discloses one proposal. `decide_lead_step()` records an
+exact structured decision. Confirmation executes only the disclosed read-only
+consultation; it does not modify an artifact or operate Git.
 
 ## Workspace initialization and readiness
 
@@ -76,8 +94,8 @@ The marker stores `story/session/`,
 policy. Initialization creates no session branch, internal ref, or sibling
 worktree. The package-internal #504 seam can inspect/list and provision or
 require-ready one exact correlated triple while the original root remains the
-pristine initialization baseline. #455 owns the installed command connection;
-#505 coordinates confirmed history work. Exact story commits now exist as
+pristine initialization baseline. Installed session transitions consume that
+seam through stable recovery assessment. #505 coordinates confirmed history work. Exact story commits now exist as
 package-internal #509 infrastructure; #491 still owns application production,
 #492 owns the lead confirmation UI. Exact closed-path internal checkpoints now
 exist as package-internal #510 infrastructure.
@@ -180,16 +198,21 @@ real initializer and removes its temporary root.
 
 ## Management runtime
 
-`StoryRuntime` is a management/configuration/inspection facade. It owns:
+`StoryRuntime` is the management/configuration/inspection and lead-workflow
+facade. It owns:
 
 - workspace-bound configuration and prompt snapshots;
 - session-bound directives and overrides;
 - quiescent settings prepare/commit coordination with `AgentBackend`;
-- persisted session/debate/context inspection; and
-- content-free artifact-reference operation inspection.
+- persisted session/debate/context inspection;
+- content-free artifact-reference operation inspection; and
+- lead provider turns, proposal construction, structured decisions, confirmed
+  specialist execution/synthesis, supersession, and restart-safe recovery.
 
-`RuntimeSession` binds the same operations to one validated session ID. Neither
-class starts a story turn or debate. Broad root aliases are absent.
+`RuntimeSession` binds the same operations to one validated session ID. Both
+classes expose confirmed consultations and direct advisory proposals; neither
+starts a debate or performs story-artifact/Git mutation. Broad root aliases are
+absent.
 
 `session_lifecycle` owns provider-neutral durable/access facts and pure
 readiness. `AgentBackend` still owns claims, manifests, provider routes,
@@ -262,17 +285,21 @@ provider call.
 ## Lead/specialist target
 
 The fixed roster remains Lead Orchestrator, Plot Architect, Character
-Custodian, and Execution Specialist. The lead is the intended user-facing
-channel; specialists are lead-routed collaborators. That target behavior is
-not a current CLI dispatch claim.
+Custodian, and Execution Specialist. The lead is the Python workflow's sole
+user-facing channel. It critiques, recommends the next action, watches
+artifact/workflow constraints, and routes a proposed assignment by subject.
+Specialists are selectively lead-routed collaborators. After exact
+confirmation, one to three run concurrently with isolated evidence; only an
+all-success set reaches typed lead synthesis. None of this is a CLI dispatch
+claim.
 
-Open #452 owns the later lead proposal/confirmation/reconfirmation workflow
-and open #453 owns specialist execution/result/finalization/outcome-unknown
-behavior. Strict workspace-v2 activation already rejects unsupported
-whole-workspace state. Those provider-bound integrations must use the sole v2
-store. In the planning vocabulary, #454 owns whole-workspace rejection of unsupported history.
-That ownership is implemented at the readiness boundary, not deferred to a
-provider call.
+The integrated lead layer owns proposal, confirmation, and reconfirmation
+behavior. Specialist execution owns result, finalization, and outcome-unknown
+behavior. Whole-workspace rejection of unsupported history is implemented at
+the strict workspace-v2 readiness boundary, not deferred to a provider call.
+The integrated runtime uses the sole v2 store. Artifact Apply and Git Commit
+are later, separately confirmed runtime-executed operations; the lead remains
+their semantic trigger and user-facing coordinator.
 
 ## Dependency direction
 
@@ -281,7 +308,7 @@ High-level composition flows downward:
 ```text
 CLI -> controller -> policies/runtime/storage/terminal
 CLI -> workspace.initialization -> workspace.schema + git
-runtime -> configuration/workspace/artifact inspection/backend coordination
+runtime -> conversations/context/backend/configuration/workspace/artifact reads
 backend -> provider adapters/process/context seams
 conversation services -> filesystem or SQLite ports
 RAG runtime -> conversation-service contracts

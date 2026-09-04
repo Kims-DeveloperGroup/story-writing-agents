@@ -16,6 +16,7 @@ from story_writing_agents import (
     AgentRequest,
     ConversationContextWindow,
     DebateMessage,
+    LEAD_ORCHESTRATOR,
     PLOT_ARCHITECT,
     Phase,
     PromptFileReference,
@@ -93,6 +94,66 @@ class PromptAssemblerTests(unittest.TestCase):
         self.assertTrue(request.task.startswith("Audit the candidate."))
         self.assertIn("Do not reveal", request.task)
         self.assertIsNone(request.conversation_context)
+
+    def test_lead_prompt_is_front_channel_router_watcher_critic_and_non_authority(
+        self,
+    ) -> None:
+        prompt = self.assembler.build_definition(
+            session_id="lead-policy", agent_id=LEAD_ORCHESTRATOR
+        ).system_prompt_file.read_text()
+        normalized_prompt = " ".join(prompt.split())
+        required = (
+            "sole normal user-facing story agent",
+            "front channel",
+            "inspect the known workflow and artifacts",
+            "Give a direct answer",
+            "ask a focused question",
+            "offer a critique",
+            "recommend a next action",
+            "propose separately confirmable work",
+            "Route proposed work selectively by canonical role and domain",
+            "does not vote",
+            "preserve material disagreement",
+            "untrusted evidence",
+            "SEARCH finds a locator and READ obtains",
+            "Return only the one invocation-specific structured result",
+            '"kind": "answer | question | critique | recommendation | proposal"',
+            "no surrounding prose",
+            "hidden reasoning",
+            "For `lead_synthesis`",
+            '"reply_event_ids": ["every runtime-supplied reply event ID, in order"]',
+            '"unresolved_input_ids": ["unresolved original input IDs, in input order"]',
+            "`continue_lineage` proposal",
+            "Round two always sets `next_intent` to null",
+            "does not make those decisions for the user",
+            "own user confirmation",
+        )
+        for phrase in required:
+            with self.subTest(phrase=phrase):
+                self.assertIn(phrase, normalized_prompt)
+        self.assertIn("set `proposal` to `null`", normalized_prompt)
+        self.assertIn('"relation": "new_step | revise_pending"', normalized_prompt)
+
+    def test_all_specialist_prompts_share_the_exact_bounded_assessment_contract(
+        self,
+    ) -> None:
+        for agent_id in ROSTER[1:]:
+            prompt = self.assembler.build_definition(
+                session_id="specialist-policy", agent_id=agent_id
+            ).system_prompt_file.read_text()
+            normalized = " ".join(prompt.split())
+            with self.subTest(agent_id=agent_id):
+                for phrase in (
+                    "one exact assignment and one ordered set of input IDs",
+                    "Read every attached reference required by the assignment",
+                    "no access to a sibling's references",
+                    "provides a scoped assessment for the lead",
+                    "Return exactly one JSON object",
+                    '"assessment": "supports | concern | conflict | insufficient_evidence"',
+                    '"assignment_id": "runtime-supplied assignment ID"',
+                    '"input_ids": ["runtime-supplied input IDs in exact order"]',
+                ):
+                    self.assertIn(phrase, normalized)
 
     def test_explicit_configuration_snapshot_is_fixed_and_overrides_stay_live(
         self,
@@ -444,6 +505,7 @@ class PromptAssemblerTests(unittest.TestCase):
                 "language",
                 "context_document_files",
                 "provider_managed_context",
+                "behavior_policy_components",
             ),
         )
         self.assertEqual(definition.agent_id, PLOT_ARCHITECT)
@@ -456,21 +518,24 @@ class PromptAssemblerTests(unittest.TestCase):
             ),
             expected_relative_paths,
         )
-        for reference, relative in zip(
+        for index, (reference, relative) in enumerate(zip(
             definition.file_references(),
             expected_relative_paths,
             strict=True,
-        ):
+        )):
             with self.subTest(relative=relative):
-                expected_digest = hashlib.sha256(
-                    self.workspace.path(relative).read_bytes()
-                ).hexdigest()
+                expected_content = (
+                    b"\n\n".join(
+                        component.content
+                        for component in definition.behavior_policy_components
+                    )
+                    if index == 0
+                    else self.workspace.path(relative).read_bytes()
+                )
+                expected_digest = hashlib.sha256(expected_content).hexdigest()
                 self.assertIsInstance(reference, PromptFileReference)
                 self.assertEqual(reference.sha256, expected_digest)
-                self.assertEqual(
-                    reference.read_text(),
-                    self.workspace.read_text(relative),
-                )
+                self.assertEqual(reference.content, expected_content)
 
         representation = repr(definition)
         for content_token in (

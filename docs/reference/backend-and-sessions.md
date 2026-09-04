@@ -5,8 +5,9 @@
 > workspace default precedes the final Codex fallback. Backend physical
 > structured calls are automatically offered to bounded agent-exchange capture.
 > This is a low-level provider API: the current shell and `StoryRuntime` do not
-> expose a public consumer for `invoke()`, `converse()`, or
-> `converse_with_retrieval()`.
+> re-expose `invoke()`, `converse()`, or `converse_with_retrieval()`.
+> `StoryRuntime.lead_turn()` instead composes the provider-managed contextual
+> path and returns lead-domain values.
 
 Key terms: **binding**—agent/provider pairing; **manifest**—durable session and
 thread state; **access claim**—temporary exclusive process ownership;

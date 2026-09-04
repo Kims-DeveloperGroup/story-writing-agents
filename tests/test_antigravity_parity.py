@@ -32,6 +32,7 @@ from story_writing_agents import (
     ConversationRetrievalSearchAction,
     ConversationRetrievalSearchObservation,
     EXECUTION_SPECIALIST,
+    LEAD_ORCHESTRATOR,
     PLOT_ARCHITECT,
     Phase,
     SessionAccessState,
@@ -922,7 +923,7 @@ class AntigravityParityTests(unittest.IsolatedAsyncioTestCase):
                         scope,
                         policy,
                         "parity-call-1",
-                        ProviderCallKind.CONVERSATION_RETRIEVAL_INITIAL,
+                        ProviderCallKind.COLLABORATION_INITIAL,
                         schema,
                         payload,
                     )
@@ -932,7 +933,7 @@ class AntigravityParityTests(unittest.IsolatedAsyncioTestCase):
                         scope,
                         policy,
                         "parity-call-2",
-                        ProviderCallKind.CONVERSATION_RETRIEVAL_CONTINUATION,
+                        ProviderCallKind.COLLABORATION_CONTINUATION,
                         schema,
                         {
                             "c": "B" * 43,
@@ -957,6 +958,13 @@ class AntigravityParityTests(unittest.IsolatedAsyncioTestCase):
                 self.assertIsNone(provider.inspect_context_thread(other_scope, policy))
 
         self.assertEqual(second.thread_id, first.thread_id)
+        self.assertEqual(
+            (first.accounting.payload.call_kind, second.accounting.payload.call_kind),
+            (
+                ProviderCallKind.COLLABORATION_INITIAL,
+                ProviderCallKind.COLLABORATION_CONTINUATION,
+            ),
+        )
         self.assertEqual(invocations[0].payload_json, canonical_provider_json(payload))
         self.assertIs(first.accounting.state, ProviderCallState.SUBMITTED)
         self.assertEqual(first.accounting.usage, ProviderUsage(input_tokens=1))
@@ -975,6 +983,78 @@ class AntigravityParityTests(unittest.IsolatedAsyncioTestCase):
                 restarted_provider.inspect_context_thread(scope, policy),
                 first.thread_id,
             )
+
+    async def test_lead_json_object_context_payload_uses_provider_neutral_wire(
+        self,
+    ) -> None:
+        session_id = "antigravity-lead-context"
+        backend = self.backend(backend_overrides={LEAD_ORCHESTRATOR: "antigravity"})
+        backend.create_session_with_access(session_id)
+        definition = self.definition(LEAD_ORCHESTRATOR)
+        provider = (await backend.bind(definition))._context_provider()
+        scope = ContextScope(
+            "workspace-context",
+            session_id,
+            ContextSubjectKind.CONVERSATION,
+            "lead-conversation",
+            LEAD_ORCHESTRATOR,
+        )
+        policy = "sha256:" + "5" * 64
+        schema = {"type": "object"}
+        payload = {
+            "c": "L" * 43,
+            "q": [
+                "lead",
+                "a",
+                "",
+                [0, 2, 2, 4, 8, 8, 16, 200],
+                ["lead", "outcome-v1"],
+            ],
+            "i": "Visible lead request.",
+        }
+        invocations = []
+        response = (
+            '{"a":"a","c":"'
+            + "L" * 43
+            + '","d":[{"kind":"answer","message":"Visible.",'
+            '"proposal":null}],"u":[]}'
+        )
+
+        async def invoke(_binding, invocation):
+            invocations.append(invocation)
+            assert invocation.payload_json is not None
+            return ProviderResult(
+                "antigravity-lead-thread",
+                response,
+                usage=ProviderUsage(input_tokens=1, output_tokens=1),
+                actual_transport_utf8_bytes=len(invocation.payload_json),
+            )
+
+        with mock.patch.object(backend._antigravity_adapter, "invoke", new=invoke):
+            async with provider.invocation(scope, policy):
+                result = await provider.invoke_context(
+                    ContextProviderCallRequest(
+                        scope,
+                        policy,
+                        "lead-parity-call",
+                        ProviderCallKind.COLLABORATION_INITIAL,
+                        schema,
+                        payload,
+                    )
+                )
+
+        self.assertEqual(len(invocations), 1)
+        self.assertEqual(invocations[0].payload_json, canonical_provider_json(payload))
+        self.assertEqual(result.response_text, response)
+        self.assertIs(result.accounting.state, ProviderCallState.SUBMITTED)
+        self.assertIs(
+            result.accounting.payload.call_kind,
+            ProviderCallKind.COLLABORATION_INITIAL,
+        )
+        self.assertEqual(
+            result.accounting.usage,
+            ProviderUsage(input_tokens=1, output_tokens=1),
+        )
 
     @staticmethod
     def _process_is_running(pid: int) -> bool:
