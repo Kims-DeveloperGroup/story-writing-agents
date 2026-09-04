@@ -11,7 +11,10 @@ from collections.abc import Awaitable, Callable, Iterable, Mapping
 from dataclasses import KW_ONLY, dataclass
 from enum import StrEnum
 from types import MappingProxyType
-from typing import TextIO
+from typing import TYPE_CHECKING, TextIO
+
+if TYPE_CHECKING:
+    from ..conversations import CollaborationEvent
 
 from ..agents import (
     AGENT_SPECS,
@@ -47,6 +50,11 @@ from ._controls import (
     transition_line_input,
     transition_prefilled_prompt_input,
     transition_prompt_input,
+)
+from ._collaboration_view import (
+    collaboration_view_context,
+    project_collaboration_event,
+    validate_collaboration_event_order,
 )
 from ._driver import (
     AdvisoryProgressError as AdvisoryProgressError,
@@ -1100,6 +1108,36 @@ class InteractiveTerminal:
                 state=ViewState.COMPLETED,
             )
         )
+
+    def write_collaboration_events(
+        self,
+        events: tuple[CollaborationEvent, ...],
+        *,
+        after_sequence: int = 0,
+        show_details: bool = False,
+    ) -> int:
+        """Render one durable collaboration suffix exactly once in order."""
+
+        if type(after_sequence) is not int or after_sequence < 0:
+            raise ValueError("after_sequence must be a non-negative integer")
+        if type(show_details) is not bool:
+            raise TypeError("show_details must be a bool")
+        validate_collaboration_event_order(events)
+        input_references, candidate_paths = collaboration_view_context(events)
+        cursor = after_sequence
+        for event in events:
+            if event.sequence <= after_sequence:
+                continue
+            self._write_component(
+                project_collaboration_event(
+                    event,
+                    show_details=show_details,
+                    input_references=input_references,
+                    candidate_paths=candidate_paths,
+                )
+            )
+            cursor = event.sequence
+        return cursor
 
     def write_agent_roster(self) -> None:
         """Render every advisory route in registry order without mutation.

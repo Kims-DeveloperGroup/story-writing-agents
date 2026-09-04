@@ -3365,6 +3365,11 @@ class PackageBoundaryFoundationTests(unittest.TestCase):
         terminal_root = package_root / "interactive_terminal"
         expected_dependencies = {
             "__init__.py": {"._core"},
+            "_collaboration_view.py": {
+                "..conversations",
+                "..writing_artifacts",
+                "._model",
+            },
             "_external_view.py": set(),
             "_input_lifecycle.py": set(),
             "_live_composer.py": {"._model"},
@@ -3388,7 +3393,9 @@ class PackageBoundaryFoundationTests(unittest.TestCase):
             },
             "_core.py": {
                 "..agents",
+                "..conversations",
                 "..interactive_commands",
+                "._collaboration_view",
                 "._controls",
                 "._driver",
                 "._external_view",

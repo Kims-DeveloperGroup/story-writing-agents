@@ -41,6 +41,7 @@ The retained public methods are:
 | --- | --- |
 | Read management input | `read_main`, `request_conversation_subject`, `request_confirmation` |
 | Render scope and management data | `write_lobby_orientation`, `write_session_orientation`, `write_conversation_scope`, `write_conversation_list_entry`, `write_conversation_search_hit`, `write_conversation_transcript_event`, `write_agent_roster`, `write_status`, `write_help`, `write_error` |
+| Render durable collaboration | `write_collaboration_events` with an ordered event tuple, optional restart cursor, and optional record details |
 | Agent-targeted conversation composition | `compose` with `ComposeMode.CHAT` and an agent ID |
 | Result presentation, without a direct-run controller entry | `write_agent`, `write_run` |
 
@@ -58,6 +59,34 @@ provider-exchange inspection is documented in
 Concrete stream/contextual builders, pickers, text viewers, external viewers,
 semantic record types, and transition functions are package-internal
 implementation details unless another reference explicitly names them.
+
+## Durable collaboration presentation
+
+`write_collaboration_events(events, after_sequence=N, show_details=False)`
+validates that every event belongs to one session/conversation and arrives in
+strict durable sequence order before writing anything. It skips sequences at or
+before `N`, writes one semantic panel for each later event, and returns the last
+rendered sequence. Reusing that cursor after restart therefore cannot duplicate
+an already presented event.
+
+Every proposal panel includes the exact proposal ID/revision/digest, purpose,
+complete specialist assignments, `${path}` or `${path}#Lx-Ly` source
+indicators, user impact, closed side effects, and bounded round/call cost.
+Confirmation, artifact application, and local Git commit panels retain their
+own exact request identities and explicitly state what the confirmation cannot
+authorize. Artifact operations show paths, digests, hunk counts, and bounded
+byte counts—not source or replacement bytes. Local commit results never imply a
+paired remote push. The prepared commit panel says `Git index: not staged`;
+staging exists only inside the separately confirmed atomic local-commit
+operation, so there is no misleading standalone staged state between Apply and
+Commit.
+
+`show_details=True` adds event, turn, conversation, batch, and timestamp facts.
+It never removes the semantic content shown by compact mode. Plain, fixed-ANSI,
+`NO_COLOR`, narrow, and fallback output all use the same semantic component
+tree, so color and terminal capability cannot change meaning. Unknown payload
+types, mixed scopes, and duplicate or out-of-order sequences fail closed before
+output.
 
 <a id="startup-welcome-and-authentication"></a>
 <a id="main-prompt-live-suggestions"></a>
