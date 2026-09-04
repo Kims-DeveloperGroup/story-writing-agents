@@ -2280,7 +2280,10 @@ class AntigravityAdapterTests(unittest.IsolatedAsyncioTestCase):
         first_invoke = mock.AsyncMock(
             return_value=ProviderResult(
                 thread_id="agy-conversation",
-                response_text='{"revision_id":"r0","content":"candidate"}',
+                response_text=(
+                    '{"kind":"candidate","revision_id":"r0",'
+                    '"content":"candidate"}'
+                ),
             )
         )
         with mock.patch.object(
@@ -2327,7 +2330,10 @@ class AntigravityAdapterTests(unittest.IsolatedAsyncioTestCase):
         second_invoke = mock.AsyncMock(
             return_value=ProviderResult(
                 thread_id="agy-conversation",
-                response_text='{"revision_id":"r0","content":"resumed"}',
+                response_text=(
+                    '{"kind":"candidate","revision_id":"r0",'
+                    '"content":"resumed"}'
+                ),
             )
         )
         with mock.patch.object(

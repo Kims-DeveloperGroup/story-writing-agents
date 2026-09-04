@@ -404,20 +404,29 @@ elif "conversation_id" in payload:
     }
 elif payload["phase"] == "audit":
     output = {
+        "kind": "audit",
         "revision_id": payload["revision_id"],
         "verdict": "approve",
         "content": "",
     }
 elif payload["phase"] == "finalize":
     output = {
+        "kind": "finalization",
         "revision_id": payload["revision_id"],
-        "core_updates": [{
-            "filename": "global_outline.md",
-            "content": "bounded outline update",
-        }],
+        "reviewed_proposal_id": "reviewed-proposal",
+        "reviewed_proposal_digest": "sha256:" + "a" * 64,
+    }
+elif payload["phase"] == "synthesize":
+    output = {
+        "kind": "synthesis",
+        "revision_id": payload["revision_id"],
+        "content": "reply-" + payload["phase"],
+        "next_phase": "finalization",
+        "deadlocked": False,
     }
 else:
     output = {
+        "kind": "candidate",
         "revision_id": payload["revision_id"],
         "content": "reply-" + payload["phase"],
     }
@@ -1409,8 +1418,12 @@ class AntigravityParityTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(reply.revision_id, f"r-{phase.value}")
         self.assertIs(phase_replies[Phase.AUDIT].verdict, Verdict.APPROVE)
         self.assertEqual(
-            dict(phase_replies[Phase.FINALIZE].core_updates),
-            {"global_outline.md": "bounded outline update"},
+            phase_replies[Phase.FINALIZE].reviewed_proposal_id,
+            "reviewed-proposal",
+        )
+        self.assertEqual(
+            phase_replies[Phase.FINALIZE].reviewed_proposal_digest,
+            "sha256:" + "a" * 64,
         )
 
         conversation = ConversationRequest(
