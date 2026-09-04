@@ -72,7 +72,7 @@ PUBLIC_EXPORTS = (
 ERROR_DEFAULTS = {
     InteractiveErrorCode.TTY_REQUIRED: (
         "Interactive mode requires a terminal.",
-        "Use story run for non-interactive automation.",
+        "Use the stepwise Python collaboration API without a terminal.",
     ),
     InteractiveErrorCode.WORKSPACE_NOT_INITIALIZED: (
         "No initialized story workspace was found.",
@@ -416,7 +416,7 @@ class PublicContractTests(unittest.TestCase):
                 ("OPENED", "opened"),
                 ("REOPENED", "reopened"),
             ),
-            ComposeMode: (("CHAT", "chat"), ("RUN", "run")),
+            ComposeMode: (("CHAT", "chat"),),
             ConfirmationResult: (
                 ("YES", "yes"),
                 ("NO", "no"),
@@ -939,7 +939,7 @@ class PromptAndRenderingTests(unittest.TestCase):
             TerminalAction(TerminalActionKind.LINE, text="subject"),
         )
         self.assertEqual(
-            terminal.compose(ComposeMode.RUN),
+            terminal.compose(ComposeMode.CHAT, agent_id=LEAD_ORCHESTRATOR),
             TerminalAction(
                 TerminalActionKind.SEND,
                 text="ordinary content",
@@ -953,13 +953,15 @@ class PromptAndRenderingTests(unittest.TestCase):
             [
                 "conversation[subject]> ",
                 expected_composer_prompt(
-                    "run",
+                    "chat",
+                    target="lead",
                     line=1,
                     line_count=0,
                     character_count=0,
                 ),
                 expected_composer_prompt(
-                    "run",
+                    "chat",
+                    target="lead",
                     line=2,
                     line_count=1,
                     character_count=16,
@@ -970,8 +972,8 @@ class PromptAndRenderingTests(unittest.TestCase):
         self.assertEqual(
             general_callbacks.records,
             [
-                "[compose] Consensus run. Use /send to submit or /cancel to discard.\n",
-                "[compose] Sending 1 line, 16 characters to consensus.\n",
+                "[compose] Target: lead. Use /send to submit or /cancel to discard.\n",
+                "[compose] Sending 1 line, 16 characters to lead.\n",
             ],
         )
 
@@ -998,7 +1000,7 @@ class PromptAndRenderingTests(unittest.TestCase):
             TerminalAction(TerminalActionKind.LINE, text="/status"),
         )
         self.assertEqual(
-            terminal.compose(ComposeMode.RUN),
+            terminal.compose(ComposeMode.CHAT, agent_id=LEAD_ORCHESTRATOR),
             TerminalAction(
                 TerminalActionKind.SEND,
                 text="run text",
@@ -1029,13 +1031,15 @@ class PromptAndRenderingTests(unittest.TestCase):
             composition_callbacks.prompts,
             [
                 expected_composer_prompt(
-                    "run",
+                    "chat",
+                    target="lead",
                     line=1,
                     line_count=0,
                     character_count=0,
                 ),
                 expected_composer_prompt(
-                    "run",
+                    "chat",
+                    target="lead",
                     line=2,
                     line_count=1,
                     character_count=8,
@@ -1924,9 +1928,9 @@ class CompositionTests(unittest.TestCase):
             ],
         )
 
-    def test_run_composition_counts_unicode_code_points_not_bytes(self) -> None:
+    def test_chat_composition_counts_unicode_code_points_not_bytes(self) -> None:
         terminal, callbacks = make_terminal("한글🙂", "/send")
-        action = terminal.compose(ComposeMode.RUN)
+        action = terminal.compose(ComposeMode.CHAT, agent_id=LEAD_ORCHESTRATOR)
         self.assertEqual(
             action,
             TerminalAction(
@@ -1940,13 +1944,15 @@ class CompositionTests(unittest.TestCase):
             callbacks.prompts,
             [
                 expected_composer_prompt(
-                    "run",
+                    "chat",
+                    target="lead",
                     line=1,
                     line_count=0,
                     character_count=0,
                 ),
                 expected_composer_prompt(
-                    "run",
+                    "chat",
+                    target="lead",
                     line=2,
                     line_count=1,
                     character_count=3,
@@ -1956,8 +1962,8 @@ class CompositionTests(unittest.TestCase):
         self.assertEqual(
             callbacks.records,
             [
-                "[compose] Consensus run. Use /send to submit or /cancel to discard.\n",
-                "[compose] Sending 1 line, 3 characters to consensus.\n",
+                "[compose] Target: lead. Use /send to submit or /cancel to discard.\n",
+                "[compose] Sending 1 line, 3 characters to lead.\n",
             ],
         )
 
@@ -1969,7 +1975,7 @@ class CompositionTests(unittest.TestCase):
             "message",
             "/send",
         )
-        action = terminal.compose(ComposeMode.RUN)
+        action = terminal.compose(ComposeMode.CHAT, agent_id=LEAD_ORCHESTRATOR)
         self.assertEqual(
             action,
             TerminalAction(
@@ -1983,31 +1989,36 @@ class CompositionTests(unittest.TestCase):
             callbacks.prompts,
             [
                 expected_composer_prompt(
-                    "run",
+                    "chat",
+                    target="lead",
                     line=1,
                     line_count=0,
                     character_count=0,
                 ),
                 expected_composer_prompt(
-                    "run",
+                    "chat",
+                    target="lead",
                     line=2,
                     line_count=1,
                     character_count=0,
                 ),
                 expected_composer_prompt(
-                    "run",
+                    "chat",
+                    target="lead",
                     line=3,
                     line_count=2,
                     character_count=3,
                 ),
                 expected_composer_prompt(
-                    "run",
+                    "chat",
+                    target="lead",
                     line=3,
                     line_count=2,
                     character_count=3,
                 ),
                 expected_composer_prompt(
-                    "run",
+                    "chat",
+                    target="lead",
                     line=4,
                     line_count=3,
                     character_count=11,
@@ -2017,7 +2028,7 @@ class CompositionTests(unittest.TestCase):
         self.assertEqual(callbacks.records[1], "[compose] Nothing to send.\n")
         self.assertEqual(
             callbacks.records[2],
-            "[compose] Sending 3 lines, 11 characters to consensus.\n",
+            "[compose] Sending 3 lines, 11 characters to lead.\n",
         )
 
     def test_say_escape_appends_the_two_literal_control_lines(self) -> None:
@@ -2048,7 +2059,7 @@ class CompositionTests(unittest.TestCase):
             "/say /send extra",
         )
         terminal, _callbacks = make_terminal(*near_misses, "/send")
-        action = terminal.compose(ComposeMode.RUN)
+        action = terminal.compose(ComposeMode.CHAT, agent_id=LEAD_ORCHESTRATOR)
         expected_text = "\n".join(near_misses)
         self.assertEqual(
             action,
@@ -2062,7 +2073,7 @@ class CompositionTests(unittest.TestCase):
 
     def test_cancel_discards_all_lines_without_returning_content(self) -> None:
         terminal, callbacks = make_terminal("draft", "", "/cancel")
-        action = terminal.compose(ComposeMode.RUN)
+        action = terminal.compose(ComposeMode.CHAT, agent_id=LEAD_ORCHESTRATOR)
         self.assertEqual(
             action,
             TerminalAction(
@@ -2119,15 +2130,15 @@ class CompositionTests(unittest.TestCase):
             lambda: make_terminal()[0].compose("chat"),
             lambda: make_terminal()[0].compose(ComposeMode.CHAT),
             lambda: make_terminal()[0].compose(
-                ComposeMode.RUN,
-                agent_id=PLOT_ARCHITECT,
-            ),
-            lambda: make_terminal()[0].compose(
                 ComposeMode.CHAT,
                 agent_id="plot",
             ),
-            lambda: make_terminal(None)[0].compose(ComposeMode.RUN),
-            lambda: make_terminal("two\nlines")[0].compose(ComposeMode.RUN),
+            lambda: make_terminal(None)[0].compose(
+                ComposeMode.CHAT, agent_id=PLOT_ARCHITECT
+            ),
+            lambda: make_terminal("two\nlines")[0].compose(
+                ComposeMode.CHAT, agent_id=PLOT_ARCHITECT
+            ),
         )
         for call in invalid_calls:
             with self.subTest(call=call):
@@ -2504,7 +2515,9 @@ class TerminalBoundaryTests(unittest.TestCase):
                     "subject",
                 )
                 self.assertEqual(
-                    terminal.compose(ComposeMode.RUN).text,
+                    terminal.compose(
+                        ComposeMode.CHAT, agent_id=LEAD_ORCHESTRATOR
+                    ).text,
                     "message",
                 )
                 terminal.write_conversation_scope(

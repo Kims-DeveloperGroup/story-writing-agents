@@ -588,7 +588,7 @@ class PublicCompatibilityFoundationTests(unittest.TestCase):
     def test_public_values_pickle_and_preserve_isinstance_compatibility(self) -> None:
         samples = (
             AttachmentKind.CREATED,
-            ComposeMode.RUN,
+            ComposeMode.CHAT,
             ConfirmationResult.EOF,
             TerminalAction(TerminalActionKind.LINE, text="exact"),
             InteractiveErrorSpec("Summary", "Hint"),
@@ -2214,7 +2214,7 @@ class CapabilityAndDriverFoundationTests(unittest.TestCase):
             TerminalAction(TerminalActionKind.LINE, text="/status"),
         )
         self.assertEqual(
-            terminal.compose(ComposeMode.RUN),
+            terminal.compose(ComposeMode.CHAT, agent_id="plot_architect"),
             TerminalAction(
                 TerminalActionKind.SEND,
                 text="composition line",
@@ -2319,8 +2319,8 @@ class CapabilityAndDriverFoundationTests(unittest.TestCase):
             [
                 mock.call(
                     _core._composer_input_view(
-                        ComposeMode.RUN,
-                        None,
+                        ComposeMode.CHAT,
+                        "plot",
                         ComposerState(),
                     ),
                     render_input_prompt,
@@ -2329,8 +2329,8 @@ class CapabilityAndDriverFoundationTests(unittest.TestCase):
                 ),
                 mock.call(
                     _core._composer_input_view(
-                        ComposeMode.RUN,
-                        None,
+                        ComposeMode.CHAT,
+                        "plot",
                         ComposerState(("composition line",)),
                     ),
                     render_input_prompt,
@@ -2378,12 +2378,12 @@ class CapabilityAndDriverFoundationTests(unittest.TestCase):
             driver.write_text.call_args_list,
             [
                 mock.call(
-                    "\x1b[36m[compose] Consensus run. Use /send to submit or "
+                    "\x1b[36m[compose] Target: plot. Use /send to submit or "
                     "/cancel to discard.\x1b[0m\n"
                 ),
                 mock.call(
                     "\x1b[32m[compose] Sending 1 line, 16 characters to "
-                    "consensus.\x1b[0m\n"
+                    "plot.\x1b[0m\n"
                 ),
                 mock.call("[result] ready\n"),
             ],
@@ -3367,6 +3367,7 @@ class PackageBoundaryFoundationTests(unittest.TestCase):
             "__init__.py": {"._core"},
             "_external_view.py": set(),
             "_input_lifecycle.py": set(),
+            "_live_composer.py": {"._model"},
             "_model.py": set(),
             "_controls.py": {"._model"},
             "_render.py": {"._model"},
@@ -3380,6 +3381,7 @@ class PackageBoundaryFoundationTests(unittest.TestCase):
             "_driver.py": {
                 "._input_lifecycle",
                 "._external_view",
+                "._live_composer",
                 "._model",
                 "._reference_activation",
                 "._viewer_model",
@@ -3390,6 +3392,7 @@ class PackageBoundaryFoundationTests(unittest.TestCase):
                 "._controls",
                 "._driver",
                 "._external_view",
+                "._live_composer",
                 "._model",
                 "._reference_activation",
                 "._render",

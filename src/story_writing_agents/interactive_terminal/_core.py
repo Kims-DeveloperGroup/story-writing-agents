@@ -151,7 +151,6 @@ class ComposeMode(StrEnum):
     """Destination of a multiline composition."""
 
     CHAT = "chat"
-    RUN = "run"
 
 
 class ConfirmationResult(StrEnum):
@@ -337,7 +336,7 @@ INTERACTIVE_ERROR_SPECS: Mapping[InteractiveErrorCode, InteractiveErrorSpec] = (
         {
             InteractiveErrorCode.TTY_REQUIRED: InteractiveErrorSpec(
                 "Interactive mode requires a terminal.",
-                "Use story run for non-interactive automation.",
+                "Use the stepwise Python collaboration API without a terminal.",
             ),
             InteractiveErrorCode.WORKSPACE_NOT_INITIALIZED: InteractiveErrorSpec(
                 "No initialized story workspace was found.",
@@ -721,7 +720,7 @@ class InteractiveTerminal:
         *,
         agent_id: str | None = None,
     ) -> TerminalAction:
-        """Collect one exact chat or consensus composition synchronously."""
+        """Collect one exact chat composition synchronously."""
 
         return self._compose(
             mode,
@@ -742,13 +741,8 @@ class InteractiveTerminal:
             raise TypeError("read_input must be callable")
 
         alias = _compose_alias(mode, agent_id)
-        if mode is ComposeMode.CHAT:
-            assert alias is not None
-            introduction = (
-                f"Target: {alias}. Use /send to submit or /cancel to discard."
-            )
-        else:
-            introduction = "Consensus run. Use /send to submit or /cancel to discard."
+        assert alias is not None
+        introduction = f"Target: {alias}. Use /send to submit or /cancel to discard."
         self._write_component(
             Notice(
                 introduction,
@@ -796,14 +790,13 @@ class InteractiveTerminal:
                     line_count=state.line_count,
                     character_count=state.character_count,
                 )
-                target = alias if alias is not None else "consensus"
                 self._write_component(
                     Notice(
                         f"Sending {action.line_count} "
                         f"{_plural(action.line_count, 'line')}, "
                         f"{action.character_count} "
                         f"{_plural(action.character_count, 'character')} "
-                        f"to {target}.",
+                        f"to {alias}.",
                         label="compose",
                         role=SemanticRole.SUCCESS,
                         state=ViewState.COMPLETED,
@@ -1631,7 +1624,7 @@ class InteractiveMainInput:
 
 
 class InteractiveCompositionInput:
-    """Bind RUN/CHAT composition to call-local reference collaborators."""
+    """Bind chat composition to call-local reference collaborators."""
 
     __slots__ = ("_terminal",)
 
@@ -2456,7 +2449,7 @@ def read_reference_composition_line(
     text_reader: Callable[[str], str],
     failure_writer: Callable[[ReferenceInputFailureKind], None],
 ) -> str:
-    """Read one RUN/CHAT line through the shared reference input route."""
+    """Read one chat-composition line through the shared reference input route."""
 
     if not isinstance(driver, RawTerminalDriver):
         raise TypeError("driver must be a RawTerminalDriver")
@@ -2740,26 +2733,23 @@ def _main_prompt(*, session_id: str | None, agent_id: str | None) -> str:
 
 
 def _compose_alias(mode: object, agent_id: str | None) -> str | None:
-    """Validate a compose destination and return its chat alias when needed."""
+    """Validate the chat compose destination and return its alias."""
 
     if not isinstance(mode, ComposeMode):
         raise TypeError("mode must be a ComposeMode")
-    if mode is ComposeMode.CHAT:
-        if agent_id is None:
-            raise ValueError("chat composition requires an agent_id")
-        return _agent_alias(agent_id)
-    if agent_id is not None:
-        raise ValueError("run composition does not accept an agent_id")
-    return None
+    if agent_id is None:
+        raise ValueError("chat composition requires an agent_id")
+    return _agent_alias(agent_id)
 
 
 def _compose_prompt(mode: ComposeMode, alias: str | None, line_number: int) -> str:
     """Build the exact prompt for one numbered composition line."""
 
-    if mode is ComposeMode.CHAT:
-        assert alias is not None
-        return f"compose[chat:{alias}:{line_number}]> "
-    return f"compose[run:{line_number}]> "
+    if not isinstance(mode, ComposeMode):
+        raise TypeError("mode must be a ComposeMode")
+    if alias is None:
+        raise ValueError("chat composition requires an alias")
+    return f"compose[chat:{alias}:{line_number}]> "
 
 
 def _composer_input_view(

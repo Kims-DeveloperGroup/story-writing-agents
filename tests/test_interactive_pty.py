@@ -4928,7 +4928,7 @@ from story_writing_agents.interactive_terminal import (
 )
 
 terminal = build_stream_terminal(input, sys.stdin, sys.stdout)
-action = terminal.compose(ComposeMode.RUN)
+action = terminal.compose(ComposeMode.CHAT, agent_id="lead_orchestrator")
 confirmation = terminal.request_confirmation("Continue?", default=False)
 print(
     "RESULT="
@@ -4952,13 +4952,14 @@ print(
             terminal_columns=40,
         )
         mark = process.output_mark()
-        opened = process.wait_for_text("compose[run:1]> ", after=mark)
-        self.assertIn("Mode: run", opened)
+        opened = process.wait_for_text("compose[chat:lead:1]> ", after=mark)
+        self.assertIn("Mode: chat", opened)
+        self.assertIn("Target: lead", opened)
         self.assertIn("Next line: 1", opened)
         self.assertNotRegex(opened, r"\x1b\[(?:0|1|3[1-7])m")
 
         process.send_text("\x1b[A\x1b[B\t\x1b[Z\x1bexact line\n")
-        process.wait_for_text("compose[run:2]> ", after=mark)
+        process.wait_for_text("compose[chat:lead:2]> ", after=mark)
         process.send_line("/send")
         confirmation = process.wait_for_text("confirm [y/N]> ", after=mark)
         self.assertIn("Question: Continue?", confirmation)
@@ -5008,7 +5009,7 @@ from story_writing_agents.interactive_terminal import (
 )
 
 terminal = build_stream_terminal(input, sys.stdin, sys.stdout)
-action = terminal.compose(ComposeMode.RUN)
+action = terminal.compose(ComposeMode.CHAT, agent_id="lead_orchestrator")
 confirmation = terminal.request_confirmation("Continue?", default=True)
 print(
     "RESULT="
@@ -5028,11 +5029,12 @@ print(
             terminal_columns=40,
         )
         mark = process.output_mark()
-        opened = process.wait_for_text("compose[run:1]> ", after=mark)
-        self.assertIn("Mode: run", opened)
+        opened = process.wait_for_text("compose[chat:lead:1]> ", after=mark)
+        self.assertIn("Mode: chat", opened)
+        self.assertIn("Target: lead", opened)
         self.assertNotIn("\x1b", opened)
         process.send_line("fallback line")
-        process.wait_for_text("compose[run:2]> ", after=mark)
+        process.wait_for_text("compose[chat:lead:2]> ", after=mark)
         process.send_line("/send")
         confirmation = process.wait_for_text("confirm [Y/n]> ", after=mark)
         self.assertIn("Question: Continue?", confirmation)
@@ -5512,7 +5514,7 @@ print(
         for command, marker in (
             ("/rn", "[error command_invalid]"),
             ("/transcript missing_conversation", "[error conversation_not_found]"),
-            ("/run removed", "Direct story execution is unavailable"),
+            ("/run removed", "[error command_invalid]"),
         ):
             with self.subTest(command=command):
                 mark = process.output_mark()

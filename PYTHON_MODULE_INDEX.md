@@ -4283,8 +4283,9 @@ every intermediate arrow. The current runtime graph is acyclic.
   `parse_interactive_line`; module-supported `AgentRouteSpec` and
   `AGENT_ROUTES`; package-internal completion metadata. Direct message,
   routed/sticky target, composition, send/cancel, run/draft-file, and one-shot
-  RAG actions and payload fields are absent. Ordinary text, `@agent`, and the
-  removed slash commands deterministically produce the integration-stage
+  RAG actions and payload fields are absent. `/run` follows ordinary unknown-
+  command handling and has no help or completion metadata. Ordinary text,
+  `@agent`, and other retired execution commands produce the integration-stage
   unavailable guidance. Agent-route aliases remain display/persona metadata
   for existing terminal and override consumers and are not parsed or completed
   as direct invocation grammar.
@@ -4644,7 +4645,7 @@ every intermediate arrow. The current runtime graph is acyclic.
 - **Source:** `src/story_writing_agents/interactive_terminal/__init__.py`
 - **Responsibility:** Provide the stable interactive-terminal import and
   construction boundary.
-- **Supported surface:** Package-supported `AttachmentKind`, `ComposeMode`,
+- **Supported surface:** Package-supported `AttachmentKind`, chat-only `ComposeMode`,
   `ConfirmationResult`, `TerminalActionKind`, `TerminalMessageKind`,
   `InteractiveErrorCode`, `TerminalAction`, `InteractiveErrorSpec`,
   `INTERACTIVE_ERROR_SPECS`, `InteractiveError`, `sanitize_terminal_text`, and
@@ -5217,7 +5218,7 @@ every intermediate arrow. The current runtime graph is acyclic.
   fallback and recomputes/validates width-correlated frames during live edits.
   Package-internal `read_reference_main_command_line` and
   `read_reference_input_line`
-  accept private call-local activation bindings for main and RUN/CHAT input
+  accept private call-local activation bindings for main and chat-composition input
   without changing that established method signature. Those bindings carry the
   controls-owned completion predicate and ranged-palette selection callback.
   Fallback raw-probes dollar positions right to left and delegates provider-
@@ -5586,7 +5587,7 @@ every intermediate arrow. The current runtime graph is acyclic.
   existing `Prompt` inside `InputPromptView`; it does not extend the closed
   semantic vocabulary or persist the rendered header. Resource-free
   `InteractiveCompositionInput` selects the same private reference-aware reader
-  for RUN/CHAT while retaining the established public `compose` behavior and
+  for chat composition while retaining the established public `compose` behavior and
   signature. Resource-free
   `InteractivePickerInput`
   validates additive standard/form presentation, an exact form-only transient

@@ -41,7 +41,6 @@ DIRECT_EXECUTION_UNAVAILABLE = (
 )
 
 REMOVED_COMMANDS = (
-    "/run",
     "/draft-file",
     "/say",
     "/to",
@@ -285,6 +284,19 @@ class InteractiveParserRetirementTests(unittest.TestCase):
         for line in cases:
             with self.subTest(line=line):
                 self.assert_unavailable(line)
+
+    def test_run_is_an_ordinary_unknown_command(self) -> None:
+        self.assertEqual(
+            parse_interactive_line("/run payload"),
+            InteractiveAction(ActionKind.PARSE_ERROR, error="unknown command: /run"),
+        )
+        self.assertEqual(
+            parse_interactive_line("/help run"),
+            InteractiveAction(
+                ActionKind.PARSE_ERROR,
+                error="unknown help command: run",
+            ),
+        )
 
     def test_retained_commands_parse_without_execution_payloads(self) -> None:
         cases = {
