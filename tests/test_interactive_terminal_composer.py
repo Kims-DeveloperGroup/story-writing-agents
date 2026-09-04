@@ -279,7 +279,7 @@ class SemanticInputModelTests(unittest.TestCase):
                 Field("Lines", "2"),
                 Notice("Guidance"),
             ),
-            Prompt("compose[run:3]>")
+            Prompt("compose[chat:plot:3]>")
         )
         frame = RenderedInputFrame("styled> ", "plain> ", 80, 1)
 
@@ -465,19 +465,6 @@ class SemanticInputRenderingTests(unittest.TestCase):
 
     def test_core_projects_exact_composer_and_confirmation_trees(self) -> None:
         self.assertEqual(
-            _core._composer_input_view(ComposeMode.RUN, None, ComposerState()),
-            InputPromptView(
-                (
-                    Field("Mode", "run"),
-                    Field("Next line", "1"),
-                    Field("Lines", "0"),
-                    Field("Characters", "0"),
-                    Notice("Use /send to submit or /cancel to discard."),
-                ),
-                Prompt("compose[run:1]>"),
-            ),
-        )
-        self.assertEqual(
             _core._composer_input_view(
                 ComposeMode.CHAT,
                 "plot",
@@ -526,8 +513,8 @@ class SemanticInputRenderingTests(unittest.TestCase):
 
     def test_wide_plain_ansi_no_color_and_narrow_bytes_are_exact(self) -> None:
         view = _core._composer_input_view(
-            ComposeMode.RUN,
-            None,
+            ComposeMode.CHAT,
+            "plot",
             ComposerState(),
         )
         plain = render_input_prompt(
@@ -543,24 +530,26 @@ class SemanticInputRenderingTests(unittest.TestCase):
             _capability(CapabilityProfile.ANSI),
         )
         expected_plain = (
-            "Mode: run\n"
+            "Mode: chat\n"
+            "Target: plot\n"
             "Next line: 1\n"
             "Lines: 0\n"
             "Characters: 0\n"
             "[info] Use /send to submit or /cancel to discard.\n"
-            "compose[run:1]> "
+            "compose[chat:plot:1]> "
         )
-        self.assertEqual(plain, RenderedInputFrame(expected_plain, expected_plain, 80, 6))
+        self.assertEqual(plain, RenderedInputFrame(expected_plain, expected_plain, 80, 7))
         self.assertEqual(no_color.text, expected_plain)
         self.assertEqual(no_color.plain_text, expected_plain)
         self.assertEqual(
             ansi.text,
-            "Mode: run\n"
+            "Mode: chat\n"
+            "Target: plot\n"
             "Next line: 1\n"
             "Lines: 0\n"
             "Characters: 0\n"
             "\x1b[36m[info] Use /send to submit or /cancel to discard.\x1b[0m\n"
-            "\x1b[35mcompose[run:1]>\x1b[0m ",
+            "\x1b[35mcompose[chat:plot:1]>\x1b[0m ",
         )
         self.assertEqual(strip_decorative_sgr(ansi.text), expected_plain)
         self.assertFalse(ansi.text.endswith("\n"))
@@ -573,7 +562,9 @@ class SemanticInputRenderingTests(unittest.TestCase):
         self.assertEqual(
             narrow.text,
             "Mode:\n"
-            " run\n"
+            " chat\n"
+            "Target:\n"
+            " plot\n"
             "Next line:\n"
             " 1\n"
             "Lines:\n"
@@ -584,9 +575,10 @@ class SemanticInputRenderingTests(unittest.TestCase):
             "       submit or /ca\n"
             "       ncel to disca\n"
             "       rd.\n"
-            "compose[run:1]> ",
+            "compose[chat:plot:1]\n"
+            "> ",
         )
-        self.assertEqual(narrow.line_count, 13)
+        self.assertEqual(narrow.line_count, 16)
         for line in narrow.text.split("\n"):
             self.assertLessEqual(_physical_width(line), 20)
 
@@ -645,13 +637,13 @@ class SemanticInputRenderingTests(unittest.TestCase):
 class SemanticInputDriverTests(unittest.TestCase):
     """Verify renderer injection, safe fallback, live trust, and cleanup."""
 
-    def test_run_and_chat_exact_double_dollar_open_before_activation_key(
+    def test_chat_exact_double_dollar_opens_before_activation_key(
         self,
     ) -> None:
         path = "manuscript/older drafts/{世界$ 章#1.md"
         paths = (path, "manuscript/root.md")
         for mode, agent_id, activation_key in (
-            (ComposeMode.RUN, None, "\n"),
+            (ComposeMode.CHAT, PLOT_ARCHITECT, "\n"),
             (ComposeMode.CHAT, PLOT_ARCHITECT, "\t"),
         ):
             with self.subTest(mode=mode, activation_key=repr(activation_key)):
@@ -710,11 +702,11 @@ class SemanticInputDriverTests(unittest.TestCase):
                     [termios_double.TCSANOW, termios_double.TCSADRAIN],
                 )
 
-    def test_run_and_chat_empty_double_dollar_preview_precedes_failure(
+    def test_chat_empty_double_dollar_preview_precedes_failure(
         self,
     ) -> None:
         for mode, agent_id, activation_key in (
-            (ComposeMode.RUN, None, "\n"),
+            (ComposeMode.CHAT, PLOT_ARCHITECT, "\n"),
             (ComposeMode.CHAT, PLOT_ARCHITECT, "\t"),
         ):
             with self.subTest(mode=mode, activation_key=repr(activation_key)):
@@ -1073,7 +1065,9 @@ class SemanticInputDriverTests(unittest.TestCase):
         driver, _input, output, fallback, termios_double, size_calls = _driver(
             f"{reserved}界e\u0301\n",
         )
-        view = _core._composer_input_view(ComposeMode.RUN, None, ComposerState())
+        view = _core._composer_input_view(
+            ComposeMode.CHAT, "plot", ComposerState()
+        )
         renderer = mock.Mock(wraps=render_input_prompt)
         provider = mock.Mock(return_value=())
 
@@ -1105,7 +1099,7 @@ class SemanticInputDriverTests(unittest.TestCase):
             [termios_double.TCSANOW, termios_double.TCSADRAIN],
         )
         rendered = "".join(output.records)
-        self.assertIn("\x1b[35mcompose[run:1]>\x1b[0m ", rendered)
+        self.assertIn("\x1b[35mcompose[chat:plot:1]>\x1b[0m ", rendered)
         self.assertNotIn(r"\x1b[35mcompose", rendered)
         self.assertIn("界e\u0301", rendered)
         initial_calls = [call for call in provider.call_args_list if call == mock.call("")]
@@ -1397,7 +1391,10 @@ class SemanticComposerCoreTests(unittest.TestCase):
             "render_component",
             wraps=render_component,
         ) as render:
-            action = InteractiveTerminal(read_line, records.append).compose(ComposeMode.RUN)
+            action = InteractiveTerminal(read_line, records.append).compose(
+                ComposeMode.CHAT,
+                agent_id=PLOT_ARCHITECT,
+            )
 
         self.assertEqual(
             action,
@@ -1414,7 +1411,7 @@ class SemanticComposerCoreTests(unittest.TestCase):
             [call.args[0] for call in render.call_args_list],
             [
                 Notice(
-                    "Consensus run. Use /send to submit or /cancel to discard.",
+                    "Target: plot. Use /send to submit or /cancel to discard.",
                     label="compose",
                     role=SemanticRole.INFO,
                     state=ViewState.OPEN,
@@ -1426,7 +1423,7 @@ class SemanticComposerCoreTests(unittest.TestCase):
                     state=ViewState.ERROR,
                 ),
                 Notice(
-                    "Sending 3 lines, 11 characters to consensus.",
+                    "Sending 3 lines, 11 characters to plot.",
                     label="compose",
                     role=SemanticRole.SUCCESS,
                     state=ViewState.COMPLETED,
@@ -1436,9 +1433,9 @@ class SemanticComposerCoreTests(unittest.TestCase):
         self.assertEqual(
             records,
             [
-                "[compose] Consensus run. Use /send to submit or /cancel to discard.\n",
+                "[compose] Target: plot. Use /send to submit or /cancel to discard.\n",
                 "[compose] Nothing to send.\n",
-                "[compose] Sending 3 lines, 11 characters to consensus.\n",
+                "[compose] Sending 3 lines, 11 characters to plot.\n",
             ],
         )
 
@@ -1493,7 +1490,10 @@ class SemanticComposerCoreTests(unittest.TestCase):
         reads = mock.Mock(return_value="unused")
         writer = mock.Mock(side_effect=RuntimeError("opening write failed"))
         with self.assertRaisesRegex(RuntimeError, "opening write failed"):
-            InteractiveTerminal(reads, writer).compose(ComposeMode.RUN)
+            InteractiveTerminal(reads, writer).compose(
+                ComposeMode.CHAT,
+                agent_id=PLOT_ARCHITECT,
+            )
         reads.assert_not_called()
         writer.assert_called_once()
 
@@ -1507,11 +1507,14 @@ class SemanticComposerCoreTests(unittest.TestCase):
                 raise RuntimeError("final write failed")
 
         with self.assertRaisesRegex(RuntimeError, "final write failed"):
-            InteractiveTerminal(reads, fail_final).compose(ComposeMode.RUN)
+            InteractiveTerminal(reads, fail_final).compose(
+                ComposeMode.CHAT,
+                agent_id=PLOT_ARCHITECT,
+            )
         self.assertEqual(reads.call_count, 2)
         self.assertEqual(writer_calls, 2)
 
-    def test_private_reference_composer_routes_run_and_chat_without_public_growth(
+    def test_private_reference_composer_routes_chat_without_public_growth(
         self,
     ) -> None:
         ordinary = mock.Mock(side_effect=AssertionError("ordinary reader used"))
@@ -1522,8 +1525,6 @@ class SemanticComposerCoreTests(unittest.TestCase):
         text = mock.Mock()
         scripted = iter(
             (
-                "run ${core_documents/global_outline.md}",
-                "/send",
                 "chat ${core_documents/character_sheets.md}#L2-L3",
                 "/send",
             )
@@ -1536,12 +1537,6 @@ class SemanticComposerCoreTests(unittest.TestCase):
 
         terminal._composition_reference_read_line = read_reference
         composer = terminal_facade.InteractiveCompositionInput(terminal)
-        run = composer.compose(
-            ComposeMode.RUN,
-            reference_scope_provider=scope,
-            reference_paths_provider=paths,
-            reference_text_reader=text,
-        )
         chat = composer.compose(
             ComposeMode.CHAT,
             agent_id=PLOT_ARCHITECT,
@@ -1551,15 +1546,6 @@ class SemanticComposerCoreTests(unittest.TestCase):
         )
 
         self.assertEqual(
-            run,
-            TerminalAction(
-                TerminalActionKind.SEND,
-                text="run ${core_documents/global_outline.md}",
-                line_count=1,
-                character_count=39,
-            ),
-        )
-        self.assertEqual(
             chat,
             TerminalAction(
                 TerminalActionKind.SEND,
@@ -1568,10 +1554,9 @@ class SemanticComposerCoreTests(unittest.TestCase):
                 character_count=48,
             ),
         )
-        self.assertEqual(len(calls), 4)
+        self.assertEqual(len(calls), 2)
         self.assertTrue(all(call[1:] == (scope, paths, text) for call in calls))
-        self.assertTrue(calls[0][0].prompt.name.startswith("compose[run:"))
-        self.assertTrue(calls[2][0].prompt.name.startswith("compose[chat:plot:"))
+        self.assertTrue(calls[0][0].prompt.name.startswith("compose[chat:plot:"))
         ordinary.assert_not_called()
         self.assertFalse(hasattr(terminal, "compose_with_references"))
         self.assertNotIn("InteractiveCompositionInput", terminal_facade.__all__)
@@ -1664,7 +1649,7 @@ class SemanticComposerCoreTests(unittest.TestCase):
             TerminalAction(TerminalActionKind.LINE, text="/status"),
         )
         self.assertEqual(
-            terminal.compose(ComposeMode.RUN),
+            terminal.compose(ComposeMode.CHAT, agent_id=PLOT_ARCHITECT),
             TerminalAction(
                 TerminalActionKind.SEND,
                 text="line",
@@ -1683,7 +1668,9 @@ class SemanticComposerCoreTests(unittest.TestCase):
         main.assert_called_once_with("story[lobby]> ")
         self.assertEqual(composition.call_count, 2)
         self.assertEqual(ordinary.call_count, 2)
-        self.assertTrue(composition.call_args_list[0].args[0].endswith("compose[run:1]> "))
+        self.assertTrue(
+            composition.call_args_list[0].args[0].endswith("compose[chat:plot:1]> ")
+        )
         self.assertTrue(ordinary.call_args_list[0].args[0].endswith("conversation[subject]> "))
         self.assertTrue(ordinary.call_args_list[1].args[0].endswith("confirm [y/N]> "))
 

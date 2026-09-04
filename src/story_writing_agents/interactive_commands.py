@@ -462,7 +462,6 @@ _REMOVED_EXECUTION_COMMANDS = frozenset(
         "compose",
         "draft-file",
         "rag",
-        "run",
         "say",
         "send",
         "to",
@@ -529,7 +528,7 @@ def project_command_completion(
             "root.command",
             start,
             end,
-            _root_command_replacements(include_composition=False),
+            _root_command_replacements(),
         )
     if preceding == ("/session",):
         return _completion_context(
@@ -580,7 +579,7 @@ def project_command_completion(
             "help.command",
             start,
             end,
-            _root_command_replacements(include_composition=True),
+            _root_command_replacements(),
         )
     if preceding == ("/inspect",):
         if active_token and not _INSPECT_LAST_ARGUMENT.startswith(active_token):
@@ -654,10 +653,9 @@ def _completion_preceding_tokens(buffer: str, start: int) -> tuple[str, ...]:
     return tuple(re.split(r"[ \t]+", value))
 
 
-def _root_command_replacements(*, include_composition: bool) -> tuple[str, ...]:
+def _root_command_replacements() -> tuple[str, ...]:
     """Return canonical and alias tokens in exact public registry order."""
 
-    del include_composition
     replacements: list[str] = []
     for spec in COMMANDS:
         replacements.append(spec.syntax.split(maxsplit=1)[0])

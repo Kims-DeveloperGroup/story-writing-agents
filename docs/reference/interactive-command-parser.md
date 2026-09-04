@@ -61,11 +61,12 @@ At character zero, `/` begins command parsing. Other nonblank input returns a
 `parse_error` with the direct-execution-unavailable guidance; a leading agent
 route is treated the same way.
 
-The following names are recognized specifically as removed execution input and
-return the same fixed guidance rather than an unknown-command suggestion:
+The following legacy names are recognized specifically as removed execution
+input and return the same fixed guidance rather than an unknown-command
+suggestion:
 
 ```text
-/agent /cancel /compose /draft-file /rag /run /say /send /to
+/agent /cancel /compose /draft-file /rag /say /send /to
 ```
 
 Exact guidance:
@@ -73,6 +74,10 @@ Exact guidance:
 ```text
 Direct story execution is unavailable in this integration stage. Session, conversation, history, search, and inspection remain available.
 ```
+
+`/run` is not a retained legacy route. It follows the ordinary unknown-command
+path, is absent from help and completion, and cannot reach a provider or mutate
+session state.
 
 Command keywords are case-sensitive. ASCII space/tab delimit grammar. There is
 no quoting, shell expansion, provider call, file read, or network access.

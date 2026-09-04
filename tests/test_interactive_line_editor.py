@@ -767,7 +767,7 @@ class LiveEditingTests(unittest.TestCase):
                 provider = mock.Mock(wraps=composition_slash_command_suggestions)
                 reader = bind_suggestion_reader(editor, provider)
                 with capable_terminal(FakeTermios(), width=20):
-                    self.assertEqual(reader("compose[run:1]> "), expected)
+                    self.assertEqual(reader("compose[chat:plot:1]> "), expected)
 
                 self.assertEqual(
                     tuple(call.args[0] for call in provider.call_args_list),
@@ -798,7 +798,9 @@ class LiveEditingTests(unittest.TestCase):
                 termios_double = FakeTermios()
                 with capable_terminal(termios_double):
                     with self.assertRaises(error_type):
-                        bind_suggestion_reader(editor, provider)("compose[run:1]> ")
+                        bind_suggestion_reader(editor, provider)(
+                            "compose[chat:plot:1]> "
+                        )
                 self.assertEqual(
                     output.records[-1],
                     "\r\r\x1b[J\n",
@@ -820,14 +822,14 @@ class LiveEditingTests(unittest.TestCase):
                 bind_suggestion_reader(
                     editor,
                     composition_slash_command_suggestions,
-                )("compose[run:1]> "),
+                )("compose[chat:plot:1]> "),
                 "/send",
             )
         rendered = "".join(output.records)
         self.assertIn("[suggestions]", rendered)
         self.assertIn("/send", rendered)
         self.assertNotIn("/status", rendered)
-        self.assertIn("compose[run:1]> /se\nnd", rendered)
+        self.assertIn("compose[chat:plot:1\n]> /send", rendered)
         fallback.assert_not_called()
 
         unsafe_provider = mock.Mock(
@@ -1366,7 +1368,7 @@ class EditorBoundaryTests(unittest.TestCase):
                     bind_suggestion_reader(
                         contextual_editor,
                         composition_slash_command_suggestions,
-                    )("compose[run:1]> "),
+                    )("compose[chat:plot:1]> "),
                     "plain",
                 )
                 self.assertEqual(

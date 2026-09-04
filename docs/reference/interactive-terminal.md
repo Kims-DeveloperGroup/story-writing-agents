@@ -31,9 +31,9 @@ InteractiveTerminal
 `InteractiveTerminal` defines semantic reads/writes used by the controller,
 including `read_main`, subject/confirmation input, lobby/session/conversation
 orientation, catalog/search/transcript rows, roster/status/help/error output,
-and generic composition/agent/run presentation seams. A method's presence on
-this generic component does not make it a current shell command. The controller
-does not call the composition/agent/run seams for user story execution.
+and agent-targeted CHAT composition plus result-presentation seams. A method's
+presence on this generic component does not make it a current shell command.
+The controller does not expose a direct story-run entry point.
 
 The retained public methods are:
 
@@ -41,7 +41,13 @@ The retained public methods are:
 | --- | --- |
 | Read management input | `read_main`, `request_conversation_subject`, `request_confirmation` |
 | Render scope and management data | `write_lobby_orientation`, `write_session_orientation`, `write_conversation_scope`, `write_conversation_list_entry`, `write_conversation_search_hit`, `write_conversation_transcript_event`, `write_agent_roster`, `write_status`, `write_help`, `write_error` |
-| Generic execution presentation, without a current controller consumer | `compose`, `write_agent`, `write_run` |
+| Agent-targeted conversation composition | `compose` with `ComposeMode.CHAT` and an agent ID |
+| Result presentation, without a direct-run controller entry | `write_agent`, `write_run` |
+
+`ComposeMode` contains only `CHAT`. There is no RUN composition mode, `/run`
+command, or noninteractive `story run` subcommand. Users converse with the Lead;
+automation uses the stepwise Python collaboration API described in the
+[runtime API](runtime-api.md).
 
 For argument and return types, inspect the public class signature; concrete
 streams remain implementation details. Session/conversation command behavior
