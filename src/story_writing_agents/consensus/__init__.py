@@ -32,6 +32,16 @@ from .projection import (
     ConsensusProjection,
     project_consensus,
 )
+from .runtime_adapter import (
+    ConsensusInputKind,
+    ConsensusRuntimeAdapter,
+    ConsensusRuntimeDecision,
+    ConsensusRuntimeDecisionResult,
+    ConsensusRuntimeInspection,
+    ConsensusRuntimePort,
+    ConsensusStoredWorkflow,
+    ConsensusWorkflowSubmission,
+)
 
 __all__ = [
     "CONSENSUS_AUDITORS",
@@ -45,6 +55,7 @@ __all__ = [
     "ConsensusEventIdFactory",
     "ConsensusExecutionCoordinator",
     "ConsensusExecutionReceipt",
+    "ConsensusInputKind",
     "ConsensusNextAction",
     "ConsensusPayload",
     "ConsensusPhase",
@@ -57,6 +68,13 @@ __all__ = [
     "ConsensusProviderInvoker",
     "ConsensusProviderOutcomeUnknown",
     "ConsensusProviderResult",
+    "ConsensusRuntimeAdapter",
+    "ConsensusRuntimeDecision",
+    "ConsensusRuntimeDecisionResult",
+    "ConsensusRuntimeInspection",
+    "ConsensusRuntimePort",
+    "ConsensusStoredWorkflow",
+    "ConsensusWorkflowSubmission",
     "consensus_request_digest",
     "prepare_consensus_phase",
     "project_consensus",

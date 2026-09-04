@@ -16,9 +16,9 @@ Source root: `src/`
 
 Package root: `src/story_writing_agents/`
 
-Importable production units indexed: 126.
+Importable production units indexed: 127.
 
-Direct internal dependency edges indexed: 486.
+Direct internal dependency edges indexed: 490.
 
 Directed internal dependency cycles indexed: 0.
 
@@ -65,10 +65,11 @@ __main__ -> cli -> conversation_rag_cli
                  |          -> writing_artifacts.read_actions
                  -> cli_context -> workspace/errors
 
-consensus -> consensus.contracts/consensus.execution/consensus.projection
+consensus -> consensus.contracts/consensus.execution/consensus.projection/consensus.runtime_adapter
 consensus.contracts -> agents
 consensus.execution -> agents/consensus.contracts/consensus.projection
 consensus.projection -> consensus.contracts
+consensus.runtime_adapter -> consensus.contracts/consensus.execution/consensus.projection
 
 interactive_controller._core -> interactive_controller._session_policy
                              -> interactive_controller._conversation_policy
@@ -1702,12 +1703,15 @@ every intermediate arrow. The current runtime graph is acyclic.
 
 - **Source:** `src/story_writing_agents/consensus/__init__.py`
 - **Responsibility:** Provide the package-level facade for provider-independent,
-  phase-confirmed consensus contracts, execution, and projection.
-- **Supported surface:** Package `__all__` exports exactly 26 consensus
-  contract, execution, projection, enum, capability, digest, and preparation names.
+  phase-confirmed consensus contracts, execution, runtime adaptation, and
+  projection.
+- **Supported surface:** Package `__all__` exports exactly 34 consensus
+  contract, execution, runtime-adapter, projection, enum, capability, digest,
+  and preparation names.
   These names are intentionally absent from the project-root facade.
 - **Direct internal dependencies:** `consensus.contracts`,
-  `consensus.execution`, and `consensus.projection`.
+  `consensus.execution`, `consensus.projection`, and
+  `consensus.runtime_adapter`.
 - **State, resources, and side effects:** Owns no persistent or external
   resource. Importing only binds immutable domain definitions and performs no
   filesystem, provider, network, subprocess, or import-time operational I/O.
@@ -1731,6 +1735,25 @@ every intermediate arrow. The current runtime graph is acyclic.
   those ports; importing performs no operational I/O.
 - **Primary verification/documentation:**
   `tests/test_consensus_execution.py` and
+  `docs/design/consensus-workflow.md`.
+
+### `story_writing_agents.consensus.runtime_adapter`
+
+- **Source:** `src/story_writing_agents/consensus/runtime_adapter.py`
+- **Responsibility:** Bridge stepwise phase-confirmed consensus operations to
+  explicit StoryRuntime-owned persistence, provider, identity, and interruption
+  ports.
+- **Supported surface:** Direct-module `__all__` exports exactly eight input,
+  runtime-adapter, decision, inspection, port, stored-workflow, and submission
+  names. The consensus package facade re-exports them.
+- **Direct internal dependencies:** `consensus.contracts`,
+  `consensus.execution`, and `consensus.projection`.
+- **State, resources, and side effects:** Retains only injected runtime ports
+  and a process-local confirmation-capability map. Durable workflow and
+  provider effects are delegated through the port; importing performs no
+  operational I/O.
+- **Primary verification/documentation:**
+  `tests/test_consensus_runtime_adapter.py` and
   `docs/design/consensus-workflow.md`.
 
 ### `story_writing_agents.consensus.contracts`
