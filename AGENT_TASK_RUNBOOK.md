@@ -1,112 +1,45 @@
 # Agent Task Runbook
 
-Use this runbook for GitHub-tracked implementation. The rules in
-[GITHUB_WORKFLOW.md](GITHUB_WORKFLOW.md) and
-[COMMIT_POLICY.md](COMMIT_POLICY.md) remain authoritative. An explicit
-implementation request bundles only the initial-planning mutations defined by
-the workflow policy and creation of its native Development-linked task branch.
-Obtain explicit authorization for every other GitHub mutation, push, pull
-request, merge, Issue closure, staging, commit, or branch deletion.
+Use for GitHub-tracked implementation. [GITHUB_WORKFLOW.md](GITHUB_WORKFLOW.md), [AGENTS.md](AGENTS.md), and [COMMIT_POLICY.md](COMMIT_POLICY.md) are authoritative. An implementation request authorizes only workflow-defined initial planning mutations and native Development-linked task-branch creation; every other GitHub mutation, push, PR, merge, Issue closure, stage, commit, or branch deletion needs explicit authorization.
 
 ## Initialize GitHub Planning
 
-Before task branches, worktrees, writers, or tracked-file edits, read
-`README.md` and the policies, classify the planning gate, and search all Issue
-states for an existing matching scope. Preflight repository access, `gh` auth
-with `project` scope, the canonical Project, its fields, milestones, Iterations,
-dependencies, and current worktrees.
+Before branches, worktrees, writers, or tracked edits, read `README.md` and policies; classify the planning gate; search all Issue states for matching scope; preflight repository access, `gh` auth with `project` scope, Project, fields, milestones, Iterations, dependencies, and worktrees.
 
-For large work, draft the complete root and all known descendants, including
-nested parents and leaves, after read-only requirements and any modularity
-analysis. Create the root first, then each descendant; add every URL to Project
-#1 and establish native relationships. Execute and verify one mutation at a
-time; stop on the first failure. This abbreviated flow uses stable outputs:
+For large work, after read-only requirements/modularity analysis, draft the complete root and known descendant tree. Create root then descendants; add each URL to Project #1; establish native relationships. Execute/verify one mutation at a time and stop at first failure. Essential pattern:
 
 ```bash
 set -euo pipefail
-
 repo=Kims-DeveloperGroup/story-writing-agents
-project_owner=Kims-DeveloperGroup
-project_number=1
-
-parent_url="$(gh issue create --repo "$repo" --title "<parent title>" \
-  --body-file "<parent body>" --label "<type>" --label "area:<name>")"
-parent_item_id="$(gh project item-add "$project_number" \
-  --owner "$project_owner" --url "$parent_url" --format json --jq .id)"
-
-child_url="$(gh issue create --repo "$repo" --title "<child title>" \
-  --body-file "<child body>" --label "<type>" --label "area:<name>" \
-  --milestone "<milestone>")"
-child_item_id="$(gh project item-add "$project_number" \
-  --owner "$project_owner" --url "$child_url" --format json --jq .id)"
-child_number="${child_url##*/}"
-child_id="$(gh api --method GET "repos/$repo/issues/$child_number" --jq .id)"
-parent_number="${parent_url##*/}"
-gh api --method POST "repos/$repo/issues/$parent_number/sub_issues" \
-  -F sub_issue_id="$child_id"
+owner=Kims-DeveloperGroup
+project=1
+parent_url="$(gh issue create --repo "$repo" --title "<title>" --body-file "<body>" --label "<type>" --label "area:<name>")"
+parent_item="$(gh project item-add "$project" --owner "$owner" --url "$parent_url" --format json --jq .id)"
+child_url="$(gh issue create --repo "$repo" --title "<title>" --body-file "<body>" --label "<type>" --label "area:<name>" --milestone "<milestone>")"
+child_item="$(gh project item-add "$project" --owner "$owner" --url "$child_url" --format json --jq .id)"
+child_id="$(gh api "repos/$repo/issues/${child_url##*/}" --jq .id)"
+gh api --method POST "repos/$repo/issues/${parent_url##*/}/sub_issues" -F sub_issue_id="$child_id"
+gh project item-edit --id <item-id> --project-id <project-id> --field-id <iteration-field-id> --iteration-id <iteration-id>
 ```
 
-Use native `blocked by` relationships for dependencies. Resolve Project, item,
-field, option, and Iteration IDs at runtime. Set one logical Iteration on the
-root and every descendant:
+Use native `blocked by`; resolve Project/item/field/option/Iteration IDs at runtime. Set one logical Iteration across the root tree and all required metadata. If no unused logical Iteration exists for a new root, require explicit Project-schema authorization. Set Priority through the organization Issue field, not the same-named Project field.
 
-```bash
-gh project item-edit --id <item-id> --project-id <project-id> \
-  --field-id <iteration-field-id> --iteration-id <iteration-id>
-```
-
-Set all other required metadata from the policy. If no unused logical
-Iteration exists for a new root, stop for explicit Project-schema
-authorization. Set Priority through the organization Issue field, not the
-Project field with the same display name.
-
-Re-read Issue bodies, native hierarchy and dependencies, Project membership,
-fields, milestone, and the root-wide Iteration. Record stable URLs and IDs.
-Set `github_planning_gate = passed` only when the graph is complete and one
-unblocked leaf is `Ready`; otherwise set `blocked`, preserve successful
-mutations, and repair only verified missing state. A standalone task uses the
-same procedure without a parent. A later child must pass this check before its
-scope is written.
+Re-read bodies, hierarchy, dependencies, Project membership/fields, milestone, and root-wide Iteration; record stable URLs/IDs. Pass only when graph is complete and an unblocked leaf is `Ready`; otherwise block, preserve successes, and repair only verified gaps. Standalone work omits parent; later children repeat the gate.
 
 ## Branch and Worktree Model
 
 ```text
 main
-└── issue-100-parent          parent worktree; PR to main (merge commit)
-    ├── issue-101-first-task  child worktree; PR to parent (squash merge)
-    └── issue-102-next-task   child worktree; PR to parent (squash merge)
+└── issue-100-parent          parent → main, merge commit
+    ├── issue-101-first-task  child → parent, squash merge
+    └── issue-102-next-task   child → parent, squash merge
 ```
 
-- Record the parent branch and exact starting commit in the parent Issue.
-  Normally create it from the current `origin/main`; never assume a local
-  `main` that is ahead or diverged is the intended base.
-- Name parent and child branches `issue-<number>-<short-slug>`.
-- Put task worktrees in a sibling root such as
-  `../<repository>-worktrees/issue-<parent>-<slug>/`. Keep the primary
-  worktree on `main` and preserve its unrelated changes.
-- Assign one integration owner to the parent worktree and one owner to each
-  child worktree. Worktrees may coexist, but only one write-capable owner is
-  active at a time. A dependent child waits until its prerequisite is
-  integrated.
-- Do not commit feature work directly to the parent branch. It accepts child
-  squash merges and synchronization merges from `main`. Handle an integration
-  fix through a child Issue, branch, and worktree.
-- Do not rebase or force-update a published parent or child branch. After a
-  fresh fetch and approval, merge `origin/main` into the parent and the parent
-  into active children; resolve a child's conflicts in its own worktree.
+Record parent branch/start SHA in its Issue; normally base on current `origin/main`, never assume divergent/ahead local `main`. Name branches `issue-<number>-<slug>` and use sibling `../<repository>-worktrees/issue-<parent>-<slug>/`, preserving primary-worktree changes. Assign one parent integration owner and one child owner; worktrees may coexist, but write-capable owners are sequential and dependent children wait.
 
-Every child PR targets the parent branch and uses **Squash and merge**. Child
-commits still follow the commit policy, while the resulting squash commit must
-be one coherent change that identifies the child Issue and PR. The final
-parent PR targets `main` and uses a merge commit, preserving one squash commit
-per child PR.
-
-For a standalone leaf Issue, create its branch in a sibling worktree from the
-approved `main` ref and target its PR directly to `main`; omit the parent steps.
+Parent accepts only child squash merges and approved `origin/main` synchronization merges; fixes use child Issue/branch/worktree. Never rebase/force-update published branches. After fresh fetch/approval, merge `origin/main` into parent, parent into children, and resolve child conflicts there. Child PRs squash to parent; child commits follow commit policy and squash commit coherently identifies Issue/PR. Final parent PR merge-commits to `main`, preserving child squashes. Standalone leaf branches from approved `main` in a sibling worktree and PRs to `main`.
 
 ## Create the Worktrees
-
-First fetch and inspect without changing branches:
 
 ```bash
 git fetch origin
@@ -115,75 +48,28 @@ git status --short
 git log --left-right --count origin/main...main
 ```
 
-If `main` is ahead, behind, or diverged, identify and record the approved base
-commit before continuing. After the gate passes, create the remote task branch
-through the Issue's native Development relationship. Resolve IDs and the
-approved base OID at runtime; link the parent branch to the parent Issue and a
-child branch to its child Issue:
+Record approved base if `main` differs. After gate passage, resolve IDs/base OID and create the remote branch through the Issue's native Development relationship:
 
 ```bash
 repo=Kims-DeveloperGroup/story-writing-agents
-issue_number=<issue-number>
-branch=issue-<issue-number>-<slug>
-base_oid=<approved-base-oid>
+number=<issue-number>; branch=issue-<number>-<slug>; base=<approved-base-oid>
 repo_id="$(gh repo view "$repo" --json id --jq .id)"
-issue_id="$(gh issue view "$issue_number" --repo "$repo" --json id --jq .id)"
-
-gh api graphql \
-  -f query='mutation($repo:ID!,$issue:ID!,$oid:GitObjectID!,$name:String!){
-    createLinkedBranch(input:{repositoryId:$repo,issueId:$issue,oid:$oid,name:$name}){
-      linkedBranch{ref{name target{oid}}}
-    }
-  }' \
-  -F repo="$repo_id" -F issue="$issue_id" -F oid="$base_oid" -f name="$branch"
-```
-
-Stop if the branch already exists but is not linked; do not silently recreate,
-rename, or replace it. Use a linked PR to repair legacy traceability when that
-action is authorized. The Development operation created the remote branch;
-fetch it, then adapt these tracking-worktree templates:
-
-```bash
+issue_id="$(gh issue view "$number" --repo "$repo" --json id --jq .id)"
+gh api graphql -f query='mutation($r:ID!,$i:ID!,$o:GitObjectID!,$n:String!){createLinkedBranch(input:{repositoryId:$r,issueId:$i,oid:$o,name:$n}){linkedBranch{ref{name target{oid}}}}}' -F r="$repo_id" -F i="$issue_id" -F o="$base" -f n="$branch"
 git fetch origin "$branch"
-
-git worktree add --track -b issue-<parent>-<slug> \
-  ../<repository>-worktrees/issue-<parent>-<slug>/parent \
-  origin/issue-<parent>-<slug>
-
-git worktree add --track -b issue-<child>-<slug> \
-  ../<repository>-worktrees/issue-<parent>-<slug>/issue-<child>-<slug> \
-  origin/issue-<child>-<slug>
+git worktree add --track -b "$branch" <exact-worktree-path> "origin/$branch"
 ```
 
-If the linked branch already exists locally, omit `--track -b` and add a
-worktree for that branch. A branch can be checked out in only one worktree.
-Create a child only from a clean, current parent commit that exists on GitHub.
-
-Verify the Issue's Development link before writing:
+Stop if an existing branch is unlinked; never recreate/rename/replace it. Repair legacy traceability only via authorized linked PR. If local branch exists, omit `--track -b`; one worktree per branch. Create children only from clean, current, GitHub-present parent commits. Before writing, verify the Development link; after PR linkage verify Project `Linked pull requests`:
 
 ```bash
-gh api graphql \
-  -f query='query($owner:String!,$repo:String!,$number:Int!){
-    repository(owner:$owner,name:$repo){
-      issue(number:$number){linkedBranches(first:20){nodes{ref{name}}}}
-    }
-  }' \
-  -F owner=Kims-DeveloperGroup -F repo=story-writing-agents \
-  -F number=<issue-number>
-```
-
-After a PR is linked, verify the Project's built-in field:
-
-```bash
-gh project item-list 1 --owner Kims-DeveloperGroup --limit 100 --format json \
-  --jq '.items[] | select(.content.number == <issue-number>) |
-    .["linked pull requests"]'
+gh api graphql -f query='query($o:String!,$r:String!,$n:Int!){repository(owner:$o,name:$r){issue(number:$n){linkedBranches(first:20){nodes{ref{name}}}}}}' -F o=Kims-DeveloperGroup -F r=story-writing-agents -F n=<issue-number>
+gh project item-list 1 --owner Kims-DeveloperGroup --limit 100 --format json --jq '.items[] | select(.content.number == <issue-number>) | .["linked pull requests"]'
 ```
 
 ## Preflight Every Writer
 
-Before a writer's first tracked mutation, its first action is the minimum
-capability/identity preflight. From the assigned worktree, capture:
+First action, before other task reads/writes:
 
 ```bash
 pwd -P
@@ -196,90 +82,15 @@ git status --porcelain=v1 -z --untracked-files=all | od -An -tx1
 git status --porcelain=v1 -z --untracked-files=all | shasum -a 256
 ```
 
-Report the exact porcelain bytes, SHA-256 fingerprint, decoded paths, and
-exclusive targets. Match every value to the handoff. Accepted upstream dirty
-state is valid only when its exact bytes, fingerprint, and paths were pinned
-there. Stop before mutation on any path, repository, branch, HEAD,
-approved-base identity or ancestry, status, capability, or ownership mismatch.
-Preserve the state; never reset, checkout, clean, or revert user changes to
-obtain a match.
-
-After upstream changes, interruption, or other identity invalidation, the root
-records the new expected identity/fingerprint and the same writer repeats this
-preflight before resuming. Before dispatch, also record exactly one canonical
-`worktree_disposition`; nest both records under existing packet fields.
+Report/match observed capability/approval path, every identity, exact porcelain bytes/hash/decoded paths, and exclusive targets. Dirty state is accepted only when all three were pinned. Any mismatch stops without reset/checkout/clean/revert. After upstream change/interruption/identity invalidation, root updates identity/hash and same writer repeats full preflight. Record exactly one `worktree_disposition` under `identity`.
 
 ## Route Work on the Critical Path
 
-Apply the canonical [Delegation-Gain Gate](AGENTS.md#delegation-gain-gate) and
-[Orchestration Sequence](AGENTS.md#orchestration-sequence) before each
-specialist dispatch:
-
-1. Record `root_sequential_estimate`, `parallel_critical_path`,
-   `spawn_wait_handoff_synthesis_overhead`, the calculated
-   `predicted_critical_path_savings_seconds`, and its percentage. Dispatch only
-   when both canonical gain thresholds pass or the decision names
-   `material_correctness_risk_reduction` or `mandatory_ownership_rule`.
-2. Use the root fast path only for a clear one- or two-file production-code or
-   configuration change within an established boundary. It never includes
-   documentation or tests. Assign all README, policy, guide, and example writes
-   exclusively to `documentation_maintainer`, and all test work exclusively to
-   `test_engineer`; assign triggered modularity work to
-   `modularity_maintainer`.
-3. Dispatch `requirements_analyst` only for substantial ambiguity and
-   `regression_diagnostician` only for an unknown failure. Do not dispatch an
-   agent merely to run a deterministic command; batch safe independent static
-   reads in the main agent's tool calls.
-4. Apply the canonical
-   [Role, Mode, and Control Gate](AGENTS.md#role-mode-and-control-gate). Reject
-   an unsupported role/mode before spawn. The child performs only identity and
-   effective-capability preflight first; reject unavailable evidence or a
-   matrix mismatch before further task reads or writes.
-5. Apply the canonical [Root-Capability Routing](AGENTS.md#root-capability-routing)
-   algorithm. Resolve the root pair, measure and classify only the child's
-   dispatch context, classify complexity/risk and role needs, derive and clamp
-   each axis independently, then treat the capped pair as the preferred
-   minimum-quality target within the effective root ceiling. Supply both child
-   overrides atomically or omit both for exact inheritance; never guess a
-   cross-family order, select a weaker pair automatically, or exceed either
-   effective root value.
-6. Narrow or split oversized context before dispatch. If high-consequence work
-   is ceiling-limited, stop for a narrower task or stronger root session.
-   Otherwise record all routing inputs, desired/capped/selected pairs,
-   availability, limitation, and fallback or inheritance evidence in the
-   canonical packet.
-7. Send the compact `task_packet` in bounded, self-contained context. Full
-   history requires its named reason, relevant bound, stale-context risk, root
-   approval, and task evidence. Thread reuse alone does not authorize it.
-8. Record every requested result ID and expected role/mode. Cross the join
-   barrier only when none is running or missing and every response validates
-   against the exact canonical `result_packet` schema; do not synthesize
-   otherwise.
-9. Retry one transient spawn/delivery/join control failure exactly once only
-   after proving no task write occurred. For possible partial-writer timeout or
-   interruption, inspect state and resume the same thread; never retry blindly.
-   Do not retry policy, capability, scope, or schema failures.
-10. Resolve conflicts by evidence level and role ownership, never voting. Route
-    unresolved material conflicts to the owner, root, or user under the
-    canonical gate. Root fallback may use only existing root authority and
-    never bypasses mandatory documentation, test, or modularity ownership.
-
-Keep writers sequential. After production stabilizes, fuse test planning,
-editing, exact execution, and final behavioral/coverage review into one
-`test_engineer` implementation turn when its dependencies permit it; otherwise
-resume that same thread after the dependency stabilizes.
+Apply [Delegation-Gain Gate](AGENTS.md#delegation-gain-gate), [Root-Capability Routing](AGENTS.md#root-capability-routing), [Role, Mode, and Control Gate](AGENTS.md#role-mode-and-control-gate), and [Orchestration Sequence](AGENTS.md#orchestration-sequence) exactly. Record estimates/formula/percentage and exception; root pair/context count and class; risk/role targets; independently desired/capped/selected axes, compatibility/ceiling/fallback; result IDs and roles/modes. Use bounded packets. Enforce exclusive docs/tests/modularity ownership and one production writer; cross the join barrier only with all valid results. Retry eligible control failure once; inspect/resume possible partial writers; never bypass ownership or conflict escalation.
 
 ## Dispose or Retain Worktrees
 
-At completion, capture the exact worktree path, branch, HEAD, porcelain
-bytes/fingerprint/paths, Issue/PR state, and commit/PR recoverability. Record
-whether cleanup authority was requested and granted, denied, or not required,
-plus the actual outcome, reason, and next owner.
-
-Retain when disposition requires it, authority is absent, or any removal gate
-is unmet. For authorized `remove_after_integration`, first prove clean status,
-completed integration verification, and recoverability. Then remove only the
-exact path without force and verify both registry and filesystem absence:
+Inventory exact path, branch, HEAD, porcelain bytes/hash/paths, Issue/PR state, recoverability, cleanup authority, actual outcome/reason/next owner. Retain unless disposition/authority/removal gates allow removal. Authorized removal requires clean status, completed integration verification, recoverability, then:
 
 ```bash
 git worktree remove <exact-worktree-path>
@@ -287,122 +98,23 @@ git worktree list --porcelain
 test ! -e <exact-worktree-path>
 ```
 
-Branch deletion is a separate authorization and action. Retain the parent
-worktree until its branch reaches `main`. Change a disposition only after a
-recorded authority or lifecycle-state change.
+Never force. Branch deletion is separately authorized. Retain parent until `main`; change disposition only after recorded authority/lifecycle change.
 
 ## Plan and Record Verification
 
-Apply [Adaptive Verification](AGENTS.md#adaptive-verification) as the canonical
-selection, budget, reuse, escalation, and completion contract. Before
-verification begins, the main agent records a compact root-owned plan with the
-task's `verification_class` and risk rationale; each acceptance criterion's
-mandatory evidence; changed inputs, affected inventory, and justified
-exclusions; the exact checks or test IDs in `authorized_selection` and their
-selection rationale; one `evidence_execution_owner` per evidence item;
-`estimated_seconds`, estimate source and confidence;
-`total_stage_budget_seconds`, `max_shard_seconds`, `spent_seconds`, and
-`remaining_seconds`; stop and escalation conditions; each objective full-suite
-trigger or an explicit record that none applies; reusable evidence and its
-invalidation analysis; and residual risk.
+Apply [Adaptive Verification](AGENTS.md#adaptive-verification) exactly. Before launch root records class/rationale, criteria→mandatory evidence, changed/affected inventory and exclusions/risks, exact authorized checks/IDs/rationale, one owner/item, estimates/source/confidence, total/max/spent/remaining budget, stops/escalations/full-suite triggers, reuse/invalidation, residual risk, and exact deduplication key. Never broaden or exceed budget without root/maintainer authorization.
 
-Before launch, deduplicate every item on exactly `normalized_command`,
-`exact_ids`, `relevant_input_digest`, and `environment_class`. Normally execute
-exact and semantic-cluster evidence locally and affected or full suites in CI;
-do not duplicate equivalent broad local and CI runs unless a local-environment
-acceptance criterion requires both.
-
-Execute and ledger that plan as follows:
-
-1. Compare each command estimate with both `max_shard_seconds` and
-   `remaining_seconds` before launch. If a selection is too large, partition it
-   into deterministic, disjoint exact-ID shards whose union is the authorized
-   selection and in which each ID occurs once. Run sequentially unless the main
-   agent separately authorizes isolated, disjoint fast-fail shards; no more than
-   two may run concurrently. Stop before starting a shard that would exceed the
-   remaining budget and return the decision to the main agent.
-2. For every selection or shard, record its purpose, evidence level, exact IDs
-   and command, provenance, actual duration and result, manifest identity,
-   `relevant_input_digest`, `completed_ids`, `failed_ids`, `accepted_skips`,
-   and `unexecuted_ids`. Keep cumulative spent and remaining budget current.
-3. Treat a timeout, replacement request, or other interruption as neither a
-   pass nor an assertion failure. Stop only the owned process, preserve the
-   completed, failed, skipped, and unexecuted IDs, and return that state to the
-   main agent. Resume only unexecuted or invalidated IDs whose inputs remain
-   valid.
-4. Reuse evidence only when its purpose and `relevant_input_digest` remain
-   unchanged and the main agent has proved intervening changes are disjoint.
-   A commit SHA is provenance, not sufficient reuse proof; invalidate evidence
-   after any relevant or uncertain input or dependency change.
-5. Run `full_suite` only when the plan records an objective full-suite trigger.
-   Tracked implementation, final review, and suite availability do not make it
-   the default. If required evidence exceeds the accepted budget, return the
-   completed evidence, remaining mandatory evidence, revised estimate, and
-   decision alternatives instead of silently omitting it.
-6. Before handoff or completion, confirm that all mandatory evidence is current
-   and green or an accepted skip, failures are resolved, the inventory is
-   sufficient, and the main agent has accepted the recorded residual risk.
-   Only then record the terminal evidence state `complete`; partial evidence or
-   budget exhaustion never establishes completion.
+Ledger each selection/shard's level, purpose, IDs/command, provenance, manifest/input digest, duration/result, completed/failed/skipped/unexecuted IDs, and budget. Deterministically shard above maximum; run sequentially unless authorized isolation/nonoverlap permits at most two fast-fail shards. Interruptions are not passes/failures; preserve state and resume valid remaining IDs. Reuse only root-proven disjoint, digest/purpose-stable evidence. Run `full_suite` only for recorded objective trigger. Complete only with all current mandatory green/accepted-skip evidence, resolved failures, sufficient inventory, and root-accepted residual risk; otherwise return remaining evidence, estimate, risk, and choices.
 
 ## Task Lifecycle
 
-1. **Pass the planning gate.** Complete or verify the initialization above.
-   Record the gate state, Issue graph, Project metadata, logical Iteration,
-   dependencies, approved base, authorization, and exactly one worktree
-   disposition. Stop before writing unless the gate is `passed` or
-   `not_required`.
-2. **Prepare the parent.** Create or reuse its Development-linked branch and
-   worktree at the recorded base commit, assign the integration owner, verify
-   the link, and move the parent to the correct Project state. After the first
-   child lands, open the parent PR to `main` as a draft with `Refs #<parent>`
-   when authorized.
-3. **Start one child.** Confirm that the child is `Ready`, assigned the root's
-   Iteration, and unblocked. Create its Development-linked branch and worktree
-   from the current parent commit, assign its owner, verify the link, and move
-   it to `In progress`. Require the assigned writer to pass the exact preflight
-   above before tracked edits.
-4. **Implement and verify.** Change only the child scope. Follow the commit
-   policy and the routed ownership above; the root fast path never absorbs test
-   or documentation writes. Apply the verification plan and evidence ledger,
-   run its authorized checks through the assigned execution owner, and review
-   the final diff and worktree status.
-5. **Review the child.** Merge the latest parent branch into the child without
-   rebasing, rerun affected checks, and open a draft PR whose base is the
-   parent branch and whose head is the child branch. Use `Refs #<child>`. Mark
-   it ready and move the child to `In review` only when all evidence is present
-   and the PR appears in Development and Project `Linked pull requests`.
-6. **Integrate the child.** Reconfirm the PR base and head, then use **Squash
-   and merge** when authorized. The child must contain the current parent tip;
-   otherwise merge the parent into it, rerun affected checks, and repeat
-   review. Record the child head SHA and resulting squash SHA, then fetch and
-   fast-forward the clean parent worktree from `origin/<parent-branch>` with
-   `--ff-only`; stop on divergence. Verify the squash diff and run focused
-   integration checks there. On success, close the child Issue manually and
-   verify `Done`. On failure, block sibling merges and keep the child open in
-   `In progress`; require an authorized revert PR or follow-up child fix instead
-   of editing the parent directly. If it was already closed, reopen it to
-   `Backlog` and replan it as required by the policy.
-7. **Complete the parent.** After all required children are `Done`, merge the
-   exact approved `origin/main` tip into the parent after a fresh fetch, resolve
-   conflicts there, and run the complete parent acceptance checks. Mark the
-   parent PR ready, replace `Refs #<parent>` with `Closes #<parent>`, move it to
-   `In review`, and merge it to `main` with a merge commit when authorization
-   includes the resulting parent closure. Record and verify the final merge
-   SHA, Issue closure, Project `Done`, and milestone state.
-8. **Clean up and hand off.** Remove a worktree only after its status is clean
-   and its integration and recoverability are verified, its disposition permits
-   removal, and cleanup is authorized. Follow the non-forced removal and
-   completion inventory above. Treat branch deletion separately and retain the
-   parent worktree until the parent reaches `main`.
+1. Pass/record planning gate, graph/metadata/Iteration/dependencies/base/authorization/disposition; never write while pending/blocked.
+2. Prepare Development-linked parent branch/worktree/base/owner/status. After first child, authorized draft parent PR to `main` uses `Refs #<parent>`.
+3. Start one `Ready`, root-Iteration, unblocked child from current parent; link branch/worktree, assign owner, set `In progress`, preflight.
+4. Implement only child scope under commit/ownership policies; execute authorized evidence; inspect diff/status.
+5. Merge parent into child without rebase; rerun affected checks; draft child PR to parent with `Refs #<child>`. Set ready/`In review` only with complete evidence and Development/Project PR links.
+6. Authorized squash requires current parent tip. Record child/squash SHAs; fetch and `--ff-only` clean parent; verify diff/focused integration. Success: manually close child and verify `Done`. Failure: block siblings, keep open/`In progress`, use authorized revert PR/follow-up child; if already closed, reopen to `Backlog` and replan.
+7. When children are `Done`, fresh-fetch and merge exact approved `origin/main` into parent; resolve there; run parent acceptance. Ready PR, change `Refs` to `Closes #<parent>`, set `In review`, then authorized merge commit to `main`; verify merge SHA, closure, `Done`, milestone.
+8. Clean only under disposition, authorization, clean/integrated/recoverable evidence; branch deletion separate; retain parent until `main`.
 
-Use the exact canonical `task_packet` and `result_packet` schemas in
-[Handoff and Result Contracts](AGENTS.md#handoff-and-result-contracts). Nest the
-planning-gate evidence, Issue and PR links, branches and SHAs, worktree,
-Development and Project metadata, Iteration, criteria, adaptive-verification
-ledger, blockers, and GitHub mutations under their defined fields. Nest writer
-identity and disposition under `identity`; cleanup authorization,
-recoverability, and final inventory under `evidence`; and actual disposition,
-reason, risk, and next owner under `findings`, `risks`, and `next_action` as
-applicable. Keep the packet compact; link stable evidence instead of copying
-raw logs, full Issue bodies, or the complete plan.
+Use exact [packet schemas](AGENTS.md#handoff-and-result-contracts). Nest planning/GitHub identity and writer disposition under defined `gates`/`identity`; verification, cleanup, recoverability, final inventory under `evidence`; disposition outcome/reason/risk/owner under `findings`/`risks`/`next_action`. Link stable evidence; omit logs, full Issues, and full plans.
