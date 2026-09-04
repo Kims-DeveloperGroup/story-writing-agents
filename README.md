@@ -22,6 +22,7 @@ inspection and the Python lead front channel.
 | Call the Python lead API with ordered artifact references; confirm a one-to-three-specialist consultation; receive typed replies and lead synthesis. | Treat consultation confirmation as artifact, consensus, or Git execution. |
 | Ask the lead to form an exact create/patch/replace/rename/delete candidate; confirm its disclosed specialist review; inspect an immutable reviewed proposal. | Apply that candidate, grant write authority, stage files, or commit through this stage. |
 | Propose one provider-free direct specialist advisory and confirm its execution. | Apply a core-document/manuscript change or create a Git commit. |
+| Use the Python API to submit a prompt or complete draft, inspect and separately confirm every consensus phase, interrupt active work, and inspect durable state after restart. | Start or advance consensus from the installed shell, treat finalization as artifact publication, or reuse confirmation authority after restart. |
 | Use schema-v2 collaboration contracts, stores, archive/transfer, readable projection, search, and paging APIs. | Bypass the runtime with a removed direct-run method. |
 | Run a disposable management/storage smoke or verify an existing workspace without changing it. | Use smoke as evidence of provider behavior or story quality. |
 
@@ -226,9 +227,12 @@ The exact grammar is in the [CLI reference](docs/reference/cli.md) and
 orchestration facade. It can bind a `RuntimeSession`; both expose async
 `lead_turn()`, `propose_specialist_advisory()`, and `decide_lead_step()`
 methods. Confirmation executes the disclosed read-only consultation through
-`decide_lead_step()`; there is no public unconfirmed specialist-dispatch,
-debate-start, artifact-publication, consensus, or Git method. The package root
-no longer exports the broad `Runtime` or `Session` aliases.
+`decide_lead_step()`. Both facades also expose a phase-confirmed consensus API:
+submit prompt/draft input, inspect, decide or confirm the exact phase,
+explicitly request its successor, interrupt, and resume inspection. There is
+no public unconfirmed specialist dispatch, artifact publication, consensus
+shell command, or Git method. The package root no longer exports the broad
+`Runtime` or `Session` aliases.
 
 ```python
 from story_writing_agents import StoryRuntime, Workspace
@@ -254,7 +258,9 @@ print(result.kind, result.next_action)
 
 Lead result, proposal-intent, structured-decision, and provider-call-accounting
 values are exported from `story_writing_agents.conversations`, not the package
-root. Exact decision code is in the [runtime API](docs/reference/runtime-api.md).
+root. Consensus values are exported from `story_writing_agents.consensus`.
+Exact calls are in the [runtime API](docs/reference/runtime-api.md), with the
+complete stepwise flow in [Consensus runs](docs/guides/consensus-runs.md).
 
 Direct schema-v2 collaboration-history values and pure projections are
 available through `story_writing_agents.conversations`; direct search, paging,
@@ -277,8 +283,10 @@ provider-text span, so `$` and `$$` do not open a picker there. See
 ## Important limits
 
 - Python lead conversation, proposal decisions, confirmed specialist
-  execution, and typed synthesis are active; story generation, debate,
-  artifact modification, consensus, and Git operations are not.
+  execution, typed synthesis, and separately confirmed stepwise consensus are
+  active. Consensus finalization is read-only; artifact modification and Git
+  operations require their own later confirmations. The shell has no story or
+  consensus execution command.
 - Confirming a consultation starts only the disclosed read-only provider work.
   It never confirms an artifact change or Git commit.
 - Initialization accepts only an absent/empty root or one exact resumable

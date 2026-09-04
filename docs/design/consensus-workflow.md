@@ -1,170 +1,111 @@
-# Consensus workflow
+# Phase-confirmed consensus design
 
-> **Status:** this is the retained internal consensus-algorithm and historical
-> schema-v1 presentation record. `StoryRuntime`, `RuntimeSession`, the installed
-> CLI, and the current shell expose no public method or command that starts it.
-> Existing persisted debates remain inspectable. Future lead/specialist work
-> must enter through the schema-v2 workflows after their integration, not by
-> restoring the consumer described here.
+`StoryRuntime` implements the narrow `ConsensusRuntimePort` and retains a
+`ConsensusRuntimeAdapter`. `RuntimeSession` only binds the session ID. The
+adapter owns workflow decisions; the runtime owns persistence, provider
+binding, prompt construction, material resolution, and interruption. The
+installed CLI and interactive shell do not expose this Python workflow.
 
-Key terms: **reservation**—the immutable claim on one debate ID; **snapshot**—
-one bounded conversation window; **revision round**—one complete replacement;
-**terminal durability**—result and lifecycle state saved before terminal
-progress; **observer**—the optional synchronous debate-progress sink. The
-agent-context observer is a separate per-invocation lifecycle; see
-[Agent-context design](agent-context.md#observer-lifecycle-and-shell-projection).
+## Authority and event sequence
 
 ```mermaid
 flowchart TD
-    P[Validate input, observer, session, and options] --> C{Context mode}
-    C -->|included| R[Read and canonicalize focused context once]
-    C -->|fresh or omitted| V[Reserve debate ID]
-    R --> V
-    V --> S[Save requested sidecar and initiation log]
-    S --> ST[STARTED]
-    ST --> D[Execution specialist authors r0]
-    D --> DR[DRAFTED]
-    DR --> AS[AUDIT_STARTED]
-    AS --> AC[AUDIT_COMPLETED]
-    AC -->|conflicts and rounds remain| Y[Proposals and lead synthesis]
-    Y --> SY[SYNTHESIZED]
-    SY --> AS
-    AC -->|conflicts at limit| TD[Save deadlock result and terminal state]
-    TD --> DE[DEADLOCK]
-    AC -->|all approve| F[Lead finalizes and artifacts commit]
-    F --> TC[Save consensus result and terminal state]
-    TC --> AR[ARTIFACTS_COMMITTED]
-    AR --> CO[CONSENSUS]
-    ST -. handled failure .-> TF[Save failed result and terminal state]
-    DR -. handled failure .-> TF
-    AS -. handled failure .-> TF
-    AC -. handled failure .-> TF
-    Y -. handled failure .-> TF
-    F -. handled failure .-> TF
-    TF --> FA[FAILED]
+    S[Submit prompt or supplied draft] --> R[Durable phase request]
+    R --> A[awaiting_confirmation]
+    A -->|Reject| X[rejected]
+    A -->|Revise| U[superseded]
+    U --> N[Explicit replacement request: same phase]
+    A -->|Confirm exact request| D[Durable decision]
+    D --> G[Consume process-local one-use capability]
+    G --> K[Durable running checkpoint]
+    K --> P[Runtime binds selected agent and invokes provider]
+    P --> T[Durable terminal result]
+    T -->|completed with successor| N2[Explicit next-phase request]
+    T -->|finalization completed| H[Read-only reviewed handoff]
+    T -->|deadlocked or failure| Z[No publication]
+    H --> AP[Separate confirmed artifact Apply]
+    AP --> GC[Separate confirmed Git Commit]
 ```
 
-## Before provider work
+Every phase uses request → decision → running → terminal events with monotonic
+sequence numbers and exact correlations. A request is durable but contains no
+executable capability. The adapter holds the capability only in the current
+process, bound to workflow, phase request, owner, and process; Confirm consumes
+it once. Durable history therefore cannot be replayed as authority after
+restart.
 
-The runtime validates the backend, nonempty input, required
-`PART/PATH.md` output, IDs, round limit, optional context request, and observer,
-then prepares the story session. Output validation happens before session
-access, debate reservation, or provider work. Included mode
-performs exactly one synchronous context read and canonical validation before
-reservation. Fresh and context-omitted modes perform no context read. Any failure here
-emits nothing and leaves the debate ID unreserved.
+Reject and Revise append a decision and terminal result without provider work.
+Revise produces `superseded`; an explicit call creates a replacement request
+for the same phase. Confirm saves its decision before consuming the capability
+and saves `running` before calling the provider. An uncertain mutation directs
+the caller to operator recovery instead of guessing or replaying.
 
-Reservation exclusively creates lifecycle state. A requested included or fresh
-sidecar is then created before the initiation blackboard entry, provider work,
-or `STARTED`. Sidecar failure is raised and best-effort makes the reserved state
-terminal `failed`; it produces no result or progress.
+## Phase routing
 
-## Trusted progress sequence
+| Consensus phase | Bound agent(s) | Provider `Phase` | Result and normal successor |
+| --- | --- | --- | --- |
+| `draft` | Execution Specialist | `draft` | New unpublished `r0` candidate → `audit` |
+| `audit` | Plot Architect, Character Custodian, Execution Specialist | `audit` | Three current-revision votes → `synthesis` |
+| `synthesis` | Lead Orchestrator | `synthesize` | Nonvoting choice of `repair`, `finalization`, or deadlock |
+| `repair` | Execution Specialist | `propose_revision` | New unpublished candidate → `reaudit`; revision increments when requested |
+| `reaudit` | Same three auditors | `audit` | Three fresh votes → `synthesis` |
+| `finalization` | Lead Orchestrator | `finalize` | Validated read-only handoff; no successor or publication |
 
-`STARTED` follows the durable initiation entry and is the only event carrying
-context mode and counts. Both prompt and supplied-draft input ask the execution
-specialist to author `r0`; for a supplied draft it preserves sound material and
-applies requested changes before any audit. `DRAFTED` follows the durable
-agent-authored candidate.
+The lead does not vote. All three auditors inspect the same candidate handle
+and revision. Synthesis cannot carry an audit verdict. Repair must produce a
+different candidate digest. Finalization retains the candidate lineage and
+identifies an already reviewed proposal; it cannot grant Apply or Git
+authority.
 
-Each revision emits `AUDIT_STARTED`, then the three specialists audit the same
-candidate and the same immutable context snapshot in parallel. Successful
-audit persistence precedes `AUDIT_COMPLETED`, whose typed agent list reports
-conflicts in roster order. Peer prose never enters progress.
+## Provider and material boundary
 
-Within each logical draft/audit/proposal/synthesis/finalize call, contextual
-execution independently follows `PREPARE → PLAN → INVOKE/ACTION → VERIFY →
-COMMIT|FAIL`. These content-free lines may interleave by agent, round, and
-phase. A context `checkpoint advanced` authorizes a later delta; it does not
-mean debate consensus or artifact publication. Consensus publication remains
-one recoverable catalog-last artifact transaction.
+Runtime converts a `ConsensusPhaseInvocation` into an `AgentRequest` whose
+agent, phase, ordinal, revision, task, input, and candidate are runtime-owned.
+It uses the bound agent's existing contextual prompt definition. Strict
+`AgentReply` validation maps candidate, audit, synthesis, deadlock, and
+finalization replies into digest-bound `ConsensusProviderResult` values.
 
-If conflicts remain and another replacement is allowed, only conflicting
-specialists propose repairs. The lead synthesizes a complete next revision;
-after it is durable the runtime emits `SYNTHESIZED` and starts the next audit.
-There is no separate proposal event. Older approvals never count.
+Prompt text and supplied drafts are immutable content-addressed material.
+Draft and repair output is likewise unpublished material. Durable events keep
+handles and digests, not candidate bytes. For canonical artifact input,
+runtime prepares the normal reference operation, verifies current path and
+digest, and passes its authorized provider-read coordinator to the agent. It
+never substitutes unverified file bytes for that operation.
 
-At the round limit, conflicts produce a durable deadlock result and state before
-`DEADLOCK`. Unanimous approval allows lead finalization and artifact commit;
-finalization may return complete updates for only the four core documents. The
-artifact repository journal-publishes one create-only part manuscript and any
-core updates, then makes the provenance catalog visible last. The consensus
-result and state are then durable before
-`ARTIFACTS_COMMITTED`, followed by `CONSENSUS`. A handled provider, protocol,
-context-propagation, workspace, finalization, or artifact failure similarly
-saves its result and state before a typed `FAILED` event.
+## Projection and external meaning
 
-### Historical interactive phase presentation
+`project_consensus()` rejects gaps, duplicate events, stale correlations,
+changed lineage, replayed confirmation IDs, and invalid transitions. It emits
+a content-free `ConsensusProjection` with phase, state, identities, candidate
+digest, last sequence, and one safe `next_action`:
 
-The following records how the removed schema-v1 controller presented this
-internal algorithm. It is not current runnable shell behavior.
+- `request_decision`: show the exact pending request to the user.
+- `start_confirmed_phase` or `wait_for_phase`: execution is confirmed or
+  active; do not issue another decision.
+- `request_next_phase`: the prior phase completed or was revised; creating the
+  next request is explicit and does not execute it.
+- `inspect_failure`: interruption or definite failure is terminal.
+- `operator_recovery`: outcome or durability is uncertain; automation stops.
+- `none`: finalization, rejection, or deadlock has no consensus successor.
 
-The interactive shell presents each accepted progress event as one Panel titled
-`Debate phase · DISPLAY_NAME` in one terminal write. Display names are the
-trusted sentence-case phase names, such as `Audit started` and `Artifacts
-committed`; the canonical Phase field still carries the enum value. Active
-headings omit `[loading]`; Consensus completion is silent, while Deadlock,
-Failed, and Interrupted retain error, error, and cancelled heading states. The
-Outcome field keeps its existing role/state. Ordered fields are Debate ID, Phase, Round,
-Revision, Action, Outcome, and Conflicts. Message details On inserts Handoff
-between Revision and Action; Off omits only that diagnostic field. `STARTED`
-also includes the fixed included/fresh context notice.
+The user meanings of all states and sample calls are in
+[Consensus runs](../guides/consensus-runs.md).
 
-Before writing the panel, the controller reads the uncommitted suffix of the
-durable debate log. It groups contiguous messages by their persisted phase,
-round, and revision into sections titled
-`Speeches · PHASE · round N · revision REVISION`, using `n/a` for an empty
-revision. Every non-error agent speech is
-shown in full as a speaker-aware chat block, with presentation-only strict JSON
-formatting when applicable. Message details On adds the persisted Kind; Off
-still shows the complete speech. An error-kind message is replaced with the
-fixed safe text `Agent error details are unavailable.` If the log cannot be
-read, the same panel contains the fixed `agent-saying` warning `Agent sayings
-unavailable; the debate log could not be read.` If that warning panel is
-written successfully, `STARTED` commits its candidate cursor of zero; a
-later-phase read failure retains the existing cursor.
+## Interruption, restart, and publication
 
-Only a successful panel write commits the candidate log cursor, accepted
-progress event, `STARTED` mapping, and any `STARTED` or `AUDIT_COMPLETED`
-conflict-cache update. The last successfully written `AUDIT_COMPLETED`
-conflicts remain visible in subsequent phases. They reset only after a
-successfully written `STARTED` panel and are replaced only after a successfully
-written later audit panel. A failed write commits none of those changes, so a
-retry sees the same suffix and retained conflicts. Successful consensus
-receives a separate final `Consensus` Record after terminal progress; deadlock
-and failed outcomes instead use typed error presentation. These display rules
-neither replace nor weaken the runtime's durable-before-progress guarantees
-above.
+An interrupt cancels only tasks registered for the exact session,
+conversation, workflow, and phase request. Confirmed cancellation appends an
+`interrupted` result; failure to prove cancellation exposes
+`recovery_required`.
 
-## Observer and cancellation boundaries
+Workflow storage is durable and reopen validation rejects malformed or
+unsupported histories. `resume_consensus()` only reloads and projects history.
+It neither resumes the physical provider call nor recreates confirmation
+authority. Callers must not turn durable `awaiting_confirmation` with
+`capability_available=False` into authority.
 
-Declared coroutine or async-generator observers fail validation before
-mutation. Every failure raised synchronously by an accepted observer, plus an
-awaitable or non-`None` result, becomes `ProgressObserverError` through
-`__cause__`.
-Before terminal durability this best-effort marks the debate `interrupted` and
-raises. After terminal durability it raises without rewriting the saved result,
-state, or artifacts.
-
-Genuine external cancellation remains `asyncio.CancelledError`. The runtime
-joins its execution task, best-effort persists `interrupted`, and emits
-`INTERRUPTED` only after that transition is confirmed. If that observer call
-fails, cancellation remains primary and the observer error is its cause.
-
-The interactive controller adds proof boundaries around that runtime contract.
-Ctrl-C before coroutine entry, with the shared Runner quiescent, is provider-free:
-no reservation, run row, or `last` update occurs. Once entered, friendly recovery
-requires a joined cancellation and trusted terminal `INTERRUPTED`; that event may
-be first after reservation and proves only the durable terminal state. Only
-`STARTED` updates `/inspect last`. An entered cancellation without trusted proof
-is fatal `operation_interrupted`; known attachment state is abandoned before
-ordered cleanup. An interrupted persisted debate cannot resume through the
-current public surface. There is no replacement command that creates a new
-attempt.
-
-Retained result/progress types are in the [Package API](../reference/package-api.md);
-artifact and
-sidecar storage are in [Persistence](persistence.md), with the exact artifact
-contract in [Canonical writing artifacts](../reference/writing-artifacts.md);
-operator response is in
-[Recovery and limitations](../operations/recovery-and-limitations.md).
+Every `ConsensusPhaseResult` fixes `publication_allowed=False`. Successful
+finalization is only a reviewed handoff. Artifact Apply uses a fresh exact
+confirmation and runtime write operation; Git Commit uses a later separate
+confirmation. A discussion, vote, or provider response therefore cannot
+silently mutate the writing workspace.

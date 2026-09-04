@@ -5,9 +5,10 @@ front-channel facade. `RuntimeSession` binds those operations to one session
 ID. The runtime can obtain one strict lead outcome, disclose a consultation,
 construct an exact complete-state-bound artifact candidate, and execute its
 one-to-three specialist assignments after an exact structured confirmation.
-Artifact review can produce an immutable reviewed proposal. It does not start
-a debate, apply or mutate an artifact, grant Apply authority, or perform Git
-work.
+Artifact review can produce an immutable reviewed proposal. The runtime also
+exposes a stepwise, separately confirmed consensus workflow through Python.
+Neither workflow applies or mutates an artifact, grants Apply authority, or
+performs Git work.
 
 The installed shell does not call the lead methods. Ordinary shell input still
 receives the direct-execution-unavailable guidance.
@@ -33,7 +34,134 @@ not consume it.
 Construction performs no provider call. Lead conversation requires a backend
 whose configured session/provider lifecycle is ready when binding occurs.
 `backend=None` remains valid for provider-free management and inspection, but
-`lead_turn` then raises `BackendProtocolError`.
+provider-backed lead and confirmed consensus execution then raise
+`BackendProtocolError`.
+
+## Phase-confirmed consensus methods
+
+```python
+StoryRuntime.submit_consensus_prompt(
+    session_id: str, conversation_id: str, prompt: str,
+) -> ConsensusRuntimeInspection
+StoryRuntime.submit_consensus_draft(
+    session_id: str, conversation_id: str, draft: str,
+) -> ConsensusRuntimeInspection
+StoryRuntime.inspect_consensus(
+    session_id: str, conversation_id: str, workflow_id: str,
+) -> ConsensusRuntimeInspection
+StoryRuntime.load_workflow(
+    session_id: str, conversation_id: str, workflow_id: str,
+) -> ConsensusStoredWorkflow | None
+await StoryRuntime.decide_consensus(
+    decision: ConsensusRuntimeDecision,
+) -> ConsensusRuntimeDecisionResult
+await StoryRuntime.confirm_consensus(
+    decision: ConsensusRuntimeDecision,
+) -> ConsensusRuntimeDecisionResult
+StoryRuntime.interrupt_consensus(
+    session_id: str, conversation_id: str, workflow_id: str,
+) -> ConsensusRuntimeInspection
+StoryRuntime.resume_consensus(
+    session_id: str, conversation_id: str, workflow_id: str,
+) -> ConsensusRuntimeInspection
+StoryRuntime.request_next_consensus_phase(
+    session_id: str, conversation_id: str, workflow_id: str,
+) -> ConsensusRuntimeInspection
+```
+
+`RuntimeSession` exposes the same names without `session_id`. Its decision
+methods reject a decision belonging to another session. Import their values
+from `story_writing_agents.consensus`:
+
+```python
+from story_writing_agents.consensus import (
+    ConsensusDecision,
+    ConsensusDurability,
+    ConsensusNextAction,
+    ConsensusPhase,
+    ConsensusPhaseState,
+    ConsensusRuntimeDecision,
+    ConsensusRuntimeDecisionResult,
+    ConsensusRuntimeInspection,
+)
+```
+
+Submission creates a durable DRAFT request and returns without calling a
+provider. Prompt and supplied-draft input both require confirmation; the latter
+is transformed by the Execution Specialist into newly authored `r0` before
+audit. `request_next_consensus_phase()` creates, but does not execute, the
+successor request. `confirm_consensus()` accepts Confirm only;
+`decide_consensus()` also accepts Reject and Revise.
+
+`inspect_consensus()` is the user-facing projection. `load_workflow()` is the
+read-only exact event-history view needed to copy the current request event's
+correlation fields into a decision; `RuntimeSession` has no wrapper for this
+lower-level view.
+
+### Inspection and decision values
+
+```python
+ConsensusRuntimeInspection(
+    submission: ConsensusWorkflowSubmission,
+    projection: ConsensusProjection,
+    capability_available: bool,
+    recovery_required: bool = False,
+)
+
+ConsensusRuntimeDecision(
+    execution_identity: ConsensusExecutionIdentity,
+    workflow_id: str,
+    phase_request_id: str,
+    proposal_id: str,
+    revision_id: str,
+    request_digest: str,
+    request_event_id: str,
+    request_event_sequence: int,
+    current_tail_sequence: int,
+    confirmation_id: str,
+    decision: ConsensusDecision,
+    revision_request: str | None = None,
+)
+
+ConsensusRuntimeDecisionResult(
+    inspection: ConsensusRuntimeInspection,
+    execution: ConsensusExecutionReceipt | None,
+    decision_durability: ConsensusDurability,
+)
+```
+
+A decision must match the current durable request event, request digest, and
+tail sequence exactly. Confirm additionally requires the private same-process
+one-use capability. Reject closes the phase without a provider call. Revise
+requires nonempty `revision_request`, closes the old request as `superseded`,
+and permits an explicit replacement request for the same phase.
+
+The projection states are `awaiting_confirmation`, `confirmed`, `running`,
+`completed`, `interrupted`, `failed`, `outcome_unknown`, `recovery_required`,
+`rejected`, `superseded`, and `deadlocked`. `next_action` is one of
+`request_decision`, `start_confirmed_phase`, `wait_for_phase`,
+`request_next_phase`, `inspect_failure`, `operator_recovery`, or `none`.
+`publication_allowed` is always false.
+
+The normal phase graph is DRAFT → AUDIT → SYNTHESIS. Lead synthesis selects
+REPAIR → REAUDIT → SYNTHESIS, FINALIZATION, or deadlock. Every phase is a new
+request and confirmation. Audits invoke all three specialists against the same
+revision; the lead synthesizes and finalizes but does not vote. Finalization is
+a read-only handoff to a separately confirmed artifact Apply, followed later
+by a separately confirmed Git Commit.
+
+`interrupt_consensus()` acts only on a running request. `resume_consensus()` is
+an inspection operation: it never resumes/replays a provider call or recreates
+confirmation authority after restart. `outcome_unknown` and
+`recovery_required` require operator reconciliation.
+
+Provider input is an `AgentRequest` with the runtime-selected agent, phase,
+revision, fixed task text, input, and current candidate. Canonical artifact
+input retains the normal provider-read reference authorization and digest
+revalidation; durable events contain handles/digests rather than file bytes.
+See [Consensus runs](../guides/consensus-runs.md) for examples and user-visible
+state meanings, and [Consensus design](../design/consensus-workflow.md) for the
+event/authority mechanism.
 
 ## Management and inspection methods
 
@@ -401,6 +529,30 @@ RuntimeSession.inspect_debate_context(debate_id: str) -> dict[str, Any] | None
 RuntimeSession.inspect_reference_operation(
     operation_id: str,
 ) -> ReferenceOperationHistory | None
+RuntimeSession.submit_consensus_prompt(
+    conversation_id: str, prompt: str,
+) -> ConsensusRuntimeInspection
+RuntimeSession.submit_consensus_draft(
+    conversation_id: str, draft: str,
+) -> ConsensusRuntimeInspection
+RuntimeSession.inspect_consensus(
+    conversation_id: str, workflow_id: str,
+) -> ConsensusRuntimeInspection
+await RuntimeSession.decide_consensus(
+    decision: ConsensusRuntimeDecision,
+) -> ConsensusRuntimeDecisionResult
+await RuntimeSession.confirm_consensus(
+    decision: ConsensusRuntimeDecision,
+) -> ConsensusRuntimeDecisionResult
+RuntimeSession.interrupt_consensus(
+    conversation_id: str, workflow_id: str,
+) -> ConsensusRuntimeInspection
+RuntimeSession.resume_consensus(
+    conversation_id: str, workflow_id: str,
+) -> ConsensusRuntimeInspection
+RuntimeSession.request_next_consensus_phase(
+    conversation_id: str, workflow_id: str,
+) -> ConsensusRuntimeInspection
 await RuntimeSession.lead_turn(
     conversation_id: str,
     text: str,
@@ -443,8 +595,9 @@ There is no package-root `Runtime` or `Session` alias. Import the explicit
 No alternate or forwarding entry point restores `converse`,
 `converse_with_retrieval`, `run_prompt`, or `run_draft` on the runtime classes.
 There is no unconfirmed/public raw specialist-dispatch, debate-start,
-artifact-application, consensus, commit, push, merge, or one-turn bypass method
-in this stage.
+artifact-application, commit, push, merge, or one-turn bypass method. Consensus
+is available only through the separately confirmed Python methods above; it
+has no installed shell command.
 
 Confirmation of a consultation cannot authorize one of those later effects. A
 future artifact or Git action—including a commit—must be a separately

@@ -2,8 +2,9 @@
 
 > **Availability:** the shell manages conversations, search, transcripts,
 > history, and inspection. Python callers can run lead advisory/proposal turns
-> and exact decisions. Specialist execution and consensus are unavailable. See
-> [Lead agent](guides/lead-agent.md).
+> and exact decisions, plus separately confirmed consensus phases. Consensus
+> has no installed shell command and never itself publishes artifacts. See
+> [Lead agent](guides/lead-agent.md) and [Consensus runs](guides/consensus-runs.md).
 
 ## A–W
 
@@ -50,9 +51,11 @@
   semantic result records are separate. See the
   [interactive design contract](design/interactive-cli-design-system.md#submitted-input-lifecycle).
 
-- **Consensus and deadlock.** Consensus commits final artifacts after all voters
-  approve one revision; deadlock leaves conflicts at the round limit. See
-  [Inspection and recovery](guides/inspection-and-recovery.md).
+- **Consensus and deadlock.** Phase-confirmed consensus moves one unpublished
+  candidate through current-revision audits, nonvoting lead synthesis, optional
+  repair/re-audit, and read-only finalization. Deadlock closes the lineage
+  without publication. Artifact Apply and Git Commit are later, separately
+  confirmed operations. See [Consensus runs](guides/consensus-runs.md).
 
 - **Conversation.** An immutable session-scoped identity with mutable display
   subject/status and authoritative schema-v2 collaboration history.
@@ -137,7 +140,9 @@
   agent, unlike the blackboard; files remain plaintext. See
   [Persistence](design/persistence.md).
 
-- **Prompt and draft.** A prompt asks for `r0`; a draft supplies it for review. See
+- **Prompt and supplied draft.** Both create a separately confirmed DRAFT
+  request. A prompt asks the Execution Specialist to author `r0`; a supplied
+  complete draft is transformed into newly authored `r0` before audit. See
   [Consensus runs](guides/consensus-runs.md).
 
 - **Provider session.** Backend lifecycle state and resumable threads for one
@@ -151,10 +156,10 @@
   durable `ready` and process access `held_here`. The query is pure and does not
   acquire access.
 
-- **Runtime.** The current management/configuration/inspection facade plus
-  retained low-level orchestration components. It has no public provider-turn
-  method in this stage. See the
-  [System overview](design/overview.md).
+- **Runtime.** The management/configuration/inspection and lead-orchestration
+  facade. Its Python surface includes confirmed lead consultations and
+  separately confirmed consensus phases; its installed shell still has no
+  story-execution command. See [Runtime API](reference/runtime-api.md).
 
 - **Story session.** Durable related work/history spanning debates and
   conversations. See [Story sessions](guides/story-sessions.md).

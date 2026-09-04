@@ -102,6 +102,13 @@ from .consensus.event_store import (
     ConsensusStoredWorkflow,
     ConsensusWorkflowSubmission,
 )
+from .consensus.material_store import ConsensusMaterialStore
+from .consensus.runtime_adapter import (
+    ConsensusRuntimeAdapter,
+    ConsensusRuntimeDecision,
+    ConsensusRuntimeDecisionResult,
+    ConsensusRuntimeInspection,
+)
 from .conversation_rag_runtime import ConversationRagRuntimeService
 from .conversation_storage.composition import compose_filesystem_conversation_storage
 from .conversation_storage.contracts import ConversationStorageServices
@@ -203,7 +210,14 @@ from .git.story_commit_contracts import (
     StoryCommitError,
     StoryCommitRecoveryAction,
 )
-from .models import AgentReply, AgentReplyKind, AgentReplyNextPhase, Verdict
+from .models import (
+    AgentReply,
+    AgentReplyKind,
+    AgentReplyNextPhase,
+    AgentRequest,
+    Phase,
+    Verdict,
+)
 from .git.story_commits import StoryCommitService
 from .debug_log import (
     DebugComponent,
@@ -746,6 +760,11 @@ class StoryRuntime:
         ] = {}
         self._live_execution_markers: set[tuple[str, str, str, str]] = set()
         self._consensus_event_store = ConsensusEventStore(self.workspace)
+        self._consensus_material_store = ConsensusMaterialStore(self.workspace.root)
+        self._consensus_provider_tasks: dict[
+            tuple[str, str, str, str], set[asyncio.Task[object]]
+        ] = {}
+        self.consensus = ConsensusRuntimeAdapter(self)
 
     def _trace_debug(
         self,
@@ -968,6 +987,261 @@ class StoryRuntime:
             workflow_id,
             expected_tail_sequence,
             event,
+        )
+
+    def new_id(self, prefix: str, /) -> str:
+        """Allocate one runtime-owned consensus identifier."""
+
+        return self._new_id(prefix)
+
+    async def invoke_provider(
+        self,
+        invocation: ConsensusPhaseInvocation,
+        /,
+    ) -> ConsensusProviderResult:
+        """Invoke one exact confirmed consensus assignment."""
+
+        if type(invocation) is not ConsensusPhaseInvocation:
+            raise TypeError("invocation must be ConsensusPhaseInvocation")
+        if self.backend is None:
+            raise BackendProtocolError("consensus execution requires an AgentBackend")
+        expected_agents = {
+            ConsensusPhase.DRAFT: (EXECUTION_SPECIALIST,),
+            ConsensusPhase.REPAIR: (EXECUTION_SPECIALIST,),
+            ConsensusPhase.AUDIT: CONSENSUS_AUDITORS,
+            ConsensusPhase.REAUDIT: CONSENSUS_AUDITORS,
+            ConsensusPhase.SYNTHESIS: (LEAD_ORCHESTRATOR,),
+            ConsensusPhase.FINALIZATION: (LEAD_ORCHESTRATOR,),
+        }[invocation.phase]
+        if (
+            invocation.agent_id not in expected_agents
+            or invocation.ordinal != expected_agents.index(invocation.agent_id) + 1
+            or (invocation.phase is ConsensusPhase.DRAFT)
+            != (invocation.candidate_material is None)
+        ):
+            raise ValueError("consensus provider invocation assignment is invalid")
+        phase = {
+            ConsensusPhase.DRAFT: Phase.DRAFT,
+            ConsensusPhase.REPAIR: Phase.PROPOSE_REVISION,
+            ConsensusPhase.AUDIT: Phase.AUDIT,
+            ConsensusPhase.REAUDIT: Phase.AUDIT,
+            ConsensusPhase.SYNTHESIS: Phase.SYNTHESIZE,
+            ConsensusPhase.FINALIZATION: Phase.FINALIZE,
+        }[invocation.phase]
+        key = (
+            invocation.execution_identity.session_id,
+            invocation.execution_identity.conversation_id,
+            invocation.workflow_id,
+            invocation.phase_request_id,
+        )
+        current_task = asyncio.current_task()
+        if current_task is None:
+            raise BackendProtocolError("consensus provider invocation has no task")
+        active_tasks = self._consensus_provider_tasks.setdefault(key, set())
+        if current_task in active_tasks:
+            raise BackendProtocolError("consensus provider invocation is already active")
+        active_tasks.add(current_task)
+        reference_operation: RuntimeReferenceOperation | None = None
+        bound_agent: BoundAgent | None = None
+        try:
+            input_text, reference_operation = self._resolve_consensus_input(invocation)
+            candidate_text = self._resolve_consensus_candidate(invocation)
+            definition = self.prompts.build_contextual_definition(
+                session_id=invocation.execution_identity.session_id,
+                agent_id=invocation.agent_id,
+            )
+            bound_agent = await self._acquire_bound_agent(definition)
+            reference_read = (
+                None
+                if reference_operation is None
+                else reference_operation.begin_invocation(
+                    agent_id=invocation.agent_id,
+                    phase=invocation.phase.value,
+                    round_number=int(invocation.revision_id[1:]),
+                )
+            )
+            request = AgentRequest(
+                session_id=invocation.execution_identity.session_id,
+                debate_id=invocation.workflow_id,
+                agent_id=invocation.agent_id,
+                phase=phase,
+                round_number=int(invocation.revision_id[1:]),
+                revision_id=invocation.revision_id,
+                task=f"Execute confirmed consensus {invocation.phase.value} phase.",
+                user_payload=input_text,
+                candidate_payload=candidate_text,
+            )
+            reply = await bound_agent.invoke(request, reference_read=reference_read)
+            if reference_operation is not None:
+                reference_operation.finish()
+            authored_material = None
+            if invocation.phase in {ConsensusPhase.DRAFT, ConsensusPhase.REPAIR}:
+                authored_material = self._consensus_material_store.put_text(reply.content)
+            return self.map_consensus_provider_reply(
+                invocation,
+                reply,
+                authored_material=authored_material,
+            )
+        except BaseException as exc:
+            if reference_operation is not None:
+                reference_operation.failure(exc)
+            raise
+        finally:
+            active_tasks.discard(current_task)
+            if not active_tasks:
+                self._consensus_provider_tasks.pop(key, None)
+            if bound_agent is not None:
+                await self._release_bound_agent_use(bound_agent)
+
+    def interrupt_provider(
+        self,
+        session_id: str,
+        conversation_id: str,
+        workflow_id: str,
+        phase_request_id: str,
+        /,
+    ) -> bool:
+        """Cancel only the exact active consensus provider task."""
+
+        tasks = self._consensus_provider_tasks.get(
+            (session_id, conversation_id, workflow_id, phase_request_id)
+        )
+        active = () if tasks is None else tuple(task for task in tasks if not task.done())
+        if not active:
+            return False
+        for task in active:
+            task.cancel()
+        return True
+
+    def _resolve_consensus_input(
+        self,
+        invocation: ConsensusPhaseInvocation,
+    ) -> tuple[str, RuntimeReferenceOperation | None]:
+        handle = invocation.input_material
+        if handle.locator.startswith("candidate:"):
+            return self._consensus_material_store.read_text(handle), None
+        if not handle.locator.startswith("artifact:"):
+            raise ValueError("consensus input material locator is unsupported")
+        path = handle.locator.removeprefix("artifact:")
+        operation = prepare_runtime_reference_operation(
+            self.artifacts,
+            session_id=invocation.execution_identity.session_id,
+            text=f"${{{path}}}",
+        )
+        proofs = operation.reference_proofs
+        if (
+            len(proofs) != 1
+            or proofs[0].reference.path != path
+            or proofs[0].reference.line_range is not None
+            or proofs[0].selected_sha256 != handle.digest
+        ):
+            operation.failure(ValueError("artifact material digest changed"))
+            raise ValueError("consensus artifact input authorization is stale")
+        return operation.provider_text, operation
+
+    def _resolve_consensus_candidate(
+        self,
+        invocation: ConsensusPhaseInvocation,
+    ) -> str | None:
+        handle = invocation.candidate_material
+        if handle is None:
+            return None
+        if not handle.locator.startswith("candidate:"):
+            raise ValueError("consensus candidate must be unpublished material")
+        return self._consensus_material_store.read_text(handle)
+
+    def submit_consensus_prompt(
+        self,
+        session_id: str,
+        conversation_id: str,
+        prompt: str,
+    ) -> ConsensusRuntimeInspection:
+        """Durably submit prompt material for a confirmed draft phase."""
+
+        self.workspace.validate_identifier(session_id)
+        self.workspace.validate_identifier(conversation_id, label="conversation ID")
+        material = self._consensus_material_store.put_text(prompt)
+        return self.consensus.submit_prompt(
+            session_id=session_id,
+            conversation_id=conversation_id,
+            input_material=material,
+        )
+
+    def submit_consensus_draft(
+        self,
+        session_id: str,
+        conversation_id: str,
+        draft: str,
+    ) -> ConsensusRuntimeInspection:
+        """Durably submit a supplied draft for execution transformation."""
+
+        self.workspace.validate_identifier(session_id)
+        self.workspace.validate_identifier(conversation_id, label="conversation ID")
+        material = self._consensus_material_store.put_text(draft)
+        return self.consensus.submit_supplied_draft(
+            session_id=session_id,
+            conversation_id=conversation_id,
+            draft_material=material,
+        )
+
+    def inspect_consensus(
+        self,
+        session_id: str,
+        conversation_id: str,
+        workflow_id: str,
+    ) -> ConsensusRuntimeInspection:
+        return self.consensus.inspect(
+            session_id=session_id,
+            conversation_id=conversation_id,
+            workflow_id=workflow_id,
+        )
+
+    async def decide_consensus(
+        self,
+        decision: ConsensusRuntimeDecision,
+    ) -> ConsensusRuntimeDecisionResult:
+        return await self.consensus.decide(decision)
+
+    async def confirm_consensus(
+        self,
+        decision: ConsensusRuntimeDecision,
+    ) -> ConsensusRuntimeDecisionResult:
+        return await self.consensus.confirm(decision)
+
+    def interrupt_consensus(
+        self,
+        session_id: str,
+        conversation_id: str,
+        workflow_id: str,
+    ) -> ConsensusRuntimeInspection:
+        return self.consensus.interrupt(
+            session_id=session_id,
+            conversation_id=conversation_id,
+            workflow_id=workflow_id,
+        )
+
+    def resume_consensus(
+        self,
+        session_id: str,
+        conversation_id: str,
+        workflow_id: str,
+    ) -> ConsensusRuntimeInspection:
+        return self.consensus.resume(
+            session_id=session_id,
+            conversation_id=conversation_id,
+            workflow_id=workflow_id,
+        )
+
+    def request_next_consensus_phase(
+        self,
+        session_id: str,
+        conversation_id: str,
+        workflow_id: str,
+    ) -> ConsensusRuntimeInspection:
+        return self.consensus.request_next_phase(
+            session_id=session_id,
+            conversation_id=conversation_id,
+            workflow_id=workflow_id,
         )
 
     def consensus_artifact_review_handoff(
@@ -7649,6 +7923,88 @@ class RuntimeSession:
         ):
             raise ValueError("reference operation does not belong to this session")
         return self.runtime.inspect_reference_operation(operation_id)
+
+    def submit_consensus_prompt(
+        self,
+        conversation_id: str,
+        prompt: str,
+    ) -> ConsensusRuntimeInspection:
+        return self.runtime.submit_consensus_prompt(
+            self.session_id,
+            conversation_id,
+            prompt,
+        )
+
+    def submit_consensus_draft(
+        self,
+        conversation_id: str,
+        draft: str,
+    ) -> ConsensusRuntimeInspection:
+        return self.runtime.submit_consensus_draft(
+            self.session_id,
+            conversation_id,
+            draft,
+        )
+
+    def inspect_consensus(
+        self,
+        conversation_id: str,
+        workflow_id: str,
+    ) -> ConsensusRuntimeInspection:
+        return self.runtime.inspect_consensus(
+            self.session_id,
+            conversation_id,
+            workflow_id,
+        )
+
+    async def decide_consensus(
+        self,
+        decision: ConsensusRuntimeDecision,
+    ) -> ConsensusRuntimeDecisionResult:
+        if decision.session_id != self.session_id:
+            raise ValueError("consensus decision does not belong to this session")
+        return await self.runtime.decide_consensus(decision)
+
+    async def confirm_consensus(
+        self,
+        decision: ConsensusRuntimeDecision,
+    ) -> ConsensusRuntimeDecisionResult:
+        if decision.session_id != self.session_id:
+            raise ValueError("consensus decision does not belong to this session")
+        return await self.runtime.confirm_consensus(decision)
+
+    def interrupt_consensus(
+        self,
+        conversation_id: str,
+        workflow_id: str,
+    ) -> ConsensusRuntimeInspection:
+        return self.runtime.interrupt_consensus(
+            self.session_id,
+            conversation_id,
+            workflow_id,
+        )
+
+    def resume_consensus(
+        self,
+        conversation_id: str,
+        workflow_id: str,
+    ) -> ConsensusRuntimeInspection:
+        return self.runtime.resume_consensus(
+            self.session_id,
+            conversation_id,
+            workflow_id,
+        )
+
+    def request_next_consensus_phase(
+        self,
+        conversation_id: str,
+        workflow_id: str,
+    ) -> ConsensusRuntimeInspection:
+        return self.runtime.request_next_consensus_phase(
+            self.session_id,
+            conversation_id,
+            workflow_id,
+        )
 
     async def lead_turn(
         self,
