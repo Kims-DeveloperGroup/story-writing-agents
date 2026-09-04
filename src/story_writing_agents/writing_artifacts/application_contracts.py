@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import re
 from dataclasses import dataclass, field
@@ -14,6 +15,11 @@ from .change_sets import (
     ArtifactChangeSetError,
     deserialize_artifact_change_set,
     serialize_artifact_change_set,
+)
+from .relationship_policy import (
+    ArtifactRelationshipEdge,
+    ArtifactRelationshipValidation,
+    ArtifactReviewFact,
 )
 
 
@@ -294,6 +300,104 @@ class ArtifactApplicationResult:
         if self.state is ArtifactApplicationState.UNCHANGED:
             return self.affected_paths
         return ()
+
+
+def artifact_relationship_validation_digest(
+    validation: ArtifactRelationshipValidation,
+) -> str:
+    """Return the exact digest consumed by the atomic application store."""
+
+    if type(validation) is not ArtifactRelationshipValidation:
+        raise ArtifactApplicationError(ArtifactApplicationErrorCode.INVALID_SCHEMA)
+    try:
+        validation.__post_init__()
+    except Exception:
+        _raise_failure(ArtifactApplicationErrorCode.INVALID_SCHEMA)
+    payload = {
+        "added_edges": [_relationship_edge_value(item) for item in validation.added_edges],
+        "base_state_digest": validation.base_state_digest,
+        "change_set_digest": validation.change_set_digest,
+        "projected_dangling_edges": [
+            _relationship_edge_value(item)
+            for item in validation.projected_dangling_edges
+        ],
+        "projected_state_digest": validation.projected_state_digest,
+        "removed_edges": [
+            _relationship_edge_value(item) for item in validation.removed_edges
+        ],
+        "retained_edges": [
+            _relationship_edge_value(item) for item in validation.retained_edges
+        ],
+        "review_facts": [
+            _relationship_review_fact_value(item) for item in validation.review_facts
+        ],
+        "schema_version": validation.schema_version,
+    }
+    return "sha256:" + hashlib.sha256(_canonical_json(payload)).hexdigest()
+
+
+def build_artifact_application_request(
+    *,
+    application_id: str,
+    candidate_id: str,
+    candidate_revision: int,
+    candidate_digest: str,
+    change_set: ArtifactChangeSet,
+    relationship_validation: ArtifactRelationshipValidation,
+    attached_core_paths: tuple[str, ...],
+) -> ArtifactApplicationRequest:
+    """Build one exact repository request from an already reviewed candidate."""
+
+    if type(change_set) is not ArtifactChangeSet:
+        raise ArtifactApplicationError(ArtifactApplicationErrorCode.INVALID_SCHEMA)
+    if (
+        type(relationship_validation) is not ArtifactRelationshipValidation
+        or relationship_validation.change_set_digest != change_set.change_set_digest
+        or relationship_validation.base_state_digest != change_set.base_state_digest
+        or relationship_validation.projected_state_digest
+        != change_set.projected_state_digest
+        or not relationship_validation.is_valid
+    ):
+        raise ArtifactApplicationError(ArtifactApplicationErrorCode.INVALID_SCHEMA)
+    return ArtifactApplicationRequest(
+        schema_version=ARTIFACT_APPLICATION_SCHEMA_VERSION,
+        provenance=ArtifactApplicationProvenance(
+            application_id=application_id,
+            candidate_id=candidate_id,
+            candidate_revision=candidate_revision,
+            candidate_digest=candidate_digest,
+            change_set_digest=change_set.change_set_digest,
+            relationship_validation_digest=artifact_relationship_validation_digest(
+                relationship_validation
+            ),
+        ),
+        change_set=change_set,
+        attached_core_paths=attached_core_paths,
+    )
+
+
+def _relationship_edge_value(
+    value: ArtifactRelationshipEdge,
+) -> dict[str, object]:
+    return {
+        "destination_end_utf8_byte": value.destination_end_utf8_byte,
+        "destination_start_utf8_byte": value.destination_start_utf8_byte,
+        "fragment": value.fragment,
+        "relationship_kind": value.relationship_kind.value,
+        "source_path": value.source_path,
+        "target_path": value.target_path,
+    }
+
+
+def _relationship_review_fact_value(
+    value: ArtifactReviewFact,
+) -> dict[str, object]:
+    return {
+        "artifact_path": value.artifact_path,
+        "domain": value.domain.value,
+        "operation_index": value.operation_index,
+        "reason": value.reason.value,
+    }
 
 
 def serialize_artifact_application_request(
@@ -787,6 +891,8 @@ __all__ = (
     "ArtifactApplicationRequest",
     "ArtifactApplicationResult",
     "ArtifactApplicationState",
+    "artifact_relationship_validation_digest",
+    "build_artifact_application_request",
     "ArtifactDeletionProvenance",
     "ArtifactRenameLineage",
     "deserialize_artifact_application_request",

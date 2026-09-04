@@ -54,6 +54,11 @@ from .events import (
     ArtifactReviewFailurePayload,
     ArtifactReviewedProposal,
     ArtifactReviewSynthesisPayload,
+    ArtifactApplicationRequestPayload,
+    ArtifactApplicationDecisionPayload,
+    ArtifactApplicationResultPayload,
+    ArtifactApplicationDecisionKind,
+    ArtifactApplicationOutcomeKind,
     LeadOutcomeKind,
     collaboration_batch_digest,
     ConversationEvent,
@@ -402,6 +407,7 @@ class CollaborationNextAction(StrEnum):
     REPAIR_AUTHORITATIVE_HISTORY = "repair_authoritative_history"
     REPLY_TO_LEAD = "reply_to_lead"
     RETRY_LEAD_TURN = "retry_lead_turn"
+    SUBMIT_APPLICATION_DECISION = "submit_application_decision"
 
 
 @dataclass(frozen=True, slots=True)
@@ -426,6 +432,8 @@ class CollaborationHistoryProjection:
     current_artifact_candidate: ArtifactReviewCandidatePayload | None = None
     current_artifact_state: ArtifactProposalState | None = None
     current_reviewed_artifact_proposal: ArtifactReviewedProposal | None = None
+    current_artifact_application_request: ArtifactApplicationRequestPayload | None = None
+    current_artifact_application_result: ArtifactApplicationResultPayload | None = None
 
     def __post_init__(self) -> None:
         _validate_non_negative_integer(self.last_sequence, label="last sequence")
@@ -465,6 +473,18 @@ class CollaborationHistoryProjection:
             is not ArtifactReviewedProposal
         ):
             raise TypeError("projected reviewed artifact proposal is invalid")
+        if (
+            self.current_artifact_application_request is not None
+            and type(self.current_artifact_application_request)
+            is not ArtifactApplicationRequestPayload
+        ):
+            raise TypeError("projected artifact application request is invalid")
+        if (
+            self.current_artifact_application_result is not None
+            and type(self.current_artifact_application_result)
+            is not ArtifactApplicationResultPayload
+        ):
+            raise TypeError("projected artifact application result is invalid")
 
 
 @dataclass(frozen=True, slots=True)
@@ -541,6 +561,81 @@ class ArtifactProposalResult:
 
 
 @dataclass(frozen=True, slots=True)
+class ArtifactApplicationDecision:
+    """One exact structured decision for the authoritative application tail."""
+
+    session_id: str
+    conversation_id: str
+    step_id: str
+    confirmation_request_id: str
+    reviewed_proposal_id: str
+    reviewed_proposal_revision: int
+    reviewed_proposal_digest: str
+    candidate_id: str
+    candidate_revision: int
+    candidate_digest: str
+    application_id: str
+    application_request_digest: str
+    kind: ArtifactApplicationDecisionKind
+    revision_request: str | None = None
+
+    def __post_init__(self) -> None:
+        ArtifactApplicationDecisionPayload(
+            confirmation_request_id=self.confirmation_request_id,
+            confirmation_request_event_id="pending",
+            reviewed_proposal_id=self.reviewed_proposal_id,
+            reviewed_proposal_revision=self.reviewed_proposal_revision,
+            reviewed_proposal_digest=self.reviewed_proposal_digest,
+            candidate_id=self.candidate_id,
+            candidate_revision=self.candidate_revision,
+            candidate_digest=self.candidate_digest,
+            application_id=self.application_id,
+            application_request_digest=self.application_request_digest,
+            decision=self.kind,
+            revision_request=self.revision_request,
+        )
+        for value, label in (
+            (self.session_id, "session ID"),
+            (self.conversation_id, "conversation ID"),
+            (self.step_id, "step ID"),
+        ):
+            _validate_identifier(value, label=label)
+
+
+@dataclass(frozen=True, slots=True)
+class ArtifactApplicationDecisionResult:
+    """Visible exact application outcome paired with its request and decision."""
+
+    request: ArtifactApplicationRequestPayload
+    decision: ArtifactApplicationDecisionKind
+    outcome: ArtifactApplicationResultPayload
+    message: str
+
+    def __post_init__(self) -> None:
+        if type(self.request) is not ArtifactApplicationRequestPayload:
+            raise TypeError("application decision result request is invalid")
+        if type(self.decision) is not ArtifactApplicationDecisionKind:
+            raise TypeError("application decision result decision is invalid")
+        if type(self.outcome) is not ArtifactApplicationResultPayload:
+            raise TypeError("application decision result outcome is invalid")
+        if type(self.message) is not str or not self.message:
+            raise ValueError("application decision result message is invalid")
+        if (
+            self.outcome.confirmation_request_id
+            != self.request.confirmation_request_id
+            or self.outcome.reviewed_proposal_id
+            != self.request.reviewed_proposal.proposal_id
+            or self.outcome.reviewed_proposal_digest
+            != self.request.reviewed_proposal.proposal_digest
+            or self.outcome.application_id
+            != self.request.application_request.application_id
+            or self.outcome.application_request_digest
+            != self.request.application_request_digest
+        ):
+            raise ValueError("application decision result correlation drifted")
+
+
+@dataclass(frozen=True, slots=True)
 class LeadTurnResult:
     """Visible result of one lead turn after runtime validation and persistence."""
 
@@ -556,6 +651,7 @@ class LeadTurnResult:
     next_action: CollaborationNextAction
     evidence: CollaborationLeadEvidence | None = None
     artifact_proposal: ArtifactProposalResult | None = None
+    artifact_application_request: ArtifactApplicationRequestPayload | None = None
 
     def __post_init__(self) -> None:
         for value, label in (
@@ -666,6 +762,17 @@ class LeadTurnResult:
                 ArtifactProposalState.REVIEWING,
             }:
                 raise ValueError("active artifact result requires its consultation")
+        if self.artifact_application_request is not None:
+            if (
+                type(self.artifact_application_request)
+                is not ArtifactApplicationRequestPayload
+                or self.artifact_proposal is None
+                or self.artifact_proposal.reviewed_proposal
+                != self.artifact_application_request.reviewed_proposal
+                or self.next_action
+                is not CollaborationNextAction.SUBMIT_APPLICATION_DECISION
+            ):
+                raise ValueError("lead result application request is inconsistent")
         provider_judgment = (
             self.proposal is not None
             and self.proposal.step_kind
@@ -732,6 +839,8 @@ class LeadTurnResult:
                 raise ValueError(
                     "running result must wait or require known-result finalization"
                 )
+        elif self.artifact_application_request is not None:
+            pass
         elif self.kind is not LeadOutcomeKind.PROPOSAL and (
             self.next_action is not CollaborationNextAction.CONTINUE_WITH_LEAD
         ):
@@ -1941,6 +2050,9 @@ def _project_validated_collaboration_history(
     artifact_candidates, artifact_states, artifact_reviewed = (
         _project_artifact_review_history(events)
     )
+    application_request, application_result = _project_artifact_application_history(
+        events, artifact_reviewed
+    )
     proposals: dict[str, CollaborationProposal] = {}
     states: dict[str, CollaborationStepState] = {}
     request_ids: set[str] = set()
@@ -2174,6 +2286,9 @@ def _project_validated_collaboration_history(
                 ArtifactReviewedProposal,
                 ArtifactProposalStatePayload,
                 ArtifactReviewFailurePayload,
+                ArtifactApplicationRequestPayload,
+                ArtifactApplicationDecisionPayload,
+                ArtifactApplicationResultPayload,
             }:
                 continue
 
@@ -2621,7 +2736,102 @@ def _project_validated_collaboration_history(
         current_artifact_candidate=artifact_candidates.get(current_step_id),
         current_artifact_state=artifact_states.get(current_step_id),
         current_reviewed_artifact_proposal=artifact_reviewed.get(current_step_id),
+        current_artifact_application_request=application_request,
+        current_artifact_application_result=application_result,
     )
+
+
+def _project_artifact_application_history(
+    events: tuple[CollaborationEventV2, ...],
+    reviewed: Mapping[str, ArtifactReviewedProposal],
+) -> tuple[ArtifactApplicationRequestPayload | None, ArtifactApplicationResultPayload | None]:
+    request: ArtifactApplicationRequestPayload | None = None
+    request_event: CollaborationEventV2 | None = None
+    decision: ArtifactApplicationDecisionPayload | None = None
+    decision_event: CollaborationEventV2 | None = None
+    result: ArtifactApplicationResultPayload | None = None
+    for event in events:
+        payload = event.payload
+        if type(payload) is ArtifactApplicationRequestPayload:
+            proposal = reviewed.get(event.step_id)
+            if (
+                request is not None
+                or proposal != payload.reviewed_proposal
+                or payload.base_tail_sequence
+                != event.sequence - event.batch_ordinal - 1
+            ):
+                raise ValueError("artifact application request is not current review tail")
+            request = payload
+            request_event = event
+        elif type(payload) is ArtifactApplicationDecisionPayload:
+            if (
+                request is None
+                or request_event is None
+                or decision is not None
+                or event.sequence != request_event.sequence + 1
+                or payload.confirmation_request_event_id != request_event.event_id
+                or payload.confirmation_request_id != request.confirmation_request_id
+                or payload.reviewed_proposal_id
+                != request.reviewed_proposal.proposal_id
+                or payload.reviewed_proposal_revision
+                != request.reviewed_proposal.proposal_revision
+                or payload.reviewed_proposal_digest
+                != request.reviewed_proposal.proposal_digest
+                or payload.candidate_id != request.application_request.candidate_id
+                or payload.candidate_revision
+                != request.application_request.candidate_revision
+                or payload.candidate_digest
+                != request.application_request.candidate_digest
+                or payload.application_id != request.application_request.application_id
+                or payload.application_request_digest
+                != request.application_request_digest
+            ):
+                raise ValueError("artifact application decision does not match request")
+            decision = payload
+            decision_event = event
+        elif type(payload) is ArtifactApplicationResultPayload:
+            if (
+                request is None
+                or decision is None
+                or decision_event is None
+                or result is not None
+                or event.sequence != decision_event.sequence + 1
+                or payload.decision_event_id != decision_event.event_id
+                or payload.confirmation_request_id != request.confirmation_request_id
+                or payload.reviewed_proposal_id
+                != request.reviewed_proposal.proposal_id
+                or payload.reviewed_proposal_digest
+                != request.reviewed_proposal.proposal_digest
+                or payload.application_id != request.application_request.application_id
+                or payload.application_request_digest
+                != request.application_request_digest
+                or (
+                    payload.result is not None
+                    and payload.result.provenance
+                    != request.application_request.provenance
+                )
+                or (
+                    decision.decision is ArtifactApplicationDecisionKind.REJECT
+                    and payload.outcome
+                    is not ArtifactApplicationOutcomeKind.REJECTED
+                )
+                or (
+                    decision.decision is ArtifactApplicationDecisionKind.REVISE
+                    and payload.outcome
+                    is not ArtifactApplicationOutcomeKind.SUPERSEDED
+                )
+                or (
+                    decision.decision is ArtifactApplicationDecisionKind.APPLY
+                    and payload.outcome
+                    in {
+                        ArtifactApplicationOutcomeKind.REJECTED,
+                        ArtifactApplicationOutcomeKind.SUPERSEDED,
+                    }
+                )
+            ):
+                raise ValueError("artifact application result does not match decision")
+            result = payload
+    return request, result
 
 
 def _validate_collaboration_execution_result(
@@ -3257,6 +3467,12 @@ def _collaboration_readable_fields(
                 text=payload.code.value,
             ),
         )
+    if type(payload) in {
+        ArtifactApplicationRequestPayload,
+        ArtifactApplicationDecisionPayload,
+        ArtifactApplicationResultPayload,
+    }:
+        return ()
     raise TypeError("unsupported collaboration payload")
 
 
@@ -3286,6 +3502,8 @@ __all__ = [
     "ConversationContextPolicy",
     "ConversationContextWindow",
     "ArtifactProposalResult",
+    "ArtifactApplicationDecision",
+    "ArtifactApplicationDecisionResult",
     "project_collaboration_history",
     "project_collaboration_readable_history",
     "select_bounded_collaboration_context",

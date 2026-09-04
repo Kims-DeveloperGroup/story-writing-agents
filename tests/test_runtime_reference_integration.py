@@ -113,6 +113,7 @@ class RuntimeExecutionRetirementTests(unittest.TestCase):
                 "context_event_sink",
             ),
             StoryRuntime.decide_lead_step: ("self", "decision"),
+            StoryRuntime.decide_artifact_application: ("self", "decision"),
             StoryRuntime.propose_specialist_advisory: (
                 "self",
                 "session_id",
@@ -128,6 +129,7 @@ class RuntimeExecutionRetirementTests(unittest.TestCase):
                 "context_event_sink",
             ),
             RuntimeSession.decide_lead_step: ("self", "decision"),
+            RuntimeSession.decide_artifact_application: ("self", "decision"),
             RuntimeSession.propose_specialist_advisory: (
                 "self",
                 "conversation_id",

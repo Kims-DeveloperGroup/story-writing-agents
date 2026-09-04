@@ -1308,9 +1308,29 @@ class CollaborationPackageBoundaryTests(unittest.TestCase):
     def test_leaf_and_facade_exports_identity_metadata_pickle_and_root_omission(
         self,
     ) -> None:
-        self.assertEqual(tuple(events_owner.__all__), COLLABORATION_EVENT_EXPORTS)
-        self.assertEqual(tuple(context_owner.__all__), COLLABORATION_CONTEXT_EXPORTS)
-        self.assertEqual(len(conversations.__all__), 117)
+        expected_event_exports = (
+            COLLABORATION_EVENT_EXPORTS[:1]
+            + (
+                "ArtifactApplicationDecisionKind",
+                "ArtifactApplicationDecisionPayload",
+                "ArtifactApplicationNextAction",
+                "ArtifactApplicationOutcomeKind",
+                "ArtifactApplicationRequestPayload",
+                "ArtifactApplicationResultPayload",
+            )
+            + COLLABORATION_EVENT_EXPORTS[1:]
+        )
+        expected_context_exports = (
+            COLLABORATION_CONTEXT_EXPORTS[:17]
+            + (
+                "ArtifactApplicationDecision",
+                "ArtifactApplicationDecisionResult",
+            )
+            + COLLABORATION_CONTEXT_EXPORTS[17:]
+        )
+        self.assertEqual(tuple(events_owner.__all__), expected_event_exports)
+        self.assertEqual(tuple(context_owner.__all__), expected_context_exports)
+        self.assertEqual(len(conversations.__all__), 125)
         self.assertNotIn("__getattr__", vars(events_owner))
         self.assertNotIn("__getattr__", vars(context_owner))
         self.assertNotIn("__getattr__", vars(conversations))

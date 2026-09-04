@@ -19,6 +19,15 @@ from ..artifact_proposals import (
     serialize_artifact_review_candidate,
 )
 from ..errors import SessionIdError
+from ..writing_artifacts import (
+    ArtifactApplicationRequest,
+    ArtifactApplicationResult,
+    ArtifactApplicationState,
+    deserialize_artifact_application_request,
+    deserialize_artifact_application_result,
+    serialize_artifact_application_request,
+    serialize_artifact_application_result,
+)
 
 
 CONVERSATION_EVENT_SCHEMA_VERSION = 1
@@ -52,6 +61,9 @@ class CollaborationEventKind(StrEnum):
     ARTIFACT_REVIEWED_PROPOSAL = "artifact_reviewed_proposal"
     ARTIFACT_PROPOSAL_STATE = "artifact_proposal_state"
     ARTIFACT_REVIEW_FAILURE = "artifact_review_failure"
+    ARTIFACT_APPLICATION_REQUEST = "artifact_application_request"
+    ARTIFACT_APPLICATION_DECISION = "artifact_application_decision"
+    ARTIFACT_APPLICATION_RESULT = "artifact_application_result"
 
 
 class CollaborationActorKind(StrEnum):
@@ -593,6 +605,36 @@ class CollaborationConfirmationDecision(StrEnum):
     CONFIRM = "confirm"
     REJECT = "reject"
     REVISE = "revise"
+
+
+class ArtifactApplicationDecisionKind(StrEnum):
+    """Closed user decisions for one exact reviewed application request."""
+
+    APPLY = "apply"
+    REJECT = "reject"
+    REVISE = "revise"
+
+
+class ArtifactApplicationOutcomeKind(StrEnum):
+    """Closed durable truth for the application-decision lifecycle."""
+
+    APPLIED = "applied"
+    UNCHANGED = "unchanged"
+    REJECTED = "rejected"
+    SUPERSEDED = "superseded"
+    STALE = "stale"
+    OUTCOME_UNKNOWN = "outcome_unknown"
+    RECOVERY_REQUIRED = "recovery_required"
+
+
+class ArtifactApplicationNextAction(StrEnum):
+    """One safe user action following an application outcome."""
+
+    REQUEST_COMMIT_CONFIRMATION = "request_commit_confirmation"
+    CONTINUE_WITH_LEAD = "continue_with_lead"
+    REGENERATE_AND_REVIEW = "regenerate_and_review"
+    INSPECT_AND_RESOLVE_OUTCOME = "inspect_and_resolve_outcome"
+    OPERATOR_RECOVERY = "operator_recovery"
 
 
 class LeadOutcomeKind(StrEnum):
@@ -1848,6 +1890,207 @@ class ArtifactReviewedProposal:
 
 
 @dataclass(frozen=True, slots=True)
+class ArtifactApplicationRequestPayload:
+    """Durable, fully inspectable request for one reviewed candidate."""
+
+    confirmation_request_id: str
+    reviewed_proposal: ArtifactReviewedProposal = field(repr=False)
+    application_request: ArtifactApplicationRequest = field(repr=False)
+    application_request_digest: str
+    base_tail_sequence: int
+    choices: tuple[ArtifactApplicationDecisionKind, ...]
+    side_effects: tuple[CollaborationSideEffect, ...]
+    prohibited_side_effects: tuple[CollaborationSideEffect, ...]
+
+    def __post_init__(self) -> None:
+        _validate_identifier(
+            self.confirmation_request_id,
+            label="artifact application confirmation request ID",
+        )
+        if type(self.reviewed_proposal) is not ArtifactReviewedProposal:
+            raise TypeError("artifact application reviewed proposal is invalid")
+        if type(self.application_request) is not ArtifactApplicationRequest:
+            raise TypeError("artifact application request is invalid")
+        _validate_digest(
+            self.application_request_digest,
+            label="artifact application request digest",
+        )
+        _validate_non_negative_integer(
+            self.base_tail_sequence,
+            label="artifact application base tail sequence",
+        )
+        candidate = self.reviewed_proposal.candidate
+        request = self.application_request
+        if (
+            request.candidate_id != candidate.candidate_id
+            or request.candidate_revision != candidate.candidate_revision
+            or request.candidate_digest != candidate.candidate_digest
+            or request.change_set != candidate.change_set
+            or request.relationship_validation_digest
+            != _artifact_relationship_digest(candidate.relationship_validation)
+            or self.application_request_digest
+            != "sha256:"
+            + hashlib.sha256(serialize_artifact_application_request(request)).hexdigest()
+        ):
+            raise ValueError("artifact application request drifted from review")
+        expected_choices = (
+            ArtifactApplicationDecisionKind.APPLY,
+            ArtifactApplicationDecisionKind.REJECT,
+            ArtifactApplicationDecisionKind.REVISE,
+        )
+        if self.choices != expected_choices:
+            raise ValueError("artifact application choices are not canonical")
+        if self.side_effects != (CollaborationSideEffect.ARTIFACT_MUTATION,):
+            raise ValueError("artifact application side effects are not exact")
+        if self.prohibited_side_effects != (
+            CollaborationSideEffect.GIT_INDEX_MUTATION,
+            CollaborationSideEffect.GIT_COMMIT,
+            CollaborationSideEffect.GIT_REMOTE_MUTATION,
+            CollaborationSideEffect.GIT_MERGE,
+        ):
+            raise ValueError("artifact application prohibited effects are not exact")
+
+
+@dataclass(frozen=True, slots=True)
+class ArtifactApplicationDecisionPayload:
+    """Durable structured user decision bound to the exact request tail."""
+
+    confirmation_request_id: str
+    confirmation_request_event_id: str
+    reviewed_proposal_id: str
+    reviewed_proposal_revision: int
+    reviewed_proposal_digest: str
+    candidate_id: str
+    candidate_revision: int
+    candidate_digest: str
+    application_id: str
+    application_request_digest: str
+    decision: ArtifactApplicationDecisionKind
+    revision_request: str | None = None
+
+    def __post_init__(self) -> None:
+        for value, label in (
+            (self.confirmation_request_id, "application confirmation request ID"),
+            (self.confirmation_request_event_id, "application request event ID"),
+            (self.reviewed_proposal_id, "application reviewed proposal ID"),
+            (self.candidate_id, "application candidate ID"),
+            (self.application_id, "artifact application ID"),
+        ):
+            _validate_identifier(value, label=label)
+        _validate_positive_integer(
+            self.reviewed_proposal_revision,
+            label="application reviewed proposal revision",
+        )
+        _validate_positive_integer(
+            self.candidate_revision,
+            label="application candidate revision",
+        )
+        _validate_digest(
+            self.reviewed_proposal_digest,
+            label="application reviewed proposal digest",
+        )
+        _validate_digest(self.candidate_digest, label="application candidate digest")
+        _validate_digest(
+            self.application_request_digest,
+            label="artifact application request digest",
+        )
+        _require_enum(
+            self.decision,
+            ArtifactApplicationDecisionKind,
+            "artifact application decision",
+        )
+        if self.decision is ArtifactApplicationDecisionKind.REVISE:
+            _validate_visible_text(
+                self.revision_request,
+                label="artifact application revision request",
+            )
+        elif self.revision_request is not None:
+            raise ValueError("only artifact application revise may carry text")
+
+
+@dataclass(frozen=True, slots=True)
+class ArtifactApplicationResultPayload:
+    """Durable content-safe outcome for one exact application decision."""
+
+    confirmation_request_id: str
+    decision_event_id: str
+    reviewed_proposal_id: str
+    reviewed_proposal_digest: str
+    application_id: str
+    application_request_digest: str
+    outcome: ArtifactApplicationOutcomeKind
+    next_action: ArtifactApplicationNextAction
+    result: ArtifactApplicationResult | None = field(default=None, repr=False)
+
+    def __post_init__(self) -> None:
+        for value, label in (
+            (self.confirmation_request_id, "application confirmation request ID"),
+            (self.decision_event_id, "application decision event ID"),
+            (self.reviewed_proposal_id, "application reviewed proposal ID"),
+            (self.application_id, "artifact application ID"),
+        ):
+            _validate_identifier(value, label=label)
+        _validate_digest(
+            self.reviewed_proposal_digest,
+            label="application reviewed proposal digest",
+        )
+        _validate_digest(
+            self.application_request_digest,
+            label="artifact application request digest",
+        )
+        _require_enum(self.outcome, ArtifactApplicationOutcomeKind, "application outcome")
+        _require_enum(
+            self.next_action,
+            ArtifactApplicationNextAction,
+            "application next action",
+        )
+        terminal_result = self.outcome in {
+            ArtifactApplicationOutcomeKind.APPLIED,
+            ArtifactApplicationOutcomeKind.UNCHANGED,
+        }
+        if terminal_result is not (type(self.result) is ArtifactApplicationResult):
+            raise ValueError("application result presence is inconsistent")
+        if self.result is not None:
+            expected = {
+                ArtifactApplicationState.APPLIED: ArtifactApplicationOutcomeKind.APPLIED,
+                ArtifactApplicationState.UNCHANGED: ArtifactApplicationOutcomeKind.UNCHANGED,
+            }[self.result.state]
+            if (
+                self.result.application_id != self.application_id
+                or self.outcome is not expected
+                or self.next_action
+                is not ArtifactApplicationNextAction.REQUEST_COMMIT_CONFIRMATION
+            ):
+                raise ValueError("artifact application terminal result is inconsistent")
+        else:
+            expected_action = {
+                ArtifactApplicationOutcomeKind.REJECTED: (
+                    ArtifactApplicationNextAction.CONTINUE_WITH_LEAD
+                ),
+                ArtifactApplicationOutcomeKind.SUPERSEDED: (
+                    ArtifactApplicationNextAction.CONTINUE_WITH_LEAD
+                ),
+                ArtifactApplicationOutcomeKind.STALE: (
+                    ArtifactApplicationNextAction.REGENERATE_AND_REVIEW
+                ),
+                ArtifactApplicationOutcomeKind.OUTCOME_UNKNOWN: (
+                    ArtifactApplicationNextAction.INSPECT_AND_RESOLVE_OUTCOME
+                ),
+                ArtifactApplicationOutcomeKind.RECOVERY_REQUIRED: (
+                    ArtifactApplicationNextAction.OPERATOR_RECOVERY
+                ),
+            }.get(self.outcome)
+            if expected_action is None or self.next_action is not expected_action:
+                raise ValueError("artifact application recovery action is inconsistent")
+
+
+def _artifact_relationship_digest(value: object) -> str:
+    from ..writing_artifacts import artifact_relationship_validation_digest
+
+    return artifact_relationship_validation_digest(value)  # type: ignore[arg-type]
+
+
+@dataclass(frozen=True, slots=True)
 class ArtifactProposalStatePayload:
     """One candidate-correlated durable artifact proposal state."""
 
@@ -2164,6 +2407,9 @@ CollaborationPayload = (
     | ArtifactReviewedProposal
     | ArtifactProposalStatePayload
     | ArtifactReviewFailurePayload
+    | ArtifactApplicationRequestPayload
+    | ArtifactApplicationDecisionPayload
+    | ArtifactApplicationResultPayload
 )
 
 
@@ -2924,6 +3170,57 @@ def _payload_value(payload: CollaborationPayload) -> dict[str, object]:
             "code": payload.code.value,
             "invocation_id": payload.invocation_id,
             "payload_type": "artifact_review_failure",
+        }
+    if type(payload) is ArtifactApplicationRequestPayload:
+        return {
+            "application_request": json.loads(
+                serialize_artifact_application_request(payload.application_request)
+            ),
+            "application_request_digest": payload.application_request_digest,
+            "base_tail_sequence": payload.base_tail_sequence,
+            "choices": [item.value for item in payload.choices],
+            "confirmation_request_id": payload.confirmation_request_id,
+            "payload_type": "artifact_application_request",
+            "prohibited_side_effects": [
+                item.value for item in payload.prohibited_side_effects
+            ],
+            "reviewed_proposal": _artifact_reviewed_proposal_value(
+                payload.reviewed_proposal, True
+            ),
+            "side_effects": [item.value for item in payload.side_effects],
+        }
+    if type(payload) is ArtifactApplicationDecisionPayload:
+        return {
+            "application_id": payload.application_id,
+            "application_request_digest": payload.application_request_digest,
+            "candidate_digest": payload.candidate_digest,
+            "candidate_id": payload.candidate_id,
+            "candidate_revision": payload.candidate_revision,
+            "confirmation_request_event_id": payload.confirmation_request_event_id,
+            "confirmation_request_id": payload.confirmation_request_id,
+            "decision": payload.decision.value,
+            "payload_type": "artifact_application_decision",
+            "reviewed_proposal_digest": payload.reviewed_proposal_digest,
+            "reviewed_proposal_id": payload.reviewed_proposal_id,
+            "reviewed_proposal_revision": payload.reviewed_proposal_revision,
+            "revision_request": payload.revision_request,
+        }
+    if type(payload) is ArtifactApplicationResultPayload:
+        return {
+            "application_id": payload.application_id,
+            "application_request_digest": payload.application_request_digest,
+            "confirmation_request_id": payload.confirmation_request_id,
+            "decision_event_id": payload.decision_event_id,
+            "next_action": payload.next_action.value,
+            "outcome": payload.outcome.value,
+            "payload_type": "artifact_application_result",
+            "result": (
+                None
+                if payload.result is None
+                else json.loads(serialize_artifact_application_result(payload.result))
+            ),
+            "reviewed_proposal_digest": payload.reviewed_proposal_digest,
+            "reviewed_proposal_id": payload.reviewed_proposal_id,
         }
     raise TypeError("unsupported collaboration payload")
 
@@ -4134,6 +4431,97 @@ def _decode_payload(value: object) -> CollaborationPayload:
             ),
             call_id=_optional_string(item["call_id"], label="failure call ID"),
         )
+    if payload_type == "artifact_application_request":
+        item = _object(value, {
+            "application_request", "application_request_digest",
+            "base_tail_sequence", "choices", "confirmation_request_id",
+            "payload_type", "prohibited_side_effects", "reviewed_proposal",
+            "side_effects",
+        }, label="artifact application request payload")
+        return ArtifactApplicationRequestPayload(
+            confirmation_request_id=_string(item["confirmation_request_id"], label="confirmation request ID"),
+            reviewed_proposal=_decode_artifact_reviewed_proposal(
+                item["reviewed_proposal"]
+            ),
+            application_request=deserialize_artifact_application_request(
+                _canonical_json(item["application_request"])
+            ),
+            application_request_digest=_string(item["application_request_digest"], label="application request digest"),
+            base_tail_sequence=_integer(item["base_tail_sequence"], label="application base tail"),
+            choices=tuple(
+                _enum(ArtifactApplicationDecisionKind, value, label="application choice")
+                for value in _array(item["choices"], label="application choices")
+            ),
+            side_effects=tuple(
+                _enum(CollaborationSideEffect, value, label="application side effect")
+                for value in _array(item["side_effects"], label="application side effects")
+            ),
+            prohibited_side_effects=tuple(
+                _enum(CollaborationSideEffect, value, label="prohibited side effect")
+                for value in _array(item["prohibited_side_effects"], label="prohibited side effects")
+            ),
+        )
+    if payload_type == "artifact_application_decision":
+        item = _object(value, {
+            "application_id", "application_request_digest", "candidate_digest",
+            "candidate_id", "candidate_revision", "confirmation_request_event_id",
+            "confirmation_request_id", "decision", "payload_type",
+            "reviewed_proposal_digest", "reviewed_proposal_id",
+            "reviewed_proposal_revision", "revision_request",
+        }, label="artifact application decision payload")
+        return ArtifactApplicationDecisionPayload(
+            confirmation_request_id=_string(item["confirmation_request_id"], label="confirmation request ID"),
+            confirmation_request_event_id=_string(
+                item["confirmation_request_event_id"], label="request event ID"
+            ),
+            reviewed_proposal_id=_string(item["reviewed_proposal_id"], label="reviewed proposal ID"),
+            reviewed_proposal_revision=_integer(item["reviewed_proposal_revision"], label="reviewed proposal revision"),
+            reviewed_proposal_digest=_string(item["reviewed_proposal_digest"], label="reviewed proposal digest"),
+            candidate_id=_string(item["candidate_id"], label="candidate ID"),
+            candidate_revision=_integer(item["candidate_revision"], label="candidate revision"),
+            candidate_digest=_string(item["candidate_digest"], label="candidate digest"),
+            application_id=_string(item["application_id"], label="application ID"),
+            application_request_digest=_string(item["application_request_digest"], label="application request digest"),
+            decision=_enum(
+                ArtifactApplicationDecisionKind,
+                item["decision"],
+                label="artifact application decision",
+            ),
+            revision_request=_optional_string(item["revision_request"], label="revision request"),
+        )
+    if payload_type == "artifact_application_result":
+        item = _object(value, {
+            "application_id", "application_request_digest",
+            "confirmation_request_id", "decision_event_id", "next_action",
+            "outcome", "payload_type", "result", "reviewed_proposal_digest",
+            "reviewed_proposal_id",
+        }, label="artifact application result payload")
+        raw_result = item["result"]
+        return ArtifactApplicationResultPayload(
+            confirmation_request_id=_string(item["confirmation_request_id"], label="confirmation request ID"),
+            decision_event_id=_string(item["decision_event_id"], label="decision event ID"),
+            reviewed_proposal_id=_string(item["reviewed_proposal_id"], label="reviewed proposal ID"),
+            reviewed_proposal_digest=_string(item["reviewed_proposal_digest"], label="reviewed proposal digest"),
+            application_id=_string(item["application_id"], label="application ID"),
+            application_request_digest=_string(item["application_request_digest"], label="application request digest"),
+            outcome=_enum(
+                ArtifactApplicationOutcomeKind,
+                item["outcome"],
+                label="artifact application outcome",
+            ),
+            next_action=_enum(
+                ArtifactApplicationNextAction,
+                item["next_action"],
+                label="artifact application next action",
+            ),
+            result=(
+                None
+                if raw_result is None
+                else deserialize_artifact_application_result(
+                    _canonical_json(raw_result)
+                )
+            ),
+        )
     raise ValueError("unknown collaboration payload type")
 
 
@@ -4239,6 +4627,15 @@ def _validate_collaboration_payload(
         CollaborationEventKind.ARTIFACT_REVIEWED_PROPOSAL: (ArtifactReviewedProposal,),
         CollaborationEventKind.ARTIFACT_PROPOSAL_STATE: (ArtifactProposalStatePayload,),
         CollaborationEventKind.ARTIFACT_REVIEW_FAILURE: (ArtifactReviewFailurePayload,),
+        CollaborationEventKind.ARTIFACT_APPLICATION_REQUEST: (
+            ArtifactApplicationRequestPayload,
+        ),
+        CollaborationEventKind.ARTIFACT_APPLICATION_DECISION: (
+            ArtifactApplicationDecisionPayload,
+        ),
+        CollaborationEventKind.ARTIFACT_APPLICATION_RESULT: (
+            ArtifactApplicationResultPayload,
+        ),
     }
     if type(payload) not in allowed[kind]:
         raise TypeError(f"payload does not match event kind {kind.value!r}")
@@ -4386,6 +4783,15 @@ def _validate_collaboration_direction(
         },
         CollaborationEventKind.ARTIFACT_REVIEW_FAILURE: {
             (CollaborationActorKind.RUNTIME, CollaborationActorKind.USER),
+        },
+        CollaborationEventKind.ARTIFACT_APPLICATION_REQUEST: {
+            (CollaborationActorKind.LEAD, CollaborationActorKind.USER),
+        },
+        CollaborationEventKind.ARTIFACT_APPLICATION_DECISION: {
+            (CollaborationActorKind.USER, CollaborationActorKind.RUNTIME),
+        },
+        CollaborationEventKind.ARTIFACT_APPLICATION_RESULT: {
+            (CollaborationActorKind.ARTIFACT, CollaborationActorKind.USER),
         },
     }
     if (sender_kind, recipient_kind) not in allowed[kind]:
@@ -4639,6 +5045,12 @@ def _raise_content_free_value_error(message: str) -> NoReturn:
 
 __all__ = [
     "ARTIFACT_REVIEW_SCHEMA_VERSION",
+    "ArtifactApplicationDecisionKind",
+    "ArtifactApplicationDecisionPayload",
+    "ArtifactApplicationNextAction",
+    "ArtifactApplicationOutcomeKind",
+    "ArtifactApplicationRequestPayload",
+    "ArtifactApplicationResultPayload",
     "COLLABORATION_EVENT_SCHEMA_VERSION",
     "COLLABORATION_PHYSICAL_CALL_LIMIT",
     "COLLABORATION_ROUND_LIMIT",

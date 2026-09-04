@@ -18,7 +18,7 @@ Package root: `src/story_writing_agents/`
 
 Importable production units indexed: 122.
 
-Direct internal dependency edges indexed: 468.
+Direct internal dependency edges indexed: 470.
 
 Directed internal dependency cycles indexed: 0.
 
@@ -243,7 +243,7 @@ session_lifecycle -> (standard library only)
 conversations -> conversations.catalog/context/events
 conversations.catalog -> errors
 conversations.context -> conversations.events/errors
-conversations.events -> agents/artifact_proposals/errors
+conversations.events -> agents/artifact_proposals/errors/writing_artifacts
 artifact_proposals -> agents/writing_artifacts
 workspace -> conversation_storage.filesystem/workspace.core
 workspace.core -> agents/conversations/errors/models
@@ -256,6 +256,7 @@ writing_artifacts -> writing_artifacts.application_contracts/authorization/catal
                   -> writing_artifacts.change_sets/directives/read_actions
                   -> writing_artifacts.references/relationship_policy
 writing_artifacts.application_contracts -> writing_artifacts.catalog/change_sets
+                                        -> writing_artifacts.relationship_policy
 writing_artifacts.authorization -> writing_artifacts.catalog/references
 writing_artifacts.change_sets -> writing_artifacts.catalog
 writing_artifacts.relationship_policy -> writing_artifacts.catalog/change_sets
@@ -3665,7 +3666,7 @@ every intermediate arrow. The current runtime graph is acyclic.
 - **Source:** `src/story_writing_agents/conversations/__init__.py`
 - **Responsibility:** Provide the stable subject-conversation and schema-v2
   collaboration contract import boundary.
-- **Supported surface:** Exactly 117 names in `__all__`: the retained immutable
+- **Supported surface:** Exactly 125 names in `__all__`: the retained immutable
   conversation metadata, visible-event, and bounded-context value contracts;
   the immutable schema-v2 lead intent/result/decision, provider-call accounting,
   event, proposal, state, readable-field/record/context, error, projection, and
@@ -3683,6 +3684,11 @@ every intermediate arrow. The current runtime graph is acyclic.
   `ArtifactReviewFailurePayload`, `artifact_reviewed_proposal_digest`,
   `encode_artifact_reviewed_proposal`,
   `decode_artifact_reviewed_proposal`, and `ArtifactProposalResult`;
+  the eight exact artifact-application request/decision/result additions
+  `ArtifactApplicationDecision`, `ArtifactApplicationDecisionKind`,
+  `ArtifactApplicationDecisionPayload`, `ArtifactApplicationDecisionResult`,
+  `ArtifactApplicationNextAction`, `ArtifactApplicationOutcomeKind`,
+  `ArtifactApplicationRequestPayload`, and `ArtifactApplicationResultPayload`;
   `CollaborationPayload`; the
   five `COLLABORATION_*` constants; the
   two digest functions; the eight strict canonical proposal/event/draft/batch
@@ -3709,6 +3715,7 @@ every intermediate arrow. The current runtime graph is acyclic.
   `tests/test_collaboration_context.py`,
   `tests/test_specialist_orchestration.py`,
   `tests/test_artifact_proposal_orchestration.py`,
+  `tests/test_lead_artifact_application.py`,
   `docs/reference/conversation-catalog.md`,
   `docs/reference/conversation-transcripts.md`,
   `docs/reference/collaboration-history.md`.
@@ -3741,10 +3748,11 @@ every intermediate arrow. The current runtime graph is acyclic.
 - **Source:** `src/story_writing_agents/conversations/context.py`
 - **Responsibility:** Define pure collaboration interaction and history-
   projection contracts.
-- **Supported surface:** Exactly 24 owning-module names in `__all__`: the five
+- **Supported surface:** Exactly 26 owning-module names in `__all__`: the five
   retained immutable context names plus `CollaborationEventStore`,
   `CollaborationHistoryProjection`, `CollaborationNextAction`,
-  `ArtifactProposalResult`, `LeadDecisionResult`, `LeadStepDecision`,
+  `ArtifactProposalResult`, `ArtifactApplicationDecision`,
+  `ArtifactApplicationDecisionResult`, `LeadDecisionResult`, `LeadStepDecision`,
   `LeadTurnResult`,
   `project_collaboration_history`, `validate_collaboration_candidate_batch`,
   and `validate_collaboration_transition`; plus
@@ -3778,9 +3786,12 @@ every intermediate arrow. The current runtime graph is acyclic.
   `CollaborationLeadEvidence`; a fixed content-free validation-failure result
   carries no successful evidence and exposes only `RETRY_LEAD_TURN`.
   Each decision result pairs its decided proposal with the authoritative
-  resulting `LeadTurnResult`. Lead results may additionally carry the exact
-  runtime-built artifact candidate, current artifact-review state, and optional
-  immutable reviewed proposal without any Apply capability. The projector
+  resulting `LeadTurnResult`. Exact artifact-application decision results pair
+  the current request, structured Apply/Reject/Revise decision, correlated
+  terminal payload, and visible message. Lead results may additionally carry
+  the exact runtime-built artifact candidate, current artifact-review state,
+  and optional immutable reviewed proposal plus its exact artifact-application
+  request. The projector
   independently validates the atomic candidate/consultation/state disclosure,
   exact reviewer assignments and candidate inputs, confirmation, execution,
   specialist replies, synthesis attribution, reviewed-proposal identity,
@@ -3810,13 +3821,17 @@ every intermediate arrow. The current runtime graph is acyclic.
   exact-tail lead-decision, submitted lead-call failure/no-replay closure,
   reviewed-artifact lifecycle closure, and atomic co-batch validation
   including exact external-exchange/result closure and rejection of every late
-  provider/execution event outside the exact active running attempt. Owns no
+  provider/execution event outside the exact active running attempt, and
+  validates the single request/decision/result application tail against its
+  reviewed proposal, application identity, digests, sequence, decision, and
+  outcome. Owns no
   mutable state or external resource and performs no import-time I/O.
 - **Primary verification/documentation:**
   `tests/collaboration_contract_fixture.py`,
   `tests/test_conversation_storage.py`,
   `tests/test_collaboration_context.py`,
   `tests/test_artifact_proposal_orchestration.py`,
+  `tests/test_lead_artifact_application.py`,
   `tests/test_lead_evidence_grounding.py`,
   `tests/test_filesystem_collaboration_event_store.py`,
   `tests/test_sqlite_collaboration_event_store.py`,
@@ -3829,7 +3844,7 @@ every intermediate arrow. The current runtime graph is acyclic.
 - **Source:** `src/story_writing_agents/conversations/events.py`
 - **Responsibility:** Define immutable visible conversation, lead-intent, and
   collaboration event schemas.
-- **Supported surface:** Exactly 86 owning-module names in `__all__`: the three
+- **Supported surface:** Exactly 92 owning-module names in `__all__`: the three
   retained immutable visible-event names; five schema-v2 constants; the closed
   `Lead*` semantic outcome/proposal-intent values; the closed `Collaboration*`
   actors, kinds, directions, inputs, profiles, basis, budget, assignments,
@@ -3843,11 +3858,14 @@ every intermediate arrow. The current runtime graph is acyclic.
   functions; plus the 13 owning reviewed-artifact state, decision, failure,
   reply, candidate, synthesis, reviewed-envelope, state/failure payload,
   digest, and strict codec names exposed through the conversations facade.
+  The six artifact-application additions define closed decision, outcome, and
+  next-action enums plus exact request, decision, and result payloads, all
+  exposed through the conversations facade.
   `LeadProviderOutcome` may carry exactly one consultation intent or one
   provider-neutral artifact intent. The conversations facade exposes every defining object, while
   the project-root facade retains only the three immutable visible-event names.
-- **Direct internal dependencies:** `agents`, `artifact_proposals`, and
-  `errors`.
+- **Direct internal dependencies:** `agents`, `artifact_proposals`, `errors`,
+  and `writing_artifacts`.
 - **State, resources, and side effects:** Immutable v1 and v2 values plus
   deterministic identifier, strict UTF-8/size/privacy, actor direction,
   lead-result closure, the strict workflow-meta/story-specific
@@ -3859,6 +3877,8 @@ every intermediate arrow. The current runtime graph is acyclic.
   content-free provider-call role/kind/state accounting; exact immutable
   artifact candidate/reviewer/consultation/synthesis/reviewed-envelope identity;
   the closed no-write artifact state machine and side-effect-false assertions;
+  exact artifact-application request/decision/result correlation and
+  outcome-to-next-action closure;
   payload, outcome,
   canonical JSON, digest, batch, sequence, and timestamp validation only. Owns
   no mutable state or external resource and performs no import-time I/O.
@@ -3866,6 +3886,7 @@ every intermediate arrow. The current runtime graph is acyclic.
   `tests/collaboration_contract_fixture.py`,
   `tests/test_collaboration_events.py`,
   `tests/test_artifact_proposal_orchestration.py`,
+  `tests/test_lead_artifact_application.py`,
   `tests/test_lead_evidence_grounding.py`,
   `tests/test_filesystem_collaboration_event_store.py`,
   `tests/test_sqlite_collaboration_event_store.py`,
@@ -5471,7 +5492,8 @@ every intermediate arrow. The current runtime graph is acyclic.
   `RuntimeSession`; package-internal `RuntimeConfigurationCandidate`.
   Directive/override management, async prepare/commit/discard, session/debate/
   context/reference inspection, and quiescent provider-binding release remain.
-  Both runtime facades expose async `lead_turn`, `decide_lead_step`, and the
+  Both runtime facades expose async `lead_turn`, `decide_lead_step`,
+  `decide_artifact_application`, and the
   separately confirmed one-specialist `propose_specialist_advisory` without a
   general agent selector. Ordinary turns persist user input before the lead
   invocation, can supersede an exact pending request, and return one strict
@@ -5508,10 +5530,16 @@ every intermediate arrow. The current runtime graph is acyclic.
   candidate and exact isolated evidence subset; the lead synthesis preserves
   every assessment and unresolved item and either produces one content-bearing
   immutable reviewed envelope or a closed revision/rejection/failure/stale/
-  recovery state. Candidate or snapshot drift invalidates prior review;
+  recovery state. A successful review atomically appends one exact application
+  request. Its structured Apply/Reject/Revise decision is accepted only against
+  the authoritative tail and a matching private single-use capability; Apply
+  revalidates the reviewed candidate and relationship facts against a fresh
+  complete artifact snapshot before delegating one atomic repository
+  application, while Reject and Revise perform no artifact write. Candidate or
+  snapshot drift invalidates prior review;
   confirmation and restart never replay an uncertain provider call. This
-  workflow creates no filesystem mutation, Apply capability, consensus action,
-  or Git authority. An optional typed continuation intent creates only a same-step
+  workflow creates no consensus action or Git authority. An optional typed
+  continuation intent creates only a same-step
   second-round proposal requiring fresh confirmation. Restart normalization
   locally finalizes a result-backed RUNNING step without a provider call and
   converts unresolved or submission-uncertain work to outcome unknown without
@@ -5543,7 +5571,8 @@ every intermediate arrow. The current runtime graph is acyclic.
   composed v2 `ConversationStorageServices` bundle, optional RAG service,
   artifact repository, backend snapshot, one workspace-scoped
   `AgentContextService`, quiescent binding state, per-conversation async locks,
-  private confirmed-step capabilities, and live execution-attempt markers.
+  private confirmed-step and artifact-application capabilities, and live
+  execution-attempt markers.
   Runtime and bound sessions expose the same storage bundle; no raw
   schema-v1 event-store injection or property remains. Explicit lead turns may
   bind the lead, authorize ordered references and optional context evidence,
@@ -5558,11 +5587,13 @@ every intermediate arrow. The current runtime graph is acyclic.
   proposals are provider-free until confirmation and reject a core-document
   reviewer mismatch. Reviewed-artifact candidates and envelopes retain proposed
   text only in their explicit durable content-bearing payloads; public result
-  values expose identity and state without granting execution authority. No
-  path mutates or publishes a writing artifact, invokes
-  Git, starts consensus, or exposes provider-native agent orchestration.
+  values expose identity and state without granting execution authority.
+  An exact current Apply decision may atomically mutate the artifact repository;
+  it neither stages nor commits the result. No path invokes Git, starts
+  consensus, or exposes provider-native agent orchestration.
 - **Primary verification/documentation:** `tests/test_lead_orchestration.py`,
   `tests/test_artifact_proposal_orchestration.py`,
+  `tests/test_lead_artifact_application.py`,
   `tests/test_lead_evidence_grounding.py`,
   `tests/test_specialist_orchestration.py`,
   `tests/test_public_api_and_cli.py`,
@@ -6001,7 +6032,7 @@ every intermediate arrow. The current runtime graph is acyclic.
 - **Source:** `src/story_writing_agents/writing_artifacts/__init__.py`
 - **Responsibility:** Provide the side-effect-free canonical writing-artifact
   value facade.
-- **Supported surface:** Exactly 76 names in `__all__`: canonical core and
+- **Supported surface:** Exactly 78 names in `__all__`: canonical core and
   resource-limit constants; `ArtifactKind`, `ArtifactCatalogEntry`,
   `ArtifactCatalog`, `ArtifactSourceIdentity`, `ArtifactContentSnapshot`,
   `ArtifactLineRange`, and `ArtifactReference`; immutable
@@ -6021,7 +6052,8 @@ every intermediate arrow. The current runtime graph is acyclic.
   content-free error, immutable proposal-correlation provenance, exact
   content-bearing request with its exact attached-core evidence, final-artifact,
   rename-lineage, deletion-provenance, and terminal-result values, and four
-  strict request/result codecs owned by `application_contracts`; the
+  strict request/result codecs plus the reviewed-relationship digest and exact
+  request builder owned by `application_contracts`; the
   relationship-policy schema, empty companion
   set, four exact resource-limit constants, closed relationship/error/review
   enums, content-free error, immutable edge/review/complete-validation values,
@@ -6046,6 +6078,7 @@ every intermediate arrow. The current runtime graph is acyclic.
   provider, process, environment, or application-startup operation.
 - **Primary verification/documentation:**
   `tests/test_artifact_application_contracts.py`,
+  `tests/test_lead_artifact_application.py`,
   `tests/test_artifact_change_sets.py`,
   `tests/test_artifact_relationship_policy.py`,
   `tests/test_writing_artifacts.py`,
@@ -6062,7 +6095,7 @@ every intermediate arrow. The current runtime graph is acyclic.
   `src/story_writing_agents/writing_artifacts/application_contracts.py`
 - **Responsibility:** Define immutable exact writing-artifact application
   request and terminal-result contracts.
-- **Supported surface:** Exactly 14 names in module `__all__`, all re-exported
+- **Supported surface:** Exactly 16 names in module `__all__`, all re-exported
   by the writing-artifact facade and absent from the project-root facade:
   `ARTIFACT_APPLICATION_SCHEMA_VERSION`,
   `ArtifactApplicationErrorCode`, content-free `ArtifactApplicationError`,
@@ -6070,9 +6103,12 @@ every intermediate arrow. The current runtime graph is acyclic.
   `ArtifactApplicationProvenance`, content-bearing
   `ArtifactApplicationRequest`, `ArtifactApplicationFinalArtifact`,
   `ArtifactRenameLineage`, `ArtifactDeletionProvenance`,
-  `ArtifactApplicationResult`, and the four strict request/result serialize
-  and deserialize functions. Provenance binds one application identity to the
-  exact reviewed candidate identity/revision, tagged candidate and
+  `ArtifactApplicationResult`, the four strict request/result serialize
+  and deserialize functions, `artifact_relationship_validation_digest`, and
+  `build_artifact_application_request`. The builder admits only an exact valid
+  reviewed relationship result correlated to the supplied change set and binds
+  its canonical digest into provenance. Provenance binds one application
+  identity to the exact reviewed candidate identity/revision, tagged candidate and
   relationship-validation digests, and the embedded change-set digest without
   importing proposal or orchestration code. Results report the canonical
   affected identity set, exact current paths/kinds/digests, manuscript rename
@@ -6088,8 +6124,9 @@ every intermediate arrow. The current runtime graph is acyclic.
   serialization intentionally contains proposed artifact text; ordinary
   representations, results, provenance, lineage, deletion facts, and complete
   error graphs do not.
-- **Direct internal dependencies:** `writing_artifacts.catalog` and
-  `writing_artifacts.change_sets`.
+- **Direct internal dependencies:** `writing_artifacts.catalog`,
+  `writing_artifacts.change_sets`, and
+  `writing_artifacts.relationship_policy`.
 - **State, resources, and side effects:** Frozen values and pure call-local
   validation, canonical JSON encoding/decoding, and tuple validation only. The
   module owns no filesystem, persistence, repository, proposal,
@@ -6100,6 +6137,7 @@ every intermediate arrow. The current runtime graph is acyclic.
   `tests/test_artifact_application_contracts.py`,
   `tests/test_artifact_application_seam.py`, facade and clean-import inventory
   in `tests/test_rag_module_and_packaging_boundary.py`,
+  `tests/test_lead_artifact_application.py`,
   `docs/reference/writing-artifacts.md`, the artifact-application persistence
   section in `docs/design/persistence.md`, and the writing-artifact section in
   `docs/operations/recovery-and-limitations.md`.
@@ -6688,7 +6726,7 @@ every intermediate arrow. The current runtime graph is acyclic.
 ## Consistency Notes
 
 - The inventory contains 122 modules. Static AST derivation over every module-
-  level and function-local import yields 468 unique direct internal edges and
+  level and function-local import yields 470 unique direct internal edges and
   no directed cycle. The v2 cutover contributes 97 modules and 362 edges;
   `writing_artifacts.change_sets` and `writing_artifacts.relationship_policy`
   add two pure modules and exactly five inward edges; application contracts
@@ -6729,7 +6767,12 @@ every intermediate arrow. The current runtime graph is acyclic.
   from `conversations.events` and `orchestrator`; one connects
   `agent_context.sources` to `writing_artifacts.catalog`; and seven connect
   `orchestrator` to the established agent-context, agent, and conversation
-  owners. This produces the current 122-module, 468-edge acyclic graph.
+  owners. This produced the historical 122-module, 468-edge acyclic graph.
+  Exact reviewed-artifact application adds only the two direct edges from
+  `conversations.events` to the writing-artifact facade and from
+  `writing_artifacts.application_contracts` to
+  `writing_artifacts.relationship_policy`, producing the current 122-module,
+  470-edge acyclic graph without a project-root export or new module.
 - The project-root facade contains exactly 104 unique exports. It removes the
   active schema-v1 store, search/page/service, and transcript-retrieval surface;
   adds only `ConversationRetrievalHistoryRecord`; and exports no concrete v2
@@ -6740,8 +6783,8 @@ every intermediate arrow. The current runtime graph is acyclic.
   filesystem or SQLite adapter. `agent_context.actions` contains 25 and
   `agent_context.service` contains 26 direct-module-only exports, while
   `agent_context.sources` remains at 13 and the project-root surface remains
-  unchanged. The conversations facade contains exactly 117 exports; its
-  context and events owners contain 24 and 86 respectively. The direct-only
+  unchanged. The conversations facade contains exactly 125 exports; its
+  context and events owners contain 26 and 92 respectively. The direct-only
   `artifact_proposals` owner contains exactly 16 exports and is absent from the
   project root and writing-artifact facade.
 - The safe Git package facade contains exactly 24 names: 23 pure contract
@@ -6774,10 +6817,10 @@ every intermediate arrow. The current runtime graph is acyclic.
   compatibility path. It now composes exhaustive main/session resource
   readiness through the package-internal Git session boundary without owning
   its journal, lock, seed, refs, branches, or worktrees.
-- The writing-artifact facade contains exactly 76 names. Its 16 change-set, 15
-  relationship-policy, and 14 application-contract additions remain absent
-  from the project root and depend inward only on the existing pure catalog
-  plus the change-set owner;
+- The writing-artifact facade contains exactly 78 names. Its 16 change-set, 15
+  relationship-policy, and 16 application-contract additions remain absent
+  from the project root and depend inward only on the existing pure catalog,
+  change-set, and relationship-policy owners;
   they own no runtime, provider, conversation, agent, repository, filesystem,
   confirmation, apply, publication, or Git behavior.
 - `models.py` remains a provider-neutral value-contract owner with direct
@@ -6789,7 +6832,9 @@ every intermediate arrow. The current runtime graph is acyclic.
   modules. The orchestrator composes those seams into confirmed specialist
   consultation and provider-free advisory workflows, and alone normalizes
   transient context/reference facts into durable lead evidence and exact
-  artifact review candidates, without moving
+  artifact review candidates and exact application requests, then accepts one
+  capability-bound application decision and delegates the revalidated atomic
+  artifact mutation to the established repository owner, without moving
   provider, storage, reference-authorization, or artifact-mutation ownership.
 - Active filesystem and SQLite selection now return one same-provenance
   `ConversationStorageServices` shape whose authoritative event store supports
@@ -6818,7 +6863,8 @@ every intermediate arrow. The current runtime graph is acyclic.
 - All dependency arrows point inward to their accepted owners. Beyond the five
   pure artifact-contract edges, three safe-Git edges, seven schema-v2 workspace
   edges, the grounded-evidence catalog edge, and the reviewed-artifact proposal
-  edges recorded above, no dependency, packaging change, policy exception, or
+  and application edges recorded above, no dependency, packaging change,
+  policy exception, or
   structural compatibility layer was introduced. The breaking cutovers have no
   forwarding, deprecation, migration, conversion, or dual-read/write shim.
 - The final documentation-link and production-isolation conformance check is
