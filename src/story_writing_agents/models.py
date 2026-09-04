@@ -639,6 +639,9 @@ class AgentDefinition:
     language: str
     context_document_files: tuple[PromptFileReference, ...]
     provider_managed_context: bool = field(default=False, repr=False)
+    behavior_policy_components: tuple[PromptFileReference, ...] = field(
+        default=(), repr=False
+    )
 
     def __post_init__(self) -> None:
         if type(self.provider_managed_context) is not bool:
@@ -647,6 +650,20 @@ class AgentDefinition:
             raise ValueError(
                 "provider-managed context cannot bind context documents"
             )
+        components = self.behavior_policy_components
+        if type(components) is not tuple or any(
+            type(item) is not PromptFileReference for item in components
+        ):
+            raise TypeError("behavior policy components must be prompt snapshots")
+        if components:
+            paths = tuple(item.path for item in components)
+            if len(set(paths)) != len(paths):
+                raise ValueError("behavior policy component paths must be unique")
+            if self.system_prompt_file.path != components[-1].path:
+                raise ValueError("composed policy must retain the domain policy path")
+            expected = b"\n\n".join(item.content for item in components)
+            if self.system_prompt_file.content != expected:
+                raise ValueError("system prompt does not match policy components")
 
     def file_references(self) -> tuple[PromptFileReference, ...]:
         """Return prompt components in their binding order."""

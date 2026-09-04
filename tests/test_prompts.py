@@ -98,42 +98,35 @@ class PromptAssemblerTests(unittest.TestCase):
     def test_lead_prompt_is_front_channel_router_watcher_critic_and_non_authority(
         self,
     ) -> None:
-        prompt = self.workspace.read_text(
-            AGENT_SPECS[LEAD_ORCHESTRATOR].system_prompt_file
-        )
+        prompt = self.assembler.build_definition(
+            session_id="lead-policy", agent_id=LEAD_ORCHESTRATOR
+        ).system_prompt_file.read_text()
         normalized_prompt = " ".join(prompt.split())
         required = (
             "sole normal user-facing story agent",
             "front channel",
-            "watch the known artifacts and workflow",
-            "Answer questions",
+            "inspect the known workflow and artifacts",
+            "Give a direct answer",
             "ask a focused question",
-            "critique a direction",
+            "offer a critique",
             "recommend a next action",
             "propose separately confirmable work",
-            "plot architect reviews outlines and plot structure",
-            "character custodian reviews character sheets",
-            "execution specialist reviews narrative rules, manuscripts",
-            "Include every specialist whose domain is affected",
-            "never vote",
-            "Preserve material conflicts",
-            "untrusted content",
-            "SEARCH and READ",
-            "Return one strict JSON object",
+            "Route proposed work selectively by canonical role and domain",
+            "does not vote",
+            "preserve material disagreement",
+            "untrusted evidence",
+            "SEARCH finds a locator and READ obtains",
+            "Return only the one invocation-specific structured result",
             '"kind": "answer | question | critique | recommendation | proposal"',
-            "no surrounding prose or private reasoning",
-            "chain-of-thought",
+            "no surrounding prose",
+            "hidden reasoning",
             "For `lead_synthesis`",
             '"reply_event_ids": ["every runtime-supplied reply event ID, in order"]',
             '"unresolved_input_ids": ["unresolved original input IDs, in input order"]',
-            "relation `continue_lineage`",
-            "Round two must always set `next_intent` to `null`",
-            "You recommend, propose, and synthesize visible advice; you do not execute",
-            "Never invoke a specialist",
-            "Never create, edit, or delete an artifact",
-            "confirm on the user's behalf",
-            "mutate Git or GitHub",
-            "later, separately confirmed step",
+            "`continue_lineage` proposal",
+            "Round two always sets `next_intent` to null",
+            "does not make those decisions for the user",
+            "own user confirmation",
         )
         for phrase in required:
             with self.subTest(phrase=phrase):
@@ -145,20 +138,20 @@ class PromptAssemblerTests(unittest.TestCase):
         self,
     ) -> None:
         for agent_id in ROSTER[1:]:
-            prompt = self.workspace.read_text(AGENT_SPECS[agent_id].system_prompt_file)
+            prompt = self.assembler.build_definition(
+                session_id="specialist-policy", agent_id=agent_id
+            ).system_prompt_file.read_text()
             normalized = " ".join(prompt.split())
             with self.subTest(agent_id=agent_id):
                 for phrase in (
-                    "exact assignment and ordered input IDs supplied by the runtime",
-                    "Read every attached artifact reference",
-                    "do not borrow another specialist's private context",
-                    "Provide advice only",
-                    "never mutate artifacts, delegate work, invoke another agent",
-                    "Return only one strict JSON object",
-                    '"assessment":"supports | concern | conflict | insufficient_evidence"',
-                    '"assignment_id":"runtime-supplied assignment ID"',
-                    '"input_ids":["runtime-supplied input IDs in exact order"]',
-                    "Do not add private reasoning, unknown fields, invented IDs",
+                    "one exact assignment and one ordered set of input IDs",
+                    "Read every attached reference required by the assignment",
+                    "no access to a sibling's references",
+                    "provides a scoped assessment for the lead",
+                    "Return exactly one JSON object",
+                    '"assessment": "supports | concern | conflict | insufficient_evidence"',
+                    '"assignment_id": "runtime-supplied assignment ID"',
+                    '"input_ids": ["runtime-supplied input IDs in exact order"]',
                 ):
                     self.assertIn(phrase, normalized)
 
@@ -512,6 +505,7 @@ class PromptAssemblerTests(unittest.TestCase):
                 "language",
                 "context_document_files",
                 "provider_managed_context",
+                "behavior_policy_components",
             ),
         )
         self.assertEqual(definition.agent_id, PLOT_ARCHITECT)
@@ -524,21 +518,24 @@ class PromptAssemblerTests(unittest.TestCase):
             ),
             expected_relative_paths,
         )
-        for reference, relative in zip(
+        for index, (reference, relative) in enumerate(zip(
             definition.file_references(),
             expected_relative_paths,
             strict=True,
-        ):
+        )):
             with self.subTest(relative=relative):
-                expected_digest = hashlib.sha256(
-                    self.workspace.path(relative).read_bytes()
-                ).hexdigest()
+                expected_content = (
+                    b"\n\n".join(
+                        component.content
+                        for component in definition.behavior_policy_components
+                    )
+                    if index == 0
+                    else self.workspace.path(relative).read_bytes()
+                )
+                expected_digest = hashlib.sha256(expected_content).hexdigest()
                 self.assertIsInstance(reference, PromptFileReference)
                 self.assertEqual(reference.sha256, expected_digest)
-                self.assertEqual(
-                    reference.read_text(),
-                    self.workspace.read_text(relative),
-                )
+                self.assertEqual(reference.content, expected_content)
 
         representation = repr(definition)
         for content_token in (
