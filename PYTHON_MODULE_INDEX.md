@@ -16,9 +16,9 @@ Source root: `src/`
 
 Package root: `src/story_writing_agents/`
 
-Importable production units indexed: 122.
+Importable production units indexed: 125.
 
-Direct internal dependency edges indexed: 477.
+Direct internal dependency edges indexed: 482.
 
 Directed internal dependency cycles indexed: 0.
 
@@ -64,6 +64,10 @@ __main__ -> cli -> conversation_rag_cli
                  |          -> workspace.initialization
                  |          -> writing_artifacts.read_actions
                  -> cli_context -> workspace/errors
+
+consensus -> consensus.contracts/consensus.projection
+consensus.contracts -> agents
+consensus.projection -> consensus.contracts
 
 interactive_controller._core -> interactive_controller._session_policy
                              -> interactive_controller._conversation_policy
@@ -1692,6 +1696,56 @@ every intermediate arrow. The current runtime graph is acyclic.
   `tests/test_interactive_settings.py`,
   `docs/reference/configuration/agent-configuration.md`, and
   `docs/reference/configuration/runtime-overrides.md`.
+
+### `story_writing_agents.consensus`
+
+- **Source:** `src/story_writing_agents/consensus/__init__.py`
+- **Responsibility:** Provide the package-level facade for provider-independent,
+  phase-confirmed consensus contracts and projection.
+- **Supported surface:** Package `__all__` exports exactly 17 consensus
+  contract, projection, enum, capability, digest, and preparation names.
+  These names are intentionally absent from the project-root facade.
+- **Direct internal dependencies:** `consensus.contracts` and
+  `consensus.projection`.
+- **State, resources, and side effects:** Owns no persistent or external
+  resource. Importing only binds immutable domain definitions and performs no
+  filesystem, provider, network, subprocess, or import-time operational I/O.
+- **Primary verification/documentation:**
+  `tests/test_consensus_projection.py` and
+  `docs/design/consensus-workflow.md`.
+
+### `story_writing_agents.consensus.contracts`
+
+- **Source:** `src/story_writing_agents/consensus/contracts.py`
+- **Responsibility:** Define immutable provider-independent phase, decision,
+  audit, result, digest, and confirmation-capability contracts for one
+  consensus lineage.
+- **Supported surface:** Direct-module `__all__` exports exactly 12
+  consensus contract names and preparation/digest functions; the package
+  facade re-exports them.
+- **Direct internal dependencies:** `agents`.
+- **State, resources, and side effects:** Owns immutable validation and a
+  process-local one-use confirmation capability with its own synchronization
+  lock. It performs no filesystem, provider, network, subprocess, or
+  import-time operational I/O.
+- **Primary verification/documentation:**
+  `tests/test_consensus_projection.py` and
+  `docs/design/consensus-workflow.md`.
+
+### `story_writing_agents.consensus.projection`
+
+- **Source:** `src/story_writing_agents/consensus/projection.py`
+- **Responsibility:** Validate sequenced consensus events and derive the
+  content-free current state and safe next action.
+- **Supported surface:** Direct-module `__all__` exports exactly five
+  projection event, payload, state, and function names; the package facade
+  re-exports them.
+- **Direct internal dependencies:** `consensus.contracts`.
+- **State, resources, and side effects:** Pure deterministic projection with
+  no retained mutable or external resource and no import-time operational I/O.
+- **Primary verification/documentation:**
+  `tests/test_consensus_projection.py` and
+  `docs/design/consensus-workflow.md`.
 
 ### `story_writing_agents.conversation_rag_cli`
 
