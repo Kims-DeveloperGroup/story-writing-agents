@@ -27,6 +27,7 @@ from ..git import (
     GitRepositoryState,
     GitTopologyKind,
 )
+from ..git.story_commits import StoryCommitService
 from ..git.session_contracts import (
     GIT_SESSION_WORKTREE_SIBLING_SUFFIX,
     GitSessionResourceError,
@@ -345,6 +346,15 @@ def require_ready_session_resources(
         manifest,
         session_id,
     )
+
+
+def compose_story_commit_service(root: Path, session_id: str) -> StoryCommitService:
+    """Compose commit authority for one already-ready workspace session."""
+
+    main_root = _main_root(root)
+    manifest = _baseline_manifest(canonical_initializer_scaffold())
+    _require_ready_git_session_resources(main_root, manifest, session_id)
+    return StoryCommitService(main_root, manifest, session_id)
 
 
 def discover_workspace_location(start: Path) -> WorkspaceRootDiscovery | None:

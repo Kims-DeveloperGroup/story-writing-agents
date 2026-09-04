@@ -157,6 +157,14 @@ from .conversations import (
     ArtifactApplicationOutcomeKind,
     ArtifactApplicationRequestPayload,
     ArtifactApplicationResultPayload,
+    StoryCommitDecisionPayload,
+    StoryCommitDecisionRequest,
+    StoryCommitDecisionResult,
+    StoryCommitNextAction,
+    StoryCommitOutcomeKind,
+    StoryCommitRequestPayload,
+    StoryCommitResultPayload,
+    build_story_commit_request_payload,
     ConversationStatus,
     LeadAssignmentIntent,
     LeadDecisionResult,
@@ -171,6 +179,14 @@ from .conversations import (
     project_collaboration_history,
     select_bounded_collaboration_context,
 )
+from .git.story_commit_contracts import (
+    StoryCommitApplicationEvidence,
+    StoryCommitConfirmation,
+    StoryCommitDecision,
+    StoryCommitError,
+    StoryCommitRecoveryAction,
+)
+from .git.story_commits import StoryCommitService
 from .debug_log import (
     DebugComponent,
     DebugOperation,
@@ -182,6 +198,7 @@ from .directives import apply_directive as persist_directive
 from .errors import BackendProtocolError, ConversationNotFoundError
 from .prompts import PromptAssembler
 from .workspace import Workspace
+from .workspace.initialization import compose_story_commit_service
 from .writing_artifacts import (
     MAX_REFERENCE_TOTAL_BYTES,
     MAX_REFERENCE_UTF8_BYTES,
@@ -677,6 +694,9 @@ class StoryRuntime:
         ] = {}
         self._artifact_application_capabilities: dict[
             tuple[str, str, str], _ArtifactApplicationCapability
+        ] = {}
+        self._story_commit_services: dict[
+            tuple[str, str, str], StoryCommitService
         ] = {}
         self._live_execution_markers: set[tuple[str, str, str, str]] = set()
 
@@ -1847,10 +1867,14 @@ class StoryRuntime:
             post_decision = self.conversation_storage_services.event_store.read(
                 decision.session_id, decision.conversation_id
             )
+            result_event_id = self._new_id("e")
+            commit_request = None
+            result_persisted = False
             try:
                 self._append_drafts(
                     post_decision[-1].sequence,
-                    (self._draft(
+                    (self._draft_with_id(
+                        event_id=result_event_id,
                         session_id=decision.session_id,
                         conversation_id=decision.conversation_id,
                         turn_id=post_decision[-1].turn_id,
@@ -1861,29 +1885,210 @@ class StoryRuntime:
                         payload=result_payload,
                     ),),
                 )
+                result_persisted = True
+                if application_result is not None:
+                    service = compose_story_commit_service(
+                        self.workspace.root, decision.session_id
+                    )
+                    candidate = service.prepare(
+                        StoryCommitApplicationEvidence(
+                            session_id=decision.session_id,
+                            application_id=application.application_id,
+                            proposal_id=reviewed.proposal_id,
+                            correlation_id=request.application_request_digest,
+                            change_set=application.change_set,
+                            applied_state_digest=application.change_set.projected_state_digest,
+                        ),
+                        proposed_message="Apply reviewed artifact changes",
+                        impact_boundary=(
+                            f"commit {len(application_result.affected_paths)} reviewed artifact paths",
+                        ),
+                    )
+                    commit_request = build_story_commit_request_payload(
+                        confirmation_request_id=self._new_id("g"),
+                        application_result_event_id=result_event_id,
+                        candidate=candidate,
+                    )
+                    result_history = self.conversation_storage_services.event_store.read(
+                        decision.session_id, decision.conversation_id
+                    )
+                    self._append_drafts(
+                        result_history[-1].sequence,
+                        (self._draft(
+                            session_id=decision.session_id,
+                            conversation_id=decision.conversation_id,
+                            turn_id=result_history[-1].turn_id,
+                            step_id=decision.step_id,
+                            kind=CollaborationEventKind.STORY_COMMIT_REQUEST,
+                            sender=_LEAD_ACTOR,
+                            recipient=_USER_ACTOR,
+                            payload=commit_request,
+                        ),),
+                    )
+                    self._story_commit_services[key] = service
             except Exception:
-                result_payload = ArtifactApplicationResultPayload(
-                    confirmation_request_id=request.confirmation_request_id,
-                    decision_event_id=decision_event_id,
-                    reviewed_proposal_id=reviewed.proposal_id,
-                    reviewed_proposal_digest=reviewed.proposal_digest,
-                    application_id=application.application_id,
-                    application_request_digest=request.application_request_digest,
-                    outcome=ArtifactApplicationOutcomeKind.OUTCOME_UNKNOWN,
-                    next_action=(
-                        ArtifactApplicationNextAction.INSPECT_AND_RESOLVE_OUTCOME
-                    ),
-                )
-                message = (
-                    "The decision is durable but its visible result could not be "
-                    "persisted. Inspect the exact application; do not retry it."
-                )
+                commit_request = None
+                self._story_commit_services.pop(key, None)
+                if result_persisted:
+                    message = (
+                        "The artifact result is durable, but a commit request could "
+                        "not be prepared. Inspect the session before preparing again."
+                    )
+                else:
+                    result_payload = ArtifactApplicationResultPayload(
+                        confirmation_request_id=request.confirmation_request_id,
+                        decision_event_id=decision_event_id,
+                        reviewed_proposal_id=reviewed.proposal_id,
+                        reviewed_proposal_digest=reviewed.proposal_digest,
+                        application_id=application.application_id,
+                        application_request_digest=request.application_request_digest,
+                        outcome=ArtifactApplicationOutcomeKind.OUTCOME_UNKNOWN,
+                        next_action=(
+                            ArtifactApplicationNextAction.INSPECT_AND_RESOLVE_OUTCOME
+                        ),
+                    )
+                    message = (
+                        "The decision is durable but its visible result could not be "
+                        "persisted. Inspect the exact application; do not retry it."
+                    )
             return ArtifactApplicationDecisionResult(
                 request=request,
                 decision=decision.kind,
                 outcome=result_payload,
                 message=message,
+                commit_request=commit_request,
             )
+
+    async def decide_story_commit(
+        self,
+        decision: StoryCommitDecisionRequest,
+    ) -> StoryCommitDecisionResult:
+        """Consume one exact structured decision for the prepared commit tail."""
+
+        if type(decision) is not StoryCommitDecisionRequest:
+            raise TypeError("decision must be a StoryCommitDecisionRequest")
+        self._validate_lead_identity(decision.session_id, decision.conversation_id)
+        lock = self._conversation_lock(decision.session_id, decision.conversation_id)
+        async with lock:
+            events = self.conversation_storage_services.event_store.read(
+                decision.session_id, decision.conversation_id
+            )
+            projection = project_collaboration_history(events)
+            request = projection.current_story_commit_request
+            if request is None or projection.current_story_commit_result is not None or not events or type(events[-1].payload) is not StoryCommitRequestPayload or events[-1].payload != request:
+                raise ValueError("story commit has no authoritative request tail")
+            exact = (
+                decision.session_id == events[-1].session_id
+                and decision.conversation_id == events[-1].conversation_id
+                and decision.step_id == events[-1].step_id
+                and decision.confirmation_request_id == request.confirmation_request_id
+                and decision.application_result_event_id == request.application_result_event_id
+                and decision.candidate_id == request.candidate.candidate_id
+                and decision.request_digest == request.request_digest
+            )
+            if not exact:
+                raise ValueError("story commit decision does not match tail")
+            decision_event_id = self._new_id("e")
+            decision_payload = StoryCommitDecisionPayload(
+                confirmation_request_id=request.confirmation_request_id,
+                confirmation_request_event_id=events[-1].event_id,
+                application_result_event_id=request.application_result_event_id,
+                candidate_id=request.candidate.candidate_id,
+                request_digest=request.request_digest,
+                confirmation_id=decision.confirmation_id,
+                decision=decision.kind,
+                revision_request=decision.revision_request,
+            )
+            self._append_drafts(
+                projection.last_sequence,
+                (self._draft_with_id(
+                    event_id=decision_event_id,
+                    session_id=decision.session_id,
+                    conversation_id=decision.conversation_id,
+                    turn_id=self._new_id("t"),
+                    step_id=decision.step_id,
+                    kind=CollaborationEventKind.STORY_COMMIT_DECISION,
+                    sender=_USER_ACTOR,
+                    recipient=_RUNTIME_ACTOR,
+                    payload=decision_payload,
+                ),),
+            )
+            key = (decision.session_id, decision.conversation_id, decision.step_id)
+            service = self._story_commit_services.pop(key, None)
+            result = None
+            if service is None:
+                outcome = StoryCommitOutcomeKind.STALE
+                next_action = StoryCommitNextAction.REPREPARE
+                message = "This runtime did not prepare the commit request. No Git mutation occurred; prepare a new request."
+            else:
+                confirmation = StoryCommitConfirmation(
+                    confirmation_id=decision.confirmation_id,
+                    candidate_id=request.candidate.candidate_id,
+                    proposal_id=request.candidate.proposal_id,
+                    correlation_id=request.candidate.correlation_id,
+                    decision=decision.kind,
+                )
+                try:
+                    if decision.kind is StoryCommitDecision.COMMIT:
+                        authority = service.authorize(request.candidate, confirmation)
+                        result = service.execute(authority)
+                        outcome = StoryCommitOutcomeKind.COMMITTED
+                        next_action = StoryCommitNextAction.CONTINUE_WITH_LEAD
+                        message = "The exact prepared artifact paths were staged and committed locally. No remote operation occurred."
+                    elif decision.kind is StoryCommitDecision.REJECT:
+                        result = service.reject(request.candidate, confirmation)
+                        outcome = StoryCommitOutcomeKind.REJECTED
+                        next_action = StoryCommitNextAction.CONTINUE_WITH_LEAD
+                        message = "The local commit was rejected. Applied artifact files and Git state were preserved."
+                    else:
+                        result = service.revise(request.candidate, confirmation)
+                        outcome = StoryCommitOutcomeKind.SUPERSEDED
+                        next_action = StoryCommitNextAction.REPREPARE
+                        message = "The commit request was superseded for revision. Applied artifact files and Git state were preserved."
+                except StoryCommitError as exc:
+                    outcome, next_action = {
+                        StoryCommitRecoveryAction.REPREPARE: (StoryCommitOutcomeKind.STALE, StoryCommitNextAction.REPREPARE),
+                        StoryCommitRecoveryAction.INSPECT: (StoryCommitOutcomeKind.OUTCOME_UNKNOWN, StoryCommitNextAction.INSPECT),
+                        StoryCommitRecoveryAction.OPERATOR_RECOVERY: (StoryCommitOutcomeKind.RECOVERY_REQUIRED, StoryCommitNextAction.OPERATOR_RECOVERY),
+                    }.get(exc.recovery_action, (StoryCommitOutcomeKind.STALE, StoryCommitNextAction.REPREPARE))
+                    message = "The local commit did not complete safely. Follow the single reported recovery action before preparing another request."
+            result_payload = StoryCommitResultPayload(
+                confirmation_request_id=request.confirmation_request_id,
+                decision_event_id=decision_event_id,
+                candidate_id=request.candidate.candidate_id,
+                request_digest=request.request_digest,
+                outcome=outcome,
+                next_action=next_action,
+                result=result,
+            )
+            post_decision = self.conversation_storage_services.event_store.read(
+                decision.session_id, decision.conversation_id
+            )
+            try:
+                self._append_drafts(
+                    post_decision[-1].sequence,
+                    (self._draft(
+                        session_id=decision.session_id,
+                        conversation_id=decision.conversation_id,
+                        turn_id=post_decision[-1].turn_id,
+                        step_id=decision.step_id,
+                        kind=CollaborationEventKind.STORY_COMMIT_RESULT,
+                        sender=CollaborationActor(CollaborationActorKind.GIT),
+                        recipient=_USER_ACTOR,
+                        payload=result_payload,
+                    ),),
+                )
+            except Exception:
+                result_payload = StoryCommitResultPayload(
+                    confirmation_request_id=request.confirmation_request_id,
+                    decision_event_id=decision_event_id,
+                    candidate_id=request.candidate.candidate_id,
+                    request_digest=request.request_digest,
+                    outcome=StoryCommitOutcomeKind.OUTCOME_UNKNOWN,
+                    next_action=StoryCommitNextAction.INSPECT,
+                )
+                message = "The commit decision is durable but its result is not visible. Inspect the session; do not retry."
+            return StoryCommitDecisionResult(request, decision.kind, result_payload, message)
 
     async def _execute_confirmed_step_locked(
         self,
@@ -7272,3 +7477,15 @@ class RuntimeSession:
         if decision.session_id != self.session_id:
             raise ValueError("artifact decision does not belong to this session")
         return await self.runtime.decide_artifact_application(decision)
+
+    async def decide_story_commit(
+        self,
+        decision: StoryCommitDecisionRequest,
+    ) -> StoryCommitDecisionResult:
+        """Apply an exact pending local commit decision owned by this session."""
+
+        if type(decision) is not StoryCommitDecisionRequest:
+            raise TypeError("decision must be a StoryCommitDecisionRequest")
+        if decision.session_id != self.session_id:
+            raise ValueError("commit decision does not belong to this session")
+        return await self.runtime.decide_story_commit(decision)

@@ -114,6 +114,7 @@ class RuntimeExecutionRetirementTests(unittest.TestCase):
             ),
             StoryRuntime.decide_lead_step: ("self", "decision"),
             StoryRuntime.decide_artifact_application: ("self", "decision"),
+            StoryRuntime.decide_story_commit: ("self", "decision"),
             StoryRuntime.propose_specialist_advisory: (
                 "self",
                 "session_id",
@@ -130,6 +131,7 @@ class RuntimeExecutionRetirementTests(unittest.TestCase):
             ),
             RuntimeSession.decide_lead_step: ("self", "decision"),
             RuntimeSession.decide_artifact_application: ("self", "decision"),
+            RuntimeSession.decide_story_commit: ("self", "decision"),
             RuntimeSession.propose_specialist_advisory: (
                 "self",
                 "conversation_id",

@@ -59,11 +59,17 @@ from .events import (
     ArtifactApplicationResultPayload,
     ArtifactApplicationDecisionKind,
     ArtifactApplicationOutcomeKind,
+    StoryCommitDecisionPayload,
+    StoryCommitNextAction,
+    StoryCommitOutcomeKind,
+    StoryCommitRequestPayload,
+    StoryCommitResultPayload,
     LeadOutcomeKind,
     collaboration_batch_digest,
     ConversationEvent,
     ConversationEventKind,
 )
+from ..git.story_commit_contracts import StoryCommitDecision
 
 
 _SAFE_IDENTIFIER = re.compile(r"[A-Za-z0-9][A-Za-z0-9_-]{0,63}")
@@ -408,6 +414,7 @@ class CollaborationNextAction(StrEnum):
     REPLY_TO_LEAD = "reply_to_lead"
     RETRY_LEAD_TURN = "retry_lead_turn"
     SUBMIT_APPLICATION_DECISION = "submit_application_decision"
+    SUBMIT_COMMIT_DECISION = "submit_commit_decision"
 
 
 @dataclass(frozen=True, slots=True)
@@ -434,6 +441,8 @@ class CollaborationHistoryProjection:
     current_reviewed_artifact_proposal: ArtifactReviewedProposal | None = None
     current_artifact_application_request: ArtifactApplicationRequestPayload | None = None
     current_artifact_application_result: ArtifactApplicationResultPayload | None = None
+    current_story_commit_request: StoryCommitRequestPayload | None = None
+    current_story_commit_result: StoryCommitResultPayload | None = None
 
     def __post_init__(self) -> None:
         _validate_non_negative_integer(self.last_sequence, label="last sequence")
@@ -485,6 +494,10 @@ class CollaborationHistoryProjection:
             is not ArtifactApplicationResultPayload
         ):
             raise TypeError("projected artifact application result is invalid")
+        if self.current_story_commit_request is not None and type(self.current_story_commit_request) is not StoryCommitRequestPayload:
+            raise TypeError("projected story commit request is invalid")
+        if self.current_story_commit_result is not None and type(self.current_story_commit_result) is not StoryCommitResultPayload:
+            raise TypeError("projected story commit result is invalid")
 
 
 @dataclass(frozen=True, slots=True)
@@ -610,6 +623,7 @@ class ArtifactApplicationDecisionResult:
     decision: ArtifactApplicationDecisionKind
     outcome: ArtifactApplicationResultPayload
     message: str
+    commit_request: StoryCommitRequestPayload | None = None
 
     def __post_init__(self) -> None:
         if type(self.request) is not ArtifactApplicationRequestPayload:
@@ -620,6 +634,14 @@ class ArtifactApplicationDecisionResult:
             raise TypeError("application decision result outcome is invalid")
         if type(self.message) is not str or not self.message:
             raise ValueError("application decision result message is invalid")
+        if self.commit_request is not None and type(self.commit_request) is not StoryCommitRequestPayload:
+            raise TypeError("application decision commit request is invalid")
+        if self.commit_request is not None and (
+            self.commit_request.candidate.application_id != self.outcome.application_id
+            or self.commit_request.candidate.proposal_id != self.outcome.reviewed_proposal_id
+            or self.commit_request.candidate.correlation_id != self.outcome.application_request_digest
+        ):
+            raise ValueError("application decision commit request drifted")
         if (
             self.outcome.confirmation_request_id
             != self.request.confirmation_request_id
@@ -633,6 +655,54 @@ class ArtifactApplicationDecisionResult:
             != self.request.application_request_digest
         ):
             raise ValueError("application decision result correlation drifted")
+
+
+@dataclass(frozen=True, slots=True)
+class StoryCommitDecisionRequest:
+    """One exact structured decision for the current prepared commit tail."""
+
+    session_id: str
+    conversation_id: str
+    step_id: str
+    confirmation_request_id: str
+    application_result_event_id: str
+    candidate_id: str
+    request_digest: str
+    confirmation_id: str
+    kind: StoryCommitDecision
+    revision_request: str | None = None
+
+    def __post_init__(self) -> None:
+        StoryCommitDecisionPayload(
+            confirmation_request_id=self.confirmation_request_id,
+            confirmation_request_event_id="pending",
+            application_result_event_id=self.application_result_event_id,
+            candidate_id=self.candidate_id,
+            request_digest=self.request_digest,
+            confirmation_id=self.confirmation_id,
+            decision=self.kind,
+            revision_request=self.revision_request,
+        )
+        for value, label in ((self.session_id, "session ID"), (self.conversation_id, "conversation ID"), (self.step_id, "step ID")):
+            _validate_identifier(value, label=label)
+
+
+@dataclass(frozen=True, slots=True)
+class StoryCommitDecisionResult:
+    """Visible exact local commit outcome paired with its request."""
+
+    request: StoryCommitRequestPayload
+    decision: StoryCommitDecision
+    outcome: StoryCommitResultPayload
+    message: str
+
+    def __post_init__(self) -> None:
+        if type(self.request) is not StoryCommitRequestPayload or type(self.decision) is not StoryCommitDecision or type(self.outcome) is not StoryCommitResultPayload:
+            raise TypeError("story commit decision result is invalid")
+        if type(self.message) is not str or not self.message:
+            raise ValueError("story commit decision result message is invalid")
+        if self.outcome.confirmation_request_id != self.request.confirmation_request_id or self.outcome.candidate_id != self.request.candidate.candidate_id or self.outcome.request_digest != self.request.request_digest:
+            raise ValueError("story commit decision result correlation drifted")
 
 
 @dataclass(frozen=True, slots=True)
@@ -2053,6 +2123,9 @@ def _project_validated_collaboration_history(
     application_request, application_result = _project_artifact_application_history(
         events, artifact_reviewed
     )
+    commit_request, commit_result = _project_story_commit_history(
+        events, application_result
+    )
     proposals: dict[str, CollaborationProposal] = {}
     states: dict[str, CollaborationStepState] = {}
     request_ids: set[str] = set()
@@ -2289,6 +2362,9 @@ def _project_validated_collaboration_history(
                 ArtifactApplicationRequestPayload,
                 ArtifactApplicationDecisionPayload,
                 ArtifactApplicationResultPayload,
+                StoryCommitRequestPayload,
+                StoryCommitDecisionPayload,
+                StoryCommitResultPayload,
             }:
                 continue
 
@@ -2730,7 +2806,15 @@ def _project_validated_collaboration_history(
         execution_attempt_id=attempts.get(current_step_id),
         execution_result_event_id=result_event_id,
         execution_result=projection_result,
-        next_safe_action=_next_action(state, projection_result),
+        next_safe_action=(
+            CollaborationNextAction.SUBMIT_COMMIT_DECISION
+            if commit_request is not None
+            and commit_result is None
+            and type(events[-1].payload) is StoryCommitRequestPayload
+            else CollaborationNextAction.INSPECT_AND_RESOLVE_OUTCOME
+            if commit_request is not None and commit_result is None
+            else _next_action(state, projection_result)
+        ),
         rounds_spent=running_attempts.get(current_step_id, 0),
         physical_calls_spent=spent_calls.get(current_step_id, 0),
         current_artifact_candidate=artifact_candidates.get(current_step_id),
@@ -2738,6 +2822,8 @@ def _project_validated_collaboration_history(
         current_reviewed_artifact_proposal=artifact_reviewed.get(current_step_id),
         current_artifact_application_request=application_request,
         current_artifact_application_result=application_result,
+        current_story_commit_request=commit_request,
+        current_story_commit_result=commit_result,
     )
 
 
@@ -2830,6 +2916,48 @@ def _project_artifact_application_history(
                 )
             ):
                 raise ValueError("artifact application result does not match decision")
+            result = payload
+    return request, result
+
+
+def _project_story_commit_history(
+    events: tuple[CollaborationEventV2, ...],
+    application_result: ArtifactApplicationResultPayload | None,
+) -> tuple[StoryCommitRequestPayload | None, StoryCommitResultPayload | None]:
+    request: StoryCommitRequestPayload | None = None
+    request_event: CollaborationEventV2 | None = None
+    decision: StoryCommitDecisionPayload | None = None
+    decision_event: CollaborationEventV2 | None = None
+    result: StoryCommitResultPayload | None = None
+    by_id = {event.event_id: event for event in events}
+    for event in events:
+        payload = event.payload
+        if type(payload) is StoryCommitRequestPayload:
+            source = by_id.get(payload.application_result_event_id)
+            if (
+                request is not None
+                or application_result is None
+                or source is None
+                or source.payload != application_result
+                or source.sequence + 1 != event.sequence
+                or application_result.result is None
+                or application_result.outcome not in {
+                    ArtifactApplicationOutcomeKind.APPLIED,
+                    ArtifactApplicationOutcomeKind.UNCHANGED,
+                }
+                or payload.candidate.application_id != application_result.application_id
+                or payload.candidate.proposal_id != application_result.reviewed_proposal_id
+                or payload.candidate.correlation_id != application_result.application_request_digest
+            ):
+                raise ValueError("story commit request does not follow application")
+            request, request_event = payload, event
+        elif type(payload) is StoryCommitDecisionPayload:
+            if request is None or request_event is None or decision is not None or event.sequence != request_event.sequence + 1 or payload.confirmation_request_event_id != request_event.event_id or payload.confirmation_request_id != request.confirmation_request_id or payload.application_result_event_id != request.application_result_event_id or payload.candidate_id != request.candidate.candidate_id or payload.request_digest != request.request_digest:
+                raise ValueError("story commit decision does not match request")
+            decision, decision_event = payload, event
+        elif type(payload) is StoryCommitResultPayload:
+            if request is None or decision is None or decision_event is None or result is not None or event.sequence != decision_event.sequence + 1 or payload.decision_event_id != decision_event.event_id or payload.confirmation_request_id != request.confirmation_request_id or payload.candidate_id != request.candidate.candidate_id or payload.request_digest != request.request_digest or (decision.decision is StoryCommitDecision.COMMIT and payload.outcome in {StoryCommitOutcomeKind.REJECTED, StoryCommitOutcomeKind.SUPERSEDED}) or (decision.decision is StoryCommitDecision.REJECT and payload.outcome is not StoryCommitOutcomeKind.REJECTED) or (decision.decision is StoryCommitDecision.REVISE and payload.outcome is not StoryCommitOutcomeKind.SUPERSEDED):
+                raise ValueError("story commit result does not match decision")
             result = payload
     return request, result
 
@@ -3471,6 +3599,9 @@ def _collaboration_readable_fields(
         ArtifactApplicationRequestPayload,
         ArtifactApplicationDecisionPayload,
         ArtifactApplicationResultPayload,
+        StoryCommitRequestPayload,
+        StoryCommitDecisionPayload,
+        StoryCommitResultPayload,
     }:
         return ()
     raise TypeError("unsupported collaboration payload")
@@ -3504,6 +3635,8 @@ __all__ = [
     "ArtifactProposalResult",
     "ArtifactApplicationDecision",
     "ArtifactApplicationDecisionResult",
+    "StoryCommitDecisionRequest",
+    "StoryCommitDecisionResult",
     "project_collaboration_history",
     "project_collaboration_readable_history",
     "select_bounded_collaboration_context",
