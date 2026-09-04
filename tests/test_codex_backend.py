@@ -53,7 +53,6 @@ from story_writing_agents import (
     ROSTER,
     SessionAccessState,
     SessionDurableState,
-    Verdict,
     Workspace,
 )
 from story_writing_agents import cli as cli_module
@@ -64,6 +63,7 @@ from story_writing_agents.conversation_retrieval import (
     ConversationRagExcerpt,
     serialize_conversation_retrieval_observation,
 )
+from story_writing_agents.models import AgentReplyKind, AgentReplyNextPhase
 from story_writing_agents.conversation_rag import (
     ConversationRagDocumentIdentity,
     ConversationRagDocumentKey,
@@ -280,20 +280,29 @@ elif "conversation_id" in payload:
     }), encoding="utf-8")
 elif payload["phase"] == "audit":
     output_path.write_text(json.dumps({
+        "kind": "audit",
         "revision_id": payload["revision_id"],
         "verdict": "approve",
         "content": "",
     }), encoding="utf-8")
 elif payload["phase"] == "finalize":
     output_path.write_text(json.dumps({
+        "kind": "finalization",
         "revision_id": payload["revision_id"],
-        "core_updates": [{
-            "filename": "global_outline.md",
-            "content": "updated outline",
-        }],
+        "reviewed_proposal_id": "reviewed-proposal",
+        "reviewed_proposal_digest": "sha256:" + "a" * 64,
+    }), encoding="utf-8")
+elif payload["phase"] == "synthesize":
+    output_path.write_text(json.dumps({
+        "kind": "synthesis",
+        "revision_id": payload["revision_id"],
+        "content": "generated candidate",
+        "next_phase": "finalization",
+        "deadlocked": False,
     }), encoding="utf-8")
 else:
     output_path.write_text(json.dumps({
+        "kind": "candidate",
         "revision_id": payload["revision_id"],
         "content": "generated candidate",
     }), encoding="utf-8")
@@ -736,6 +745,73 @@ def _assert_provider_supported_schema(
 
 
 class ConversationModelContractTests(unittest.TestCase):
+    def test_agent_reply_kinds_are_closed_and_fields_are_phase_exact(self) -> None:
+        digest = "sha256:" + "a" * 64
+        replies = (
+            AgentReply.candidate("r0", "draft"),
+            AgentReply.approval("r0"),
+            AgentReply.conflict("r0", "repair this"),
+            AgentReply.synthesis(
+                "r0", "repair plan", AgentReplyNextPhase.REPAIR
+            ),
+            AgentReply.synthesis(
+                "r0", "ready", AgentReplyNextPhase.FINALIZATION
+            ),
+            AgentReply.deadlock("r0", "conflict remains"),
+            AgentReply.finalization("r0", "reviewed-proposal", digest),
+        )
+        self.assertEqual(
+            tuple(reply.kind for reply in replies),
+            (
+                AgentReplyKind.CANDIDATE,
+                AgentReplyKind.AUDIT,
+                AgentReplyKind.AUDIT,
+                AgentReplyKind.SYNTHESIS,
+                AgentReplyKind.SYNTHESIS,
+                AgentReplyKind.DEADLOCK,
+                AgentReplyKind.FINALIZATION,
+            ),
+        )
+        self.assertEqual(
+            (replies[3].next_phase, replies[4].next_phase),
+            (AgentReplyNextPhase.REPAIR, AgentReplyNextPhase.FINALIZATION),
+        )
+        self.assertTrue(replies[5].deadlocked)
+        self.assertEqual(replies[6].reviewed_proposal_digest, digest)
+
+        invalid = (
+            dict(kind="candidate", revision_id="r0", content="draft"),
+            dict(kind=AgentReplyKind.CANDIDATE, revision_id="r0", content=""),
+            dict(
+                kind=AgentReplyKind.CANDIDATE,
+                revision_id="r0",
+                content="draft",
+                deadlocked=True,
+            ),
+            dict(kind=AgentReplyKind.AUDIT, revision_id="r0"),
+            dict(
+                kind=AgentReplyKind.SYNTHESIS,
+                revision_id="r0",
+                content="proposal",
+            ),
+            dict(
+                kind=AgentReplyKind.DEADLOCK,
+                revision_id="r0",
+                content="blocked",
+                deadlocked=False,
+            ),
+            dict(
+                kind=AgentReplyKind.FINALIZATION,
+                revision_id="r0",
+                reviewed_proposal_id="reviewed-proposal",
+                reviewed_proposal_digest="a" * 64,
+            ),
+        )
+        for values in invalid:
+            with self.subTest(values=values):
+                with self.assertRaises((TypeError, ValueError)):
+                    AgentReply(**values)
+
     def test_exact_frozen_slotted_no_default_models_and_converse_signature(
         self,
     ) -> None:
@@ -4888,49 +4964,72 @@ class CodexBackendTestCase(unittest.IsolatedAsyncioTestCase):
 
     async def test_strict_phase_reply_mapping(self) -> None:
         candidate = AgentBackend._decode_reply(
-            Phase.SYNTHESIZE,
-            '{"revision_id":"r2","content":"candidate"}',
+            Phase.DRAFT,
+            '{"kind":"candidate","revision_id":"r2","content":"candidate"}',
         )
         self.assertEqual(candidate, AgentReply.candidate("r2", "candidate"))
 
         approval = AgentBackend._decode_reply(
             Phase.AUDIT,
-            '{"revision_id":"r2","verdict":"approve","content":""}',
+            '{"kind":"audit","revision_id":"r2","verdict":"approve","content":""}',
         )
-        self.assertIs(approval.verdict, Verdict.APPROVE)
+        self.assertEqual(approval, AgentReply.approval("r2"))
         conflict = AgentBackend._decode_reply(
             Phase.AUDIT,
-            '{"revision_id":"r2","verdict":"conflict","content":"fix it"}',
+            '{"kind":"audit","revision_id":"r2","verdict":"conflict","content":"fix it"}',
         )
-        self.assertIs(conflict.verdict, Verdict.CONFLICT)
+        self.assertEqual(conflict, AgentReply.conflict("r2", "fix it"))
+
+        repair = AgentBackend._decode_reply(
+            Phase.SYNTHESIZE,
+            '{"kind":"synthesis","revision_id":"r2","content":"repair","next_phase":"repair","deadlocked":false}',
+        )
+        self.assertEqual(
+            repair,
+            AgentReply.synthesis("r2", "repair", AgentReplyNextPhase.REPAIR),
+        )
+        deadlock = AgentBackend._decode_reply(
+            Phase.SYNTHESIZE,
+            '{"kind":"deadlock","revision_id":"r2","content":"blocked","next_phase":null,"deadlocked":true}',
+        )
+        self.assertEqual(deadlock, AgentReply.deadlock("r2", "blocked"))
 
         finalized = AgentBackend._decode_reply(
             Phase.FINALIZE,
             (
-                '{"revision_id":"r2","core_updates":['
-                '{"filename":"global_outline.md","content":"outline"}]}'
+                '{"kind":"finalization","revision_id":"r2",'
+                '"reviewed_proposal_id":"reviewed-proposal",'
+                '"reviewed_proposal_digest":"sha256:' + "a" * 64 + '"}'
             ),
         )
-        self.assertEqual(dict(finalized.core_updates), {"global_outline.md": "outline"})
+        self.assertEqual(
+            finalized,
+            AgentReply.finalization(
+                "r2", "reviewed-proposal", "sha256:" + "a" * 64
+            ),
+        )
 
         invalid_values = (
-            (Phase.AUDIT, '{"revision_id":"r2","verdict":"maybe","content":""}'),
             (
-                Phase.FINALIZE,
-                (
-                    '{"revision_id":"r2","core_updates":['
-                    '{"filename":"secret.md","content":"no"}]}'
-                ),
+                Phase.AUDIT,
+                '{"kind":"audit","revision_id":"r2","verdict":"maybe","content":""}',
             ),
             (
-                Phase.FINALIZE,
-                (
-                    '{"revision_id":"r2","core_updates":['
-                    '{"filename":"global_outline.md","content":"one"},'
-                    '{"filename":"global_outline.md","content":"two"}]}'
-                ),
+                Phase.SYNTHESIZE,
+                '{"kind":"synthesis","revision_id":"r2","content":"ambiguous","next_phase":null,"deadlocked":false}',
             ),
-            (Phase.DRAFT, '{"revision_id":"r2","content":"ok","extra":true}'),
+            (
+                Phase.SYNTHESIZE,
+                '{"kind":"deadlock","revision_id":"r2","content":"blocked","next_phase":"repair","deadlocked":true}',
+            ),
+            (
+                Phase.DRAFT,
+                '{"kind":"audit","revision_id":"r2","content":"ok"}',
+            ),
+            (
+                Phase.DRAFT,
+                '{"kind":"candidate","revision_id":"r2","content":"one","content":"two"}',
+            ),
         )
         for phase, value in invalid_values:
             with self.subTest(phase=phase, value=value):
@@ -5520,6 +5619,7 @@ class CodexBackendTestCase(unittest.IsolatedAsyncioTestCase):
                 "revision mismatch",
                 json.dumps(
                     {
+                        "kind": "candidate",
                         "revision_id": "PRIVATE_REVISION\x1bTAIL",
                         "content": "candidate",
                     }
@@ -5543,41 +5643,29 @@ class CodexBackendTestCase(unittest.IsolatedAsyncioTestCase):
                 None,
             ),
             (
-                "disallowed core filename",
-                json.dumps(
-                    {
-                        "revision_id": "r0",
-                        "core_updates": [
-                            {
-                                "filename": "PRIVATE_CORE\x1bTAIL.md",
-                                "content": "update",
-                            }
-                        ],
-                    }
+                "duplicate agent field",
+                (
+                    '{"kind":"candidate","revision_id":"r0",'
+                    '"content":"candidate",'
+                    f'{quoted_duplicate_key}:"one",'
+                    f'{quoted_duplicate_key}:"two"}}'
                 ),
-                "Codex core update filename is not allowed",
-                "PRIVATE_CORE",
-                Phase.FINALIZE,
+                "Codex agent response duplicates a field",
+                "PRIVATE_DUPLICATE_KEY",
+                Phase.DRAFT,
             ),
             (
-                "duplicate core filename",
+                "wrong finalization kind",
                 json.dumps(
                     {
+                        "kind": "candidate",
                         "revision_id": "r0",
-                        "core_updates": [
-                            {
-                                "filename": "global_outline.md",
-                                "content": "first",
-                            },
-                            {
-                                "filename": "global_outline.md",
-                                "content": "second",
-                            },
-                        ],
+                        "reviewed_proposal_id": "PRIVATE_PROPOSAL\x1bTAIL",
+                        "reviewed_proposal_digest": "sha256:" + "a" * 64,
                     }
                 ),
-                "Codex returned a duplicate core update filename",
-                "global_outline.md",
+                "Codex finalization response has an invalid schema",
+                "PRIVATE_PROPOSAL",
                 Phase.FINALIZE,
             ),
         )

@@ -85,6 +85,17 @@ from .artifact_proposals import (
     serialize_artifact_review_candidate,
 )
 from .config import ConfigurationSnapshot, ConfigManager
+from .consensus.contracts import (
+    CONSENSUS_AUDITORS,
+    ConsensusAuditVerdict,
+    ConsensusMaterialHandle,
+    ConsensusPhase,
+)
+from .consensus.execution import (
+    ConsensusPhaseInvocation,
+    ConsensusPhaseOutputKind,
+    ConsensusProviderResult,
+)
 from .conversation_rag_runtime import ConversationRagRuntimeService
 from .conversation_storage.composition import compose_filesystem_conversation_storage
 from .conversation_storage.contracts import ConversationStorageServices
@@ -186,6 +197,7 @@ from .git.story_commit_contracts import (
     StoryCommitError,
     StoryCommitRecoveryAction,
 )
+from .models import AgentReply, AgentReplyKind, AgentReplyNextPhase, Verdict
 from .git.story_commits import StoryCommitService
 from .debug_log import (
     DebugComponent,
@@ -613,6 +625,34 @@ class RuntimeConfigurationCandidate:
     prompts: PromptAssembler
 
 
+@dataclass(frozen=True, slots=True)
+class ConsensusArtifactReviewHandoff:
+    """Non-authorizing link from finalization to an existing reviewed proposal."""
+
+    invocation: ConsensusPhaseInvocation
+    provider_result: ConsensusProviderResult
+    reviewed_proposal: ArtifactReviewedProposal
+
+    def __post_init__(self) -> None:
+        if (
+            type(self.invocation) is not ConsensusPhaseInvocation
+            or self.invocation.phase is not ConsensusPhase.FINALIZATION
+            or type(self.provider_result) is not ConsensusProviderResult
+            or self.provider_result.kind is not ConsensusPhaseOutputKind.FINALIZATION
+            or self.provider_result.candidate_material
+            != self.invocation.candidate_material
+            or type(self.reviewed_proposal) is not ArtifactReviewedProposal
+            or self.reviewed_proposal.session_id
+            != self.invocation.execution_identity.session_id
+            or self.reviewed_proposal.conversation_id
+            != self.invocation.execution_identity.conversation_id
+            or self.reviewed_proposal.artifact_write_occurred
+            or self.reviewed_proposal.apply_authority_granted
+            or self.reviewed_proposal.git_action_occurred
+        ):
+            raise ValueError("consensus artifact-review handoff is invalid")
+
+
 class StoryRuntime:
     """Public management and lead front-channel/confirmation APIs."""
 
@@ -771,6 +811,143 @@ class StoryRuntime:
 
         self.workspace.validate_identifier(session_id)
         return RuntimeSession(self, session_id)
+
+    @staticmethod
+    def map_consensus_provider_reply(
+        invocation: ConsensusPhaseInvocation,
+        reply: AgentReply,
+        *,
+        authored_material: ConsensusMaterialHandle | None = None,
+    ) -> ConsensusProviderResult:
+        """Map one strict backend reply without deriving authority from prose."""
+
+        if type(invocation) is not ConsensusPhaseInvocation:
+            raise TypeError("invocation must be ConsensusPhaseInvocation")
+        if type(reply) is not AgentReply or reply.revision_id != invocation.revision_id:
+            raise ValueError("agent reply does not match consensus invocation")
+        expected_agents = {
+            ConsensusPhase.DRAFT: (EXECUTION_SPECIALIST,),
+            ConsensusPhase.AUDIT: CONSENSUS_AUDITORS,
+            ConsensusPhase.REPAIR: (EXECUTION_SPECIALIST,),
+            ConsensusPhase.REAUDIT: CONSENSUS_AUDITORS,
+            ConsensusPhase.SYNTHESIS: (LEAD_ORCHESTRATOR,),
+            ConsensusPhase.FINALIZATION: (LEAD_ORCHESTRATOR,),
+        }[invocation.phase]
+        if (
+            invocation.agent_id not in expected_agents
+            or invocation.ordinal != expected_agents.index(invocation.agent_id) + 1
+        ):
+            raise ValueError("consensus invocation assignment is invalid")
+        digest = hashlib.sha256(
+            json.dumps(
+                {
+                    "content": reply.content,
+                    "deadlocked": reply.deadlocked,
+                    "kind": reply.kind.value,
+                    "next_phase": (
+                        None if reply.next_phase is None else reply.next_phase.value
+                    ),
+                    "reviewed_proposal_digest": reply.reviewed_proposal_digest,
+                    "reviewed_proposal_id": reply.reviewed_proposal_id,
+                    "revision_id": reply.revision_id,
+                    "verdict": None if reply.verdict is None else reply.verdict.value,
+                },
+                allow_nan=False,
+                ensure_ascii=False,
+                separators=(",", ":"),
+                sort_keys=True,
+            ).encode("utf-8", errors="strict")
+        ).hexdigest()
+        if invocation.phase in {ConsensusPhase.DRAFT, ConsensusPhase.REPAIR}:
+            if (
+                reply.kind is not AgentReplyKind.CANDIDATE
+                or authored_material is None
+                or authored_material.digest
+                != hashlib.sha256(reply.content.encode("utf-8", errors="strict")).hexdigest()
+                or not authored_material.locator.startswith("candidate:")
+            ):
+                raise ValueError("consensus candidate reply is invalid")
+            return ConsensusProviderResult(
+                ConsensusPhaseOutputKind.CANDIDATE,
+                digest,
+                authored_material,
+            )
+        if authored_material is not None:
+            raise ValueError("only authored candidate output accepts new material")
+        candidate = invocation.candidate_material
+        if candidate is None:
+            raise ValueError("consensus phase requires candidate material")
+        if invocation.phase in {ConsensusPhase.AUDIT, ConsensusPhase.REAUDIT}:
+            if reply.kind is not AgentReplyKind.AUDIT or type(reply.verdict) is not Verdict:
+                raise ValueError("consensus audit reply is invalid")
+            return ConsensusProviderResult(
+                (
+                    ConsensusPhaseOutputKind.AUDIT
+                    if reply.verdict is Verdict.APPROVE
+                    else ConsensusPhaseOutputKind.CONFLICT
+                ),
+                digest,
+                candidate,
+                ConsensusAuditVerdict(reply.verdict.value),
+            )
+        if invocation.phase is ConsensusPhase.SYNTHESIS:
+            if reply.kind is AgentReplyKind.DEADLOCK and reply.deadlocked:
+                return ConsensusProviderResult(
+                    ConsensusPhaseOutputKind.DEADLOCK,
+                    digest,
+                    candidate,
+                )
+            if (
+                reply.kind is not AgentReplyKind.SYNTHESIS
+                or type(reply.next_phase) is not AgentReplyNextPhase
+            ):
+                raise ValueError("consensus synthesis reply is invalid")
+            return ConsensusProviderResult(
+                ConsensusPhaseOutputKind.SYNTHESIS,
+                digest,
+                candidate,
+                next_phase=ConsensusPhase(reply.next_phase.value),
+            )
+        if (
+            invocation.phase is not ConsensusPhase.FINALIZATION
+            or reply.kind is not AgentReplyKind.FINALIZATION
+        ):
+            raise ValueError("consensus finalization reply is invalid")
+        return ConsensusProviderResult(
+            ConsensusPhaseOutputKind.FINALIZATION,
+            digest,
+            candidate,
+        )
+
+    def consensus_artifact_review_handoff(
+        self,
+        invocation: ConsensusPhaseInvocation,
+        reply: AgentReply,
+        provider_result: ConsensusProviderResult,
+    ) -> ConsensusArtifactReviewHandoff:
+        """Expose an existing reviewed proposal without application authority."""
+
+        if provider_result != StoryRuntime.map_consensus_provider_reply(
+            invocation,
+            reply,
+        ):
+            raise ValueError("consensus finalization result does not match its reply")
+        projection = self.conversation_storage_services.event_store.read_context(
+            invocation.execution_identity.session_id,
+            invocation.execution_identity.conversation_id,
+        )
+        reviewed = projection.current_reviewed_artifact_proposal
+        if (
+            projection.current_artifact_state is not ArtifactProposalState.REVIEWED
+            or reviewed is None
+            or reply.kind is not AgentReplyKind.FINALIZATION
+            or reply.reviewed_proposal_id != reviewed.proposal_id
+            or reply.reviewed_proposal_digest != reviewed.proposal_digest
+            or projection.current_artifact_application_request is not None
+            or projection.current_artifact_application_result is not None
+        ):
+            raise ValueError("complete artifact-review lineage is unavailable")
+        return ConsensusArtifactReviewHandoff(invocation, provider_result, reviewed)
 
     def apply_directive(self, session_id: str, text: str) -> dict[str, object]:
         """Persist one supported runtime directive for a session."""

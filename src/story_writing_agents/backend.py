@@ -41,7 +41,7 @@ if os.name == "nt":
 else:
     _msvcrt = None
 
-from .agents import CORE_DOCUMENTS, ROSTER
+from .agents import ROSTER
 from .agent_context import (
     ContextComponentKind,
     JsonPath,
@@ -117,6 +117,8 @@ from .git.session_contracts import GitSessionResourceInspection
 from .models import (
     AgentDefinition,
     AgentReply,
+    AgentReplyKind,
+    AgentReplyNextPhase,
     AgentRequest,
     ConversationReply,
     ConversationRequest,
@@ -5496,37 +5498,53 @@ class AgentBackend:
     def _output_schema(phase: Phase) -> dict[str, Any]:
         if phase is Phase.AUDIT:
             properties: dict[str, Any] = {
+                "kind": {"type": "string", "enum": ["audit"]},
                 "revision_id": {"type": "string"},
                 "verdict": {"type": "string", "enum": ["approve", "conflict"]},
                 "content": {"type": "string"},
             }
-            required = ["revision_id", "verdict", "content"]
+            required = ["kind", "revision_id", "verdict", "content"]
+        elif phase is Phase.SYNTHESIZE:
+            properties = {
+                "kind": {
+                    "type": "string",
+                    "enum": ["synthesis", "deadlock"],
+                },
+                "revision_id": {"type": "string"},
+                "content": {"type": "string"},
+                "next_phase": {
+                    "type": ["string", "null"],
+                    "enum": ["repair", "finalization", None],
+                },
+                "deadlocked": {"type": "boolean"},
+            }
+            required = [
+                "kind",
+                "revision_id",
+                "content",
+                "next_phase",
+                "deadlocked",
+            ]
         elif phase is Phase.FINALIZE:
             properties = {
+                "kind": {"type": "string", "enum": ["finalization"]},
                 "revision_id": {"type": "string"},
-                "core_updates": {
-                    "type": "array",
-                    "items": {
-                        "type": "object",
-                        "properties": {
-                            "filename": {
-                                "type": "string",
-                                "enum": list(CORE_DOCUMENTS),
-                            },
-                            "content": {"type": "string"},
-                        },
-                        "required": ["filename", "content"],
-                        "additionalProperties": False,
-                    },
-                },
+                "reviewed_proposal_id": {"type": "string"},
+                "reviewed_proposal_digest": {"type": "string"},
             }
-            required = ["revision_id", "core_updates"]
+            required = [
+                "kind",
+                "revision_id",
+                "reviewed_proposal_id",
+                "reviewed_proposal_digest",
+            ]
         else:
             properties = {
+                "kind": {"type": "string", "enum": ["candidate"]},
                 "revision_id": {"type": "string"},
                 "content": {"type": "string"},
             }
-            required = ["revision_id", "content"]
+            required = ["kind", "revision_id", "content"]
         return {
             "type": "object",
             "properties": properties,
@@ -5558,13 +5576,25 @@ class AgentBackend:
     ) -> AgentReply:
         """Decode one phase reply without echoing provider values in errors."""
 
-        value = json.loads(text)
+        def reject_duplicate_fields(
+            pairs: list[tuple[str, Any]],
+        ) -> dict[str, Any]:
+            result: dict[str, Any] = {}
+            for key, item in pairs:
+                if key in result:
+                    raise BackendProtocolError(
+                        f"{provider_name} agent response duplicates a field"
+                    )
+                result[key] = item
+            return result
+
+        value = json.loads(text, object_pairs_hook=reject_duplicate_fields)
         if not isinstance(value, dict):
             raise BackendProtocolError(
                 f"{provider_name} final response must be a JSON object"
             )
         if phase is Phase.AUDIT:
-            if set(value) != {"revision_id", "verdict", "content"}:
+            if set(value) != {"kind", "revision_id", "verdict", "content"} or value.get("kind") != AgentReplyKind.AUDIT.value:
                 raise BackendProtocolError(
                     f"{provider_name} audit response has an invalid schema"
                 )
@@ -5583,12 +5613,18 @@ class AgentBackend:
                 raise BackendProtocolError(f"{provider_name} audit verdict is invalid")
             verdict = Verdict(verdict_value)
             return AgentReply(
+                kind=AgentReplyKind.AUDIT,
                 revision_id=revision_id,
                 content=content,
                 verdict=verdict,
             )
         if phase is Phase.FINALIZE:
-            if set(value) != {"revision_id", "core_updates"}:
+            if set(value) != {
+                "kind",
+                "revision_id",
+                "reviewed_proposal_id",
+                "reviewed_proposal_digest",
+            } or value.get("kind") != AgentReplyKind.FINALIZATION.value:
                 raise BackendProtocolError(
                     f"{provider_name} finalization response has an invalid schema"
                 )
@@ -5597,40 +5633,67 @@ class AgentBackend:
                 "revision_id",
                 provider_name=provider_name,
             )
-            raw_updates = value.get("core_updates")
-            if not isinstance(raw_updates, list):
+            return AgentReply.finalization(
+                revision_id,
+                _required_text(
+                    value,
+                    "reviewed_proposal_id",
+                    provider_name=provider_name,
+                ),
+                _required_text(
+                    value,
+                    "reviewed_proposal_digest",
+                    provider_name=provider_name,
+                ),
+            )
+        if phase is Phase.SYNTHESIZE:
+            expected_fields = {
+                "kind",
+                "revision_id",
+                "content",
+                "next_phase",
+                "deadlocked",
+            }
+            if set(value) != expected_fields:
                 raise BackendProtocolError(
-                    f"{provider_name} core_updates must be an array"
+                    f"{provider_name} synthesis response has an invalid schema"
                 )
-            updates: dict[str, str] = {}
-            for raw in raw_updates:
-                if not isinstance(raw, dict) or set(raw) != {
-                    "filename",
-                    "content",
-                }:
+            revision_id = _required_text(
+                value,
+                "revision_id",
+                provider_name=provider_name,
+            )
+            content = _required_text(
+                value,
+                "content",
+                provider_name=provider_name,
+            )
+            kind = value.get("kind")
+            next_phase = value.get("next_phase")
+            deadlocked = value.get("deadlocked")
+            if kind == AgentReplyKind.DEADLOCK.value:
+                if next_phase is not None or deadlocked is not True:
                     raise BackendProtocolError(
-                        f"{provider_name} core update has an invalid schema"
+                        f"{provider_name} deadlock response is ambiguous"
                     )
-                filename = _required_text(
-                    raw,
-                    "filename",
-                    provider_name=provider_name,
+                return AgentReply.deadlock(revision_id, content)
+            if (
+                kind != AgentReplyKind.SYNTHESIS.value
+                or deadlocked is not False
+                or next_phase not in {
+                    AgentReplyNextPhase.REPAIR.value,
+                    AgentReplyNextPhase.FINALIZATION.value,
+                }
+            ):
+                raise BackendProtocolError(
+                    f"{provider_name} synthesis response is ambiguous"
                 )
-                if filename not in CORE_DOCUMENTS:
-                    raise BackendProtocolError(
-                        f"{provider_name} core update filename is not allowed"
-                    )
-                if filename in updates:
-                    raise BackendProtocolError(
-                        f"{provider_name} returned a duplicate core update filename"
-                    )
-                updates[filename] = _text(
-                    raw,
-                    "content",
-                    provider_name=provider_name,
-                )
-            return AgentReply.finalization(revision_id, updates)
-        if set(value) != {"revision_id", "content"}:
+            return AgentReply.synthesis(
+                revision_id,
+                content,
+                AgentReplyNextPhase(next_phase),
+            )
+        if set(value) != {"kind", "revision_id", "content"} or value.get("kind") != AgentReplyKind.CANDIDATE.value:
             raise BackendProtocolError(
                 f"{provider_name} candidate response has an invalid schema"
             )
@@ -5640,7 +5703,7 @@ class AgentBackend:
                 "revision_id",
                 provider_name=provider_name,
             ),
-            _text(
+            _required_text(
                 value,
                 "content",
                 provider_name=provider_name,

@@ -18,7 +18,7 @@ Package root: `src/story_writing_agents/`
 
 Importable production units indexed: 129.
 
-Direct internal dependency edges indexed: 497.
+Direct internal dependency edges indexed: 499.
 
 Directed internal dependency cycles indexed: 0.
 
@@ -43,6 +43,7 @@ __main__ -> cli -> conversation_rag_cli
                  |               -> backend/config/conversations/debug_log/directives
                  |               -> conversation_rag_runtime
                  |               -> conversation_storage.composition/contracts
+                 |               -> consensus.contracts/consensus.execution
                  |               -> errors/prompts/workspace
                  |               -> writing_artifacts/repository/runtime_references
                  -> backend -> agent_context/agent_context.service
@@ -178,7 +179,7 @@ conversation_storage.sqlite -> conversation_literal_search/conversation_search
                             -> errors/workspace.core
                             -> conversation_storage.sqlite_database
                             -> conversation_storage.sqlite_search_index
-orchestrator -> artifact_proposals/backend/config
+orchestrator -> artifact_proposals/backend/config/consensus.contracts/consensus.execution
              -> conversation_rag_runtime/debug_log/directives
              -> conversation_storage.composition/contracts
              -> errors/git.story_commit_contracts/git.story_commits
@@ -1064,7 +1065,11 @@ every intermediate arrow. The current runtime graph is acyclic.
   `decode_context_conversation_answer`, `decode_context_retrieval_answer`, and
   `decode_context_agent_answer` helpers reuse the backend's canonical domain
   decoders and enforce exact request correlation before orchestration can
-  authorize a contextual checkpoint.
+  authorize a contextual checkpoint. Its phase reply decoder requires a closed
+  `AgentReplyKind` discriminator and exact phase-specific fields, including
+  typed synthesis next-phase/deadlock metadata and finalization references to
+  an existing reviewed proposal; duplicate JSON fields and prose-derived
+  authority are rejected before orchestration.
 - **Direct internal dependencies:** `agent_context`, `agent_context.service`,
   the supported `agent_exchanges` facade, the internal
   `agent_exchanges.capture` module, `agents`, `antigravity_adapter`,
@@ -5605,14 +5610,16 @@ every intermediate arrow. The current runtime graph is acyclic.
 
 - **Source:** `src/story_writing_agents/models.py`
 - **Responsibility:** Define immutable cross-boundary request, reply, state, and
-  result contracts.
+  result contracts, including the closed semantic provider-reply contract.
 - **Supported surface:** Package-supported `InputKind`, `Phase`, `Verdict`,
   `DebateStatus`, `DebateContextMode`, `DebateContextRequest`,
   `DebateFailureKind`, `DebateProgressPhase`, `DebateProgressEvent`,
   `DebateProgressSink`, `DebateMessage`, `AgentStateEntry`,
   `PromptFileReference`, `AgentDefinition`, `AgentRequest`, `AgentReply`,
   `ConversationRequest`, `ConversationReply`, `ConversationResult`, and
-  `DebateResult`. Package-internal schema-v1 `StorySessionContext`,
+  `DebateResult`. The direct module also defines the strict
+  `AgentReplyKind` and `AgentReplyNextPhase` discriminators; they are not
+  package-root re-exports. Package-internal schema-v1 `StorySessionContext`,
   `OwnerOutcomeWindow`, `StoryFocusedContext`, `BoundCoreDocumentIdentity`,
   their fixed mode/schema/cap constants, and pure selection/build helpers define
   the bounded provider-neutral continuity envelope without a project-root
@@ -5626,6 +5633,10 @@ every intermediate arrow. The current runtime graph is acyclic.
   `ConversationResult` and `DebateResult` each carry an additive optional,
   validated, content-free `reference_operation_id`; its default is `None`, and
   `DebateResult.to_dict()` omits the key in that default no-reference case.
+  `AgentReply` is a strict discriminated value: candidate, audit, synthesis,
+  deadlock, and finalization fields are mutually exclusive; synthesis carries
+  only a closed next-phase value, while finalization carries only a reviewed
+  proposal ID and tagged digest and never carries artifact content or authority.
 - **Direct internal dependencies:** `agents`, `conversations`, and `errors`.
 - **State, resources, and side effects:** Value contracts own no process state;
   owner outcomes retain only the newest complete suffix under both 24-entry and
@@ -5717,10 +5728,19 @@ every intermediate arrow. The current runtime graph is acyclic.
   single-use capability.
   `converse`, `converse_with_retrieval`, `run_prompt`, `run_draft`,
   and the `Runtime`/`Session` aliases are absent.
+  `StoryRuntime.map_consensus_provider_reply` is the sole typed bridge from a
+  strict `AgentReply` to a digest-only `ConsensusProviderResult`; it validates
+  phase, revision, canonical agent/ordinal, candidate material digest, audit
+  verdict, synthesis next phase, and finalization shape without interpreting
+  prose. `consensus_artifact_review_handoff` may expose only an existing
+  complete `ArtifactReviewedProposal` lineage and preserves its false
+  artifact-write, Apply-authority, and Git-action flags; it does not apply or
+  authorize an artifact change.
 - **Direct internal dependencies:** `agent_context.accounting`,
   `agent_context.manifest`, `agent_context.planning`, `agent_context.service`,
   `agent_context.sources`, `agents`, `artifact_proposals`, `backend`, `config`,
-  `conversations`, `git.story_commit_contracts`, `git.story_commits`,
+  `consensus.contracts`, `consensus.execution`, `conversations`,
+  `git.story_commit_contracts`, `git.story_commits`,
   `conversation_rag_runtime`, `conversation_storage.composition`,
   `conversation_storage.contracts`, `debug_log`, `directives`, `errors`,
   `prompts`, `workspace`, `workspace.initialization`,
