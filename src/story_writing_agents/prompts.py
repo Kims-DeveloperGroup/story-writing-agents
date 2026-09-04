@@ -6,9 +6,10 @@ import hashlib
 import json
 from typing import Mapping
 
-from .agents import AGENT_SPECS, ROSTER
+from .agents import AGENT_SPECS, ROSTER, behavior_policy_files
 from .config import ConfigurationSnapshot, ConfigManager
 from .conversations import ConversationContextWindow
+from .errors import WorkspaceFormatError
 from .models import (
     AgentDefinition,
     AgentRequest,
@@ -123,8 +124,24 @@ class PromptAssembler:
                 self.backend_overrides,
             )
         )
-        spec = AGENT_SPECS[agent_id]
-        system_prompt_file = self._reference(spec.system_prompt_file)
+        try:
+            spec = AGENT_SPECS[agent_id]
+        except KeyError:
+            raise ValueError("agent ID is not canonical") from None
+        policy_components = tuple(
+            self._reference(path) for path in behavior_policy_files(agent_id)
+        )
+        if any(
+            not component.content or b"\x00" in component.content
+            for component in policy_components
+        ):
+            raise WorkspaceFormatError(
+                "behavior policy component must be nonempty and NUL-free"
+            )
+        system_prompt_file = PromptFileReference.from_bytes(
+            policy_components[-1].path,
+            b"\n\n".join(component.content for component in policy_components),
+        )
         persona_file = self._reference(
             self.workspace.persona_path(resolved.persona).relative_to(
                 self.workspace.root
@@ -143,7 +160,7 @@ class PromptAssembler:
             agent_id=agent_id,
             backend=resolved.backend,
             language=resolved.language,
-            system_prompt_file=system_prompt_file,
+            behavior_policy_components=policy_components,
             persona_file=persona_file,
             context_document_files=context_document_file_tuple,
             provider_route_generation=self.provider_route_generations[agent_id],
@@ -158,6 +175,7 @@ class PromptAssembler:
             language=resolved.language,
             context_document_files=context_document_file_tuple,
             provider_managed_context=not include_context_documents,
+            behavior_policy_components=policy_components,
         )
 
     def build_request(
@@ -290,14 +308,19 @@ class PromptAssembler:
         agent_id: str,
         backend: str,
         language: str,
-        system_prompt_file: PromptFileReference,
+        behavior_policy_components: tuple[PromptFileReference, ...],
         persona_file: PromptFileReference,
         context_document_files: tuple[PromptFileReference, ...],
         provider_route_generation: int = 0,
         provider_managed_context: bool = False,
     ) -> str:
         components = (
-            ("system_prompt", system_prompt_file),
+            *(
+                (f"behavior_policy:{ordinal}", reference)
+                for ordinal, reference in enumerate(
+                    behavior_policy_components, start=1
+                )
+            ),
             ("persona", persona_file),
             *(
                 ("context_document", reference)

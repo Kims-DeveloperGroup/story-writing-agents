@@ -72,10 +72,12 @@ _EXPECTED_DIGESTS = {
     "agent_states/orchestrator_state/sessions/.gitkeep": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
     "agent_states/plot_architect_state/.gitkeep": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
     "config/agent_configs.json": "16b585aa159899eb54f2f75d013e4dba1c35435f1beef4e34d50862500a4908e",
-    "config/agents/character_custodian/AGENTS.md": "8a2224c113bf9f1e4f8556c6432380a6aa7c65a447863c9bbcf3ce123f63ce44",
-    "config/agents/execution_specialist/AGENTS.md": "cec732e7fd03551a38b7e14ed7cbcbc54a5e0c2272c82ba43b4db4f2a9234c3c",
-    "config/agents/lead_orchestrator/AGENTS.md": "031a9805616cbc191be45e0480c80e1d76d6f28b4c52fa49f925a02e216c4e4e",
-    "config/agents/plot_architect/AGENTS.md": "6d5e38dc0d15feb196c39619c324ee40a6dcd48b69d293292da051fa192fc080",
+    "config/agents/character_custodian/AGENTS.md": "18b3ef46527944538cf36179190b82214809f9db56582afa47e21851cd7d797a",
+    "config/agents/common/AGENTS.md": "2407f607cdf5cedcc96ef5563bce5b3e9e2336630e6033cd3839a47058f824de",
+    "config/agents/execution_specialist/AGENTS.md": "d638cda4ee27306b8c87379bf9fee5e76652832bbd63a59b4372aabfbfc2b458",
+    "config/agents/lead_orchestrator/AGENTS.md": "2ca0cb3b1a5369e0f6df469600657512f67881d79b5eba158a8b1a4158338e80",
+    "config/agents/plot_architect/AGENTS.md": "79f2f072beeacb420479098788df6b9cda34d5bc5b33c9c02c577f45eeef7f3d",
+    "config/agents/specialist_collaboration/AGENTS.md": "7aad65b0511fe4087513ff55c999d9ca974c600d33908eb5b32770e2a7d763f1",
     "config/persona_templates/alternative_templates/.gitkeep": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
     "config/persona_templates/default_kim_eun_hee.md": "fd1c91425394d07b308b3869c56579a760dc868568b6c6cfc637148a5f3336d1",
     "config/system_defaults.json": "539426a048ec074569c11e206e07fa145a69da393fc9af711f610642bad0e6df",
@@ -239,7 +241,7 @@ class WorkspaceV2SchemaTests(unittest.TestCase):
         paths = tuple(entry.path for entry in entries)
         self.assertEqual(paths, tuple(_EXPECTED_DIGESTS))
         self.assertEqual(paths, tuple(sorted(paths, key=lambda path: path.encode())))
-        self.assertEqual(len(paths), 22)
+        self.assertEqual(len(paths), 24)
         self.assertEqual(
             {
                 entry.path: hashlib.sha256(entry.content).hexdigest()
@@ -248,6 +250,16 @@ class WorkspaceV2SchemaTests(unittest.TestCase):
             _EXPECTED_DIGESTS,
         )
         contents = {entry.path: entry.content for entry in entries}
+        repository_root = Path(__file__).resolve().parents[1]
+        for path in (
+            "config/agents/common/AGENTS.md",
+            "config/agents/specialist_collaboration/AGENTS.md",
+            "config/agents/lead_orchestrator/AGENTS.md",
+            "config/agents/plot_architect/AGENTS.md",
+            "config/agents/character_custodian/AGENTS.md",
+            "config/agents/execution_specialist/AGENTS.md",
+        ):
+            self.assertEqual(contents[path], (repository_root / path).read_bytes())
         self.assertEqual(contents[WORKSPACE_MARKER_PATH], _MARKER_BYTES)
         self.assertEqual(
             tuple(CANONICAL_CORE_DOCUMENT_PATHS),
