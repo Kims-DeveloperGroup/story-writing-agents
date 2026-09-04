@@ -42,7 +42,6 @@ from story_writing_agents.writing_artifacts import _storage as storage_module
 from story_writing_agents.writing_artifacts import (
     filesystem_sources as filesystem_sources_module,
 )
-from story_writing_agents.writing_artifacts import repository as repository_module
 from story_writing_agents.writing_artifacts._storage import (
     ArtifactEntrySecurityError,
     ArtifactLeaseSecurityError,
@@ -51,6 +50,9 @@ from story_writing_agents.writing_artifacts._storage import (
 )
 from story_writing_agents.writing_artifacts.repository import (
     WritingArtifactRepository,
+)
+from story_writing_agents.writing_artifacts._application_store import (
+    ArtifactApplicationStoreFailure,
 )
 
 from tests.helpers import initialize_test_workspace
@@ -545,7 +547,11 @@ class RepositoryEligibilityTests(WritingArtifactTestCase):
                         side_effect=aliased_listdir,
                     ),
                     self.assertRaises(
-                        (ArtifactRootSecurityError, ArtifactEntrySecurityError)
+                        (
+                            ArtifactRootSecurityError,
+                            ArtifactEntrySecurityError,
+                            ArtifactApplicationStoreFailure,
+                        )
                     ),
                 ):
                     self.commit(
@@ -657,10 +663,15 @@ class RepositoryEligibilityTests(WritingArtifactTestCase):
         manuscript_path, _ = self.commit()
         read_bytes = self.repository._storage.read_bytes
 
+        def reject_source_content(relative: str, *args, **kwargs):
+            if canonical_artifact_kind(relative) is not None:
+                raise AssertionError("source listing read content")
+            return read_bytes(relative, *args, **kwargs)
+
         with mock.patch.object(
             self.repository._storage,
             "read_bytes",
-            side_effect=AssertionError("source listing read content"),
+            side_effect=reject_source_content,
         ):
             self.assertEqual(
                 self.repository.list_paths(),
@@ -1870,8 +1881,8 @@ class SecureStorageTests(WritingArtifactTestCase):
                 side_effect=detach_after_target_publication,
             ),
             self.assertRaisesRegex(
-                ArtifactRootSecurityError,
-                "ancestry changed",
+                (ArtifactRootSecurityError, ArtifactApplicationStoreFailure),
+                "ancestry changed|artifact application state is corrupt",
             ),
         ):
             self.commit(

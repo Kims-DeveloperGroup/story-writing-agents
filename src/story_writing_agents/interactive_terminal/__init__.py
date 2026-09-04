@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from ._core import (
+from ._core import (  # noqa: F401
     AdvisoryProgressError,
     format_agent_reply_content,
     InteractiveAdvisoryProgress,

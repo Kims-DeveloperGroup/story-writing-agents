@@ -65,6 +65,7 @@ _MARKER_BYTES = (
 )
 
 _EXPECTED_DIGESTS = {
+    ".gitignore": "d2a04d1ee9e09537a6505f58bd322273a6267ea8bf40daa43f7d7dd095d63f6c",
     "agent_states/character_custodian_state/.gitkeep": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
     "agent_states/execution_specialist_state/.gitkeep": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
     "agent_states/orchestrator_state/.gitkeep": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
@@ -241,7 +242,7 @@ class WorkspaceV2SchemaTests(unittest.TestCase):
         paths = tuple(entry.path for entry in entries)
         self.assertEqual(paths, tuple(_EXPECTED_DIGESTS))
         self.assertEqual(paths, tuple(sorted(paths, key=lambda path: path.encode())))
-        self.assertEqual(len(paths), 24)
+        self.assertEqual(len(paths), 25)
         self.assertEqual(
             {
                 entry.path: hashlib.sha256(entry.content).hexdigest()
@@ -639,7 +640,7 @@ class WorkspaceV2RejectionTests(WorkspaceV2GitTestCase):
         ambiguous = self.repository("ambiguous")
         first = canonical_initializer_scaffold()[0]
         target = ambiguous / first.path
-        target.parent.mkdir(parents=True)
+        target.parent.mkdir(parents=True, exist_ok=True)
         target.write_bytes(first.content)
         cases.append(("ambiguous", WorkspaceFormatError))
 
@@ -850,7 +851,7 @@ class WorkspaceV2RecoveryTests(WorkspaceV2GitTestCase):
             Workspace(root).initialize()
         writes = [event for event in events if event[0] == "write"]
         self.assertEqual(writes[0], ("write", WORKSPACE_INITIALIZATION_JOURNAL_PATH))
-        self.assertEqual(len(writes), 23)
+        self.assertEqual(len(writes), 26)
         verify_and_remove = [event for event in events if event[0] != "write"]
         self.assertEqual(
             verify_and_remove,

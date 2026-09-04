@@ -268,6 +268,7 @@ def _recovery_result(
     owner: SessionRecoveryOwner = SessionRecoveryOwner.LEAD,
 ) -> SessionRecoveryResult:
     action = {
+        SessionRecoveryState.READY: SessionRecoveryNextAction.CONTINUE_WITH_LEAD,
         SessionRecoveryState.PROPOSED: SessionRecoveryNextAction.CONTINUE_WITH_LEAD,
         SessionRecoveryState.REVIEWED: SessionRecoveryNextAction.REQUEST_APPLICATION_CONFIRMATION,
         SessionRecoveryState.AWAITING_APPLICATION: SessionRecoveryNextAction.SUBMIT_APPLICATION_DECISION,
@@ -299,7 +300,7 @@ def _recovery_result(
             )
         ),
     }
-    if active:
+    if active and state is not SessionRecoveryState.READY:
         values["proposal_id"] = "proposal-1"
     if state is SessionRecoveryState.AWAITING_APPLICATION:
         values["confirmation_request_id"] = "request-1"
@@ -573,6 +574,7 @@ class SessionTransitionAssessmentTests(unittest.TestCase):
     def test_active_permission_matrix_covers_every_recovery_state(self) -> None:
         all_operations = tuple(SessionTransitionOperation)
         cases = {
+            SessionRecoveryState.READY: all_operations,
             SessionRecoveryState.PROPOSED: all_operations,
             SessionRecoveryState.REVIEWED: all_operations,
             SessionRecoveryState.AWAITING_APPLICATION: all_operations,
@@ -792,8 +794,8 @@ class SessionTransitionAssessmentTests(unittest.TestCase):
             )
         )
         index = (_ROOT / "PYTHON_MODULE_INDEX.md").read_text(encoding="utf-8")
-        self.assertIn("Importable production units indexed: 121.", index)
-        self.assertIn("Direct internal dependency edges indexed: 456.", index)
+        self.assertIn("Importable production units indexed: 132.", index)
+        self.assertIn("Direct internal dependency edges indexed: 514.", index)
         self.assertIn("Directed internal dependency cycles indexed: 0.", index)
         self.assertIn("tests/test_session_transition_assessment.py", index)
 

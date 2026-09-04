@@ -144,7 +144,7 @@ class GitSessionContractTests(unittest.TestCase):
         for name in expected_exports:
             self.assertFalse(hasattr(git_facade, name), name)
             self.assertFalse(hasattr(story_writing_agents, name), name)
-        self.assertEqual(len(git_facade.__all__), 22)
+        self.assertEqual(len(git_facade.__all__), 24)
         self.assertEqual(len(story_writing_agents.__all__), 104)
 
     def test_identity_derives_only_exact_schema_names_for_unicode_root(self) -> None:

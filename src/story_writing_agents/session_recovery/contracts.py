@@ -52,6 +52,7 @@ _TAGGED_DIGEST = re.compile(r"sha256:[0-9a-f]{64}")
 class SessionRecoveryState(StrEnum):
     """Closed user-visible state of one active correlated story workflow."""
 
+    READY = "ready"
     PROPOSED = "proposed"
     REVIEWED = "reviewed"
     AWAITING_APPLICATION = "awaiting_application"
@@ -252,6 +253,7 @@ class SessionRecoveryEvidence:
 
 
 _NEXT_ACTION = {
+    SessionRecoveryState.READY: SessionRecoveryNextAction.CONTINUE_WITH_LEAD,
     SessionRecoveryState.PROPOSED: SessionRecoveryNextAction.CONTINUE_WITH_LEAD,
     SessionRecoveryState.REVIEWED: (
         SessionRecoveryNextAction.REQUEST_APPLICATION_CONFIRMATION
@@ -377,9 +379,7 @@ def reconcile_session_recovery(
     history = evidence.collaboration_history
     reviewed = evidence.reviewed_proposal
     application = evidence.artifact_application
-    candidate = evidence.story_commit_candidate
     commit = evidence.story_commit_operation
-    checkpoint = evidence.checkpoint_operation
 
     if _is_fresh_idle(evidence):
         _raise_error(SessionRecoveryFailureCode.UNSUPPORTED_SHAPE)

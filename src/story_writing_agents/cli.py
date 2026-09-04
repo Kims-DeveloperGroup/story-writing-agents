@@ -64,7 +64,6 @@ from .interactive_controller import InteractiveController
 from .interactive_settings import (
     SettingsError,
     SettingsErrorKind,
-    establish_default_backend,
 )
 from .interactive_terminal import (
     AdvisoryProgressError,
@@ -491,11 +490,18 @@ def _record_cli_error(
         pass
 
 
-def _create_cli_debug_log(workspace: Workspace) -> WorkspaceDebugLog | None:
+def _create_cli_debug_log(
+    workspace: Workspace,
+    *,
+    defer_until_session: bool = False,
+) -> WorkspaceDebugLog | None:
     """Create one optional CLI logger without changing command behavior."""
 
     try:
-        return WorkspaceDebugLog(workspace)
+        return WorkspaceDebugLog(
+            workspace,
+            defer_until_session=defer_until_session,
+        )
     except BaseException:
         return None
 
@@ -829,7 +835,7 @@ def _run_interactive_cli(arguments: argparse.Namespace) -> int:
     except Exception as exc:
         _write_interactive_cli_error(_classify_workspace_entry_failure(exc))
         return 2
-    debug_log = _create_cli_debug_log(workspace)
+    debug_log = _create_cli_debug_log(workspace, defer_until_session=True)
     _trace_cli(
         debug_log,
         DebugOperation.WORKSPACE_DISCOVERY,
@@ -934,13 +940,17 @@ def _run_interactive_cli(arguments: argparse.Namespace) -> int:
         )
         if default_provider is None:
             raise RuntimeError("authenticated startup snapshot has no default provider")
-        establish_default_backend(workspace, default_provider)
         manager = ConfigManager(workspace)
         configuration = manager.load_configuration_snapshot()
+        runtime_backend_overrides = dict(backend_overrides)
+        if configuration.system_defaults.default_backend is None:
+            for agent_id, agent in configuration.agent_configs.items():
+                if agent.backend is None:
+                    runtime_backend_overrides.setdefault(agent_id, default_provider)
         effective_providers = _effective_interactive_providers(
             manager,
             configuration,
-            backend_overrides,
+            runtime_backend_overrides,
         )
     except KeyboardInterrupt:
         _trace_cli(
@@ -1010,7 +1020,7 @@ def _run_interactive_cli(arguments: argparse.Namespace) -> int:
             workspace,
             model=model,
             timeout_seconds=timeout_seconds,
-            backend_overrides=backend_overrides,
+            backend_overrides=runtime_backend_overrides,
             antigravity_executable=antigravity_executable,
             antigravity_model=antigravity_model,
             antigravity_effort=antigravity_effort,

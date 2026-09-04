@@ -1303,7 +1303,10 @@ class AgentBackend:
         self.workspace = (
             workspace if isinstance(workspace, Workspace) else Workspace(workspace)
         )
-        self._debug_log = WorkspaceDebugLog(self.workspace)
+        self._debug_log = WorkspaceDebugLog(
+            self.workspace,
+            defer_until_session=True,
+        )
         self._agent_exchange_capture = WorkspaceAgentExchangeCapture(self.workspace)
         self._context_accounting_sink: (
             Callable[[ProviderCallAccounting], object] | None
@@ -1339,6 +1342,7 @@ class AgentBackend:
             self.workspace,
             configuration,
             provider_overrides=self.backend_overrides,
+            persist_missing=False,
         )
         startup_switched_agents = frozenset(
             agent_id

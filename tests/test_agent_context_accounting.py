@@ -450,7 +450,7 @@ class AgentContextBoundaryTests(unittest.TestCase):
             ),
         )
         self.assertEqual(len(story_writing_agents.__all__), 104)
-        self.assertEqual(len(writing_artifacts.__all__), 62)
+        self.assertEqual(len(writing_artifacts.__all__), 78)
         self.assertTrue(
             set(agent_context.__all__).isdisjoint(story_writing_agents.__all__)
         )

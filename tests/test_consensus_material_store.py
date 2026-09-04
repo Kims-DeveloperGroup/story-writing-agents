@@ -218,9 +218,8 @@ class ConsensusMaterialStoreTests(unittest.TestCase):
             self.store.read_text(entry_handle)
 
         valid = self.store.put_text("locator target")
-        forged = ConsensusMaterialHandle(f"candidate:{'c' * 64}", valid.digest)
-        with self.assertRaisesRegex(ConsensusMaterialStoreError, "handle is invalid"):
-            self.store.read_text(forged)
+        with self.assertRaisesRegex(ValueError, "locator is invalid"):
+            ConsensusMaterialHandle(f"candidate:{'c' * 64}", valid.digest)
         self.assertEqual(self.store.read_text(valid), "locator target")
 
 

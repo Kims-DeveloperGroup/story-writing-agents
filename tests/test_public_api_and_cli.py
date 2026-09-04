@@ -1414,11 +1414,21 @@ class CliTests(unittest.TestCase):
                 expected_workspace_option = str(workspace.root) if arguments else None
                 resolve_workspace.assert_called_once_with(expected_workspace_option)
                 load_context.assert_called_once_with(workspace)
+                effective_overrides = dict.fromkeys(
+                    (
+                        "lead_orchestrator",
+                        "plot_architect",
+                        "character_custodian",
+                        "execution_specialist",
+                    ),
+                    "codex",
+                )
+                effective_overrides.update(overrides)
                 backend_factory.assert_called_once_with(
                     workspace,
                     model=model,
                     timeout_seconds=timeout,
-                    backend_overrides=overrides,
+                    backend_overrides=effective_overrides,
                     antigravity_executable=antigravity_executable,
                     antigravity_model=antigravity_model,
                     antigravity_effort=antigravity_effort,
@@ -1491,7 +1501,7 @@ class CliTests(unittest.TestCase):
         stderr = io.StringIO()
 
         original_validate_executable = cli_module._validate_antigravity_executable
-        original_establish = cli_module.establish_default_backend
+        original_select_default = cli_module.select_default_provider
         original_load_snapshot = cli_module.ConfigManager.load_configuration_snapshot
         original_routes = cli_module._effective_interactive_providers
         original_activate = cli_module.activate_configured_conversation_storage
@@ -1501,9 +1511,10 @@ class CliTests(unittest.TestCase):
             events.append(("validation", value))
             return original_validate_executable(value)
 
-        def establish(current_workspace: Workspace, provider: str) -> bool:
-            events.append(("default", provider))
-            return original_establish(current_workspace, provider)
+        def select_default(*args: object, **kwargs: object) -> str | None:
+            selected = original_select_default(*args, **kwargs)  # type: ignore[arg-type]
+            events.append(("default", selected))
+            return selected
 
         def load_snapshot(manager: object) -> object:
             events.append(("snapshot", None))
@@ -1595,8 +1606,8 @@ class CliTests(unittest.TestCase):
             ),
             mock.patch.object(
                 cli_module,
-                "establish_default_backend",
-                side_effect=establish,
+                "select_default_provider",
+                side_effect=select_default,
             ),
             mock.patch.object(
                 cli_module.ConfigManager,
@@ -1650,6 +1661,7 @@ class CliTests(unittest.TestCase):
                 "progress_start",
                 "storage",
                 "snapshot",
+                "snapshot",
                 "progress_end",
                 "auth_service",
                 "catalog_service",
@@ -1668,8 +1680,8 @@ class CliTests(unittest.TestCase):
                 "lobby",
             ],
         )
-        self.assertEqual(events[7][1], workspace.root)
         self.assertEqual(events[8][1], workspace.root)
+        self.assertEqual(events[9][1], workspace.root)
         backend.close.assert_not_called()
         self.assertEqual(stderr.getvalue(), "")
 
@@ -2511,7 +2523,10 @@ class CliTests(unittest.TestCase):
                 self.assertEqual(exit_code, 0)
                 self.assertEqual(stdout.getvalue(), "")
                 self.assertEqual(stderr.getvalue(), "")
-                logger.assert_called_once_with(workspace)
+                logger.assert_called_once_with(
+                    workspace,
+                    defer_until_session=True,
+                )
                 load_context.assert_called_once_with(workspace)
                 build_terminal.assert_called_once_with(input, stdin, stdout)
                 backend_factory.assert_called_once()
@@ -2560,7 +2575,10 @@ class CliTests(unittest.TestCase):
                     ),
                 )
                 self.assertNotIn(str(failure), stderr.getvalue())
-                logger.assert_called_once_with(workspace)
+                logger.assert_called_once_with(
+                    workspace,
+                    defer_until_session=True,
+                )
                 load_context.assert_called_once_with(workspace)
                 backend.assert_not_called()
 
@@ -2638,7 +2656,10 @@ class CliTests(unittest.TestCase):
                     )
                     + "\n",
                 )
-                logger.assert_called_once_with(workspace)
+                logger.assert_called_once_with(
+                    workspace,
+                    defer_until_session=False,
+                )
 
             with self.subTest(control=control_type.__name__, outcome="failure"):
                 workspace = initialized_workspace(self)
@@ -2683,7 +2704,10 @@ class CliTests(unittest.TestCase):
                     "Debug log (if available, workspace-relative): "
                     "debug_logs/runtime.jsonl\n",
                 )
-                logger.assert_called_once_with(workspace)
+                logger.assert_called_once_with(
+                    workspace,
+                    defer_until_session=False,
+                )
                 load_context.assert_called_once_with(workspace)
                 runtime.assert_not_called()
 

@@ -243,6 +243,10 @@ class CollaborationTransitionTests(unittest.TestCase):
                 "current_artifact_candidate",
                 "current_artifact_state",
                 "current_reviewed_artifact_proposal",
+                "current_artifact_application_request",
+                "current_artifact_application_result",
+                "current_story_commit_request",
+                "current_story_commit_result",
             ),
         )
 

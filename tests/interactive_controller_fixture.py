@@ -36,7 +36,7 @@ from story_writing_agents.workspace import (
     Workspace,
 )
 
-from tests.helpers import initialized_workspace
+from tests.helpers import pristine_initialized_workspace
 
 
 REAL_RUNTIME = object()
@@ -93,7 +93,7 @@ class InteractiveControllerTestCase(unittest.TestCase):
     """Build real retained management controllers without execution doubles."""
 
     def make_workspace(self) -> Workspace:
-        return initialized_workspace(self)
+        return pristine_initialized_workspace(self)
 
     def seed_session(
         self,
@@ -104,6 +104,7 @@ class InteractiveControllerTestCase(unittest.TestCase):
     ) -> None:
         backend = AgentBackend(workspace, executable=sys.executable)
         try:
+            backend.provision_session_resources(session_id)
             backend.create_session_with_access(session_id)
             if durable_state is SessionDurableState.PAUSED:
                 backend.pause_session_and_release_access(session_id)

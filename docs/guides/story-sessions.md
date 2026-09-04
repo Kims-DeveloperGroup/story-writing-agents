@@ -81,13 +81,17 @@ worktree status.
 | Assessment shown to you | Allowed lifecycle operations | What to do next |
 | --- | --- | --- |
 | `idle_ready` / `begin_with_lead` | Enter, leave, pause | Continue through the lead. |
-| Active `proposed`, `reviewed`, `awaiting_application`, `committed`, or `rejected` / `follow_active_recovery` | Enter, leave, pause | Follow the nested recovery result's exact next action. |
+| Active `ready`, `proposed`, `reviewed`, `awaiting_application`, `committed`, or `rejected` / `follow_active_recovery` | Enter, leave, pause | For `ready`, begin the first lead turn. Otherwise follow the nested recovery result's exact next action. |
 | Active `applied_not_committed` or `staged` / `follow_active_recovery` | Enter only | Attach to inspect; do not leave or pause the owner. |
 | `outcome_unknown` / `inspect_owner_outcome` | None | Preserve evidence and inspect the named owner. |
 | `recovery_required` / `operator_recovery` | None | Stop automated mutation and perform explicit operator recovery. |
 
 For ordinary active progress the outer `owner` is null and `failure_code` is
 `none`; the nested result names the workflow owner and its exact next action.
+An exact zero-event conversation is active `ready`, owned by the Lead, with
+`continue_with_lead`; it is not a missing predecessor. The runtime reaches that
+state only after the same stable resource, history, external-Git, status, and
+tip checks used for later active recovery.
 For uncertainty or recovery, the outer result copies the nested owner and
 failure code and allows nothing. Assessment invokes no story provider and
 does not reveal or recreate confirmation choices, content, or capability. An

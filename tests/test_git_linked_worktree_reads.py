@@ -27,7 +27,6 @@ from story_writing_agents.git import (
     GitRepositoryState,
     GitRepositoryTopology,
     GitStatus,
-    GitStatusEntry,
     GitTopologyKind,
 )
 from story_writing_agents.git import adapter as adapter_module
@@ -110,8 +109,8 @@ class GitLinkedWorktreeReadContractTests(unittest.TestCase):
         }
         self.assertEqual(dependencies, {"contracts", "process"})
         index = (_ROOT / "PYTHON_MODULE_INDEX.md").read_text()
-        self.assertIn("Importable production units indexed: 119.", index)
-        self.assertIn("Direct internal dependency edges indexed: 432.", index)
+        self.assertIn("Importable production units indexed: 132.", index)
+        self.assertIn("Direct internal dependency edges indexed: 514.", index)
         self.assertIn("Directed internal dependency cycles indexed: 0.", index)
 
     def test_status_and_log_guard_external_identity_before_body_and_after_success(

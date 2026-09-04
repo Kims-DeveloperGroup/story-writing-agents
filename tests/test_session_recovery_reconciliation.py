@@ -135,10 +135,17 @@ def _proposal() -> CollaborationProposal:
         basis=CollaborationProposalBasis(
             "plot-review",
             _tagged("2"),
-            (CollaborationAgentProfile("plot_architect", _tagged("3")),),
+            (
+                CollaborationAgentProfile(
+                    "plot_architect",
+                    _tagged("3"),
+                    _tagged("4"),
+                ),
+            ),
             _tagged("4"),
             _tagged("5"),
             (input_value,),
+            None,
         ),
     )
 
@@ -163,6 +170,24 @@ def _history(
         None,
         None,
         CollaborationNextAction.SUBMIT_CONFIRMATION,
+    )
+
+
+def _empty_history() -> CollaborationHistoryProjection:
+    return CollaborationHistoryProjection(
+        None,
+        None,
+        0,
+        None,
+        None,
+        None,
+        None,
+        None,
+        None,
+        None,
+        None,
+        None,
+        CollaborationNextAction.NONE,
     )
 
 
@@ -508,6 +533,24 @@ class SessionRecoveryReconcilerContractTests(unittest.TestCase):
 
 
 class SessionRecoveryLifecycleTests(unittest.TestCase):
+    def test_focused_canonical_empty_history_is_ready_after_stable_owner_checks(self) -> None:
+        empty = _empty_history()
+        observed = _observe(histories=(empty, empty))
+
+        self.assertIs(observed.result.state, SessionRecoveryState.READY)
+        self.assertIs(
+            observed.result.next_action,
+            SessionRecoveryNextAction.CONTINUE_WITH_LEAD,
+        )
+        self.assertIs(observed.result.owner, SessionRecoveryOwner.LEAD)
+        self.assertIs(
+            observed.result.failure_code,
+            SessionRecoveryFailureCode.NONE,
+        )
+        self.assertEqual(observed.result.collaboration_tail_sequence, 0)
+        self.assertEqual(observed.store.trace.count("collaboration"), 2)
+        self.assertEqual(len(observed.adapter_instances), 1)
+
     def test_lifecycle_gate_matrix_blocks_without_observing_or_acquiring_owners(self) -> None:
         cases = (
             (_lifecycle(SessionDurableState.READY, SessionAccessState.BLOCKED_BY_LIVE_LOCAL_OWNER), SessionRecoveryState.OUTCOME_UNKNOWN),
@@ -814,7 +857,6 @@ class SessionRecoveryBoundaryTests(unittest.TestCase):
         observed = _observe(histories=(RuntimeError("PRIVATE PROSE"),))
         self.assertIs(observed.result.state, SessionRecoveryState.RECOVERY_REQUIRED)
         self.assertNotIn("PRIVATE PROSE", repr(observed.result))
-        reconciler = SessionRecoveryReconciler(_WORKSPACE, _Store((_history(), _history())))
         self.assertEqual(
             set(SessionRecoveryReconciler.__slots__),
             {"_workspace_root", "_collaboration_store"},
@@ -839,8 +881,8 @@ class SessionRecoveryBoundaryTests(unittest.TestCase):
         self.assertNotIn("git.process", dependencies)
         self.assertNotIn("git.session_history", dependencies)
         index = (_ROOT / "PYTHON_MODULE_INDEX.md").read_text()
-        self.assertIn("Importable production units indexed: 120.", index)
-        self.assertIn("Direct internal dependency edges indexed: 441.", index)
+        self.assertIn("Importable production units indexed: 132.", index)
+        self.assertIn("Direct internal dependency edges indexed: 514.", index)
         self.assertIn("Directed internal dependency cycles indexed: 0.", index)
         self.assertIn("tests/test_session_recovery_reconciliation.py", index)
 

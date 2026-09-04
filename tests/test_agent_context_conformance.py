@@ -117,16 +117,16 @@ class AgentContextConformanceTests(unittest.TestCase):
         )
         self.assertIn("The controller uses that schema-v2 service for", overview)
         self.assertIn(
-            "The current #452 layer owns lead "
-            "proposal/confirmation/reconfirmation behavior",
+            "The integrated lead layer owns proposal, confirmation, and",
+            overview,
+        )
+        self.assertIn("reconfirmation\nbehavior", overview)
+        self.assertIn(
+            "Specialist execution owns result, finalization, and outcome-unknown",
             overview,
         )
         self.assertIn(
-            "#453 owns specialist execution/result/finalization/outcome-unknown",
-            overview,
-        )
-        self.assertIn(
-            "#454 owns whole-workspace rejection of unsupported history",
+            "Whole-workspace rejection of unsupported history is implemented",
             overview,
         )
 

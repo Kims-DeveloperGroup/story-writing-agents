@@ -458,7 +458,7 @@ class RuntimeLeadEvidenceGroundingTests(LeadOrchestrationTestCase):
             for path in self.workspace.root.rglob("*.md")
         }
         self.assertEqual(after, before)
-        self.assertFalse((self.workspace.root / ".git").exists())
+        self.assertTrue((self.workspace.root / ".git").is_dir())
 
     @staticmethod
     def _confirm_decision():

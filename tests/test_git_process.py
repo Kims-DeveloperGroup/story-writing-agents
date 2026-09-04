@@ -25,6 +25,7 @@ class GitProcessContractTests(unittest.TestCase):
             tuple(process_module.__all__),
             (
                 "GitAlternateIndex",
+                "GitCommitTimestamps",
                 "GitProcessFailure",
                 "GitProcessProfile",
                 "GitProcessResult",

@@ -25,7 +25,6 @@ from .directives import parse_artifact_references
 from .read_actions import (
     ReferenceReadAction,
     ReferenceReadInvocation,
-    ReferenceReadRequest,
     ReferenceReadResult,
 )
 from .references import ArtifactReferenceBatch

@@ -293,7 +293,7 @@ class ArtifactRelationshipSurfaceTests(RelationshipTestCase):
         self.assertEqual(MAX_RELATIONSHIP_STATE_UTF8_BYTES, 64 * 1024 * 1024)
         self.assertEqual(MAX_RELATIONSHIP_EDGES, 65_536)
         self.assertEqual(tuple(relationship_module.__all__), _MODULE_EXPORTS)
-        self.assertEqual(len(writing_artifacts.__all__), 62)
+        self.assertEqual(len(writing_artifacts.__all__), 78)
         for name in _MODULE_EXPORTS:
             with self.subTest(name=name):
                 self.assertIs(
@@ -1716,8 +1716,8 @@ assert tuple(relationship_policy.__all__) == tuple(sys.argv[2].split(','))
                     resolved = resolve(target)
                     if resolved is not None and resolved != module:
                         edges.add((module, resolved))
-        self.assertEqual(len(modules), 122)
-        self.assertEqual(len(edges), 468)
+        self.assertEqual(len(modules), 132)
+        self.assertEqual(len(edges), 514)
         relationship_name = "story_writing_agents.writing_artifacts.relationship_policy"
         self.assertEqual(
             {target for source, target in edges if source == relationship_name},
@@ -1751,8 +1751,8 @@ assert tuple(relationship_policy.__all__) == tuple(sys.argv[2].split(','))
         for module in modules:
             visit(module)
         index = (_ROOT / "PYTHON_MODULE_INDEX.md").read_text(encoding="utf-8")
-        self.assertIn("Importable production units indexed: 122.", index)
-        self.assertIn("Direct internal dependency edges indexed: 468.", index)
+        self.assertIn("Importable production units indexed: 132.", index)
+        self.assertIn("Direct internal dependency edges indexed: 514.", index)
         self.assertIn("Directed internal dependency cycles indexed: 0.", index)
         self.assertIn(
             "### `story_writing_agents.writing_artifacts.relationship_policy`",

@@ -590,8 +590,10 @@ def canonical_initializer_scaffold() -> tuple[WorkspaceScaffoldEntry, ...]:
     entries: dict[str, bytes] = {
         WORKSPACE_MARKER_PATH: encode_workspace_marker(),
         ".gitignore": (
-            b"/agent_states/orchestrator_state/consensus_materials/v1/*\n"
-            b"/agent_states/orchestrator_state/consensus_workflows/v2/*\n"
+            b"/agent_states/*\n"
+            b"/config/.conversation_storage.lock\n"
+            b"/debug_logs/*\n"
+            b"/discussion_logs/*\n"
         ),
         "config/system_defaults.json": _canonical_json(dict(DEFAULT_SYSTEM_CONFIG)),
         "config/agent_configs.json": _canonical_json(

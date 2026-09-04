@@ -105,6 +105,14 @@ def initialized_workspace(test_case: TestCase) -> Workspace:
     return workspace
 
 
+def pristine_initialized_workspace(test_case: TestCase) -> Workspace:
+    """Create one exact clean v2 baseline suitable for session provisioning."""
+
+    temporary = tempfile.TemporaryDirectory()
+    test_case.addCleanup(temporary.cleanup)
+    return initialize_test_workspace(temporary.name)
+
+
 def core_snapshot(workspace: Workspace) -> dict[str, str]:
     """Return raw fixture-only bytes for the full allowlisted core state."""
 

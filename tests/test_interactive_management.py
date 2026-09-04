@@ -315,10 +315,6 @@ class InteractiveManagementGateAndDirectiveTests(InteractiveConversationTestCase
         workspace = self.make_workspace()
         self.seed_session(workspace, "session")
         save_default_session(workspace, "session")
-        workspace.write_text(
-            "config/persona_templates/alternative_templates/directive_persona.md",
-            "directive persona",
-        )
 
         def verify_language_then_set_persona(_prompt: str) -> str:
             """Verify language durability before returning the persona command."""
@@ -327,7 +323,7 @@ class InteractiveManagementGateAndDirectiveTests(InteractiveConversationTestCase
                 workspace.load_session_overrides("session"),
                 {"language": "EN", "persona": None, "agents": {}},
             )
-            return "/override persona plot directive_persona"
+            return "/override persona plot default_kim_eun_hee"
 
         def verify_persona_then_reset(_prompt: str) -> str:
             """Verify canonical agent persistence before returning reset."""
@@ -340,7 +336,7 @@ class InteractiveManagementGateAndDirectiveTests(InteractiveConversationTestCase
                     "agents": {
                         PLOT_ARCHITECT: {
                             "language": None,
-                            "persona": "directive_persona",
+                            "persona": "default_kim_eun_hee",
                         }
                     },
                 },
@@ -373,7 +369,11 @@ class InteractiveManagementGateAndDirectiveTests(InteractiveConversationTestCase
                 wraps=controller._runtime.apply_directive,
             ) as apply_directive,
             mock.patch.object(backend, "bind") as bind,
-            mock.patch.object(subprocess, "Popen") as popen,
+            mock.patch.object(
+                subprocess,
+                "Popen",
+                wraps=subprocess.Popen,
+            ) as popen,
             mock.patch.object(socket, "create_connection") as connect,
             mock.patch.object(
                 controller._conversation_storage_services.event_store,
@@ -388,13 +388,16 @@ class InteractiveManagementGateAndDirectiveTests(InteractiveConversationTestCase
                 mock.call("session", "[SYS: LANG=EN]"),
                 mock.call(
                     "session",
-                    "[OVERRIDE: plot_architect Persona=directive_persona]",
+                    "[OVERRIDE: plot_architect Persona=default_kim_eun_hee]",
                 ),
                 mock.call("session", "[RESET: ALL]"),
             ],
         )
         bind.assert_not_called()
-        popen.assert_not_called()
+        self.assertTrue(popen.called)
+        self.assertTrue(
+            all(call.args[0][0] == "git" for call in popen.call_args_list)
+        )
         connect.assert_not_called()
         append.assert_not_called()
         self.assertIsNone(load_default_conversation(workspace, "session"))
@@ -414,7 +417,7 @@ class InteractiveManagementGateAndDirectiveTests(InteractiveConversationTestCase
         rendered = "".join(callbacks.records)
         self.assertIn("Language override set to EN.", rendered)
         self.assertIn(
-            "Persona override for plot_architect set to directive_persona.",
+            "Persona override for plot_architect set to default_kim_eun_hee.",
             rendered,
         )
         self.assertIn("Runtime overrides reset.", rendered)
@@ -443,7 +446,11 @@ class InteractiveManagementGateAndDirectiveTests(InteractiveConversationTestCase
                 wraps=controller._runtime.apply_directive,
             ) as apply_directive,
             mock.patch.object(backend, "bind") as bind,
-            mock.patch.object(subprocess, "Popen") as popen,
+            mock.patch.object(
+                subprocess,
+                "Popen",
+                wraps=subprocess.Popen,
+            ) as popen,
             mock.patch.object(socket, "create_connection") as connect,
         ):
             self.assertEqual(controller.run_session_lobby(), 0)
@@ -459,7 +466,10 @@ class InteractiveManagementGateAndDirectiveTests(InteractiveConversationTestCase
             ],
         )
         bind.assert_not_called()
-        popen.assert_not_called()
+        self.assertTrue(popen.called)
+        self.assertTrue(
+            all(call.args[0][0] == "git" for call in popen.call_args_list)
+        )
         connect.assert_not_called()
         self.assertEqual((state.read_bytes(), state.stat().st_mtime_ns), before)
         self.assertEqual(
@@ -1175,14 +1185,21 @@ class InteractiveInspectionTests(InteractiveConversationTestCase):
         )
         before = _durable_file_snapshot(workspace)
         with (
-            mock.patch.object(subprocess, "Popen") as popen,
+            mock.patch.object(
+                subprocess,
+                "Popen",
+                wraps=subprocess.Popen,
+            ) as popen,
             mock.patch.object(subprocess, "run") as run,
             mock.patch.object(socket, "create_connection") as connect,
             mock.patch.object(controller_core_module.asyncio, "run") as async_run,
         ):
             self.assertEqual(controller.run_session_lobby(), 0)
 
-        popen.assert_not_called()
+        self.assertTrue(popen.called)
+        self.assertTrue(
+            all(call.args[0][0] == "git" for call in popen.call_args_list)
+        )
         run.assert_not_called()
         connect.assert_not_called()
         async_run.assert_not_called()

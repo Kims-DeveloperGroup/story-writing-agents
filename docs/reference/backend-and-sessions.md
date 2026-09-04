@@ -401,7 +401,9 @@ nor exposes a confirmation capability for installed lifecycle commands.
 
 For normal active recovery the outer state is `active`, outer owner is null,
 failure is `none`, and the nested result supplies its workflow owner and next
-action. `proposed`, `reviewed`, `awaiting_application`, `committed`, and
+action. An exact zero-event conversation is `ready` and can begin with the
+Lead after all correlated owners are observed twice. `ready`, `proposed`,
+`reviewed`, `awaiting_application`, `committed`, and
 `rejected` allow enter/leave/pause; `applied_not_committed` and `staged` allow
 entry only. `outcome_unknown` and `recovery_required` expose the responsible
 owner and exact failure and allow nothing. See the

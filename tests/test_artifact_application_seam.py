@@ -32,9 +32,6 @@ from story_writing_agents.writing_artifacts import (
 from story_writing_agents.writing_artifacts.relationship_policy import (
     validate_artifact_relationships,
 )
-from story_writing_agents.writing_artifacts.repository import (
-    WritingArtifactRepository,
-)
 from story_writing_agents.writing_artifacts import repository as repository_module
 
 from tests.test_artifact_application_store_lifecycle import (

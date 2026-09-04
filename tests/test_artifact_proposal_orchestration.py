@@ -435,6 +435,7 @@ class ArtifactProposalOrchestrationTests(LeadOrchestrationTestCase):
         self,
     ) -> None:
         stale_id = self.conversation("Stale candidate")
+        self.workspace.path(_RULES).unlink(missing_ok=True)
         self.backend.enqueue(
             _artifact_outcome(
                 operations=[
@@ -551,6 +552,7 @@ class ArtifactProposalOrchestrationTests(LeadOrchestrationTestCase):
         self,
     ) -> None:
         conversation_id = self.conversation("Replace artifact candidate")
+        self.workspace.path(_RULES).unlink(missing_ok=True)
         self.backend.enqueue(
             _artifact_outcome(
                 operations=[

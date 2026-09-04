@@ -1784,6 +1784,7 @@ class AntigravityParityTests(unittest.IsolatedAsyncioTestCase):
                 thread_id="agy-mixed-thread",
                 response_text=json.dumps(
                     {
+                        "kind": "candidate",
                         "revision_id": invocation.payload["revision_id"],
                         "content": "antigravity mixed reply",
                     }
@@ -1793,7 +1794,10 @@ class AntigravityParityTests(unittest.IsolatedAsyncioTestCase):
         codex_invoke = mock.AsyncMock(
             return_value=ProviderResult(
                 thread_id="codex-mixed-thread",
-                response_text=('{"revision_id":"r0","content":"codex mixed reply"}'),
+                response_text=(
+                    '{"kind":"candidate","revision_id":"r0",'
+                    '"content":"codex mixed reply"}'
+                ),
             )
         )
         with (
@@ -1897,7 +1901,8 @@ class AntigravityParityTests(unittest.IsolatedAsyncioTestCase):
         debate_session = "agy_capture_debate_session"
         debate_id = "agy_capture_debate"
         debate_body = (
-            '{"revision_id":"other-revision","content":"PRIVATE_AGY_REJECTED_한🙂"}'
+            '{"kind":"candidate","revision_id":"other-revision",'
+            '"content":"PRIVATE_AGY_REJECTED_한🙂"}'
         )
         backend.create_session_with_access(debate_session)
         invoke = mock.AsyncMock(
@@ -1905,7 +1910,8 @@ class AntigravityParityTests(unittest.IsolatedAsyncioTestCase):
                 ProviderResult(
                     thread_id="agy-capture-seeded-thread",
                     response_text=(
-                        '{"revision_id":"seed-revision","content":"seeded response"}'
+                        '{"kind":"candidate","revision_id":"seed-revision",'
+                        '"content":"seeded response"}'
                     ),
                 ),
                 ProviderResult(
@@ -1915,7 +1921,7 @@ class AntigravityParityTests(unittest.IsolatedAsyncioTestCase):
                 ProviderResult(
                     thread_id="agy-capture-recovered-thread",
                     response_text=(
-                        '{"revision_id":"recovery-revision",'
+                        '{"kind":"candidate","revision_id":"recovery-revision",'
                         '"content":"recovered response"}'
                     ),
                 ),
@@ -2061,9 +2067,9 @@ class AntigravityParityTests(unittest.IsolatedAsyncioTestCase):
             set(debate_record) - {"debate_id"},
             set(conversation_record) - {"conversation_id"},
         )
-        runtime_log = self.workspace.path("debug_logs/runtime.jsonl").read_text(
-            encoding="utf-8"
-        )
+        runtime_log_path = self.workspace.path("debug_logs/runtime.jsonl")
+        self.assertFalse(runtime_log_path.exists())
+        runtime_log = ""
         for private_value in (
             debate_body,
             conversation_body,

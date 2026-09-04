@@ -13,7 +13,7 @@ from dataclasses import dataclass
 
 from .catalog import (
     CORE_ARTIFACT_PATHS,
-    MAX_ARTIFACT_PATH_BYTES,
+    MAX_ARTIFACT_PATH_BYTES as MAX_ARTIFACT_PATH_BYTES,
     ArtifactKind,
     validate_artifact_path_syntax,
 )

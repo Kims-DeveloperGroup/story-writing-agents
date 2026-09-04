@@ -6,7 +6,6 @@ import ast
 import asyncio
 import importlib.util
 import inspect
-import json
 import os
 import socket
 import subprocess
@@ -36,6 +35,7 @@ from story_writing_agents.cli_context import (
 )
 from story_writing_agents.config import ConfigManager
 from story_writing_agents.conversation_search import (
+    ReferenceCollaborationHistorySearch,
     ConversationCitation,
     ConversationSearchHit,
     ConversationSearchMatchKind,
@@ -51,6 +51,9 @@ from story_writing_agents.conversation_storage import (
     ConversationStorageComponentBinding,
     ConversationStorageServices,
     compose_filesystem_conversation_storage,
+)
+from story_writing_agents.conversation_storage.filesystem import (
+    FilesystemCollaborationEventStore,
 )
 from story_writing_agents.conversation_storage.provisioning import (
     ConversationStorageProvisioner,
@@ -144,7 +147,7 @@ from story_writing_agents.workspace import (
 )
 
 from tests.collaboration_contract_fixture import contract_batches
-from tests.helpers import initialized_workspace
+from tests.helpers import pristine_initialized_workspace
 
 
 _SESSION_DIRECTORY = "agent_states/orchestrator_state/provider_sessions"
@@ -717,13 +720,7 @@ class ControllerTestCase(unittest.TestCase):
     def make_workspace(self) -> Workspace:
         """Create one initialized workspace registered for test cleanup."""
 
-        workspace = initialized_workspace(self)
-        configuration = ConfigManager(workspace).load_configuration_snapshot()
-        settings_module.reconcile_provider_route_generations(
-            workspace,
-            configuration,
-        )
-        return workspace
+        return pristine_initialized_workspace(self)
 
     def make_backend(self, workspace: Workspace) -> AgentBackend:
         """Create a provider-free lifecycle backend using Python as executable."""
@@ -743,6 +740,7 @@ class ControllerTestCase(unittest.TestCase):
 
         backend = AgentBackend(workspace, executable=sys.executable)
         try:
+            backend.provision_session_resources(session_id)
             backend.create_session_with_access(session_id)
             if durable_state is SessionDurableState.PAUSED:
                 backend.pause_session_and_release_access(session_id)
@@ -780,13 +778,26 @@ class ControllerTestCase(unittest.TestCase):
             if conversation_storage_services is not None:
                 raise TypeError("catalog and storage services are mutually exclusive")
             base = compose_filesystem_conversation_storage(workspace)
+            event_store = FilesystemCollaborationEventStore(
+                workspace,
+                catalog=conversation_catalog,
+            )
             conversation_storage_services = ConversationStorageServices(
                 catalog_binding=ConversationStorageComponentBinding(
                     base.provenance,
                     conversation_catalog,
                 ),
-                event_store_binding=base.event_store_binding,
-                search_binding=base.search_binding,
+                event_store_binding=ConversationStorageComponentBinding(
+                    base.provenance,
+                    event_store,
+                ),
+                search_binding=ConversationStorageComponentBinding(
+                    base.provenance,
+                    ReferenceCollaborationHistorySearch(
+                        conversation_catalog,
+                        event_store,
+                    ),
+                ),
                 mutation_coordinator=base.mutation_coordinator,
             )
         if conversation_storage_services is not None:
@@ -1299,6 +1310,7 @@ class ControllerContractTests(ControllerTestCase):
                 "errors",
                 "interactive_terminal",
                 "session_lifecycle",
+                "session_recovery.transition_assessment",
             },
             "interactive_controller._conversation_policy": {
                 "conversation_search",
@@ -1340,12 +1352,18 @@ class ControllerContractTests(ControllerTestCase):
         expected_policy_exports = {
             session_policy_module: [
                 "RECOVERABLE_SESSION_ERROR_CODES",
+                "SessionTransitionAssessment",
+                "SessionTransitionOperation",
+                "SessionTransitionPresentation",
                 "classify_session_failure",
                 "next_session_action",
+                "project_transition_assessment",
                 "require_correlated_state",
                 "require_lifecycle_state",
                 "require_ready_access_state",
                 "require_released_state",
+                "require_transition_assessment",
+                "transition_operation_is_allowed",
             ],
             conversation_policy_module: [
                 "ConversationCatalogProtocolFailure",
@@ -1396,7 +1414,9 @@ class ControllerContractTests(ControllerTestCase):
             "interactive_controller._runtime_policy": {"__all__"},
         }
         expected_policy_classes = {
-            "interactive_controller._session_policy": set(),
+            "interactive_controller._session_policy": {
+                "SessionTransitionPresentation",
+            },
             "interactive_controller._conversation_policy": {
                 "ConversationCatalogProtocolFailure",
                 "ConversationInputFailure",
@@ -1564,8 +1584,8 @@ class ControllerContractTests(ControllerTestCase):
 
         for module_name in graph:
             visit(module_name)
-        self.assertEqual(len(modules), 122)
-        self.assertEqual(sum(len(dependencies) for dependencies in graph.values()), 468)
+        self.assertEqual(len(modules), 132)
+        self.assertEqual(sum(len(dependencies) for dependencies in graph.values()), 514)
         self.assertTrue(
             {
                 "story_writing_agents.artifact_proposals",
@@ -1953,7 +1973,8 @@ class ControllerStartupTests(ControllerTestCase):
             if "command_invalid" in record
             and "Direct story execution is unavailable" in record
         )
-        self.assertEqual(len(unavailable_records), len(removed_inputs))
+        self.assertEqual(len(unavailable_records), len(removed_inputs) - 1)
+        self.assertIn("unknown command: /run", rendered)
         self.assertIn("Execution profiles", rendered)
         for removed_attribute in (
             "_main_reference_scope",
@@ -2408,41 +2429,11 @@ class ControllerCommandTests(ControllerTestCase):
             ),
             1,
         )
-        raw = workspace.path("debug_logs/runtime.jsonl").read_text(encoding="utf-8")
-        records = [
-            record
-            for record in (json.loads(line) for line in raw.splitlines())
-            if record["component"] == "interactive_controller"
-            and record["operation"] == "interactive_command"
-        ]
-        self.assertEqual(
-            [
-                (
-                    record["level"],
-                    record["phase"],
-                    record.get("outcome"),
-                )
-                for record in records
-            ],
-            [
-                ("trace", "started", None),
-                ("trace", "failed", "rejected"),
-                ("trace", "started", None),
-                ("trace", "succeeded", "completed"),
-                ("trace", "started", None),
-                ("trace", "succeeded", "completed"),
-            ],
-        )
-        for record in records:
-            self.assertNotIn("session_id", record)
-            self.assertNotIn("conversation_id", record)
-            self.assertNotIn("agent_id", record)
-        for prohibited in (
-            "PRIVATE_SEARCH_TEXT",
-            "/search",
-            str(workspace.root),
-        ):
-            self.assertNotIn(prohibited, raw)
+        self.assertFalse(workspace.path("debug_logs/runtime.jsonl").exists())
+        rendered = "".join(callbacks.records)
+        self.assertNotIn("PRIVATE_SEARCH_TEXT", rendered)
+        self.assertIn("[error session_not_attached]", rendered)
+        self.assertIn("Writing artifact references", rendered)
 
     def test_session_list_preserves_order_and_hides_access_owner_facts(self) -> None:
         workspace = self.make_workspace()
@@ -4521,7 +4512,11 @@ class ControllerSettingsTests(ControllerTestCase):
                 autospec=True,
                 return_value=(provider_pending, False),
             ) as edit_provider,
-            mock.patch.object(subprocess, "Popen") as popen,
+            mock.patch.object(
+                subprocess,
+                "Popen",
+                wraps=subprocess.Popen,
+            ) as popen,
             mock.patch.object(subprocess, "run") as run,
             mock.patch.object(socket, "create_connection") as connect,
         ):
@@ -6707,7 +6702,7 @@ class ControllerSettingsTests(ControllerTestCase):
             "agent_states/orchestrator_state/provider_route_generations.json"
         )
         agent_before = agent_path.read_bytes()
-        route_before = route_path.read_bytes()
+        route_before = route_path.read_bytes() if route_path.exists() else None
         route_generations_before = dict(backend.provider_route_generations())
         profiles_before = tuple(
             backend.execution_profile(agent_id) for agent_id in ROSTER
@@ -6889,7 +6884,10 @@ class ControllerSettingsTests(ControllerTestCase):
             ["config/system_defaults.json"],
         )
         self.assertEqual(agent_path.read_bytes(), agent_before)
-        self.assertEqual(route_path.read_bytes(), route_before)
+        self.assertEqual(
+            route_path.read_bytes() if route_path.exists() else None,
+            route_before,
+        )
         self.assertEqual(
             dict(backend.provider_route_generations()),
             route_generations_before,
@@ -7137,7 +7135,7 @@ class ControllerSettingsTests(ControllerTestCase):
             "agent_states/orchestrator_state/provider_route_generations.json"
         )
         agent_before = agent_path.read_bytes()
-        route_before = route_path.read_bytes()
+        route_before = route_path.read_bytes() if route_path.exists() else None
         terminal_failure = OSError("terminal write failed")
         with (
             mock.patch.object(
@@ -7165,7 +7163,10 @@ class ControllerSettingsTests(ControllerTestCase):
             ).pending.system_defaults.show_message_details
         )
         self.assertEqual(agent_path.read_bytes(), agent_before)
-        self.assertEqual(route_path.read_bytes(), route_before)
+        self.assertEqual(
+            route_path.read_bytes() if route_path.exists() else None,
+            route_before,
+        )
 
     def test_settings_save_and_cancel_confirmation_controls_are_call_local(
         self,
@@ -8213,8 +8214,14 @@ class ControllerSettingsTests(ControllerTestCase):
                             "provider_route_generations.json"
                         ),
                     ):
-                        self.assertEqual(after[relative][:2], before[relative][:2])
-                        after[relative] = before[relative]
+                        if relative in before:
+                            self.assertEqual(
+                                after[relative][:2],
+                                before[relative][:2],
+                            )
+                            after[relative] = before[relative]
+                        else:
+                            self.assertNotIn(relative, after)
                 else:
                     self.assertIsNone(storage_guard)
                 self.assertEqual(after, before)
@@ -10711,12 +10718,19 @@ class ControllerConversationCommandTests(ControllerTestCase):
             "/quit",
         )
         with (
-            mock.patch.object(subprocess, "Popen") as popen,
+            mock.patch.object(
+                subprocess,
+                "Popen",
+                wraps=subprocess.Popen,
+            ) as popen,
             mock.patch.object(subprocess, "run") as run,
             mock.patch.object(socket, "create_connection") as connect,
         ):
             self.assertEqual(controller.run_session_lobby(), 0)
-        popen.assert_not_called()
+        self.assertTrue(popen.called)
+        self.assertTrue(
+            all(call.args[0][0] == "git" for call in popen.call_args_list)
+        )
         run.assert_not_called()
         connect.assert_not_called()
 
@@ -11453,7 +11467,11 @@ class ControllerConversationCommandTests(ControllerTestCase):
             )
         ]
         provider_patches = (
-            mock.patch.object(subprocess, "Popen"),
+            mock.patch.object(
+                subprocess,
+                "Popen",
+                wraps=subprocess.Popen,
+            ),
             mock.patch.object(subprocess, "run"),
             mock.patch.object(socket, "create_connection"),
         )
@@ -11501,7 +11519,10 @@ class ControllerConversationCommandTests(ControllerTestCase):
                 len(future_actions),
             )
 
-        popen.assert_not_called()
+        self.assertTrue(popen.called)
+        self.assertTrue(
+            all(call.args[0][0] == "git" for call in popen.call_args_list)
+        )
         run.assert_not_called()
         connect.assert_not_called()
         for journey_workspace, before in journey_snapshots:
@@ -12129,7 +12150,7 @@ class ControllerEndAndCleanupTests(ControllerTestCase):
             ) as summary,
         ):
             self.assertEqual(controller.run_session_lobby(), 0)
-        self.assertEqual(summary.call_count, 6)
+        self.assertEqual(summary.call_count, 7)
         self.assertEqual(
             workspace.read_json(_manifest_relative("session"))["durable_state"],
             "ready",

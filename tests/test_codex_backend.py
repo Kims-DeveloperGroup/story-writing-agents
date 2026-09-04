@@ -420,6 +420,16 @@ def _workspace_debug_records(workspace: Any) -> list[dict[str, object]]:
     return [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines()]
 
 
+def _mark_debug_session_attached(workspace: Any) -> None:
+    """Model the attached-session boundary required before runtime logging."""
+
+    state = workspace.path(
+        "agent_states/orchestrator_state/sessions/test_attached.json"
+    )
+    state.parent.mkdir(parents=True, exist_ok=True)
+    state.write_text("{}\n", encoding="utf-8")
+
+
 def _provider_error_records(workspace: Any) -> list[dict[str, object]]:
     """Read complete rejected-response artifacts, excluding guard leaves."""
 
@@ -1188,6 +1198,7 @@ class CodexBackendDefaultsTests(unittest.TestCase):
 
     def setUp(self) -> None:
         self.workspace = initialized_workspace(self)
+        _mark_debug_session_attached(self.workspace)
 
     def write_defaults(
         self,
@@ -1887,6 +1898,7 @@ class CodexBackendDefaultsTests(unittest.TestCase):
 class CodexBackendTestCase(unittest.IsolatedAsyncioTestCase):
     def setUp(self) -> None:
         self.workspace = initialized_workspace(self)
+        _mark_debug_session_attached(self.workspace)
         temporary = tempfile.TemporaryDirectory()
         self.addCleanup(temporary.cleanup)
         self.fake_directory = Path(temporary.name)
@@ -8288,7 +8300,7 @@ class CodexBackendTestCase(unittest.IsolatedAsyncioTestCase):
         )
         seeded_thread = self.thread(debate_session)["thread_id"]
         debate_body = (
-            '{"revision_id":"wrong-revision","content":'
+            '{"kind":"candidate","revision_id":"wrong-revision","content":'
             '"PRIVATE_REJECTED_RESPONSE_한🙂"}'
         )
         with (
@@ -9042,6 +9054,21 @@ class ConcreteBackendCliTests(unittest.TestCase):
                 json.loads(stdout.getvalue()),
                 {
                     "access_state": "claimable",
+                    "assessment": {
+                        "allowed_operations": [
+                            "enter_destination",
+                            "leave_source",
+                            "pause_session",
+                        ],
+                        "conversation_id": None,
+                        "failure_code": "none",
+                        "next_action": "begin_with_lead",
+                        "owner": None,
+                        "recovery_result": None,
+                        "scope": "idle",
+                        "session_id": "cli_session",
+                        "state": "idle_ready",
+                    },
                     "durable_state": durable,
                     "session_id": "cli_session",
                 },

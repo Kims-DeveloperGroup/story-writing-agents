@@ -717,6 +717,23 @@ def activate_configured_conversation_storage(
     operation_workspace = topology.workspace()
     if configuration is not None and type(configuration) is not ConfigurationSnapshot:
         raise TypeError("configuration must be a ConfigurationSnapshot")
+    initial_snapshot = ConfigManager(operation_workspace).load_configuration_snapshot()
+    if configuration is not None and configuration != initial_snapshot:
+        raise ValueError("configuration changed before storage startup")
+    initial_desired = parse_conversation_storage_backend(
+        initial_snapshot.system_defaults.conversation_storage_backend
+    )
+    initial_active = load_conversation_storage_activation_state(operation_workspace)
+    if initial_desired is initial_active.backend:
+        services = compose_active_conversation_storage(operation_workspace)
+        if ConfigManager(operation_workspace).load_configuration_snapshot() != initial_snapshot:
+            raise ConversationStorageCoordinationError()
+        outcome = ConversationStorageActivationOutcome(
+            kind=ConversationStorageActivationOutcomeKind.UNCHANGED,
+            previous=initial_active,
+            current=initial_active,
+        )
+        return ConversationStorageStartup(services, outcome)
     coordinator = WorkspaceConversationStorageMutationCoordinator(operation_workspace)
     with coordinator.borrow(timeout_seconds=mutation_timeout_seconds) as lease:
         _validate_lease(lease, topology.workspace_key)
