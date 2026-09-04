@@ -1,22 +1,22 @@
 # Privacy and provider exposure
 
-> **Availability:** these controls cover local reads, advisory turns, and
-> retrieval-enabled turns, management commands, focused-context consensus, and
-> runtime explicit-reference authorization and backend enforcement, plus direct
+> **Availability:** these controls cover current management/search/inspection
+> commands and retained low-level backend, contextual execution, debate, and
+> explicit-reference components, plus direct
 > Python conversation archive values, filesystem transfer, and optional SQLite
 > conversation/search storage, provider-free desired selection, and
-> conversation migration. They also cover the optional fixed-local
+> conversation transfer. They also cover the optional fixed-local
 > conversation-RAG store and noninteractive lifecycle/authorized-search
-> commands, plus interactive settings, startup composition, automatic
-> preflight, and private one-turn `/rag` arming.
+> commands, plus interactive settings and startup composition.
 > They also cover the content-safe runtime debug log, automatic bounded
 > agent-exchange store, required base-installed isolated `/exchanges` viewer,
 > and the separate bounded store for eligible rejected provider responses.
 > They do not make either provider, its executable, the workspace, or the
 > terminal trusted.
-> Inline canonical references in provider-bound prompt text are active.
-> `$`/`$$` discovery and viewer attachment are active in eligible interactive
-> prompt spans; they remain local until the user normally submits the prompt.
+> `StoryRuntime.lead_turn()` and confirmed specialist/synthesis invocations are
+> provider-bound Python story spans. The shell, inline-reference parsing in
+> main input, and `$`/`$$` activation remain inactive. Python lead and
+> consultation references follow the data boundaries documented below.
 > Settings Model/Effort catalog discovery is also bounded and local; only a
 > user's selected opaque value can be persisted, never provider catalog data.
 
@@ -29,7 +29,7 @@ stored or displayed failure text.
 There is no encryption, application access control, or secure erase.
 Documents, debate/context records, provider metadata, subjects, transcripts,
 scrollback, manuscripts, artifact catalogs, commit provenance, transaction
-journals, migration checkpoints, reference-operation evidence, and recovery
+journals, transfer checkpoints, reference-operation evidence, and recovery
 markers have no application-managed retention policy and rely on
 OS/terminal-service protection. The workspace debug log, agent-exchange store,
 and rejected-provider-response store are bounded-retention channels described
@@ -41,13 +41,115 @@ Blackboards can contain input, drafts, reviews, and errors. Provider output is
 not generally scrubbed; catalog archive status neither deletes nor conceals
 conversations; transcripts retain messages, replies, and runtime errors.
 
+### Session Git-resource exposure
+
+The package-internal #504 lifecycle is local and provider-free, but it is not
+secret storage. During provisioning, the owner-only plaintext journal beneath
+`.git/story-writing-agents/runtime/session-provisioning/` contains the session
+ID, random provisioning ID, baseline object ID, one UTC timestamp, and the
+effective author and committer names and email addresses. Its exact path and
+filesystem metadata also reveal the session identity and operation timing. The
+journal is removed only after the correlated triple verifies and removal is
+synchronized; interruption or recovery-required state can retain it.
+
+The permanent internal seed commit retains the effective author/committer,
+timestamp, and session ID in its message
+`Initialize story session runtime: <session_id>`. It has an empty tree and no
+story content, but it remains local Git history and is never securely erased by
+the runtime. Branch/ref names and the sibling worktree path also expose the
+session ID. The persistent lock contains no story content but its metadata can
+expose use timing.
+
+Provisioning sends none of these values to Codex, Antigravity, another
+provider, or a remote. That does not encrypt them or prevent another local
+process with repository access from reading them. Protect the complete main
+repository, sibling worktree directory, `.git` storage, backups, and process
+memory. Pause, release, close, and process exit are not retention or secure-
+erase operations; there is no automatic deletion, migration, compatibility,
+push, or remote-cleanup path.
+
+<a id="session-history-exposure"></a>
+
+### Session-history exposure
+
+The package-internal #508 history beneath
+`.git/story-writing-agents/runtime/session-history/<session_id>/` is also local,
+provider-free plaintext. Its JSON records are content-free, but not necessarily
+anonymous: they retain session, operation, application, proposal, and
+correlation IDs; canonical relative artifact paths; before/after SHA-256
+digests; expected Git object IDs; a worktree identity digest; a bounded proposed
+commit message and impact labels; fixed state/sequence facts; and whether
+author/committer identity came from environment, repository, global, or system
+configuration. They do not retain effective names/emails, core-document or
+manuscript bytes, provider prompts/replies, raw Git output, credentials,
+descriptors, or serialized confirmation authority.
+
+Paths, identifiers, messages, labels, digests, object IDs, state transitions,
+and filesystem timestamps can still reveal project structure, intent, identity
+correlation, and operation timing. Hashes provide content identity, not secrecy,
+authentication, authorization, or proof that the original content can be
+restored. Protect these records with the repository and include them in a
+consistent operational-recovery backup; do not publish them as harmless
+telemetry.
+
+The optional `checkpoint-inputs/<operation_id>/index` is operation-owned Git
+metadata, not a redaction boundary. It can expose paths, object identities, and
+staging facts and is deliberately preserved after ambiguous or recovery-
+required outcomes. Only an exact durably committed checkpoint permits its
+narrow removal. Candidate and operation records have no expiry, compaction, or
+automatic cleanup.
+
+#508 itself creates no story commit or checkpoint. The package-internal #509
+service can create literal blobs/tree/commit objects and update one local
+session branch after receiving typed applied-change evidence and a fresh exact
+Commit decision. The package-internal #510 service can create literal runtime-
+state blobs/tree/commit objects and update only one local session internal ref
+from exact owner-supplied deltas. No installed command or lead UI invokes
+either service; #491 and #492 own story application/confirmation integration.
+
+Prepare persists only the content-free candidate metadata described above. A
+Commit authority remains process/service/thread-bound, nonserializable, and
+one-use; the user decision itself is not stored as reusable executable
+authority. Reject/Revise persist only a terminal operation correlation and
+state, not the confirmation payload or story bytes.
+
+During Commit, Git object storage receives the exact candidate file bytes as
+literal filter-free blobs before the branch update, and the real session index
+receives exact candidate path entries. An interruption can therefore leave
+unreachable blob/tree/commit objects or a staged index even when no successful
+result was returned. Recovery preserves these facts and never treats deletion
+as privacy cleanup. A completed commit permanently exposes its message,
+effective author/committer names and emails, paths, parent/tree IDs, and story
+content to local Git readers according to Git reachability/retention behavior.
+SHA-256 object IDs improve collision properties but do not encrypt content;
+SHA-1 and SHA-256 repositories have the same disclosure boundary.
+
+During a checkpoint, the content-free operation JSON stores session,
+correlation and operation IDs, expected internal tip/tree, salted commit-intent
+digest, state/sequence, optional checkpoint ID, and alternate-index preservation
+flag. It does not store the supplied runtime-state bodies or effective identity.
+Those bodies do enter local Git object storage as filter-free blobs, and the
+checkpoint commit permanently records their paths plus the fixed message,
+effective author/committer names and emails, and captured UTC timestamps. The
+operation-owned alternate index can reveal paths, object IDs, and staging facts.
+Provider-free and content-free history therefore do not make checkpointed
+runtime state encrypted, anonymous, remotely backed up, or securely erasable.
+
+Removing a session-history record, staged index entry, or alternate checkpoint
+index would neither securely erase Git objects nor revoke a prior confirmation.
+Provider-free means the service makes no network/provider call; it does not
+mean encryption, anonymity, backup, retention, or secure erase. Protect the
+main repository, sibling worktree, common Git object/index/ref storage, and
+session-history records as one sensitive recovery set.
+
 <a id="conversation-archive-privacy"></a>
 
 ### Conversation archive exposure
 
 Canonical conversation archive values and serialized bytes contain exact
-plaintext subjects, identities, timestamps, statuses, user messages, agent
-replies, and runtime-error content. Serialization performs no redaction or
+plaintext subjects, identities, timestamps, statuses, proposals,
+confirmations, specialist replies, execution outcomes, interruption/recovery
+facts, and other typed collaboration payloads. Serialization performs no redaction or
 encryption. Its SHA-256 digest detects modification but provides no secrecy,
 signature, origin authentication, or access control.
 
@@ -55,9 +157,17 @@ Filesystem export deliberately excludes debate/runtime logs, debate
 state/results/context, credentials, provider and agent state, prompts,
 configuration/defaults, storage activation and RAG state, manuscripts, and
 writing artifacts. Those exclusions make the value conversation-only; they do
-not make its included transcript content safe to disclose. Import copies the
+not make its included collaboration content safe to disclose. Import copies the
 included plaintext and neither deletes excluded state nor securely erases a
 source or caller-owned archive copy.
+
+Provider-private state, hidden reasoning, raw provider responses and
+diagnostics, credentials, capabilities, full referenced-file bytes, artifact
+contents, and derived FTS/RAG data are not archive payloads. Therefore an
+archive or backend transfer is not a workspace, provider-session, or recovery
+backup. Only canonical archive schema 2 is accepted; legacy transcript files,
+database event rows, and schema-1 archive bytes are rejected rather than
+redacted or converted.
 
 The runtime owns no archive file or retention policy. A caller that stores,
 transmits, logs, or otherwise retains the returned bytes owns protection and
@@ -65,11 +175,10 @@ cleanup for every copy. See
 [Canonical conversation archives](../reference/conversation-archives.md#archive-non-goals).
 
 The optional `discussion_logs/conversation_storage.sqlite3` database is also
-plaintext and can coexist with the filesystem catalog and transcripts, leaving
+plaintext and can coexist with the filesystem catalog and histories, leaving
 two independent copies under caller control. It contains exact subjects,
-identities, timestamps, status, and transcript content plus derived normalized
-subjects, normalized transcript-search text, lexical generation, and private
-turn slots. Protect the database, any live rollback journal, external backups,
+identities, timestamps, catalog status, canonical collaboration BLOBs, and the
+still-present v1/derived search resources. Protect the database, any live rollback journal, external backups,
 and process memory with the rest of the workspace.
 
 Desired `conversation_storage_backend` in `config/system_defaults.json` and
@@ -89,18 +198,18 @@ the main database; it may omit the companion because exact search falls back
 to the main snapshot. Search preserves and ignores an unsafe companion rather
 than reading or repairing it.
 
-Provisioning is creation, not migration or deletion; archive export/import and
-the explicit storage migration workflow copy plaintext rather than securely
+Provisioning is creation, not transfer or deletion; archive export/import and
+the explicit storage transfer workflow copy plaintext rather than securely
 erasing a source. The canonical archive payload contains exact metadata and
 events in memory, and any persistence or transmission performed by its caller
 is outside the adapters' controls.
 
-`story storage migrate` and `story storage verify` emit one content-free report
+`story storage transfer` and `story storage verify` emit one content-free report
 containing backend names, fixed outcomes/failures, parity, checkpoint state, and
 aggregate classification/source counts. They never print subjects, conversation
 IDs, event text, paths, malformed values, or FTS content and never create a
 runtime debug record. This output boundary does not make the copied destination
-confidential: migration can leave the same plaintext conversations in both
+confidential: transfer can leave the same plaintext conversations in both
 stores, never deletes the source, and does not impose a retention policy.
 
 `story storage use` emits a different counts-free content-free report containing
@@ -111,7 +220,7 @@ output, provider data, or parity counts and never creates a runtime debug
 record. An explicitly run installer instead writes its native stdout and
 stderr to the CLI's stderr stream, outside that JSON boundary.
 
-Retained migration checkpoints contain session and conversation IDs, a SHA-256
+Retained transfer checkpoints contain session and conversation IDs, a SHA-256
 fingerprint of the canonical source archive, source conversation/event counts,
 and completed/total progress. They omit subjects, timestamps, statuses, events,
 runtime errors, and FTS data, but identities, counts, timing of file updates, and
@@ -121,9 +230,10 @@ erasure or authorization.
 
 ## Local management, search, and reads
 
-`/search` shows active subjects/user/replies; `/transcript` shows active or
-archived metadata/content; `/history` shows one full or newest-suffix snapshot,
-including errors, unmatched users, and whitespace. `/status` exposes
+`/search` shows snippets from closed readable schema-v2 event fields plus a
+display-only subject and exact event/field/range citations. `/transcript` shows
+active or archived structured readable records; `/history` shows one full or
+newest-record suffix plus state and next-safe-action meanings. `/status` exposes
 workspace/session/subject/context/run metadata. Session status shows durable
 state, process access, defaults, current attachment/focus, readiness, and next
 action, then the authoritative provider/model/effort profile, sources,
@@ -148,12 +258,12 @@ absolute diagnostic path. Terminal escaping is not redaction. See
 [Conversation search](../reference/conversation-search.md) and
 [Terminal safety](terminal-safety.md).
 
-Direct SQLite catalog, transcript, context, and exact literal-search operations
+Direct SQLite catalog, collaboration history, context, and exact search operations
 are provider-free and add no network call, authentication, RAG, or new citation
 mechanism. Optional FTS5 hint lookup adds no network path and never becomes
 search truth. Returned Python values, application logs, process memory, and
 caller-created backups can still move or expose plaintext beyond the
-workspace. Storage migration/verification is also provider-free and dispatches
+workspace. Storage transfer/verification is also provider-free and dispatches
 before authentication, broader settings/context, backend, runtime, session, or
 debug-log construction. It still performs local archive reads and, outside
 dry-run/verify, destination and checkpoint writes. `story storage use` likewise
@@ -205,22 +315,13 @@ only the system configuration without entering either gate or activating RAG.
 The saved choice applies at the next shell, while the current service and
 automatic policy remain unchanged.
 
-`/rag QUERY` retains one representation-hidden process-local value scoped to
-the attached session and focused conversation. It is absent from configuration,
-conversation transcripts, runtime debug records, RAG outcome/source result
-values, semantic output, and the later story-agent payload. The subsequent
-ordinary story message and reply retain their normal transcript persistence.
-The live editor necessarily displays typed input, process-local command history
-may recall the submitted line, and ordinary-line fallback or terminal/remote
-infrastructure may retain it in scrollback; those surfaces are not a secrecy
-boundary.
-
-An attempted preflight sends the story agent only bounded reauthorized excerpt
-bodies with stable citations. The shell renders only content-free outcome/reason
-and source identities, never excerpt bodies as diagnostics. Raw optional-package
-and composition diagnostics are replaced with fixed guidance and do not enter
-configuration, transcript, debug, or semantic result output. The fixed local
-provider has no runtime network or credential flow. Provider fragment text and
+The former one-turn interactive RAG preflight is unavailable. Ordinary input
+does not retain a query or send excerpts to a story provider. The six top-level
+RAG lifecycle/search commands retain their documented local data boundaries;
+direct callers of the low-level service own any subsequent provider use. Raw
+optional-package and composition diagnostics are replaced with fixed guidance
+and do not enter configuration, transcript, debug, or semantic result output.
+The fixed local provider has no runtime network or credential flow. Provider fragment text and
 vectors never become authority, and canonical writing-artifact references
 remain an independent authorization path.
 
@@ -340,7 +441,8 @@ provider projections, prompts, provider results, and diagnostic values derived
 from content. Authorization errors use fixed coded messages without echoing a
 path or selected text.
 
-Before provider delivery, selected artifact byte tuples are held in closeable,
+In a direct low-level provider integration, selected artifact byte tuples are
+held in closeable,
 nonserializable in-process authorization, delivery, and result carriers whose
 `repr` hides content. The backend transiently decodes them for the one provider
 payload described below. Closing drops the carriers' references to their byte
@@ -348,18 +450,18 @@ tuples; Python and the operating system do not provide a secure memory-zeroing
 guarantee. The durable evidence remains plaintext and has no encryption,
 access control, secure erase, or retention policy.
 
-Interactive source entries contain canonical paths only. Listing reads path and
-type metadata, not file bytes. Opening an artifact
+Direct artifact-source entries contain canonical paths only. Listing reads path
+and type metadata, not file bytes. Opening an artifact through the generic viewer
 loads verified plaintext into local process memory and renders it in the
 terminal. A capable viewer uses an alternate screen, but closing it is cleanup,
 not secure erasure from the process, emulator, multiplexer, or remote terminal.
 Fallback prints the complete numbered content into scrollback. Source-list/viewer
 activity is not sent to a provider and creates no durable reference-operation
-evidence; only a later submitted `${...}` indicator starts the runtime path.
-UI error output is fixed and content-free.
+evidence. Current main input does not activate that viewer or submit the
+indicator to a provider. Component error output is fixed and content-free.
 
-For an optional referenced backend call, the first provider payload contains
-only fixed rules, exact operation/invocation correlation, and the complete
+For a referenced lead, specialist, or synthesis call, the first provider
+payload contains only fixed rules, exact operation/invocation correlation, and the complete
 ordered canonical path/range indicators. The capability object is never
 serialized, and its repository-private identifier is absent from provider
 requests, replies, validated public history, and diagnostics. After the
@@ -374,21 +476,84 @@ backend path. The backend records `result_received` only after a structurally
 valid substantive result, performs final revalidation, records `accepted`, and
 then returns the reply. This proves the exact request, delivery sequence,
 result, and acceptance—not provider comprehension, obedience, or correct use.
-Baseline core context cannot satisfy explicit-reference evidence.
+Baseline core context cannot satisfy explicit-reference evidence. Confirmed
+collaboration creates a separate reference operation for each addressed
+invocation. A specialist receives only its assignment's ordered reference
+subset and cannot inventory, SEARCH, or READ a sibling-only artifact path.
+Lead synthesis receives fresh direct reference authority rather than borrowing
+a specialist receipt.
 
 Closing local authorization, delivery, and result carriers drops their Python
 references but offers neither secure memory erasure nor provider erasure. Once
 the substantive request is sent, provider-private or remote systems may retain
-its context under their own policy. `StoryRuntime` now constructs this path
-from inline `${...}` indicators. The interactive controller can now construct
-those same indicators through `$`/`$$` discovery and viewer selection without
-copying selected content into the prompt or work history.
+its context under their own policy. `StoryRuntime.lead_turn()`, confirmed
+consultation execution, and `propose_specialist_advisory()` construct this
+path; the interactive controller does not.
+
+### Lead-evidence retention
+
+Fresh lead judgments add content-free evidence to canonical collaboration
+history. A receipt can retain relative locator/source identity, state,
+revision/content/manifest digests, UTF-8 size, exact line or record boundary,
+and action ordinal. A zero-hit receipt retains a query digest and count,
+authorized source identities/kinds, optional artifact prefix, and a
+deterministic fingerprint of the authorized source snapshot. It does not
+retain the query, snippet, excerpt, or source body. The typed lead message and
+later specialist replies/synthesis remain visible plaintext story analysis.
+
+These receipts disclose topology and change facts even though they are
+content-free. Protect them like other workspace metadata. They prove only that
+runtime authorized and revalidated the cited acquisition. They do not prove
+provider comprehension, semantic relevance, exhaustive search outside the
+authorized scope, or story consistency. Runtime does not inspect prose to
+correct a provider's `story_specific`/`workflow_meta` classification.
+
+An evidence-validation rejection writes only a closed failure code plus the
+submitted invocation/call IDs to canonical history. The rejected response may
+still exist in the separate bounded provider-exchange or rejected-response
+diagnostic stores under their documented best-effort policies; the failure
+event does not copy that response into collaboration history.
+
+### Artifact-candidate and review retention
+
+A valid non-null lead `artifact_intent` contains proposed story text. Runtime
+resolves it against a complete in-process capture of all canonical artifacts.
+That capture is used to build and validate the candidate; it is not copied as
+a second complete-workspace blob into collaboration history. The resulting
+`ArtifactReviewCandidate`, however, deliberately contains the exact proposed
+change set and projected relationship facts and is stored in the typed
+`artifact_review_candidate` event. A successful `propose` synthesis stores the
+same candidate inside `ArtifactReviewedProposal` so restart and storage
+transfer can prove what every reviewer assessed.
+
+After exact confirmation, each disclosed specialist and the lead synthesis
+provider receive the same content-bearing candidate in their runtime input.
+They may also receive separately authorized reference bytes through the
+ordinary reference boundary. Candidate text can therefore be retained by the
+configured provider under its policy and by local provider-exchange diagnostics
+under their documented limits. The candidate is hidden from `repr`, but that
+is only accidental-display reduction, not encryption or erasure.
+
+Readable collaboration projection exposes only artifact review message,
+decision, state, and closed failure code. Candidate and reviewed-proposal bytes
+are not searchable readable fields and are not automatically selected into
+bounded agent context. Direct event-store/API readers and canonical
+filesystem/SQLite/archive/transfer bytes can still access them; protect those
+stores as story content.
+
+If non-null artifact intent is malformed or claims Apply/Git authority,
+canonical collaboration history records only content-free
+`artifact_intent_rejected` and `intent_rejected` failures. The rejected raw
+provider response may still appear in the separate rejected-response or
+provider-exchange diagnostic boundary. No artifact write, Apply authority, or
+Git action occurs for candidate construction, review, or reviewed-proposal
+finalization.
 
 <a id="agent-context-progress-privacy"></a>
 
 ## Agent-context progress privacy
 
-The optional context lifecycle observer and installed-shell progress contain
+The optional context lifecycle observer and any caller projection contain
 only validated scope and operation identities, fixed lifecycle kinds,
 nonnegative counters, and an optional truncation boolean. They have no field
 for prompts, search queries, candidates, excerpts, mandatory-reference bodies,
@@ -398,10 +563,10 @@ the canonical agent, phase, and round needed to distinguish logical
 invocations.
 
 Observer delivery adds no provider call, result field, story content,
-conversation event, debate record, or second context ledger. The runtime has no
-supported post-hoc observer inspection. The installed shell renders compact
-facts into terminal output only; a terminal emulator, multiplexer, or remote
-terminal may retain them in scrollback. A Python caller may deliberately retain
+conversation event, debate record, or second context ledger. The component has
+no supported post-hoc observer inspection. A consumer may render compact facts
+into terminal output, where an emulator, multiplexer, or remote terminal may
+retain them in scrollback. A Python caller may deliberately retain
 callback values, in which case that caller owns access control, retention, and
 cleanup for the new copy.
 
@@ -437,6 +602,12 @@ source bodies, focused record changes, content-free catalog facts, and
 applicable mandatory-reference bodies. Continuations expose only the newly
 authorized SEARCH/READ observation.
 
+The lead initial payload also exposes four content-free canonical-core status
+rows and the strict scope/status/evidence answer contract. Status inventory
+does not itself expose core bytes. With no explicit reference and no provider
+SEARCH/READ, a workflow/meta answer receives no story body through this
+evidence path.
+
 SEARCH/READ is route-restricted to canonical writing artifacts, focused
 same-session conversation, active debate, and the invoking agent's own state.
 Provider-visible evidence deliberately contains relative source identity,
@@ -445,6 +616,16 @@ untrusted content so the agent can reason from exact evidence. It excludes
 absolute paths, internal files, another agent's state, and incompatible scopes.
 These evidence facts are provider input; public progress and the ledger remain
 content-free.
+
+A specialist-assignment payload also exposes its visible instruction, exact
+input aliases/revisions, and strict assessment/message contract. A synthesis
+payload exposes every successful specialist's assessment, message, ordered
+input IDs, reply-event attribution, all direct story inputs, mandatory
+unresolved IDs, and the optional round-two contract. Those values can contain
+sensitive story analysis and are captured as plaintext provider input/output
+and canonical collaboration events as applicable. The provider receives no
+write/Git capability, credential, absolute path, sibling-only artifact source,
+or API for calling another agent.
 
 `StorySessionContext` remains an internal capture and direct-request
 compatibility value, not the current built-in provider envelope. Direct eager
@@ -510,22 +691,22 @@ later constructor validation failures are eligible. CLI, controller, and smoke
 emission begins only after workspace resolution or initialization.
 
 The low-level writer suppresses ordinary `Exception` failures. CLI, backend,
-runtime, controller, and smoke each add a private submission guard that catches
-diagnostic `BaseException`; diagnostic-handle acquisition by CLI and smoke paths
-is guarded separately. Even a sink `KeyboardInterrupt` or `SystemExit` therefore
+runtime, controller, and disposable smoke each add a private submission guard
+that catches diagnostic `BaseException`; diagnostic-handle acquisition is
+guarded separately. Even a sink `KeyboardInterrupt` or `SystemExit` therefore
 cannot replace the application's result, exception, cancellation, cleanup,
-output, or exit status. Explicit smoke retains any best-effort records
-successfully written; implicit smoke removes its temporary workspace and any log
-that was successfully written. A hint or retained explicit workspace therefore
-does not guarantee that a record exists.
+output, or exit status. Explicit `story smoke --workspace` is read-only and
+creates no diagnostic handle or record. Implicit smoke removes its temporary
+workspace and any log that was successfully written. A debug-log hint never
+guarantees that a record exists.
 
 Interactive errors after workspace resolution add exactly
 `[debug log] If available, workspace-relative: debug_logs/runtime.jsonl`.
 A caught noninteractive exception adds the fixed path as a second stderr line
-after CLI workspace initialization or discovery succeeds, even if optional
-handle acquisition failed and no record or file is available. Initialization
-and discovery failures, implicit smoke, returned domain outcomes, argparse, and
-other pre-workspace errors add no debug-log path. See
+after CLI workspace discovery succeeds, even if optional handle acquisition
+failed and no record or file is available. Initialization and discovery
+failures, both smoke forms, returned domain outcomes, argparse, and other
+pre-workspace errors add no debug-log path. See
 [Persistence](../design/persistence.md#workspace-runtime-debug-log) for the
 schema, [CLI](../reference/cli.md#runtime-debug-logs) for exact output, and
 [Filesystem safety](filesystem-safety.md#debug-log-filesystem-safety) for
@@ -738,9 +919,10 @@ metadata and do not echo provider response values. Progress exposes fixed facts;
 sources intentionally reveal subject/citation, never
 query/event/candidate/critique/error/model prose.
 
-Separately, after a durable advisory user event, an ordinary `Exception` from a
-`StoryRuntime` turn attempts to store failure type plus sanitized detail in the
-transcript. Its known-value sanitizer:
+The retired schema-v1 direct-turn consumer used the following failure-storage
+boundary. It is retained only to interpret preexisting records; current
+ordinary input creates no durable user event or failure transcript. Its
+known-value sanitizer:
 
 - replaces current/context/retrieval variants with `<redacted>` and workspace
   roots with `<workspace>`;

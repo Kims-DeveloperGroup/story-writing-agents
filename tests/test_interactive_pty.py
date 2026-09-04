@@ -7,6 +7,7 @@ import json
 import os
 import re
 import select
+import shutil
 import signal
 import struct
 import subprocess
@@ -15,35 +16,29 @@ import tempfile
 import time
 import unittest
 from collections.abc import Callable, Mapping, Sequence
+from dataclasses import replace
 from pathlib import Path
 from typing import Any
 
-from story_writing_agents.agent_exchanges import (
-    AgentExchangeScopeKind,
-    AgentExchangeSelection,
-    WorkspaceAgentExchangeStore,
-)
-from story_writing_agents.backend import AgentBackend
 from story_writing_agents.cli_context import (
     load_cli_context,
     load_default_conversation,
-    save_default_conversation,
-    save_default_session,
 )
-from story_writing_agents.conversation_storage import (
-    CONVERSATION_STORAGE_MUTATION_GUARD_PATH,
+from story_writing_agents.conversation_storage.filesystem import (
+    FilesystemCollaborationEventStore,
 )
 from story_writing_agents.conversations import (
-    ConversationEventAppend,
-    ConversationEventKind,
+    CollaborationEventBatch,
     ConversationMetadata,
     ConversationStatus,
 )
 from story_writing_agents.workspace import (
     FilesystemConversationCatalog,
-    FilesystemConversationEventStore,
-    Workspace,
 )
+
+from tests.collaboration_contract_fixture import contract_batches
+from tests.helpers import initialize_test_workspace
+
 try:
     import fcntl
     import pty
@@ -53,8 +48,7 @@ except ImportError as _pty_import_error:
     pty = None  # type: ignore[assignment]
     termios = None  # type: ignore[assignment]
     _POSIX_PTY_SKIP_REASON = (
-        "POSIX PTY facilities are unavailable: "
-        f"{type(_pty_import_error).__name__}"
+        f"POSIX PTY facilities are unavailable: {type(_pty_import_error).__name__}"
     )
 else:
     _POSIX_PTY_SKIP_REASON = ""
@@ -474,7 +468,7 @@ elif payload.get("operation") == "conversation_retrieval":
         citation_id = observation["hits"][0]["citation_id"]
         sequence = observation["hits"][0]["source"]["citation"]["sequence"]
         response = {
-            "kind": "read_transcript",
+            "kind": "read_history",
             **correlation,
             "citation_id": citation_id,
             "start_sequence": sequence,
@@ -659,7 +653,7 @@ raise SystemExit(int(state.get("antigravity_login_returncode", 0)))
 '''
 
 
-_REFERENCE_PROBE_PREAMBLE = r'''
+_REFERENCE_PROBE_PREAMBLE = r"""
 import json
 import sys
 
@@ -712,7 +706,7 @@ terminal = build_stream_terminal(input, sys.stdin, sys.stdout)
 main = InteractiveMainInput(terminal)
 composition = InteractiveCompositionInput(terminal)
 choices = lambda _buffer, _cursor: None
-'''
+"""
 
 
 def _control_character_byte(value: object, *, label: str) -> bytes:
@@ -739,8 +733,7 @@ def _durable_tree(root: Path) -> dict[str, bytes]:
     return {
         path.relative_to(root).as_posix(): path.read_bytes()
         for path in sorted(root.rglob("*"))
-        if path.is_file()
-        and "debug_logs" not in path.relative_to(root).parts
+        if path.is_file() and "debug_logs" not in path.relative_to(root).parts
     }
 
 
@@ -878,10 +871,7 @@ class PtyCliProcess:
 
         def captured_contains_expected() -> bool:
             captured = self.normalized_bytes[after:]
-            return (
-                encoded in captured
-                or encoded in _ANSI_SGR_BYTES.sub(b"", captured)
-            )
+            return encoded in captured or encoded in _ANSI_SGR_BYTES.sub(b"", captured)
 
         deadline = time.monotonic() + timeout
         while not captured_contains_expected():
@@ -912,9 +902,7 @@ class PtyCliProcess:
             self.final_terminal_attributes = _copy_terminal_attributes(
                 termios.tcgetattr(self.master_fd)
             )
-        stdout, stderr = self.process.communicate(
-            timeout=_TEARDOWN_DEADLINE_SECONDS
-        )
+        stdout, stderr = self.process.communicate(timeout=_TEARDOWN_DEADLINE_SECONDS)
         self.pipe_stdout += stdout or b""
         self.pipe_stderr += stderr or b""
         return_code = self.process.returncode
@@ -1041,7 +1029,7 @@ class InteractiveCliPtyTests(unittest.TestCase):
         temporary = tempfile.TemporaryDirectory()
         self.addCleanup(temporary.cleanup)
         self.temporary_root = Path(temporary.name)
-        self.workspace = Workspace(self.temporary_root / "workspace").initialize()
+        self.workspace = initialize_test_workspace(self.temporary_root / "workspace")
         self.fake_directory = self.temporary_root / "provider-bin"
         self.fake_directory.mkdir()
         self.fake_executable = self.fake_directory / "codex"
@@ -1087,12 +1075,17 @@ class InteractiveCliPtyTests(unittest.TestCase):
     def _environment(self) -> dict[str, str]:
         """Return a provider-free child environment with explicit source imports."""
 
+        git_executable = shutil.which("git")
+        if git_executable is None:
+            raise AssertionError("PTY integration tests require Git")
         environment = os.environ.copy()
         environment.update(
             {
                 "PYTHONPATH": str(_SOURCE_ROOT),
                 "PYTHONDONTWRITEBYTECODE": "1",
-                "PATH": str(self.fake_directory),
+                "PATH": os.pathsep.join(
+                    (str(self.fake_directory), str(Path(git_executable).parent))
+                ),
                 "NO_COLOR": "1",
                 "TERM": "dumb",
                 "STORY_REDUCED_MOTION": "1",
@@ -1126,11 +1119,7 @@ class InteractiveCliPtyTests(unittest.TestCase):
         assert fcntl is not None, "POSIX PTY tests require fcntl"
         with self.auth_log.open("r", encoding="utf-8") as handle:
             fcntl.flock(handle.fileno(), fcntl.LOCK_SH)
-            return [
-                json.loads(line)
-                for line in handle.read().splitlines()
-                if line
-            ]
+            return [json.loads(line) for line in handle.read().splitlines() if line]
 
     def _set_provider_control(self, **values: object) -> None:
         """Replace the fake provider's next-invocation behavior."""
@@ -1148,11 +1137,7 @@ class InteractiveCliPtyTests(unittest.TestCase):
         assert fcntl is not None, "POSIX PTY tests require fcntl"
         with self.provider_log.open("r", encoding="utf-8") as handle:
             fcntl.flock(handle.fileno(), fcntl.LOCK_SH)
-            return [
-                json.loads(line)
-                for line in handle.read().splitlines()
-                if line
-            ]
+            return [json.loads(line) for line in handle.read().splitlines() if line]
 
     def _context_thread_records(
         self,
@@ -1175,13 +1160,9 @@ class InteractiveCliPtyTests(unittest.TestCase):
         return [
             record
             for record in records
-            if (
-                agent_id is None
-                or record["key"]["scope"]["agent_id"] == agent_id
-            )
+            if (agent_id is None or record["key"]["scope"]["agent_id"] == agent_id)
             and (
-                subject_id is None
-                or record["key"]["scope"]["subject_id"] == subject_id
+                subject_id is None or record["key"]["scope"]["subject_id"] == subject_id
             )
         ]
 
@@ -1306,6 +1287,7 @@ class InteractiveCliPtyTests(unittest.TestCase):
         if provider == "codex":
             selection = "1"
             code_prompt = "FAKE_CODEX_AUTH_CODE> "
+            arguments: tuple[str, ...] = ()
             self._set_auth_state(
                 codex="unauthenticated",
                 antigravity="indeterminate",
@@ -1314,9 +1296,11 @@ class InteractiveCliPtyTests(unittest.TestCase):
         elif provider == "antigravity":
             selection = "2"
             code_prompt = "FAKE_AGY_AUTH_CODE> "
-            agent_configs = self.workspace.read_json("config/agent_configs.json")
-            agent_configs["plot_architect"]["backend"] = "antigravity"
-            self.workspace.write_json("config/agent_configs.json", agent_configs)
+            arguments = (
+                "chat",
+                "--backend",
+                "plot_architect=antigravity",
+            )
             self._set_auth_state(
                 codex="authenticated",
                 antigravity="unauthenticated",
@@ -1325,7 +1309,7 @@ class InteractiveCliPtyTests(unittest.TestCase):
         else:
             raise AssertionError(f"unsupported fake auth provider: {provider}")
 
-        process = self._spawn_cli(())
+        process = self._spawn_cli(arguments)
         process.wait_for_text("Provider authentication")
         auth_record_count = len(self._auth_records())
         process.send_line(selection)
@@ -1333,8 +1317,7 @@ class InteractiveCliPtyTests(unittest.TestCase):
         login = self._wait_for_auth_record(
             process,
             lambda record: (
-                record["provider"] == provider
-                and record["operation"] == "login"
+                record["provider"] == provider and record["operation"] == "login"
             ),
             after_count=auth_record_count,
         )
@@ -1345,8 +1328,7 @@ class InteractiveCliPtyTests(unittest.TestCase):
         terminated = self._wait_for_auth_record(
             process,
             lambda record: (
-                record["provider"] == provider
-                and record["operation"] == "terminated"
+                record["provider"] == provider and record["operation"] == "terminated"
             ),
             after_count=auth_record_count,
         )
@@ -1372,31 +1354,27 @@ class InteractiveCliPtyTests(unittest.TestCase):
             process.normalized_text,
         )
 
-    def _seed_default_session(
+    def _create_conversation(
         self,
+        process: PtyCliProcess,
         *,
         session_id: str = "alpha",
         subject: str = "Harbor planning",
     ) -> ConversationMetadata:
-        """Persist one ready default session and default conversation."""
+        """Create one conversation through an already-authorized CLI process."""
 
-        backend = AgentBackend(
-            self.workspace,
-            executable=str(self.fake_executable),
-        )
-        try:
-            backend.create_session_with_access(session_id)
-        finally:
-            backend.close()
-        save_default_session(self.workspace, session_id)
+        mark = process.output_mark()
+        process.send_line(f"/conversation new {subject}")
+        process.wait_for_text(f"Subject: {subject}", after=mark)
+        process.wait_for_text(f"story[{session_id}]> ", after=mark)
         catalog = FilesystemConversationCatalog(self.workspace)
-        selected = catalog.create(session_id, subject)
-        save_default_conversation(
-            self.workspace,
-            session_id,
-            selected.conversation_id,
+        matches = tuple(
+            metadata
+            for metadata in catalog.list(session_id)
+            if metadata.subject == subject
         )
-        return selected
+        self.assertEqual(len(matches), 1)
+        return matches[0]
 
     def _seed_filesystem_reference_artifacts(
         self,
@@ -1573,7 +1551,7 @@ class InteractiveCliPtyTests(unittest.TestCase):
     ) -> None:
         """Exercise real Shift+Arrow bytes and independent repeated screens."""
 
-        source = r'''
+        source = r"""
 import sys
 
 from story_writing_agents.interactive_terminal import (
@@ -1590,7 +1568,7 @@ for attempt in range(2):
         initial_line=3,
     )
     print(f"RESULT={attempt}:{outcome.kind.value}:{outcome.line_range}")
-'''
+"""
         before = _durable_tree(self.workspace.root)
         process = self._spawn_python(
             source,
@@ -1632,7 +1610,7 @@ for attempt in range(2):
     def test_external_view_returns_terminal_to_the_interactive_shell(self) -> None:
         """Borrow and restore one real PTY before ordinary shell input resumes."""
 
-        source = r'''
+        source = r"""
 import sys
 
 from story_writing_agents.interactive_terminal import (
@@ -1651,7 +1629,7 @@ def operation(host):
 viewer.open(operation)
 print(f"VIEW_EVENT={events[0]}")
 print(f"SHELL_VALUE={input('shell> ')}")
-'''
+"""
         before = _durable_tree(self.workspace.root)
         process = self._spawn_python(
             source,
@@ -1811,7 +1789,7 @@ print(f"SHELL_VALUE={input('shell> ')}")
     ) -> None:
         """Keep overlong suffixes inert through the real PTY byte route."""
 
-        source = r'''
+        source = r"""
 import sys
 
 from story_writing_agents.interactive_terminal import (
@@ -1828,7 +1806,7 @@ for attempt in range(2):
         display_name=f"overflow-{attempt}.md",
     )
     print(f"RESULT={attempt}:{outcome.kind.value}:{outcome.line_range}")
-'''
+"""
         before = _durable_tree(self.workspace.root)
         process = self._spawn_python(
             source,
@@ -1837,9 +1815,7 @@ for attempt in range(2):
         )
         for attempt, introducer in enumerate(("\x1b[", "\x1bO")):
             process.wait_for_text(f"[viewer] overflow-{attempt}.md")
-            process.send_text(
-                introducer + "1" * 62 + "B\x1b[1;2B\n"
-            )
+            process.send_text(introducer + "1" * 62 + "B\x1b[1;2B\n")
             process.wait_for_text(f"RESULT={attempt}:selected:(1, 2)")
 
         self.assertEqual(process.wait_for_exit(), 0, process.normalized_text)
@@ -1855,7 +1831,7 @@ for attempt in range(2):
     def test_pending_single_write_crosses_prompt_into_viewer_repeatedly(self) -> None:
         """Consume immediate post-submit viewer keys without losing PTY bytes."""
 
-        source = r'''
+        source = r"""
 import json
 import sys
 
@@ -1878,7 +1854,7 @@ for attempt in range(2):
     )
     results.append([entered.text, selected.kind.value, selected.line_range])
 print("RESULT=" + json.dumps(results, separators=(",", ":")))
-'''
+"""
         process = self._spawn_python(
             source,
             environment_overrides={"TERM": "xterm-256color"},
@@ -1889,8 +1865,7 @@ print("RESULT=" + json.dumps(results, separators=(",", ":")))
             process.send_text(f"value-{attempt}\n\x1b[B\n")
             process.wait_for_text(f"[viewer] pending-{attempt}.md")
         process.wait_for_text(
-            'RESULT=[["value-0","selected",[2,2]],'
-            '["value-1","selected",[2,2]]]'
+            'RESULT=[["value-0","selected",[2,2]],["value-1","selected",[2,2]]]'
         )
         self.assertEqual(process.wait_for_exit(), 0, process.normalized_text)
         self.assertEqual(process.raw_bytes.count(b"\x1b[?1049h"), 2)
@@ -1905,7 +1880,7 @@ print("RESULT=" + json.dumps(results, separators=(",", ":")))
     ) -> None:
         """Decode fragmented bytes across select, cancel, and later live input."""
 
-        source = r'''
+        source = r"""
 import json
 import sys
 
@@ -1938,7 +1913,7 @@ print(
         separators=(",", ":"),
     )
 )
-'''
+"""
         process = self._spawn_python(
             source,
             environment_overrides={"TERM": "xterm-256color"},
@@ -1972,7 +1947,7 @@ print(
     def test_viewer_render_and_read_failures_restore_screen_and_termios(self) -> None:
         """Use real PTY resources while injected collaborators fail once."""
 
-        source = r'''
+        source = r"""
 import os
 import sys
 
@@ -2030,7 +2005,7 @@ try:
     InteractiveTextViewer(terminal).read_range("one\ntwo", display_name="failure.md")
 except OSError as failure:
     print("RESULT=" + str(failure))
-'''
+"""
         for failure_kind in ("render", "read"):
             with self.subTest(failure=failure_kind):
                 process = self._spawn_python(
@@ -2059,14 +2034,14 @@ except OSError as failure:
     ) -> None:
         """Return each observable live noncommit result after exact cleanup."""
 
-        source = r'''
+        source = r"""
 import sys
 from story_writing_agents.interactive_terminal import InteractiveTextViewer, build_stream_terminal
 
 viewer = InteractiveTextViewer(build_stream_terminal(input, sys.stdin, sys.stdout))
 outcome = viewer.read_range("one\ntwo", display_name="events.md")
 print("RESULT=" + outcome.kind.value)
-'''
+"""
         for event_name in ("cancelled", "interrupted", "eof"):
             with self.subTest(event=event_name):
                 process = self._spawn_python(
@@ -2095,14 +2070,14 @@ print("RESULT=" + outcome.kind.value)
     ) -> None:
         """Keep line-mode grammar exact and its retry visible on a real PTY."""
 
-        source = r'''
+        source = r"""
 import sys
 from story_writing_agents.interactive_terminal import InteractiveTextViewer, build_stream_terminal
 
 viewer = InteractiveTextViewer(build_stream_terminal(input, sys.stdin, sys.stdout))
 outcome = viewer.read_range("one\ntwo\nthree", display_name="fallback.md")
 print(f"RESULT={outcome.kind.value}:{outcome.line_range}")
-'''
+"""
         process = self._spawn_python(
             source,
             environment_overrides={"TERM": "dumb"},
@@ -2127,7 +2102,7 @@ print(f"RESULT={outcome.kind.value}:{outcome.line_range}")
     ) -> None:
         """Render hostile supplied text safely and observe resize only on input."""
 
-        source = r'''
+        source = r"""
 import sys
 from story_writing_agents.interactive_terminal import InteractiveTextViewer, build_stream_terminal
 
@@ -2139,7 +2114,7 @@ first = viewer.read_range(
 print("FIRST=" + first.kind.value)
 second = viewer.read_range("", display_name="empty.md")
 print("SECOND=" + second.kind.value)
-'''
+"""
         process = self._spawn_python(
             source,
             environment_overrides={"TERM": "xterm-256color"},
@@ -2176,7 +2151,7 @@ print("SECOND=" + second.kind.value)
     ) -> None:
         """Exercise the unlisted stream adapter and transient live commit."""
 
-        source = r'''
+        source = r"""
 import sys
 
 from story_writing_agents.interactive_terminal import (
@@ -2207,7 +2182,7 @@ outcome = InteractivePickerInput(terminal).read_picker(
 )
 assert outcome.text == "secret-10"
 print("RESULT=" + outcome.kind.value)
-'''
+"""
         for attempt in range(3):
             with self.subTest(attempt=attempt):
                 before = _durable_tree(self.workspace.root)
@@ -2244,9 +2219,7 @@ print("RESULT=" + outcome.kind.value)
                 process.send_text("\n")
                 final = process.wait_for_text("RESULT=commit", after=resize_mark)
                 self.assertEqual(process.wait_for_exit(), 0, process.normalized_text)
-                collapsed = "".join(
-                    re.sub(r"\x1b\[[0-9;]*[A-Za-z]", "", final).split()
-                )
+                collapsed = "".join(re.sub(r"\x1b\[[0-9;]*[A-Za-z]", "", final).split())
                 self.assertIn("[selected][highlighted]Kappa", collapsed)
                 self.assertIn("\x1b[J", final)
                 self.assertNotIn("[completed]", collapsed)
@@ -2266,7 +2239,7 @@ print("RESULT=" + outcome.kind.value)
     ) -> None:
         """Keep combined cues and hostile text visible without decorative SGR."""
 
-        source = r'''
+        source = r"""
 import sys
 
 from story_writing_agents.interactive_terminal import (
@@ -2290,7 +2263,7 @@ outcome = InteractivePickerInput(terminal).read_picker(
 )
 assert outcome.text is None
 print("RESULT=" + outcome.kind.value)
-'''
+"""
         for attempt in range(3):
             with self.subTest(attempt=attempt):
                 process = self._spawn_python(
@@ -2327,7 +2300,7 @@ print("RESULT=" + outcome.kind.value)
     ) -> None:
         """Return typed terminal events with raw restoration and no final record."""
 
-        source = r'''
+        source = r"""
 import sys
 
 from story_writing_agents.interactive_terminal import (
@@ -2344,7 +2317,7 @@ outcome = InteractivePickerInput(terminal).read_picker(
 )
 assert outcome.text is None
 print("RESULT=" + outcome.kind.value)
-'''
+"""
         for event_name in ("interrupt", "eof"):
             for attempt in range(3):
                 with self.subTest(event=event_name, attempt=attempt):
@@ -2378,7 +2351,7 @@ print("RESULT=" + outcome.kind.value)
     def test_internal_picker_dumb_fallback_retries_disabled_then_commits(self) -> None:
         """Use complete numbered line input without cursor or identity output."""
 
-        source = r'''
+        source = r"""
 import sys
 
 from story_writing_agents.interactive_terminal import (
@@ -2399,7 +2372,7 @@ outcome = InteractivePickerInput(terminal).read_picker(
 )
 assert outcome.text == "secret-3"
 print("RESULT=" + outcome.kind.value)
-'''
+"""
         before = _durable_tree(self.workspace.root)
         process = self._spawn_python(
             source,
@@ -2431,7 +2404,7 @@ print("RESULT=" + outcome.kind.value)
     def test_internal_prompt_transient_clears_and_restores_repeatedly(self) -> None:
         """Exercise transient raw prompt cleanup without a duplicate final frame."""
 
-        source = r'''
+        source = r"""
 import sys
 
 from story_writing_agents.interactive_terminal import (
@@ -2447,7 +2420,7 @@ outcome = InteractivePromptInput(terminal).read_prompt(
 )
 assert outcome.text == "value"
 print("RESULT=" + outcome.kind.value)
-'''
+"""
         for attempt in range(3):
             with self.subTest(attempt=attempt):
                 process = self._spawn_python(
@@ -2473,7 +2446,7 @@ print("RESULT=" + outcome.kind.value)
     ) -> None:
         """Exercise seeded Enter, editing, Escape, VINTR, and VEOF on a real PTY."""
 
-        source = r'''
+        source = r"""
 import json
 import sys
 
@@ -2498,7 +2471,7 @@ for label in ("Enter", "Edit", "Escape", "Interrupt", "EOF"):
         flush=True,
     )
 print("RESULT=" + json.dumps(results, separators=(",", ":")))
-'''
+"""
         process = self._spawn_python(
             source,
             environment_overrides={"TERM": "xterm-256color"},
@@ -2541,7 +2514,7 @@ print("RESULT=" + json.dumps(results, separators=(",", ":")))
     def test_live_accepted_input_follows_cleanup_once_and_restores(self) -> None:
         """Project one accepted message only after the capable frame is gone."""
 
-        source = r'''
+        source = r"""
 import sys
 
 from story_writing_agents.interactive_terminal import (
@@ -2562,7 +2535,7 @@ InteractiveSemanticOutput(terminal).write_accepted_input(
     Message("user", "accepted marker 🌊")
 )
 print("RESULT=" + outcome.kind.value)
-'''
+"""
         before = _durable_tree(self.workspace.root)
         process = self._spawn_python(
             source,
@@ -2592,7 +2565,7 @@ print("RESULT=" + outcome.kind.value)
     def test_speaker_rails_match_ansi_no_color_and_dumb_profiles(self) -> None:
         """Keep one exact rail topology while styling only speaker headers."""
 
-        source = r'''
+        source = r"""
 import sys
 
 from story_writing_agents import (
@@ -2626,7 +2599,7 @@ for agent_id in (
 ):
     terminal.write_agent(agent_id, "agent body")
 print("RESULT=done")
-'''
+"""
         before = _durable_tree(self.workspace.root)
         profiles = (
             (
@@ -2713,7 +2686,7 @@ print("RESULT=done")
     def test_internal_main_dynamic_choices_focus_commit_clear_and_restore(self) -> None:
         """Exercise call-local live choices without exposing opaque identities."""
 
-        source = r'''
+        source = r"""
 import json
 import sys
 
@@ -2748,7 +2721,7 @@ print(
         separators=(",", ":"),
     )
 )
-'''
+"""
         process = self._spawn_python(
             source,
             environment_overrides={"TERM": "xterm-256color"},
@@ -2802,7 +2775,7 @@ print(
         self.assertIn(b"\x1b[1m--------------------------------", ansi.raw_bytes)
         self.assertIn(b"\x1b[0m", ansi.raw_bytes)
         mark = ansi.output_mark()
-        ansi.send_text("/help /run\n\n")
+        ansi.send_text("/help status\n\n")
         ansi.wait_for_text("Help", after=mark)
         ansi.wait_for_text("story[lobby]> ", after=mark)
         dense_ansi = bytes(ansi.raw_bytes[mark:])
@@ -2815,6 +2788,9 @@ print(
             ansi.original_terminal_attributes,
         )
 
+        self.workspace = initialize_test_workspace(
+            self.temporary_root / "workspace-no-color"
+        )
         no_color = self._spawn_cli(
             (),
             environment_overrides={"TERM": "xterm-256color"},
@@ -2837,6 +2813,9 @@ print(
             no_color.original_terminal_attributes,
         )
 
+        self.workspace = initialize_test_workspace(
+            self.temporary_root / "workspace-line-profile"
+        )
         line = self._spawn_cli(())
         line.wait_for_text("story[lobby]> ")
         mark = line.output_mark()
@@ -2880,17 +2859,14 @@ print(
         )
         opened_lines = plain_opened.splitlines()
         self.assertTrue(all(row in opened_lines for row in expected_rows))
-        summary_lines = tuple(
-            line for line in opened_lines if " — Current:" in line
-        )
+        summary_lines = tuple(line for line in opened_lines if " — Current:" in line)
         self.assertEqual(len(summary_lines), 6)
         self.assertEqual(
             {line.index("Current:") for line in summary_lines},
             {29},
         )
         self.assertIn(
-            "\x1b[36m> 1. Language              — \x1b[0m"
-            "\x1b[37mCurrent: KO\x1b[0m",
+            "\x1b[36m> 1. Language              — \x1b[0m\x1b[37mCurrent: KO\x1b[0m",
             opened,
         )
 
@@ -2951,9 +2927,7 @@ print(
         process.wait_for_text("Choices 1/7", after=mark)
         process.send_text(("\x1b[B" * 2) + "\n")
         opened = process.wait_for_text("Current value", after=mark)
-        compact_opened = "".join(
-            re.sub(r"\x1b\[[0-9;]*[A-Za-z]", "", opened).split()
-        )
+        compact_opened = "".join(re.sub(r"\x1b\[[0-9;]*[A-Za-z]", "", opened).split())
         self.assertIn("Currentvalue:1", compact_opened)
         self.assertIn("Maximumdebaterounds", compact_opened)
         self.assertIn("Newvalue>", compact_opened)
@@ -3008,9 +2982,7 @@ print(
             "[cancelled]",
         )
         self.assertEqual(
-            "".join(discarded.split()).count(
-                "[cancelled]Pendingchangesdiscarded."
-            ),
+            "".join(discarded.split()).count("[cancelled]Pendingchangesdiscarded."),
             1,
         )
         process.send_text("/quit\n\n")
@@ -3025,14 +2997,15 @@ print(
     def test_settings_ansi_picker_save_history_isolation_and_restore_repeatedly(
         self,
     ) -> None:
-        """Exercise the real settings picker, prompt boundary, and next-shell save."""
+        """Exercise repeated settings saves and prompt restoration in clean roots."""
 
         expected_languages = ("EN", "JA", "ZH")
         for attempt, expected_language in enumerate(expected_languages):
             with self.subTest(attempt=attempt):
-                current_language = (
-                    "KO" if attempt == 0 else expected_languages[attempt - 1]
+                self.workspace = initialize_test_workspace(
+                    self.temporary_root / f"workspace-settings-save-{attempt}"
                 )
+                current_language = "KO"
                 process = self._spawn_cli(
                     (),
                     environment_overrides={"TERM": "xterm-256color"},
@@ -3080,14 +3053,10 @@ print(
                     "Agents",
                 )
                 self.assertEqual(
-                    tuple(
-                        compact_opened.index(value)
-                        for value in ordered_settings
-                    ),
+                    tuple(compact_opened.index(value) for value in ordered_settings),
                     tuple(
                         sorted(
-                            compact_opened.index(value)
-                            for value in ordered_settings
+                            compact_opened.index(value) for value in ordered_settings
                         )
                     ),
                 )
@@ -3106,7 +3075,7 @@ print(
                     "Choose the workspace language.",
                     after=language_mark,
                 )
-                process.send_text("\x1b[B\n")
+                process.send_text(("\x1b[B" * (attempt + 1)) + "\n")
                 language_result = process.wait_for_text(
                     f"[entered] Pending Language entered: {expected_language}.",
                     after=language_mark,
@@ -3235,9 +3204,7 @@ print(
                     process.normalized_text,
                 )
                 self.assertEqual(
-                    self.workspace.read_json("config/system_defaults.json")[
-                        "language"
-                    ],
+                    self.workspace.read_json("config/system_defaults.json")["language"],
                     expected_language,
                 )
                 self.assertFalse(self.provider_log.exists())
@@ -3274,8 +3241,7 @@ print(
             re.sub(r"\x1b\[[0-9;]*[A-Za-z]", "", agents_picker).split()
         )
         self.assertIn(
-            "Plot&StructureArchitectCurrent:"
-            "(Codex/providerdefault/providerdefault)",
+            "Plot&StructureArchitectCurrent:(Codex/providerdefault/providerdefault)",
             compact_agents,
         )
         process.send_text("\x1b[B\n")
@@ -3286,11 +3252,15 @@ print(
         compact_fields = "".join(
             re.sub(r"\x1b\[[0-9;]*[A-Za-z]", "", initial_fields).split()
         )
-        self.assertIn("Provider—Current:Codex", compact_fields)
+        self.assertIn("Provider(disabled)—Current:Codex", compact_fields)
+        self.assertIn(
+            "Disabled:Setbyalaunchoverride;read-onlyinthisshell.",
+            compact_fields,
+        )
         self.assertIn("Model—Current:providerdefault", compact_fields)
         self.assertIn("Effort—Current:providerdefault", compact_fields)
         model_picker_mark = process.output_mark()
-        process.send_text("\x1b[B\n")
+        process.send_text("\n")
         model_picker = process.wait_for_text("GPT PTY", after=model_picker_mark)
         self.assertIn("GPT PTY", model_picker)
         self.assertIn("gpt-pty", model_picker)
@@ -3309,9 +3279,7 @@ print(
         )
         self.assertIn(
             "Model—Pending:gpt-pty",
-            "".join(
-                re.sub(r"\x1b\[[0-9;]*[A-Za-z]", "", model_parent).split()
-            ),
+            "".join(re.sub(r"\x1b\[[0-9;]*[A-Za-z]", "", model_parent).split()),
         )
         effort_picker_mark = process.output_mark()
         process.send_text("\x1b[B\n")
@@ -3343,9 +3311,7 @@ print(
         )
         self.assertIn(
             "Plot&StructureArchitectPending:(Codex/gpt-pty/future_2)",
-            "".join(
-                re.sub(r"\x1b\[[0-9;]*[A-Za-z]", "", agents_parent).split()
-            ),
+            "".join(re.sub(r"\x1b\[[0-9;]*[A-Za-z]", "", agents_parent).split()),
         )
         settings_parent_mark = process.output_mark()
         process.send_text("\x1b")
@@ -3359,7 +3325,7 @@ print(
         process.wait_for_text("Apply changes?", after=save_prompt_mark)
         save_commit_mark = process.output_mark()
         process.send_text("\n")
-        saved = process.wait_for_text(
+        process.wait_for_text(
             "[saved and applied]",
             after=save_commit_mark,
         )
@@ -3375,9 +3341,7 @@ print(
                 ).split()
             ),
         )
-        compact_result = "".join(
-            re.sub(r"\x1b\[[0-9;]*[A-Za-z]", "", result).split()
-        )
+        compact_result = "".join(re.sub(r"\x1b\[[0-9;]*[A-Za-z]", "", result).split())
         self.assertIn(
             "[profileschanged]1agentprofilechanged."
             "Use/agentsforactivevaluesandconfirmation,"
@@ -3395,9 +3359,7 @@ print(
         process.send_text("/quit\n\n")
         self.assertEqual(process.wait_for_exit(), 0, process.normalized_text)
 
-        agent = self.workspace.read_json("config/agent_configs.json")[
-            "plot_architect"
-        ]
+        agent = self.workspace.read_json("config/agent_configs.json")["plot_architect"]
         self.assertEqual(agent["codex_model"], "gpt-pty")
         self.assertEqual(agent["codex_reasoning_effort"], "future_2")
         self.assertFalse(self.provider_log.exists())
@@ -3438,9 +3400,7 @@ print(
             "Choose a setting to edit.",
             after=settings_mark,
         )
-        compact_opened = "".join(
-            re.sub(r"\x1b\[[0-9;]*[A-Za-z]", "", opened).split()
-        )
+        compact_opened = "".join(re.sub(r"\x1b\[[0-9;]*[A-Za-z]", "", opened).split())
         ordered_settings = (
             "LanguageCurrent:KO",
             "PersonaCurrent:default_kim_eun_hee",
@@ -3452,12 +3412,7 @@ print(
         )
         self.assertEqual(
             tuple(compact_opened.index(value) for value in ordered_settings),
-            tuple(
-                sorted(
-                    compact_opened.index(value)
-                    for value in ordered_settings
-                )
-            ),
+            tuple(sorted(compact_opened.index(value) for value in ordered_settings)),
         )
 
         details_mark = process.output_mark()
@@ -3469,9 +3424,7 @@ print(
         self.assertIn("Message details", details)
         self.assertIn(
             "ChooseOffforcompactmessagesorOnfordetailedmessages.",
-            "".join(
-                re.sub(r"\x1b\[[0-9;]*[A-Za-z]", "", details).split()
-            ),
+            "".join(re.sub(r"\x1b\[[0-9;]*[A-Za-z]", "", details).split()),
         )
         self.assertIn("> 1. Off (selected)", details)
         self.assertIn("  2. On", details)
@@ -3483,9 +3436,9 @@ print(
             after=entered_mark,
         )
         self.assertEqual(
-            "".join(
-                re.sub(r"\x1b\[[0-9;]*[A-Za-z]", "", entered).split()
-            ).count("[entered]Pendingmessagedetailsentered:On."),
+            "".join(re.sub(r"\x1b\[[0-9;]*[A-Za-z]", "", entered).split()).count(
+                "[entered]Pendingmessagedetailsentered:On."
+            ),
             1,
         )
         returned_mark = process.output_mark()
@@ -3493,9 +3446,7 @@ print(
         returned = process.wait_for_text("[save required]", after=returned_mark)
         self.assertIn(
             "MessagedetailsPending:On",
-            "".join(
-                re.sub(r"\x1b\[[0-9;]*[A-Za-z]", "", returned).split()
-            ),
+            "".join(re.sub(r"\x1b\[[0-9;]*[A-Za-z]", "", returned).split()),
         )
 
         apply_mark = process.output_mark()
@@ -3506,14 +3457,10 @@ print(
         process.wait_for_text("[saved and applied]", after=save_mark)
         process.wait_for_text("story[lobby]> ", after=save_mark)
         saved = process.text_after(save_mark)
-        compact_saved = "".join(
-            re.sub(r"\x1b\[[0-9;]*[A-Za-z]", "", saved).split()
-        )
+        compact_saved = "".join(re.sub(r"\x1b\[[0-9;]*[A-Za-z]", "", saved).split())
         self.assertEqual(saved.count("[saved and applied]"), 1)
         self.assertEqual(
-            compact_saved.count(
-                "Settingssavedandappliedtothisrunningshellnow."
-            ),
+            compact_saved.count("Settingssavedandappliedtothisrunningshellnow."),
             1,
         )
         self.assertNotIn("[profiles changed]", saved)
@@ -3571,28 +3518,14 @@ print(
             mark = process.output_mark()
             process.send_text(navigation)
             output = process.wait_for_text(expected_picker, after=mark)
-            positions = tuple(
-                output.index(frame) for frame in _VISIBLE_PROGRESS_FRAMES
-            )
+            positions = tuple(output.index(frame) for frame in _VISIBLE_PROGRESS_FRAMES)
             self.assertEqual(positions, tuple(sorted(positions)))
             self.assertLess(max(positions), output.index(expected_picker))
             self.assertIn("\r\x1b[K", output)
             self.assertNotIn(f"{_VISIBLE_PROGRESS_FRAMES[0]}\n", output)
             return output
 
-        provider = open_delayed_picker(
-            "\n",
-            "Provider\nContext: Plot & Structure Architect",
-        )
-        self.assertIn("Codex", provider)
-        return_mark = process.output_mark()
-        process.send_text("\x1b")
-        process.wait_for_text(
-            "Agent settings\nContext: Plot & Structure Architect",
-            after=return_mark,
-        )
-
-        model = open_delayed_picker("\x1b[B\n", "GPT PTY")
+        model = open_delayed_picker("\n", "GPT PTY")
         self.assertIn("Model\nContext: Plot & Structure Architect", model)
         return_mark = process.output_mark()
         process.send_text("\x1b")
@@ -3649,22 +3582,23 @@ print(
         process.send_text(("\x1b[B" * 6) + "\n")
         agents = process.wait_for_text("Select an agent to configure", after=mark)
         self.assertIn(
-            "Plot&StructureArchitectCurrent:"
-            "(Codex/providerdefault/providerdefault)",
+            "Plot&StructureArchitectCurrent:(Codex/providerdefault/providerdefault)",
             "".join(agents.split()),
         )
         process.send_text("\x1b[B\n")
         fields = process.wait_for_text("Agent settings", after=mark)
         compact_fields = "".join(fields.split())
-        self.assertIn("ProviderCurrent:Codex", compact_fields)
+        self.assertIn("Provider(disabled)Current:Codex", compact_fields)
         self.assertIn("ModelCurrent:providerdefault", compact_fields)
         self.assertIn("EffortCurrent:providerdefault", compact_fields)
+        plain_fields = self.plain_terminal_text(fields)
+        self.assertIn("1. Provider (disabled)", plain_fields)
+        self.assertIn("Current: Codex", plain_fields)
         self.assertIn(
-            "> 1. Provider\n     Current: Codex",
-            self.plain_terminal_text(fields),
+            "Disabled:Setbyalaunchoverride;read-onlyinthisshell.",
+            compact_fields,
         )
-        self.assertNotIn(" — Current:", self.plain_terminal_text(fields))
-        process.send_text("\x1b[B\n")
+        process.send_text("\n")
         process.wait_for_text("GPT PTY", after=mark)
         self.assertNotRegex(
             process.text_after(mark),
@@ -3702,8 +3636,7 @@ print(
             after=returned_mark,
         )
         self.assertIn(
-            "Plot&StructureArchitectPending:"
-            "(Codex/gpt-pty/providerdefault)",
+            "Plot&StructureArchitectPending:(Codex/gpt-pty/providerdefault)",
             "".join(returned_agents.split()),
         )
         process.send_text("\x1b")
@@ -3775,6 +3708,9 @@ print(
         for event_name in ("escape", "interrupt", "eof"):
             for attempt in range(3):
                 with self.subTest(event=event_name, attempt=attempt):
+                    self.workspace = initialize_test_workspace(
+                        self.temporary_root / f"workspace-{event_name}-{attempt}"
+                    )
                     process = self._spawn_cli(
                         (),
                         environment_overrides={"TERM": "xterm-256color"},
@@ -3933,7 +3869,6 @@ print(
         )
         before = _durable_tree(self.workspace.root)
         coordinated = dict(before)
-        coordinated[CONVERSATION_STORAGE_MUTATION_GUARD_PATH] = b""
         process = self._spawn_cli(())
         process.wait_for_text("Provider authentication")
 
@@ -3972,8 +3907,7 @@ print(
             codex="unauthenticated",
             antigravity="indeterminate",
         )
-        descendant = self.workspace.root / "nested" / "deeper"
-        descendant.mkdir(parents=True)
+        descendant = self.workspace.root / "core_documents"
         process = self._spawn_cli((), cwd=descendant)
         process.wait_for_text("Provider authentication")
         process.send_line("1")
@@ -4003,8 +3937,7 @@ print(
         )
         self.assertTrue(
             any(
-                later["provider"] == "codex"
-                and later["operation"] == "probe"
+                later["provider"] == "codex" and later["operation"] == "probe"
                 for later in records[login_index + 1 :]
             )
         )
@@ -4023,10 +3956,8 @@ print(
         process.send_line("/quit")
         self.assertEqual(process.wait_for_exit(), 0, process.normalized_text)
         self.assertEqual(
-            self.workspace.read_json("config/system_defaults.json")[
-                "default_backend"
-            ],
-            "codex",
+            self.workspace.read_json("config/system_defaults.json")["default_backend"],
+            None,
         )
         self.assertFalse(self.provider_log.exists())
         self.assertNotIn(
@@ -4050,15 +3981,18 @@ print(
     ) -> None:
         """Gate a distinct effective Antigravity route before backend creation."""
 
-        agent_configs = self.workspace.read_json("config/agent_configs.json")
-        agent_configs["plot_architect"]["backend"] = "antigravity"
-        self.workspace.write_json("config/agent_configs.json", agent_configs)
         self._set_auth_state(
             codex="authenticated",
             antigravity="unauthenticated",
         )
 
-        process = self._spawn_cli(())
+        process = self._spawn_cli(
+            (
+                "chat",
+                "--backend",
+                "plot_architect=antigravity",
+            )
+        )
         process.wait_for_text("Provider authentication")
         self.assertFalse(self.provider_log.exists())
         process.send_line("2")
@@ -4066,9 +4000,7 @@ print(
         process.wait_for_text("story[lobby]> ")
 
         logins = [
-            record
-            for record in self._auth_records()
-            if record["operation"] == "login"
+            record for record in self._auth_records() if record["operation"] == "login"
         ]
         self.assertEqual(len(logins), 1)
         self.assertEqual(logins[0]["provider"], "antigravity")
@@ -4091,16 +4023,14 @@ print(
         process.send_line("/quit")
         self.assertEqual(process.wait_for_exit(), 0, process.normalized_text)
         self.assertEqual(
-            self.workspace.read_json("config/system_defaults.json")[
-                "default_backend"
-            ],
-            "codex",
+            self.workspace.read_json("config/system_defaults.json")["default_backend"],
+            None,
         )
         self.assertEqual(
-            self.workspace.read_json("config/agent_configs.json")[
-                "plot_architect"
-            ]["backend"],
-            "antigravity",
+            self.workspace.read_json("config/agent_configs.json")["plot_architect"][
+                "backend"
+            ],
+            None,
         )
         self.assertFalse(self.provider_log.exists())
         self.assertEqual(
@@ -4154,15 +4084,10 @@ print(
         process.wait_for_text("story[lobby]> ", after=settings_mark)
 
         logins = [
-            record
-            for record in self._auth_records()
-            if record["operation"] == "login"
+            record for record in self._auth_records() if record["operation"] == "login"
         ]
         self.assertEqual(
-            [
-                (record["provider"], record["argv"])
-                for record in logins
-            ],
+            [(record["provider"], record["argv"]) for record in logins],
             [
                 ("antigravity", []),
                 ("codex", ["login"]),
@@ -4176,9 +4101,7 @@ print(
         process.send_line("/quit")
         self.assertEqual(process.wait_for_exit(), 0, process.normalized_text)
         self.assertEqual(
-            self.workspace.read_json("config/system_defaults.json")[
-                "default_backend"
-            ],
+            self.workspace.read_json("config/system_defaults.json")["default_backend"],
             "codex",
         )
         self.assertNotIn(
@@ -4250,7 +4173,7 @@ print(
     ) -> None:
         """Keep startup visibly active before welcome and lobby rendering."""
 
-        source = r'''
+        source = r"""
 import time
 
 from story_writing_agents import cli
@@ -4273,7 +4196,7 @@ def delayed_context(workspace):
 cli.activate_configured_conversation_storage = delayed_activate
 cli.load_cli_context = delayed_context
 raise SystemExit(cli.main([]))
-'''
+"""
         process = self._spawn_python(
             source,
             environment_overrides={"TERM": "xterm-256color"},
@@ -4313,7 +4236,7 @@ raise SystemExit(cli.main([]))
     ) -> None:
         """Keep each blocking data-to-picker transition visibly active."""
 
-        source = r'''
+        source = r"""
 import time
 
 from story_writing_agents import cli
@@ -4351,8 +4274,9 @@ ProviderAuthService.probe_all = delayed_probe_all
 AgentBackend.list_session_lifecycles = delayed_list_sessions
 FilesystemConversationCatalog.list = delayed_list_conversations
 InteractiveController._main_resume_choices = lambda self, buffer, cursor: None
+InteractiveController._persist_missing_auth_default = lambda self, snapshot, **kwargs: None
 raise SystemExit(cli.main([]))
-'''
+"""
         process = self._spawn_python(
             source,
             environment_overrides={"TERM": "xterm-256color"},
@@ -4363,9 +4287,7 @@ raise SystemExit(cli.main([]))
         def assert_progress_before_picker(output: str, prompt: str) -> None:
             """Require ordered spatial frames before one completed picker."""
 
-            positions = tuple(
-                output.index(frame) for frame in _VISIBLE_PROGRESS_FRAMES
-            )
+            positions = tuple(output.index(frame) for frame in _VISIBLE_PROGRESS_FRAMES)
             self.assertEqual(positions, tuple(sorted(positions)))
             self.assertLess(max(positions), output.index(prompt, positions[0]))
 
@@ -4385,7 +4307,7 @@ raise SystemExit(cli.main([]))
 
         create_mark = process.output_mark()
         process.send_line("/session create alpha")
-        process.wait_for_text("story[alpha:lead]> ", after=create_mark)
+        process.wait_for_text("story[alpha]> ", after=create_mark)
         session_mark = process.output_mark()
         process.send_text("/session resume\n\n")
         session_output = process.wait_for_text(
@@ -4398,12 +4320,12 @@ raise SystemExit(cli.main([]))
         )
         cancel_mark = process.output_mark()
         process.send_interrupt()
-        process.wait_for_text("story[alpha:lead]> ", after=cancel_mark)
+        process.wait_for_text("story[alpha]> ", after=cancel_mark)
 
         conversation_mark = process.output_mark()
         process.send_line("/conversation new Delayed Subject")
         process.wait_for_text("Subject: Delayed Subject", after=conversation_mark)
-        process.wait_for_text("story[alpha:lead]> ", after=conversation_mark)
+        process.wait_for_text("story[alpha]> ", after=conversation_mark)
         resume_mark = process.output_mark()
         process.send_text("/conversation resume\n\n")
         conversation_output = process.wait_for_text(
@@ -4416,7 +4338,7 @@ raise SystemExit(cli.main([]))
         )
         cancel_mark = process.output_mark()
         process.send_interrupt()
-        process.wait_for_text("story[alpha:lead]> ", after=cancel_mark)
+        process.wait_for_text("story[alpha]> ", after=cancel_mark)
 
         process.send_text("/quit\n\n")
         self.assertEqual(process.wait_for_exit(), 0, process.normalized_text)
@@ -4442,6 +4364,9 @@ raise SystemExit(cli.main([]))
         )
         for terminal_columns, logo_marker, identity, next_copy in cases:
             with self.subTest(terminal_columns=terminal_columns):
+                self.workspace = initialize_test_workspace(
+                    self.temporary_root / f"workspace-welcome-{terminal_columns}"
+                )
                 process = self._spawn_cli(
                     (),
                     environment_overrides={
@@ -4488,9 +4413,29 @@ raise SystemExit(cli.main([]))
             "".join(process.normalized_text.split()),
         )
         self.assertIn("Session: lobby\n", process.normalized_text)
+        self.assertEqual(
+            subprocess.run(
+                ("git", "status", "--porcelain=v1", "--untracked-files=all"),
+                cwd=self.workspace.root,
+                capture_output=True,
+                check=True,
+            ).stdout,
+            b"",
+        )
+        self.assertIsNone(
+            self.workspace.read_json("config/system_defaults.json")[
+                "default_backend"
+            ]
+        )
+        self.assertFalse(
+            self.workspace.path(
+                "agent_states/orchestrator_state/provider_route_generations.json"
+            ).exists()
+        )
+        self.assertFalse(self.workspace.path("debug_logs/runtime.jsonl").exists())
 
         process.send_line("/session create alpha")
-        process.wait_for_text("story[alpha:lead]> ")
+        process.wait_for_text("story[alpha]> ")
         self.assertIn("Session: alpha (created)\n", process.normalized_text)
         process.send_text("/quit\n\n")
         self.assertEqual(process.wait_for_exit(), 0, process.normalized_text)
@@ -4498,14 +4443,21 @@ raise SystemExit(cli.main([]))
         manifest = self.workspace.read_json(f"{_SESSION_DIRECTORY}/alpha.json")
         self.assertEqual(manifest["durable_state"], "ready")
         self.assertFalse(
-            self.workspace.path(
-                f"{_SESSION_DIRECTORY}/alpha.access.json"
-            ).exists()
+            self.workspace.path(f"{_SESSION_DIRECTORY}/alpha.access.json").exists()
         )
         self.assertEqual(load_cli_context(self.workspace).default_session_id, "alpha")
         self.assertFalse(self.provider_log.exists())
         self.assertNotIn("[suggestions]", process.normalized_text)
         self.assertNotIn("PTY_TEST_CREDENTIAL_MUST_NOT_APPEAR", process.normalized_text)
+        self.assertEqual(
+            subprocess.run(
+                ("git", "status", "--porcelain=v1", "--untracked-files=all"),
+                cwd=self.workspace.root,
+                capture_output=True,
+                check=True,
+            ).stdout,
+            b"",
+        )
 
     def test_capable_main_editor_previews_edits_clears_and_restores(self) -> None:
         """Exercise live suggestions and exact PTY cleanup without side effects."""
@@ -4529,21 +4481,16 @@ raise SystemExit(cli.main([]))
         self.assertIn("Suggestions [open]", preview)
         compact_preview = "".join(preview.split())
         for token in (
-            "/say",
-            "/rag",
-            "/to",
-            "/agent",
             "/agents",
             "/auth",
             "/settings",
             "/override",
-            "/run",
-            "/draft-file",
             "/session",
             "/conversation",
             "/search",
             "/transcript",
             "/inspect",
+            "/exchanges",
             "/history",
             "/status",
             "/help",
@@ -4622,1299 +4569,6 @@ raise SystemExit(cli.main([]))
             process.original_terminal_attributes,
         )
 
-    def test_public_cli_filesystem_artifact_completion_scans_and_inserts(
-        self,
-    ) -> None:
-        """Discover direct-disk sources through explicit and implicit workspaces."""
-
-        self._seed_default_session()
-        paths, excluded = self._seed_filesystem_reference_artifacts()
-        catalog_path = self.workspace.root / (
-            "agent_states/orchestrator_state/writing_artifacts/catalog.json"
-        )
-        self.assertFalse(catalog_path.exists())
-        target = "manuscript/part-01/scene.md"
-        token = f"${{{target}}}"
-        self.assertIn(target, paths)
-        process = self._spawn_cli(
-            ("chat", "alpha", "--workspace", str(self.workspace.root)),
-            environment_overrides={"TERM": "xterm-256color"},
-            terminal_columns=160,
-        )
-        prompt = "story[alpha:lead]> "
-        process.wait_for_text(prompt)
-
-        discovery_mark = process.output_mark()
-        process.send_text("x $")
-        process.wait_for_text(
-            "[controls] Up/Down selects; Enter/Tab inserts a whole-file reference.",
-            after=discovery_mark,
-        )
-        for path in paths:
-            process.wait_for_text(
-                f"${{{path}}}",
-                after=discovery_mark,
-            )
-        discovery = process.text_after(discovery_mark)
-        self.assertIn("Writing artifact selection [open]", discovery)
-        self.assertNotIn("Suggestions [open]", discovery)
-        positions = [discovery.index(f"${{{path}}}") for path in paths]
-        self.assertEqual(positions, sorted(positions))
-        for path in excluded:
-            with self.subTest(excluded=path):
-                self.assertNotIn(path, discovery)
-
-        process.send_text(" y")
-        process.wait_for_text(
-            f"{prompt}x $ y",
-            after=discovery_mark,
-        )
-        cursor_mark = process.output_mark()
-        process.send_text("\x1b[D" * len(" y"))
-        process.wait_for_text(f"${{{paths[0]}}}", after=cursor_mark)
-
-        filter_mark = process.output_mark()
-        process.send_text("manuscript/")
-        manuscript_paths = tuple(
-            path for path in paths if path.startswith("manuscript/")
-        )
-        for path in manuscript_paths:
-            process.wait_for_text(f"${{{path}}}", after=filter_mark)
-        filtered = process.text_after(filter_mark)
-        self.assertIn("Writing artifact selection [open]", filtered)
-        for path in paths:
-            if path.startswith("core_documents/"):
-                self.assertNotIn(f"${{{path}}}", filtered)
-
-        navigation_mark = process.output_mark()
-        target_index = manuscript_paths.index(target)
-        process.send_text("\x1b[B" * target_index)
-        process.wait_for_text(f"[highlighted] {token}", after=navigation_mark)
-
-        completion_mark = process.output_mark()
-        process.send_text("\t")
-        first_expected = f"x {token} y"
-        completed = process.wait_for_text(
-            f"{prompt}{first_expected}",
-            after=completion_mark,
-        )
-        self.assertNotIn(f"$${{{target}}}", completed)
-        self.assertNotIn(f"{token}#L", completed)
-        self.assertFalse(self.provider_log.exists())
-
-        process.send_text("\x1b[C" * len(" y"))
-        character = "core_documents/character_sheets.md"
-        character_token = f"${{{character}}}"
-        second_mark = process.output_mark()
-        process.send_text(" and $core_documents/")
-        process.wait_for_text(character_token, after=second_mark)
-        process.send_text("\n")
-        final_expected = f"{first_expected} and {character_token} "
-        process.wait_for_text(f"{prompt}{final_expected}", after=second_mark)
-        self.assertFalse(self.provider_log.exists())
-
-        process.send_interrupt()
-        process.wait_for_text(
-            "[cancelled] No action was taken.",
-            after=second_mark,
-        )
-        process.send_text("/quit\n\n")
-        self.assertEqual(process.wait_for_exit(), 0, process.normalized_text)
-        self.assertFalse(self.provider_log.exists())
-        self.assertFalse(
-            self.workspace.path(
-                f"{_SESSION_DIRECTORY}/alpha.access.json"
-            ).exists()
-        )
-        self.assertEqual(
-            process.final_terminal_attributes,
-            process.original_terminal_attributes,
-        )
-
-        nested_cwd = self.workspace.root / "scratch" / "nested"
-        nested_cwd.mkdir(parents=True)
-        implicit = self._spawn_cli(
-            ("chat", "alpha"),
-            cwd=nested_cwd,
-            environment_overrides={"TERM": "xterm-256color"},
-            terminal_columns=160,
-        )
-        implicit.wait_for_text(prompt)
-        implicit_mark = implicit.output_mark()
-        implicit_path = "manuscript/volume_2/ending.md"
-        implicit_token = f"${{{implicit_path}}}"
-        implicit.send_text("$manuscript/volume_2")
-        implicit.wait_for_text(implicit_token, after=implicit_mark)
-        implicit.send_text("\t")
-        implicit.wait_for_text(f"{prompt}{implicit_token} ", after=implicit_mark)
-        self.assertFalse(self.provider_log.exists())
-        implicit.send_interrupt()
-        implicit.wait_for_text(
-            "[cancelled] No action was taken.",
-            after=implicit_mark,
-        )
-        implicit.send_text("/quit\n\n")
-        self.assertEqual(implicit.wait_for_exit(), 0, implicit.normalized_text)
-        self.assertEqual(
-            implicit.final_terminal_attributes,
-            implicit.original_terminal_attributes,
-        )
-        self.assertFalse(catalog_path.exists())
-
-    def test_installed_console_double_dollar_opens_complete_picker_immediately(
-        self,
-    ) -> None:
-        """Launch the installed `story` script without source-path assistance."""
-
-        self._seed_default_session()
-        paths, excluded = self._seed_filesystem_reference_artifacts()
-        sibling = Workspace(self.temporary_root / "sibling").initialize()
-        sibling_source = sibling.root / "manuscript/sibling-only.md"
-        sibling_source.parent.mkdir(parents=True, exist_ok=True)
-        sibling_source.write_text("must not leak\n", encoding="utf-8")
-        catalog_path = self.workspace.root / (
-            "agent_states/orchestrator_state/writing_artifacts/catalog.json"
-        )
-        self.assertFalse(catalog_path.exists())
-
-        virtual_environment = self.temporary_root / "installed-runtime"
-        subprocess.run(
-            (
-                sys.executable,
-                "-m",
-                "venv",
-                "--system-site-packages",
-                str(virtual_environment),
-            ),
-            check=True,
-            cwd=self.temporary_root,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.STDOUT,
-            text=True,
-            timeout=120,
-        )
-        binary_directory = virtual_environment / (
-            "Scripts" if os.name == "nt" else "bin"
-        )
-        installed_python = binary_directory / (
-            "python.exe" if os.name == "nt" else "python"
-        )
-        clean_environment = os.environ.copy()
-        clean_environment.pop("PYTHONPATH", None)
-        clean_environment["PYTHONNOUSERSITE"] = "1"
-        installation = subprocess.run(
-            (
-                str(installed_python),
-                "-m",
-                "pip",
-                "install",
-                "--no-deps",
-                "--no-build-isolation",
-                str(_REPOSITORY_ROOT),
-            ),
-            check=False,
-            cwd=self.temporary_root,
-            env=clean_environment,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.STDOUT,
-            text=True,
-            timeout=120,
-        )
-        self.assertEqual(
-            installation.returncode,
-            0,
-            installation.stdout,
-        )
-        probe = subprocess.run(
-            (
-                str(installed_python),
-                "-c",
-                "import story_writing_agents as package; print(package.__file__)",
-            ),
-            check=False,
-            cwd=self.temporary_root,
-            env=clean_environment,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.STDOUT,
-            text=True,
-            timeout=30,
-        )
-        self.assertEqual(probe.returncode, 0, probe.stdout)
-        installed_module = Path(probe.stdout.strip()).resolve()
-        self.assertTrue(
-            installed_module.is_relative_to(virtual_environment.resolve()),
-            installed_module,
-        )
-
-        installed_story = binary_directory / (
-            "story.exe" if os.name == "nt" else "story"
-        )
-        self.assertTrue(installed_story.is_file())
-        process = self._spawn_command(
-            (
-                str(installed_story),
-                "chat",
-                "alpha",
-                "--workspace",
-                str(self.workspace.root),
-            ),
-            environment_overrides={
-                "PYTHONNOUSERSITE": "1",
-                "TERM": "xterm-256color",
-            },
-            environment_removals=("PYTHONPATH",),
-            terminal_columns=160,
-        )
-        prompt = "story[alpha:lead]> "
-        process.wait_for_text(prompt)
-        picker_mark = process.output_mark()
-        process.send_text("$$")
-        picker = process.wait_for_text(
-            "[controls] Up/Down selects; Enter/Tab opens the ranged viewer.",
-            after=picker_mark,
-        )
-        self.assertIn(f"{prompt}$$", picker)
-        for path in paths:
-            self.assertIn(path, picker)
-        for path in excluded:
-            self.assertNotIn(path, picker)
-        self.assertNotIn("sibling-only.md", picker)
-        self.assertFalse(self.provider_log.exists())
-        self.assertFalse(catalog_path.exists())
-
-        process.send_interrupt()
-        process.wait_for_text("[cancelled] No action was taken.", after=picker_mark)
-        process.send_text("/quit\n\n")
-        self.assertEqual(process.wait_for_exit(), 0, process.normalized_text)
-        self.assertFalse(self.provider_log.exists())
-        self.assertFalse(catalog_path.exists())
-        self.assertFalse(
-            any(
-                "history" in path.name.lower()
-                for path in self.workspace.root.rglob("*")
-            )
-        )
-        self.assertEqual(
-            process.final_terminal_attributes,
-            process.original_terminal_attributes,
-        )
-
-    def test_public_cli_no_artifact_files_preview_and_activation_are_deferred(
-        self,
-    ) -> None:
-        """Preview empty `$`/`$$` before their deferred activation failure."""
-
-        self._seed_default_session()
-        prompt = "story[alpha:lead]> "
-        empty_copy = (
-            "No writing artifacts. Add a supported canonical core document or "
-            "Markdown file with a lowercase .md suffix under manuscript/. "
-            "Consensus can also publish one."
-        )
-        creation_hint = (
-            "Add a supported canonical core document or Markdown file with a "
-            "lowercase .md suffix under manuscript/. Consensus can also publish "
-            "one."
-        )
-        for marker in ("$", "$$"):
-            for activation_key in ("\t", "\n"):
-                with self.subTest(
-                    marker=marker,
-                    activation_key=repr(activation_key),
-                ):
-                    instruction = (
-                        "[controls] Up/Down selects; Enter/Tab opens the ranged "
-                        "viewer."
-                        if marker == "$$"
-                        else "[controls] Up/Down selects; Enter/Tab inserts a "
-                        "whole-file reference."
-                    )
-                    process = self._spawn_cli(
-                        (
-                            "chat",
-                            "alpha",
-                            "--workspace",
-                            str(self.workspace.root),
-                        ),
-                        environment_overrides={"TERM": "xterm-256color"},
-                        terminal_columns=120,
-                    )
-                    process.wait_for_text(prompt)
-                    preview_mark = process.output_mark()
-                    process.send_text(marker)
-                    preview = process.wait_for_text(
-                        instruction if marker == "$$" else "also publish one.",
-                        after=preview_mark,
-                    )
-                    self.assertIn(
-                        "".join(f"[empty] {empty_copy}".split()),
-                        "".join(preview.split()),
-                    )
-                    self.assertIn("Writing artifact selection [open]", preview)
-                    self.assertIn(instruction, preview)
-                    self.assertIn(f"{prompt}{marker}", preview)
-
-                    activation_mark = process.output_mark()
-                    process.send_text(activation_key)
-                    failure = process.wait_for_text(
-                        "[error command_invalid] No current writing artifacts are "
-                        "available.",
-                        after=activation_mark,
-                    )
-                    failure = process.wait_for_text(
-                        "also publish one.",
-                        after=activation_mark,
-                    )
-                    self.assertIn(
-                        "".join(f"[hint] {creation_hint}".split()),
-                        "".join(failure.split()),
-                    )
-                    restored = process.wait_for_text(
-                        f"{prompt}{marker}",
-                        after=activation_mark,
-                    )
-                    self.assertIn(
-                        "[error command_invalid] No current writing artifacts are "
-                        "available.",
-                        failure,
-                    )
-                    self.assertIn(f"{prompt}{marker}", restored)
-                    self.assertEqual(process.raw_bytes.count(b"\x1b[?1049h"), 0)
-                    self.assertEqual(process.raw_bytes.count(b"\x1b[?1049l"), 0)
-                    self.assertFalse(self.provider_log.exists())
-
-                    process.send_interrupt()
-                    process.wait_for_text(
-                        "[cancelled] No action was taken.",
-                        after=activation_mark,
-                    )
-                    history_mark = process.output_mark()
-                    process.send_text("\x1b[AX")
-                    recalled = process.wait_for_text(
-                        f"{prompt}X",
-                        after=history_mark,
-                    )
-                    self.assertNotIn(f"{prompt}{marker}X", recalled)
-                    process.send_interrupt()
-                    process.wait_for_text(
-                        "[cancelled] No action was taken.",
-                        after=history_mark,
-                    )
-                    process.send_text("/quit\n\n")
-                    self.assertEqual(
-                        process.wait_for_exit(),
-                        0,
-                        process.normalized_text,
-                    )
-                    self.assertFalse(self.provider_log.exists())
-                    self.assertFalse(
-                        self.workspace.path(
-                            f"{_SESSION_DIRECTORY}/alpha.access.json"
-                        ).exists()
-                    )
-                    self.assertEqual(
-                        process.final_terminal_attributes,
-                        process.original_terminal_attributes,
-                    )
-
-    def test_public_cli_reference_guidance_and_inert_states_are_visible(
-        self,
-    ) -> None:
-        """Explain `$`/`$$` while lobby and attached no-focus input stay inert."""
-
-        guidance = (
-            "Artifact references require an attached session and focused "
-            "conversation. In provider-bound prompts, $ opens whole-file "
-            "selection and completion; exact $$ immediately opens ranged "
-            "selection, where Enter/Tab opens the highlighted source in the viewer."
-        )
-        lobby = self._spawn_cli(
-            (),
-            cwd=self.workspace.root,
-            environment_overrides={"TERM": "xterm-256color"},
-            terminal_columns=120,
-        )
-        lobby.wait_for_text("story[lobby]> ")
-        self.assertIn(
-            "".join(guidance.split()),
-            "".join(lobby.normalized_text.split()),
-        )
-        inert_mark = lobby.output_mark()
-        lobby.send_text("$")
-        inert = lobby.wait_for_text("story[lobby]> $", after=inert_mark)
-        self.assertNotIn("Writing artifact selection [open]", inert)
-        lobby.send_interrupt()
-        lobby.wait_for_text("[cancelled] No action was taken.", after=inert_mark)
-        help_mark = lobby.output_mark()
-        lobby.send_text("/help\n\n")
-        lobby.wait_for_text(
-            "Writing artifact references",
-            after=help_mark,
-        )
-        lobby.wait_for_text(
-            "/override language LANG | persona AGENT NAME | reset",
-            after=help_mark,
-        )
-        help_output = lobby.wait_for_text("story[lobby]> ", after=help_mark)
-        self.assertIn("Writing artifact references", help_output)
-        self.assertIn(
-            "".join(guidance.split()),
-            "".join(help_output.split()),
-        )
-        compact_help = "".join(help_output.split())
-        self.assertIn(
-            "/overridelanguageLANG|personaAGENTNAME|reset",
-            compact_help,
-        )
-        for hidden in ("/languageLANG", "/personaAGENTNAME", "/exit"):
-            with self.subTest(hidden=hidden):
-                self.assertNotIn(hidden, compact_help)
-        lobby.send_text("/quit\n\n")
-        self.assertEqual(lobby.wait_for_exit(), 0, lobby.normalized_text)
-        self.assertEqual(
-            lobby.final_terminal_attributes,
-            lobby.original_terminal_attributes,
-        )
-
-        backend = AgentBackend(
-            self.workspace,
-            executable=str(self.fake_executable),
-        )
-        try:
-            backend.create_session_with_access("alpha")
-        finally:
-            backend.close()
-        save_default_session(self.workspace, "alpha")
-        attached = self._spawn_cli(
-            ("chat", "alpha", "--workspace", str(self.workspace.root)),
-            environment_overrides={"TERM": "xterm-256color"},
-            terminal_columns=120,
-        )
-        attached.wait_for_text("story[alpha:lead]> ")
-        self.assertIn(
-            "".join(guidance.split()),
-            "".join(attached.normalized_text.split()),
-        )
-        no_focus_mark = attached.output_mark()
-        attached.send_text("$")
-        no_focus = attached.wait_for_text(
-            "story[alpha:lead]> $",
-            after=no_focus_mark,
-        )
-        self.assertNotIn("Writing artifact selection [open]", no_focus)
-        attached.send_interrupt()
-        attached.wait_for_text(
-            "[cancelled] No action was taken.",
-            after=no_focus_mark,
-        )
-        attached.send_text("/quit\n\n")
-        self.assertEqual(
-            attached.wait_for_exit(),
-            0,
-            attached.normalized_text,
-        )
-        self.assertFalse(self.provider_log.exists())
-        self.assertEqual(
-            attached.final_terminal_attributes,
-            attached.original_terminal_attributes,
-        )
-
-    def test_reference_fragment_completion_is_capable_and_provider_free(self) -> None:
-        """Complete typed $c, require explicit submission, and restore the PTY."""
-
-        source = _REFERENCE_PROBE_PREAMBLE + r'''
-results = []
-for _attempt in range(2):
-    results.append(main.read_main_with_references(
-        choices,
-        main_scope,
-        paths,
-        text,
-        session_id="session",
-        agent_id=PLOT_ARCHITECT,
-    ))
-print("RESULT=" + json.dumps({
-    "texts": [result.text for result in results],
-    "catalog_calls": len(catalog_calls),
-    "read_calls": read_calls,
-}, separators=(",", ":")))
-'''
-        process = self._spawn_python(
-            source,
-            environment_overrides={"TERM": "xterm-256color"},
-            terminal_columns=80,
-        )
-        path = "core_documents/character_sheets.md"
-        token = f"${{{path}}}"
-        process.wait_for_text("story[session:plot]>")
-        preview_mark = process.output_mark()
-        process.send_text("typed $c suffix")
-        process.wait_for_text("typed $c suffix", after=preview_mark)
-        cursor_mark = process.output_mark()
-        process.send_text("\x1b[D" * len(" suffix"))
-        preview = process.wait_for_text(token, after=cursor_mark)
-        self.assertIn("Writing artifact selection [open]", preview)
-        self.assertIn(
-            "[controls] Up/Down selects; Enter/Tab inserts a whole-file reference.",
-            preview,
-        )
-        self.assertIn("[highlighted]", preview)
-        process.send_text("\t")
-        first_expected = f"typed {token} suffix"
-        process.wait_for_text(first_expected, after=cursor_mark)
-        self.assertNotIn('RESULT={"texts":', process.text_after(preview_mark))
-        second_prompt_mark = process.output_mark()
-        process.send_text("\x1b[C" * len(" suffix") + "\n")
-        process.wait_for_text("story[session:plot]>", after=second_prompt_mark)
-
-        direct = f"view $${{{path}}}."
-        process.send_text(direct)
-        process.wait_for_text(direct, after=second_prompt_mark)
-        process.send_text("\x1b[D\n")
-        process.wait_for_text(f"[viewer] {path}", after=second_prompt_mark)
-        process.send_text("\x1b[1;2B\n")
-        second_expected = f"view {token}#L1-L2."
-        process.wait_for_text(second_expected, after=second_prompt_mark)
-        process.send_text("\x1b[C\n")
-        process.wait_for_text('RESULT={"texts":')
-        self.assertEqual(process.wait_for_exit(), 0, process.normalized_text)
-
-        match = re.search(r"RESULT=(\{[^\r\n]+\})", process.normalized_text)
-        self.assertIsNotNone(match, process.normalized_text)
-        assert match is not None
-        result = json.loads(match.group(1))
-        self.assertEqual(result["texts"], [first_expected, second_expected])
-        self.assertGreater(result["catalog_calls"], 0)
-        self.assertEqual(result["read_calls"], [path])
-        self.assertEqual(process.raw_bytes.count(b"\x1b[?1049h"), 1)
-        self.assertEqual(process.raw_bytes.count(b"\x1b[?1049l"), 1)
-        self.assertEqual(
-            process.final_terminal_attributes,
-            process.original_terminal_attributes,
-        )
-        self.assertFalse(self.provider_log.exists())
-
-    def test_reference_fragment_completion_uses_dumb_fallback_confirmation(
-        self,
-    ) -> None:
-        """Filter $c to one numbered choice and retain explicit confirmation."""
-
-        source = _REFERENCE_PROBE_PREAMBLE + r'''
-PATHS = (PATHS[0],)
-results = []
-for _attempt in range(2):
-    results.append(main.read_main_with_references(
-        choices,
-        main_scope,
-        paths,
-        text,
-        session_id="session",
-        agent_id=PLOT_ARCHITECT,
-    ))
-print("RESULT=" + json.dumps({
-    "texts": [result.text for result in results],
-    "catalog_calls": len(catalog_calls),
-    "read_calls": read_calls,
-}, separators=(",", ":")))
-'''
-        process = self._spawn_python(
-            source,
-            environment_overrides={"TERM": "dumb"},
-            terminal_columns=80,
-        )
-        path = "core_documents/character_sheets.md"
-        token = f"${{{path}}}"
-        process.wait_for_text("story[session:plot]>")
-        assert termios is not None
-        fallback_attributes = termios.tcgetattr(process.master_fd)
-        self.assertTrue(fallback_attributes[3] & termios.ICANON)
-        self.assertTrue(fallback_attributes[3] & termios.ECHO)
-
-        process.send_line("fallback $c suffix")
-        picker = process.wait_for_text(f"1. [highlighted] {token}")
-        self.assertNotIn("2. [", picker)
-        process.send_line("1")
-        first_expected = f"fallback {token} suffix"
-        process.wait_for_text(f"Draft retained: {first_expected}")
-        process.wait_for_text("Press Enter to submit it")
-        confirmation_mark = process.output_mark()
-        process.send_line("")
-        process.wait_for_text("story[session:plot]>", after=confirmation_mark)
-
-        direct = f"view $${{{path}}}."
-        process.send_line(direct)
-        process.wait_for_text(f"[viewer] {path}")
-        process.wait_for_text("Select START-END or /cancel:")
-        process.send_line("2-3")
-        second_expected = f"view {token}#L2-L3."
-        process.wait_for_text(f"Draft retained: {second_expected}")
-        process.wait_for_text("Press Enter to submit it")
-        process.send_line("")
-        process.wait_for_text('RESULT={"texts":')
-        self.assertEqual(process.wait_for_exit(), 0, process.normalized_text)
-
-        match = re.search(r"RESULT=(\{[^\r\n]+\})", process.normalized_text)
-        self.assertIsNotNone(match, process.normalized_text)
-        assert match is not None
-        result = json.loads(match.group(1))
-        self.assertEqual(result["texts"], [first_expected, second_expected])
-        self.assertGreater(result["catalog_calls"], 0)
-        self.assertEqual(result["read_calls"], [path])
-        self.assertNotIn("\x1b", process.normalized_text)
-        self.assertEqual(process.raw_bytes.count(b"\x1b[?1049h"), 0)
-        self.assertEqual(process.raw_bytes.count(b"\x1b[?1049l"), 0)
-        self.assertEqual(
-            process.final_terminal_attributes,
-            process.original_terminal_attributes,
-        )
-        self.assertFalse(self.provider_log.exists())
-
-    def test_reference_viewer_reuses_main_latch_and_ineligible_dollar_stays_literal(
-        self,
-    ) -> None:
-        """Insert one range, then prove the next ineligible marker does no I/O."""
-
-        source = r'''
-import json
-import sys
-
-from story_writing_agents import PLOT_ARCHITECT
-from story_writing_agents.interactive_commands import project_provider_text_span
-from story_writing_agents.interactive_terminal import (
-    InteractiveMainInput,
-    build_stream_terminal,
-)
-from story_writing_agents.interactive_terminal._reference_activation import (
-    ReferenceInputScope,
-)
-
-path = "core_documents/global_outline.md"
-catalog_calls = []
-read_calls = []
-
-def scope(buffer, cursor):
-    span = project_provider_text_span(buffer, cursor)
-    return None if span is None else ReferenceInputScope(span.start, span.end)
-
-def paths():
-    catalog_calls.append("list")
-    return (path,)
-
-def text(selected):
-    read_calls.append(selected)
-    return "one\ntwo\nthree"
-
-terminal = build_stream_terminal(input, sys.stdin, sys.stdout)
-main = InteractiveMainInput(terminal)
-choices = lambda _buffer, _cursor: None
-first = main.read_main_with_references(
-    choices,
-    scope,
-    paths,
-    text,
-    session_id="session",
-    agent_id=PLOT_ARCHITECT,
-)
-before_second = [len(catalog_calls), len(read_calls)]
-second = main.read_main_with_references(
-    choices,
-    scope,
-    paths,
-    text,
-    session_id="session",
-    agent_id=PLOT_ARCHITECT,
-)
-print("RESULT=" + json.dumps({
-    "first": first.text,
-    "second": second.text,
-    "before_second": before_second,
-    "after_second": [len(catalog_calls), len(read_calls)],
-    "read_calls": read_calls,
-}, separators=(",", ":")))
-'''
-        process = self._spawn_python(
-            source,
-            environment_overrides={"TERM": "xterm-256color"},
-            terminal_columns=48,
-        )
-        path = "core_documents/global_outline.md"
-        process.wait_for_text("story[session:plot]>")
-        first_prompt_mark = process.output_mark()
-        process.send_text(f"use $${{{path}}}\n\x1b[1;2B\n\n")
-        process.wait_for_text(f"[viewer] {path}")
-        process.wait_for_text("story[session:plot]>", after=first_prompt_mark)
-        process.send_line("/status $")
-        process.wait_for_text(
-            'RESULT={"first":"use ${core_documents/global_outline.md}#L1-L2",'
-            '"second":"/status $","before_second":'
-        )
-        self.assertEqual(process.wait_for_exit(), 0, process.normalized_text)
-        match = re.search(r"RESULT=(\{[^\r\n]+\})", process.normalized_text)
-        self.assertIsNotNone(match, process.normalized_text)
-        assert match is not None
-        result = json.loads(match.group(1))
-        self.assertEqual(
-            result,
-            {
-                "first": "use ${core_documents/global_outline.md}#L1-L2",
-                "second": "/status $",
-                "before_second": result["after_second"],
-                "after_second": result["after_second"],
-                "read_calls": ["core_documents/global_outline.md"],
-            },
-        )
-        self.assertGreater(result["after_second"][0], 0)
-        self.assertEqual(result["after_second"][1], 1)
-        self.assertEqual(process.raw_bytes.count(b"\x1b[?1049h"), 1)
-        self.assertEqual(process.raw_bytes.count(b"\x1b[?1049l"), 1)
-        self.assertEqual(
-            process.final_terminal_attributes,
-            process.original_terminal_attributes,
-        )
-        self.assertFalse(self.provider_log.exists())
-
-    def test_reference_routes_picker_reverse_range_and_repeated_insertions(self) -> None:
-        """Drive every inline route and two edits through real nested input."""
-
-        source = _REFERENCE_PROBE_PREAMBLE + r'''
-results = []
-for _attempt in range(3):
-    results.append(main.read_main_with_references(
-        choices,
-        main_scope,
-        paths,
-        text,
-        session_id="session",
-        agent_id=PLOT_ARCHITECT,
-    ).text)
-parsed = [parse_interactive_line(line) for line in results]
-print("RESULT=" + json.dumps({
-    "results": results,
-    "parsed": [
-        [action.kind.value, action.text, action.agent_id]
-        for action in parsed
-    ],
-    "catalog_calls": len(catalog_calls),
-    "read_calls": read_calls,
-}, separators=(",", ":")))
-'''
-        process = self._spawn_python(
-            source,
-            environment_overrides={"TERM": "xterm-256color"},
-            terminal_columns=64,
-        )
-        character, outline, rules = (
-            "core_documents/character_sheets.md",
-            "core_documents/global_outline.md",
-            "core_documents/narrative_rules.md",
-        )
-
-        process.wait_for_text("story[session:plot]>")
-        second_prompt_mark = process.output_mark()
-        process.send_text("@plot compare $$")
-        immediate = process.wait_for_text(
-            f"[highlighted] {character}",
-            after=second_prompt_mark,
-        )
-        self.assertIn(
-            "[controls]Up/Downselects;Enter/Tabopenstherangedviewer.",
-            "".join(immediate.split()),
-        )
-        self.assertIn("story[session:plot]> @plot compare $$", immediate)
-        for path in (character, outline, rules):
-            self.assertIn(path, immediate)
-        self.assertFalse(self.provider_log.exists())
-        process.send_text(
-            "\x1b[B\n"
-            "\x1b[B\x1b[B\x1b[1;2A\x1b[1;2A\n"
-            f" and $${{{rules}}}\n\x1b[B\n\n"
-        )
-        process.wait_for_text(f"[viewer] {outline}")
-        process.wait_for_text(f"[viewer] {rules}")
-        process.wait_for_text(
-            "story[session:plot]>",
-            after=second_prompt_mark,
-        )
-
-        third_prompt_mark = process.output_mark()
-        process.send_text("/say cite $$")
-        say_picker = process.wait_for_text(
-            f"[highlighted] {character}",
-            after=third_prompt_mark,
-        )
-        self.assertIn("story[session:plot]> /say cite $$", say_picker)
-        process.send_text("\t\n\n")
-        process.wait_for_text(f"[viewer] {character}")
-        process.wait_for_text(
-            "story[session:plot]>",
-            after=third_prompt_mark,
-        )
-        run_prompt_mark = process.output_mark()
-        process.send_text("/run use $$")
-        run_picker = process.wait_for_text(
-            f"[highlighted] {character}",
-            after=run_prompt_mark,
-        )
-        self.assertIn("story[session:plot]> /run use $$", run_picker)
-        process.send_text("\x1b[B\n\x1b[B\n\n")
-        process.wait_for_text('RESULT={"results":')
-        self.assertEqual(process.wait_for_exit(), 0, process.normalized_text)
-
-        match = re.search(r"RESULT=(\{[^\r\n]+\})", process.normalized_text)
-        self.assertIsNotNone(match, process.normalized_text)
-        assert match is not None
-        result = json.loads(match.group(1))
-        self.assertEqual(
-            result["results"],
-            [
-                (
-                    f"@plot compare ${{{outline}}}#L1-L3 and "
-                    f"${{{rules}}}#L2-L2"
-                ),
-                f"/say cite ${{{character}}}#L1-L1",
-                f"/run use ${{{outline}}}#L2-L2",
-            ],
-        )
-        self.assertGreater(result["catalog_calls"], 0)
-        self.assertEqual(
-            result["parsed"],
-            [
-                [
-                    "routed_message",
-                    (
-                        f"compare ${{{outline}}}#L1-L3 and "
-                        f"${{{rules}}}#L2-L2"
-                    ),
-                    "plot_architect",
-                ],
-                ["message", f"cite ${{{character}}}#L1-L1", None],
-                ["run", f"use ${{{outline}}}#L2-L2", None],
-            ],
-        )
-        self.assertEqual(
-            result["read_calls"],
-            [outline, rules, character, outline],
-        )
-        self.assertEqual(process.raw_bytes.count(b"\x1b[?1049h"), 4)
-        self.assertEqual(process.raw_bytes.count(b"\x1b[?1049l"), 4)
-        self.assertEqual(
-            process.final_terminal_attributes,
-            process.original_terminal_attributes,
-        )
-        self.assertFalse(self.provider_log.exists())
-
-    def test_reference_direct_marker_survives_one_write_bracketed_paste(self) -> None:
-        """Keep a complex direct marker intact through one pasted PTY write."""
-
-        source = _REFERENCE_PROBE_PREAMBLE + r'''
-result = main.read_main_with_references(
-    choices,
-    main_scope,
-    paths,
-    text,
-    session_id="session",
-    agent_id=PLOT_ARCHITECT,
-).text
-print("RESULT=" + json.dumps({
-    "result": result,
-    "read_calls": read_calls,
-}, ensure_ascii=False, separators=(",", ":")))
-'''
-        process = self._spawn_python(
-            source,
-            environment_overrides={"TERM": "xterm-256color"},
-            terminal_columns=120,
-        )
-        path = "manuscript/older drafts/{世界$ 章#1.md"
-        marker = f"$${{{path}}}"
-        prompt = "story[session:plot]> "
-        process.wait_for_text(prompt)
-        paste_mark = process.output_mark()
-        process.send_bytes(
-            b"\x1b[200~" + f"cite {marker}".encode("utf-8") + b"\x1b[201~"
-        )
-        pasted = process.wait_for_text(f"{prompt}cite {marker}", after=paste_mark)
-        self.assertIn(f"{prompt}cite {marker}", pasted)
-        self.assertFalse(self.provider_log.exists())
-
-        process.send_text("\n")
-        process.wait_for_text(f"[viewer] {path}", after=paste_mark)
-        process.send_text("\x1b[1;2B\n\n")
-        process.wait_for_text("RESULT=", after=paste_mark)
-        self.assertEqual(process.wait_for_exit(), 0, process.normalized_text)
-
-        match = re.search(r"RESULT=(\{[^\r\n]+\})", process.normalized_text)
-        self.assertIsNotNone(match, process.normalized_text)
-        assert match is not None
-        self.assertEqual(
-            json.loads(match.group(1)),
-            {
-                "result": f"cite ${{{path}}}#L1-L2",
-                "read_calls": [path],
-            },
-        )
-        self.assertEqual(process.raw_bytes.count(b"\x1b[?1049h"), 1)
-        self.assertEqual(process.raw_bytes.count(b"\x1b[?1049l"), 1)
-        self.assertEqual(
-            process.final_terminal_attributes,
-            process.original_terminal_attributes,
-        )
-        self.assertFalse(self.provider_log.exists())
-
-    def test_reference_run_and_internal_chat_composers_restore_and_send_exactly(
-        self,
-    ) -> None:
-        """Use reference-aware RUN and internal CHAT composers over one PTY."""
-
-        source = _REFERENCE_PROBE_PREAMBLE + r'''
-run = composition.compose(
-    ComposeMode.RUN,
-    reference_scope_provider=composition_scope,
-    reference_paths_provider=paths,
-    reference_text_reader=text,
-)
-chat = composition.compose(
-    ComposeMode.CHAT,
-    agent_id=PLOT_ARCHITECT,
-    reference_scope_provider=composition_scope,
-    reference_paths_provider=paths,
-    reference_text_reader=text,
-)
-print("RESULT=" + json.dumps({
-    "run": [run.kind.value, run.text, run.line_count, run.character_count],
-    "chat": [chat.kind.value, chat.text, chat.line_count, chat.character_count],
-    "read_calls": read_calls,
-}, separators=(",", ":")))
-'''
-        process = self._spawn_python(
-            source,
-            environment_overrides={"TERM": "xterm-256color"},
-            terminal_columns=64,
-        )
-        character = "core_documents/character_sheets.md"
-        outline = "core_documents/global_outline.md"
-
-        process.wait_for_text("compose[run:1]>")
-        run_mark = process.output_mark()
-        process.send_text("run $$")
-        run_picker = process.wait_for_text(
-            f"[highlighted] {character}",
-            after=run_mark,
-        )
-        self.assertIn(
-            "[controls]Up/Downselects;Enter/Tabopenstherangedviewer.",
-            "".join(run_picker.split()),
-        )
-        self.assertIn("compose[run:1]> run $$", run_picker)
-        self.assertFalse(self.provider_log.exists())
-        process.send_text("\x1b[B\n\x1b[B\n\n")
-        process.wait_for_text("compose[run:2]>", after=run_mark)
-        process.send_line("/send")
-
-        process.wait_for_text("compose[chat:plot:1]>")
-        chat_mark = process.output_mark()
-        process.send_text("chat $$")
-        chat_picker = process.wait_for_text(
-            f"[highlighted] {character}",
-            after=chat_mark,
-        )
-        self.assertIn(
-            "[controls]Up/Downselects;Enter/Tabopenstherangedviewer.",
-            "".join(chat_picker.split()),
-        )
-        self.assertIn("compose[chat:plot:1]> chat $$", chat_picker)
-        self.assertFalse(self.provider_log.exists())
-        process.send_text("\t\x1b[1;2B\n\n")
-        process.wait_for_text("compose[chat:plot:2]>", after=chat_mark)
-        process.send_line("/send")
-        process.wait_for_text('RESULT={"run":')
-        self.assertEqual(process.wait_for_exit(), 0, process.normalized_text)
-
-        match = re.search(r"RESULT=(\{[^\r\n]+\})", process.normalized_text)
-        self.assertIsNotNone(match, process.normalized_text)
-        assert match is not None
-        result = json.loads(match.group(1))
-        run_text = f"run ${{{outline}}}#L2-L2"
-        chat_text = f"chat ${{{character}}}#L1-L2"
-        self.assertEqual(
-            result,
-            {
-                "run": ["send", run_text, 1, len(run_text)],
-                "chat": ["send", chat_text, 1, len(chat_text)],
-                "read_calls": [outline, character],
-            },
-        )
-        self.assertEqual(process.raw_bytes.count(b"\x1b[?1049h"), 2)
-        self.assertEqual(process.raw_bytes.count(b"\x1b[?1049l"), 2)
-        self.assertEqual(
-            process.final_terminal_attributes,
-            process.original_terminal_attributes,
-        )
-        self.assertFalse(self.provider_log.exists())
-
-    def test_reference_empty_run_and_chat_picker_precedes_deferred_failure(
-        self,
-    ) -> None:
-        """Show empty ranged palettes in both composers without opening viewers."""
-
-        source = _REFERENCE_PROBE_PREAMBLE + r'''
-empty_calls = []
-def empty_paths():
-    empty_calls.append("list")
-    return ()
-
-run = composition.compose(
-    ComposeMode.RUN,
-    reference_scope_provider=composition_scope,
-    reference_paths_provider=empty_paths,
-    reference_text_reader=text,
-)
-chat = composition.compose(
-    ComposeMode.CHAT,
-    agent_id=PLOT_ARCHITECT,
-    reference_scope_provider=composition_scope,
-    reference_paths_provider=empty_paths,
-    reference_text_reader=text,
-)
-print("RESULT=" + json.dumps({
-    "run": run.kind.value,
-    "chat": chat.kind.value,
-    "empty_calls": len(empty_calls),
-    "read_calls": read_calls,
-}, separators=(",", ":")))
-'''
-        process = self._spawn_python(
-            source,
-            environment_overrides={"TERM": "xterm-256color"},
-            terminal_columns=100,
-        )
-
-        for prompt, activation_key in (
-            ("compose[run:1]>", "\n"),
-            ("compose[chat:plot:1]>", "\t"),
-        ):
-            process.wait_for_text(prompt)
-            preview_mark = process.output_mark()
-            process.send_text("$$")
-            preview = process.wait_for_text(
-                "[controls] Up/Down selects; Enter/Tab opens the ranged viewer.",
-                after=preview_mark,
-            )
-            self.assertIn("No writing artifacts.", preview)
-            self.assertIn(f"{prompt} $$", preview)
-            self.assertIn(
-                "Enter/Tabopenstherangedviewer.",
-                "".join(preview.split()),
-            )
-
-            dismiss_mark = process.output_mark()
-            process.send_text("\x1b")
-            dismissed = process.wait_for_text(
-                f"{prompt} $$",
-                after=dismiss_mark,
-            )
-            self.assertNotIn("Writing artifact selection [open]", dismissed)
-            self.assertNotIn(
-                "No current writing artifacts are available.",
-                dismissed,
-            )
-
-            reopen_mark = process.output_mark()
-            process.send_text(activation_key)
-            reopened = process.wait_for_text(
-                "[controls] Up/Down selects; Enter/Tab opens the ranged viewer.",
-                after=reopen_mark,
-            )
-            self.assertIn("No writing artifacts.", reopened)
-            self.assertIn(f"{prompt} $$", reopened)
-            self.assertNotIn(
-                "No current writing artifacts are available.",
-                reopened,
-            )
-
-            activation_mark = process.output_mark()
-            process.send_text(activation_key)
-            process.wait_for_text(
-                "[error command_invalid] No current writing artifacts are available.",
-                after=activation_mark,
-            )
-            self.assertEqual(process.raw_bytes.count(b"\x1b[?1049h"), 0)
-            self.assertEqual(process.raw_bytes.count(b"\x1b[?1049l"), 0)
-            self.assertFalse(self.provider_log.exists())
-            process.send_interrupt()
-
-        process.wait_for_text('RESULT={"run":')
-        self.assertEqual(process.wait_for_exit(), 0, process.normalized_text)
-        match = re.search(r"RESULT=(\{[^\r\n]+\})", process.normalized_text)
-        self.assertIsNotNone(match, process.normalized_text)
-        assert match is not None
-        result = json.loads(match.group(1))
-        self.assertEqual(result["run"], "interrupt")
-        self.assertEqual(result["chat"], "interrupt")
-        self.assertGreater(result["empty_calls"], 0)
-        self.assertEqual(result["read_calls"], [])
-        self.assertEqual(
-            process.normalized_text.count(
-                "[error command_invalid] No current writing artifacts are available."
-            ),
-            2,
-        )
-        self.assertFalse(self.provider_log.exists())
-        self.assertEqual(
-            process.final_terminal_attributes,
-            process.original_terminal_attributes,
-        )
-
-    def test_reference_nested_cancel_vintr_and_veof_restore_originating_drafts(
-        self,
-    ) -> None:
-        """Return three nested exits to the same live draft and next prompt."""
-
-        source = _REFERENCE_PROBE_PREAMBLE + r'''
-results = []
-for _attempt in range(3):
-    results.append(main.read_main_with_references(
-        choices,
-        main_scope,
-        paths,
-        text,
-        session_id="session",
-        agent_id=PLOT_ARCHITECT,
-    ).text)
-print("RESULT=" + json.dumps({
-    "results": results,
-    "read_calls": read_calls,
-}, separators=(",", ":")))
-'''
-        process = self._spawn_python(
-            source,
-            environment_overrides={"TERM": "xterm-256color"},
-            terminal_columns=56,
-        )
-        path = "core_documents/global_outline.md"
-        marker = f"$${{{path}}}"
-        labels = ("cancel", "interrupt", "eof")
-
-        for index, label in enumerate(labels):
-            prompt_mark = process.output_mark()
-            process.wait_for_text("story[session:plot]>", after=prompt_mark)
-            process.send_line(f"{label} {marker}")
-            process.wait_for_text(f"[viewer] {path}", after=prompt_mark)
-            exit_mark = process.output_mark()
-            if label == "cancel":
-                process.send_text("\x1b")
-            elif label == "interrupt":
-                process.send_interrupt()
-            else:
-                process.send_eof()
-            process.wait_for_text("\x1b[?1049l", after=exit_mark)
-            process.send_bytes(
-                (b"\x7f" * len(marker))
-                + f"retained-{index}\n".encode("utf-8")
-            )
-
-        process.wait_for_text('RESULT={"results":')
-        self.assertEqual(process.wait_for_exit(), 0, process.normalized_text)
-        match = re.search(r"RESULT=(\{[^\r\n]+\})", process.normalized_text)
-        self.assertIsNotNone(match, process.normalized_text)
-        assert match is not None
-        result = json.loads(match.group(1))
-        self.assertEqual(
-            result,
-            {
-                "results": [
-                    "cancel retained-0",
-                    "interrupt retained-1",
-                    "eof retained-2",
-                ],
-                "read_calls": [path, path, path],
-            },
-        )
-        self.assertEqual(process.raw_bytes.count(b"\x1b[?1049h"), 3)
-        self.assertEqual(process.raw_bytes.count(b"\x1b[?1049l"), 3)
-        self.assertEqual(
-            process.final_terminal_attributes,
-            process.original_terminal_attributes,
-        )
-        self.assertFalse(self.provider_log.exists())
-
-    def test_reference_dumb_fallback_reverses_then_requires_confirmation(
-        self,
-    ) -> None:
-        """Keep fallback canonical, visible, ANSI-free, and explicitly confirmed."""
-
-        source = _REFERENCE_PROBE_PREAMBLE + r'''
-first = main.read_main_with_references(
-    choices,
-    main_scope,
-    paths,
-    text,
-    session_id="session",
-    agent_id=PLOT_ARCHITECT,
-)
-before_second = [len(catalog_calls), len(read_calls)]
-second = main.read_main_with_references(
-    choices,
-    main_scope,
-    paths,
-    text,
-    session_id="session",
-    agent_id=PLOT_ARCHITECT,
-)
-print("RESULT=" + json.dumps({
-    "first": first.text,
-    "second": second.text,
-    "before_second": before_second,
-    "after_second": [len(catalog_calls), len(read_calls)],
-    "read_calls": read_calls,
-}, separators=(",", ":")))
-'''
-        process = self._spawn_python(
-            source,
-            environment_overrides={"TERM": "dumb"},
-            terminal_columns=56,
-        )
-        path = "core_documents/global_outline.md"
-        process.wait_for_text("story[session:plot]>")
-        assert termios is not None
-        fallback_attributes = termios.tcgetattr(process.master_fd)
-        self.assertTrue(fallback_attributes[3] & termios.ICANON)
-        self.assertTrue(fallback_attributes[3] & termios.ECHO)
-
-        process.send_line(f"fallback $${{{path}}}")
-        process.wait_for_text(f"[viewer] {path}")
-        process.wait_for_text("Select START-END or /cancel:")
-        process.send_line("3-1")
-        expected = f"fallback ${{{path}}}#L1-L3"
-        process.wait_for_text(f"Draft retained: {expected}")
-        process.wait_for_text("Press Enter to submit it")
-        second_prompt_mark = process.output_mark()
-        process.send_line("")
-        process.wait_for_text(
-            "story[session:plot]>",
-            after=second_prompt_mark,
-        )
-        process.send_line("/status $")
-        process.wait_for_text('RESULT={"first":')
-        self.assertEqual(process.wait_for_exit(), 0, process.normalized_text)
-
-        match = re.search(r"RESULT=(\{[^\r\n]+\})", process.normalized_text)
-        self.assertIsNotNone(match, process.normalized_text)
-        assert match is not None
-        result = json.loads(match.group(1))
-        self.assertEqual(result["first"], expected)
-        self.assertEqual(result["second"], "/status $")
-        self.assertEqual(result["before_second"], result["after_second"])
-        self.assertEqual(result["read_calls"], [path])
-        self.assertNotIn("\x1b", process.normalized_text)
-        self.assertEqual(process.raw_bytes.count(b"\x1b[?1049h"), 0)
-        self.assertEqual(process.raw_bytes.count(b"\x1b[?1049l"), 0)
-        self.assertEqual(
-            process.final_terminal_attributes,
-            process.original_terminal_attributes,
-        )
-        self.assertFalse(self.provider_log.exists())
-
     def test_main_history_restores_draft_edits_preview_and_nonempty_veof(
         self,
     ) -> None:
@@ -5942,14 +4596,17 @@ print("RESULT=" + json.dumps({
         process.send_text("\x1b[BX")
         process.wait_for_text("story[lobby]> draft-Xtail", after=draft_mark)
         process.send_text("\n")
-        process.wait_for_text("[error session_not_attached]", after=draft_mark)
+        process.wait_for_text(
+            "Direct story execution is unavailable",
+            after=draft_mark,
+        )
         process.wait_for_text("story[lobby]> ", after=draft_mark)
 
         preview_mark = process.output_mark()
         process.send_text("/")
         process.wait_for_text("Suggestions [open]", after=preview_mark)
         process.send_text("\x1b[B" * 2)
-        process.wait_for_text("[highlighted] /to", after=preview_mark)
+        process.wait_for_text("[highlighted] /settings", after=preview_mark)
         close_mark = process.output_mark()
         process.send_text("\x1b")
         process.wait_for_text("story[lobby]> /", after=close_mark)
@@ -6017,15 +4674,13 @@ print("RESULT=" + json.dumps({
         process.send_text("/")
         process.wait_for_text("Suggestions [open]", after=mark)
         process.send_text("\x1b[B" * 2)
-        process.wait_for_text("[highlighted] /to", after=mark)
+        process.wait_for_text("[highlighted] /settings", after=mark)
         process.send_text("\t")
-        process.wait_for_text("story[lobby]> /to", after=mark)
+        process.wait_for_text("story[lobby]> /settings", after=mark)
         snapshot_mark = process.output_mark()
-        process.send_text("\x1b")
-        process.wait_for_text("story[lobby]> /to ", after=snapshot_mark)
         self.assertNotIn("Suggestions [open]", process.text_after(snapshot_mark))
 
-        process.send_text("\x7f\x7f\x7fstatus\t\n")
+        process.send_text("\x7f" * 9 + "status\t\n")
         process.wait_for_text("story[lobby]> /status", after=snapshot_mark)
         process.wait_for_text("[session]", after=snapshot_mark)
         process.wait_for_text("story[lobby]> ", after=snapshot_mark)
@@ -6050,12 +4705,15 @@ print("RESULT=" + json.dumps({
         process.wait_for_text("story[lobby]> ")
         before = _durable_tree(self.workspace.root)
         mark = process.output_mark()
-        process.send_text("/s")
+        process.send_text("/")
         process.wait_for_text("Suggestions [open", after=mark)
-        process.wait_for_text("[highlighted]", after=mark)
-        narrow = "".join(process.text_after(mark).split())
+        process.wait_for_text("- /quit", after=mark)
+        filtered_mark = process.output_mark()
+        process.send_text("s")
+        process.wait_for_text("- /status", after=filtered_mark)
+        narrow = "".join(process.text_after(filtered_mark).split())
         self.assertIn("Suggestions[open]", narrow)
-        self.assertIn("[highlighted]/say", narrow)
+        self.assertIn("[highlighted]/settings", narrow)
         process.send_text("z")
         process.wait_for_text("[empty]", after=mark)
         self.assertIn(
@@ -6087,7 +4745,7 @@ print("RESULT=" + json.dumps({
     ) -> None:
         """Prove sticky fallback while a separately constructed editor is live."""
 
-        source = r'''
+        source = r"""
 import json
 import os
 import sys
@@ -6122,7 +4780,7 @@ print(
         separators=(",", ":"),
     )
 )
-'''
+"""
         before = _durable_tree(self.workspace.root)
         process = self._spawn_python(
             source,
@@ -6155,7 +4813,7 @@ print(
     ) -> None:
         """Exercise the internal chat reader binding on one real narrow PTY."""
 
-        source = r'''
+        source = r"""
 import json
 import sys
 
@@ -6195,7 +4853,7 @@ print(
         separators=(",", ":"),
     )
 )
-'''
+"""
         before = _durable_tree(self.workspace.root)
         process = self._spawn_python(
             source,
@@ -6280,7 +4938,7 @@ print(
     ) -> None:
         """Exercise both semantic input routes without decorative SGR/history."""
 
-        source = r'''
+        source = r"""
 import json
 import sys
 
@@ -6290,7 +4948,7 @@ from story_writing_agents.interactive_terminal import (
 )
 
 terminal = build_stream_terminal(input, sys.stdin, sys.stdout)
-action = terminal.compose(ComposeMode.RUN)
+action = terminal.compose(ComposeMode.CHAT, agent_id="lead_orchestrator")
 confirmation = terminal.request_confirmation("Continue?", default=False)
 print(
     "RESULT="
@@ -6306,7 +4964,7 @@ print(
         separators=(",", ":"),
     )
 )
-'''
+"""
         before = _durable_tree(self.workspace.root)
         process = self._spawn_python(
             source,
@@ -6314,13 +4972,14 @@ print(
             terminal_columns=40,
         )
         mark = process.output_mark()
-        opened = process.wait_for_text("compose[run:1]> ", after=mark)
-        self.assertIn("Mode: run", opened)
+        opened = process.wait_for_text("compose[chat:lead:1]> ", after=mark)
+        self.assertIn("Mode: chat", opened)
+        self.assertIn("Target: lead", opened)
         self.assertIn("Next line: 1", opened)
         self.assertNotRegex(opened, r"\x1b\[(?:0|1|3[1-7])m")
 
         process.send_text("\x1b[A\x1b[B\t\x1b[Z\x1bexact line\n")
-        process.wait_for_text("compose[run:2]> ", after=mark)
+        process.wait_for_text("compose[chat:lead:2]> ", after=mark)
         process.send_line("/send")
         confirmation = process.wait_for_text("confirm [y/N]> ", after=mark)
         self.assertIn("Question: Continue?", confirmation)
@@ -6360,7 +5019,7 @@ print(
     ) -> None:
         """Keep structured composer and confirmation facts on line fallback."""
 
-        source = r'''
+        source = r"""
 import json
 import sys
 
@@ -6370,7 +5029,7 @@ from story_writing_agents.interactive_terminal import (
 )
 
 terminal = build_stream_terminal(input, sys.stdin, sys.stdout)
-action = terminal.compose(ComposeMode.RUN)
+action = terminal.compose(ComposeMode.CHAT, agent_id="lead_orchestrator")
 confirmation = terminal.request_confirmation("Continue?", default=True)
 print(
     "RESULT="
@@ -6382,7 +5041,7 @@ print(
         separators=(",", ":"),
     )
 )
-'''
+"""
         before = _durable_tree(self.workspace.root)
         process = self._spawn_python(
             source,
@@ -6390,11 +5049,12 @@ print(
             terminal_columns=40,
         )
         mark = process.output_mark()
-        opened = process.wait_for_text("compose[run:1]> ", after=mark)
-        self.assertIn("Mode: run", opened)
+        opened = process.wait_for_text("compose[chat:lead:1]> ", after=mark)
+        self.assertIn("Mode: chat", opened)
+        self.assertIn("Target: lead", opened)
         self.assertNotIn("\x1b", opened)
         process.send_line("fallback line")
-        process.wait_for_text("compose[run:2]> ", after=mark)
+        process.wait_for_text("compose[chat:lead:2]> ", after=mark)
         process.send_line("/send")
         confirmation = process.wait_for_text("confirm [Y/n]> ", after=mark)
         self.assertIn("Question: Continue?", confirmation)
@@ -6414,86 +5074,15 @@ print(
             process.original_terminal_attributes,
         )
 
-    def test_term_dumb_advisory_and_consensus_inputs_are_not_duplicated(
-        self,
-    ) -> None:
-        """Keep fallback echo as the sole accepted-input projection."""
-
-        self._seed_default_session()
-        process = self._spawn_cli(
-            ("chat", "alpha", "--workspace", str(self.workspace.root)),
-            environment_overrides={"TERM": "dumb"},
-        )
-        process.wait_for_text("story[alpha:lead]> ")
-
-        advisory_mark = process.output_mark()
-        process.send_line("fallback advisory body")
-        self._wait_for_live_reply(
-            process,
-            after=advisory_mark,
-            title="Lead Orchestrator",
-            content="deterministic advisory reply",
-        )
-        process.wait_for_text("story[alpha:lead]> ", after=advisory_mark)
-        advisory = process.text_after(advisory_mark)
-        self.assertEqual(advisory.count("fallback advisory body"), 1)
-        self.assertNotIn("You → Lead Orchestrator", advisory)
-        self.assertNotIn("\x1b", advisory)
-
-        consensus_mark = process.output_mark()
-        process.send_line(
-            "/run --output part-01/fallback.md fallback consensus body"
-        )
-        process.wait_for_text(
-            "Consensus [success]",
-            after=consensus_mark,
-        )
-        process.wait_for_text("story[alpha:lead]> ", after=consensus_mark)
-        consensus = process.text_after(consensus_mark)
-        self.assertEqual(consensus.count("fallback consensus body"), 1)
-        self.assertNotIn("You → Consensus", consensus)
-        self.assertNotIn("\x1b", consensus)
-        self.assertEqual(consensus.count("--- Debate phase"), 6)
-        for heading in (
-            "Debate phase · Started",
-            "Debate phase · Drafted",
-            "Debate phase · Audit started",
-            "Debate phase · Audit completed",
-            "Debate phase · Artifacts committed",
-        ):
-            self.assertIn(f"--- {heading}", consensus)
-            self.assertNotIn(f"{heading} [loading]", consensus)
-        self.assertIn(
-            "--- Debate phase · Consensus",
-            consensus,
-        )
-        self.assertEqual(consensus.count("deterministic candidate"), 1)
-        self.assertLess(
-            consensus.rfind("--- Debate phase"),
-            consensus.index("Consensus [success]"),
-        )
-
-        process.send_line("/quit")
-        self.assertEqual(process.wait_for_exit(), 0, process.normalized_text)
-        self.assertEqual(
-            self.workspace.read_text("manuscript/part-01/fallback.md"),
-            "deterministic candidate",
-        )
-        self.assertEqual(
-            process.final_terminal_attributes,
-            process.original_terminal_attributes,
-        )
-
     def test_conversation_management_routes_controls_and_main_interrupt(
         self,
     ) -> None:
-        """Cover selected subjects, sticky routing, safe output, and main VINTR."""
+        """Cover retained conversation management and main-input cleanup."""
 
         process = self._spawn_cli(())
         process.wait_for_text("story[lobby]> ")
-        mark = process.output_mark()
         process.send_line("/session create alpha")
-        process.wait_for_text("story[alpha:lead]> ", after=mark)
+        process.wait_for_text("story[alpha]> ")
 
         mark = process.output_mark()
         process.send_line("/conversation new First Subject")
@@ -6506,128 +5095,55 @@ print(
         assert match is not None
         first_handle = match.group(1)
 
-        mark = process.output_mark()
         process.send_line("/conversation new Second Subject")
-        process.wait_for_text("Subject: Second Subject", after=mark)
+        process.wait_for_text("Subject: Second Subject")
         mark = process.output_mark()
         process.send_line("/conversation list")
         listed = process.wait_for_text("First Subject", after=mark)
         process.wait_for_text("Second Subject", after=mark)
-        process.wait_for_text("story[alpha:lead]> ", after=mark)
+        process.wait_for_text("story[alpha]> ", after=mark)
         self.assertIn("focused", listed)
 
-        mark = process.output_mark()
         process.send_line(f"/conversation resume {first_handle}")
-        process.wait_for_text("Current focus: ", after=mark)
-        mark = process.output_mark()
+        process.wait_for_text("Current focus: ")
         process.send_line("/conversation subject Renamed Subject")
-        process.wait_for_text("Subject: Renamed Subject", after=mark)
+        process.wait_for_text("Subject: Renamed Subject")
         mark = process.output_mark()
         process.send_line("/conversation archive")
         confirmation = process.wait_for_text("confirm [y/N]> ", after=mark)
         self.assertIn("Choices: y/yes or n/no", confirmation)
-        self.assertIn("Default: no", confirmation)
         process.send_line("yes")
         process.wait_for_text("Archived ", after=mark)
-        process.wait_for_text("Subject: Second Subject", after=mark)
-        process.wait_for_text("story[alpha:lead]> ", after=mark)
+        ready_mark = process.output_mark()
+        process.wait_for_text("Subject: Second Subject", after=ready_mark)
+        process.wait_for_text("story[alpha]> ", after=ready_mark)
 
         mark = process.output_mark()
-        process.send_line("/to plot")
-        process.wait_for_text(
-            "Sticky target set to plot_architect.",
-            after=mark,
-        )
-        process.wait_for_text("story[alpha:plot]> ", after=mark)
-
-        mark = process.output_mark()
-        process.send_line("ordinary sticky turn")
-        self._wait_for_live_reply(
-            process,
-            after=mark,
-            title="Plot & Structure Architect",
-            content="deterministic advisory reply",
-        )
-        process.wait_for_text("story[alpha:plot]> ", after=mark)
-        ordinary_output = process.text_after(mark)
-        self.assertNotIn("You → Plot & Structure Architect", ordinary_output)
-        self.assertEqual(ordinary_output.count("ordinary sticky turn"), 1)
-        self.assertNotIn("--- Conversation scope ", ordinary_output)
-
-        mark = process.output_mark()
-        process.send_line("@character one-shot turn")
-        routed = self._wait_for_live_reply(
-            process,
-            after=mark,
-            title="Character & World Custodian",
-            content="deterministic advisory reply",
-        )
-        process.wait_for_text("story[alpha:plot]> ", after=mark)
-        self.assertNotIn("[routing] One-shot route", routed)
-        routed_output = process.text_after(mark)
-        self.assertNotIn("You → Character & World Custodian", routed_output)
-        self.assertEqual(routed_output.count("@character one-shot turn"), 1)
-        self.assertNotIn("--- Conversation scope ", routed_output)
-
-        mark = process.output_mark()
-        process.send_line("show visible controls")
-        safe_output = process.wait_for_text(r"\x1b[31mred", after=mark)
-        process.wait_for_text("story[alpha:plot]> ", after=mark)
-        self.assertIn(r"bell \x07", safe_output)
-        self.assertNotIn(b"\x1b[", process.raw_bytes)
-        self.assertNotIn(b"\x1b]", process.raw_bytes)
-        self.assertNotIn(b"\x9b", process.raw_bytes)
-
-        mark = process.output_mark()
+        process.send_text("cancel me")
         process.send_interrupt()
-        process.wait_for_text("[cancelled] No action was taken.", after=mark)
-        process.wait_for_text("story[alpha:plot]> ", after=mark)
+        process.wait_for_text("story[alpha]> ", after=mark)
         process.send_line("/quit")
         self.assertEqual(process.wait_for_exit(), 0, process.normalized_text)
-        self.assertEqual(
-            process.normalized_text.count("--- Conversation scope "),
-            7,
-        )
 
         catalog = FilesystemConversationCatalog(self.workspace)
         conversations = catalog.list("alpha", include_archived=True)
         self.assertEqual(len(conversations), 2)
         by_subject = {item.subject: item for item in conversations}
-        self.assertIs(
-            by_subject["Renamed Subject"].status,
-            ConversationStatus.ARCHIVED,
-        )
+        self.assertIs(by_subject["Renamed Subject"].status, ConversationStatus.ARCHIVED)
         successor = by_subject["Second Subject"]
         self.assertIs(successor.status, ConversationStatus.ACTIVE)
         self.assertEqual(
             load_default_conversation(self.workspace, "alpha"),
             successor.conversation_id,
         )
-        events = FilesystemConversationEventStore(
+        events = FilesystemCollaborationEventStore(
             self.workspace,
             catalog=catalog,
         ).read("alpha", successor.conversation_id)
-        self.assertEqual(
-            tuple(event.kind for event in events),
-            (
-                ConversationEventKind.USER_MESSAGE,
-                ConversationEventKind.AGENT_REPLY,
-                ConversationEventKind.USER_MESSAGE,
-                ConversationEventKind.AGENT_REPLY,
-                ConversationEventKind.USER_MESSAGE,
-                ConversationEventKind.AGENT_REPLY,
-            ),
-        )
+        self.assertEqual(events, ())
+        self.assertFalse(self.provider_log.exists())
         self.assertFalse(
             self.workspace.path(f"{_SESSION_DIRECTORY}/alpha.access.json").exists()
-        )
-        history_names = {
-            ".python_history",
-            ".story_history",
-            ".story-writing-agents-history",
-        }
-        self.assertFalse(
-            any(path.name in history_names for path in self.temporary_root.rglob("*"))
         )
 
     def test_explicit_chat_switches_sessions_and_confirmed_pause_is_distinct(
@@ -6635,24 +5151,27 @@ print(
     ) -> None:
         """Prove explicit attachment, safe switching, and confirmed deactivation."""
 
-        selected = self._seed_default_session()
         noncanonical_option = self.workspace.root / ".." / self.workspace.root.name
         process = self._spawn_cli(
             ("chat", "alpha", "--workspace", str(noncanonical_option)),
             cwd=self.temporary_root,
         )
-        process.wait_for_text("story[alpha:lead]> ")
+        process.wait_for_text("story[alpha]> ")
+        mark = process.output_mark()
+        process.send_line("/conversation new Harbor planning")
+        process.wait_for_text("Subject: Harbor planning", after=mark)
+        selected = FilesystemConversationCatalog(self.workspace).list("alpha")[0]
         self.assertIn(
             f"Workspace:{self.workspace.root}",
             "".join(process.normalized_text.split()),
         )
-        self.assertIn("Session: alpha (opened)", process.normalized_text)
+        self.assertIn("Session: alpha (created)", process.normalized_text)
         self.assertIn(selected.subject, process.normalized_text)
 
         mark = process.output_mark()
         process.send_line("/session create beta")
         process.wait_for_text("Session: beta (created)", after=mark)
-        process.wait_for_text("story[beta:lead]> ", after=mark)
+        process.wait_for_text("story[beta]> ", after=mark)
         self.assertFalse(
             self.workspace.path(f"{_SESSION_DIRECTORY}/alpha.access.json").exists()
         )
@@ -6660,7 +5179,7 @@ print(
         mark = process.output_mark()
         process.send_line("/session resume alpha")
         process.wait_for_text("Session: alpha (opened)", after=mark)
-        process.wait_for_text("story[alpha:lead]> ", after=mark)
+        process.wait_for_text("story[alpha]> ", after=mark)
         self.assertFalse(
             self.workspace.path(f"{_SESSION_DIRECTORY}/beta.access.json").exists()
         )
@@ -6699,15 +5218,16 @@ print(
     ) -> None:
         """Commit one live resume choice without entering a second picker."""
 
-        self._seed_default_session()
-        backend = AgentBackend(
-            self.workspace,
-            executable=str(self.fake_executable),
+        process = self._spawn_cli(
+            ("chat", "alpha", "--workspace", str(self.workspace.root)),
+            environment_overrides={"TERM": "xterm-256color"},
         )
-        try:
-            backend.create_session_with_access("beta")
-        finally:
-            backend.close()
+        process.wait_for_text("story[alpha]> ")
+        self._create_conversation(process)
+        process.send_line("/session create beta")
+        process.wait_for_text("story[beta]> ")
+        process.send_line("/session resume alpha")
+        process.wait_for_text("story[alpha]> ")
         for session_id, updated_at in (
             ("alpha", "2099-01-01T00:00:00+00:00"),
             ("beta", "2099-01-02T00:00:00+00:00"),
@@ -6721,11 +5241,6 @@ print(
                 manifest,
             )
 
-        process = self._spawn_cli(
-            (),
-            environment_overrides={"TERM": "xterm-256color"},
-        )
-        process.wait_for_text("story[alpha:lead]> ")
         mark = process.output_mark()
         process.send_text("/session resume")
         opened = process.wait_for_text(
@@ -6747,10 +5262,10 @@ print(
         )
         commit_mark = process.output_mark()
         process.send_text("\n")
-        resumed = process.wait_for_text("story[beta:lead]> ", after=commit_mark)
+        resumed = process.wait_for_text("story[beta]> ", after=commit_mark)
         self.assertRegex(resumed, r"^\r(?:\x1b\[A)*\r\x1b\[J")
         self.assertEqual(resumed.count("Session: beta (opened)"), 1)
-        self.assertEqual(resumed.count("--- Conversation scope "), 1)
+        self.assertGreaterEqual(resumed.count("[conversation]"), 1)
         self.assertNotIn("[session] Already attached to beta.", resumed)
         self.assertNotIn("Resume story session [focused] [open] >", resumed)
         process.send_text("/quit\n\n")
@@ -6759,9 +5274,9 @@ print(
         self.assertEqual(load_cli_context(self.workspace).default_session_id, "beta")
         for session_id in ("alpha", "beta"):
             self.assertEqual(
-                self.workspace.read_json(
-                    f"{_SESSION_DIRECTORY}/{session_id}.json"
-                )["durable_state"],
+                self.workspace.read_json(f"{_SESSION_DIRECTORY}/{session_id}.json")[
+                    "durable_state"
+                ],
                 "ready",
             )
             self.assertFalse(
@@ -6780,14 +5295,15 @@ print(
     ) -> None:
         """Commit one live focus choice without entering a second picker."""
 
-        self._seed_default_session(subject="First subject")
-        catalog = FilesystemConversationCatalog(self.workspace)
-        target = catalog.create("alpha", "Second subject")
         process = self._spawn_cli(
-            (),
+            ("chat", "alpha", "--workspace", str(self.workspace.root)),
             environment_overrides={"TERM": "xterm-256color"},
         )
-        process.wait_for_text("story[alpha:lead]> ")
+        process.wait_for_text("story[alpha]> ")
+        first = self._create_conversation(process, subject="First subject")
+        target = self._create_conversation(process, subject="Second subject")
+        process.send_line(f"/conversation resume {first.conversation_id}")
+        process.wait_for_text("Subject: First subject")
 
         mark = process.output_mark()
         process.send_text("/conversation resume")
@@ -6800,7 +5316,7 @@ print(
             opened.index("[highlighted] First subject"),
             opened.index("- Second subject"),
         )
-        self.assertEqual(opened.count("Handle:"), 2)
+        self.assertGreaterEqual(opened.count("Handle:"), 2)
         self.assertNotIn("Resume conversation [focused] [open] >", opened)
 
         navigation_mark = process.output_mark()
@@ -6808,10 +5324,10 @@ print(
         process.wait_for_text("[highlighted] Second subject", after=navigation_mark)
         commit_mark = process.output_mark()
         process.send_text("\n")
-        resumed = process.wait_for_text("story[alpha:lead]> ", after=commit_mark)
+        resumed = process.wait_for_text("story[alpha]> ", after=commit_mark)
         self.assertRegex(resumed, r"^\r(?:\x1b\[A)*\r\x1b\[J")
         self.assertEqual(resumed.count("Current focus: "), 1)
-        self.assertEqual(resumed.count("--- Conversation scope "), 1)
+        self.assertGreaterEqual(resumed.count("[conversation]"), 1)
         self.assertIn("Subject: Second subject", resumed)
         self.assertNotIn("Resume conversation [focused] [open] >", resumed)
         process.send_text("/quit\n\n")
@@ -6830,225 +5346,54 @@ print(
     def test_history_search_transcript_and_cited_retrieval_stay_scoped(
         self,
     ) -> None:
-        """Exercise provider-free reads followed by trusted retrieval progress."""
+        """Exercise retained provider-free history, search, and transcript reads."""
 
-        selected = self._seed_default_session()
-        defaults = self.workspace.read_json("config/system_defaults.json")
-        defaults["show_message_details"] = True
-        self.workspace.write_json("config/system_defaults.json", defaults)
         process = self._spawn_cli(
             ("chat", "alpha", "--workspace", str(self.workspace.root)),
             environment_overrides={"TERM": "xterm-256color"},
             decorative_color=True,
         )
-        process.wait_for_text("story[alpha:lead]> ")
-
-        mark = process.output_mark()
-        process.send_line("harbor beacon beside the vessel")
-        self._wait_for_live_reply(
-            process,
-            after=mark,
-            title="Lead Orchestrator",
-            content="deterministic advisory reply",
-            details=True,
+        process.wait_for_text("story[alpha]> ")
+        selected = self._create_conversation(process)
+        catalog = FilesystemConversationCatalog(self.workspace)
+        store = FilesystemCollaborationEventStore(self.workspace, catalog=catalog)
+        batch = contract_batches(selected.conversation_id)["proposal"]
+        store.append_batch(
+            CollaborationEventBatch(
+                batch_id=batch.batch_id,
+                expected_last_sequence=batch.expected_last_sequence,
+                events=tuple(
+                    replace(event, session_id="alpha") for event in batch.events
+                ),
+            )
         )
-        process.wait_for_text("story[alpha:lead]> ", after=mark)
-        advisory_output = process.text_after(mark)
-        advisory_plain = _ANSI_SGR_BYTES.sub(
-            b"",
-            advisory_output.encode("utf-8"),
-        ).decode("utf-8")
-        accepted_message = (
-            "You → Lead Orchestrator\n"
-            "│ harbor beacon beside the vessel"
-        )
-        self.assertEqual(advisory_plain.count(accepted_message), 1)
-        self.assertLess(
-            advisory_plain.index(accepted_message),
-            advisory_plain.index("Lead Orchestrator → You\n"),
-        )
-        self.assertNotIn("You → Lead Orchestrator\n  Codex /", advisory_plain)
-        advisory_raw = bytes(process.raw_bytes[mark:])
-        self.assertIn(b"\x1b[1;35m", advisory_raw)
-        self.assertIn(b"\x1b[1;36m", advisory_raw)
-        provider_calls_before_reads = len(
-            [
-                record
-                for record in self._provider_records()
-                if record.get("event") == "started"
-            ]
-        )
-        self.assertEqual(provider_calls_before_reads, 1)
 
         mark = process.output_mark()
         process.send_line("/history 2")
         process.wait_for_text("History (1/2)", after=mark)
-        process.wait_for_text("harbor beacon beside the vessel", after=mark)
-        history = process.wait_for_text("deterministic advisory reply", after=mark)
-        process.wait_for_text("story[alpha:lead]> ", after=mark)
+        process.wait_for_text("Consult specialists", after=mark)
+        history = process.wait_for_text("awaiting_confirmation", after=mark)
+        process.wait_for_text("story[alpha]> ", after=mark)
         self.assertIn("History (2/2)", history)
-        self.assertIn("deterministic advisory reply", history)
-        first_events = FilesystemConversationEventStore(
-            self.workspace,
-            catalog=FilesystemConversationCatalog(self.workspace),
-        ).read("alpha", selected.conversation_id)
-        self.assertEqual(len(first_events), 2)
-        history_plain = _ANSI_SGR_BYTES.sub(
-            b"",
-            process.text_after(mark).encode("utf-8"),
-        ).decode("utf-8")
-        history_compact = " ".join(history_plain.split())
-        for detail in (
-            "You → Lead Orchestrator",
-            "Lead Orchestrator → You",
-            "Sequence: 1",
-            f"Turn: {first_events[0].turn_id}",
-            "Kind: user_message",
-            "IDs: user → lead_orchestrator",
-            "Sequence: 2",
-            "Kind: agent_reply",
-            "IDs: lead_orchestrator → user",
-        ):
-            self.assertIn(detail, history_compact)
 
         mark = process.output_mark()
-        process.send_line("/search harbor beacon")
-        search_output = process.wait_for_text(
-            "Search results (1/1)",
-            after=mark,
-        )
-        process.wait_for_text("story[alpha:lead]> ", after=mark)
-        search_output = process.text_after(mark)
-        search_context = (
-            "[context] Search request\n"
-            "  Query: harbor beacon\n"
-            "  Scope: active"
-        )
-        self.assertEqual(search_output.count(search_context), 1)
-        self.assertLess(
-            search_output.index(search_context),
-            search_output.index("Search results (1/1)"),
-        )
+        process.send_line("/search Consult specialists")
+        search_output = process.wait_for_text("Search results (1/1)", after=mark)
+        process.wait_for_text("story[alpha]> ", after=mark)
         self.assertIn("Citation: conversation", search_output)
-        self.assertIn(selected.subject, " ".join(search_output.split()))
 
         mark = process.output_mark()
-        process.send_line(f"/transcript {selected.conversation_id} 2")
+        process.send_line(f"/transcript {selected.conversation_id} 2 --from 4")
         process.wait_for_text("Transcript (1/2)", after=mark)
-        process.wait_for_text(
-            "harbor beacon beside the vessel",
-            after=mark,
-        )
-        transcript_output = process.wait_for_text(
-            "deterministic advisory reply",
-            after=mark,
-        )
-        process.wait_for_text("story[alpha:lead]> ", after=mark)
-        transcript_output = process.text_after(mark)
-        transcript_context = (
-            "[context] Transcript request\n"
-            f"  Conversation: {selected.conversation_id[:12]}\n"
-            "  Start: 1\n"
-            "  Count: 2"
-        )
-        self.assertEqual(transcript_output.count(transcript_context), 1)
-        self.assertLess(
-            transcript_output.index(transcript_context),
-            transcript_output.index("Transcript (1/2)"),
-        )
-        self.assertIn("deterministic advisory reply", transcript_output)
-        transcript_plain = _ANSI_SGR_BYTES.sub(
-            b"",
-            transcript_output.encode("utf-8"),
-        ).decode("utf-8")
-        transcript_compact = " ".join(transcript_plain.split())
-        for detail in (
-            "Sequence: 1",
-            f"Turn: {first_events[0].turn_id}",
-            "Kind: user_message",
-            "IDs: user → lead_orchestrator",
-            "Sequence: 2",
-            "Kind: agent_reply",
-            "IDs: lead_orchestrator → user",
-        ):
-            self.assertIn(detail, transcript_compact)
-        self.assertEqual(
-            len(
-                [
-                    record
-                    for record in self._provider_records()
-                    if record.get("event") == "started"
-                ]
-            ),
-            provider_calls_before_reads,
-        )
+        process.wait_for_text("Consult specialists", after=mark)
+        transcript_output = process.wait_for_text("awaiting_confirmation", after=mark)
+        process.wait_for_text("story[alpha]> ", after=mark)
+        self.assertIn("Transcript (2/2)", transcript_output)
+        self.assertFalse(self.provider_log.exists())
 
-        mark = process.output_mark()
-        process.send_line("retrieve harbor beacon")
-        retrieval_output = process.wait_for_text(
-            "Retrieval search action 1 started.",
-            after=mark,
-        )
-        process.wait_for_text(
-            "Retrieval search action 1 completed:",
-            after=mark,
-        )
-        process.wait_for_text("Retrieval read action 2 started.", after=mark)
-        process.wait_for_text("Retrieval read action 2 completed:", after=mark)
-        self._wait_for_live_reply(
-            process,
-            after=mark,
-            title="Lead Orchestrator",
-            content="retrieval-assisted answer",
-            details=True,
-        )
-        process.wait_for_text("[context] Source 1", after=mark)
-        process.wait_for_text("story[alpha:lead]> ", after=mark)
-        retrieval_output = process.text_after(mark)
-        self.assertIn(f"Conversation: {selected.conversation_id}", retrieval_output)
-        self.assertIn(f"Turn: {first_events[0].turn_id}", retrieval_output)
-        self.assertIn("Sequence: 1", retrieval_output)
-        self.assertIn("Kind: user_message", retrieval_output)
-        self.assertNotIn("[waiting]", retrieval_output)
-        self.assertNotIn("[routing] One-shot route", retrieval_output)
-        self.assertIn("\x1b[K", retrieval_output)
-        self.assertLess(
-            retrieval_output.index("retrieval-assisted answer"),
-            retrieval_output.index("[context] Source 1"),
-        )
-
-        started = [
-            record
-            for record in self._provider_records()
-            if record.get("event") == "started"
-        ]
-        self.assertEqual(len(started), provider_calls_before_reads + 3)
-        self.assertEqual(
-            [record["context_action_index"] for record in started[-3:]],
-            [1, 2, 3],
-        )
         process.send_text("/quit\n\n")
         self.assertEqual(process.wait_for_exit(), 0, process.normalized_text)
-        self.assertEqual(
-            process.normalized_text.count("--- Conversation scope "),
-            1,
-        )
-
-        catalog = FilesystemConversationCatalog(self.workspace)
-        events = FilesystemConversationEventStore(
-            self.workspace,
-            catalog=catalog,
-        ).read("alpha", selected.conversation_id)
-        self.assertEqual(
-            tuple(event.kind for event in events),
-            (
-                ConversationEventKind.USER_MESSAGE,
-                ConversationEventKind.AGENT_REPLY,
-                ConversationEventKind.USER_MESSAGE,
-                ConversationEventKind.AGENT_REPLY,
-            ),
-        )
-        self.assertEqual(events[-1].content, "retrieval-assisted answer")
+        self.assertEqual(len(store.read("alpha", selected.conversation_id)), 5)
         self.assertEqual(
             load_default_conversation(self.workspace, "alpha"),
             selected.conversation_id,
@@ -7057,229 +5402,14 @@ print(
             self.workspace.path(f"{_SESSION_DIRECTORY}/alpha.access.json").exists()
         )
 
-    def test_run_composer_send_cancel_interrupt_and_eof_have_exact_durability(
-        self,
-    ) -> None:
-        """Cover multiline consensus plus local cancel, VINTR, and VEOF discards."""
-
-        selected = self._seed_default_session()
-        process = self._spawn_cli(
-            ("chat", "alpha", "--workspace", str(self.workspace.root)),
-            environment_overrides={"TERM": "xterm-256color"},
-            terminal_columns=20,
-        )
-        process.wait_for_text("story[alpha:lead]> ")
-
-        mark = process.output_mark()
-        process.send_text("/run\n\n")
-        process.wait_for_text("Manuscript output", after=mark)
-        process.send_line("part-01/composed.md")
-        process.wait_for_text("compose[run:1]> ", after=mark)
-        preview_bytes = _durable_tree_without_access(self.workspace.root)
-        preview_mark = process.output_mark()
-        process.send_text("/")
-        process.wait_for_text("/cancel", after=preview_mark)
-        preview = process.text_after(preview_mark)
-        self.assertIn("[suggestions]", preview)
-        self.assertIn("/send", preview)
-        self.assertIn("/cancel", preview)
-        self.assertNotIn("/status", preview)
-        self.assertEqual(
-            _durable_tree_without_access(self.workspace.root),
-            preview_bytes,
-        )
-        self.assertFalse(self.provider_log.exists())
-        clear_mark = process.output_mark()
-        process.send_text("\x7f")
-        cleared = process.wait_for_text("compose[run:1]> ", after=clear_mark)
-        self.assertIn("\x1b[J", cleared)
-        self.assertNotIn("[suggestions]", cleared)
-        process.send_line("")
-        process.wait_for_text("compose[run:2]> ", after=mark)
-        process.send_line("/send")
-        rejected = process.wait_for_text("send.", after=mark)
-        self.assertIn("[compose]Nothingtosend.", "".join(rejected.split()))
-        process.send_line("/say /send")
-        process.wait_for_text("compose[run:3]> ", after=mark)
-        process.send_line("/say /cancel")
-        process.wait_for_text("compose[run:4]> ", after=mark)
-        process.send_line("final literal line")
-        process.wait_for_text("compose[run:5]> ", after=mark)
-        process.send_line("/send")
-        process.wait_for_text("core updates:", after=mark)
-        process.wait_for_text("revision rounds:", after=mark)
-        process.wait_for_text("story[alpha:lead]> ", after=mark)
-        successful_output = process.text_after(mark)
-        successful_plain = _ANSI_SGR_BYTES.sub(
-            b"",
-            successful_output.encode("utf-8"),
-        ).decode("utf-8")
-        self.assertIn("\x1b[", successful_output)
-        self.assertEqual(successful_plain.count("--- Debate phase"), 6)
-        successful_compact = "".join(
-            successful_plain.replace("│", "").split()
-        )
-        for heading in (
-            "Started",
-            "Drafted",
-            "Auditstarted",
-            "Auditcompleted",
-            "Artifactscommitted",
-        ):
-            self.assertIn(f"---Debatephase·{heading}", successful_compact)
-            self.assertNotIn(
-                f"---Debatephase·{heading}[loading]",
-                successful_compact,
-            )
-        self.assertIn(
-            "---Debatephase·Consensus",
-            successful_compact,
-        )
-        self.assertEqual(successful_compact.count("deterministiccandidate"), 1)
-        self.assertLess(
-            successful_compact.rfind("---Debatephase"),
-            successful_compact.index("Consensus[success]"),
-        )
-        collapsed = "".join(successful_output.split())
-        accepted_prompt = (
-            "You→Consensus││/send│/cancel│finalliteralline"
-        )
-        self.assertEqual(collapsed.count(accepted_prompt), 1)
-        self.assertLess(
-            collapsed.index(accepted_prompt),
-            collapsed.index("Startedpromptconsensus."),
-        )
-        self.assertIn(
-            "[context]Consensusrequest"
-            "Output:part-01/composed.md",
-            collapsed,
-        )
-        self.assertIn(
-            "[compose]Sending4lines,33characterstoconsensus.",
-            collapsed,
-        )
-        ordered_fragments = (
-            "Startedpromptconsensus.",
-            "Draftedrevisionr0.",
-            "Auditstartedforr0atround0.",
-            "Auditcompletedforr0atround0;conflicts:none.",
-            "Artifactscommittedforr0:",
-            "Consensusreachedonr0after0revisionrounds.",
-            "Consensus[success]revision:r0",
-        )
-        for fragment in ordered_fragments:
-            with self.subTest(fragment=fragment):
-                self.assertIn(fragment, collapsed)
-        offsets = [collapsed.index(fragment) for fragment in ordered_fragments]
-        self.assertEqual(offsets, sorted(offsets))
-        self.assertNotIn("[waiting]", successful_output)
-        self.assertNotIn("Provider:", successful_output)
-        durable_after_success = _durable_tree_without_access(self.workspace.root)
-
-        mark = process.output_mark()
-        process.send_text("/run\n\n")
-        process.wait_for_text("Manuscript output", after=mark)
-        process.send_line("part-01/discarded-by-command.md")
-        process.wait_for_text("compose[run:1]> ", after=mark)
-        process.send_line("discarded by slash command")
-        process.wait_for_text("compose[run:2]> ", after=mark)
-        process.send_line("/cancel")
-        discarded = process.wait_for_text("r sent.", after=mark)
-        self.assertIn(
-            "[compose]Discarded1line.Nomessagewassavedorsent.",
-            "".join(discarded.split()),
-        )
-        process.wait_for_text("story[alpha:lead]> ", after=mark)
-        self.assertEqual(
-            _durable_tree_without_access(self.workspace.root),
-            durable_after_success,
-        )
-
-        mark = process.output_mark()
-        process.send_text("/run\n\n")
-        process.wait_for_text("Manuscript output", after=mark)
-        process.send_line("part-01/discarded-by-interrupt.md")
-        process.wait_for_text("compose[run:1]> ", after=mark)
-        process.send_line("discarded by interrupt")
-        process.wait_for_text("compose[run:2]> ", after=mark)
-        process.send_interrupt()
-        discarded = process.wait_for_text("r sent.", after=mark)
-        self.assertIn(
-            "[compose]Discarded1line.Nomessagewassavedorsent.",
-            "".join(discarded.split()),
-        )
-        process.wait_for_text("story[alpha:lead]> ", after=mark)
-        self.assertEqual(
-            _durable_tree_without_access(self.workspace.root),
-            durable_after_success,
-        )
-
-        mark = process.output_mark()
-        process.send_text("/run\n\n")
-        process.wait_for_text("Manuscript output", after=mark)
-        process.send_line("part-01/discarded-by-eof.md")
-        process.wait_for_text("compose[run:1]> ", after=mark)
-        process.send_line("discarded by eof")
-        process.wait_for_text("compose[run:2]> ", after=mark)
-        process.send_eof()
-        self.assertEqual(process.wait_for_exit(), 0, process.normalized_text)
-        self.assertIn(
-            "[compose]Discarded1line.Nomessagewassavedorsent.",
-            "".join(process.text_after(mark).split()),
-        )
-        self.assertEqual(
-            _durable_tree_without_access(self.workspace.root),
-            durable_after_success,
-        )
-        self.assertEqual(process.normalized_text.count("You → Consensus"), 1)
-
-        inspection = self.workspace.inspect_session("alpha")
-        self.assertEqual(len(inspection["debates"]), 1)
-        self.assertEqual(inspection["debates"][0]["status"], "consensus")
-        manuscripts = [
-            path
-            for path in self.workspace.path("manuscript").rglob("*")
-            if path.is_file() and path.name != ".gitkeep"
-        ]
-        self.assertEqual(len(manuscripts), 1)
-        self.assertEqual(
-            manuscripts[0].read_text(encoding="utf-8"),
-            "deterministic candidate",
-        )
-        self.assertEqual(
-            self.workspace.read_text("core_documents/global_outline.md"),
-            "updated outline",
-        )
-        catalog = FilesystemConversationCatalog(self.workspace)
-        self.assertEqual(
-            FilesystemConversationEventStore(
-                self.workspace,
-                catalog=catalog,
-            ).read("alpha", selected.conversation_id),
-            (),
-        )
-        started = [
-            record
-            for record in self._provider_records()
-            if record.get("event") == "started"
-        ]
-        self.assertEqual(len(started), 5)
-        self.assertEqual(
-            started[0]["context_current"]["command"],
-            "\n/send\n/cancel\nfinal literal line",
-        )
-        self.assertFalse(
-            self.workspace.path(f"{_SESSION_DIRECTORY}/alpha.access.json").exists()
-        )
-
     def test_main_eof_exits_normally_without_ending_or_mutating_session(self) -> None:
         """Deliver configured VEOF at main input and prove detach-only cleanup."""
 
-        selected = self._seed_default_session()
         process = self._spawn_cli(
             ("chat", "alpha", "--workspace", str(self.workspace.root))
         )
-        process.wait_for_text("story[alpha:lead]> ")
+        process.wait_for_text("story[alpha]> ")
+        selected = self._create_conversation(process)
         before = _durable_tree_without_access(self.workspace.root)
         process.send_eof()
         self.assertEqual(process.wait_for_exit(), 0, process.normalized_text)
@@ -7295,526 +5425,10 @@ print(
         )
         self.assertFalse(self.provider_log.exists())
 
-    def test_capable_advisory_progress_animates_all_frames_and_joins_repeatedly(
+    def _retired_v1_test_vintr_during_large_local_history_stops_sequential_rendering(
         self,
     ) -> None:
-        """Prove capable PTYs animate, serialize writes, and leave no workers."""
-
-        source = r'''
-import asyncio
-import sys
-
-from story_writing_agents.interactive_terminal import build_stream_terminal
-
-
-async def main():
-    terminal = build_stream_terminal(input, sys.stdin, sys.stdout)
-    for label in ("one", "two"):
-        async def operation(label=label):
-            await asyncio.sleep(0.38)
-            terminal._write_text("answer-" + label + "\\n")
-            return label
-
-        result = await terminal._advisory_progress(operation())
-        print("RESULT=" + result)
-
-
-asyncio.run(main())
-'''
-        for attempt in range(2):
-            with self.subTest(attempt=attempt):
-                process = self._spawn_python(
-                    source,
-                    environment_overrides={"TERM": "xterm-256color"},
-                    terminal_columns=40,
-                    decorative_color=True,
-                )
-                mark = process.output_mark()
-                output = process.wait_for_text("RESULT=two", after=mark)
-                self.assertEqual(process.wait_for_exit(), 0, process.normalized_text)
-                positions = tuple(
-                    output.index(frame) for frame in _VISIBLE_PROGRESS_FRAMES
-                )
-                self.assertEqual(positions, tuple(sorted(positions)))
-                self.assertIn("answer-one", output)
-                self.assertIn("answer-two", output)
-                self.assertNotIn("[routing]", output)
-                self.assertNotIn("[waiting]", output)
-                raw_output = bytes(process.raw_bytes)
-                for color in (36, 34, 35, 31):
-                    self.assertIn(f"\x1b[1;{color}m".encode(), raw_output)
-                self.assertGreaterEqual(output.count("\x1b[K"), 4)
-                self.assertNotIn("Task was destroyed", process.normalized_text)
-
-    def test_term_dumb_advisory_progress_is_silent(self) -> None:
-        """Prove a non-capable terminal receives only the advisory result."""
-
-        source = r'''
-import asyncio
-import sys
-
-from story_writing_agents.interactive_terminal import build_stream_terminal
-
-
-async def main():
-    terminal = build_stream_terminal(input, sys.stdin, sys.stdout)
-
-    async def operation():
-        await asyncio.sleep(0.2)
-        return "done"
-
-    result = await terminal._advisory_progress(operation())
-    print("RESULT=" + result)
-
-
-asyncio.run(main())
-'''
-        process = self._spawn_python(source, environment_overrides={"TERM": "dumb"})
-        output = process.wait_for_text("RESULT=done")
-        self.assertEqual(process.wait_for_exit(), 0, process.normalized_text)
-        self.assertNotIn(_VISIBLE_PROGRESS_FRAMES[0], output)
-        self.assertNotIn("\x1b[K", output)
-
-    def test_advisory_vintr_terminates_provider_taints_then_restarts_thread(
-        self,
-    ) -> None:
-        """Prove joined real-signal advisory cancellation and clean retry semantics."""
-
-        selected = self._seed_default_session()
-        process = self._spawn_cli(
-            ("chat", "alpha", "--workspace", str(self.workspace.root)),
-            environment_overrides={"TERM": "xterm-256color"},
-        )
-        process.wait_for_text("story[alpha:lead]> ")
-        mark = process.output_mark()
-        process.send_text("/to plot\n\n")
-        process.wait_for_text("story[alpha:plot]> ", after=mark)
-
-        mark = process.output_mark()
-        process.send_line("seed advisory")
-        self._wait_for_live_reply(
-            process,
-            after=mark,
-            title="Plot & Structure Architect",
-            content="deterministic advisory reply",
-        )
-        process.wait_for_text("story[alpha:plot]> ", after=mark)
-        manifest_path = f"{_SESSION_DIRECTORY}/alpha.json"
-        manifest = self.workspace.read_json(manifest_path)
-        self.assertEqual(manifest["provider_threads"], {})
-        context_records = self._context_thread_records(
-            "alpha",
-            agent_id="plot_architect",
-            subject_id=selected.conversation_id,
-        )
-        self.assertEqual(len(context_records), 1)
-        self.assertIs(context_records[0]["tainted"], False)
-
-        self._set_provider_control(mode="block")
-        records_before_cancel = len(self._provider_records())
-        mark = process.output_mark()
-        process.send_line("cancel advisory")
-        progress_output = process.wait_for_text(
-            _VISIBLE_PROGRESS_FRAMES[0],
-            after=mark,
-        )
-        self.assertNotIn("responding; Ctrl-C", progress_output)
-        self.assertNotIn("[routing] ", progress_output)
-
-        def is_cancelled_invocation(record: dict[str, Any]) -> bool:
-            """Identify the blocking advisory provider invocation by payload."""
-
-            payload = record.get("context_current")
-            return (
-                record.get("event") == "started"
-                and isinstance(payload, dict)
-                and payload.get("command") == "cancel advisory"
-            )
-
-        blocked = self._wait_for_provider_record(
-            process,
-            is_cancelled_invocation,
-            after_count=records_before_cancel,
-        )
-        process.send_interrupt()
-        cancelled_output = process.wait_for_text(
-            "[cancelled] Plot & Structure Architect turn was interrupted.",
-            after=mark,
-        )
-        self.assertNotIn("[waiting] ", cancelled_output)
-        self.assertNotIn("[routing] ", cancelled_output)
-        process.wait_for_text(
-            "[hint] The story session remains attached;",
-            after=mark,
-        )
-        process.wait_for_text("story[alpha:plot]> ", after=mark)
-        self.assertIn(
-            "thestorysessionremainsattached;theaffectedproviderthreadmay"
-            "restartonthenextmessage.",
-            "".join(process.text_after(mark).casefold().split()),
-        )
-
-        blocked_pid = blocked["pid"]
-
-        def is_blocked_termination(record: dict[str, Any]) -> bool:
-            """Identify backend termination of the exact blocking provider PID."""
-
-            return (
-                record.get("event") == "terminated"
-                and record.get("pid") == blocked_pid
-            )
-
-        self._wait_for_provider_record(
-            process,
-            is_blocked_termination,
-            after_count=records_before_cancel,
-        )
-        with self.assertRaises(ProcessLookupError):
-            os.kill(blocked_pid, 0)
-
-        manifest = self.workspace.read_json(manifest_path)
-        self.assertEqual(manifest["provider_threads"], {})
-        context_records = self._context_thread_records(
-            "alpha",
-            agent_id="plot_architect",
-            subject_id=selected.conversation_id,
-        )
-        self.assertEqual(len(context_records), 1)
-        self.assertIs(context_records[0]["tainted"], True)
-        catalog = FilesystemConversationCatalog(self.workspace)
-        store = FilesystemConversationEventStore(self.workspace, catalog=catalog)
-        events = store.read("alpha", selected.conversation_id)
-        self.assertEqual(
-            tuple(event.kind for event in events),
-            (
-                ConversationEventKind.USER_MESSAGE,
-                ConversationEventKind.AGENT_REPLY,
-                ConversationEventKind.USER_MESSAGE,
-                ConversationEventKind.RUNTIME_ERROR,
-            ),
-        )
-        self.assertEqual(
-            events[-1].content,
-            "CancelledError: conversation turn was cancelled",
-        )
-
-        self._set_provider_control(mode="auto")
-        mark = process.output_mark()
-        process.send_line("after cancellation")
-        self._wait_for_live_reply(
-            process,
-            after=mark,
-            title="Plot & Structure Architect",
-            content="deterministic advisory reply",
-        )
-        process.wait_for_text("story[alpha:plot]> ", after=mark)
-        manifest = self.workspace.read_json(manifest_path)
-        self.assertEqual(manifest["provider_threads"], {})
-        context_records = self._context_thread_records(
-            "alpha",
-            agent_id="plot_architect",
-            subject_id=selected.conversation_id,
-        )
-        self.assertEqual(len(context_records), 1)
-        self.assertIs(context_records[0]["tainted"], False)
-        started = [
-            record
-            for record in self._provider_records()
-            if record.get("event") == "started"
-        ]
-        self.assertEqual(len(started), 3)
-        self.assertEqual(
-            ["resume" in record["argv"] for record in started],
-            [False, True, False],
-        )
-        process.send_text("/quit\n\n")
-        self.assertEqual(process.wait_for_exit(), 0, process.normalized_text)
-        self.assertEqual(
-            load_default_conversation(self.workspace, "alpha"),
-            selected.conversation_id,
-        )
-        self.assertFalse(
-            self.workspace.path(f"{_SESSION_DIRECTORY}/alpha.access.json").exists()
-        )
-        self.assertNotIn("PTY_TEST_CREDENTIAL_MUST_NOT_APPEAR", cancelled_output)
-
-    def test_consensus_vintr_persists_interruption_and_restarts_tainted_drafter(
-        self,
-    ) -> None:
-        """Prove real-signal interruption, artifact safety, and drafter retry."""
-
-        selected = self._seed_default_session()
-        process = self._spawn_cli(
-            ("chat", "alpha", "--workspace", str(self.workspace.root)),
-            environment_overrides={"TERM": "xterm-256color"},
-        )
-        process.wait_for_text("story[alpha:lead]> ")
-
-        mark = process.output_mark()
-        process.send_line(
-            "/run --output part-01/seed-consensus.md seed consensus"
-        )
-        process.wait_for_text("Consensus [success]", after=mark)
-        process.wait_for_text("story[alpha:lead]> ", after=mark)
-        mark = process.output_mark()
-        process.send_line("establish current lead thread")
-        self._wait_for_live_reply(
-            process,
-            after=mark,
-            title="Lead Orchestrator",
-            content="deterministic advisory reply",
-        )
-        process.wait_for_text("story[alpha:lead]> ", after=mark)
-        core_after_seed = self.workspace.read_text(
-            "core_documents/global_outline.md"
-        )
-        seed_manuscripts = {
-            path.relative_to(self.workspace.root).as_posix(): path.read_bytes()
-            for path in self.workspace.path("manuscript").rglob("*")
-            if path.is_file() and path.name != ".gitkeep"
-        }
-        self.assertEqual(len(seed_manuscripts), 1)
-
-        self._set_provider_control(mode="block")
-        records_before_cancel = len(self._provider_records())
-        mark = process.output_mark()
-        process.send_line(
-            "/run --output part-01/cancel-consensus.md cancel consensus"
-        )
-        process.wait_for_text("Started prompt consensus.", after=mark)
-        process.wait_for_text(_VISIBLE_PROGRESS_FRAMES[0], after=mark)
-
-        def is_blocked_consensus_draft(record: dict[str, Any]) -> bool:
-            """Identify the blocked execution draft for the cancellation run."""
-
-            payload = record.get("context_current")
-            return (
-                record.get("event") == "started"
-                and isinstance(payload, dict)
-                and payload.get("phase") == "draft"
-                and payload.get("command") == "cancel consensus"
-            )
-
-        blocked = self._wait_for_provider_record(
-            process,
-            is_blocked_consensus_draft,
-            after_count=records_before_cancel,
-        )
-        live_debates = [
-            item
-            for item in self.workspace.inspect_session("alpha")["debates"]
-            if not item["terminal"]
-        ]
-        self.assertEqual(len(live_debates), 1)
-        cancelled_debate_id = live_debates[0]["debate_id"]
-        process.send_interrupt()
-        process.wait_for_text(
-            "Run interrupted after durable state transition.",
-            after=mark,
-        )
-        process.wait_for_text("[cancelled] Debate ", after=mark)
-        process.wait_for_text("was marked interrupted.", after=mark)
-        process.wait_for_text("It cannot resume.", after=mark)
-        process.wait_for_text('"alpha" remains ready and attached.', after=mark)
-        process.wait_for_text("story[alpha:lead]> ", after=mark)
-        cancelled_output = process.text_after(mark)
-        cancelled_plain = _ANSI_SGR_BYTES.sub(
-            b"",
-            cancelled_output.encode("utf-8"),
-        ).decode("utf-8")
-        self.assertEqual(cancelled_plain.count("--- Debate phase"), 2)
-        cancelled_compact = "".join(cancelled_plain.split())
-        self.assertIn("---Debatephase·Started", cancelled_compact)
-        self.assertNotIn(
-            "---Debatephase·Started[loading]",
-            cancelled_compact,
-        )
-        self.assertIn(
-            "---Debatephase·Interrupted[cancelled]",
-            cancelled_compact,
-        )
-        self.assertEqual(cancelled_plain.count("Phase: interrupted"), 1)
-        self.assertEqual(
-            cancelled_plain.count(
-                "Run interrupted after durable state transition."
-            ),
-            1,
-        )
-        self.assertLess(
-            cancelled_plain.index("Phase: interrupted"),
-            cancelled_plain.index("[cancelled] Debate "),
-        )
-
-        blocked_pid = blocked["pid"]
-
-        def is_consensus_termination(record: dict[str, Any]) -> bool:
-            """Identify termination of the blocked consensus provider PID."""
-
-            return (
-                record.get("event") == "terminated"
-                and record.get("pid") == blocked_pid
-            )
-
-        self._wait_for_provider_record(
-            process,
-            is_consensus_termination,
-            after_count=records_before_cancel,
-        )
-        with self.assertRaises(ProcessLookupError):
-            os.kill(blocked_pid, 0)
-
-        interrupted_inspection = self.workspace.inspect_session("alpha")
-        statuses = [item["status"] for item in interrupted_inspection["debates"]]
-        self.assertEqual(statuses.count("consensus"), 1)
-        self.assertEqual(statuses.count("interrupted"), 1)
-        interrupted = next(
-            item
-            for item in interrupted_inspection["debates"]
-            if item["status"] == "interrupted"
-        )
-        self.assertIs(interrupted["terminal"], True)
-        self.assertEqual(
-            self.workspace.read_text("core_documents/global_outline.md"),
-            core_after_seed,
-        )
-        manuscripts_after_cancel = {
-            path.relative_to(self.workspace.root).as_posix(): path.read_bytes()
-            for path in self.workspace.path("manuscript").rglob("*")
-            if path.is_file() and path.name != ".gitkeep"
-        }
-        self.assertEqual(manuscripts_after_cancel, seed_manuscripts)
-        manifest_path = f"{_SESSION_DIRECTORY}/alpha.json"
-        manifest = self.workspace.read_json(manifest_path)
-        self.assertEqual(manifest["provider_threads"], {})
-        self.assertEqual(
-            self._context_thread_records(
-                "alpha",
-                agent_id="execution_specialist",
-                subject_id=cancelled_debate_id,
-            ),
-            [],
-        )
-
-        self._set_provider_control(mode="auto")
-        mark = process.output_mark()
-        process.send_line(
-            "/run --output part-01/recovered-consensus.md recovered consensus"
-        )
-        process.wait_for_text("Consensus [success]", after=mark)
-        process.wait_for_text("story[alpha:lead]> ", after=mark)
-        manifest = self.workspace.read_json(manifest_path)
-        self.assertEqual(manifest["provider_threads"], {})
-        drafter_invocations = [
-            record
-            for record in self._provider_records()
-            if record.get("event") == "started"
-            and record["context_current"]["identity"].get("agent_id")
-            == "execution_specialist"
-        ]
-        self.assertEqual(
-            [record["context_current"]["phase"] for record in drafter_invocations],
-            ["draft", "audit", "draft", "draft", "audit"],
-        )
-        self.assertEqual(
-            ["resume" in record["argv"] for record in drafter_invocations],
-            [False, True, False, False, True],
-        )
-        context_records = self._context_thread_records(
-            "alpha",
-            agent_id="execution_specialist",
-        )
-        self.assertEqual(len(context_records), 2)
-        self.assertTrue(all(not record["tainted"] for record in context_records))
-        self.assertNotIn(
-            cancelled_debate_id,
-            {
-                record["key"]["scope"]["subject_id"]
-                for record in context_records
-            },
-        )
-        final_inspection = self.workspace.inspect_session("alpha")
-        final_statuses = [item["status"] for item in final_inspection["debates"]]
-        self.assertEqual(final_statuses.count("consensus"), 2)
-        self.assertEqual(final_statuses.count("interrupted"), 1)
-        final_manuscripts = [
-            path
-            for path in self.workspace.path("manuscript").rglob("*")
-            if path.is_file() and path.name != ".gitkeep"
-        ]
-        self.assertEqual(len(final_manuscripts), 2)
-        process.send_text("/quit\n\n")
-        self.assertEqual(process.wait_for_exit(), 0, process.normalized_text)
-        self.assertEqual(
-            load_default_conversation(self.workspace, "alpha"),
-            selected.conversation_id,
-        )
-        self.assertFalse(
-            self.workspace.path(f"{_SESSION_DIRECTORY}/alpha.access.json").exists()
-        )
-
-    def test_vintr_during_large_local_history_stops_sequential_rendering(
-        self,
-    ) -> None:
-        """Use PTY backpressure to interrupt provider-free row rendering safely."""
-
-        selected = self._seed_default_session()
-        catalog = FilesystemConversationCatalog(self.workspace)
-        store = FilesystemConversationEventStore(self.workspace, catalog=catalog)
-        for ordinal in range(1, 13):
-            turn_id = f"seed_{ordinal}"
-            store.append(
-                ConversationEventAppend(
-                    session_id="alpha",
-                    conversation_id=selected.conversation_id,
-                    turn_id=turn_id,
-                    sender="user",
-                    recipient="lead_orchestrator",
-                    kind=ConversationEventKind.USER_MESSAGE,
-                    content=f"question {ordinal} " + ("q" * 4096),
-                )
-            )
-            store.append(
-                ConversationEventAppend(
-                    session_id="alpha",
-                    conversation_id=selected.conversation_id,
-                    turn_id=turn_id,
-                    sender="lead_orchestrator",
-                    recipient="user",
-                    kind=ConversationEventKind.AGENT_REPLY,
-                    content=f"answer {ordinal} " + ("a" * 4096),
-                )
-            )
-        process = self._spawn_cli(
-            ("chat", "alpha", "--workspace", str(self.workspace.root))
-        )
-        process.wait_for_text("story[alpha:lead]> ")
-        before = _durable_tree_without_access(self.workspace.root)
-        mark = process.output_mark()
-        process.send_line("/history 24")
-        process.wait_for_text("History (1/24)", after=mark)
-        process.send_interrupt()
-        process.wait_for_text(
-            "[cancelled] History cancelled; attached state is unchanged.",
-            after=mark,
-        )
-        process.wait_for_text("story[alpha:lead]> ", after=mark)
-        interrupted_output = process.text_after(mark)
-        self.assertLess(interrupted_output.count("History ("), 24)
-        self.assertNotIn("[context]", interrupted_output)
-        self.assertEqual(
-            _durable_tree_without_access(self.workspace.root),
-            before,
-        )
-        self.assertFalse(self.provider_log.exists())
-        process.send_text("/quit\n\n")
-        self.assertEqual(process.wait_for_exit(), 0, process.normalized_text)
-        self.assertEqual(
-            load_default_conversation(self.workspace, "alpha"),
-            selected.conversation_id,
-        )
-        self.assertFalse(
-            self.workspace.path(f"{_SESSION_DIRECTORY}/alpha.access.json").exists()
-        )
+        """Document the removed schema-v1 bulk-history setup."""
 
     def test_tty_startup_workspace_configuration_and_preflight_errors_are_safe(
         self,
@@ -7846,17 +5460,20 @@ asyncio.run(main())
         self.assertNotIn("story[", process.normalized_text)
         self.assertEqual(_durable_tree(self.workspace.root), before)
 
-        empty_path = self.temporary_root / "empty-path"
-        empty_path.mkdir()
+        git_only_path = self.temporary_root / "git-only-path"
+        git_only_path.mkdir()
+        git_executable = shutil.which("git")
+        if git_executable is None:
+            self.fail("PTY integration tests require Git")
+        (git_only_path / "git").symlink_to(git_executable)
         process = self._spawn_cli(
             ("chat", "alpha", "--workspace", str(self.workspace.root)),
-            environment_overrides={"PATH": str(empty_path)},
+            environment_overrides={"PATH": str(git_only_path)},
         )
         process.wait_for_text("Provider authentication")
         process.send_interrupt()
         self.assertEqual(process.wait_for_exit(), 0, process.normalized_text)
         coordinated = dict(before)
-        coordinated[CONVERSATION_STORAGE_MUTATION_GUARD_PATH] = b""
         self.assertEqual(_durable_tree(self.workspace.root), coordinated)
         self.assertFalse(self.provider_log.exists())
 
@@ -7866,16 +5483,16 @@ asyncio.run(main())
         self.assertNotIn("PTY_TEST_CREDENTIAL_MUST_NOT_APPEAR", combined)
         self.assertNotIn(b"\x1b[", combined.encode("utf-8"))
 
-    def test_second_real_process_reports_blocked_access_without_exposing_token(
+    def test_second_real_process_rejects_runtime_workspace_without_exposing_token(
         self,
     ) -> None:
-        """Prove a natural access conflict preserves owner and durable scope."""
+        """Prove a fresh path-only process cannot reopen the owner's runtime root."""
 
-        selected = self._seed_default_session()
         owner = self._spawn_cli(
             ("chat", "alpha", "--workspace", str(self.workspace.root))
         )
-        owner.wait_for_text("story[alpha:lead]> ")
+        owner.wait_for_text("story[alpha]> ")
+        selected = self._create_conversation(owner)
         access_path = f"{_SESSION_DIRECTORY}/alpha.access.json"
         access = self.workspace.read_json(access_path)
         claim_token = access["claim_token"]
@@ -7884,10 +5501,8 @@ asyncio.run(main())
         contender = self._spawn_cli(
             ("chat", "alpha", "--workspace", str(self.workspace.root))
         )
-        contender.wait_for_text("[error session_access_blocked]")
-        contender.wait_for_text("story[lobby]> ")
-        contender.send_text("/quit\n\n")
-        self.assertEqual(contender.wait_for_exit(), 0, contender.normalized_text)
+        contender.wait_for_text("[error workspace_invalid]")
+        self.assertEqual(contender.wait_for_exit(), 2, contender.normalized_text)
         self.assertEqual(_durable_tree(self.workspace.root), before_contender)
         self.assertNotIn(claim_token, contender.normalized_text)
         self.assertNotIn(
@@ -7909,248 +5524,25 @@ asyncio.run(main())
     def test_natural_command_provider_draft_and_transcript_errors_are_sanitized(
         self,
     ) -> None:
-        """Cover stable real-process error categories and recovery without leaks."""
+        """Cover retained command and transcript failures without provider work."""
 
-        selected = self._seed_default_session()
         process = self._spawn_cli(
             ("chat", "alpha", "--workspace", str(self.workspace.root))
         )
-        process.wait_for_text("story[alpha:lead]> ")
+        process.wait_for_text("story[alpha]> ")
+        selected = self._create_conversation(process)
 
-        for command, code, output_path in (
-            ("/rn", "command_invalid", None),
-            ("/to unknown_agent", "agent_invalid", None),
-            (
-                "/draft-file missing-draft.md",
-                "draft_input_invalid",
-                "part-01/missing-draft.md",
-            ),
-            (
-                "/transcript missing_conversation",
-                "conversation_not_found",
-                None,
-            ),
+        for command, marker in (
+            ("/rn", "[error command_invalid]"),
+            ("/transcript missing_conversation", "[error conversation_not_found]"),
+            ("/run removed", "[error command_invalid]"),
         ):
-            with self.subTest(code=code):
+            with self.subTest(command=command):
                 mark = process.output_mark()
                 process.send_line(command)
-                if output_path is not None:
-                    process.wait_for_text("Manuscript output", after=mark)
-                    process.send_line(output_path)
-                process.wait_for_text(f"[error {code}]", after=mark)
-                process.wait_for_text("[hint] ", after=mark)
-                process.wait_for_text("story[alpha:lead]> ", after=mark)
+                process.wait_for_text(marker, after=mark)
+                process.wait_for_text("story[alpha]> ", after=mark)
         self.assertFalse(self.provider_log.exists())
-
-        diagnostic_secret = "PRIVATE_PROVIDER_STATE_MUST_NOT_APPEAR"
-        hidden_path = str(self.workspace.root / "private" / "provider-state.json")
-        self._set_provider_control(
-            mode="nonzero",
-            diagnostic=(
-                f"{diagnostic_secret} {hidden_path} "
-                "PTY_TEST_CREDENTIAL_MUST_NOT_APPEAR \x1b]8;;unsafe\x07"
-            ),
-        )
-        mark = process.output_mark()
-        process.send_line("provider failure turn")
-        process.wait_for_text(
-            "[error provider_protocol_error]",
-            after=mark,
-        )
-        process.wait_for_text("story[alpha:lead]> ", after=mark)
-        provider_error = process.text_after(mark)
-        for secret in (
-            diagnostic_secret,
-            hidden_path,
-            "PTY_TEST_CREDENTIAL_MUST_NOT_APPEAR",
-        ):
-            self.assertNotIn(secret, provider_error)
-        self.assertNotIn(b"\x1b]", process.raw_bytes)
-        self.assertNotIn(b"\x07", process.raw_bytes)
-
-        catalog = FilesystemConversationCatalog(self.workspace)
-        store = FilesystemConversationEventStore(self.workspace, catalog=catalog)
-        failed_events = store.read("alpha", selected.conversation_id)
-        self.assertEqual(
-            tuple(event.kind for event in failed_events),
-            (
-                ConversationEventKind.USER_MESSAGE,
-                ConversationEventKind.RUNTIME_ERROR,
-            ),
-        )
-        for secret in (diagnostic_secret, hidden_path):
-            self.assertNotIn(secret, failed_events[-1].content)
-        self.assertEqual(
-            failed_events[-1].content,
-            "BackendProtocolError: Codex CLI exited with status 7",
-        )
-        self.assertLessEqual(len(failed_events[-1].content), 4096)
-
-        mark = process.output_mark()
-        process.send_line("/history 2")
-        provider_history = process.wait_for_text(
-            "Codex CLI exited with status 7",
-            after=mark,
-        )
-        process.wait_for_text("story[alpha:lead]> ", after=mark)
-        for secret in (
-            diagnostic_secret,
-            hidden_path,
-            "PTY_TEST_CREDENTIAL_MUST_NOT_APPEAR",
-        ):
-            self.assertNotIn(secret, provider_history)
-
-        self._set_provider_control(mode="auto")
-        mark = process.output_mark()
-        process.send_line("recovered provider turn")
-        self._wait_for_live_reply(
-            process,
-            after=mark,
-            title="Lead Orchestrator",
-            content="deterministic advisory reply",
-        )
-        process.wait_for_text("story[alpha:lead]> ", after=mark)
-        self.assertEqual(
-            len(
-                [
-                    record
-                    for record in self._provider_records()
-                    if record.get("event") == "started"
-                ]
-            ),
-            2,
-        )
-
-        malformed_value = "MALFORMED_PROVIDER_VALUE_MUST_NOT_APPEAR\x1b]unsafe\x07"
-        self._set_provider_control(
-            mode="malformed",
-            response=malformed_value,
-        )
-        mark = process.output_mark()
-        process.send_line("malformed provider turn")
-        process.wait_for_text("[error provider_protocol_error]", after=mark)
-        process.wait_for_text("story[alpha:lead]> ", after=mark)
-        malformed_error = process.text_after(mark)
-        self.assertNotIn("MALFORMED_PROVIDER_VALUE_MUST_NOT_APPEAR", malformed_error)
-        self.assertNotIn(b"\x1b]", process.raw_bytes)
-        self.assertNotIn(b"\x07", process.raw_bytes)
-        malformed_events = store.read("alpha", selected.conversation_id)
-        self.assertEqual(
-            malformed_events[-1].content,
-            "BackendProtocolError: contextual provider action is malformed",
-        )
-        self.assertNotIn(
-            "MALFORMED_PROVIDER_VALUE_MUST_NOT_APPEAR",
-            malformed_events[-1].content,
-        )
-
-        mark = process.output_mark()
-        process.send_line("/history 2")
-        process.wait_for_text("[context]", after=mark)
-        process.wait_for_text("story[alpha:lead]> ", after=mark)
-        malformed_history = process.text_after(mark)
-        self.assertIn(
-            "contextualprovideractionismalformed",
-            "".join(malformed_history.split()).replace("│", ""),
-        )
-        self.assertNotIn(
-            "MALFORMED_PROVIDER_VALUE_MUST_NOT_APPEAR",
-            malformed_history,
-        )
-
-        self._set_provider_control(mode="invalid_read")
-        mark = process.output_mark()
-        process.send_line("invalid read provider turn")
-        process.wait_for_text("[error provider_protocol_error]", after=mark)
-        process.wait_for_text("story[alpha:lead]> ", after=mark)
-        invalid_read_error = process.text_after(mark)
-        self.assertNotIn("conflict", invalid_read_error)
-        self.assertNotIn("PRIVATE/critique text", invalid_read_error)
-        invalid_read_events = store.read("alpha", selected.conversation_id)
-        concrete_diagnostic = (
-            "BackendProtocolError: contextual provider read action is invalid: "
-            "`d` must contain source handles returned by the preceding context search"
-        )
-        self.assertEqual(invalid_read_events[-1].content, concrete_diagnostic)
-        self.assertNotIn("conflict", invalid_read_events[-1].content)
-        self.assertNotIn("PRIVATE/critique text", invalid_read_events[-1].content)
-
-        mark = process.output_mark()
-        process.send_line("/history 2")
-        process.wait_for_text("[context]", after=mark)
-        process.wait_for_text("story[alpha:lead]> ", after=mark)
-        invalid_read_history = process.text_after(mark)
-        compact_history = "".join(invalid_read_history.split()).replace("│", "")
-        self.assertIn(
-            "contextualproviderreadactionisinvalid:`d`mustcontainsourcehandles"
-            "returnedbytheprecedingcontextsearch",
-            compact_history,
-        )
-        self.assertNotIn("conflict", invalid_read_history)
-        self.assertNotIn("PRIVATE/critique text", invalid_read_history)
-
-        self._set_provider_control(mode="correlation_mismatch")
-        mark = process.output_mark()
-        process.send_line("correlation mismatch provider turn")
-        process.wait_for_text("[error provider_protocol_error]", after=mark)
-        process.wait_for_text("story[alpha:lead]> ", after=mark)
-        correlation_error = process.text_after(mark)
-        for private in ("PRIVATE critique prose", "\x1b]", "\x07"):
-            self.assertNotIn(private, correlation_error)
-        correlation_events = store.read("alpha", selected.conversation_id)
-        correlation_diagnostic = (
-            "BackendProtocolError: contextual provider response is invalid: "
-            "`c` does not match the current request correlation token"
-        )
-        self.assertEqual(correlation_events[-1].content, correlation_diagnostic)
-
-        exchange_snapshot = WorkspaceAgentExchangeStore(self.workspace).snapshot(
-            AgentExchangeSelection(
-                "alpha",
-                AgentExchangeScopeKind.CONVERSATION,
-                selected.conversation_id,
-                "lead_orchestrator",
-            )
-        )
-        exchange_records = [
-            json.loads(line) for line in exchange_snapshot.jsonl_bytes.splitlines()
-        ]
-        self.assertEqual(
-            [record["request_type"] for record in exchange_records[-3:]],
-            ["request", "response", "outcome"],
-        )
-        self.assertEqual(
-            json.loads(exchange_records[-1]["content"]),
-            {
-                "code": "response_correlation_mismatch",
-                "outcome": "rejected",
-            },
-        )
-
-        mark = process.output_mark()
-        process.send_line("/history 2")
-        process.wait_for_text("[context]", after=mark)
-        process.wait_for_text("story[alpha:lead]> ", after=mark)
-        correlation_history = process.text_after(mark)
-        compact_history = "".join(correlation_history.split()).replace("│", "")
-        self.assertIn(
-            "contextualproviderresponseisinvalid:`c`doesnotmatchthecurrent"
-            "requestcorrelationtoken",
-            compact_history,
-        )
-        for private in ("PRIVATE critique prose", "\x1b]", "\x07"):
-            self.assertNotIn(private, correlation_history)
-
-        self._set_provider_control(mode="auto")
-        mark = process.output_mark()
-        process.send_line("recovered malformed provider turn")
-        self._wait_for_live_reply(
-            process,
-            after=mark,
-            title="Lead Orchestrator",
-            content="deterministic advisory reply",
-        )
-        process.wait_for_text("story[alpha:lead]> ", after=mark)
 
         transcript_path = self.workspace.path(
             "discussion_logs/alpha/interactive/conversations/"
@@ -8164,17 +5556,11 @@ asyncio.run(main())
         mark = process.output_mark()
         process.send_text("/history\n\n")
         process.wait_for_text("[error transcript_invalid]", after=mark)
-        process.wait_for_text("story[alpha:lead]> ", after=mark)
+        process.wait_for_text("story[alpha]> ", after=mark)
         transcript_error = process.text_after(mark)
         self.assertNotIn(transcript_secret, transcript_error)
         self.assertNotIn(str(transcript_path), transcript_error)
-        error_lines = [
-            line
-            for line in process.normalized_text.splitlines()
-            if line.lstrip().startswith(("[error ", "[hint] "))
-        ]
-        self.assertTrue(error_lines)
-        self.assertTrue(all(len(line) <= 80 for line in error_lines))
+        self.assertFalse(self.provider_log.exists())
 
         process.send_text("/quit\n\n")
         self.assertEqual(process.wait_for_exit(), 0, process.normalized_text)

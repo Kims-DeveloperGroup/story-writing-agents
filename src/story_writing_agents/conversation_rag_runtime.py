@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import inspect
+import json
 from collections.abc import Callable, Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass
@@ -40,32 +41,34 @@ from .conversation_retrieval import (
     ConversationRetrievalSource,
 )
 from .conversation_search import (
-    ConversationCitation,
-    ConversationSearchHit,
-    ConversationSearchMatchKind,
-    ConversationSearchQuery,
-    ConversationSearchResult,
-    ConversationSearchScope,
+    CollaborationHistoryCitation,
+    CollaborationHistorySearchHit,
+    CollaborationHistorySearchQuery,
+    CollaborationHistorySearchResult,
+    CollaborationHistorySearchScope,
 )
 from .conversation_storage.contracts import ConversationStorageServices
 from .conversations import (
-    ConversationEvent,
-    ConversationEventKind,
+    CollaborationEvent,
+    CollaborationReadableField,
+    CollaborationReadableRecord,
     ConversationMetadata,
     ConversationStatus,
+    encode_collaboration_event,
+    project_collaboration_readable_history,
 )
 
-CONVERSATION_RAG_RUNTIME_SCHEMA_ID = "story-conversation-rag-visible-turn-v1"
+CONVERSATION_RAG_RUNTIME_SCHEMA_ID = "story-collaboration-rag-readable-event-v2"
 
-_DOCUMENT_ID_DOMAIN = "story-conversation-rag-visible-turn-document-id-v1"
-_REVISION_ID_DOMAIN = "story-conversation-rag-visible-turn-revision-v1"
-_LITERAL_FRAGMENT_DOMAIN = "story-conversation-rag-visible-turn-literal-v1"
+_DOCUMENT_ID_DOMAIN = "story-collaboration-rag-readable-event-document-id-v2"
+_REVISION_ID_DOMAIN = "story-collaboration-rag-readable-event-revision-v2"
+_LITERAL_FRAGMENT_DOMAIN = "story-collaboration-rag-readable-event-literal-v2"
 _MAX_QUERY_CODEPOINTS = 200
 _MAX_CONTEXT_UTF8_BYTES = 32_768
 _MAX_PROJECTED_SOURCE_UTF8_BYTES = 32 * 1_024 * 1_024
 _SNAPSHOT_MUTATION_TIMEOUT_SECONDS = 30.0
 _PROJECTION_MUTATION_TIMEOUT_SECONDS = 3_600.0
-_AUTHORIZED_TARGET_TOKEN_DOMAIN = "story-conversation-rag-authorized-target-v1"
+_AUTHORIZED_TARGET_TOKEN_DOMAIN = "story-collaboration-rag-authorized-target-v2"
 
 _SyncResultT = TypeVar("_SyncResultT")
 
@@ -254,20 +257,24 @@ class ConversationRagRuntimeInspection:
 
 
 @dataclass(frozen=True, slots=True)
-class _VisibleTurnDocument:
-    metadata: ConversationMetadata
-    user: ConversationEvent
-    reply: ConversationEvent
+class _ReadableFieldRange:
+    field: CollaborationReadableField
+    start_codepoint: int
+    end_codepoint: int
+    encoded_boundaries: tuple[int, ...]
+
+
+@dataclass(frozen=True, slots=True)
+class _ReadableEventDocument:
+    record: CollaborationReadableRecord
     source: ConversationRagSourceDocument
-    subject_range: tuple[int, int]
-    user_range: tuple[int, int]
-    reply_range: tuple[int, int]
+    field_ranges: tuple[_ReadableFieldRange, ...]
 
 
 @dataclass(frozen=True, slots=True)
 class _AuthorizedTarget:
     request: ConversationRagProjectionRequest
-    documents: dict[str, _VisibleTurnDocument]
+    documents: dict[str, _ReadableEventDocument]
     conversation_count: int
     event_count: int
     source_utf8_bytes: int
@@ -277,7 +284,7 @@ def _validate_identifier(value: object, *, label: str) -> str:
     """Return an exact package identifier using an existing value contract."""
 
     del label
-    scope = ConversationSearchScope(session_id=value)  # type: ignore[arg-type]
+    scope = CollaborationHistorySearchScope(session_id=value)  # type: ignore[arg-type]
     return scope.session_id
 
 
@@ -329,144 +336,105 @@ def _length_framed_sha256(domain: str, *fields: str) -> str:
     return digest.hexdigest()
 
 
-def _event_digest_fields(event: ConversationEvent) -> tuple[str, ...]:
-    """Return exact ``ConversationEvent.to_dict`` values in schema order."""
-
-    row = event.to_dict()
-    return tuple(
-        str(row[name])
-        for name in (
-            "schema_version",
-            "session_id",
-            "conversation_id",
-            "turn_id",
-            "sequence",
-            "timestamp",
-            "sender",
-            "recipient",
-            "kind",
-            "content",
+def _readable_document(
+    event: CollaborationEvent,
+    record: CollaborationReadableRecord,
+) -> _ReadableEventDocument:
+    fields = [
+        {
+            "assignment_ordinal": field.assignment_ordinal,
+            "input_ordinal": field.input_ordinal,
+            "key": field.key.value,
+            "text": field.text,
+        }
+        for field in record.fields
+    ]
+    text = json.dumps(
+        {"fields": fields},
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    )
+    ranges: list[_ReadableFieldRange] = []
+    cursor = 0
+    marker = '"text":'
+    for field in record.fields:
+        encoded = json.dumps(field.text, ensure_ascii=False, separators=(",", ":"))
+        marker_start = text.find(marker + encoded, cursor)
+        if marker_start < 0:
+            raise ValueError("readable event document framing is inconsistent")
+        start = marker_start + len(marker) + 1
+        end = start + len(encoded) - 2
+        encoded_parts = tuple(
+            json.dumps(character, ensure_ascii=False)[1:-1] for character in field.text
         )
-    )
-
-
-def _source_text(
-    metadata: ConversationMetadata,
-    user: ConversationEvent,
-    reply: ConversationEvent,
-) -> tuple[str, tuple[int, int], tuple[int, int], tuple[int, int]]:
-    subject_prefix = "Subject: "
-    user_prefix = "\nUser: "
-    reply_prefix = f"\nAgent[{reply.sender}]: "
-    text = (
-        subject_prefix
-        + metadata.subject
-        + user_prefix
-        + user.content
-        + reply_prefix
-        + reply.content
-    )
-    subject_start = len(subject_prefix)
-    subject_end = subject_start + len(metadata.subject)
-    user_start = subject_end + len(user_prefix)
-    user_end = user_start + len(user.content)
-    reply_start = user_end + len(reply_prefix)
-    reply_end = reply_start + len(reply.content)
-    return (
-        text,
-        (subject_start, subject_end),
-        (user_start, user_end),
-        (reply_start, reply_end),
-    )
-
-
-def _visible_document(
-    metadata: ConversationMetadata,
-    user: ConversationEvent,
-    reply: ConversationEvent,
-) -> _VisibleTurnDocument:
-    text, subject_range, user_range, reply_range = _source_text(
-        metadata,
-        user,
-        reply,
-    )
+        if "".join(encoded_parts) != text[start:end]:
+            raise ValueError("readable event field encoding is inconsistent")
+        boundaries = [start]
+        for part in encoded_parts:
+            boundaries.append(boundaries[-1] + len(part))
+        ranges.append(
+            _ReadableFieldRange(
+                field=field,
+                start_codepoint=start,
+                end_codepoint=end,
+                encoded_boundaries=tuple(boundaries),
+            )
+        )
+        cursor = end + 1
     document_id = _length_framed_sha256(
         _DOCUMENT_ID_DOMAIN,
         CONVERSATION_RAG_RUNTIME_SCHEMA_ID,
-        metadata.session_id,
-        metadata.conversation_id,
-        user.turn_id,
-    )
-    revision_fields = (
-        CONVERSATION_RAG_RUNTIME_SCHEMA_ID,
-        str(metadata.schema_version),
-        metadata.session_id,
-        metadata.conversation_id,
-        metadata.subject,
-        str(metadata.subject_revision),
-        *_event_digest_fields(user),
-        *_event_digest_fields(reply),
-        text,
+        record.session_id,
+        record.conversation_id,
+        record.event_id,
     )
     revision_id = "sha256:" + _length_framed_sha256(
         _REVISION_ID_DOMAIN,
-        *revision_fields,
+        CONVERSATION_RAG_RUNTIME_SCHEMA_ID,
+        record.event_id,
+        encode_collaboration_event(event).decode("utf-8"),
+        record.batch_digest,
+        text,
     )
     identity = ConversationRagDocumentIdentity(
         key=ConversationRagDocumentKey(
-            session_id=metadata.session_id,
+            session_id=record.session_id,
             document_id=document_id,
         ),
-        conversation_id=metadata.conversation_id,
-        start_turn_id=user.turn_id,
-        end_turn_id=user.turn_id,
-        start_sequence=user.sequence,
-        end_sequence=reply.sequence,
+        conversation_id=record.conversation_id,
+        start_turn_id=record.turn_id,
+        end_turn_id=record.turn_id,
+        start_sequence=record.sequence,
+        end_sequence=record.sequence,
         revision_id=revision_id,
     )
-    return _VisibleTurnDocument(
-        metadata=metadata,
-        user=user,
-        reply=reply,
+    return _ReadableEventDocument(
+        record=record,
         source=ConversationRagSourceDocument(identity=identity, text=text),
-        subject_range=subject_range,
-        user_range=user_range,
-        reply_range=reply_range,
+        field_ranges=tuple(ranges),
     )
 
 
-def _complete_visible_documents(
+def _readable_event_documents(
     metadata: ConversationMetadata,
     raw_events: object,
-) -> tuple[_VisibleTurnDocument, ...]:
+) -> tuple[_ReadableEventDocument, ...]:
     if type(raw_events) is not tuple:
         raise TypeError("event store read must return a tuple")
-    users: dict[str, ConversationEvent] = {}
-    completed: set[str] = set()
-    documents: list[_VisibleTurnDocument] = []
-    for expected_sequence, event in enumerate(raw_events, start=1):
-        if type(event) is not ConversationEvent:
-            raise TypeError("event store returned an invalid event")
-        if (
-            event.session_id != metadata.session_id
-            or event.conversation_id != metadata.conversation_id
-            or event.sequence != expected_sequence
-        ):
-            raise ValueError("event store returned an invalid transcript")
-        if event.kind is ConversationEventKind.USER_MESSAGE:
-            if event.turn_id in users:
-                raise ValueError("event store returned a duplicate user event")
-            users[event.turn_id] = event
-            continue
-        user = users.get(event.turn_id)
-        if user is None or event.turn_id in completed:
-            raise ValueError("event store returned an invalid turn outcome")
-        completed.add(event.turn_id)
-        if event.kind is ConversationEventKind.AGENT_REPLY:
-            if event.sender != user.recipient:
-                raise ValueError("event store returned a reply from the wrong agent")
-            documents.append(_visible_document(metadata, user, event))
-    return tuple(documents)
+    if any(type(event) is not CollaborationEvent for event in raw_events):
+        raise TypeError("event store returned an invalid collaboration event")
+    records = project_collaboration_readable_history(raw_events)
+    if any(
+        record.session_id != metadata.session_id
+        or record.conversation_id != metadata.conversation_id
+        for record in records
+    ):
+        raise ValueError("event store returned history for another conversation")
+    return tuple(
+        _readable_document(event, record)
+        for event, record in zip(raw_events, records, strict=True)
+    )
 
 
 def _synchronous_member(
@@ -533,7 +501,7 @@ def _read_authorized_target(
             raise ValueError("catalog returned an invalid active target")
         seen_conversations.add(item.conversation_id)
         metadata.append(item)
-    documents: list[_VisibleTurnDocument] = []
+    documents: list[_ReadableEventDocument] = []
     event_count = 0
     source_utf8_bytes = 0
     for item in sorted(metadata, key=lambda value: value.conversation_id):
@@ -547,8 +515,8 @@ def _read_authorized_target(
         event_count += len(raw_events)
         if event_count > CONVERSATION_RAG_POLICY.max_events:
             raise ValueError("authorized projection exceeds the event budget")
-        visible = _complete_visible_documents(item, raw_events)
-        for document in visible:
+        readable = _readable_event_documents(item, raw_events)
+        for document in readable:
             source_utf8_bytes += len(
                 document.source.text.encode("utf-8", errors="strict")
             )
@@ -559,7 +527,7 @@ def _read_authorized_target(
                 raise ValueError(
                     "authorized projection exceeds the source UTF-8 budget"
                 )
-        documents.extend(visible)
+        documents.extend(readable)
     if len(documents) > CONVERSATION_RAG_POLICY.max_events:
         raise ValueError("authorized projection exceeds the document budget")
     validate_snapshot()
@@ -704,67 +672,110 @@ def _authorized_target(
         return target
 
 
+def _field_coordinate(
+    field: CollaborationReadableField,
+) -> tuple[object, int | None, int | None]:
+    return field.key, field.assignment_ordinal, field.input_ordinal
+
+
+def _field_range_for_citation(
+    document: _ReadableEventDocument,
+    citation: CollaborationHistoryCitation,
+) -> _ReadableFieldRange | None:
+    if (
+        citation.session_id != document.record.session_id
+        or citation.conversation_id != document.record.conversation_id
+        or citation.event_id != document.record.event_id
+        or citation.sequence != document.record.sequence
+    ):
+        return None
+    coordinate = (
+        citation.field_key,
+        citation.assignment_ordinal,
+        citation.input_ordinal,
+    )
+    return next(
+        (
+            field_range
+            for field_range in document.field_ranges
+            if _field_coordinate(field_range.field) == coordinate
+        ),
+        None,
+    )
+
+
 def _citation_for_range(
-    document: _VisibleTurnDocument,
+    document: _ReadableEventDocument,
     start: int,
     end: int,
-) -> ConversationCitation:
-    for interval, event in (
-        (document.subject_range, None),
-        (document.user_range, document.user),
-        (document.reply_range, document.reply),
-    ):
-        if start < interval[1] and end > interval[0]:
-            if event is None:
-                break
-            return ConversationCitation(
-                session_id=event.session_id,
-                conversation_id=event.conversation_id,
-                turn_id=event.turn_id,
-                sequence=event.sequence,
-                event_kind=event.kind,
-            )
-    identity = document.source.identity
-    return ConversationCitation(
-        session_id=identity.key.session_id,
-        conversation_id=identity.conversation_id,
-        turn_id=None,
-        sequence=None,
-        event_kind=None,
-    )
+) -> CollaborationHistoryCitation | None:
+    for field_range in document.field_ranges:
+        if not (
+            field_range.start_codepoint <= start < end <= field_range.end_codepoint
+        ):
+            continue
+        try:
+            source_start = field_range.encoded_boundaries.index(start)
+            source_end = field_range.encoded_boundaries.index(end)
+        except ValueError:
+            return None
+        field = field_range.field
+        record = document.record
+        return CollaborationHistoryCitation(
+            session_id=record.session_id,
+            conversation_id=record.conversation_id,
+            event_id=record.event_id,
+            sequence=record.sequence,
+            field_key=field.key,
+            start_codepoint=source_start,
+            end_codepoint=source_end,
+            assignment_ordinal=field.assignment_ordinal,
+            input_ordinal=field.input_ordinal,
+        )
+    return None
 
 
 def _excerpt(
-    document: _VisibleTurnDocument,
+    document: _ReadableEventDocument,
     reference: ConversationRagSourceReference,
-) -> tuple[ConversationRetrievalSource, str]:
-    text = document.source.text[reference.start_codepoint : reference.end_codepoint]
-    source = ConversationRetrievalSource(
-        subject=document.metadata.subject,
-        citation=_citation_for_range(
-            document,
-            reference.start_codepoint,
-            reference.end_codepoint,
-        ),
+    *,
+    citation: CollaborationHistoryCitation | None = None,
+) -> tuple[ConversationRetrievalSource, str] | None:
+    exact = citation or _citation_for_range(
+        document,
+        reference.start_codepoint,
+        reference.end_codepoint,
     )
-    return source, text
+    if exact is None:
+        return None
+    text = document.source.text[reference.start_codepoint : reference.end_codepoint]
+    return ConversationRetrievalSource(citation=exact), text
 
 
 def _literal_reference(
-    document: _VisibleTurnDocument,
-    interval: tuple[int, int],
-) -> ConversationRagSourceReference:
-    start, content_end = interval
-    end = min(
-        content_end,
-        start + CONVERSATION_RAG_RUNTIME_POLICY.max_excerpt_codepoints,
-    )
+    document: _ReadableEventDocument,
+    citation: CollaborationHistoryCitation,
+) -> ConversationRagSourceReference | None:
+    field_range = _field_range_for_citation(document, citation)
+    if field_range is None or citation.end_codepoint > len(field_range.field.text):
+        return None
+    start = field_range.encoded_boundaries[citation.start_codepoint]
+    end = field_range.encoded_boundaries[citation.end_codepoint]
+    if (
+        start >= end
+        or end - start > CONVERSATION_RAG_RUNTIME_POLICY.max_excerpt_codepoints
+    ):
+        return None
     fragment_id = "literal-" + _length_framed_sha256(
         _LITERAL_FRAGMENT_DOMAIN,
         document.source.identity.key.document_id,
         document.source.identity.revision_id,
-        str(start),
-        str(end),
+        citation.event_id,
+        citation.field_key.value,
+        str(citation.assignment_ordinal),
+        str(citation.input_ordinal),
+        str(citation.start_codepoint),
+        str(citation.end_codepoint),
     )
     return ConversationRagSourceReference(
         document=document.source.identity,
@@ -777,97 +788,51 @@ def _literal_reference(
 def _canonical_literal_result(
     value: object,
     *,
-    query: ConversationSearchQuery,
-) -> ConversationSearchResult:
-    if type(value) is not ConversationSearchResult:
-        raise TypeError("conversation search returned an invalid result")
+    query: CollaborationHistorySearchQuery,
+) -> CollaborationHistorySearchResult:
+    if type(value) is not CollaborationHistorySearchResult:
+        raise TypeError("collaboration history search returned an invalid result")
     if value.query != query:
-        raise ValueError("conversation search result crossed its request")
-    return ConversationSearchResult(
+        raise ValueError("collaboration history search result crossed its request")
+    return CollaborationHistorySearchResult(
         query=value.query,
         normalized_query=value.normalized_query,
         hits=value.hits,
-        matched_conversations=value.matched_conversations,
-        scanned_conversations=value.scanned_conversations,
-        scanned_events=value.scanned_events,
+        matched_fields=value.matched_fields,
+        scanned_records=value.scanned_records,
+        scanned_fields=value.scanned_fields,
         scan_truncated=value.scan_truncated,
         truncated=value.truncated,
     )
 
 
 def _literal_references(
-    result: ConversationSearchResult,
-    documents: dict[str, _VisibleTurnDocument],
+    result: CollaborationHistorySearchResult,
+    documents: dict[str, _ReadableEventDocument],
 ) -> tuple[
     list[tuple[ConversationRagSourceReference, ConversationRetrievalSource, str]], bool
 ]:
-    by_conversation: dict[str, list[_VisibleTurnDocument]] = {}
-    for indexed_document in documents.values():
-        by_conversation.setdefault(
-            indexed_document.source.identity.conversation_id,
-            [],
-        ).append(indexed_document)
+    by_event = {document.record.event_id: document for document in documents.values()}
     selected: list[
         tuple[ConversationRagSourceReference, ConversationRetrievalSource, str]
     ] = []
     dropped = False
     for hit in result.hits:
-        if type(hit) is not ConversationSearchHit:
+        if type(hit) is not CollaborationHistorySearchHit:
             dropped = True
             continue
-        candidates = by_conversation.get(hit.citation.conversation_id, [])
-        if not candidates:
+        document = by_event.get(hit.citation.event_id)
+        reference = (
+            None if document is None else _literal_reference(document, hit.citation)
+        )
+        if document is None or reference is None:
             dropped = True
             continue
-        metadata = candidates[0].metadata
-        if (
-            hit.citation.session_id != metadata.session_id
-            or hit.subject != metadata.subject
-            or hit.subject_revision != metadata.subject_revision
-            or hit.status is not ConversationStatus.ACTIVE
-        ):
+        excerpt = _excerpt(document, reference, citation=hit.citation)
+        if excerpt is None:
             dropped = True
             continue
-        document: _VisibleTurnDocument | None = None
-        interval: tuple[int, int] | None = None
-        if hit.match_kind is ConversationSearchMatchKind.TRANSCRIPT:
-            for candidate in candidates:
-                if hit.citation.turn_id != candidate.user.turn_id:
-                    continue
-                if (
-                    hit.citation.sequence == candidate.user.sequence
-                    and hit.citation.event_kind is ConversationEventKind.USER_MESSAGE
-                ):
-                    document, interval = candidate, candidate.user_range
-                    break
-                if (
-                    hit.citation.sequence == candidate.reply.sequence
-                    and hit.citation.event_kind is ConversationEventKind.AGENT_REPLY
-                ):
-                    document, interval = candidate, candidate.reply_range
-                    break
-        elif (
-            hit.match_kind
-            in (
-                ConversationSearchMatchKind.EXACT_SUBJECT,
-                ConversationSearchMatchKind.SUBJECT_PREFIX,
-                ConversationSearchMatchKind.SUBJECT_SUBSTRING,
-            )
-            and hit.citation.sequence is None
-        ):
-            document = max(
-                candidates,
-                key=lambda value: (
-                    value.reply.sequence,
-                    value.source.identity.key.document_id,
-                ),
-            )
-            interval = document.subject_range
-        if document is None or interval is None or interval[0] >= interval[1]:
-            dropped = True
-            continue
-        reference = _literal_reference(document, interval)
-        source, text = _excerpt(document, reference)
+        source, text = excerpt
         selected.append((reference, source, text))
     return selected, dropped
 
@@ -893,7 +858,7 @@ def _canonical_semantic_result(
 
 def _semantic_references(
     candidates: tuple[ConversationRagCandidate, ...],
-    documents: dict[str, _VisibleTurnDocument],
+    documents: dict[str, _ReadableEventDocument],
 ) -> tuple[
     list[tuple[ConversationRagSourceReference, ConversationRetrievalSource, str]], bool
 ]:
@@ -920,7 +885,11 @@ def _semantic_references(
             continue
         if reference.document.key in seen_documents:
             continue
-        source, text = _excerpt(document, reference)
+        excerpt = _excerpt(document, reference)
+        if excerpt is None:
+            dropped = True
+            continue
+        source, text = excerpt
         seen_documents.add(reference.document.key)
         selected.append((reference, source, text))
     return selected, dropped
@@ -1258,17 +1227,16 @@ class ConversationRagRuntimeService:
                 [],
                 truncated=False,
             )
-        literal_query = ConversationSearchQuery(
+        literal_query = CollaborationHistorySearchQuery(
             text=query_text,
             limit=CONVERSATION_RAG_RUNTIME_POLICY.max_literal_candidates,
-            include_archived=False,
         )
-        literal_result: ConversationSearchResult | None = None
+        literal_result: CollaborationHistorySearchResult | None = None
         literal_failed = False
         try:
             raw_literal = _synchronous_result(
                 conversation_storage_services.search.search(
-                    ConversationSearchScope(session_id=session),
+                    CollaborationHistorySearchScope(session_id=session),
                     literal_query,
                 ),
                 operation="conversation literal search",

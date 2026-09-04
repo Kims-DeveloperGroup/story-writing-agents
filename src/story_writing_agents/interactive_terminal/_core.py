@@ -11,7 +11,10 @@ from collections.abc import Awaitable, Callable, Iterable, Mapping
 from dataclasses import KW_ONLY, dataclass
 from enum import StrEnum
 from types import MappingProxyType
-from typing import TextIO
+from typing import TYPE_CHECKING, TextIO
+
+if TYPE_CHECKING:
+    from ..conversations import CollaborationEvent
 
 from ..agents import (
     AGENT_SPECS,
@@ -48,6 +51,11 @@ from ._controls import (
     transition_prefilled_prompt_input,
     transition_prompt_input,
 )
+from ._collaboration_view import (
+    collaboration_view_context,
+    project_collaboration_event,
+    validate_collaboration_event_order,
+)
 from ._driver import (
     AdvisoryProgressError as AdvisoryProgressError,
     RawTerminalDriver,
@@ -56,6 +64,16 @@ from ._driver import (
 from ._external_view import (
     _BorrowedLineViewerHost,
     ExternalViewOperation,
+)
+from ._live_composer import (
+    BoundaryProvider,
+    CancelAndJoin,
+    LiveComposerDeliveryKind,
+    LiveComposerInput as LiveComposerInput,
+    LiveComposerInputKind as LiveComposerInputKind,
+    LiveComposerJoinStatus as LiveComposerJoinStatus,
+    LiveComposerResult,
+    LiveOperationBoundary as LiveOperationBoundary,
 )
 from ._model import (
     CapabilityProfile,
@@ -71,6 +89,7 @@ from ._model import (
     InputPresentation,
     InputPromptView,
     ListView,
+    LineInputState,
     MainCommandControlState,
     MainInputControlState as MainInputControlState,
     MainInputHistoryState as MainInputHistoryState,
@@ -140,7 +159,6 @@ class ComposeMode(StrEnum):
     """Destination of a multiline composition."""
 
     CHAT = "chat"
-    RUN = "run"
 
 
 class ConfirmationResult(StrEnum):
@@ -326,7 +344,7 @@ INTERACTIVE_ERROR_SPECS: Mapping[InteractiveErrorCode, InteractiveErrorSpec] = (
         {
             InteractiveErrorCode.TTY_REQUIRED: InteractiveErrorSpec(
                 "Interactive mode requires a terminal.",
-                "Use story run for non-interactive automation.",
+                "Use the stepwise Python collaboration API without a terminal.",
             ),
             InteractiveErrorCode.WORKSPACE_NOT_INITIALIZED: InteractiveErrorSpec(
                 "No initialized story workspace was found.",
@@ -341,8 +359,8 @@ INTERACTIVE_ERROR_SPECS: Mapping[InteractiveErrorCode, InteractiveErrorSpec] = (
                 "Use a path inside the initialized workspace.",
             ),
             InteractiveErrorCode.WORKSPACE_VERSION_UNSUPPORTED: InteractiveErrorSpec(
-                "This workspace uses an unsupported older session format.",
-                "Use a new workspace or follow the documented manual reset procedure.",
+                "This workspace uses an unsupported workspace version.",
+                "Migration and compatibility are unsupported; create a new workspace.",
             ),
             InteractiveErrorCode.CONFIGURATION_INVALID: InteractiveErrorSpec(
                 "Runtime configuration is invalid.",
@@ -534,6 +552,7 @@ class InteractiveTerminal:
         "_advisory_progress",
         "_debate_progress",
         "_external_view_open",
+        "_live_composer",
         "_read_line",
         "_width",
         "_write_text",
@@ -608,6 +627,7 @@ class InteractiveTerminal:
         )
         self._advisory_progress = _plain_advisory_progress
         self._debate_progress = _plain_debate_progress
+        self._live_composer = _plain_live_composer_runner(read_line, width)
         self._write_text = write_text
         self._width = width
         self._capability_provider = lambda: _plain_capabilities(width)
@@ -708,7 +728,7 @@ class InteractiveTerminal:
         *,
         agent_id: str | None = None,
     ) -> TerminalAction:
-        """Collect one exact chat or consensus composition synchronously."""
+        """Collect one exact chat composition synchronously."""
 
         return self._compose(
             mode,
@@ -729,13 +749,8 @@ class InteractiveTerminal:
             raise TypeError("read_input must be callable")
 
         alias = _compose_alias(mode, agent_id)
-        if mode is ComposeMode.CHAT:
-            assert alias is not None
-            introduction = (
-                f"Target: {alias}. Use /send to submit or /cancel to discard."
-            )
-        else:
-            introduction = "Consensus run. Use /send to submit or /cancel to discard."
+        assert alias is not None
+        introduction = f"Target: {alias}. Use /send to submit or /cancel to discard."
         self._write_component(
             Notice(
                 introduction,
@@ -783,14 +798,13 @@ class InteractiveTerminal:
                     line_count=state.line_count,
                     character_count=state.character_count,
                 )
-                target = alias if alias is not None else "consensus"
                 self._write_component(
                     Notice(
                         f"Sending {action.line_count} "
                         f"{_plural(action.line_count, 'line')}, "
                         f"{action.character_count} "
                         f"{_plural(action.character_count, 'character')} "
-                        f"to {target}.",
+                        f"to {alias}.",
                         label="compose",
                         role=SemanticRole.SUCCESS,
                         state=ViewState.COMPLETED,
@@ -1094,6 +1108,37 @@ class InteractiveTerminal:
                 state=ViewState.COMPLETED,
             )
         )
+
+    def write_collaboration_events(
+        self,
+        events: tuple[CollaborationEvent, ...],
+        *,
+        after_sequence: int = 0,
+        show_details: bool = False,
+    ) -> int:
+        """Render one durable collaboration suffix exactly once in order."""
+
+        if type(after_sequence) is not int or after_sequence < 0:
+            raise ValueError("after_sequence must be a non-negative integer")
+        if type(show_details) is not bool:
+            raise TypeError("show_details must be a bool")
+        validate_collaboration_event_order(events)
+        input_references, candidate_paths, proposals = collaboration_view_context(events)
+        cursor = after_sequence
+        for event in events:
+            if event.sequence <= after_sequence:
+                continue
+            self._write_component(
+                project_collaboration_event(
+                    event,
+                    show_details=show_details,
+                    input_references=input_references,
+                    candidate_paths=candidate_paths,
+                    proposals=proposals,
+                )
+            )
+            cursor = event.sequence
+        return cursor
 
     def write_agent_roster(self) -> None:
         """Render every advisory route in registry order without mutation.
@@ -1618,7 +1663,7 @@ class InteractiveMainInput:
 
 
 class InteractiveCompositionInput:
-    """Bind RUN/CHAT composition to call-local reference collaborators."""
+    """Bind chat composition to call-local reference collaborators."""
 
     __slots__ = ("_terminal",)
 
@@ -1845,6 +1890,40 @@ class InteractiveDebateProgress:
         return await self._run(operation)
 
 
+class InteractiveLiveComposer:
+    """Bind one terminal's package-internal live steering capability."""
+
+    __slots__ = ("_run",)
+
+    def __init__(self, terminal: InteractiveTerminal) -> None:
+        if not isinstance(terminal, InteractiveTerminal):
+            raise TypeError("terminal must be an InteractiveTerminal")
+        self._run = terminal._live_composer
+
+    async def run(
+        self,
+        operation: Awaitable[object],
+        prompt: str,
+        frame_renderer: Callable[
+            [LineInputState, int, TerminalCapabilities], RenderedInputFrame
+        ],
+        boundary_provider: BoundaryProvider,
+        cancel_and_join: CancelAndJoin,
+        *,
+        initial_state: LineInputState = LineInputState(),
+    ) -> LiveComposerResult:
+        """Run one live editor without acquiring domain-side authority."""
+
+        return await self._run(
+            operation,
+            prompt,
+            frame_renderer,
+            boundary_provider,
+            cancel_and_join,
+            initial_state=initial_state,
+        )
+
+
 def build_contextual_terminal(
     read_line: Callable[[str], str],
     write_text: Callable[[str], None],
@@ -1949,6 +2028,51 @@ async def _plain_debate_progress(operation: Awaitable[object]) -> object:
     """Keep callback and non-TTY consensus execution visually silent."""
 
     return await operation
+
+
+def _plain_live_composer_runner(
+    read_line: Callable[[str], str],
+    width: int,
+) -> Callable[..., Awaitable[LiveComposerResult]]:
+    """Adapt an ordinary reader to the live composer's closed outcomes.
+
+    Line fallback cannot provide simultaneous editing, so it finishes the
+    confirmed operation without opening a blocking input callback and retains
+    the initial draft for the caller's normal next-turn read.
+    """
+
+    if not callable(read_line):
+        raise TypeError("read_line must be callable")
+
+    async def run(
+        operation: Awaitable[object],
+        prompt: str,
+        frame_renderer: Callable[
+            [LineInputState, int, TerminalCapabilities], RenderedInputFrame
+        ],
+        boundary_provider: BoundaryProvider,
+        cancel_and_join: CancelAndJoin,
+        *,
+        initial_state: LineInputState = LineInputState(),
+    ) -> LiveComposerResult:
+        if not hasattr(operation, "__await__"):
+            raise TypeError("operation must be awaitable")
+        if type(prompt) is not str:
+            raise TypeError("prompt must be a string")
+        if not callable(frame_renderer):
+            raise TypeError("frame_renderer must be callable")
+        if not callable(boundary_provider) or not callable(cancel_and_join):
+            raise TypeError("live composer collaborators must be callable")
+        if type(initial_state) is not LineInputState:
+            raise TypeError("initial_state must be a LineInputState")
+
+        return LiveComposerResult(
+            LiveComposerDeliveryKind.OPERATION_COMPLETED,
+            initial_state,
+            operation_result=await operation,
+        )
+
+    return run
 
 
 def _plain_picker_reader(
@@ -2217,7 +2341,8 @@ def _reference_input_error(kind: ReferenceInputFailureKind) -> InteractiveError:
     }[kind]
     code = (
         InteractiveErrorCode.COMMAND_INVALID
-        if kind in {
+        if kind
+        in {
             ReferenceInputFailureKind.EMPTY_SOURCES,
             ReferenceInputFailureKind.INVALID,
         }
@@ -2363,7 +2488,7 @@ def read_reference_composition_line(
     text_reader: Callable[[str], str],
     failure_writer: Callable[[ReferenceInputFailureKind], None],
 ) -> str:
-    """Read one RUN/CHAT line through the shared reference input route."""
+    """Read one chat-composition line through the shared reference input route."""
 
     if not isinstance(driver, RawTerminalDriver):
         raise TypeError("driver must be a RawTerminalDriver")
@@ -2544,6 +2669,7 @@ def build_stream_terminal(
 
     terminal._advisory_progress = run_advisory_progress
     terminal._debate_progress = run_debate_progress
+    terminal._live_composer = driver.run_live_composer
     terminal._capability_provider = driver.capabilities
     return terminal
 
@@ -2633,37 +2759,36 @@ def _validated_input_line(value: object) -> str:
 
 
 def _main_prompt(*, session_id: str | None, agent_id: str | None) -> str:
-    """Build the exact lobby or attached main prompt."""
+    """Build the exact lobby, session-only, or agent-scoped main prompt."""
 
     if session_id is None and agent_id is None:
         return "story[lobby]> "
-    if session_id is None or agent_id is None:
-        raise ValueError("attached prompts require both session_id and agent_id")
+    if session_id is None:
+        raise ValueError("agent-scoped prompts require a session_id")
     safe_session = _safe_identifier("session_id", session_id)
+    if agent_id is None:
+        return f"story[{safe_session}]> "
     return f"story[{safe_session}:{_agent_alias(agent_id)}]> "
 
 
 def _compose_alias(mode: object, agent_id: str | None) -> str | None:
-    """Validate a compose destination and return its chat alias when needed."""
+    """Validate the chat compose destination and return its alias."""
 
     if not isinstance(mode, ComposeMode):
         raise TypeError("mode must be a ComposeMode")
-    if mode is ComposeMode.CHAT:
-        if agent_id is None:
-            raise ValueError("chat composition requires an agent_id")
-        return _agent_alias(agent_id)
-    if agent_id is not None:
-        raise ValueError("run composition does not accept an agent_id")
-    return None
+    if agent_id is None:
+        raise ValueError("chat composition requires an agent_id")
+    return _agent_alias(agent_id)
 
 
 def _compose_prompt(mode: ComposeMode, alias: str | None, line_number: int) -> str:
     """Build the exact prompt for one numbered composition line."""
 
-    if mode is ComposeMode.CHAT:
-        assert alias is not None
-        return f"compose[chat:{alias}:{line_number}]> "
-    return f"compose[run:{line_number}]> "
+    if not isinstance(mode, ComposeMode):
+        raise TypeError("mode must be a ComposeMode")
+    if alias is None:
+        raise ValueError("chat composition requires an alias")
+    return f"compose[chat:{alias}:{line_number}]> "
 
 
 def _composer_input_view(

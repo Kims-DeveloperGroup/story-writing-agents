@@ -17,14 +17,11 @@ from .conversation_rag import (
 )
 from .conversation_search import (
     CONVERSATION_MEMORY_POLICY,
-    ConversationCitation,
-    ConversationSearchMatchKind,
+    CollaborationHistoryCitation,
 )
 from .conversations import (
-    ConversationContextWindow,
-    ConversationEventKind,
-    normalize_conversation_subject,
-    validate_conversation_context_window,
+    CollaborationReadableContext,
+    CollaborationReadableRecord,
 )
 from .errors import SessionIdError
 from .models import StorySessionContext
@@ -88,36 +85,42 @@ def _boolean(value: bool, *, label: str) -> bool:
     return value
 
 
-def _citation_to_dict(citation: ConversationCitation) -> dict[str, object]:
+def _citation_to_dict(citation: CollaborationHistoryCitation) -> dict[str, object]:
     """Project one validated citation into its exact JSON-compatible shape."""
 
     return {
         "session_id": citation.session_id,
         "conversation_id": citation.conversation_id,
-        "turn_id": citation.turn_id,
+        "event_id": citation.event_id,
         "sequence": citation.sequence,
-        "event_kind": (
-            None if citation.event_kind is None else citation.event_kind.value
-        ),
+        "field_key": citation.field_key.value,
+        "start_codepoint": citation.start_codepoint,
+        "end_codepoint": citation.end_codepoint,
+        "assignment_ordinal": citation.assignment_ordinal,
+        "input_ordinal": citation.input_ordinal,
     }
 
 
 def _validated_citation(
-    value: ConversationCitation,
+    value: CollaborationHistoryCitation,
     *,
     label: str,
-) -> ConversationCitation:
+) -> CollaborationHistoryCitation:
     """Return a canonical exact citation without performing external reads."""
 
-    if type(value) is not ConversationCitation:
-        raise TypeError(f"{label} must be a ConversationCitation")
+    if type(value) is not CollaborationHistoryCitation:
+        raise TypeError(f"{label} must be a CollaborationHistoryCitation")
     try:
-        return ConversationCitation(
+        return CollaborationHistoryCitation(
             session_id=value.session_id,
             conversation_id=value.conversation_id,
-            turn_id=value.turn_id,
+            event_id=value.event_id,
             sequence=value.sequence,
-            event_kind=value.event_kind,
+            field_key=value.field_key,
+            start_codepoint=value.start_codepoint,
+            end_codepoint=value.end_codepoint,
+            assignment_ordinal=value.assignment_ordinal,
+            input_ordinal=value.input_ordinal,
         )
     except (AttributeError, SessionIdError, TypeError, ValueError) as exc:
         raise ValueError(f"{label} is invalid") from exc
@@ -127,7 +130,7 @@ class ConversationRetrievalActionKind(StrEnum):
     """Provider actions allowed during one bounded retrieval turn."""
 
     SEARCH_CONVERSATIONS = "search_conversations"
-    READ_TRANSCRIPT = "read_transcript"
+    READ_HISTORY = "read_history"
     ANSWER = "answer"
 
 
@@ -239,13 +242,8 @@ class ConversationRagExcerpt:
         ):
             raise ValueError("conversation RAG excerpt source crossed its document")
         citation = self.source.citation
-        if citation.sequence is not None and (
-            citation.turn_id
-            not in {
-                document.start_turn_id,
-                document.end_turn_id,
-            }
-            or citation.sequence < document.start_sequence
+        if (
+            citation.sequence < document.start_sequence
             or citation.sequence > document.end_sequence
         ):
             raise ValueError("conversation RAG excerpt citation crossed its range")
@@ -332,14 +330,13 @@ class ConversationRagContext:
 
 @dataclass(frozen=True, slots=True, kw_only=True)
 class ConversationRetrievalPolicy:
-    """Fixed whole-turn provider, search, transcript, and framing limits."""
+    """Fixed provider, search, readable-history, and framing limits."""
 
     max_nonterminal_actions: int = 4
     max_provider_calls: int = 5
     max_search_hits_per_action: int = 10
     max_search_hits_total: int = 20
-    max_transcript_turns: int = 12
-    max_transcript_events: int = 24
+    max_history_records: int = 24
     max_observation_utf8_bytes: int = 32_768
 
     def __post_init__(self) -> None:
@@ -362,13 +359,9 @@ class ConversationRetrievalPolicy:
             raise ValueError(
                 "per-action search hits exceed the conversation memory policy"
             )
-        if self.max_transcript_events != self.max_transcript_turns * 2:
+        if self.max_history_records > CONVERSATION_MEMORY_POLICY.max_page_events:
             raise ValueError(
-                "maximum transcript events must equal twice the turn limit"
-            )
-        if self.max_transcript_events > CONVERSATION_MEMORY_POLICY.max_page_events:
-            raise ValueError(
-                "maximum transcript events exceed the conversation memory policy"
+                "maximum history records exceed the conversation memory policy"
             )
         if (
             self.max_observation_utf8_bytes
@@ -386,8 +379,7 @@ class ConversationRetrievalPolicy:
             "max_provider_calls": self.max_provider_calls,
             "max_search_hits_per_action": self.max_search_hits_per_action,
             "max_search_hits_total": self.max_search_hits_total,
-            "max_transcript_turns": self.max_transcript_turns,
-            "max_transcript_events": self.max_transcript_events,
+            "max_history_records": self.max_history_records,
             "max_observation_utf8_bytes": self.max_observation_utf8_bytes,
         }
 
@@ -404,7 +396,7 @@ class ConversationRetrievalRequest:
     turn_id: str
     agent_id: str
     content: str
-    context: ConversationContextWindow
+    context: CollaborationReadableContext
     story_session_context: StorySessionContext | None = None
     rag_context: ConversationRagContext | None = None
 
@@ -424,20 +416,16 @@ class ConversationRetrievalRequest:
             label="conversation retrieval request content",
             nonempty=True,
         )
-        if type(self.context) is not ConversationContextWindow:
+        if type(self.context) is not CollaborationReadableContext:
             raise TypeError(
-                "conversation retrieval context must be a ConversationContextWindow"
+                "conversation retrieval context must be a CollaborationReadableContext"
             )
-        object.__setattr__(
-            self,
-            "context",
-            validate_conversation_context_window(
-                self.context,
-                session_id=self.session_id,
-                conversation_id=self.conversation_id,
-                excluded_turn_id=self.turn_id,
-            ),
-        )
+        bootstrap = self.context.bootstrap
+        if bootstrap.session_id is not None and (
+            bootstrap.session_id != self.session_id
+            or bootstrap.conversation_id != self.conversation_id
+        ):
+            raise ValueError("conversation retrieval context crossed its history")
         if self.story_session_context is not None:
             if type(self.story_session_context) is not StorySessionContext:
                 raise TypeError(
@@ -520,7 +508,7 @@ class ConversationRetrievalSearchAction:
 
 @dataclass(frozen=True, slots=True, kw_only=True)
 class ConversationRetrievalReadAction:
-    """Request a bounded range, optionally through the current snapshot."""
+    """Request a bounded readable-history range from a field citation."""
 
     kind: ConversationRetrievalActionKind
     session_id: str
@@ -532,11 +520,11 @@ class ConversationRetrievalReadAction:
     end_sequence: int | None
 
     def __post_init__(self) -> None:
-        """Validate shape and range without authorizing or reading a transcript."""
+        """Validate shape and range without authorizing or reading history."""
 
         _validate_action_common(
             kind=self.kind,
-            expected_kind=ConversationRetrievalActionKind.READ_TRANSCRIPT,
+            expected_kind=ConversationRetrievalActionKind.READ_HISTORY,
             session_id=self.session_id,
             conversation_id=self.conversation_id,
             turn_id=self.turn_id,
@@ -597,42 +585,31 @@ ConversationRetrievalAction: TypeAlias = (
 
 @dataclass(frozen=True, slots=True, kw_only=True)
 class ConversationRetrievalSource:
-    """One display subject and stable conversation or event citation."""
+    """One exact canonical event-field citation supplied to an agent."""
 
-    subject: str
-    citation: ConversationCitation
+    citation: CollaborationHistoryCitation
 
     def __post_init__(self) -> None:
-        """Validate display subject and citation without reading catalog state."""
+        """Validate the citation without reading authoritative history."""
 
-        _strict_utf8(self.subject, label="conversation retrieval source subject")
-        normalize_conversation_subject(self.subject)
         canonical = _validated_citation(
             self.citation,
             label="conversation retrieval source citation",
         )
-        if canonical.event_kind is ConversationEventKind.RUNTIME_ERROR:
-            raise ValueError(
-                "conversation retrieval sources cannot cite runtime errors"
-            )
         object.__setattr__(self, "citation", canonical)
 
     def to_dict(self) -> dict[str, object]:
         """Return the exact JSON-compatible source shape without mutation."""
 
-        return {
-            "subject": self.subject,
-            "citation": _citation_to_dict(self.citation),
-        }
+        return {"citation": _citation_to_dict(self.citation)}
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)
 class ConversationRetrievalSearchItem:
-    """One provider-visible search hit with a turn-local citation ID."""
+    """One provider-visible event-field search hit with a local citation ID."""
 
     citation_id: str
     source: ConversationRetrievalSource
-    match_kind: ConversationSearchMatchKind
     snippet: str
 
     def __post_init__(self) -> None:
@@ -641,17 +618,11 @@ class ConversationRetrievalSearchItem:
         _identifier(self.citation_id, label="search citation ID")
         if type(self.source) is not ConversationRetrievalSource:
             raise TypeError("search item source must be a ConversationRetrievalSource")
-        if type(self.match_kind) is not ConversationSearchMatchKind:
-            raise TypeError(
-                "search item match kind must be a ConversationSearchMatchKind"
-            )
         _strict_utf8(
             self.snippet,
             label="conversation retrieval search snippet",
             nonempty=True,
         )
-        if self.source.citation.event_kind is ConversationEventKind.RUNTIME_ERROR:
-            raise ValueError("search items cannot cite runtime errors")
 
     def to_dict(self) -> dict[str, object]:
         """Return the exact JSON-compatible search-item shape without mutation."""
@@ -659,71 +630,72 @@ class ConversationRetrievalSearchItem:
         return {
             "citation_id": self.citation_id,
             "source": self.source.to_dict(),
-            "match_kind": self.match_kind.value,
             "snippet": self.snippet,
         }
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)
-class ConversationRetrievalTranscriptEvent:
-    """One complete-pair transcript event with a turn-local citation ID."""
+class ConversationRetrievalHistoryRecord:
+    """One structured readable record with one citation ID per closed field."""
 
-    citation_id: str
-    citation: ConversationCitation
-    sender: str
-    recipient: str
-    content: str
+    record: CollaborationReadableRecord
+    field_citation_ids: tuple[str, ...]
 
     def __post_init__(self) -> None:
-        """Validate visible event shape without reading or persisting a transcript."""
+        """Validate closed readable data without exposing the full payload."""
 
-        _identifier(self.citation_id, label="transcript event citation ID")
-        canonical = _validated_citation(
-            self.citation,
-            label="transcript event citation",
-        )
-        if (
-            canonical.turn_id is None
-            or canonical.sequence is None
-            or canonical.event_kind
-            not in {
-                ConversationEventKind.USER_MESSAGE,
-                ConversationEventKind.AGENT_REPLY,
-            }
-        ):
-            raise ValueError("transcript event requires a visible event citation")
-        object.__setattr__(self, "citation", canonical)
-        _strict_utf8(
-            self.sender,
-            label="transcript event sender",
-            nonempty=True,
-        )
-        _strict_utf8(
-            self.recipient,
-            label="transcript event recipient",
-            nonempty=True,
-        )
-        _strict_utf8(
-            self.content,
-            label="transcript event content",
-            nonempty=True,
-        )
-        if canonical.event_kind is ConversationEventKind.USER_MESSAGE:
-            valid_actors = self.sender == "user" and self.recipient in ROSTER
-        else:
-            valid_actors = self.sender in ROSTER and self.recipient == "user"
-        if not valid_actors:
-            raise ValueError("transcript event actors do not match its kind")
+        if type(self.record) is not CollaborationReadableRecord:
+            raise TypeError("history record must be a CollaborationReadableRecord")
+        if type(self.field_citation_ids) is not tuple or len(
+            self.field_citation_ids
+        ) != len(self.record.fields):
+            raise TypeError("history field citation IDs must match readable fields")
+        for citation_id in self.field_citation_ids:
+            _identifier(citation_id, label="history field citation ID")
+        if len(set(self.field_citation_ids)) != len(self.field_citation_ids):
+            raise ValueError("history field citation IDs must be unique")
 
     def to_dict(self) -> dict[str, object]:
-        """Return the exact JSON-compatible transcript-event shape."""
+        """Return identity facts plus ordered closed readable fields only."""
 
+        record = self.record
         return {
-            "citation_id": self.citation_id,
-            "citation": _citation_to_dict(self.citation),
-            "sender": self.sender,
-            "recipient": self.recipient,
-            "content": self.content,
+            "schema_version": record.schema_version,
+            "session_id": record.session_id,
+            "conversation_id": record.conversation_id,
+            "turn_id": record.turn_id,
+            "step_id": record.step_id,
+            "event_id": record.event_id,
+            "batch_id": record.batch_id,
+            "batch_ordinal": record.batch_ordinal,
+            "batch_size": record.batch_size,
+            "batch_digest": record.batch_digest,
+            "sequence": record.sequence,
+            "timestamp": record.timestamp,
+            "sender": {
+                "kind": record.sender.kind.value,
+                "agent_id": record.sender.agent_id,
+            },
+            "recipient": {
+                "kind": record.recipient.kind.value,
+                "agent_id": record.recipient.agent_id,
+            },
+            "direction": record.direction.value,
+            "kind": record.kind.value,
+            "fields": [
+                {
+                    "citation_id": citation_id,
+                    "key": field.key.value,
+                    "text": field.text,
+                    "assignment_ordinal": field.assignment_ordinal,
+                    "input_ordinal": field.input_ordinal,
+                }
+                for field, citation_id in zip(
+                    record.fields,
+                    self.field_citation_ids,
+                    strict=True,
+                )
+            ],
         }
 
 
@@ -779,7 +751,7 @@ class ConversationRetrievalSearchObservation:
 
 @dataclass(frozen=True, slots=True, kw_only=True)
 class ConversationRetrievalReadObservation:
-    """One bounded provider-visible complete-pair transcript observation."""
+    """One bounded provider-visible structured history observation."""
 
     session_id: str
     conversation_id: str
@@ -787,7 +759,7 @@ class ConversationRetrievalReadObservation:
     action_index: int
     source_citation_id: str
     source: ConversationRetrievalSource
-    events: tuple[ConversationRetrievalTranscriptEvent, ...]
+    records: tuple[ConversationRetrievalHistoryRecord, ...]
     truncated: bool
 
     def __post_init__(self) -> None:
@@ -806,70 +778,49 @@ class ConversationRetrievalReadObservation:
             )
         if self.source.citation.session_id != self.session_id:
             raise ValueError("read observation source crossed its session")
-        if type(self.events) is not tuple or any(
-            type(event) is not ConversationRetrievalTranscriptEvent
-            for event in self.events
+        if type(self.records) is not tuple or any(
+            type(record) is not ConversationRetrievalHistoryRecord
+            for record in self.records
         ):
             raise TypeError(
-                "read observation events must be a tuple of "
-                "ConversationRetrievalTranscriptEvent"
+                "read observation records must be a tuple of "
+                "ConversationRetrievalHistoryRecord"
             )
-        if len(self.events) > CONVERSATION_RETRIEVAL_POLICY.max_transcript_events:
-            raise ValueError("read observation exceeds the transcript event limit")
-        turns: dict[str, list[ConversationRetrievalTranscriptEvent]] = {}
+        if len(self.records) > CONVERSATION_RETRIEVAL_POLICY.max_history_records:
+            raise ValueError("read observation exceeds the history record limit")
         previous_sequence = 0
-        for ordinal, event in enumerate(self.events, start=1):
-            if event.citation_id != f"r{self.action_index}e{ordinal}":
-                raise ValueError("read observation citation IDs are inconsistent")
-            citation = event.citation
+        for record_ordinal, item in enumerate(self.records, start=1):
+            record = item.record
             if (
-                citation.session_id != self.session_id
-                or citation.conversation_id != self.source.citation.conversation_id
+                record.session_id != self.session_id
+                or record.conversation_id != self.source.citation.conversation_id
             ):
-                raise ValueError("read observation event crossed its source")
-            assert citation.turn_id is not None
-            assert citation.sequence is not None
-            if citation.sequence <= previous_sequence:
+                raise ValueError("read observation record crossed its source")
+            if record.sequence <= previous_sequence:
                 raise ValueError(
-                    "read observation event sequences must be strictly increasing"
+                    "read observation record sequences must be strictly increasing"
                 )
-            previous_sequence = citation.sequence
-            turns.setdefault(citation.turn_id, []).append(event)
-        for turn_events in turns.values():
-            users = [
-                event
-                for event in turn_events
-                if event.citation.event_kind is ConversationEventKind.USER_MESSAGE
-            ]
-            replies = [
-                event
-                for event in turn_events
-                if event.citation.event_kind is ConversationEventKind.AGENT_REPLY
-            ]
-            if len(turn_events) != 2 or len(users) != 1 or len(replies) != 1:
-                raise ValueError("read observation contains an incomplete turn")
-            user, reply = users[0], replies[0]
-            assert user.citation.sequence is not None
-            assert reply.citation.sequence is not None
-            if (
-                user.citation.sequence >= reply.citation.sequence
-                or reply.sender != user.recipient
-            ):
-                raise ValueError("read observation contains an invalid turn pair")
+            previous_sequence = record.sequence
+            expected_ids = tuple(
+                f"r{self.action_index}e{record_ordinal}f{field_ordinal}"
+                for field_ordinal in range(1, len(record.fields) + 1)
+            )
+            if item.field_citation_ids != expected_ids:
+                raise ValueError("read observation citation IDs are inconsistent")
         _boolean(self.truncated, label="read observation truncated")
 
     def to_dict(self) -> dict[str, object]:
         """Return the exact typed read-observation dictionary."""
 
         return {
-            "kind": ConversationRetrievalActionKind.READ_TRANSCRIPT.value,
+            "kind": ConversationRetrievalActionKind.READ_HISTORY.value,
             "session_id": self.session_id,
             "conversation_id": self.conversation_id,
             "turn_id": self.turn_id,
             "action_index": self.action_index,
             "source_citation_id": self.source_citation_id,
             "source": self.source.to_dict(),
-            "events": [event.to_dict() for event in self.events],
+            "records": [record.to_dict() for record in self.records],
             "truncated": self.truncated,
         }
 
@@ -928,14 +879,14 @@ class ConversationRetrievalReply:
 
 @dataclass(frozen=True, slots=True, kw_only=True)
 class ConversationRetrievalResult:
-    """One successful durable retrieval turn with pre-turn context and sources."""
+    """One successful retrieval result with readable context and exact sources."""
 
     session_id: str
     conversation_id: str
     turn_id: str
     agent_id: str
     content: str
-    context: ConversationContextWindow
+    context: CollaborationReadableContext
     sources: tuple[ConversationRetrievalSource, ...]
     reference_operation_id: str | None = None
     rag_outcome: ConversationRagAttemptOutcome | None = None
@@ -957,20 +908,16 @@ class ConversationRetrievalResult:
             label="conversation retrieval result content",
             nonempty=True,
         )
-        if type(self.context) is not ConversationContextWindow:
+        if type(self.context) is not CollaborationReadableContext:
             raise TypeError(
-                "conversation retrieval context must be a ConversationContextWindow"
+                "conversation retrieval context must be a CollaborationReadableContext"
             )
-        object.__setattr__(
-            self,
-            "context",
-            validate_conversation_context_window(
-                self.context,
-                session_id=self.session_id,
-                conversation_id=self.conversation_id,
-                excluded_turn_id=self.turn_id,
-            ),
-        )
+        bootstrap = self.context.bootstrap
+        if bootstrap.session_id is not None and (
+            bootstrap.session_id != self.session_id
+            or bootstrap.conversation_id != self.conversation_id
+        ):
+            raise ValueError("conversation retrieval context crossed its history")
         _validate_sources(self.sources, session_id=self.session_id)
         if self.reference_operation_id is not None and (
             type(self.reference_operation_id) is not str
@@ -1001,7 +948,7 @@ class ConversationRetrievalResult:
 
 @dataclass(frozen=True, slots=True, kw_only=True)
 class ConversationRetrievalProgressEvent:
-    """One trusted nonsensitive search or transcript-read progress fact."""
+    """One trusted nonsensitive search or history-read progress fact."""
 
     session_id: str
     conversation_id: str
@@ -1010,8 +957,7 @@ class ConversationRetrievalProgressEvent:
     action_index: int
     phase: ConversationRetrievalProgressPhase
     search_hit_count: int = 0
-    transcript_turn_count: int = 0
-    transcript_event_count: int = 0
+    history_record_count: int = 0
     observation_utf8_bytes: int = 0
     truncated: bool = False
 
@@ -1033,8 +979,7 @@ class ConversationRetrievalProgressEvent:
             raise TypeError("conversation retrieval progress phase is invalid")
         for value, label in (
             (self.search_hit_count, "search hit count"),
-            (self.transcript_turn_count, "transcript turn count"),
-            (self.transcript_event_count, "transcript event count"),
+            (self.history_record_count, "history record count"),
             (self.observation_utf8_bytes, "observation UTF-8 bytes"),
         ):
             _non_negative_integer(value, label=label)
@@ -1048,8 +993,7 @@ class ConversationRetrievalProgressEvent:
                 any(
                     (
                         self.search_hit_count,
-                        self.transcript_turn_count,
-                        self.transcript_event_count,
+                        self.history_record_count,
                         self.observation_utf8_bytes,
                     )
                 )
@@ -1065,8 +1009,8 @@ class ConversationRetrievalProgressEvent:
         ):
             raise ValueError("progress observation bytes exceed the retrieval policy")
         if self.phase is ConversationRetrievalProgressPhase.SEARCH_COMPLETED:
-            if self.transcript_turn_count or self.transcript_event_count:
-                raise ValueError("search progress cannot carry transcript counts")
+            if self.history_record_count:
+                raise ValueError("search progress cannot carry history counts")
             if (
                 self.search_hit_count
                 > CONVERSATION_RETRIEVAL_POLICY.max_search_hits_per_action
@@ -1075,15 +1019,11 @@ class ConversationRetrievalProgressEvent:
             return
         if self.search_hit_count:
             raise ValueError("read progress cannot carry a search hit count")
-        if self.transcript_event_count != self.transcript_turn_count * 2:
-            raise ValueError("read progress events must equal twice its turns")
         if (
-            self.transcript_turn_count
-            > CONVERSATION_RETRIEVAL_POLICY.max_transcript_turns
-            or self.transcript_event_count
-            > CONVERSATION_RETRIEVAL_POLICY.max_transcript_events
+            self.history_record_count
+            > CONVERSATION_RETRIEVAL_POLICY.max_history_records
         ):
-            raise ValueError("read progress exceeds the transcript policy")
+            raise ValueError("read progress exceeds the history policy")
 
 
 ConversationRetrievalProgressSink: TypeAlias = Callable[
@@ -1108,7 +1048,7 @@ def serialize_conversation_retrieval_observation(
 ) -> str:
     """Frame one exact observation as canonical untrusted story data.
 
-    The built-in search or read observation is serialized with sorted compact
+    The built-in search or history observation is serialized with sorted compact
     JSON and exact delimiters. No I/O or mutation occurs; subclasses and other
     values raise ``TypeError`` and invalid text is rejected by the contracts.
     """
@@ -1138,6 +1078,7 @@ __all__ = [
     "ConversationRetrievalActionHandler",
     "ConversationRetrievalActionKind",
     "ConversationRetrievalAnswerAction",
+    "ConversationRetrievalHistoryRecord",
     "ConversationRetrievalObservation",
     "ConversationRetrievalPolicy",
     "ConversationRetrievalProgressEvent",
@@ -1152,6 +1093,5 @@ __all__ = [
     "ConversationRetrievalSearchItem",
     "ConversationRetrievalSearchObservation",
     "ConversationRetrievalSource",
-    "ConversationRetrievalTranscriptEvent",
     "serialize_conversation_retrieval_observation",
 ]

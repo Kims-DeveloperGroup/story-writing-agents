@@ -45,8 +45,8 @@ class CanonicalProviderJsonTests(unittest.TestCase):
         )
 
     def test_multibyte_unicode_and_escaping_are_exact_utf8(self) -> None:
-        value = {"한글": "é🙂\n\"\\"}
-        expected = '{"한글":"é🙂\\n\\\"\\\\"}'.encode("utf-8")
+        value = {"한글": 'é🙂\n"\\'}
+        expected = '{"한글":"é🙂\\n\\"\\\\"}'.encode("utf-8")
         encoded = canonical_provider_json(value)
         self.assertEqual(encoded, expected)
         self.assertNotIn(b"\\ud83d", encoded)
@@ -174,7 +174,7 @@ class ProviderPayloadAccountingTests(unittest.TestCase):
                             "path": "core_documents/global_outline.md",
                             "line_range": None,
                         },
-                        "content": "quote \" slash \\ newline\n",
+                        "content": 'quote " slash \\ newline\n',
                     },
                     {
                         "reference": {
@@ -256,7 +256,7 @@ class ProviderPayloadAccountingTests(unittest.TestCase):
                         "path": "manuscript/part-01/a.md",
                         "line_range": {"start": 1, "end": 1},
                     },
-                    "content": "\"한🙂\"\n",
+                    "content": '"한🙂"\n',
                 }
             ]
         }
@@ -300,17 +300,13 @@ class ProviderPayloadAccountingTests(unittest.TestCase):
             account_provider_payload(
                 {},
                 {"present": "value"},
-                component_paths={
-                    ("missing",): ContextComponentKind.CURRENT_INPUT
-                },
+                component_paths={("missing",): ContextComponentKind.CURRENT_INPUT},
             )
         with self.assertRaisesRegex(ValueError, "mandatory-reference paths"):
             account_provider_payload(
                 {},
                 {"content": "value"},
-                component_paths={
-                    ("content",): ContextComponentKind.CURRENT_INPUT
-                },
+                component_paths={("content",): ContextComponentKind.CURRENT_INPUT},
                 mandatory_reference_paths=(("content",),),
             )
         with self.assertRaisesRegex(ValueError, "raw mandatory-reference"):
@@ -425,6 +421,19 @@ class AgentContextBoundaryTests(unittest.TestCase):
 
     def test_exact_internal_facade_and_public_facades_are_unchanged(self) -> None:
         self.assertEqual(
+            tuple(item.value for item in ProviderCallKind),
+            (
+                "unclassified",
+                "debate",
+                "conversation",
+                "conversation_retrieval_initial",
+                "conversation_retrieval_continuation",
+                "collaboration_initial",
+                "collaboration_continuation",
+                "writing_artifact_reference_read",
+            ),
+        )
+        self.assertEqual(
             tuple(agent_context.__all__),
             (
                 "ContextComponentBytes",
@@ -440,8 +449,8 @@ class AgentContextBoundaryTests(unittest.TestCase):
                 "canonical_provider_json",
             ),
         )
-        self.assertEqual(len(story_writing_agents.__all__), 120)
-        self.assertEqual(len(writing_artifacts.__all__), 31)
+        self.assertEqual(len(story_writing_agents.__all__), 104)
+        self.assertEqual(len(writing_artifacts.__all__), 78)
         self.assertTrue(
             set(agent_context.__all__).isdisjoint(story_writing_agents.__all__)
         )

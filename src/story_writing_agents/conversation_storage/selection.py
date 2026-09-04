@@ -2,10 +2,11 @@
 
 from __future__ import annotations
 
+import copy
 import json
 import os
 import sys
-from dataclasses import dataclass, replace
+from dataclasses import dataclass, field, replace
 from enum import StrEnum
 from pathlib import Path
 from typing import Callable, TextIO
@@ -17,7 +18,7 @@ from ..config import (
     ConfigurationSnapshot,
     ConfigManager,
 )
-from ..workspace import Workspace
+from ..workspace.core import Workspace
 from .archive import (
     ConversationArchive,
     deserialize_conversation_archive,
@@ -35,7 +36,7 @@ from .contracts import (
     ConversationStorageBackend,
     ConversationStorageCapability,
     ConversationStorageCoordinationError,
-    ConversationStorageMigrationReadiness,
+    ConversationStorageTransferReadiness,
     ConversationStorageMutationLease,
     ConversationStorageParity,
     ConversationStorageServices,
@@ -71,7 +72,7 @@ class ConversationStorageSelectionFailure(StrEnum):
     INSTALLATION_FAILED = "installation_failed"
     INTERPRETER_UNAVAILABLE = "interpreter_unavailable"
     PROVISIONING_FAILED = "provisioning_failed"
-    MIGRATION_REQUIRED = "migration_required"
+    TRANSFER_REQUIRED = "transfer_required"
     PARITY_MISMATCH = "parity_mismatch"
     CONFIGURATION_INVALID = "configuration_invalid"
     CONFIGURATION_CONFLICT = "configuration_conflict"
@@ -214,22 +215,28 @@ class ConversationStorageStartup:
 @dataclass(frozen=True, slots=True)
 class _SelectionTopology:
     root: Path
+    _workspace_lease: Workspace = field(repr=False, compare=False)
 
     @classmethod
     def capture(cls, workspace: Workspace) -> _SelectionTopology:
         if not isinstance(workspace, Workspace):
             raise TypeError("workspace must be a Workspace")
+        workspace.require_ready()
         root = Path(os.fspath(workspace.root))
         if not root.is_absolute():
             root = Path(os.path.abspath(root))
-        return cls(root)
+        lease = copy.copy(workspace)
+        lease.root = root
+        return cls(root, lease)
 
     @property
     def workspace_key(self) -> str:
         return os.fspath(self.root)
 
     def workspace(self) -> Workspace:
-        return Workspace(self.root)
+        workspace = copy.copy(self._workspace_lease)
+        workspace.root = self.root
+        return workspace
 
 
 def _coerce_backend(value: object) -> ConversationStorageBackend:
@@ -296,7 +303,7 @@ def inspect_conversation_storage_parity(
     source_backend: ConversationStorageBackend | str,
     target_backend: ConversationStorageBackend | str,
     source_generation: int,
-) -> ConversationStorageMigrationReadiness:
+) -> ConversationStorageTransferReadiness:
     """Freshly compare public canonical archives under the caller's lease."""
 
     if not isinstance(workspace, Workspace):
@@ -327,7 +334,7 @@ def inspect_conversation_storage_parity(
         else:
             parity = ConversationStorageParity.MISMATCH
     _validate_lease(lease, topology.workspace_key)
-    return ConversationStorageMigrationReadiness(
+    return ConversationStorageTransferReadiness(
         source_backend=source,
         target_backend=target,
         source_generation=source_generation,
@@ -596,7 +603,7 @@ def select_conversation_storage(
                 failure = (
                     ConversationStorageSelectionFailure.PARITY_MISMATCH
                     if readiness.parity is ConversationStorageParity.MISMATCH
-                    else ConversationStorageSelectionFailure.MIGRATION_REQUIRED
+                    else ConversationStorageSelectionFailure.TRANSFER_REQUIRED
                 )
                 return _selection_failure(
                     failure,
@@ -710,6 +717,23 @@ def activate_configured_conversation_storage(
     operation_workspace = topology.workspace()
     if configuration is not None and type(configuration) is not ConfigurationSnapshot:
         raise TypeError("configuration must be a ConfigurationSnapshot")
+    initial_snapshot = ConfigManager(operation_workspace).load_configuration_snapshot()
+    if configuration is not None and configuration != initial_snapshot:
+        raise ValueError("configuration changed before storage startup")
+    initial_desired = parse_conversation_storage_backend(
+        initial_snapshot.system_defaults.conversation_storage_backend
+    )
+    initial_active = load_conversation_storage_activation_state(operation_workspace)
+    if initial_desired is initial_active.backend:
+        services = compose_active_conversation_storage(operation_workspace)
+        if ConfigManager(operation_workspace).load_configuration_snapshot() != initial_snapshot:
+            raise ConversationStorageCoordinationError()
+        outcome = ConversationStorageActivationOutcome(
+            kind=ConversationStorageActivationOutcomeKind.UNCHANGED,
+            previous=initial_active,
+            current=initial_active,
+        )
+        return ConversationStorageStartup(services, outcome)
     coordinator = WorkspaceConversationStorageMutationCoordinator(operation_workspace)
     with coordinator.borrow(timeout_seconds=mutation_timeout_seconds) as lease:
         _validate_lease(lease, topology.workspace_key)

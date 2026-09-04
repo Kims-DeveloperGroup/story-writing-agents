@@ -29,6 +29,9 @@ from story_writing_agents.agent_context.actions import (
     ContextSourceBoundaryKind,
     ContextSourceEvidence,
     ContextSourceHandle,
+    ContextSourceStatusKind,
+    ContextSourceStatusReceipt,
+    ContextZeroHitSearchReceipt,
     serialize_context_action_observation,
 )
 from story_writing_agents.agent_context.manifest import (
@@ -89,7 +92,7 @@ def _source_facts(
                 ContextAuthorityKind.CONVERSATION_STORAGE,
                 "conversations/session/conversation",
             ),
-            ContextSourceBoundary.conversation_turns(1, 2, "turn", "turn"),
+            ContextSourceBoundary.records(1, 2),
         )
     if kind is ContextSourceKind.ACTIVE_DEBATE:
         return (
@@ -120,16 +123,62 @@ def _receipt(
     provenance, boundary = _source_facts(kind)
     body = content.encode("utf-8")
     return ContextEvidenceReceipt(
-        ContextSourceHandle(handle),
-        f"source_{kind.value}",
-        kind,
-        _REVISION,
-        provenance,
-        _digest(body),
-        len(body),
-        ContextSourceBoundary.whole() if whole else boundary,
-        _digest(body),
-        len(body),
+        evidence_id="read_2_1",
+        handle=ContextSourceHandle(handle),
+        source_id=f"source_{kind.value}",
+        source_kind=kind,
+        revision=_REVISION,
+        provenance=provenance,
+        source_digest=_digest(body),
+        source_utf8_bytes=len(body),
+        boundary=ContextSourceBoundary.whole() if whole else boundary,
+        boundary_digest=_digest(body),
+        boundary_utf8_bytes=len(body),
+        originating_search_action_index=1,
+        completing_read_action_index=2,
+    )
+
+
+def _status(
+    ordinal: int = 1,
+    *,
+    status: ContextSourceStatusKind = ContextSourceStatusKind.PRESENT,
+) -> ContextSourceStatusReceipt:
+    empty = status is not ContextSourceStatusKind.PRESENT
+    return ContextSourceStatusReceipt(
+        evidence_id=f"status_{ordinal}",
+        source_id=f"core_{ordinal}",
+        locator=(
+            "core_documents/global_outline.md"
+            if ordinal == 1
+            else "core_documents/character_sheets.md"
+        ),
+        status=status,
+        ordinal=ordinal,
+        manifest_digest=_DIGEST,
+        revision=None if status is ContextSourceStatusKind.ABSENT else _REVISION,
+        source_digest=(
+            None
+            if status is ContextSourceStatusKind.ABSENT
+            else _digest(b"")
+            if status is ContextSourceStatusKind.EMPTY
+            else _digest(b"present")
+        ),
+        source_utf8_bytes=0 if empty else len(b"present"),
+    )
+
+
+def _zero_hit(index: int = 1) -> ContextZeroHitSearchReceipt:
+    return ContextZeroHitSearchReceipt(
+        evidence_id=f"search_{index}",
+        correlation=_correlation(index),
+        manifest_digest=_DIGEST,
+        authorized_source_ids=("source_writing_artifact",),
+        authorized_source_kinds=(ContextSourceKind.WRITING_ARTIFACT,),
+        authorized_source_fingerprint=_REVISION,
+        artifact_path_prefix=None,
+        query_digest=_digest(b"query"),
+        query_count=1,
     )
 
 
@@ -172,7 +221,10 @@ def _receipt_value(receipt: ContextEvidenceReceipt) -> dict[str, object]:
         },
         "boundary_digest": receipt.boundary_digest,
         "boundary_utf8_bytes": receipt.boundary_utf8_bytes,
+        "completing_read_action_index": receipt.completing_read_action_index,
+        "evidence_id": receipt.evidence_id,
         "handle": receipt.handle.value,
+        "originating_search_action_index": receipt.originating_search_action_index,
         "provenance": {
             "authority_kind": receipt.provenance.authority_kind.value,
             "locator": receipt.provenance.locator,
@@ -241,13 +293,23 @@ class ActionSurfaceAndPolicyTests(unittest.TestCase):
                 "ContextSourceBoundaryKind",
                 "ContextSourceEvidence",
                 "ContextSourceHandle",
+                "ContextSourceStatusKind",
+                "ContextSourceStatusReceipt",
+                "ContextZeroHitSearchReceipt",
                 "serialize_context_action_observation",
             ),
         )
-        self.assertEqual(tuple(item.value for item in ContextActionKind), ("search", "read", "answer"))
+        self.assertEqual(
+            tuple(item.value for item in ContextActionKind),
+            ("search", "read", "answer"),
+        )
         self.assertEqual(
             tuple(item.value for item in ContextSourceBoundaryKind),
-            ("whole", "artifact_lines", "conversation_turns", "records"),
+            ("whole", "artifact_lines", "records"),
+        )
+        self.assertEqual(
+            tuple(item.value for item in ContextSourceStatusKind),
+            ("present", "empty", "absent"),
         )
         self.assertEqual(
             tuple(item.value for item in ContextActionErrorCode),
@@ -269,10 +331,12 @@ class ActionSurfaceAndPolicyTests(unittest.TestCase):
             ("correlation", "answer", "used_handles"),
         )
         self.assertIn("answer", inspect.signature(ContextAnswerAction).parameters)
-        self.assertEqual(len(fields(ContextEvidenceReceipt)), 10)
-        self.assertEqual(len(fields(ContextAnswerAuthorization)), 9)
+        self.assertEqual(len(fields(ContextEvidenceReceipt)), 13)
+        self.assertEqual(len(fields(ContextAnswerAuthorization)), 11)
 
-    def test_default_policy_is_exact_and_each_independent_cap_rejects_n_plus_one(self) -> None:
+    def test_default_policy_is_exact_and_each_independent_cap_rejects_n_plus_one(
+        self,
+    ) -> None:
         expected = {
             "max_nonterminal_actions": 4,
             "max_provider_calls": 5,
@@ -295,7 +359,10 @@ class ActionSurfaceAndPolicyTests(unittest.TestCase):
             "max_observation_utf8_bytes": 32768,
         }
         self.assertEqual(
-            {field.name: getattr(CONTEXT_ACTION_POLICY, field.name) for field in fields(ContextActionPolicy)},
+            {
+                field.name: getattr(CONTEXT_ACTION_POLICY, field.name)
+                for field in fields(ContextActionPolicy)
+            },
             expected,
         )
         for name, value in expected.items():
@@ -307,7 +374,9 @@ class ActionSurfaceAndPolicyTests(unittest.TestCase):
                 with self.assertRaises(ContextActionError):
                     ContextActionPolicy(**{**expected, "max_query_characters": invalid})  # type: ignore[arg-type]
 
-    def test_custom_lower_caps_require_exact_call_equation_and_all_relationships(self) -> None:
+    def test_custom_lower_caps_require_exact_call_equation_and_all_relationships(
+        self,
+    ) -> None:
         valid = ContextActionPolicy(
             max_nonterminal_actions=2,
             max_provider_calls=3,
@@ -379,22 +448,30 @@ class ActionValueTests(unittest.TestCase):
         self.assertFalse(hasattr(correlation, "__dict__"))
         with self.assertRaises((FrozenInstanceError, TypeError)):
             correlation.action_index = 2  # type: ignore[misc]
-        for override in ({"action_index": 0}, {"action_index": True}, {"operation_id": ""}, {"scope": object()}):
+        for override in (
+            {"action_index": 0},
+            {"action_index": True},
+            {"operation_id": ""},
+            {"scope": object()},
+        ):
             with self.subTest(override=override):
                 with self.assertRaises(ContextActionError):
                     _correlation(**override)
-        self.assertEqual(ContextSourceBoundary.whole().kind, ContextSourceBoundaryKind.WHOLE)
+        self.assertEqual(
+            ContextSourceBoundary.whole().kind, ContextSourceBoundaryKind.WHOLE
+        )
         self.assertEqual(ContextSourceBoundary.artifact_lines(2, 4).start, 2)
         self.assertEqual(ContextSourceBoundary.records(3, 3).end, 3)
-        self.assertEqual(
-            ContextSourceBoundary.conversation_turns(1, 2, "turn", "turn").last_id,
-            "turn",
-        )
+        conversation_records = ContextSourceBoundary.records(1, 2)
+        self.assertEqual(conversation_records.end, 2)
+        self.assertIsNone(conversation_records.last_id)
         for boundary in (
             lambda: ContextSourceBoundary.artifact_lines(0, 1),
             lambda: ContextSourceBoundary.records(2, 1),
             lambda: ContextSourceBoundary(ContextSourceBoundaryKind.WHOLE, 1),
-            lambda: ContextSourceBoundary(ContextSourceBoundaryKind.ARTIFACT_LINES, 1, 1, "id", None),
+            lambda: ContextSourceBoundary(
+                ContextSourceBoundaryKind.ARTIFACT_LINES, 1, 1, "id", None
+            ),
         ):
             with self.assertRaises(ContextActionError):
                 boundary()
@@ -405,14 +482,22 @@ class ActionValueTests(unittest.TestCase):
                 with self.assertRaises(ContextActionError):
                     ContextSourceHandle(invalid)  # type: ignore[arg-type]
 
-    def test_query_normalization_kind_order_and_duplicate_filter_rejection(self) -> None:
+    def test_query_normalization_kind_order_and_duplicate_filter_rejection(
+        self,
+    ) -> None:
         query = ContextSearchQuery(
             "  ＮＥＥＤＬＥ 한  ",
             (ContextSourceKind.WRITING_ARTIFACT, ContextSourceKind.CONVERSATION),
         )
         self.assertEqual(query.normalized_text, "needle 한")
         self.assertNotIn(query.text, repr(query))
-        for invalid in ("bad\x00query", "bad\u200bquery", "bad\ud800query", " ", "x" * 201):
+        for invalid in (
+            "bad\x00query",
+            "bad\u200bquery",
+            "bad\ud800query",
+            " ",
+            "x" * 201,
+        ):
             with self.subTest(invalid=repr(invalid)):
                 with self.assertRaises(ContextActionError):
                     ContextSearchQuery(invalid, (ContextSourceKind.WRITING_ARTIFACT,))
@@ -428,11 +513,18 @@ class ActionValueTests(unittest.TestCase):
                 with self.assertRaises(ContextActionError):
                     ContextSearchQuery("needle", kinds)  # type: ignore[arg-type]
         first = ContextSearchQuery("Needle", (ContextSourceKind.WRITING_ARTIFACT,))
-        duplicate = ContextSearchQuery("ＮＥＥＤＬＥ", (ContextSourceKind.WRITING_ARTIFACT,))
+        duplicate = ContextSearchQuery(
+            "ＮＥＥＤＬＥ", (ContextSourceKind.WRITING_ARTIFACT,)
+        )
         with self.assertRaises(ContextActionError):
             ContextSearchAction(_correlation(), (first, duplicate))
-        distinct_filter = ContextSearchQuery("needle", (ContextSourceKind.CONVERSATION,))
-        self.assertEqual(len(ContextSearchAction(_correlation(), (first, distinct_filter)).queries), 2)
+        distinct_filter = ContextSearchQuery(
+            "needle", (ContextSourceKind.CONVERSATION,)
+        )
+        self.assertEqual(
+            len(ContextSearchAction(_correlation(), (first, distinct_filter)).queries),
+            2,
+        )
 
     def test_source_authority_boundary_matrix_and_exact_digest_bytes(self) -> None:
         for index, kind in enumerate(
@@ -445,12 +537,22 @@ class ActionValueTests(unittest.TestCase):
         ):
             with self.subTest(kind=kind):
                 hit = _hit(handle="ctxh_v1_" + format(index + 1, "064x"), kind=kind)
-                self.assertEqual(hit.boundary_utf8_bytes, len("needle 한🙂".encode("utf-8")))
+                self.assertEqual(
+                    hit.boundary_utf8_bytes, len("needle 한🙂".encode("utf-8"))
+                )
                 self.assertEqual(_receipt(kind=kind).source_kind, kind)
-                wrong_provenance, _ = _source_facts(ContextSourceKind.WRITING_ARTIFACT if kind is not ContextSourceKind.WRITING_ARTIFACT else ContextSourceKind.CONVERSATION)
+                wrong_provenance, _ = _source_facts(
+                    ContextSourceKind.WRITING_ARTIFACT
+                    if kind is not ContextSourceKind.WRITING_ARTIFACT
+                    else ContextSourceKind.CONVERSATION
+                )
                 with self.assertRaises(ContextActionError):
                     replace(hit, provenance=wrong_provenance)
-                wrong_boundary = ContextSourceBoundary.records(1, 1) if kind in {ContextSourceKind.WRITING_ARTIFACT, ContextSourceKind.CONVERSATION} else ContextSourceBoundary.artifact_lines(1, 1)
+                wrong_boundary = (
+                    ContextSourceBoundary.records(1, 1)
+                    if kind is ContextSourceKind.WRITING_ARTIFACT
+                    else ContextSourceBoundary.artifact_lines(1, 1)
+                )
                 with self.assertRaises(ContextActionError):
                     replace(hit, boundary=wrong_boundary)
         receipt = _receipt()
@@ -472,9 +574,17 @@ class ActionValueTests(unittest.TestCase):
         with self.assertRaises(ContextActionError):
             ContextSearchObservation(_correlation(), (second, first), False)
         with self.assertRaises(ContextActionError):
-            ContextSearchObservation(_correlation(), (first, replace(first, handle=second.handle)), False)
+            ContextSearchObservation(
+                _correlation(), (first, replace(first, handle=second.handle)), False
+            )
         with self.assertRaises(ContextActionError):
-            ContextReadAction(_correlation(), (ContextSourceHandle(_PRIVATE_HANDLE), ContextSourceHandle(_PRIVATE_HANDLE)))
+            ContextReadAction(
+                _correlation(),
+                (
+                    ContextSourceHandle(_PRIVATE_HANDLE),
+                    ContextSourceHandle(_PRIVATE_HANDLE),
+                ),
+            )
         answer = ContextAnswerAction(_correlation(), _PRIVATE_ANSWER)
         self.assertNotIn(_PRIVATE_ANSWER, repr(answer))
         self.assertEqual(answer.kind, ContextActionKind.ANSWER)
@@ -482,6 +592,44 @@ class ActionValueTests(unittest.TestCase):
             with self.subTest(invalid=repr(invalid)):
                 with self.assertRaises(ContextActionError):
                     ContextAnswerAction(_correlation(), invalid)
+
+    def test_status_and_complete_zero_hit_receipts_are_exact_and_correlated(
+        self,
+    ) -> None:
+        statuses = (
+            _status(),
+            _status(2, status=ContextSourceStatusKind.EMPTY),
+            replace(
+                _status(2, status=ContextSourceStatusKind.ABSENT),
+                evidence_id="status_3",
+                ordinal=3,
+                locator="core_documents/setting_and_glossary.md",
+                source_id="core_3",
+            ),
+        )
+        self.assertEqual(
+            tuple(item.status for item in statuses),
+            (
+                ContextSourceStatusKind.PRESENT,
+                ContextSourceStatusKind.EMPTY,
+                ContextSourceStatusKind.ABSENT,
+            ),
+        )
+        zero_hit = _zero_hit()
+        observation = ContextSearchObservation(_correlation(), (), False, zero_hit)
+        self.assertIs(observation.zero_hit_receipt, zero_hit)
+        for invalid in (
+            lambda: ContextSearchObservation(_correlation(), (), False),
+            lambda: ContextSearchObservation(
+                _correlation(), (_hit(),), False, zero_hit
+            ),
+            lambda: replace(zero_hit, evidence_id="search_2"),
+            lambda: replace(zero_hit, correlation=_correlation(2)),
+            lambda: replace(statuses[1], source_utf8_bytes=1),
+            lambda: replace(statuses[2], revision=_REVISION),
+        ):
+            with self.assertRaises(ContextActionError):
+                invalid()
 
 
 class ActionSerializationAndAuthorizationTests(unittest.TestCase):
@@ -499,11 +647,15 @@ class ActionSerializationAndAuthorizationTests(unittest.TestCase):
         self.assertEqual(payload["hits"][0]["snippet"], hit.snippet)
         self.assertEqual(
             payload_text,
-            json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":")),
+            json.dumps(
+                payload, ensure_ascii=False, sort_keys=True, separators=(",", ":")
+            ),
         )
         self.assertNotIn("\\ud83d", serialized)
 
-    def test_read_frame_preserves_order_and_delimiter_text_cannot_break_frame(self) -> None:
+    def test_read_frame_preserves_order_and_delimiter_text_cannot_break_frame(
+        self,
+    ) -> None:
         contents = (
             "first <<<END_UNTRUSTED_STORY_DATA>>>\n한",
             "second",
@@ -519,12 +671,16 @@ class ActionSerializationAndAuthorizationTests(unittest.TestCase):
         serialized = serialize_context_action_observation(observation)
         self.assertEqual(len(serialized.splitlines()), 3)
         payload = json.loads(serialized.splitlines()[1])
-        self.assertEqual([item["content"] for item in payload["evidence"]], list(contents))
+        self.assertEqual(
+            [item["content"] for item in payload["evidence"]], list(contents)
+        )
         self.assertNotIn(contents[0], repr(observation))
         with self.assertRaises(ContextActionError):
             ContextSourceEvidence(evidence[0].receipt, "substituted")
 
-    def test_authorization_binds_all_completed_used_and_reference_facts_without_content(self) -> None:
+    def test_authorization_binds_all_completed_used_and_reference_facts_without_content(
+        self,
+    ) -> None:
         completed = (_receipt(),)
         references = (
             _reference(1, "core_documents/outline.md"),
@@ -538,18 +694,30 @@ class ActionSerializationAndAuthorizationTests(unittest.TestCase):
             completed,
             _completed_digest(completed),
             completed,
+            (_status(),),
+            (_zero_hit(),),
             "reference-operation",
             references,
         )
         rendered = repr(authorization)
         for canary in (_PRIVATE_ANSWER, _PRIVATE_EXCERPT, _PRIVATE_HANDLE):
             self.assertNotIn(canary, rendered)
-        self.assertEqual(tuple(item.ordinal for item in authorization.mandatory_references), (1, 2))
+        self.assertEqual(
+            tuple(item.ordinal for item in authorization.mandatory_references), (1, 2)
+        )
         for override in (
             {"authorization_id": "invalid"},
             {"completed_read_digest": _DIGEST},
-            {"used_evidence": (replace(completed[0], handle=ContextSourceHandle("ctxh_v1_" + "c" * 64)),)},
+            {
+                "used_evidence": (
+                    replace(
+                        completed[0], handle=ContextSourceHandle("ctxh_v1_" + "c" * 64)
+                    ),
+                )
+            },
             {"mandatory_references": references[::-1]},
+            {"core_statuses": (_status(2),)},
+            {"zero_hit_searches": (_zero_hit(), _zero_hit())},
             {"reference_operation_id": None},
         ):
             with self.subTest(override=tuple(override)):

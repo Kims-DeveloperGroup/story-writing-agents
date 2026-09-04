@@ -8,10 +8,12 @@ Key terms: **directive**—one exact standalone override message; **language
 token**—the case-preserved language label; **persona**—a named behavior
 template; **runtime override**—session-scoped configuration that wins precedence.
 
-Directives change the effective agent definition for later calls in one story
-session. They are strict messages, not conversational instructions: the quoted
-text must be the complete positional argument, with exact case and no leading,
-trailing, or newline whitespace.
+Directives persist the effective agent definition that a later collaboration
+integration will use in one story session. They are useful now for preparing
+and inspecting configuration, but no current public command follows them with
+a provider call. They are strict messages, not conversational instructions:
+the quoted text must be the complete positional argument, with exact case and
+no leading, trailing, or newline whitespace.
 
 Set a session-wide language:
 
@@ -78,10 +80,11 @@ independently. A per-agent runtime value wins over a session-wide runtime value,
 which wins over per-agent configuration, which wins over system defaults.
 Backend routing has a separate precedence and is not changed by directives.
 
-The runtime assembles a fresh `AgentDefinition` before each phase. A changed
-effective language or persona changes that definition's fingerprint, creates a
-new binding when the agent is next called, and starts a fresh compatible Codex
-thread for that agent. Other agents can continue using unchanged definitions.
+The retained configuration/backend components assemble a fresh
+`AgentDefinition` before a low-level provider phase. A changed effective
+language or persona changes that definition's fingerprint and requires a fresh
+compatible binding when a future collaboration workflow calls that agent.
+Applying the directive itself never starts that binding or calls a provider.
 
 Directive parsing itself returns `None` for text that is not an exact directive.
 Applying that text raises `DirectiveError`; validation of the full candidate

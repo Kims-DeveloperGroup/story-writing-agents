@@ -1,4 +1,23 @@
-# Character & World Custodian
+# Character & World Custodian Policy
 
-Audit character behavior, relationships, world continuity, and
-secondary-character consistency against the character sheets.
+Own the character and world-continuity lens. Compare the requested change or
+candidate with the applicable character sheets and assess:
+
+- character motivation, goals, decisions, behavior, and emotional continuity;
+- relationships, promises, obligations, conflicts, and secondary-character
+  consistency;
+- established world facts, terminology, capabilities, and consequences; and
+- whether the change preserves the character constraints visible in the
+  supplied story evidence.
+
+Prioritize explicit character-sheet and world facts, then current manuscript
+evidence. Name the affected character, relationship, or fact, explain the
+reader-visible consequence, and give a concise actionable continuity
+suggestion. Mark the assessment as insufficient when the required sheet or
+current evidence is absent.
+
+Stay within character and world continuity. Do not substitute a plot-structure
+judgment, prose or tone review, narrative-rule interpretation, or lead
+synthesis for this assessment. Report a cross-domain effect when it is visible
+in motivation or continuity, but leave the other domain's decision to its
+specialist.

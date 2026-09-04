@@ -15,6 +15,7 @@ from .backend import AgentBackend
 from .cli_context import (
     CliContext,
     load_cli_context,
+    load_default_conversation,
     resolve_session,
     resolve_workspace,
     save_default_session,
@@ -27,7 +28,10 @@ from .conversation_rag_cli import (
     ConversationRagCliRequest,
     dispatch_conversation_rag,
 )
-from .conversation_storage.contracts import ConversationStorageCoordinationError
+from .conversation_storage.contracts import (
+    ConversationStorageCoordinationError,
+    ConversationStorageServices,
+)
 from .conversation_storage.selection import (
     ConversationStorageSelectionFailure,
     ConversationStorageSelectionReport,
@@ -44,6 +48,7 @@ from .debug_log import (
 from .errors import (
     BackendProtocolError,
     ConfigurationError,
+    ConversationNotFoundError,
     SessionIdError,
     WorkspaceFormatError,
     WorkspaceSecurityError,
@@ -59,7 +64,6 @@ from .interactive_controller import InteractiveController
 from .interactive_settings import (
     SettingsError,
     SettingsErrorKind,
-    establish_default_backend,
 )
 from .interactive_terminal import (
     AdvisoryProgressError,
@@ -69,16 +73,18 @@ from .interactive_terminal import (
     InteractiveTerminal,
     build_stream_terminal,
 )
-from .models import DebateStatus
 from .orchestrator import StoryRuntime
 from .provider_auth import ProviderAuthService, ProviderAuthSnapshot
 from .provider_catalog import ProviderCatalogService
-from .run_inputs import read_draft_file
 from .session_lifecycle import (
     SessionAccessState,
     SessionDurableState,
     SessionLifecycleState,
     provider_work_is_ready,
+)
+from .session_recovery.transition_assessment import (
+    SessionTransitionAssessment,
+    SessionTransitionOperation,
 )
 from .workspace import Workspace, initialize_workspace
 
@@ -141,11 +147,6 @@ def build_parser() -> argparse.ArgumentParser:
         help="idempotently initialize a local workspace",
     )
     initialize.add_argument("workspace", nargs="?", default=".")
-    initialize.add_argument(
-        "--overwrite-prompts",
-        action="store_true",
-        help="replace only the four canonical agent AGENTS.md files",
-    )
 
     directive = subcommands.add_parser(
         "directive",
@@ -154,56 +155,6 @@ def build_parser() -> argparse.ArgumentParser:
     directive.add_argument("--workspace", help=_WORKSPACE_HELP)
     directive.add_argument("--session", help=_SESSION_HELP)
     directive.add_argument("text")
-
-    run = subcommands.add_parser(
-        "run",
-        help="run a prompt or draft through the configured agent backends",
-    )
-    run.add_argument("--workspace", help=_WORKSPACE_HELP)
-    run.add_argument("--session", help=_SESSION_HELP)
-    run.add_argument(
-        "--backend",
-        action="append",
-        default=[],
-        metavar="AGENT=BACKEND",
-        help="override one canonical agent backend for this run (repeatable)",
-    )
-    run.add_argument("--codex-model", metavar="MODEL")
-    run.add_argument(
-        "--antigravity-executable",
-        metavar="EXECUTABLE",
-        default="agy",
-    )
-    run.add_argument("--antigravity-model", metavar="MODEL")
-    run.add_argument("--antigravity-effort", metavar="EFFORT")
-    run.add_argument(
-        "--codex-timeout",
-        metavar="SECONDS",
-        type=float,
-        default=300,
-    )
-    run.add_argument(
-        "positional_prompt",
-        nargs="?",
-        metavar="PROMPT",
-        help="story prompt; mutually exclusive with the other input options",
-    )
-    payload = run.add_mutually_exclusive_group()
-    payload.add_argument("--prompt", help="inline story prompt")
-    payload.add_argument("--draft", help="inline complete draft")
-    payload.add_argument(
-        "--draft-file",
-        metavar="PATH",
-        help="strict-UTF-8 draft file relative to the current directory",
-    )
-    run.add_argument(
-        "--output",
-        required=True,
-        metavar="PART/PATH.md",
-        help="required create-only manuscript path beneath manuscript/PART/",
-    )
-    run.add_argument("--debate-id")
-    run.add_argument("--max-debate-rounds", type=int)
 
     inspect = subcommands.add_parser(
         "inspect",
@@ -237,13 +188,13 @@ def build_parser() -> argparse.ArgumentParser:
 
     storage = subcommands.add_parser(
         "storage",
-        help="select, migrate, or verify authoritative conversation storage",
+        help="select, transfer, or verify authoritative conversation storage",
     )
     storage_actions = storage.add_subparsers(
         dest="storage_action",
         required=True,
     )
-    for action in ("migrate", "verify"):
+    for action in ("transfer", "verify"):
         action_parser = storage_actions.add_parser(action)
         action_parser.add_argument(
             "--from",
@@ -258,7 +209,7 @@ def build_parser() -> argparse.ArgumentParser:
             required=True,
         )
         action_parser.add_argument("--workspace", help=_WORKSPACE_HELP)
-        if action == "migrate":
+        if action == "transfer":
             action_parser.add_argument("--dry-run", action="store_true")
     use = storage_actions.add_parser("use")
     use.add_argument("backend", metavar="BACKEND")
@@ -302,9 +253,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
     smoke.add_argument(
         "--workspace",
-        help=(
-            "use an explicit workspace path and retain diagnostic artifacts"
-        ),
+        help="verify an existing workspace without modifying it",
     )
     return parser
 
@@ -327,9 +276,7 @@ def _parse_backend_overrides(values: Sequence[str]) -> dict[str, str]:
         if agent_id not in ROSTER:
             raise ConfigurationError(f"unknown backend override agent: {agent_id}")
         if agent_id in result:
-            raise ConfigurationError(
-                f"duplicate backend override agent: {agent_id}"
-            )
+            raise ConfigurationError(f"duplicate backend override agent: {agent_id}")
         validated = ConfigManager.validate_backend(backend)
         assert validated is not None
         result[agent_id] = validated
@@ -348,9 +295,7 @@ def _parse_positive_timeout_seconds(value: object) -> float:
     try:
         timeout = float(value)
     except (TypeError, ValueError) as exc:
-        raise ConfigurationError(
-            "Codex timeout must be a positive number"
-        ) from exc
+        raise ConfigurationError("Codex timeout must be a positive number") from exc
     if not math.isfinite(timeout) or timeout <= 0:
         raise ConfigurationError("Codex timeout must be a positive number")
     return timeout
@@ -364,35 +309,6 @@ def _validate_antigravity_executable(value: object) -> str:
             "Antigravity executable must be non-empty NUL-free text"
         )
     return value
-
-
-def _resolve_run_input(arguments: argparse.Namespace) -> tuple[str, str]:
-    """Resolve exactly one established prompt/draft source without mutation.
-
-    Inline values are returned unchanged. Draft files are read as strict UTF-8;
-    ambiguous, missing, unreadable, or invalid input raises
-    ``ConfigurationError`` before backend construction.
-    """
-
-    sources = (
-        ("prompt", arguments.positional_prompt),
-        ("prompt", arguments.prompt),
-        ("draft", arguments.draft),
-        ("draft_file", arguments.draft_file),
-    )
-    supplied = [(kind, value) for kind, value in sources if value is not None]
-    if len(supplied) != 1:
-        raise ConfigurationError(
-            "exactly one run input is required: positional prompt, --prompt, "
-            "--draft, or --draft-file"
-        )
-    input_kind, value = supplied[0]
-    if not isinstance(value, str):
-        raise ConfigurationError("run input must be text")
-    if input_kind != "draft_file":
-        return input_kind, value
-
-    return "draft", read_draft_file(value)
 
 
 def _require_session_command_state(
@@ -426,6 +342,87 @@ def _require_session_command_state(
             "session command returned uncorrelated lifecycle facts"
         )
     return value
+
+
+def _transition_assessment_payload(
+    assessment: SessionTransitionAssessment,
+) -> dict[str, object]:
+    """Return only fixed content-safe transition fields for CLI JSON."""
+
+    if type(assessment) is not SessionTransitionAssessment:
+        raise BackendProtocolError(
+            "session command returned an invalid transition assessment"
+        )
+    try:
+        assessment.__post_init__()
+    except Exception as exc:
+        raise BackendProtocolError(
+            "session command returned malformed transition assessment facts"
+        ) from exc
+    recovery = assessment.recovery_result
+    recovery_payload: dict[str, object] | None = None
+    if recovery is not None:
+        recovery_payload = {
+            "application_id": recovery.application_id,
+            "checkpoint_operation_id": recovery.checkpoint_operation_id,
+            "collaboration_tail_sequence": recovery.collaboration_tail_sequence,
+            "commit_id": recovery.commit_id,
+            "confirmation_request_id": recovery.confirmation_request_id,
+            "conversation_id": recovery.conversation_id,
+            "correlation_id": recovery.correlation_id,
+            "failure_code": recovery.failure_code.value,
+            "next_action": recovery.next_action.value,
+            "owner": recovery.owner.value,
+            "proposal_id": recovery.proposal_id,
+            "reviewed_candidate_id": recovery.reviewed_candidate_id,
+            "session_id": recovery.session_id,
+            "state": recovery.state.value,
+            "story_commit_candidate_id": recovery.story_commit_candidate_id,
+            "story_commit_operation_id": recovery.story_commit_operation_id,
+        }
+    return {
+        "allowed_operations": [
+            operation.value for operation in assessment.allowed_operations
+        ],
+        "conversation_id": assessment.conversation_id,
+        "failure_code": assessment.failure_code.value,
+        "next_action": assessment.next_action.value,
+        "owner": assessment.owner.value if assessment.owner is not None else None,
+        "recovery_result": recovery_payload,
+        "scope": assessment.scope.value,
+        "session_id": assessment.session_id,
+        "state": assessment.state.value,
+    }
+
+
+def _session_transition_conversation_storage(
+    workspace: Workspace,
+    session_id: str,
+) -> tuple[str | None, ConversationStorageServices | None]:
+    """Resolve one persisted active default and its same-provenance services."""
+
+    conversation_id = load_default_conversation(workspace, session_id)
+    if conversation_id is None:
+        return None, None
+    services = activate_configured_conversation_storage(workspace).services
+    try:
+        metadata = services.catalog.get(session_id, conversation_id)
+    except ConversationNotFoundError:
+        return None, None
+    if (
+        metadata.session_id != session_id
+        or metadata.conversation_id != conversation_id
+    ):
+        raise BackendProtocolError(
+            "conversation storage returned metadata for another scope"
+        )
+    if metadata.status.value == "archived":
+        return None, None
+    if metadata.status.value != "active":
+        raise BackendProtocolError(
+            "conversation storage returned an invalid conversation status"
+        )
+    return conversation_id, services
 
 
 def _interactive_streams_are_terminals() -> bool:
@@ -466,11 +463,7 @@ def _write_interactive_cli_error(
     )
     terminal.write_error(
         error,
-        debug_log_path=(
-            _INTERACTIVE_DEBUG_LOG_NOTICE
-            if debug_log_available
-            else None
-        ),
+        debug_log_path=(_INTERACTIVE_DEBUG_LOG_NOTICE if debug_log_available else None),
     )
 
 
@@ -497,11 +490,18 @@ def _record_cli_error(
         pass
 
 
-def _create_cli_debug_log(workspace: Workspace) -> WorkspaceDebugLog | None:
+def _create_cli_debug_log(
+    workspace: Workspace,
+    *,
+    defer_until_session: bool = False,
+) -> WorkspaceDebugLog | None:
     """Create one optional CLI logger without changing command behavior."""
 
     try:
-        return WorkspaceDebugLog(workspace)
+        return WorkspaceDebugLog(
+            workspace,
+            defer_until_session=defer_until_session,
+        )
     except BaseException:
         return None
 
@@ -634,7 +634,7 @@ def _classify_conversation_storage_startup_failure(
         InteractiveErrorCode.CONFIGURATION_INVALID,
         summary="Conversation storage activation could not be completed.",
         hint=(
-            "Run story storage use, migrate, or verify as appropriate, then "
+            "Run story storage use, transfer, or verify as appropriate, then "
             "retry after concurrent workspace storage work finishes."
         ),
     )
@@ -817,13 +817,9 @@ def _run_interactive_cli(arguments: argparse.Namespace) -> int:
         backend_overrides = _parse_backend_overrides(backend_values)
         timeout_seconds = _parse_positive_timeout_seconds(timeout_value)
         if requested_session is not None:
-            requested_session = Workspace.validate_identifier(
-                requested_session
-            )
+            requested_session = Workspace.validate_identifier(requested_session)
         model = ConfigManager.validate_codex_model(model)
-        antigravity_model = ConfigManager.validate_antigravity_model(
-            antigravity_model
-        )
+        antigravity_model = ConfigManager.validate_antigravity_model(antigravity_model)
         antigravity_effort = ConfigManager.validate_antigravity_effort(
             antigravity_effort
         )
@@ -831,9 +827,7 @@ def _run_interactive_cli(arguments: argparse.Namespace) -> int:
             antigravity_executable
         )
     except Exception as exc:
-        _write_interactive_cli_error(
-            _classify_interactive_configuration_failure(exc)
-        )
+        _write_interactive_cli_error(_classify_interactive_configuration_failure(exc))
         return 2
 
     try:
@@ -841,7 +835,7 @@ def _run_interactive_cli(arguments: argparse.Namespace) -> int:
     except Exception as exc:
         _write_interactive_cli_error(_classify_workspace_entry_failure(exc))
         return 2
-    debug_log = _create_cli_debug_log(workspace)
+    debug_log = _create_cli_debug_log(workspace, defer_until_session=True)
     _trace_cli(
         debug_log,
         DebugOperation.WORKSPACE_DISCOVERY,
@@ -945,16 +939,18 @@ def _run_interactive_cli(arguments: argparse.Namespace) -> int:
             newly_authenticated_provider=newly_authenticated,
         )
         if default_provider is None:
-            raise RuntimeError(
-                "authenticated startup snapshot has no default provider"
-            )
-        establish_default_backend(workspace, default_provider)
+            raise RuntimeError("authenticated startup snapshot has no default provider")
         manager = ConfigManager(workspace)
         configuration = manager.load_configuration_snapshot()
+        runtime_backend_overrides = dict(backend_overrides)
+        if configuration.system_defaults.default_backend is None:
+            for agent_id, agent in configuration.agent_configs.items():
+                if agent.backend is None:
+                    runtime_backend_overrides.setdefault(agent_id, default_provider)
         effective_providers = _effective_interactive_providers(
             manager,
             configuration,
-            backend_overrides,
+            runtime_backend_overrides,
         )
     except KeyboardInterrupt:
         _trace_cli(
@@ -1024,7 +1020,7 @@ def _run_interactive_cli(arguments: argparse.Namespace) -> int:
             workspace,
             model=model,
             timeout_seconds=timeout_seconds,
-            backend_overrides=backend_overrides,
+            backend_overrides=runtime_backend_overrides,
             antigravity_executable=antigravity_executable,
             antigravity_model=antigravity_model,
             antigravity_effort=antigravity_effort,
@@ -1070,9 +1066,7 @@ def _run_interactive_cli(arguments: argparse.Namespace) -> int:
         return 2
 
     try:
-        result = controller.run_session_lobby(
-            requested_session=requested_session
-        )
+        result = controller.run_session_lobby(requested_session=requested_session)
     except Exception as exc:
         _record_cli_error(debug_log, DebugOperation.INTERACTIVE_LOBBY, exc)
         _write_interactive_cli_error(
@@ -1084,9 +1078,7 @@ def _run_interactive_cli(arguments: argparse.Namespace) -> int:
         debug_log,
         DebugOperation.CLI_COMMAND,
         DebugPhase.SUCCEEDED if result == 0 else DebugPhase.FAILED,
-        outcome=(
-            DebugOutcome.COMPLETED if result == 0 else DebugOutcome.FAILED
-        ),
+        outcome=(DebugOutcome.COMPLETED if result == 0 else DebugOutcome.FAILED),
     )
     return result
 
@@ -1192,25 +1184,8 @@ def main(argv: Sequence[str] | None = None) -> int:
     session_id: str | None = None
     try:
         if arguments.command == "init":
-            workspace = initialize_workspace(
-                arguments.workspace,
-                overwrite_prompts=arguments.overwrite_prompts,
-            )
-            debug_log_hint_available = True
-            debug_log = _create_cli_debug_log(workspace)
-            _trace_cli(
-                debug_log,
-                DebugOperation.WORKSPACE_INITIALIZATION,
-                DebugPhase.SUCCEEDED,
-                outcome=DebugOutcome.READY,
-            )
-            _trace_cli(
-                debug_log,
-                DebugOperation.CLI_COMMAND,
-                DebugPhase.STARTED,
-            )
+            workspace = initialize_workspace(arguments.workspace)
             print(json.dumps({"workspace": str(workspace.root)}, indent=2))
-            _trace_cli_completion(debug_log)
             return 0
 
         if arguments.command == "smoke":
@@ -1219,9 +1194,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             if arguments.workspace is None:
                 report, exit_code = run_smoke()
             else:
-                workspace = initialize_workspace(arguments.workspace)
-                debug_log_hint_available = True
-                debug_log = _create_cli_debug_log(workspace)
+                workspace = resolve_workspace(arguments.workspace)
                 report, exit_code = run_smoke(workspace)
             print(
                 json.dumps(
@@ -1235,11 +1208,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                 _trace_cli(
                     debug_log,
                     DebugOperation.CLI_COMMAND,
-                    (
-                        DebugPhase.SUCCEEDED
-                        if exit_code == 0
-                        else DebugPhase.FAILED
-                    ),
+                    (DebugPhase.SUCCEEDED if exit_code == 0 else DebugPhase.FAILED),
                     outcome=(
                         DebugOutcome.COMPLETED
                         if exit_code == 0
@@ -1262,12 +1231,8 @@ def main(argv: Sequence[str] | None = None) -> int:
                     assert desired is not None
                     install_missing = arguments.install_missing
                     yes = arguments.yes
-                    if (
-                        install_missing != yes
-                        or (
-                            desired != "sqlite"
-                            and (install_missing or yes)
-                        )
+                    if install_missing != yes or (
+                        desired != "sqlite" and (install_missing or yes)
                     ):
                         use_report = ConversationStorageSelectionReport.failed(
                             ConversationStorageSelectionFailure.INVALID_REQUEST,
@@ -1293,18 +1258,18 @@ def main(argv: Sequence[str] | None = None) -> int:
                 return use_report.exit_code
 
             from .conversation_storage.migration import (
-                ConversationStorageMigrationOperation,
-                ConversationStorageMigrationReport,
-                migrate_conversation_storage,
+                ConversationStorageTransferOperation,
+                ConversationStorageTransferReport,
+                transfer_conversation_storage,
                 verify_conversation_storage,
             )
 
-            operation = ConversationStorageMigrationOperation(arguments.storage_action)
+            operation = ConversationStorageTransferOperation(arguments.storage_action)
             dry_run = bool(getattr(arguments, "dry_run", False))
             try:
                 workspace = resolve_workspace(arguments.workspace)
             except Exception:
-                storage_report = ConversationStorageMigrationReport.failed(
+                storage_report = ConversationStorageTransferReport.failed(
                     operation=operation,
                     source_backend=arguments.source_backend,
                     destination_backend=arguments.destination_backend,
@@ -1313,13 +1278,13 @@ def main(argv: Sequence[str] | None = None) -> int:
                 )
             else:
                 storage_report = (
-                    migrate_conversation_storage(
+                    transfer_conversation_storage(
                         workspace,
                         source_backend=arguments.source_backend,
                         destination_backend=arguments.destination_backend,
                         dry_run=dry_run,
                     )
-                    if operation is ConversationStorageMigrationOperation.MIGRATE
+                    if operation is ConversationStorageTransferOperation.TRANSFER
                     else verify_conversation_storage(
                         workspace,
                         source_backend=arguments.source_backend,
@@ -1352,9 +1317,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         )
         if arguments.command == "session":
             if arguments.session_name is not None:
-                session_id = workspace.validate_identifier(
-                    arguments.session_name
-                )
+                session_id = workspace.validate_identifier(arguments.session_name)
             elif cli_context.default_session_id is not None:
                 session_id = workspace.validate_identifier(
                     cli_context.default_session_id
@@ -1365,12 +1328,21 @@ def main(argv: Sequence[str] | None = None) -> int:
                     "'story session create SESSION'"
                 )
             backend = AgentBackend(workspace)
+            assessment: SessionTransitionAssessment | None = None
+            denied = False
             try:
                 if arguments.session_action == "create":
+                    _require_session_command_state(
+                        backend.get_session_lifecycle(session_id),
+                        session_id=session_id,
+                        durable_state=SessionDurableState.ABSENT,
+                        access_state=SessionAccessState.CLAIMABLE,
+                    )
                     if backend.validate_provider_configuration(session_id) is not True:
                         raise BackendProtocolError(
                             "provider configuration validation did not return true"
                         )
+                    backend.provision_session_resources(session_id)
                     acquired = _require_session_command_state(
                         backend.create_session_with_access(session_id),
                         session_id=session_id,
@@ -1383,33 +1355,189 @@ def main(argv: Sequence[str] | None = None) -> int:
                             "created session lifecycle changed before release"
                         )
                     try:
-                        save_default_session(workspace, session_id)
+                        assessment = backend.assess_session_transition(
+                            lifecycle_state=acquired,
+                            requested_operation=(
+                                SessionTransitionOperation.ENTER_DESTINATION
+                            ),
+                            conversation_id=None,
+                            collaboration_store=None,
+                        )
+                        denied = (
+                            SessionTransitionOperation.ENTER_DESTINATION
+                            not in assessment.allowed_operations
+                        )
+                        if not denied:
+                            save_default_session(workspace, session_id)
                     finally:
                         state = backend.release_session_access(session_id)
                 elif arguments.session_action == "reopen":
-                    if backend.validate_provider_configuration(session_id) is not True:
+                    before = backend.get_session_lifecycle(session_id)
+                    if type(before) is not SessionLifecycleState:
                         raise BackendProtocolError(
-                            "provider configuration validation did not return true"
+                            "session command returned an invalid lifecycle state"
                         )
-                    acquired = _require_session_command_state(
-                        backend.reopen_session_with_access(session_id),
-                        session_id=session_id,
-                        durable_state=SessionDurableState.READY,
-                        access_state=SessionAccessState.HELD_HERE,
+                    provider_work_is_ready(
+                        before,
+                        provider_configuration_ready=False,
                     )
-                    observed = backend.get_session_lifecycle(session_id)
-                    if observed != acquired:
+                    if (
+                        before.session_id != session_id
+                        or before.durable_state is SessionDurableState.ABSENT
+                    ):
                         raise BackendProtocolError(
-                            "reopened session lifecycle changed before release"
+                            "session command cannot reopen an absent session"
                         )
-                    try:
-                        save_default_session(workspace, session_id)
-                    finally:
-                        state = backend.release_session_access(session_id)
+                    if before.access_state in {
+                        SessionAccessState.BLOCKED_BY_LIVE_LOCAL_OWNER,
+                        SessionAccessState.OWNERSHIP_UNKNOWN,
+                    }:
+                        denied = True
+                        state = before
+                    else:
+                        if backend.validate_provider_configuration(session_id) is not True:
+                            raise BackendProtocolError(
+                                "provider configuration validation did not return true"
+                            )
+                        transition = (
+                            backend.reopen_session_with_access(session_id)
+                            if before.durable_state is SessionDurableState.PAUSED
+                            else backend.acquire_session_access(session_id)
+                        )
+                        acquired = _require_session_command_state(
+                            transition,
+                            session_id=session_id,
+                            durable_state=SessionDurableState.READY,
+                            access_state=SessionAccessState.HELD_HERE,
+                        )
+                        observed = backend.get_session_lifecycle(session_id)
+                        if observed != acquired:
+                            raise BackendProtocolError(
+                                "reopened session lifecycle changed before release"
+                            )
+                        try:
+                            conversation_id, storage_services = (
+                                _session_transition_conversation_storage(
+                                    workspace,
+                                    session_id,
+                                )
+                            )
+                            assessment = backend.assess_session_transition(
+                                lifecycle_state=acquired,
+                                requested_operation=(
+                                    SessionTransitionOperation.ENTER_DESTINATION
+                                ),
+                                conversation_id=conversation_id,
+                                collaboration_store=(
+                                    storage_services.event_store
+                                    if storage_services is not None
+                                    else None
+                                ),
+                            )
+                            denied = (
+                                SessionTransitionOperation.ENTER_DESTINATION
+                                not in assessment.allowed_operations
+                            )
+                            if not denied:
+                                save_default_session(workspace, session_id)
+                        finally:
+                            state = backend.release_session_access(session_id)
                 else:
-                    state = backend.pause_session_and_release_access(session_id)
+                    before = backend.get_session_lifecycle(session_id)
+                    if type(before) is not SessionLifecycleState:
+                        raise BackendProtocolError(
+                            "session command returned an invalid lifecycle state"
+                        )
+                    provider_work_is_ready(
+                        before,
+                        provider_configuration_ready=False,
+                    )
+                    if before.session_id != session_id:
+                        raise BackendProtocolError(
+                            "session command returned another lifecycle identity"
+                        )
+                    if (
+                        before.durable_state is SessionDurableState.READY
+                        and before.access_state is SessionAccessState.CLAIMABLE
+                    ):
+                        current = _require_session_command_state(
+                            backend.acquire_session_access(session_id),
+                            session_id=session_id,
+                            durable_state=SessionDurableState.READY,
+                            access_state=SessionAccessState.HELD_HERE,
+                        )
+                        newly_acquired = True
+                    elif (
+                        before.durable_state is SessionDurableState.READY
+                        and before.access_state is SessionAccessState.HELD_HERE
+                    ):
+                        current = before
+                        newly_acquired = False
+                    else:
+                        denied = True
+                        state = before
+                    if not denied:
+                        conversation_id, storage_services = (
+                            _session_transition_conversation_storage(
+                                workspace,
+                                session_id,
+                            )
+                        )
+                        assessment = backend.assess_session_transition(
+                            lifecycle_state=current,
+                            requested_operation=(
+                                SessionTransitionOperation.PAUSE_SESSION
+                            ),
+                            conversation_id=conversation_id,
+                            collaboration_store=(
+                                storage_services.event_store
+                                if storage_services is not None
+                                else None
+                            ),
+                        )
+                        denied = (
+                            SessionTransitionOperation.PAUSE_SESSION
+                            not in assessment.allowed_operations
+                        )
+                        if denied:
+                            state = (
+                                backend.release_session_access(session_id)
+                                if newly_acquired
+                                else before
+                            )
+                        else:
+                            state = backend.pause_session_and_release_access(session_id)
             finally:
                 backend.close()
+            if denied:
+                print(
+                    json.dumps(
+                        {
+                            "access_state": state.access_state.value,
+                            "assessment": (
+                                _transition_assessment_payload(assessment)
+                                if assessment is not None
+                                else None
+                            ),
+                            "durable_state": state.durable_state.value,
+                            "session_id": state.session_id,
+                            "transition_denial": (
+                                None
+                                if assessment is not None
+                                else "lifecycle_not_ready_held_here"
+                            ),
+                        },
+                        ensure_ascii=False,
+                        indent=2,
+                        sort_keys=True,
+                    )
+                )
+                _trace_cli_completion(
+                    debug_log,
+                    session_id=session_id,
+                    outcome=DebugOutcome.REJECTED,
+                )
+                return 2
             expected_durable_state = (
                 SessionDurableState.PAUSED
                 if arguments.session_action == "pause"
@@ -1421,10 +1549,12 @@ def main(argv: Sequence[str] | None = None) -> int:
                 durable_state=expected_durable_state,
                 access_state=SessionAccessState.CLAIMABLE,
             )
+            assert assessment is not None
             print(
                 json.dumps(
                     {
                         "access_state": state.access_state.value,
+                        "assessment": _transition_assessment_payload(assessment),
                         "durable_state": state.durable_state.value,
                         "session_id": state.session_id,
                     },
@@ -1458,61 +1588,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             _trace_cli_completion(debug_log, session_id=session_id)
             return 0
 
-        input_kind, input_payload = _resolve_run_input(arguments)
-        backend_overrides = _parse_backend_overrides(arguments.backend)
-        backend = AgentBackend(
-            workspace,
-            model=arguments.codex_model,
-            timeout_seconds=arguments.codex_timeout,
-            backend_overrides=backend_overrides,
-            antigravity_executable=arguments.antigravity_executable,
-            antigravity_model=arguments.antigravity_model,
-            antigravity_effort=arguments.antigravity_effort,
-        )
-        runtime = StoryRuntime(workspace, backend)
-        options = {
-            "output_path": arguments.output,
-            "max_debate_rounds": arguments.max_debate_rounds,
-            "debate_id": arguments.debate_id,
-        }
-        try:
-            result = asyncio.run(
-                runtime.run_prompt(session_id, input_payload, **options)
-                if input_kind == "prompt"
-                else runtime.run_draft(session_id, input_payload, **options)
-            )
-        finally:
-            backend.close()
-        print(
-            json.dumps(
-                result.to_dict(),
-                ensure_ascii=False,
-                indent=2,
-                sort_keys=True,
-            )
-        )
-        if result.status is DebateStatus.CONSENSUS:
-            _trace_cli_completion(
-                debug_log,
-                session_id=session_id,
-                outcome=DebugOutcome.CONSENSUS,
-            )
-            return 0
-        if result.status is DebateStatus.DEADLOCK:
-            _trace_cli_completion(
-                debug_log,
-                session_id=session_id,
-                outcome=DebugOutcome.DEADLOCK,
-            )
-            return 3
-        _trace_cli(
-            debug_log,
-            DebugOperation.CLI_COMMAND,
-            DebugPhase.FAILED,
-            session_id=session_id,
-            outcome=DebugOutcome.FAILED,
-        )
-        return 4
+        raise ConfigurationError(f"unsupported command: {arguments.command}")
     except Exception as exc:
         if debug_log is not None:
             _record_cli_error(

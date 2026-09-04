@@ -13,7 +13,6 @@ from types import SimpleNamespace
 from unittest import mock
 
 from story_writing_agents import cli as cli_module
-from story_writing_agents.agents import PLOT_ARCHITECT
 from story_writing_agents.cli_context import save_default_session
 from story_writing_agents.config import (
     ConfigurationCommitError,
@@ -59,18 +58,19 @@ from story_writing_agents.conversation_retrieval import (
     ConversationRagExcerpt,
     ConversationRetrievalSource,
 )
-from story_writing_agents.conversation_search import ConversationCitation
+from story_writing_agents.conversation_search import CollaborationHistoryCitation
 from story_writing_agents.conversation_storage import (
     ConversationStorageCoordinationError,
     ConversationStorageUnavailableError,
     compose_filesystem_conversation_storage,
 )
 from story_writing_agents.conversations import (
-    ConversationEventAppend,
-    ConversationEventKind,
+    CollaborationEventBatch,
+    CollaborationReadableFieldKey,
 )
 from story_writing_agents.errors import ConfigurationError, SessionIdError
 
+from tests.collaboration_contract_fixture import contract_batches
 from tests.helpers import initialized_workspace
 
 
@@ -126,9 +126,13 @@ def _cli_excerpt(content: str = "Alpha") -> rag_cli.ConversationRagCliExcerpt:
         citation_id="g1",
         session_id=_SESSION,
         conversation_id="conversation-a",
-        turn_id="turn-a",
+        event_id="proposal_event",
         sequence=1,
-        event_kind=ConversationEventKind.USER_MESSAGE.value,
+        field_key=CollaborationReadableFieldKey.PROPOSAL_PURPOSE.value,
+        field_start_codepoint=0,
+        field_end_codepoint=len(content),
+        assignment_ordinal=None,
+        input_ordinal=None,
         document_id="document-a",
         revision_id="sha256:" + "3" * 64,
         fragment_id="sha256:" + "4" * 64,
@@ -151,13 +155,14 @@ def _context(content: str) -> ConversationRagContext:
     excerpt = ConversationRagExcerpt(
         citation_id="g1",
         source=ConversationRetrievalSource(
-            subject="PRIVATE_PROVIDER_SUBJECT",
-            citation=ConversationCitation(
-                _SESSION,
-                "conversation-a",
-                "turn-a",
-                1,
-                ConversationEventKind.USER_MESSAGE,
+            citation=CollaborationHistoryCitation(
+                session_id=_SESSION,
+                conversation_id="conversation-a",
+                event_id="proposal_event",
+                sequence=1,
+                field_key=CollaborationReadableFieldKey.PROPOSAL_PURPOSE,
+                start_codepoint=0,
+                end_codepoint=len(content),
             ),
         ),
         reference=ConversationRagSourceReference(
@@ -177,6 +182,17 @@ def _context(content: str) -> ConversationRagContext:
         retained_utf8_bytes=len(content.encode("utf-8")),
         truncated=False,
     )
+
+
+def _append_proposal(services: object, conversation_id: str):  # type: ignore[no-untyped-def]
+    batch = contract_batches(conversation_id)["proposal"]
+    batch = CollaborationEventBatch(
+        batch_id=batch.batch_id,
+        expected_last_sequence=batch.expected_last_sequence,
+        events=tuple(replace(event, session_id=_SESSION) for event in batch.events),
+    )
+    services.event_store.append_batch(batch)
+    return services.event_store.read(_SESSION, conversation_id)
 
 
 def _tree_bytes(root: Path) -> tuple[tuple[str, str, bytes | None], ...]:
@@ -322,9 +338,7 @@ class ConversationRagCliContractTests(unittest.TestCase):
         excerpt = _cli_excerpt()
         malformed_excerpts = (
             lambda: replace(excerpt, session_id="../escape"),
-            lambda: replace(
-                excerpt, event_kind=ConversationEventKind.RUNTIME_ERROR.value
-            ),
+            lambda: replace(excerpt, field_key="not_a_readable_field"),
             lambda: replace(excerpt, sequence=-1),
             lambda: replace(excerpt, start_codepoint=5, end_codepoint=1),
             lambda: replace(excerpt, end_codepoint=4),
@@ -749,17 +763,7 @@ class ConversationRagCliWorkflowTests(unittest.TestCase):
         self,
     ) -> None:
         conversation = self.services.catalog.create(_SESSION, "Authoritative sentinel")
-        event = self.services.event_store.append(
-            ConversationEventAppend(
-                session_id=_SESSION,
-                conversation_id=conversation.conversation_id,
-                turn_id="turn-a",
-                sender="user",
-                recipient=PLOT_ARCHITECT,
-                kind=ConversationEventKind.USER_MESSAGE,
-                content="authoritative content",
-            )
-        )
+        history = _append_proposal(self.services, conversation.conversation_id)
         store = ConversationRagGenerationStore(self.workspace)
         store.set_status(_SESSION, ConversationRagStoreStatus.STALE)
         store.set_status("other_session", ConversationRagStoreStatus.PROVIDER_FAILED)
@@ -806,7 +810,7 @@ class ConversationRagCliWorkflowTests(unittest.TestCase):
         self.assertEqual(artifact.read_text(encoding="utf-8"), "artifact")
         self.assertEqual(
             self.services.event_store.read(_SESSION, conversation.conversation_id),
-            (event,),
+            history,
         )
         self.assertEqual(external.read_text(encoding="utf-8"), "external")
 
@@ -819,31 +823,7 @@ class ConversationRagCliWorkflowTests(unittest.TestCase):
             self.skipTest("pinned optional generic-rag distribution is not installed")
         self.assertEqual(installed, "0.1.0")
         conversation = self.services.catalog.create(_SESSION, "Local workflow")
-        for kind, sender, recipient, content in (
-            (
-                ConversationEventKind.USER_MESSAGE,
-                "user",
-                PLOT_ARCHITECT,
-                "semantic needle",
-            ),
-            (
-                ConversationEventKind.AGENT_REPLY,
-                PLOT_ARCHITECT,
-                "user",
-                "authorized answer",
-            ),
-        ):
-            self.services.event_store.append(
-                ConversationEventAppend(
-                    session_id=_SESSION,
-                    conversation_id=conversation.conversation_id,
-                    turn_id="turn-a",
-                    sender=sender,
-                    recipient=recipient,
-                    kind=kind,
-                    content=content,
-                )
-            )
+        _append_proposal(self.services, conversation.conversation_id)
         enabled = dispatch_conversation_rag(
             self.workspace,
             ConversationRagCliRequest(
@@ -870,7 +850,7 @@ class ConversationRagCliWorkflowTests(unittest.TestCase):
             ConversationRagCliRequest(
                 ConversationRagCliOperation.SEARCH,
                 _SESSION,
-                query="semantic needle",
+                query="Consult specialists",
             ),
             conversation_storage_services=self.services,
         )
@@ -976,7 +956,15 @@ class ConversationRagArgparseTests(unittest.TestCase):
     def _main(self, arguments: list[str]) -> tuple[int, str, str]:
         stdout = io.StringIO()
         stderr = io.StringIO()
-        with contextlib.redirect_stdout(stdout), contextlib.redirect_stderr(stderr):
+        with (
+            mock.patch.object(
+                cli_module,
+                "resolve_workspace",
+                return_value=self.workspace,
+            ),
+            contextlib.redirect_stdout(stdout),
+            contextlib.redirect_stderr(stderr),
+        ):
             code = cli_module.main(arguments)
         return code, stdout.getvalue(), stderr.getvalue()
 

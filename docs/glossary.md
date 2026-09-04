@@ -1,7 +1,10 @@
 # Glossary
 
-> **Availability:** with a session attached, the shell manages conversations,
-> advisory turns, search, transcripts, and consensus. See [Story sessions](guides/story-sessions.md).
+> **Availability:** the shell manages conversations, search, transcripts,
+> history, and inspection. Python callers can run lead advisory/proposal turns
+> and exact decisions, plus separately confirmed consensus phases. Consensus
+> has no installed shell command and never itself publishes artifacts. See
+> [Lead agent](guides/lead-agent.md) and [Consensus runs](guides/consensus-runs.md).
 
 ## A–W
 
@@ -12,6 +15,11 @@
 - **Agent, role, and binding.** An agent is a fixed team member; its role defines
   responsibility and instructions, and a binding connects it to a backend. See
   [Agent contracts](reference/agent-contracts.md).
+
+- **Lead front channel.** The Lead Orchestrator is the only story agent users
+  address directly. It can answer, question, critique, recommend, or propose;
+  runtime—not provider prose—owns proposal and confirmation authority. See
+  [Lead agent](guides/lead-agent.md).
 
 - **Writing artifact.** Agent-produced story output at one of four exact core
   paths or beneath `manuscript/PART/`. Runtime internals are not writing
@@ -43,25 +51,33 @@
   semantic result records are separate. See the
   [interactive design contract](design/interactive-cli-design-system.md#submitted-input-lifecycle).
 
-- **Consensus and deadlock.** Consensus commits final artifacts after all voters
-  approve one revision; deadlock leaves conflicts at the round limit. See
-  [Inspection and recovery](guides/inspection-and-recovery.md).
+- **Consensus, deadlock, and continuation.** Phase-confirmed consensus moves one
+  unpublished candidate through current-revision audits, nonvoting lead
+  synthesis, optional repair/re-audit, and read-only finalization. Deadlock is
+  terminal and nonpublishing, but an explicit continuation can resume the same
+  lineage or create a linked workflow by referencing the exact candidate and
+  unresolved critique material—never by copying their text. The continuation
+  requires an operator ruling, a positive repair-round budget, and fresh user
+  confirmation for every phase. Artifact Apply and Git Commit are later,
+  separately confirmed operations. See [Consensus runs](guides/consensus-runs.md).
 
-- **Conversation.** An immutable session-scoped subject and visible history.
-  Its catalog stores identity and status; its event store holds the transcript.
+- **Conversation.** An immutable session-scoped identity with mutable display
+  subject/status and authoritative schema-v2 collaboration history.
   See [Conversation catalog](reference/conversation-catalog.md).
 
-- **Conversation catalog and event store.** The catalog owns identity and discovery;
-  the store owns append, full reads, and bounded context. Archive does not hide
-  transcripts. See [Conversation
+- **Conversation catalog and event store.** The catalog owns identity,
+  display-only subject, and discovery; the active v2 store owns atomic append,
+  full reads, and bounded context. Archive does not hide transcript reads. See [Conversation
   transcripts](reference/conversation-transcripts.md).
 
-- **Conversation citation, page, and cursor.** A citation identifies a record;
-  a page is a bounded read, and its cursor continues that snapshot. See
+- **Conversation citation, page, and cursor.** A citation identifies an exact
+  event, readable field, and code-point range; a page is a bounded read, and
+  its cursor continues only the unchanged snapshot. See
   [Conversation search](reference/conversation-search.md).
 
-- **Conversation search.** Bounded literal matching over current-session
-  subjects and visible messages. Direct `/search` is a provider-free CLI
+- **Conversation search.** Bounded literal matching over closed readable event
+  fields in active current-session conversations. Subjects are display-only
+  metadata. Direct `/search` is a provider-free CLI
   command, not a provider call or tool; agent retrieval reaches memory only
   through runtime authorization. See [Conversation search](reference/conversation-search.md).
 
@@ -69,8 +85,8 @@
   holds. A default session is not necessarily attached. See
   [Session lifecycle](design/session-lifecycle.md).
 
-- **Current focus and agent focus.** Current focus is the conversation used for
-  turns; agent focus is the ordinary advisory responder. Both are process-local.
+- **Current conversation focus.** The process-local conversation selected for
+  management and inspection. It does not select an advisory responder.
 
 - **Default session and default conversation.** Persisted fallbacks used when a
   command omits a session or when session attachment restores conversation
@@ -99,8 +115,10 @@
   is missing, permits provider work, or is intentionally stopped. It is
   independent of process access.
 
-- **Event, turn, and context window.** An event is one record; a complete turn
-  pairs user input with a reply or error. Context is a bounded complete-turn view.
+- **Event, turn, and context window.** An event is one canonical schema-v2
+  collaboration fact. A readable record exposes only its closed public fields.
+  Provider context is an explicit bounded whole-record selection; its default
+  bootstrap contains no history content.
   See [Conversation transcripts](reference/conversation-transcripts.md).
 
 - **Fingerprint and provider thread.** A fingerprint identifies resolved prompt
@@ -118,14 +136,17 @@
   [Session storage](reference/configuration/session-storage.md).
 
 - **Manuscript.** Create-only story output at
-  `manuscript/PART/PATH.md` after consensus/finalization. A revision uses a
-  distinct part-scoped path. See [Consensus runs](guides/consensus-runs.md).
+  `manuscript/PART/PATH.md`. Direct repository components and the later
+  execution workflow preserve distinct part-scoped revision
+  paths. See [Consensus runs](guides/consensus-runs.md).
 
 - **Owner-isolated state.** Concise persisted outcomes supplied only to their
   agent, unlike the blackboard; files remain plaintext. See
   [Persistence](design/persistence.md).
 
-- **Prompt and draft.** A prompt asks for `r0`; a draft supplies it for review. See
+- **Prompt and supplied draft.** Both create a separately confirmed DRAFT
+  request. A prompt asks the Execution Specialist to author `r0`; a supplied
+  complete draft is transformed into newly authored `r0` before audit. See
   [Consensus runs](guides/consensus-runs.md).
 
 - **Provider session.** Backend lifecycle state and resumable threads for one
@@ -139,9 +160,10 @@
   durable `ready` and process access `held_here`. The query is pure and does not
   acquire access.
 
-- **Runtime.** Local orchestration that validates, coordinates debates and turns,
-  and persists results. See the
-  [System overview](design/overview.md).
+- **Runtime.** The management/configuration/inspection and lead-orchestration
+  facade. Its Python surface includes confirmed lead consultations and
+  separately confirmed consensus phases; its installed shell still has no
+  story-execution command. See [Runtime API](reference/runtime-api.md).
 
 - **Story session.** Durable related work/history spanning debates and
   conversations. See [Story sessions](guides/story-sessions.md).

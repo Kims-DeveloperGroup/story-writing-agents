@@ -2,24 +2,667 @@
 
 > **Available:** guarded access recovery, shell workflows, and process-level
 > POSIX PTY verification, including the package-internal ranged viewer.
-> Interactive `$`/`$$` artifact discovery and selection are available in
-> provider-bound prompt spans. Direct Python conversation archive operations
+> The current shell has no provider-bound prompt span, so main-input `$`/`$$`
+> artifact discovery and selection are inactive. Python lead-turn, confirmed
+> consultation, and decision recovery is available through `StoryRuntime`.
+> Direct Python conversation archive operations
 > have content-free failures and recognized additive-import recovery. Optional
 > SQLite conversation storage also fails closed. Explicit `/settings` or
 > provider-free `story storage use` can prepare and save desired storage for the
-> next shell; host installation always requires explicit consent. Migration and
+> next shell; host installation always requires explicit consent. Transfer and
 > parity verification remain separate workflows between two already-ready
 > stores. Optional local conversation RAG has no-write status, explicit
-> opt-in/rebuild/search/disable, confirmed derived-only purge recovery,
-> next-shell settings, and private one-turn preflight arming.
+> opt-in/rebuild/search/disable, confirmed derived-only purge recovery, and
+> next-shell settings. The former one-turn preflight is unavailable.
 > Automatic retry, silent installation, general destructive cleanup, event
 > repair, live switching, automation picker UI, and Windows console emulation
 > are not available.
+> Package-internal session Git-resource inspection, provisioning, exact-prefix
+> resume, and require-ready validation are wired into explicit session Create;
+> Reopen and Pause assess existing correlated resources without provisioning.
 > Explicit SQLite provisioning recognizes only one exact
 > interrupted-publication alias shape.
 
 Key terms: **fail closed** means preserve uncertain state; **taint** means stop
 continuing incomplete provider history; **external backup** is outside the workspace.
+
+<a id="workspace-initialization-recovery"></a>
+
+## Workspace initialization recovery
+
+`story init PATH` supports only an absent root, an empty safe directory, or one
+exact interrupted schema-v2 initialization. It never adopts, overwrites,
+migrates, upgrades, or resets other state.
+
+| Observation or failure | Meaning | Safe response |
+| --- | --- | --- |
+| Success JSON and no journal | The marker, exact 22-file scaffold, one parentless `main` commit, index/tree, and clean status were verified after journal removal. | Keep the original root pristine. Mutable session and runtime state belongs in the exact sibling/internal resources provisioned by session Create. |
+| `ConfigurationError: effective Git identity is unavailable or invalid` | The runtime did not invent an author/committer. Exact scaffold/journal bytes may exist, but an absent Git repository was not created. | Configure a valid effective Git author and committer under normal host policy, then run the same init command in a fresh process. |
+| Exact `.story-writing-agents-initialize-v2.json` remains | Initialization stopped after durable progress. The failed `Workspace` object is terminal. | Preserve all bytes and rerun with a fresh object/process. It will validate every present byte and continue only missing exact steps. |
+| `WorkspaceVersionUnsupportedError` | A recognizable markerless/pre-v2 root or unsupported numeric marker/journal was found. | Preserve it and create a separate new workspace. Migration and compatibility are unsupported. |
+| `WorkspaceFormatError` naming scaffold, journal, Git state, status, or recovery | State is malformed, ambiguous, dirty, drifted, or differs from the exact initialization contract. | Stop and preserve the complete root. Restore a trusted exact snapshot or create a new workspace; do not edit/delete the journal, reset Git, or remove unknown files to force readiness. |
+| `WorkspaceSecurityError` or topology failure | The root or Git layout is nested, linked, symlinked, replaced, sparse, bare, mismatched, or otherwise unsafe. | Do not follow or repair suspicious paths in place. Preserve evidence and choose a new standalone safe root. |
+| `OSError`, interruption, or process exit | Safe primitives or an operation failed. Exact completed partial steps are not rolled back. | Use a fresh process only after the environment is stable; exact journal recovery will converge or fail closed. |
+
+A clean ready root can be passed to `story init` again. That call validates only
+and does not rewrite, restage, or create a second commit. Any dirty tracked,
+staged, or untracked original-root state is preserved and rejected. Initialization
+itself creates no debug record, so its stderr and the protected root are the
+recovery evidence.
+
+`story smoke --workspace PATH` is read-only validation, not repair. It requires
+an already clean ready root, returns null session/conversation IDs, and creates
+no directive, catalog record, history, or diagnostic. `story smoke` without a
+path uses the real initializer inside a disposable directory, reports identity
+failures, and removes the directory.
+
+Discovery stops at the nearest recognizable boundary. It does not skip an
+unsupported or malformed inner marker/journal/legacy sentinel to select an
+outer workspace. An explicit path also validates strictly and never
+initializes.
+
+<a id="external-git-operation-recovery"></a>
+
+## External Git operation recovery
+
+The direct Git facade can inspect an externally started operation without
+running Git or mutating the repository. Session transition assessment now
+correlates that observation with active or idle owner evidence and blocks
+enter, leave, and pause when a stable external operation is present.
+
+| Observed kind | User meaning and one safe response |
+| --- | --- |
+| `none` | No supported external-operation marker is present. Continue only after separate `GitStatus`, topology, and workflow checks also pass; this does not prove a clean index/worktree. |
+| `merge` | One unambiguous merge is active. Stop Story mutation and resolve the merge externally before reinspection. |
+| `rebase` | Exactly one rebase mode is active. Stop Story mutation and resolve the rebase externally before reinspection. |
+| `cherry_pick` | One cherry-pick, optionally using the sequencer, is active. Stop Story mutation and resolve it externally before reinspection. |
+| `revert` | One revert, optionally using the sequencer, is active. Stop Story mutation and resolve it externally before reinspection. |
+| `sequencer` | Sequenced Git work exists without the supported cherry-pick/revert head. Stop Story mutation and inspect/resolve that operation externally. |
+| `RECOVERY_REQUIRED` | Markers are mixed, contradictory, wrong-type, symlinked, unreadable, replaced, or changed during inspection. Preserve the repository, common Git administration, worktree, markers, index, refs, and files; inspect them offline. |
+
+The failure is content-safe and recommends `inspect_repository`. The adapter
+never chooses `git merge --continue`, `rebase --abort`, reset, clean, checkout,
+or another repair. It also cannot infer which story session owns the work. A
+dirty, staged, or unmerged `GitStatus` remains separate evidence: neither
+inspection result substitutes for the other.
+
+```text
+input: direct inspection of MERGE_HEAD plus rebase-merge/
+output: GitOperationError(
+  code="recovery_required",
+  operation="inspect_external_operation",
+  recovery_action="inspect_repository"
+)
+repository mutation: none
+```
+
+See [External Git operation inspection](../reference/git-adapter.md#external-git-operation-inspection)
+for the exact accepted marker shapes and opaque identity binding.
+
+<a id="linked-worktree-read-recovery"></a>
+
+### Linked-worktree read recovery
+
+Direct `status()` and `log_metadata()` calls can safely observe a securely
+validated linked worktree. They inspect the external-operation markers and
+bind the root/administration identities before and after the bounded read,
+including after an ordinary failure or interruption. An unchanged merge,
+rebase, cherry-pick, revert, or sequencer marker may therefore coexist with a
+successful metadata read. That success is observation only: users must still
+resolve the external operation with trusted Git tooling before any later Story
+mutation.
+
+When the closing marker or identity observation differs, no successful result
+is returned. The public error is `recovery_required`, names `status` or
+`log_metadata` as the operation, and recommends `inspect_repository`; this
+guard failure takes precedence over a simultaneous body failure or
+interruption. Preserve the linked worktree, common Git administration,
+markers, index, refs, and working bytes, stop automated writers, and inspect
+offline. Do not retry merely because partial metadata may have been read.
+
+These reads never continue, abort, reset, clean, checkout, stage, commit, or
+repair Git. They also do not establish which story session owns the worktree.
+The recovery reconciler and transition assessor correlate those observations
+internally, while the CLI/controller consume the resulting operation
+permissions. The linked-read boundary itself provides neither orchestration nor
+a user command. See the
+[linked-worktree read contract](../reference/git-adapter.md#linked-worktree-status-and-log).
+
+<a id="session-git-resource-recovery"></a>
+
+## Session Git-resource recovery
+
+This recovery contract belongs to the package-internal session-resource seam.
+`story session create` and interactive Create now provision and verify the
+exact resource triple before lifecycle creation. Reopen never provisions a
+missing triple; after acquiring lifecycle access it relies on transition
+assessment to prove the existing resources and history.
+
+| Observation or result | Meaning | Safe response |
+| --- | --- | --- |
+| `absent` / `create` | No journal, requested branch/ref, or registered worktree exists. Provision still performs a separate sibling-path collision preflight. | Explicit Create may provision it. Reopen remains read-only and fails rather than creating. |
+| `provisioning` / `retry_create` | The immutable journal and an exact ordered prefix exist. This includes a complete triple whose journal removal or post-removal verification did not finish. | Preserve all facts and retry the same Create operation. It reinspects before attempting only the next missing exact step. |
+| `ready` / `reopen` | The journal is absent and the exact correlated branch, ref, worktree, baseline root, and seed root passed final verification. | Reopen or repeat Create may return the same identity. Neither creates a duplicate. |
+| `outcome_unknown` / `operator_recovery` | A mutation may have happened, but subsequent inspection could not prove whether it did. | Stop automatic replay and all workspace writers. Inspect the complete repository and sibling path with trusted local tools before deciding a recovery. |
+| `recovery_required` / `operator_recovery` | Durable facts are malformed, partial without a journal, non-prefix, moved, substituted, differently anchored, colliding, or otherwise unsafe. | Preserve every path, ref, object, journal, and administration record. Restore a trusted exact state or create a separate workspace; do not delete or rewrite evidence to force readiness. |
+
+Concrete cases:
+
+- If interruption leaves only the journal, or the journal plus the exact seed
+  ref, or the journal plus exact seed ref and baseline branch, the same Create
+  resumes in order. Reopen and require-ready only report `provisioning` and
+  never continue it.
+- If `git worktree add` completed but its process result was lost, a fresh
+  Create first inspects the worktree. An exact completed triple proceeds to
+  journal removal and final verification instead of creating another one.
+- If journal removal fails, the complete triple remains `provisioning` with
+  `retry_create`. A later Create verifies it, removes only that journal, and
+  verifies again.
+- A pre-existing file, directory, symlink, or filesystem alias at the sibling
+  path is preserved and rejected before journal, object, ref, or branch
+  mutation. A foreign registered worktree, unknown ref, packed-ref collision,
+  moved worktree, malformed `.git` indirection, or changed anchor likewise
+  fails closed.
+- Concurrent Create calls for the same or different session IDs serialize
+  across the repository. Exact same-session calls converge; case-distinct IDs
+  follow filesystem identity truth and a real alias fails closed.
+
+The runtime never automatically removes a named branch, internal ref,
+worktree, worktree-administration entry, seed object, journal-backed recovery
+fact, or user byte. The lock file persists as coordination infrastructure.
+Pause, release, close, and process exit preserve durable session resources.
+There is no migration, compatibility, remote, reset, clean, prune, garbage
+collection, rebase, merge, or history-rewrite recovery route. #505, not #504,
+coordinates that later work; #509 now supplies internal story commits and #510
+supplies closed-path internal checkpoints.
+
+<a id="session-history-recovery"></a>
+
+## Session-history recovery
+
+Issue #508 supplies package-internal evidence and classification. #509 now
+supplies internal exact story-commit execution, and #510 now supplies exact
+internal-ref checkpoint execution and conservative recovery. No current
+command, lead action, or public facade starts either one, and no current UI
+displays these states: #491 still owns application evidence and #492 owns the
+lead confirmation UI.
+
+For any internal interruption or later public-workflow interruption, first stop
+repository writers and preserve the main repository, sibling session worktree,
+common `.git` directory, and the complete session-history subtree together.
+Restoring only one JSON record, one index, one ref, or one worktree can destroy
+the correlation needed for safe classification.
+
+<a id="session-history-snapshot-recovery"></a>
+
+### Stable snapshot evidence
+
+Issue #536 can capture the complete candidate, commit-operation, and
+checkpoint-operation records behind one session-history inspection without
+creating or changing history. The first inventory is decoded under the
+existing repository lease, then independently re-inspected. The immutable
+result is returned only when both observations agree exactly; its complete
+record tuples are hidden from `repr`, while their bounded fields remain
+available to the later internal consumer.
+
+If operation `O4` disappears or changes before the second inspection, the
+snapshot attempt returns the existing typed `recovery_required` failure—never
+a partial result—and creates no replacement record. Stop writers and preserve
+the history, Git state, and any alternate checkpoint index. The internal #527
+reconciler can use a stable snapshot to surface the preserved recovery state;
+it does not duplicate the commit or checkpoint. #536 itself has no UI,
+lifecycle decision, replay, recovery mutation, provider call, or cleanup
+authority. An empty `create=False` inspection creates nothing, and this
+additive read path adds no persisted format, migration, or compatibility
+reader. See the [snapshot contract](../reference/git-adapter.md#package-internal-session-history-snapshot)
+and [workspace composition](../reference/workspace-api.md#workspace-session-history-snapshot).
+
+| State, result, or failure | Meaning | Safe response |
+| --- | --- | --- |
+| Candidate `prepared` | Exact path/digest/expected-tree evidence exists; no confirmation or Git index/object/ref mutation is implied. | Revalidate it. When #492 is available, request a fresh exact decision; if any candidate fact changed, `reprepare` from new successful application evidence. |
+| Checkpoint `unchanged` / `none` | An empty delta or fully validated same-tree result needed no operation. No operation ID, index, object, or ref update exists to recover. | Continue from the unchanged internal tip; do not fabricate an operation or checkpoint ID. |
+| Commit `rejected` / `none` | One Reject or Revise decision was recorded before execution. It is terminal and authorizes nothing. Reject preserves the candidate; Revise invalidates it. | After Reject, keep the candidate and require a fresh confirmation for another decision. After Revise, apply/prepare a new candidate and request new confirmation. |
+| Story commit `running` / `inspect` | Commit authority was consumed and intent was durable before staging, but the resulting index/branch state is not yet proved. | Call the internal recovery classifier once writers are stopped. Do not replay confirmation or execute again. It may classify exact staging, an exact committed tip, ambiguity, or recovery-required state. |
+| Checkpoint `running` / `inspect` | Intent is durable against one expected internal tip, but CAS completion is not proved. | Stop repository writers and call the internal checkpoint recovery classifier. Do not resubmit the delta, rerun `commit-tree`, or retry CAS. |
+| Story commit `staged` / `operator_recovery` | The branch remains at the old tip and index/worktree exactly match the candidate tree, but no commit is proved. | Preserve worktree, index, objects, and records. Inspect and recover explicitly; the service never automatically commits, resets, cleans, or restages. |
+| Story commit or checkpoint `committed` / `none` | The terminal record names the exact commit and corresponding branch/internal-ref tip. Recovery can reach this state when a correlated commit was already CAS-installed but result persistence/reporting failed. | Treat the returned existing object as the result after verification. Do not create a duplicate commit. |
+| Operation `outcome_unknown` / `inspect` | Git may have mutated, or the branch/index/result cannot be classified exactly. | Preserve all records, index, refs, and objects. Inspect; only an exact correlated tip may advance the same record to `committed`. Otherwise retain ambiguity or require operator recovery. |
+| Operation `recovery_required` / `operator_recovery` | State is inconsistent, unsafe, substituted, or no longer automatically reconcilable. It is terminal. | Perform explicit operator recovery or restore a complete trusted backup. Never edit the record or delete/reset evidence to force another transition. |
+| Missing/noncanonical/oversized record, unexpected entry, alias, symlink, hard link, or failed fsync | The store cannot trust the addressed history boundary. | Stop all writers, retain exact bytes and metadata, and investigate offline. Do not normalize, replace, or follow the rejected path. |
+| Repository lock unavailable or root/common-Git identity changed | Safe serialization or repository identity cannot be proved. | End the operation and retry only after the original exact repository is trustworthy and no competing writer remains. |
+
+An `outcome_unknown` checkpoint can retain
+`checkpoint-inputs/<operation_id>/index`; `recovery_required` may retain it as
+well. The runtime removes that leaf only after the exact checkpoint record is
+durably `committed`. Candidate and operation records have no automatic expiry
+or cleanup. Process exit, session pause/close, and a later successful operation
+do not erase earlier evidence.
+
+For story commits specifically:
+
+- If interruption leaves `running` but the old branch tip and exact candidate
+  index/worktree are present, `recover()` records/returns `staged` with
+  `operator_recovery`; it does not continue to `commit-tree`.
+- If the branch points at a commit with the candidate's exact tree, sole parent,
+  and literal message, `recover()` advances the existing operation to
+  `committed` and returns that same object ID. It creates no second object or
+  branch update.
+- If the branch remains old but index/worktree match neither the parent nor
+  candidate tree, recovery records terminal `recovery_required`. A staged
+  record whose expected index was lost is likewise recovery-required.
+- A foreign or otherwise unproved new branch tip remains `outcome_unknown`.
+  Recovery does not reset it or inspect provider history to guess intent.
+
+For checkpoints specifically:
+
+- If uncertain pre-CAS work leaves the internal ref at its exact expected tip,
+  `recover()` records terminal `recovery_required`. It preserves an allocated
+  alternate index and never repeats `commit-tree` or CAS.
+- If the internal ref already names the exact one-parent commit whose salted
+  intent matches the durable record, recovery records `committed`, returns that
+  same object ID, and removes only its completed alternate index.
+- A stale CAS never overwrites the newer tip. If that tip is foreign or cannot
+  be correlated, recovery reports or retains `outcome_unknown`; it does not
+  reset the ref or guess.
+- Checkpoint recovery restores no excluded runtime store, canonical artifact,
+  working-file byte, or remote history. The internal-ref Git objects and
+  content-free JSON are evidence, not a complete workspace backup.
+
+These records are content-free, so they are not a story-data backup. Conversely,
+a story-files-only backup is not recovery evidence. A useful recovery backup
+must preserve the repository, common Git administration/history namespace, and
+sibling worktree consistently. Git commits produced by the internal services
+also contain effective identity and commit-message metadata. See the
+[story-commit scenarios](../guides/workspaces.md#exact-confirmed-story-commits),
+[checkpoint scenarios](../guides/workspaces.md#exact-session-runtime-checkpoints),
+[story-commit contract](../reference/git-adapter.md#package-internal-exact-story-commits),
+and [checkpoint contract](../reference/git-adapter.md#package-internal-session-checkpoints).
+
+<a id="correlated-session-recovery-projection"></a>
+
+## Correlated session-recovery projection
+
+The pure package API converts already gathered, immutable owner facts for one
+active story workflow into one content-free state and one safe next-action
+label. The internal reconciler gathers stable owner facts and delegates to it;
+the transition assessor preserves that exact result for lifecycle commands.
+Neither component performs the projected action.
+
+<a id="session-recovery-owner-reconciliation"></a>
+
+### Stable owner reconciliation
+
+`SessionRecoveryReconciler.inspect()` accepts owner observation only when the
+caller-supplied lifecycle is exactly `ready + held_here`. It does not acquire
+the claim. Ready state held by another live process or with unknown ownership
+returns `outcome_unknown`; absent, paused, or claimable rather than held state
+returns `recovery_required`. When no authoritative collaboration read was
+accepted, `collaboration_tail_sequence=0` means “tail unavailable,” not
+“durable history is empty.”
+
+For an accepted lifecycle, the reconciler reads collaboration, the exact
+session-resource triple, complete session history, external Git operation, and
+linked session-worktree status as generation A. It performs an exact
+application-ID owner lookup when application evidence exists, selects at most
+one correlated candidate/commit/checkpoint chain, and reads the current-`HEAD`
+log only when that chain claims a committed story operation. It then rereads
+collaboration, resources, history, external Git, and status as generation B.
+Any owner drift or second-read failure returns `outcome_unknown` for that owner
+instead of combining generations. Stable facts are selected again, any commit
+is checked against the nonempty newest-first log and stable status, and only
+then are they passed to the pure classifier.
+
+The visible result fields answer different questions:
+
+- `state` says the exact workflow position that was proved.
+- `next_action` names one safe instruction but grants no authority.
+- `owner` identifies the durable boundary to inspect or maintain.
+- `failure_code` says why progress is accepted, uncertain, or blocked.
+- Optional proposal, application, candidate, operation, commit, checkpoint,
+  and correlation IDs appear only when the evidence proved them. Direct
+  blockers do not fabricate them.
+
+A first-read owner failure normally returns `recovery_required`; a second-read
+failure or changed A/B observation returns `outcome_unknown`. Resource
+provisioning also remains outcome-unknown, while absent resources are a
+missing predecessor. Artifact inspection distinguishes a recovered exact
+result from blocked outcomes: absence maps to `missing_predecessor`; drift,
+corruption, or a mismatched/foreign result maps to `correlation_mismatch`; and
+artifact `recovery_required` maps to `owner_recovery_required`. Its documented
+recovery-before-read may finish or verify an already-journaled application and
+create only its standard maintenance state. This is owner maintenance, not a
+new workflow mutation: reconciliation
+never calls Apply, invokes a provider, replays work, changes Git or lifecycle,
+cleans evidence, or performs `next_action`.
+
+| Projected state | What it means to a user | Exact next action |
+| --- | --- | --- |
+| `proposed` | The collaboration history has an active proposal, but no exact reviewed artifact candidate is supplied. | `continue_with_lead` |
+| `reviewed` | The reviewed proposal/candidate facts agree, but no application-confirmation request exists. | `request_application_confirmation` |
+| `awaiting_application` | The exact application request and its visible Confirm/Reject/Revise choices are durable and still correlated. No executable capability is retained. | `submit_application_decision` |
+| `applied_not_committed` | An exact session-bound terminal application result is correlated, but no story commit is closed. `applied` requires exactly its affected paths as unstaged changes; idempotent `unchanged` requires a clean status. | `request_commit_confirmation` |
+| `staged` | The exact candidate and commit operation are correlated and Git status proves only those candidate paths are staged at the expected branch tip. A commit is not yet proved. | `inspect_story_commit` |
+| `committed` | Commit metadata, branch tip, tree, parent, candidate, application, proposal, and correlation facts agree. | `continue_with_lead` |
+| `rejected` | Collaboration history or the exact story-commit operation records a terminal rejection. It authorizes no apply or commit. | `continue_with_lead` |
+| `outcome_unknown` | One authoritative owner is still running, provisioning, ownership-unknown, or otherwise cannot prove its outcome. A session-history operation summary is sufficient even when its optional detailed record is absent. | `inspect_owner_outcome` |
+| `recovery_required` | An owner or session-history summary already requires recovery, external Git is active, a predecessor is missing, or cross-owner/repository facts contradict one another. | `operator_recovery` |
+
+The action names are instructions consumed by the lifecycle controller, not
+callable authority. Users can use the projection to understand which exact decision or
+inspection should happen next. They cannot use it to call a provider, apply an
+artifact, stage or commit Git data, reconstruct a capability, retry an
+operation, or continue/abort/reset/clean a repository. For
+`outcome_unknown`, preserve evidence and inspect the named owner. For
+`recovery_required`, stop automated work and have an operator restore or prove
+one exact consistent state; do not reexecute or clean away evidence.
+
+Recovery-required facts are evaluated before unresolved outcomes, and
+unresolved outcomes before ordinary progress. With neither present, the
+furthest exactly proved closed state wins: for example, a correlated
+`committed` operation supersedes its earlier staged, applied, and reviewed
+facts. Equivalent owner evidence therefore produces the same projection
+regardless of the order in which the caller obtained it.
+
+Session-history operation summaries are durable owner facts, not hints. A
+summary entry marked `recovery_required` or `outcome_unknown` controls the
+projection even if the caller has no optional detailed operation record. If a
+preserved checkpoint index is listed without the detailed checkpoint record
+that explains it, the safe result is `recovery_required` with
+`missing_predecessor` and `checkpoint` ownership. Likewise, an authoritative
+`unchanged` application result does not excuse unexplained worktree, staged, or
+unmerged changes: those produce `recovery_required` with
+`repository_state_mismatch`.
+
+### Sample input and output
+
+The following JSON-shaped summaries are explanatory views of Python values,
+not a wire format. Operational flags such as `provider_call`, `replay`, and
+`new_workflow_mutation` annotate the scenario; they are not
+`SessionRecoveryResult` fields. This package defines no serializer or legacy
+reader.
+
+An awaiting-application projection retains request `R9`, proposal `P7`
+revision 3, and reviewed candidate `D7`, while deliberately retaining no
+provider or write capability:
+
+```text
+input owner facts:
+  lifecycle: ready + held_here for session story_review
+  generation A/B: exact ready resources, stable linked status, no external Git
+  collaboration A/B: conversation review_1, tail 12, proposal P7 revision 3
+  reviewed proposal: candidate D7, correlation K1, request R9
+  visible choices: [confirm, reject, revise]
+
+output:
+  {state: awaiting_application,
+   next_action: submit_application_decision,
+   owner: lead,
+   failure_code: none,
+   proposal_id: P7,
+   confirmation_request_id: R9,
+   reviewed_candidate_id: D7,
+   correlation_id: K1,
+   provider_call: false,
+   new_workflow_mutation: false,
+   replay: false}
+```
+
+An exact staged story commit can correlate operation `O4`, commit candidate
+`C4`, and application `A2` without claiming the commit completed:
+
+```text
+input owner facts:
+  lifecycle: ready + held_here
+  reviewed proposal and session-bound application A2: exact
+  generation A/B: candidate C4 and operation O4 have exact bindings
+  linked status A/B: exactly C4 paths staged at the expected branch tip
+  external Git A/B: none
+
+output:
+  {state: staged,
+   next_action: inspect_story_commit,
+   owner: story_commit,
+   failure_code: none,
+   application_id: A2,
+   story_commit_candidate_id: C4,
+   story_commit_operation_id: O4,
+   commit_replay: false}
+```
+
+If an owner changes between the two generations, later-looking facts are not
+combined with earlier ones:
+
+```text
+input: linked repository status A != linked repository status B, accepted tail 12
+output:
+  {state: outcome_unknown,
+   next_action: inspect_owner_outcome,
+   owner: repository_status,
+   failure_code: owner_outcome_unknown,
+   collaboration_tail_sequence: 12,
+   new_workflow_mutation: false}
+```
+
+If lifecycle access is paused before any collaboration read, the unavailable
+tail is explicit:
+
+```text
+input: lifecycle durable_state=paused
+output:
+  {state: recovery_required,
+   next_action: operator_recovery,
+   owner: session_lifecycle,
+   failure_code: invalid_request,
+   collaboration_tail_sequence: 0}
+```
+
+A claimed committed operation is accepted only when stable status names that
+commit as `HEAD` and the nonempty log's newest entry is the same commit. For
+example, if operation `O5` records commit `G5`, status names `G5`, but the log's
+first commit is `F5`, the result is:
+
+```text
+{state: recovery_required,
+ next_action: operator_recovery,
+ owner: story_commit,
+ failure_code: correlation_mismatch,
+ replay: false}
+```
+
+If the session-bound application instead names a different proposal than its
+reviewed predecessor, the classifier does not guess which owner is correct:
+
+```text
+input owner facts:
+  reviewed proposal: P7, correlation K1
+  session-bound application: proposal P8, correlation K1
+
+output:
+  {state: recovery_required,
+   next_action: operator_recovery,
+   owner: artifact_application,
+   failure_code: correlation_mismatch}
+```
+
+An `ArtifactApplicationResult` by itself is not application evidence. It must
+be wrapped in `SessionArtifactApplicationEvidence` with the exact session,
+conversation, collaboration-tail, proposal, and correlation binding. The
+relationship-validation digest is likewise supplied by its authoritative
+owner and compared across those facts; this classifier does not privately
+recompute it. A fresh idle session has no active correlated workflow for this
+classifier and raises `SessionRecoveryError` with `unsupported_shape`; the
+separate transition assessment below proves idle transition safety.
+
+The projection contracts are frozen and side-effect-free. A result contains
+identifiers, owner, state, action, and a content-safe failure code; fixed
+errors contain only a content-safe code and message. Neither contains story
+bytes or provider text. Pre-v2 dictionaries, mutable or subclassed shapes,
+unknown fields, and invalid or duplicate values are not adapted. There is no
+codec, migration, or compatibility reader. See the
+[exact package imports](../reference/package-api.md#correlated-session-recovery-api).
+
+<a id="session-transition-assessment"></a>
+
+## Story-session transition assessment
+
+The package-internal `SessionTransitionAssessor` gives the backend, CLI, and
+interactive controller one content-safe answer about entering a destination,
+leaving a source, or pausing a session. It does not perform or authorize the
+transition. In particular, `enter_destination` means only that a controller may
+proceed with attachment; it grants no provider, artifact Apply, staging, or
+commit authority. A permitted leave or pause lets that controller proceed
+through the existing ownership-release path, but this assessment itself
+neither acquires nor releases a claim.
+
+This is the canonical permission matrix:
+
+The outer `scope` is exactly `idle` when no active conversation evidence is
+accepted and `active` when a conversation/store pair is reconciled.
+The ordered operation tokens are exactly `enter_destination`, `leave_source`,
+and `pause_session`; “enter, leave, pause” below abbreviates those values.
+
+| Nested/idle state | Outer state and next action | Outer owner / failure | Nested owner and next action | Allowed operations |
+| --- | --- | --- | --- | --- |
+| `idle_ready` | `idle_ready` / `begin_with_lead` | null / `none` | no nested result | enter, leave, pause |
+| `proposed` | `active` / `follow_active_recovery` | null / `none` | `lead` / `continue_with_lead` | enter, leave, pause |
+| `reviewed` | `active` / `follow_active_recovery` | null / `none` | `lead` / `request_application_confirmation` | enter, leave, pause |
+| `awaiting_application` | `active` / `follow_active_recovery` | null / `none` | `lead` / `submit_application_decision` | enter, leave, pause |
+| `applied_not_committed` | `active` / `follow_active_recovery` | null / `none` | `artifact_application` / `request_commit_confirmation` | enter only |
+| `staged` | `active` / `follow_active_recovery` | null / `none` | `story_commit` / `inspect_story_commit` | enter only |
+| `committed` | `active` / `follow_active_recovery` | null / `none` | `story_commit` / `continue_with_lead` | enter, leave, pause |
+| `rejected` | `active` / `follow_active_recovery` | null / `none` | `collaboration_history` or `story_commit` / `continue_with_lead` | enter, leave, pause |
+| `outcome_unknown` | `outcome_unknown` / `inspect_owner_outcome` | copied nested owner / `owner_outcome_unknown` | same owner / `inspect_owner_outcome` | none |
+| `recovery_required` | `recovery_required` / `operator_recovery` | copied nested owner / exact non-`none` failure | same owner / `operator_recovery` | none |
+
+For active work, the assessment contains the exact nested recovery result.
+Normal active progress has outer state `active`; its allowed operations come
+only from the nested state. Uncertainty or required recovery copies the nested
+`owner` and `failure_code` and allows nothing. Safe known recovery takes
+precedence over uncertainty.
+
+For idle work, `conversation_id` and `recovery_result` are absent. Lifecycle
+must be exactly `ready + held_here`. The assessor reads resources, complete
+session history, external Git, and linked-worktree status twice and accepts
+only equal generations. Ready resources must identify the exact session
+worktree; status must be clean on its exact branch and current tip; external
+Git must be `none`; every candidate must have one unique terminal committed or
+rejected operation; the latest committed story tip must match the current
+branch tip (or the initial tip when there is no commit), and the latest
+checkpoint tip must likewise match the internal ref (or its initial tip); and
+no running, uncertain, recovery-required or staged operation or preserved
+checkpoint index may remain.
+
+A generic failure on the first owner read is `recovery_required`; a typed
+uncertain first read is `outcome_unknown`. A failure on the second read or any
+A/B drift is `outcome_unknown`, because no single generation was proved. The
+result identifies the owner and gives only `operator_recovery` or
+`inspect_owner_outcome`; it never combines observations. Recovery-before-read
+work performed inside an authoritative owner may finish or verify that owner's
+already-journaled state. That is owner maintenance, not a new workflow
+mutation by the assessor.
+
+The result never exposes the worktree or proof paths, branch or internal ref,
+proof or repository/worktree identity digests, story/provider content, process
+identity, raw Git output, live handles, or capabilities. Its exact fields are
+`session_id`, `conversation_id`, `scope`, `state`, `next_action`, `owner`,
+`failure_code`,
+`allowed_operations`, and `recovery_result`. The JSON-shaped examples below
+are explanatory views; labels such as R9 are values inside the nested recovery
+result, not additional assessment fields.
+
+An idle session whose two observations agree can begin with the lead:
+
+```text
+input: lifecycle ready + held_here; stable ready resources/history;
+       external Git none; exact clean session branch and tips
+output: {session_id: story_review, conversation_id: null, scope: idle,
+         state: idle_ready, next_action: begin_with_lead, owner: null,
+         failure_code: none,
+         allowed_operations: [enter_destination, leave_source, pause_session],
+         recovery_result: null}
+```
+
+An active R9 confirmation request remains governed by its nested recovery:
+
+```text
+input: conversation review_1; #527 result awaiting_application for request R9
+output: {scope: active, state: active,
+         next_action: follow_active_recovery, owner: null, failure_code: none,
+         allowed_operations: [enter_destination, leave_source, pause_session],
+         recovery_result: {state: awaiting_application,
+                           confirmation_request_id: R9,
+                           next_action: submit_application_decision}}
+```
+
+A staged active operation permits attachment for inspection, but not leaving
+or pausing while the Git outcome remains unresolved:
+
+```text
+input: #527 result staged for operation O4
+output: {scope: active, state: active,
+         next_action: follow_active_recovery,
+         allowed_operations: [enter_destination],
+         recovery_result: {state: staged,
+                           story_commit_operation_id: O4,
+                           next_action: inspect_story_commit}}
+```
+
+Stable external Git activity blocks every transition:
+
+```text
+input: idle generations A and B both report external Git merge
+output: {scope: idle, state: recovery_required,
+         next_action: operator_recovery, owner: external_git,
+         failure_code: external_git_operation, allowed_operations: []}
+```
+
+Changed history between the two idle reads proves no safe generation:
+
+```text
+input: idle history A != idle history B
+output: {scope: idle, state: outcome_unknown,
+         next_action: inspect_owner_outcome, owner: story_commit,
+         failure_code: owner_outcome_unknown, allowed_operations: []}
+```
+
+The installed CLI and controller now consume this evidence immediately before
+their lifecycle mutations. Noninteractive commands serialize the full fixed
+assessment projection, including the nested active result; the interactive
+controller presents only `Scope`, `State`, `Next action`, `Owner`, `Failure`,
+and `Allowed operations` on denial. For example, a staged pause denial appears
+semantically as:
+
+```text
+session transition
+Scope: active
+State: active
+Next action: follow_active_recovery
+Owner: none
+Failure: none
+Allowed operations: enter_destination
+```
+
+The requested `pause_session` is absent, so the session stays ready and
+attached. On a destination-entry denial, the destination claim is released,
+the source is preserved, and no source-leave assessment occurs. On a
+source-leave denial, only the destination is released; the source attachment
+and default are preserved. Neither path resets, aborts, cleans, or deletes
+recovery evidence.
+
+Create/Reopen assessment follows resource/lifecycle mutation. A later denial
+does not delete a provisioned triple or roll a reopened session back to paused;
+the resulting lifecycle is released when possible and must be inspected before
+retry. Pause assessment precedes durable pause, so its denial does not write
+`paused`.
+
+Assessment invokes no provider, reconstructs or exposes no confirmation
+capability/content, and performs no projected recovery action. Allowed
+lifecycle movement does not bypass the existing lead/user confirmation path
+for later artifact or commit writes. `outcome_unknown` and
+`recovery_required` cannot be cleared by reset, abort, cleanup, default changes,
+or a lifecycle retry; preserve the evidence and follow the named owner/action.
+The exact internal imports and signatures are in the
+[package reference](../reference/package-api.md#session-transition-assessment-api).
 
 ## Session access recovery
 
@@ -38,6 +681,48 @@ A same-host missing PID needs no deletion: acquisition replaces its unchanged
 claim under the guard. If ownership is unknown, back up and investigate before
 retrying. Never manufacture `claimable` by removing files.
 
+## Lead proposal and decision recovery
+
+The collaboration tail determines the only safe next action. A caller must not
+infer authority from visible text or replay incomplete work.
+
+| Runtime result | User meaning | Safe response |
+| --- | --- | --- |
+| `retry_lead_turn` | The submitted provider response used invalid, invented, reordered, stale, or matrix-incompatible evidence. Runtime closed that exact call with `lead_outcome_failure`; no judgment/proposal was accepted. | Submit a fresh lead turn. Do not replay, repair, or reinterpret the rejected provider output. If failure closure could not be persisted, follow `recovery_required` instead. |
+| `reply_to_lead` or `continue_with_lead` | Continue the conversation; no work is authorized. | Send a new lead turn. Ordinary text while a proposal is pending supersedes it first. |
+| `submit_confirmation` | One exact proposal is waiting. | Submit `confirm`, `reject`, or `revise` with every returned identity/digest field. Text such as `Yes` is not confirmation. |
+| `start_or_reconfirm` | A confirmation is durable, but projection alone is not a reusable capability. A live `decide_lead_step()` normally crosses this boundary immediately. | Let the owning runtime use its private single-use start authority. After restart, collect the fresh `reconfirmation_required` request instead of reconstructing authority. |
+| `reconfirmation_required` | A confirmed proposal survived restart but its live execution capability did not. | Present the same proposal/digest with the fresh request and collect another exact decision. No provider call is needed. |
+| `finalize_result` | `running` has an authoritative result batch but lacks its visible terminal state. | Let runtime append deterministic local finalization. Do not call a provider or replay assignments. |
+| `continue_with_lead` after `failed` | At least one assignment or synthesis failed; every knowable sibling fact is retained. | Continue with the lead from those facts. Do not manufacture a semantic synthesis over an incomplete result set. |
+| `continue_with_lead` after `interrupted` | Cancellation/interruption and every knowable result are durable. | Continue with the lead; do not infer missing success or replay automatically. |
+| `outcome_unknown` | A running attempt has no authoritative terminal result. | Preserve it and investigate; never replay automatically. |
+| `recovery_required` | History is corrupt, dangling, or otherwise unsafe to interpret. | Stop mutation, preserve the workspace, and inspect canonical collaboration history. |
+
+Confirmed consultations create `running` plus all ordered dispatches as one
+durable batch before any provider call. A complete result batch can be
+finalized after restart with zero provider calls. Unresolved `running` without
+a live owner/result becomes `outcome_unknown` and is never replayed. See
+[Lead agent](../guides/lead-agent.md) for the complete state table.
+
+Before a confirmed consultation starts, runtime revalidates the proposal's
+exact evidence. A changed attached file or READ boundary, changed core status,
+or changed authorized writing-artifact snapshot behind a zero-hit SEARCH makes
+the decision stale and prevents specialist calls. Form a fresh lead turn from
+current evidence; do not reconstruct an old receipt. Conversation events
+appended by the same lead step are excluded from the stable fingerprint used
+for a mixed conversation/writing zero-hit claim, so the workflow's own durable
+records do not create false drift.
+
+The runtime joins all parallel assignment tasks before classifying a known
+partial failure. One failed peer does not cancel successful siblings, and no
+lead synthesis is attempted over an incomplete set. Outer cancellation cancels
+and joins every child, persists knowable terminal facts/result, removes the
+live marker, releases bound-agent resources, and re-raises. A submitted timeout
+or transport failure marked outcome-uncertain enters `outcome_unknown`; a
+PREPARED call that never crossed the provider boundary does not spend budget or
+justify that state.
+
 <a id="conversation-archive-recovery"></a>
 
 ## Conversation archive recovery
@@ -51,35 +736,36 @@ of already created exact files, cleanup, overwrite, or deletion.
 | Result or failure | Meaning | Safe response |
 | --- | --- | --- |
 | `ConversationArchiveImportStatus.UNCHANGED` | The complete requested archive state already existed, or the archive was empty. | Treat the destination as unchanged. An empty archive does not prove that the destination is empty. |
-| `ConversationArchiveImportStatus.IMPORTED` | At least one exact metadata or transcript file was created and the complete post-import scan matched. | Continue only after the calling workflow accepts that additive result. This is not proof of complete workspace parity. |
+| `ConversationArchiveImportStatus.IMPORTED` | At least one exact canonical destination conversation was created and the complete post-import scan matched. | Continue only after the calling workflow accepts that additive result. This is not proof of complete workspace parity. |
 | `ConversationArchiveFormatError`, `ConversationArchiveVersionError`, `ConversationArchiveBoundsError`, or `ConversationArchiveDigestError` | The logical value or bytes are invalid, unsupported, oversized, modified, or noncanonical. | Reject the payload. Preserve untrusted input only according to caller policy; do not repair fields, recompute a digest to force acceptance, or import it. |
 | `ConversationArchiveSourceError` | The authoritative source layout or values are malformed or unsafe. | Keep the source unchanged, quiesce all writers, and inspect the fixed conversation subtree offline. Do not copy around the rejected entry. |
 | `ConversationArchiveSourceChangedError` | The two canonical export scans differed or the second scan became invalid. | Discard the attempted export, keep the source quiescent, investigate the change, and start a completely new export only after stability is established. |
-| `ConversationArchiveConflictError` | An addressed destination identity has different metadata or transcript values. | Preserve both inputs and investigate. The adapter does not merge, replace, or delete the destination. |
+| `ConversationArchiveConflictError` | An addressed destination identity has different metadata or collaboration-history values. | Preserve both inputs and investigate. The adapter does not merge, replace, or delete the destination. |
 | `ConversationArchiveDestinationError` | Destination preflight found malformed/unsafe state, or a write could not complete safely. | Preserve the destination. Inspect before deciding whether it is unchanged or contains an exact metadata-first prefix; never remove an unknown artifact to force import. |
 | `ConversationArchiveDestinationChangedError` | A target collision, path change, or complete post-import rescan differed from the preflight plan. | Stop all destination mutation and inspect every addressed identity. Some exact create-only files may already exist; do not assume rollback. |
 | `ConversationStorageCoordinationError` | The lease is invalid, released, expired, wrong-thread, wrong-workspace, or failed during the operation. | End the old lease, quiesce the workspace, and acquire a fresh exact-workspace lease. Inspect possible exact prefixes before reapplying a payload. |
 
 Import deliberately supports resuming only its recognized canonical empty
-directory prefixes or exact metadata awaiting a nonempty transcript. Reapply
+directory prefixes or exact metadata awaiting a nonempty history file. Reapply
 only the identical canonical payload, under a fresh valid lease, after the
 destination is quiescent and inspection shows no divergence. Exact complete
 records are accepted; unrelated complete conversations are preserved. Unknown,
 unsafe, or divergent state is not resumable.
 
-The archive contains only conversation metadata and transcripts, not debates,
+The archive contains only catalog metadata and canonical v2 collaboration
+history, not debates,
 defaults, providers, prompts, manuscripts, artifacts, configuration, logs, or
 other workspace state. It is transport infrastructure rather than a complete
 backup, arbitrary restore, or backend switch. The separate same-workspace
-migration coordinator composes these archive adapters but does not broaden the
+transfer coordinator composes these archive adapters but does not broaden the
 archive contents. See the exact
 [archive contract](../reference/conversation-archives.md).
 
-<a id="conversation-storage-migration-recovery"></a>
+<a id="conversation-storage-transfer-recovery"></a>
 
-## Conversation storage migration recovery
+## Conversation storage transfer recovery
 
-Run migration only after stopping or coordinating every unsupported direct
+Run transfer only after stopping or coordinating every unsupported direct
 writer. `--from` must match the active backend, filesystem and SQLite must be
 distinct, and the SQLite database must already be provisioned and ready. One
 outer coordinator lease then covers planning through fresh final parity. The
@@ -87,22 +773,29 @@ workflow never provisions, activates, dual-writes, deletes, or retries
 automatically.
 
 Use the guide for the
-[forward migration](../guides/sqlite-conversation-storage.md#sqlite-storage-migration)
+[forward transfer](../guides/sqlite-conversation-storage.md#sqlite-storage-transfer)
 and
-[create-or-identical reverse workflow](../guides/sqlite-conversation-storage.md#sqlite-storage-reverse-migration).
+[create-or-identical reverse workflow](../guides/sqlite-conversation-storage.md#sqlite-storage-reverse-transfer).
 
 | Report or exit | Meaning | Safe response |
 | --- | --- | --- |
 | Dry-run `work_required` or `completed`, exit `0` | The fresh plan is valid. `work_required` has at least one `create`; `completed` needs no creation and reports verified parity. No destination or checkpoint was written, although the empty coordinator guard may have been created. | Review all five counts, keep both stores quiescent, then run the same non-dry command if copying is intended. A later run exports and plans again. |
-| Migration `completed` / `verified`, exit `0` | Fresh final source and destination canonical archives matched. A terminal per-direction checkpoint was retained. | Run `story storage verify` for an independent fresh comparison, then separately decide whether to activate in an approved workflow. Do not delete the source or checkpoint based only on this report. |
-| Verify `parity_mismatch`, exit `1` | The otherwise valid plan has source records to create or destination-only records. Verify ignored any checkpoint and changed no conversation state. | Keep both stores, inspect ownership, and migrate only when the destination has no destination-only records. Never use activation to hide the mismatch. |
-| `conflict`, `unsupported`, or migration `destination_only`, exit `2` | A divergent identity, SQLite-unrepresentable integer, or extra destination identity blocks the complete plan. No transfer or checkpoint update occurred. | Preserve both stores and the old checkpoint. Investigate offline; do not overwrite, truncate, delete, or hand-edit one side to force success. |
-| `activation_mismatch`, `activation_invalid`, `provisioning_needed`, `backend_unavailable`, `invalid_request`, `workspace_invalid`, `unsafe_state`, or `coordination_failed`, exit `2` | A precondition or safe-coordination boundary failed. | Correct the selected direction or workspace, restore trustworthy activation/path state, explicitly provision an intended empty SQLite target through its API, or wait for the supported owner. Do not treat migration as installation or activation. |
-| `checkpoint_invalid` or `checkpoint_unsupported`, exit `2` | Migration could not trust its direction-specific checkpoint. Verify does not read checkpoints. | Preserve the file and both stores. Back up and inspect the fixed schema/path offline; do not rewrite progress. Retry migration only after an approved recovery restores trustworthy checkpoint state. |
-| `source_changed`, final `parity_mismatch`, `source_invalid`, `destination_invalid`, or `operational_failure`, exit `2` | Failure may have occurred after destination work. Filesystem-to-SQLite rolls back an uncommitted import, but a source change can follow a committed SQLite transaction. SQLite-to-filesystem can retain complete exact conversations, and checkpoint publication can fail after one completes. | Quiesce both stores. Freshly export/inspect or run verify when safe; never assume rollback. Re-running migration revalidates exact destination records and any checkpoint before resuming. |
+| Transfer `completed` / `verified`, exit `0` | Fresh final source and destination canonical archives matched. A terminal per-direction checkpoint was retained. | Run `story storage verify` for an independent fresh comparison, then separately decide whether to activate in an approved workflow. Do not delete the source or checkpoint based only on this report. |
+| Verify `parity_mismatch`, exit `1` | The otherwise valid plan has source records to create or destination-only records. Verify ignored any checkpoint and changed no conversation state. | Keep both stores, inspect ownership, and transfer only when the destination has no destination-only records. Never use activation to hide the mismatch. |
+| `conflict`, `unsupported`, or transfer `destination_only`, exit `2` | A divergent identity, SQLite-unrepresentable integer, or extra destination identity blocks the complete plan. No transfer or checkpoint update occurred. | Preserve both stores and the old checkpoint. Investigate offline; do not overwrite, truncate, delete, or hand-edit one side to force success. |
+| `activation_mismatch`, `activation_invalid`, `provisioning_needed`, `backend_unavailable`, `invalid_request`, `workspace_invalid`, `unsafe_state`, or `coordination_failed`, exit `2` | A precondition or safe-coordination boundary failed. | Correct the selected direction or workspace, restore trustworthy activation/path state, explicitly provision an intended empty SQLite target through its API, or wait for the supported owner. Do not treat transfer as installation or activation. |
+| `checkpoint_invalid` or `checkpoint_unsupported`, exit `2` | Transfer could not trust its direction-specific checkpoint. Verify does not read checkpoints. | Preserve the file and both stores. Back up and inspect the fixed schema/path offline; do not rewrite progress. Retry transfer only after an approved recovery restores trustworthy checkpoint state. |
+| `source_changed`, final `parity_mismatch`, `source_invalid`, `destination_invalid`, or `operational_failure`, exit `2` | Failure may have occurred after destination work. Filesystem-to-SQLite rolls back an uncommitted import, but a source change can follow a committed SQLite transaction. SQLite-to-filesystem can retain complete exact conversations, and checkpoint publication can fail after one completes. | Quiesce both stores. Freshly export/inspect or run verify when safe; never assume rollback. Re-running transfer revalidates exact destination records and any checkpoint before resuming. |
+
+`source_invalid` or `destination_invalid` can mean that archive/transfer found
+a filesystem `transcript.jsonl` or SQLite `conversation_events` row. Those are
+unsupported owning-boundary inputs. Preserve the stores; do not rename,
+parse-and-rewrite, or hand-copy them into v2. Strict workspace-v2 readiness
+rejects unsupported whole-workspace state, and active adapters also reject the
+addressed owning boundary.
 
 Checkpoints remain at
-`agent_states/orchestrator_state/conversation_storage_migrations/{filesystem-to-sqlite,sqlite-to-filesystem}.json`.
+`agent_states/orchestrator_state/conversation_storage_transfers/{filesystem-to-sqlite,sqlite-to-filesystem}.json`.
 They are strict, bounded, regular, singly linked schema-v1 files. A matching
 fingerprint is resumed only when its counts, completed identities, and fresh
 destination records exactly match the fresh source. A changed source starts new
@@ -114,9 +807,9 @@ Filesystem-to-SQLite destination insertion is one transaction. For the reverse
 direction, complete global filesystem preflight precedes mutation and each
 checkpoint advance follows confirmation and reread of one complete exact
 conversation. This permits safe replay after publication/checkpoint uncertainty
-without accepting an incomplete transcript. It is not rollback across both
+without accepting an incomplete history. It is not rollback across both
 stores. Exact command/report semantics are in the
-[CLI reference](../reference/cli.md#conversation-storage-migration).
+[CLI reference](../reference/cli.md#conversation-storage-transfer).
 
 <a id="conversation-storage-selection-and-activation-recovery"></a>
 
@@ -143,11 +836,11 @@ show the normal path before the failure matrix below.
 | `installation_unsupported` or `installation_failed`, exit `2` | The exact OS/package-manager plan is unsupported, or the one authorized installer failed. | Inspect host/package-manager diagnostics. Do not substitute arbitrary arguments through Story. Complete approved host repair separately, then rerun selection. |
 | `interpreter_unavailable`, exit `2` | The installer may have exited zero, but the same Python interpreter still failed its complete SQLite probe. The report can show `installation: completed`. | Rebuild or reinstall that Python interpreter with functional SQLite support, then rerun. Installing only a standalone `sqlite3` binary is insufficient. |
 | `provisioning_failed`, exit `2` | The fixed SQLite database could not be safely proved ready or create-only provisioned. | Preserve the database, sidecars, and temporary residue. Run direct observational preflight or follow the SQLite recovery table; never delete suspect state to force an empty target. |
-| `migration_required`, exit `2` | The active canonical source is nonempty and the requested target is empty. An empty SQLite database created during selection can remain ready. | Run migrate dry-run, migrate, and verify from the active backend to the target; rerun `storage use`, then start a new shell. Selection itself never copies data. |
+| `transfer_required`, exit `2` | The active canonical source is nonempty and the requested target is empty. An empty SQLite database created during selection can remain ready. | Run transfer dry-run, transfer, and verify from the active backend to the target; rerun `storage use`, then start a new shell. Selection itself never copies data. |
 | `parity_mismatch`, exit `2` | Both canonical stores are nonempty and differ. | Preserve both. Use `story storage verify` in the active direction and investigate conflicts or destination-only state offline. Do not overwrite, merge, truncate, or switch around the mismatch. |
 | `configuration_invalid`, `configuration_conflict`, or `configuration_write_failed`, exit `2` | Pending configuration was invalid, an opening config/persona fact changed, or publication/rollback could not be reported as a clean success. Host installation or an empty provisioned database can remain. | Preserve both config files and storage. Reopen Settings or rerun `storage use` from a fresh baseline. After write uncertainty, inspect both complete configuration files before another attempt. |
 | `coordination_failed`, `workspace_invalid`, or `invalid_request`, exit `2` | The workspace/lease/request boundary failed before a safe desired save. | Correct exact syntax/workspace, wait for supported work, and retry with a fresh invocation. Without POSIX `fcntl`, selection, provisioning, config save, and activation remain unavailable. |
-| Interactive startup aborts before the welcome | Desired and active state could not be safely reconciled; the active marker was preserved and there is no silent fallback. | Read the sanitized hint, quiesce unsupported writers, then run `storage use`, migrate, or verify as appropriate. Repair desired/readiness/parity rather than forcing the marker. |
+| Interactive startup aborts before the welcome | Desired and active state could not be safely reconciled; the active marker was preserved and there is no silent fallback. | Read the sanitized hint, quiesce unsupported writers, then run `storage use`, transfer, or verify as appropriate. Repair desired/readiness/parity rather than forcing the marker. |
 | Startup advanced the marker, then later terminal/auth/backend/session startup failed | Activation CAS already succeeded; unrelated later failure is not compensation for that durable switch. | Fix the later failure and start Story again. The new active backend must now be treated as authoritative; do not restore the old marker manually. |
 
 Selection proves coordination briefly, releases it during consent/installation,
@@ -168,7 +861,7 @@ end-to-end command sequence are in the
 
 SQLite preflight is strict, observational, and byte-preserving. It may load and
 probe the host `sqlite3` runtime and open an existing database read-only, but it
-does not create, repair, migrate, rewrite, or remove storage. Readiness applies
+does not create, repair, convert, rewrite, or remove storage. Readiness applies
 to the authoritative main database; the derived FTS companion is not required
 for preflight, provisioning, composition, reads, or exact search.
 
@@ -181,11 +874,11 @@ for the plain-language authority, backup, and exposure model.
 | `provisioning_needed` | On a capable host, the fixed database is absent. | Provision only after deciding the SQLite destination is deliberately empty and acquiring the exact workspace mutation lease. Provisioning does not import filesystem conversations. |
 | `unavailable` or `ConversationStorageUnavailableError` | The active Python interpreter's `sqlite3` is missing, older than 3.7.16, fails its functional runtime probe, the database is busy/locked, or an operational resource is unavailable. | Direct preflight remains observational. For a missing runtime, use the explicit selection workflow only when one allowlisted host command and its consent policy apply; otherwise repair the interpreter outside Story. There is no automatic retry, and the standalone SQLite CLI is not readiness proof. |
 | `ConversationStorageProvisioningNeededError` | Composition or an adapter operation requires a database that has not been provisioned. | Run observational preflight and, only for an intended empty target, the explicit leased provisioning flow. |
-| `WorkspaceVersionUnsupportedError` | The file has the recognized application identity but an unsupported schema version. | Stop workspace processes, preserve and verify a complete backup, then use a compatible runtime or a separately approved schema upgrade. Conversation-data migration does not upgrade SQLite schemas. |
+| `WorkspaceVersionUnsupportedError` | The database has the recognized application identity but an unsupported schema version. | Stop workspace processes and preserve a complete backup. Restore an exact supported database from trusted state or create a separate new v2 workspace; Story provides no database or workspace migration/upgrade path. |
 | `WorkspaceFormatError` | Header, schema manifest/fingerprint/cookie, encoding, integrity, foreign keys, required lexical generation/searchable values, event structure, or strict sidecar state is invalid, or the stable database-name entry is nonregular without being a symlink. | Preserve the database and sidecars unchanged. Restore a known-good complete database or investigate offline; do not hand-edit or ask preflight to repair it. |
 | `WorkspaceSecurityError` | The database name is a symlink, or its named/opened path identity is unsafe, nonmeaningful, replaced, mismatched, or has an unexpected link count. | Stop all processes, back up the complete workspace, and restore safe exact path identities. Do not manually follow, unlink, or replace suspicious names. Explicit leased provisioning can recognize only the exact interrupted-publication case described below. |
 | `ConversationStorageCoordinationError` | A lease is wrong-workspace, wrong-thread, expired, released, or cannot be acquired safely; the POSIX advisory guard may also be unavailable or unsafe. | Let the supported owner finish or close it, then acquire a fresh exact-workspace lease. Never reuse or manufacture lease evidence. Without `fcntl`, keep use observational; supported provisioning and mutations remain unavailable. |
-| `ConversationArchiveConflictError` during canonical archive import | An existing identity differs from the incoming exact metadata or transcript. | Keep both sources and investigate. The whole import transaction rolls back; there is no merge or overwrite mode. |
+| `ConversationArchiveConflictError` during canonical archive import | An existing identity differs from the incoming exact metadata or v2 history. | Keep both sources and investigate. The whole import transaction rolls back; there is no merge or overwrite mode. |
 
 ### Derived search companion recovery
 
@@ -218,7 +911,7 @@ generation.
 
 The amended exact schema remains version `1`. A database produced by older
 unpublished pre-Issue-257 development code has the old fingerprint and can be
-rejected as malformed. There is no released-user migration promise, v2 schema,
+rejected as malformed. There is no released-user upgrade promise, v2 schema,
 or automatic conversion for that development artifact.
 
 Preflight and ordinary reads never repair or remove storage. Explicit leased
@@ -270,7 +963,7 @@ append could duplicate intended work. A failed best-effort companion refresh
 does not change that committed main state and needs no mutation replay. Beyond
 the exact leased alias cleanup above, the API performs no repair, compensation,
 retry, schema upgrade, activation, or source deletion. Explicit conversation
-data migration between this ready database and the filesystem uses the separate
+data transfer between this ready database and the filesystem uses the separate
 coordinator described above.
 
 <a id="unsupported-v1-session-data"></a>
@@ -279,21 +972,14 @@ coordinator described above.
 
 V1 provider manifests, `<session_id>.lease.json`, `.lease-claims.lock`, V1
 `cli_context.json`, and `conversation_selections/` are rejected unchanged with
-`WorkspaceVersionUnsupportedError`. There is no migration or compatibility mode.
-
-Use this nondestructive reset:
-
-1. Stop every process using the workspace.
-2. Copy the complete workspace to an external backup and verify the copy.
-3. Prefer a fresh workspace. Otherwise move—never delete—the old
-   `provider_sessions/`, `cli_context.json`, and `conversation_selections/`
-   outside the active workspace.
-4. Run `story init WORKSPACE` to recreate current scaffold directories.
-5. Recreate sessions with `story session create SESSION`, then recreate needed
-   conversation defaults through the shell.
-
-Do not copy old provider state, access files, guards, defaults, or CLI context
-into V2. Copy editable story/configuration files only after review; keep backup.
+`WorkspaceVersionUnsupportedError`. There is no conversion or compatibility mode.
+At the whole-workspace boundary, recognizable pre-v2 state is unsupported
+before normal activation. Stop every process, preserve and verify an external
+backup, and create a separate new v2 workspace. Do not move selected legacy
+files out of the old root and rerun init, and do not copy old provider state,
+access files, guards, defaults, CLI context, or configuration into the new
+baseline. Any later reviewed content transfer must use a separately supported
+workflow; #454 supplies none.
 
 <a id="authentication-recovery"></a>
 
@@ -387,36 +1073,68 @@ preterminal debates `interrupted` when possible; later failures cannot rewrite r
 
 ## Writing-artifact recovery
 
-Every artifact catalog read or commit first checks for a pending publication
-journal under the verified readiness-triple lease. Filesystem-source listing
-and reads use the same lease but neither inspect nor recover the journal. The
-schema-v2 journal is one immutable image containing the exact catalog-before
-existence/hash/image, catalog-after image, commit, and ordered targets with
-their complete new bytes and old/new hashes. It is never rewritten to record a
-later phase.
+Every repository-owned artifact listing, read, reference capture, catalog
+lookup, and application first checks for a pending application journal under
+the verified readiness-triple lease. The schema-1 journal is one immutable,
+content-bearing image containing the exact request, catalog-before
+existence/hash/image, schema-2 catalog-after image, content-free application
+record, and ordered targets with their complete new bytes and old/new hashes.
+It is never rewritten to record a later phase.
 
 Recovery compares the current catalog with those two exact positions. From
 catalog-before, every target may equal only its recorded old or new bytes;
-recovery rolls the set forward, publishes immutable commit history, and
-publishes the catalog last. If the pending commit record already exists here,
-the audit exempts it only when its byte-canonical record exactly equals this
-journal's commit. That exempt commit contributes neither paths nor a
-newest-core candidate to the expected before catalog; paths and unique newest
-core authority from every older established commit remain required. The
-projected after catalog includes the pending commit and must pass the full audit.
-An unrelated record absent from the exact before view or divergent ledger state
-still blocks. At catalog-after there is no exemption: every target and canonical
-commit must be exact, catalog paths must equal the full union, and each repeated
-core path must project the unique newest offset-aware commit, so recovery only
-verifies them. It
-then hash-checks the unchanged journal and moves it with native no-replace rename to
-a `.completed` name in staging. A catalog matching neither position, an
-untrusted target, or missing/replaced journal or final commit authority blocks
-rather than guessing. Users may see an infrastructure failure followed by
-successful recovery on the next catalog or publication access; inspect the associated debate
+recovery rolls the complete set forward, publishes the exact immutable
+application record, and publishes the current-membership catalog last. If the
+record already exists, its canonical bytes must exactly equal the journal's
+record. The projected catalog must equal the complete ordered application
+history after that record. At catalog-after, recovery verifies the targets,
+record, and catalog without republishing them. It then hash-checks the unchanged
+journal and moves it with native no-replace rename to a `.completed` staging
+name. A catalog matching neither position, an untrusted target, or a
+missing/replaced journal or final application record blocks rather than
+guessing. Users may see an infrastructure failure followed by successful
+recovery on the next repository artifact access; inspect the associated debate
 because its result and lifecycle are outside the artifact transaction.
 
-Publication temporaries live under the repository's separate `staging/`
+The `apply_artifact_changes(request)` seam exposes only fixed content-free
+outcomes:
+
+| What happened | External result and safe next action |
+| --- | --- |
+| The exact first application completes. | Immutable `applied` result. Inspect its affected/final/rename/delete facts; call `catalog()` separately for complete current membership. |
+| The same completed request is retried after a lost response. | Immutable `unchanged` result with the original historical facts and no republish. |
+| Current artifact bytes no longer match the request before journaling. | `error.code == ArtifactApplicationErrorCode.DRIFT` (`"drift"`); reread, rebuild, review, and obtain fresh Apply confirmation. No target was written. |
+| Durable catalog/application state is malformed or unsafe without a recovery block. | `error.code == ArtifactApplicationErrorCode.CORRUPTION` (`"corruption"`); stop writers, preserve evidence, and restore verified exact metadata. |
+| Journal recovery cannot establish exact old/new authority and records a block marker. | `error.code == ArtifactApplicationErrorCode.RECOVERY_REQUIRED` (`"recovery_required"`); do not retry, reset, clean, or delete evidence. Perform operator recovery from a complete trusted state. |
+
+A recoverable crash is not reported as a partial application on the next
+authoritative call: that call completes or verifies the existing journal first.
+Reject and Revise are not repository outcomes; #491 must leave this seam
+uninvoked. Recovery does not infer confirmation, refresh agent context, call a
+provider, or stage/commit Git. Any later Git operation has separate evidence
+and confirmation.
+
+Read-only `inspect_artifact_application(application_id)` uses the same
+recovery-before-read boundary and audits the full application ledger/catalog
+before deciding whether one safe identity exists:
+
+| Inspection outcome | Meaning and safe action |
+| --- | --- |
+| Original immutable result with state `applied` | The application record exists and complete authority audited successfully. This is the historical first-application result, not the `unchanged` state returned by an exact apply retry. Inspect its content-free facts; use a separately correlated session record when session ownership matters. |
+| `None` | The safe ID is absent after successful recovery and audit. Do not infer that a session did or did not apply some differently identified request. |
+| `INVALID_IDENTIFIER` | The supplied value is not an exact safe built-in string. Correct the identifier; the repository did not take its lock or inspect persisted state. |
+| `CORRUPTION` | Catalog/application records are malformed, unsafe, or inconsistent. Preserve them and restore one verified exact authority; absence was not established. |
+| `RECOVERY_REQUIRED` | A durable block marker exists or a journal cannot be reconciled. Stop writers and perform operator recovery without reset, cleanup, replay, or evidence deletion. |
+
+Inspection never reconstructs a request, starts a new application, refreshes
+context, calls a provider, or touches Git. Its recovery prerequisite may finish
+an already-journaled application; without one, it writes no canonical artifact
+or application record. A first repository access may also create the standard
+lock/state-directory bootstrap needed to hold the read lease. The internal
+#527 reconciler can consume a result using correlation it already owns, but
+inspection itself cannot discover a session or confirmation owner.
+
+Application temporaries live under the repository's separate `staging/`
 directory rather than `transactions/`. Failed `.tmp` bytes, prior `.held`
 bytes, failed published `.retired` bytes, and finished `.completed` journals are
 all retained there. This residue is normal internal state, is ignored and
@@ -426,42 +1144,39 @@ there is ambiguity and blocks recovery.
 
 If a journal is invalid or a target diverged, the repository writes
 `agent_states/orchestrator_state/writing_artifacts/recovery_blocked.json` and
-all later catalog/publication access fails with `writing-artifact recovery is
-blocked`. Safe filesystem-source listing and reads remain independent.
+all later repository-owned artifact listing, reading, reference capture,
+catalog, and application access fails with `writing-artifact recovery is
+blocked`.
 Stop workspace processes, preserve a complete backup, and investigate the
 journal and target history. Do not delete or edit the lock, journal, catalog,
-commit records, or block marker to force recovery; no automatic repair command
-exists. Restore a verified backup when trustworthy reconstruction is not
-possible. See [Canonical writing artifacts](../reference/writing-artifacts.md).
+application records, or block marker to force recovery; no automatic repair
+command exists. Restore a verified backup when trustworthy reconstruction is
+not possible. See
+[Canonical writing artifacts](../reference/writing-artifacts.md).
 
-Filesystem-source discovery and selective prompt-context reads are independent
-of the publication catalog. They include present safe manual and hash-divergent
-canonical files and omit an individual missing, unsafe, hard-linked,
-nonregular, or invalid-path entry. Workspace-root, ancestor, or lock-lease
-failures still propagate because safe source access is unavailable. Catalog,
-ledger, journal, or recovery corruption does not blank safe source listing or
-reads; it continues to block `catalog()` and publication until the provenance
-authority is restored.
+Filesystem-source discovery and selective prompt-context reads do not use the
+application catalog as their source of path membership. They include present
+safe manual and hash-divergent canonical files and omit an individual missing,
+unsafe, hard-linked, nonregular, or invalid-path entry. They still acquire the
+repository lease and run pending application recovery before reading. With no
+pending journal or recovery-block marker, malformed catalog or application
+record state blocks authoritative catalog/application access but does not blank
+otherwise safe source listing or reads. Workspace-root, ancestor, lock-lease,
+journal-recovery, or persistent recovery-block failures still propagate.
 
-A cataloged manuscript identity is never reusable. If its file is deleted, the
-permanent commit ledger retains the historical reservation while source
-discovery omits the absent entry. A later commit to the same path raises
-`ManuscriptExistsError`; choose a new part-scoped revision path. Catalog loss
-does not free reservations: a missing, empty, or subset catalog beside existing
-commits fails closed. Malformed, unexpected, extra, mismatched, or
-duplicate-reservation commit records also fail global audit. Immutable commit
-JSON must have the repository's exact canonical bytes; merely reformatting an
-otherwise equivalent record invalidates the ledger. Historical core commits may
-remain, but the catalog must select the unique newest normalized instant for a
-repeated path. An equal newest tie or an older projection is ambiguous and fails
-closed. These records are preserved rather than rewritten or migrated.
+`catalog.json` schema 2 records only current membership. Immutable schema-1
+application records preserve historical final facts, manuscript rename
+lineage, and deletion provenance; omission from the catalog is not loss of that
+history. A missing catalog beside records, a sequence gap, an unexpected or
+malformed record, noncanonical JSON, or a catalog/history mismatch fails the
+catalog/application audit. The runtime does not reconstruct, rewrite, or
+convert this authority. Old nonempty `writing_artifacts/commits/`, catalog
+schema 1, and transaction schema 2 are deliberately unsupported and fail
+closed; no compatibility migration is provided.
 
 Operators should stop workspace processes, preserve a complete backup, and
-restore exact verified repository metadata. The runtime does not guess a tie or
-normalize a hand-edited commit. New repository timestamps remain strictly later
-than all ledger timestamps even when the wall clock moves backward. If the
-latest representable instant cannot advance, a new commit fails before creating
-a journal or mutating an artifact; it does not reinterpret existing history.
+restore exact verified repository metadata. The runtime does not normalize a
+hand-edited application record, transaction journal, or catalog.
 
 The permanent artifact lock is similarly not repaired. Exact primary, anchor,
 and `ready` aliases fail before final inspection or locking, and the three names
@@ -476,7 +1191,7 @@ Any failure avoids protected work. A partial one- or two-link state—including
 the old development pair—a divergent inode, alias, or extra link fails again on
 later artifact access and remains untouched. Stop all workspace processes,
 preserve a backup, and investigate the triple; there is no cleanup,
-reconstruction, or migration.
+reconstruction, or conversion.
 
 Stop every workspace process before a manual or external filesystem edit. The
 repository lease serializes supported repository writers, but an actively
@@ -530,8 +1245,8 @@ content-free outcome. Once the provider sequence advances, the backend
 best-effort taints the compatible thread where required so later work cannot
 assume a clean continuation. The original failure remains primary.
 
-Inline `${...}` input now creates and finalizes these states. Successful
-conversation, retrieval, and debate results carry an optional operation ID;
+Inline `${...}` input on a provider-bound Python/component path creates and
+finalizes these states. Successful conversation, retrieval, and debate results carry an optional operation ID;
 `StoryRuntime` and `RuntimeSession` expose content-free inspection. The shell
 maps failures to existing safe error categories rather than displaying this
 history. Pre-submit `$`/`$$` discovery and viewer selection create no operation
@@ -587,7 +1302,9 @@ different mode.
 ## Ranged-text viewer exits and recovery
 
 The viewer remains an unlisted package-internal supplied-text component rather
-than a command or public API. In provider-bound shell prompt spans, exact `$$`
+than a command or public API. No provider-bound shell prompt span is currently
+connected; the following describes the internal component contract only. In a
+provider-bound shell prompt span, exact `$$`
 immediately opens current-source selection on the second dollar; Enter/Tab
 opens the highlighted source. A complete `$${path}` opens it directly on
 Enter/Tab, while `$` completes a whole-file indicator without viewing. The controller owns
@@ -658,14 +1375,44 @@ path/range indicator. The viewer itself never receives or preserves the outer
 composer. Multiple ordered references use repeated fresh viewer calls owned by
 that caller.
 
-See the [exact viewer contract](../reference/interactive-terminal.md#independent-ranged-text-viewer)
-and [terminal safety boundary](terminal-safety.md#ranged-text-viewer-boundary).
+The independent ranged viewer remains a generic terminal component but current
+main input does not activate it. See the
+[interactive terminal reference](../reference/interactive-terminal.md) and
+[terminal safety boundary](terminal-safety.md#ranged-text-viewer-boundary).
+
+## Live-composer recovery boundary
+
+The package-internal live composer lets later controller work keep an editable
+request visible while an already-confirmed operation runs. It does not decide
+whether the operation committed. A runtime-owned callback supplies the
+authoritative `precommit` or `postcommit` boundary when input is accepted.
+
+| Returned outcome | Proven fact | Safe consumer action |
+| --- | --- | --- |
+| `operation_completed` | The operation finished before terminal input was accepted; its result and exact unfinished editor state are returned. | Present the operation result and preserve the draft/cursor for the next ordinary read. |
+| `replan` | Input was submitted at `precommit`, and cancellation of the exact operation was proved joined. | Re-read authoritative state and plan from the literal submitted text. Slash-prefixed text is not a command here. |
+| `next_turn` | Input was submitted at `postcommit`; the old operation was not cancelled and finalization completed. | Queue the literal text as the next lead turn. Do not roll back or reinterpret the completed operation. |
+| `interrupted` / `eof` | Ctrl-C or EOF was accepted as its own terminal event. | Follow the controller's interruption or shutdown policy; do not treat the buffer as submitted text. |
+| `recovery_required` | The precommit join was uncertain/invalid/failed, the boundary could not be trusted, or postcommit finalization failed or was cancelled. | Preserve durable evidence and stop automatic replay. Inspect runtime state before another mutation. |
+
+Progress frames and a cleared terminal span are not durable-completion proof.
+The terminal driver is the only writer during the span, preserves buffer and
+cursor across redraws, and restores terminal state before returning. If live
+input is unavailable, fallback performs no concurrent read: it lets the
+operation finish and returns `operation_completed` with the initial draft.
+Users therefore retain semantic continuity but cannot edit concurrently in
+that environment.
+
+The current story controller does not call this seam yet. Ordinary shell story
+input remains rejected, so these outcomes are contracts for later controller
+and semantic-presentation consumers rather than a user-accessible recovery
+command.
 
 ## Pause, quit, and cleanup
 
 Declined or interrupted pause confirmation keeps the current attachment; EOF at
 confirmation exits. Confirmed pause writes durable `paused`, releases access,
-retains defaults, clears current attachment/current focus/agent focus, and
+retains defaults, clears current attachment/current conversation focus, and
 returns to the lobby. Quit and main/composer EOF release access without pausing.
 
 Cleanup attempts each applicable stage once in this order: Runner close, known
@@ -744,8 +1491,8 @@ derived state stale best-effort; wait for writers to quiesce and rerun.
 prevented a stable operation. There is no automatic retry; let the owning
 storage/RAG operation finish, then rerun status. `storage_unavailable` on search
 or confirmed rebuild belongs to the configured conversation-storage startup
-boundary. Repair/provision/migrate/select that authority through its documented
-workflow before retrying RAG; RAG never provisions or migrates it.
+boundary. Repair/provision/transfer/select that authority through its documented
+workflow before retrying RAG; RAG never provisions or transfers it.
 
 If Local is saved but the next shell prints the fixed one-time Conversation RAG
 unavailable warning, the shell and `/settings` remain usable and configuration
@@ -755,13 +1502,10 @@ and restart. Startup never installs or silently disables the saved provider.
 Choose Disabled and confirm Apply Changes only when that is the intended
 durable policy.
 
-An armed `/rag QUERY` is not an immediate operation. Ineligible commands retain
-it, while scope change, pause/detach, quit, or cleanup clears it. If Ctrl-C
-arrives before the advisory runtime coroutine enters, retrying an eligible turn
-uses the retained query. Once the coroutine enters, the query is consumed even
-when that turn later fails or is cancelled; explicitly arm it again for a new
-attempt. The query is intentionally absent from logs/transcripts/results, so a
-user who needs to retry must retain it outside those channels.
+The former one-turn interactive RAG preflight is unavailable. Use the six
+provider-free top-level `story rag` lifecycle/search commands or the direct
+service APIs; ordinary input does not retain an armed query or start a provider
+turn.
 
 A successful search can still report `literal_fallback` with a non-ready reason
 and exit `0`. Its excerpts, if any, were reread from authority, but the result is
@@ -831,30 +1575,67 @@ workflow](privacy-and-provider.md#rejected-provider-response-artifacts).
   [Bounded agent context](../guides/agent-context.md#c20-decisions-limits-and-user-impact).
 - Artifact publication is recoverable and catalog-last, but does not share one
   transaction with debate logs, lifecycle, results, or provider state.
-- Advisory input is one line; `/run --output PART/PATH.md` without prompt text
-  owns multiline composition. Bare `/run` first prompts for the output.
+- Public shell story input is unavailable. Ordinary/routed/removed shell input
+  is rejected before provider, history, RAG, reference, progress, or artifact
+  work. Python lead turns, structured decisions, and confirmed read-only
+  specialist/synthesis execution and separately confirmed consensus are
+  available; they stop before artifact mutation or Git work.
+- Runtime enforces structural evidence scope/status/receipt rules for lead
+  judgments, but it does not perform semantic NLP verification, prove provider
+  comprehension, or guarantee that the lead selected every relevant artifact.
+  Explicit missing `${path}` still raises `ReferenceOperationFailure`; use an
+  absent core status or complete zero-hit writing-artifact SEARCH when absence
+  itself is the intended evidence.
 - Conversation search is active-only; transcript reads retain no cursor.
 - Filesystem remains the missing/legacy conversation-storage default.
   `/settings` and provider-free `story storage use` save a desired filesystem
   or SQLite backend for the next shell; host installation is limited to one
   explicitly confirmed allowlisted command, and startup never installs or
-  provisions. Migration/verification remain separate operations over two ready
+  provisions. Transfer/verification remain separate operations over two ready
   stores and never select, activate, or delete one. There is no live switch,
   dual write, automatic retry, MySQL, or FTS-dependent result behavior.
   The private local FTS5 companion supplies non-authoritative hints only.
 - Optional local conversation RAG defaults off and has explicit noninteractive
   status, enable, rebuild, cited search, disable, and derived-only purge.
-  `/settings` provider/automatic editors apply to the next shell; Automatic On
-  and private `/rag QUERY` use bounded preflight only for eligible focused
-  advisory turns. External/network RAG providers and MySQL coupling remain
-  unavailable. Literal `/search` is unchanged.
-- Parsing, repository authorization/evidence, top-level `StoryRuntime`
-  propagation, and provider-enforced reads are active for inline canonical
-  references. Provider-bound interactive spans add `$` completion and
-  `$${path}`/`$$` ranged selection. Standalone compose/artifact commands,
-  automation selection UI, and public selection APIs remain unavailable. The
-  supplied-text viewer remains independent and package-internal: its controller
-  caller discovers artifacts and attaches references.
+  `/settings` provider/automatic editors preserve next-shell configuration, but
+  the current shell has no provider-bound turn that consumes Automatic. External
+  or network RAG providers and MySQL coupling remain unavailable. Literal
+  `/search` is unchanged.
+- Artifact parsing, repository authorization/evidence, provider read actions,
+  and the independent supplied-text viewer remain generic components. Python
+  lead input accepts `${path}` and `${path}#Lx-Ly`; no shell input activates
+  `$`/`$$` or exposes a selection API.
+
+<a id="consensus-deadlock-continuation-recovery"></a>
+
+## Consensus deadlock-continuation recovery
+
+A terminal consensus deadlock publishes nothing. Applications may stop there,
+resume the same workflow, or create a linked workflow through the Python
+`continue_consensus_deadlock()` API. The continuation must name the exact
+deadlock result and current tail, and supplies only a ruling plus a positive
+additional repair-round budget. Runtime reuses immutable candidate and
+unresolved-critique handles; do not copy their text into a new prompt.
+
+| Observation | Safe response |
+| --- | --- |
+| Source tail/result, session/conversation, candidate lineage, or material does not match | Reinspect the exact source. Do not retry with guessed IDs or copied content. No provider or artifact mutation occurred. |
+| Continuation is `awaiting_confirmation` with capability available | Show its exact REPAIR request and ask for a fresh Confirm, Reject, or Revise decision. |
+| Restarted linked continuation is awaiting confirmation without capability | Do not reconstruct authority. Reinspect the still-terminal source and prepare a new linked continuation if it remains exact. |
+| Restarted in-place continuation is awaiting confirmation without capability | Do not replay the repair. Preserve and inspect it; use explicit operator/application recovery or begin a separate new workflow. |
+| Revise closes a REPAIR request | Prepare its explicit replacement; no repair round was consumed. |
+| Completed REPAIR leaves rounds | Request and confirm REAUDIT, then SYNTHESIS. One round was consumed. |
+| A repair successor is requested with no rounds left | Stop or obtain a new explicit continuation from the latest exact deadlock. Nothing is published. |
+| Provider interruption has a proved cancellation | Preserve the `interrupted` terminal result; do not replay it. |
+| Provider outcome or durability is uncertain | Stop automation and perform operator reconciliation. Never assume the repair ran or repeat it. |
+| Continuation reaches FINALIZATION | Treat it only as a read-only handoff. Artifact Apply and Git Commit each require their own later confirmation. |
+
+Both continuation modes preserve immutable provenance. `resume_in_place`
+appends to the source workflow; `linked_workflow` preserves that source as a
+terminal record and creates a distinct linked workflow. Repeated deadlocks
+remain nonpublishing. Strict consensus workflow serialization format version 3
+has no migration or legacy reader. The installed CLI and interactive shell
+provide no continuation command; use the Python runtime API.
 
 See [Session lifecycle](../design/session-lifecycle.md),
 [Troubleshooting](../guides/troubleshooting.md), and

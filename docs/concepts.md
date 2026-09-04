@@ -1,8 +1,9 @@
 # Core concepts
 
-> **Availability:** the TTY shell with a current attachment manages conversations,
-> dispatches routed advisory turns, searches active records, and reads bounded
-> active or archived transcripts. See [Story sessions](guides/story-sessions.md).
+> **Availability:** the TTY shell manages sessions/conversations and performs
+> local search, history, transcript, and inspection reads. It does not dispatch
+> an advisory turn or debate in this integration stage. See
+> [Story sessions](guides/story-sessions.md).
 
 Key terms: **scope**—what one persisted object groups; **ownership**—which
 component controls data or a transition; **turn**—one user event and its
@@ -24,33 +25,36 @@ flowchart TD
     R -->|unanimous approval and commit| M[Consensus manuscript]
     S -. separate conversation scope .-> C[Conversation identity]
     C --> CM[Catalog metadata]
-    C --> CT[Visible event transcript]
-    CM --> Q[Read-only bounded search]
-    CT -->|user and reply text| Q
-    Q --> P[Citation and transcript page]
+    C --> CT[Authoritative v2 event history]
+    CT --> Q[Read-only event-field search]
+    Q --> P[Exact event/field citation and page]
 ```
 
-In words: work narrows from workspace to session to debate, then moves through
-candidate revisions toward at most one committed manuscript. Conversation
-identity is scoped by the same story session but remains separate from debate
-execution. Its catalog owns subject and archive status; its event store owns
-the full visible transcript and a bounded complete-turn view. A read-only
-memory service searches both and follows stable citations into bounded pages.
-`StoryRuntime` can also persist and send one turn for an existing conversation
-ID, without creating or focusing that identity. See [Runtime API](reference/runtime-api.md#one-conversation-turn)
-and [Conversation search and cited transcript pages](reference/conversation-search.md).
+Work narrows from workspace to session to a lead conversation and collaboration
+step. The current Python runtime stops after direct lead advice or the user's
+exact decision on one proposal; later execution may enter a debate and move
+through candidate revisions toward at most one committed manuscript.
+Conversation identity is scoped by the same story session but
+remains separate from debate execution. Its catalog owns subject/archive
+status. The selected service stores schema-v2 collaboration events and derives
+readable records, event-field search hits, exact citations, state, and bounded
+pages from that same authority. Subject metadata is displayed with a hit but is
+not searched. See
+[Runtime API](reference/runtime-api.md) and
+[Conversation search and cited transcript pages](reference/conversation-search.md).
 
 ## The four roles
 
 | Role | Responsibility | Votes? |
 | --- | --- | --- |
-| `lead_orchestrator` | Moderates, synthesizes, and finalizes | No |
+| `lead_orchestrator` | Sole user front channel; advises, critiques, recommends, watches constraints, and proposes specialist routing | No |
 | `plot_architect` | Plot, structure, flow, and pacing | Yes |
 | `character_custodian` | Character, relationships, world, and continuity | Yes |
 | `execution_specialist` | Drafting, prose, POV, tone, grammar, and format | Yes |
 
-For debates, the runtime owns phase ordering and consensus validation. For an
-advisory turn, it owns preflight, event/provider ordering, and reply validation.
+For later debates, runtime components own phase ordering and consensus
+validation. For the current advisory turn, the structured workflow owns
+preflight, event/provider ordering, proposal authority, and reply validation.
 The three specialists audit the same debate revision; the lead cannot vote or
 erase a conflict. Context manifests and route-specific source authority limit
 each agent to role-relevant current material and only its own private state.
@@ -68,14 +72,13 @@ when session and agent definition remain compatible.
 
 ## Core documents and manuscripts
 
-Core documents are authoritative contextual P2 sources, not permanent mutable
+Core documents are authoritative contextual sources, not permanent mutable
 bytes in built-in provider definitions. Fresh work bootstraps role-relevant
 current material; compatible work receives exact changes and can boundedly
-search/read omitted authorized sources. After unanimous approval, finalization
-may update only the allowed core documents and create one approved manuscript
-at a required part-scoped path. The story agents author candidate and update
-text, while the runtime validates, journals, publishes, and catalogs it. The
-provider never writes workspace files directly. See
+search/read omitted authorized sources. The retained internal publication
+components can validate, journal, publish, and catalog approved bytes, while a
+provider never writes workspace files directly. No public workflow currently
+authorizes such a publication. See
 [Bounded agent context](guides/agent-context.md) and
 [Canonical writing artifacts](reference/writing-artifacts.md).
 

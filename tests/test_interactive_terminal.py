@@ -72,7 +72,7 @@ PUBLIC_EXPORTS = (
 ERROR_DEFAULTS = {
     InteractiveErrorCode.TTY_REQUIRED: (
         "Interactive mode requires a terminal.",
-        "Use story run for non-interactive automation.",
+        "Use the stepwise Python collaboration API without a terminal.",
     ),
     InteractiveErrorCode.WORKSPACE_NOT_INITIALIZED: (
         "No initialized story workspace was found.",
@@ -87,8 +87,8 @@ ERROR_DEFAULTS = {
         "Use a path inside the initialized workspace.",
     ),
     InteractiveErrorCode.WORKSPACE_VERSION_UNSUPPORTED: (
-        "This workspace uses an unsupported older session format.",
-        "Use a new workspace or follow the documented manual reset procedure.",
+        "This workspace uses an unsupported workspace version.",
+        "Migration and compatibility are unsupported; create a new workspace.",
     ),
     InteractiveErrorCode.CONFIGURATION_INVALID: (
         "Runtime configuration is invalid.",
@@ -370,9 +370,7 @@ def expected_error_record(
         ),
     ]
     if debug_log_path is not None:
-        notices.append(
-            terminal_module.Notice(debug_log_path, label="debug log")
-        )
+        notices.append(terminal_module.Notice(debug_log_path, label="debug log"))
     component = terminal_module.Panel(
         "Interactive error",
         tuple(notices),
@@ -418,7 +416,7 @@ class PublicContractTests(unittest.TestCase):
                 ("OPENED", "opened"),
                 ("REOPENED", "reopened"),
             ),
-            ComposeMode: (("CHAT", "chat"), ("RUN", "run")),
+            ComposeMode: (("CHAT", "chat"),),
             ConfirmationResult: (
                 ("YES", "yes"),
                 ("NO", "no"),
@@ -753,8 +751,7 @@ class PromptAndRenderingTests(unittest.TestCase):
         )
         self.assertTrue(
             all(
-                list_signature.parameters[name].kind
-                is inspect.Parameter.KEYWORD_ONLY
+                list_signature.parameters[name].kind is inspect.Parameter.KEYWORD_ONLY
                 for name in ("archived", "focused")
             )
         )
@@ -777,8 +774,7 @@ class PromptAndRenderingTests(unittest.TestCase):
         )
         self.assertTrue(
             all(
-                search_signature.parameters[name].kind
-                is inspect.Parameter.KEYWORD_ONLY
+                search_signature.parameters[name].kind is inspect.Parameter.KEYWORD_ONLY
                 for name in (
                     "archived",
                     "citation_turn_id",
@@ -811,11 +807,7 @@ class PromptAndRenderingTests(unittest.TestCase):
             )
         )
         self.assertEqual(
-            tuple(
-                inspect.signature(
-                    InteractiveTerminal.write_agent_roster
-                ).parameters
-            ),
+            tuple(inspect.signature(InteractiveTerminal.write_agent_roster).parameters),
             ("self",),
         )
 
@@ -947,7 +939,7 @@ class PromptAndRenderingTests(unittest.TestCase):
             TerminalAction(TerminalActionKind.LINE, text="subject"),
         )
         self.assertEqual(
-            terminal.compose(ComposeMode.RUN),
+            terminal.compose(ComposeMode.CHAT, agent_id=LEAD_ORCHESTRATOR),
             TerminalAction(
                 TerminalActionKind.SEND,
                 text="ordinary content",
@@ -961,13 +953,15 @@ class PromptAndRenderingTests(unittest.TestCase):
             [
                 "conversation[subject]> ",
                 expected_composer_prompt(
-                    "run",
+                    "chat",
+                    target="lead",
                     line=1,
                     line_count=0,
                     character_count=0,
                 ),
                 expected_composer_prompt(
-                    "run",
+                    "chat",
+                    target="lead",
                     line=2,
                     line_count=1,
                     character_count=16,
@@ -978,9 +972,8 @@ class PromptAndRenderingTests(unittest.TestCase):
         self.assertEqual(
             general_callbacks.records,
             [
-                "[compose] Consensus run. Use /send to submit or "
-                "/cancel to discard.\n",
-                "[compose] Sending 1 line, 16 characters to consensus.\n",
+                "[compose] Target: lead. Use /send to submit or /cancel to discard.\n",
+                "[compose] Sending 1 line, 16 characters to lead.\n",
             ],
         )
 
@@ -1007,7 +1000,7 @@ class PromptAndRenderingTests(unittest.TestCase):
             TerminalAction(TerminalActionKind.LINE, text="/status"),
         )
         self.assertEqual(
-            terminal.compose(ComposeMode.RUN),
+            terminal.compose(ComposeMode.CHAT, agent_id=LEAD_ORCHESTRATOR),
             TerminalAction(
                 TerminalActionKind.SEND,
                 text="run text",
@@ -1038,13 +1031,15 @@ class PromptAndRenderingTests(unittest.TestCase):
             composition_callbacks.prompts,
             [
                 expected_composer_prompt(
-                    "run",
+                    "chat",
+                    target="lead",
                     line=1,
                     line_count=0,
                     character_count=0,
                 ),
                 expected_composer_prompt(
-                    "run",
+                    "chat",
+                    target="lead",
                     line=2,
                     line_count=1,
                     character_count=8,
@@ -1097,14 +1092,15 @@ class PromptAndRenderingTests(unittest.TestCase):
                 terminal, _callbacks = make_terminal(invalid)
                 with self.assertRaises((TypeError, ValueError)):
                     terminal.read_main()
+        terminal, callbacks = make_terminal("attached")
+        self.assertEqual(
+            terminal.read_main(session_id="SESSION"),
+            TerminalAction(TerminalActionKind.LINE, text="attached"),
+        )
+        self.assertEqual(callbacks.prompts, ["story[SESSION]> "])
         terminal, callbacks = make_terminal("unused")
-        for session_id, agent_id in (("SESSION", None), (None, PLOT_ARCHITECT)):
-            with self.subTest(session_id=session_id, agent_id=agent_id):
-                with self.assertRaises(ValueError):
-                    terminal.read_main(
-                        session_id=session_id,
-                        agent_id=agent_id,
-                    )
+        with self.assertRaises(ValueError):
+            terminal.read_main(agent_id=PLOT_ARCHITECT)
         self.assertEqual(callbacks.prompts, [])
 
     def test_private_reference_main_input_is_call_local_and_cleans_after_failure(
@@ -1621,7 +1617,8 @@ class PromptAndRenderingTests(unittest.TestCase):
                 *valid[:3], "", archived=False
             ),
             lambda: terminal.write_conversation_search_hit(
-                *valid, archived=1  # type: ignore[arg-type]
+                *valid,
+                archived=1,  # type: ignore[arg-type]
             ),
             lambda: terminal.write_conversation_search_hit(
                 *valid,
@@ -1735,9 +1732,7 @@ class PromptAndRenderingTests(unittest.TestCase):
             "content": "body",
         }
         invalid_calls = (
-            lambda: terminal.write_conversation_transcript_event(
-                "unsafe/id", **base
-            ),
+            lambda: terminal.write_conversation_transcript_event("unsafe/id", **base),
             lambda: terminal.write_conversation_transcript_event(
                 "c_0123456789", **{**base, "sequence": True}
             ),
@@ -1796,11 +1791,7 @@ class PromptAndRenderingTests(unittest.TestCase):
         wrapped = callbacks.records[0]
         self.assertEqual(
             len(
-                [
-                    line
-                    for line in wrapped.splitlines()
-                    if line.startswith("  [agent] ")
-                ]
+                [line for line in wrapped.splitlines() if line.startswith("  [agent] ")]
             ),
             4,
         )
@@ -1816,8 +1807,7 @@ class PromptAndRenderingTests(unittest.TestCase):
         ):
             terminal.write_agent_roster()
         self.assertIn(
-            "[agent] Unsafe\\x1bLead\n"
-            "    ID: lead_orchestrator",
+            "[agent] Unsafe\\x1bLead\n    ID: lead_orchestrator",
             callbacks.records[0],
         )
         self.assertNotIn("\x1b", callbacks.records[0])
@@ -1933,15 +1923,14 @@ class CompositionTests(unittest.TestCase):
         self.assertEqual(
             callbacks.records,
             [
-                "[compose] Target: plot. Use /send to submit or "
-                "/cancel to discard.\n",
+                "[compose] Target: plot. Use /send to submit or /cancel to discard.\n",
                 "[compose] Sending 2 lines, 12 characters to plot.\n",
             ],
         )
 
-    def test_run_composition_counts_unicode_code_points_not_bytes(self) -> None:
+    def test_chat_composition_counts_unicode_code_points_not_bytes(self) -> None:
         terminal, callbacks = make_terminal("한글🙂", "/send")
-        action = terminal.compose(ComposeMode.RUN)
+        action = terminal.compose(ComposeMode.CHAT, agent_id=LEAD_ORCHESTRATOR)
         self.assertEqual(
             action,
             TerminalAction(
@@ -1955,13 +1944,15 @@ class CompositionTests(unittest.TestCase):
             callbacks.prompts,
             [
                 expected_composer_prompt(
-                    "run",
+                    "chat",
+                    target="lead",
                     line=1,
                     line_count=0,
                     character_count=0,
                 ),
                 expected_composer_prompt(
-                    "run",
+                    "chat",
+                    target="lead",
                     line=2,
                     line_count=1,
                     character_count=3,
@@ -1971,9 +1962,8 @@ class CompositionTests(unittest.TestCase):
         self.assertEqual(
             callbacks.records,
             [
-                "[compose] Consensus run. Use /send to submit or "
-                "/cancel to discard.\n",
-                "[compose] Sending 1 line, 3 characters to consensus.\n",
+                "[compose] Target: lead. Use /send to submit or /cancel to discard.\n",
+                "[compose] Sending 1 line, 3 characters to lead.\n",
             ],
         )
 
@@ -1985,7 +1975,7 @@ class CompositionTests(unittest.TestCase):
             "message",
             "/send",
         )
-        action = terminal.compose(ComposeMode.RUN)
+        action = terminal.compose(ComposeMode.CHAT, agent_id=LEAD_ORCHESTRATOR)
         self.assertEqual(
             action,
             TerminalAction(
@@ -1999,31 +1989,36 @@ class CompositionTests(unittest.TestCase):
             callbacks.prompts,
             [
                 expected_composer_prompt(
-                    "run",
+                    "chat",
+                    target="lead",
                     line=1,
                     line_count=0,
                     character_count=0,
                 ),
                 expected_composer_prompt(
-                    "run",
+                    "chat",
+                    target="lead",
                     line=2,
                     line_count=1,
                     character_count=0,
                 ),
                 expected_composer_prompt(
-                    "run",
+                    "chat",
+                    target="lead",
                     line=3,
                     line_count=2,
                     character_count=3,
                 ),
                 expected_composer_prompt(
-                    "run",
+                    "chat",
+                    target="lead",
                     line=3,
                     line_count=2,
                     character_count=3,
                 ),
                 expected_composer_prompt(
-                    "run",
+                    "chat",
+                    target="lead",
                     line=4,
                     line_count=3,
                     character_count=11,
@@ -2033,7 +2028,7 @@ class CompositionTests(unittest.TestCase):
         self.assertEqual(callbacks.records[1], "[compose] Nothing to send.\n")
         self.assertEqual(
             callbacks.records[2],
-            "[compose] Sending 3 lines, 11 characters to consensus.\n",
+            "[compose] Sending 3 lines, 11 characters to lead.\n",
         )
 
     def test_say_escape_appends_the_two_literal_control_lines(self) -> None:
@@ -2064,7 +2059,7 @@ class CompositionTests(unittest.TestCase):
             "/say /send extra",
         )
         terminal, _callbacks = make_terminal(*near_misses, "/send")
-        action = terminal.compose(ComposeMode.RUN)
+        action = terminal.compose(ComposeMode.CHAT, agent_id=LEAD_ORCHESTRATOR)
         expected_text = "\n".join(near_misses)
         self.assertEqual(
             action,
@@ -2078,7 +2073,7 @@ class CompositionTests(unittest.TestCase):
 
     def test_cancel_discards_all_lines_without_returning_content(self) -> None:
         terminal, callbacks = make_terminal("draft", "", "/cancel")
-        action = terminal.compose(ComposeMode.RUN)
+        action = terminal.compose(ComposeMode.CHAT, agent_id=LEAD_ORCHESTRATOR)
         self.assertEqual(
             action,
             TerminalAction(
@@ -2127,8 +2122,7 @@ class CompositionTests(unittest.TestCase):
                 self.assertIsNone(action.text)
                 self.assertEqual(
                     callbacks.records[-1],
-                    "[compose] Discarded 1 line. "
-                    "No message was saved or sent.\n",
+                    "[compose] Discarded 1 line. No message was saved or sent.\n",
                 )
 
     def test_composition_validates_mode_target_and_reader_lines(self) -> None:
@@ -2136,15 +2130,15 @@ class CompositionTests(unittest.TestCase):
             lambda: make_terminal()[0].compose("chat"),
             lambda: make_terminal()[0].compose(ComposeMode.CHAT),
             lambda: make_terminal()[0].compose(
-                ComposeMode.RUN,
-                agent_id=PLOT_ARCHITECT,
-            ),
-            lambda: make_terminal()[0].compose(
                 ComposeMode.CHAT,
                 agent_id="plot",
             ),
-            lambda: make_terminal(None)[0].compose(ComposeMode.RUN),
-            lambda: make_terminal("two\nlines")[0].compose(ComposeMode.RUN),
+            lambda: make_terminal(None)[0].compose(
+                ComposeMode.CHAT, agent_id=PLOT_ARCHITECT
+            ),
+            lambda: make_terminal("two\nlines")[0].compose(
+                ComposeMode.CHAT, agent_id=PLOT_ARCHITECT
+            ),
         )
         for call in invalid_calls:
             with self.subTest(call=call):
@@ -2182,15 +2176,11 @@ class HelpAndErrorTests(unittest.TestCase):
                                         ),
                                         terminal_module.Field(
                                             "Calls provider",
-                                            "yes"
-                                            if spec.may_call_provider
-                                            else "no",
+                                            "yes" if spec.may_call_provider else "no",
                                         ),
                                         terminal_module.Field(
                                             "May write artifacts",
-                                            "yes"
-                                            if spec.may_write_artifacts
-                                            else "no",
+                                            "yes" if spec.may_write_artifacts else "no",
                                         ),
                                     ),
                                     role=terminal_module.SemanticRole.COMMAND,
@@ -2199,9 +2189,7 @@ class HelpAndErrorTests(unittest.TestCase):
                                 for spec in COMMANDS
                                 if spec.group == group
                             ),
-                            total_count=sum(
-                                spec.group == group for spec in COMMANDS
-                            ),
+                            total_count=sum(spec.group == group for spec in COMMANDS),
                             state=terminal_module.ViewState.COMPLETED,
                         ),
                     ),
@@ -2231,25 +2219,16 @@ class HelpAndErrorTests(unittest.TestCase):
             with self.subTest(hidden=hidden):
                 self.assertNotIn(hidden, callbacks.records[0])
 
-    def test_context_help_accepts_alias_and_includes_the_registry_example(
+    def test_context_help_uses_retained_registry_command(
         self,
     ) -> None:
         terminal, callbacks = make_terminal()
-        terminal.write_help("/agent")
-        self.assertEqual(
-            callbacks.records,
-            [
-                f"--- Help {'-' * 71}\n"
-                "  [command]\n"
-                "    Group: Agents\n"
-                "    Syntax: /to NAME\n"
-                "    Aliases: /agent\n"
-                "    Calls provider: no\n"
-                "    May write artifacts: no\n"
-                "    Example: /to plot\n"
-                f"{'-' * 80}\n"
-            ],
-        )
+        terminal.write_help("/agents")
+        rendered = callbacks.records[0]
+        self.assertIn("Syntax: /agents", rendered)
+        self.assertIn("Calls provider: no", rendered)
+        self.assertIn("May write artifacts: no", rendered)
+        self.assertNotIn("/agent\n", rendered)
 
         for invalid in ("agent", "", "/unknown", 1):
             with self.subTest(invalid=invalid):
@@ -2258,29 +2237,13 @@ class HelpAndErrorTests(unittest.TestCase):
 
     def test_help_wraps_semantic_tokens_with_stable_prefix_indentation(self) -> None:
         terminal, callbacks = make_terminal(width=32)
-        terminal.write_help("/run")
-        self.assertEqual(
-            callbacks.records,
-            [
-                f"--- Help {'-' * 23}\n"
-                " [command]\n"
-                "  Group:\n"
-                "   Consensus\n"
-                "  Syntax:\n"
-                "   /run [--fresh] [--output PART\n"
-                "   /PATH.md] [PROMPT]\n"
-                "  Aliases:\n"
-                "   none\n"
-                "  Calls provider:\n"
-                "   yes\n"
-                "  May write artifacts:\n"
-                "   yes\n"
-                "  Example:\n"
-                "   /run --output part-01/chapter\n"
-                "   -01.md Outline chapter one\n"
-                f"{'-' * 32}\n"
-            ],
-        )
+        terminal.write_help("/override")
+        rendered = callbacks.records[0]
+        self.assertTrue(rendered.startswith(f"--- Help {'-' * 23}\n"))
+        self.assertIn(" [command]\n", rendered)
+        self.assertIn("  Syntax:\n", rendered)
+        self.assertIn("   /override language LANG | per\n", rendered)
+        self.assertNotIn("/run", rendered)
         for line in callbacks.records[0].splitlines():
             self.assertLessEqual(len(line), 32)
 
@@ -2289,7 +2252,7 @@ class HelpAndErrorTests(unittest.TestCase):
             with self.subTest(code=code):
                 terminal, callbacks = make_terminal(width=1000)
                 terminal.write_error(InteractiveError(code))
-                spec = INTERACTIVE_ERROR_SPECS[code]
+                INTERACTIVE_ERROR_SPECS[code]
                 self.assertEqual(
                     callbacks.records,
                     [expected_error_record(code, width=1000)],
@@ -2323,9 +2286,7 @@ class HelpAndErrorTests(unittest.TestCase):
         )
         self.assertEqual(callbacks.records, [expected_default, expected_default])
 
-        debug_notice = (
-            "If available, workspace-relative: debug_logs/runtime.jsonl"
-        )
+        debug_notice = "If available, workspace-relative: debug_logs/runtime.jsonl"
         terminal.write_error(error, debug_log_path=debug_notice)
         self.assertEqual(
             callbacks.records[-1],
@@ -2383,7 +2344,7 @@ class HelpAndErrorTests(unittest.TestCase):
         error = InteractiveError(InteractiveErrorCode.INTERNAL_ERROR)
         terminal.write_error(error, secrets=("",))
         terminal.write_error(error, secrets="")
-        spec = INTERACTIVE_ERROR_SPECS[InteractiveErrorCode.INTERNAL_ERROR]
+        INTERACTIVE_ERROR_SPECS[InteractiveErrorCode.INTERNAL_ERROR]
         self.assertEqual(
             callbacks.records,
             [
@@ -2415,9 +2376,9 @@ class HelpAndErrorTests(unittest.TestCase):
                 hint="h" * 300,
             )
         )
-        title_line, summary_line, hint_line, bottom_line = (
-            callbacks.records[0].splitlines()
-        )
+        title_line, summary_line, hint_line, bottom_line = callbacks.records[
+            0
+        ].splitlines()
         self.assertEqual(
             title_line,
             f"--- Interactive error [error] {'-' * 970}",
@@ -2462,8 +2423,7 @@ class SanitizerTests(unittest.TestCase):
         code_points = (*range(0x20), 0x7F, *range(0x80, 0xA0))
         source = "".join(chr(value) for value in code_points)
         expected = "".join(
-            "\n" if value == 0x0A else f"\\x{value:02x}"
-            for value in code_points
+            "\n" if value == 0x0A else f"\\x{value:02x}" for value in code_points
         )
         self.assertEqual(sanitize_terminal_text(source), expected)
         self.assertEqual(
@@ -2555,7 +2515,9 @@ class TerminalBoundaryTests(unittest.TestCase):
                     "subject",
                 )
                 self.assertEqual(
-                    terminal.compose(ComposeMode.RUN).text,
+                    terminal.compose(
+                        ComposeMode.CHAT, agent_id=LEAD_ORCHESTRATOR
+                    ).text,
                     "message",
                 )
                 terminal.write_conversation_scope(

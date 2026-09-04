@@ -1,10 +1,10 @@
 # Use Antigravity agents
 
-> **Availability:** Antigravity is implemented through the `agy` CLI for
-> debates, direct conversation, bounded retrieval, and persistent provider
-> conversations. Interactive onboarding invokes the resolved Antigravity
-> executable without arguments for native sign-in; it defaults to `agy`. Codex
-> remains the final route fallback.
+> **Availability:** the Antigravity adapter and persistent provider-session
+> components remain implemented. The current shell uses `agy` for native
+> authentication, model discovery, and configuration, but has no public story
+> turn or debate. Python `StoryRuntime.lead_turn()` can invoke the configured
+> lead route. Codex remains the final configured route fallback.
 > Settings Model/Effort editors also use bounded `agy models` discovery for a
 > pending Antigravity route without persisting the catalog.
 
@@ -133,7 +133,7 @@ read-only in that shell.
 The complete persistent schemas are in
 [Agent configuration](../reference/configuration/agent-configuration.md).
 
-For one shell or run, use repeatable CLI overrides. Other agents retain their
+For one shell, use repeatable `story chat` overrides. Other agents retain their
 persisted routes, then inherit the workspace default and final Codex fallback:
 
 ```bash
@@ -142,17 +142,13 @@ story chat draft \
   --antigravity-model MODEL \
   --antigravity-effort medium
 
-story run --session draft \
-  --backend plot_architect=antigravity \
-  --backend execution_specialist=antigravity \
-  --draft-file ./draft.md
 ```
 
 `--antigravity-executable EXECUTABLE` defaults to `agy`. Use it only when the
 binary is not resolved through ordinary `PATH`. The legacy-named
-`--codex-timeout SECONDS` bounds both Codex and Antigravity calls. These options
-are available on `story chat` and `story run`, not on bare `story` or standalone
-session lifecycle commands.
+`--codex-timeout SECONDS` bounds provider subprocess work. These options are
+available on `story chat`, not on bare `story` or standalone session lifecycle
+commands.
 
 ## Precedence and snapshots
 
@@ -279,14 +275,13 @@ Generation zero preserves the legacy definition fingerprint.
 | Provider change, including A→B→A | Advances route generation and starts a fresh target-provider thread. |
 | Same-provider model/effort change | Retains route generation and remains eligible for native-thread reuse. |
 
-A fresh Antigravity or Codex thread is not a new story session. Contextual
-execution starts a new epoch and bootstraps current role-relevant authoritative
-sources; compatible later calls use exact deltas. `/run --fresh` retains the
-focused conversation identity while omitting its transcript, but current core
-sources can still bootstrap. Provider-private hidden history is optional
-acceleration and never correctness authority. See
-[Story sessions](story-sessions.md#execution-identity-and-fresh-thread-continuity)
-and [Agent-context design](../design/agent-context.md).
+A fresh Antigravity or Codex thread is not a new story session. The retained
+context engine starts a new epoch by bootstrapping current role-relevant
+authoritative sources; compatible later calls can use exact deltas.
+Provider-private hidden history is optional acceleration and never correctness
+authority. Python lead turns enter this path; the public shell does not.
+See [Story sessions](story-sessions.md) and
+[Agent-context design](../design/agent-context.md).
 
 There is no user-facing session close or delete command. `AgentBackend.close()`
 ends one local backend instance; it does not pause the durable story session,
@@ -305,9 +300,10 @@ PYTHONPATH=src python -W error -m unittest \
   tests.test_antigravity_parity -v
 ```
 
-They cover all debate phases, direct and retrieval conversations, mixed
-providers, session/thread partitioning, resume, taint/restart, timeout and
-cancellation cleanup, fixed diagnostics, and confidentiality boundaries.
+They cover retained adapter/provider component contracts, mixed providers,
+session/thread partitioning, resume, taint/restart, timeout and cancellation
+cleanup, fixed diagnostics, and confidentiality boundaries. Passing these
+component tests does not expose a public story command.
 
 Local vendor checks are optional and still do not make a provider turn:
 
@@ -320,10 +316,12 @@ The default native authentication probe is `agy models`; it is not part of
 `story smoke` or the adapter capability check. Sign-in invokes that resolved
 executable with no arguments.
 
-A real `story chat` or `story run` call is a live provider check. It may require
-credentials and network access, consume provider quota, transmit story content,
-and retain remote/provider-native history. It is never required by the standard
-test suite.
+`story chat` performs live native authentication/status and can perform model
+catalog discovery through Settings. Those operations may require credentials
+and network access, but the current shell has no accepted story input that
+invokes an Antigravity story-provider turn. Low-level direct adapter invocation
+can still transmit caller-provided content and consume quota; it is never
+required by the standard test suite.
 
 See [Privacy and provider exposure](../operations/privacy-and-provider.md),
 [Backend and sessions](../reference/backend-and-sessions.md), and

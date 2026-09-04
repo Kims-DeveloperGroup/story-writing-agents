@@ -17,7 +17,6 @@ from story_writing_agents.writing_artifacts import (
     ReferenceInvocationState,
     ReferenceOperationState,
 )
-from story_writing_agents.errors import WorkspaceFormatError
 from story_writing_agents.writing_artifacts._storage import (
     ArtifactRootSecurityError,
 )
@@ -309,8 +308,8 @@ class EvidenceCorrelationAndIsolationTests(ReferenceEvidenceTestCase):
         for operation_id in cases:
             with self.subTest(operation_id=operation_id):
                 authorization = self.capture(operation_id)
-                first = self.authorize(authorization, "z-invoke", 1)
-                second = self.authorize(authorization, "a-invoke", 2)
+                self.authorize(authorization, "z-invoke", 1)
+                self.authorize(authorization, "a-invoke", 2)
                 root = self.evidence_root(operation_id) / "invocations"
                 target = root / "a-invoke/manifest.json"
                 value = json.loads(target.read_text())
@@ -442,19 +441,19 @@ class EvidenceCorrelationAndIsolationTests(ReferenceEvidenceTestCase):
 
         with (
             mock.patch.object(
-                self.repository,
-                "_load_catalog",
+                self.repository._applications,
+                "catalog",
                 side_effect=AssertionError("source capture loaded catalog"),
             ) as load_catalog,
             mock.patch.object(
-                self.repository,
-                "_recover",
-                side_effect=AssertionError("source capture ran recovery"),
+                self.repository._applications,
+                "recover",
+                wraps=self.repository._applications.recover,
             ) as recover,
         ):
             catalog_independent = self.capture("catalog-failure")
         load_catalog.assert_not_called()
-        recover.assert_not_called()
+        recover.assert_called_once_with()
         catalog_history = self.repository.inspect_reference_operation(
             "catalog-failure"
         )

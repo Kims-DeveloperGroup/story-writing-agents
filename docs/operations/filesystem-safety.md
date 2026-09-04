@@ -19,7 +19,13 @@
 > per-session generation store. An explicitly injected runtime service or the
 > noninteractive local lifecycle/search commands can authorize and schedule its
 > use; interactive `/settings` persists next-shell policy, and startup composes
-> Local only beside a complete authoritative storage bundle.
+> Local only beside a complete authoritative storage bundle. Exact session
+> branch/ref/sibling-worktree provisioning is also implemented as
+> package-internal #504 infrastructure. Package-internal #508 adds the shared
+> repository lease, durable content-free session-history records, and a bounded
+> alternate checkpoint index. Package-internal #509 adds exact confirmed story
+> commits, and package-internal #510 adds exact closed-path checkpoints. None is
+> yet connected to installed story commands or lead confirmation UI.
 
 Key terms: **containment**—keeping paths beneath the workspace root; **symlink**—
 a filesystem alias the runtime rejects; **exclusive creation**—failure instead
@@ -27,67 +33,60 @@ of overwrite; **atomic file**—a replacement observed as old or complete new da
 
 ## Workspace boundary
 
-`Workspace` resolves its root once and makes a nonmutating identity probe. An
-existing canonical directory with meaningful positive device and inode values
-binds that identity at construction. A specifically missing root remains
-pending for one valid `initialize()` attempt. The method validates
-`overwrite_prompts` before I/O; a non-boolean value raises `TypeError` without
-consuming that attempt.
+`Workspace` classifies the exact lexical absolute root without mutation. An
+existing root must be a non-symlinked directory with a meaningful device/inode
+identity. An absent root remains pending; an empty root is eligible; an exact
+initialization journal is resumable; an exact clean v2 root is ready. Any other
+nonempty, malformed, drifted, or unsafe state fails closed.
 
-At the start of the first valid attempt, a pending instance becomes terminal
-before capability checks or filesystem mutation. Safe initialization preflights
-the required descriptor-relative directory and atomic-file operations,
-no-follow flags and inspection, identity checks, synchronization, and cleanup.
-If any required primitive is unavailable, `initialize()` raises `OSError` before
-mutation rather than using a weaker fallback.
+Before creating a missing root, initialization rejects any repository ancestor.
+Before mutating an empty root, it requires Git topology `absent`. Journal-backed
+recovery accepts only `absent` or an exact standalone repository. Parent
+repositories, nested repositories, linked worktrees, submodules, sparse or bare
+repositories, root mismatches, and unsafe Git administration are never adopted.
 
-The attempt walks the canonical root from an opened filesystem anchor, creates
-each missing component relative to its opened parent, and opens each component
-without following its name. It verifies the opened final root against its final
-named identity, then retains that root descriptor until initialization ends.
-All topology creation and default-file parent traversal is relative to that
-descriptor. Each new file is written and synchronized through an exclusively
-created temporary regular file. Before installation, its meaningful identity is
-captured; after installation, the target must have that same identity. The
-create-only path leaves an existing non-symlink target unchanged and never
-replaces a competing target. `overwrite_prompts=True` instead atomically
-replaces only the four canonical role prompts. Both paths preserve the
-established file bytes and create-versus-overwrite behavior.
+Initialization preflights required descriptor-relative, no-follow,
+exclusive-create, synchronization, identity, and cleanup operations. It opens
+the filesystem anchor, creates/walks each component through retained directory
+descriptors, and repeatedly compares the opened and named root identities. If a
+required primitive is unavailable, it raises `OSError` before root mutation.
 
-After all topology and default writes, initialization reopens the filesystem
-anchor, rewalks the complete canonical root without following component names,
-and requires that descriptor to match the retained root identity. It then closes
-the retained root descriptor. Only after that cleanup succeeds does the instance
-record a successful identity. A canonical ancestor or root replacement after
-the initial comparison cannot redirect writes: they remain on the retained
-root, the final rewalk rejects the changed name, and later debug-log storage has
-no successful identity to follow.
+For a missing or empty root, the first scaffold mutation is an exclusively
+created and synchronized `.story-writing-agents-initialize-v2.json`. Its strict
+canonical JSON binds schema version `2`, state `initializing`, and the SHA-256
+identity of the exact 22-file manifest. Existing entries during recovery must
+be byte-identical members of that manifest; unknown files, undeclared
+directories, symlinks, nonregular entries, mismatched bytes, or a different
+journal are preserved and rejected. There is no overwrite, adoption, cleanup,
+upgrade, or weaker fallback path.
 
-The originating `OSError`, `KeyboardInterrupt`, or `SystemExit` from root
-creation, identity verification, child/default work, or file installation
-propagates unchanged; cleanup does not replace an active body failure. If the
-body succeeds and retained-root cleanup fails, that cleanup failure propagates
-unchanged. Safely created components and intended partial data on the retained
-root are not rolled back. Until complete success, every later `initialize()`
-call on that instance raises the established identity-unavailable `OSError`
-before root creation, stat or bind, child creation, or default writes. It neither
-retries nor repeats the original failure. Calls after successful initialization
-retain the established preserve-existing behavior and optional canonical-prompt
-overwrite.
+Missing exact scaffold files are installed create-only through synchronized
+temporary regular files and descriptor-relative hard-link publication. The
+initializer then asks the closed Git adapter for one fixed parentless `main`
+commit. The adapter verifies the effective author and committer and never uses
+an agent-invented identity. An identity failure leaves the exact journal and
+scaffold available to a fresh retry but creates no absent Git repository.
 
-Any other unavailable or nonmeaningful construction-time identity remains
-unavailable for that `Workspace` instance rather than silently rebinding later.
-An existing directory in that state retains the established limitation: normal
-pathname-based initialization may create its scaffold, but diagnostic storage
-remains unavailable for that instance. A new `Workspace` performs its own
-construction-time probe, so inspect and repair a failed root path before
-constructing one.
+After baseline creation, the initializer verifies the exact marker, scaffold,
+manifest, repository topology, one commit, branch, index/tree, and a status
+containing only the untracked journal. It removes and synchronizes only that
+journal, then repeats ready verification and root-identity comparison. Success
+is reported only after the journal is absent and status is clean. `story init`
+itself creates no debug-log event or other post-baseline residue.
 
-This identity protects internal diagnostic containment only. Public and domain
-operations retain pathname and no-symlink checks but do not compare the retained
-root identity, so they may observe a real directory installed later at the same
-root path. A `Workspace` is not an identity-pinned filesystem snapshot or a
-transaction across operations. Every public path operation rejects:
+An `OSError`, `KeyboardInterrupt`, `SystemExit`, typed workspace failure, or Git
+failure terminalizes that `Workspace` object. It does not roll back durable
+exact partial progress. Every later `initialize()` call on the same object
+raises before another attempt; a fresh object/process must reclassify the
+journal and all bytes. A clean ready-root `initialize()` is read-only and
+creates no second commit. Dirty or drifted ready state is preserved and reported
+as recovery-required.
+
+`Workspace.require_ready()` checks the authorization captured by that object;
+it is not a live disk scan. Fresh CLI resolution, explicit smoke, and fresh
+construction perform strict current inspection. A long-lived `Workspace` is
+not an identity-pinned filesystem snapshot, watcher, or transaction across
+operations. Every public path operation rejects:
 
 - absolute paths;
 - any `..` path component;
@@ -99,8 +98,130 @@ The symlink rule protects logical as well as physical boundaries. A link cannot
 redirect a manuscript, core document, default, catalog record, or transcript.
 Workspace and template identifiers have additional validation.
 
-CLI discovery chooses the nearest initialized ancestor and never initializes a
-directory. Use an explicit path for automation or nested workspaces.
+CLI discovery selects the nearest recognizable boundary and validates it. A
+marker, initialization journal, or known legacy sentinel stops the search, so
+an unsupported or malformed inner boundary is never skipped for an outer one.
+Discovery and explicit paths never initialize. Use the exact root for
+automation; nested workspace/repository initialization is unsupported.
+
+<a id="session-git-resource-safety"></a>
+
+## Session Git-resource safety
+
+The package-internal owner freshly binds the initialization root and its exact
+non-symlink `.git` directory for every operation. One repository-wide advisory
+lease on the opened common-Git directory now serializes provisioning and
+session-history work across both same-session and different-session calls.
+Provisioning additionally retains its persistent owner-only lock:
+
+```text
+.git/story-writing-agents/runtime/session-provisioning/.lock
+```
+
+Read-only inspect/list/require-ready operations never create that namespace.
+Provision may create the private directories and lock, then writes one
+owner-only `<session_id>.json` journal by descriptor-relative, no-follow,
+exclusive creation. The immutable payload is canonical UTF-8 JSON with a
+trailing newline and a 64-KiB maximum. The journal file and its containing
+directory are synchronized before any seed, ref, branch, or worktree mutation.
+Malformed names, types, links, modes, duplicate or unknown fields, noncanonical
+bytes, and identity substitution fail closed.
+
+Under the lock, provisioning performs this fixed order:
+
+```text
+verify main baseline and exhaustive inventory
+-> reject sibling-path and identity collisions
+-> capture effective identity, UTC timestamp, baseline, provisioning ID
+-> publish and synchronize the immutable journal
+-> create and fully decode/verify the deterministic empty-tree seed object
+-> compare-and-swap internal ref from zero to the seed
+-> compare-and-swap session branch from zero to the baseline
+-> create the exact sibling linked worktree for that branch
+-> verify root invariance and the correlated triple
+-> remove and synchronize only the journal
+-> verify the complete journal-free result again
+```
+
+The main root must keep symbolic `HEAD` on `main`, the same baseline/tree/index,
+the exact initializer files, and clean status. Inventory accounts for every
+branch, session internal ref, registered worktree, and provisioning journal;
+unknown or uncorrelated facts are not ignored. An accepted session worktree
+must be at its schema-derived sibling path, have exact common-Git indirection
+and registration, use its expected symbolic session branch, and retain the
+immutable baseline and seed roots. Later tips may advance, but #504 does not
+interpret that #505 history.
+
+Every Git child uses fixed arguments, `shell=False`, bounded streams and time,
+disabled prompting, hooks, signing, filters, pagers, and inherited Git control
+variables, followed by root-identity revalidation and complete process/pipe
+cleanup. Only a temporary file still proved to belong to the in-process
+operation can be removed automatically. Named refs, branches, worktrees,
+administration entries, Git objects, journals that carry recovery evidence,
+and user bytes are never cleaned up automatically. See
+[Session Git-resource recovery](recovery-and-limitations.md#session-git-resource-recovery).
+
+For a ready session, the same common-Git lease guards
+`story-writing-agents/runtime/session-history/<session_id>/`. The history owner
+walks from the already-open common-Git descriptor, creates private directories,
+and accepts only exact names and no-follow single-link regular leaves. Candidate
+records use exclusive immutable publication. Operation records use synchronized
+temporary publication and identity-checked atomic replacement, with only an
+exact sequence increment and legal state successor accepted. All JSON is
+canonical, at most 1 MiB, and synchronized before a later owner can rely on it
+to authorize Git mutation.
+
+The checkpoint-input leaf is derived exactly as
+`checkpoint-inputs/<operation_id>/index`, bounded to 64 MiB when inspected, and
+accepted by only the internal-checkpoint process profile. The process owner
+strips arbitrary inherited `GIT_*` variables, disables hooks/signing/external
+diff/fsmonitor/pagers/editors/prompts, and revalidates the root and every index
+ancestor before and after the child. An ambiguous or recovery-required index is
+preserved; only the exact durably committed checkpoint permits removal. See the
+[internal session-history contract](../reference/git-adapter.md#package-internal-session-history).
+
+The package-internal checkpoint owner accepts only exact, same-session path
+families supplied as immutable create/update/delete snapshots by one of five
+matching runtime owners. It never scans a directory, treats omission as
+deletion, or accepts canonical, configuration, debug, SQLite/global,
+provider-private, temporary, cross-session, or unknown paths. Under the same
+lease, it initializes only the operation-owned alternate index from the current
+internal-ref tree, applies literal delta paths, validates the complete result,
+creates one parented commit, and compare-and-swap advances only
+`refs/story-writing-agents/runtime/sessions/<session_id>`. The story branch,
+real indexes, both `HEAD` values and working trees, canonical artifacts,
+unrelated bytes, and pristine main root are not mutation targets. Recovery
+preserves uncertain objects/indexes and never resets, cleans, replays, or
+contacts a remote. See the
+[exact checkpoint contract](../reference/git-adapter.md#package-internal-session-checkpoints).
+
+The package-internal story-commit owner takes this same repository lease. Its
+Prepare phase uses only fixed read operations against the session/main roots;
+the sole durable write is exclusive immutable candidate-history publication.
+It requires a clean real session index, an exact ready branch/tip/worktree,
+complete equality between current canonical files and typed successful
+application evidence, stable effective identity/source, stable internal ref and
+main-root facts, and no unreported canonical change. Canonical symlinks,
+aliases, unsafe paths, content drift, pre-staged entries, and moved identities
+fail closed. Noncanonical untracked files are omitted and preserved.
+
+Commit authority is nonserializable and consumed before I/O. Under the lease,
+the executor synchronizes `running` evidence before the first mutation, then
+uses only literal `hash-object -w --no-filters --stdin`, `update-index`
+cache-entry/removal, `write-tree`, `commit-tree`, and compare-and-swap
+`update-ref` operations. Durable `staged` evidence precedes `commit-tree`.
+Candidate paths are supplied after `--` where the Git command accepts a path;
+no glob, directory-wide add, checkout, reset, clean, hook, signing, filter,
+textconv, alias, pager/editor, credential prompt, remote, or provider input can
+widen the set.
+
+The verified tree must equal the prepared expected tree. The commit has exactly
+one prepared parent, exact message, and captured effective identity, and only
+the expected session branch can advance from the prepared tip. The internal
+ref, main root/head/index/status, and unrelated noncandidate files are never
+targets. On interruption, staged index/object state is preserved; recovery
+classifies it without reset, replay, cleanup, or duplicate commit. See the
+[exact story-commit contract](../reference/git-adapter.md#package-internal-exact-story-commits).
 
 The writing-artifact storage adapter has a distinct construction contract. It
 captures a supplied relative root immediately as a lexical absolute path using
@@ -161,7 +282,7 @@ requires the already complete triple.
 
 Partial one- or two-link state, an old two-link development lock, a divergent
 inode, an extra hard link, or any creation/link/flush failure never enters
-protected work and is preserved without cleanup, reconstruction, or migration.
+protected work and is preserved without cleanup, reconstruction, or conversion.
 The triple, link count, open descriptor, directory ancestry, and workspace root
 are reverified around mutations. These hard links belong only to lock identity;
 canonical artifacts remain one-link regular files.
@@ -187,10 +308,12 @@ Do not replace the guard pathname while a workspace may be used.
 For one nonempty parsed reference batch, `WritingArtifactRepository` creates
 the operation manifest and schema-v2 `requested` evidence under its repository
 lease before source-content reads. It then uses the same descriptor-relative,
-no-follow adapter as source discovery and prompt-context access without loading
-the publication catalog or running recovery. Each unique
-path is securely read once at initial capture; multiple ranges retain request
-order while sharing that immutable source snapshot.
+no-follow adapter as source discovery and prompt-context access. The repository
+runs pending application recovery first; with no pending journal, reference
+capture does not use the application catalog as its path source or require a
+catalog audit. Each unique path is securely read once at initial capture;
+multiple ranges retain request order while sharing that immutable source
+snapshot.
 
 The complete source must be strict UTF-8 without NUL. Universal CRLF, LF, and
 lone-CR records determine exact one-based range slices, including their line
@@ -234,7 +357,7 @@ published create-only with exact path identities and contiguous sequences.
 Delivery evidence is written before the transient content is returned. A
 partial, replaced, aliased, malformed, noncanonical, duplicated, gapped, or
 invalidly transitioned evidence tree is corrupt and is neither repaired nor
-rewritten. Schema-v1 evidence cannot authorize, resume, or be migrated into a
+rewritten. Schema-v1 evidence cannot authorize, resume, or be converted into a
 new operation. Never edit `writing_artifacts/input_snapshots/`; it is repository
 state, not a canonical artifact directory.
 
@@ -276,16 +399,18 @@ primitive drops the record instead of using a weaker or less-contained fallback
 destination. The diagnostic may therefore be absent, but the caller's result,
 exception, output, and exit remain unchanged.
 
-Explicit CLI smoke initializes one identity-bearing `Workspace` and passes that
-same object as the smoke run's retained workspace and uses it for CLI diagnostic
-attempts. Every fresh workspace-bound service inside smoke also borrows that
-object. The CLI never resolves the pathname again for handoff or post-run
-diagnostics. Replacing or making the bound root unavailable can therefore drop
-later records, but cannot redirect them into the replacement or change the
-compact report, established stderr lines, propagated process control, or exit
-status. This does not identity-pin ordinary smoke artifacts; their ordinary
-`Workspace` I/O is pathname-based and may observe the replacement. Implicit
-smoke instead owns and removes its temporary workspace.
+Explicit CLI smoke resolves an already ready root, then constructs one fresh
+`Workspace` to reverify the exact clean v2 marker, scaffold, baseline, and
+status. It performs no initialization, directive/catalog/history work, or
+debug-log handle/submission, and creates no filesystem residue. Its report has
+null session/conversation IDs and only the initialization and unchanged-
+execution checks.
+
+Implicit smoke instead owns a disposable directory, uses the real initializer,
+exercises provider-free management/storage checks, and removes the complete
+directory. Effective Git identity failures propagate truthfully; the temporary
+directory is still removed. Neither form can redirect work through a replaced
+root or use diagnostics to change its primary result.
 
 A guarded weak process-wide lock serializes writers for one resolved workspace.
 After the safe-primitive and directory checks pass, an independent persistent
@@ -436,24 +561,90 @@ sibling owners toward exchange retention. Their sizes do not consume the
 the [exact topology](../reference/configuration/session-storage.md#agent-exchange-storage),
 and [privacy](privacy-and-provider.md#agent-exchange-privacy).
 
-## Conversation transcript safety
+## Unsupported transcript sentinel
 
-Transcript reads and appends for the same workspace, session, and conversation
-share a weakly retained process-wide lock. Different conversations are not
-serialized together. An append validates the complete old transcript, then
-atomically replaces the complete file; readers observe the old or complete new
-version, not a partial appended line.
+The active filesystem schema-v2 owner treats any `transcript.jsonl` below an
+addressed catalog conversation as an unsupported sentinel. It detects that
+file before append/read mutation and preserves it unchanged. A symlink or
+unsafe owning path also fails closed. #454 separately owns a future
+whole-workspace rejection; this boundary checks only the conversation being
+opened.
 
-The event-store adapter does not acquire or verify story-session access. A
-caller that permits multiple processes must acquire the session's V2 access
-claim before same-session writes. The persisted claim and claim guard provide
-cross-process exclusion; the in-process transcript lock alone is insufficient.
+<a id="schema-v2-collaboration-history-safety"></a>
 
-After catalog identity succeeds, a missing transcript is valid empty history.
-An existing empty file, malformed JSONL, invalid sequence or pairing, or
-path-mismatched record raises `WorkspaceFormatError`. Symlinks raise
-`WorkspaceSecurityError`. Exact event rules are in
-[Conversation transcripts](../reference/conversation-transcripts.md).
+## Schema-v2 collaboration-history safety
+
+`FilesystemCollaborationEventStore` is a direct-module-only concrete adapter
+placed behind the selected filesystem service bundle. It is not exported
+through a package facade. It owns these siblings below an existing catalog
+conversation:
+
+```text
+collaboration-history.jsonl
+.collaboration-history.lock
+```
+
+`transcript.jsonl` is rejected as described above. Construction and an
+absent-history read create no v2 storage. Present reads and appends verify
+catalog identity, use the workspace's contained no-symlink path checks, and
+hold both a weak per-history process lock and a blocking POSIX exclusive
+advisory lock. A present guard must remain the same regular non-symlink file
+after open. Unsupported safe-open, advisory-lock, or directory-fsync primitives
+fail closed rather than weakening the operation.
+
+The history must be strict canonical schema-v2 JSONL: one exact encoded event
+per line and exactly one final LF. The adapter validates every record's path
+identity, complete batch metadata, contiguous sequence, unique IDs, digest,
+state transition, correlation, budget, and co-batch closure before returning a
+read or considering an append. A present empty file, malformed or noncanonical
+JSON, invalid UTF-8, schema-v1 record, partial batch, or invalid complete
+history raises `WorkspaceFormatError`. `append_batch()` maps that stored
+corruption to `CollaborationAppendError(CORRUPT_HISTORY)`; neither path mutates
+the rejected bytes.
+
+Append publication is one complete-file replacement:
+
+1. validate the locked current history and candidate;
+2. assign contiguous sequence/batch metadata and canonical UTC timestamps;
+3. write the complete canonical image to a same-directory mode-`0600`
+   temporary file;
+4. flush and file-fsync it;
+5. atomically replace `collaboration-history.jsonl`; and
+6. mandatorily fsync the parent directory before returning `APPENDED`.
+
+Failure before replace leaves the old history or absence authoritative and
+cleans the temporary file when cleanup remains possible. Failure after replace,
+including directory-fsync, advisory unlock, or descriptor close, is uncertain:
+the call reports an operational error while a complete new history may be
+visible. Retry only the exact same `batch_id` and exact canonical drafts. If
+the replacement is present, validation returns the original sequence range and
+timestamps as `ALREADY_COMMITTED`; do not create a fresh batch merely because
+the first call lacked a receipt.
+
+The history contains plaintext user-visible proposal, message, assignment,
+reply, decision, result, notice, interruption, and state facts. A newly staged
+history file and newly created guard request mode `0600`; existing workspace
+directory ownership and access policy remain the operator's responsibility.
+The adapter is not encryption, authorization, backup, retention, secure erase,
+or permission repair.
+
+Use failures as follows:
+
+| Observation | Safe response |
+| --- | --- |
+| `APPENDED` | Continue from the returned exact receipt and freshly read history. |
+| `ALREADY_COMMITTED` | Treat the exact retry as success; retain its original sequences and timestamps. |
+| Fixed semantic conflict | Preserve history; reread for stale CAS, or repair caller-generated batch/event identity. Never force the rejected candidate. |
+| Operational error before commit is known | Preserve the workspace. If replace might have happened, retry only the exact batch. |
+| `WorkspaceFormatError` or `corrupt_history` | Stop normal appends, preserve the exact bytes, and restore only a trusted complete schema-v2 history through an owning future recovery/transfer workflow. |
+| Unsafe lock/history path | Stop writers and inspect the containing workspace with trusted local tools. Do not follow, replace, or repair an alias in place. |
+
+Do not hand-edit, pretty-print, truncate, combine, or copy unsupported
+transcript bytes into this file. Durable confirmation and projected
+next action remain evidence only; reading them never recreates a provider,
+workspace lease, Git capability, credential, or permission to repeat work. See
+[Structured collaboration history](../reference/collaboration-history.md#direct-filesystem-storage-and-retry)
+and the [persistence boundary](../design/persistence.md#structured-collaboration-history-persistence).
 
 <a id="conversation-archive-filesystem-safety"></a>
 
@@ -471,26 +662,38 @@ later caller-root mutation cannot redirect root A transfer into root B.
 
 This archive-owned topology is independent of composed-service provenance and
 SQLite's pinned database owner. The caller must stop or otherwise coordinate
-ordinary catalog and transcript writers for the complete operation: those
+ordinary catalog and history writers for the complete operation: those
 ordinary adapters do not acquire the archive lease, and the lease is not an
 authorization decision.
 
+The archive scans only canonical `metadata.json` and, when nonempty,
+`collaboration-history.jsonl`. It validates but excludes the safe
+`.collaboration-history.lock`. Any `transcript.jsonl` anywhere in the canonical
+conversation namespace rejects export or import before destination mutation;
+legacy bytes are never converted. Import performs a complete preflight, then
+publishes create-only metadata and, for nonempty history, one complete history
+file. An interruption may leave exact metadata-only residue, which the same
+canonical payload can complete; divergent or unsafe residue remains and fails
+closed.
+
 Export strictly enumerates only the authoritative
 `discussion_logs/<session_id>/interactive/conversations/<conversation_id>/`
-namespace. Metadata is required; a transcript is absent for empty history and
-must be a nonempty canonical JSONL file when present. IDs, metadata, complete
-event history, pairing, and path correlation are revalidated through addressed
-`FilesystemConversationCatalog.get()` and
-`FilesystemConversationEventStore.read()` calls. No catalog-wide list is used.
+namespace. `metadata.json` is required. `collaboration-history.jsonl` is absent
+for an empty history and must contain nonempty canonical JSONL when present.
+IDs, metadata, complete collaboration history, pairing, and path correlation
+are revalidated through addressed `FilesystemConversationCatalog.get()` and
+`FilesystemCollaborationEventStore.read()` calls. No catalog-wide list is used.
 
 Every scanned directory must remain a real directory. Every included file must
 be regular and singly linked. Symlinks, hard links, nonregular files, malformed
-or empty present transcripts, orphan/unknown conversation artifacts, invalid
-identifiers, and unexpected interactive layout fail closed. Safe regular
-non-session root files and safe regular noninteractive session siblings are
-excluded without reading their content, but each consumes the one-million-entry
-inventory budget; a safe session without `interactive` is skipped. An unsafe
-excluded entry fails rather than being followed or silently ignored. The normal
+or empty present collaboration histories, orphan/unknown conversation
+artifacts, invalid identifiers, and unexpected interactive layout fail closed.
+Every legacy `transcript.jsonl` is rejected before destination mutation; it is
+never interpreted as collaboration history. Safe regular non-session root files
+and safe regular noninteractive session siblings are excluded without reading
+their content, but each consumes the one-million-entry inventory budget; a safe
+session without `interactive` is skipped. An unsafe excluded entry fails rather
+than being followed or silently ignored. The normal
 `discussion_logs/.gitkeep` sentinel must be a singly linked regular file whose
 zero size is verified from metadata; its bytes are not read.
 
@@ -504,14 +707,16 @@ scan.
 
 Import first canonicalizes and fully validates the bounded archive in memory.
 It then scans the complete destination namespace, classifies the full
-destination-plus-payload union, builds exact planned metadata/transcript bytes,
-projects paths, descendant entries, included bytes, logical text, and canonical
-wire, and checks every planned target and ancestor path before writing
-anything. A late divergent identity or projected bound failure therefore
-prevents an earlier absent identity from being installed. Missing state uses
-the existing create-only atomic workspace writers, metadata first and a
-transcript only for nonempty history. Exact domain-value collisions are
-accepted; divergent or unsafe collisions are preserved and rejected.
+destination-plus-payload union, builds exact planned metadata and canonical
+collaboration-history bytes, projects paths, descendant entries, included
+bytes, logical text, and canonical wire, and checks every planned target and
+ancestor path before writing anything. A late divergent identity or projected
+bound failure therefore prevents an earlier absent identity from being
+installed. Missing state is published as complete create-only files:
+`metadata.json` first, then `collaboration-history.jsonl` only when the history
+is nonempty. An empty history is represented by metadata alone; a present empty
+history file is invalid. Exact domain-value collisions are accepted; divergent
+or unsafe collisions are preserved and rejected.
 
 The lease and containing path are revalidated around each installation. A
 complete destination rescan must then match the preflight inventory plus the
@@ -521,13 +726,19 @@ complete records byte-for-byte. A post-preflight exact target collision is
 accepted only after an addressed domain reread; a divergent collision or
 unrelated post-write mutation is preserved and reported without rollback.
 
-Operational failure may leave canonical directories, exact metadata, or
-complete exact earlier conversations. The same canonical payload can resume
-recognized metadata-first state under a fresh correct lease after the
+Operational failure may leave canonical directories, exact metadata without
+its nonempty history, or complete exact earlier conversations. The same
+canonical payload can resume that recognized inactive metadata-only residue
+and publish its one complete history file under a fresh correct lease after the
 destination is quiescent. Unknown artifacts, divergence, unsafe topology, or a
 post-preflight change instead fail closed; the adapter performs no cleanup or
-automatic retry. Path revalidation narrows but cannot eliminate a hostile
-same-user race between the last check and a native filesystem call.
+automatic retry. After each addressed conversation has been published, import
+rereads its exact metadata and complete collaboration history before invoking
+the durable-progress callback used for a transfer checkpoint. Callback failure
+stops the import but does not roll back complete create-only files. Neither the
+archive import nor its callback activates a backend. Path revalidation narrows
+but cannot eliminate a hostile same-user race between the last check and a
+native filesystem call.
 
 Archive errors are content-free and never expose the rejected path or bytes.
 Exact values, bounds, exclusions, statuses, and error types are in
@@ -552,7 +763,7 @@ The composed filesystem catalog's create, rename, archive, and unarchive plus
 the composed event store's append borrow this same coordinator. Their reads
 remain observational. Direct standalone filesystem adapters retain their
 uncoordinated compatibility behavior and therefore do not participate in
-selection, startup, or migration safety unless their caller stops or otherwise
+selection, startup, or transfer safety unless their caller stops or otherwise
 coordinates them.
 
 A separately constructed
@@ -569,15 +780,15 @@ creating an operation workspace or performing filesystem I/O; a matching call
 reads, revalidates its lease, and publishes only within the captured root.
 Caller-root reassignment during a load or compare-and-set therefore cannot
 redirect its read or write. This path provenance is not an inode-pinned
-snapshot or a transaction with catalog, event, migration, or SQLite work.
+snapshot or a transaction with catalog, event, transfer, or SQLite work.
 SQLite keeps its separate already-pinned database owner. See the
 [composition API](../reference/package-api.md#conversation-storage-composition).
 
-<a id="conversation-storage-migration-safety"></a>
+<a id="conversation-storage-transfer-safety"></a>
 
-## Conversation storage migration safety
+## Conversation storage transfer safety
 
-The migration coordinator captures one canonical workspace root and acquires
+The transfer coordinator captures one canonical workspace root and acquires
 one outer `WorkspaceConversationStorageMutationCoordinator` lease for the
 complete operation. That lease covers activation/readiness checks, fresh
 canonical exports, planning, all destination work, checkpoint publication, and
@@ -590,11 +801,11 @@ workflows create no conversation rows/files or checkpoint.
 The coordinator serializes every supported filesystem/SQLite writer that uses
 the same guard. Direct low-level filesystem catalog/event-store writers do not
 acquire it automatically, and external database/file editors do not participate
-at all. Stop or otherwise coordinate those writers before migration. The guard
+at all. Stop or otherwise coordinate those writers before transfer. The guard
 is advisory coordination, not caller authorization, a hostile-process defense,
 or a transaction spanning both stores.
 
-Migration reads each per-direction checkpoint through a bounded no-follow file
+Transfer reads each per-direction checkpoint through a bounded no-follow file
 descriptor and requires the fixed name and descriptor to remain one regular,
 singly linked file with stable identity and size. Strict UTF-8 JSON parsing
 rejects duplicate, missing, extra, noncanonical, oversized, wrong-direction,
@@ -606,21 +817,25 @@ lease, and rereads the exact result. Do not edit, relink, or replace a checkpoin
 to manufacture progress.
 
 Filesystem-to-SQLite destination work occurs in one `BEGIN IMMEDIATE`
-transaction, so an uncommitted failure rolls back the complete import.
+transaction, so an uncommitted failure rolls back the complete import. It
+imports exact canonical BLOBs into `collaboration_events`; any legacy
+`conversation_events` row rejects the archive before mutation. FTS is excluded
+from parity, and a best-effort refresh after commit cannot change canonical
+success or failure.
 SQLite-to-filesystem work first preflights the complete destination union, then
 uses create-only archive publication. A progress callback runs only after one
-conversation's metadata and optional transcript are present as one complete
+conversation's metadata and optional history are present as one complete
 canonical value and have been reread exactly. If checkpoint publication fails,
 those complete files remain; the next run accepts them only after fresh source
 and destination exports revalidate the fingerprint, counts, completed
 identities, and exact records.
 
-Conflict, unsupported SQLite values, or destination-only data blocks migration
+Conflict, unsupported SQLite values, or destination-only data blocks transfer
 before checkpoint or destination mutation. Final parity still uses fresh
 canonical exports. A source change can therefore be discovered after a complete
 destination transaction, and a final mismatch can follow create-only
 filesystem publication; neither condition triggers destructive rollback. See
-[migration recovery](recovery-and-limitations.md#conversation-storage-migration-recovery)
+[transfer recovery](recovery-and-limitations.md#conversation-storage-transfer-recovery)
 before retrying.
 
 <a id="conversation-storage-selection-and-startup-safety"></a>
@@ -817,18 +1032,18 @@ An ordinary read opens one read-only connection, verifies connection policy,
 executes `BEGIN`, verifies bounded database/schema identity, validates the rows
 requested by one adapter operation, commits, closes, then rechecks the sidecar
 and database identity. This gives one stable snapshot for that operation. It
-does not run the exhaustive preflight scan. `SQLiteConversationSearch` uses one
+does not run the exhaustive preflight scan. `SQLiteCollaborationHistorySearch` uses one
 such main-database transaction for its complete bounded search rather than
 composing several catalog and event-store operations.
 
 ### Derived FTS companion
 
-The direct SQLite search adapter may consult the fixed private
+The SQLite collaboration-history search adapter may consult the fixed private
 `discussion_logs/.conversation_storage_fts5.sqlite3` companion while its main
 snapshot is open. The companion is a derived candidate source, not authority:
-all subject matches come from authoritative normalized subjects, and every
-scanned event is checked by exact normalized literal comparison against the
-main database regardless of its hint. False, missing, or reordered hints
+every candidate is checked by exact normalized literal comparison against a
+closed readable event field in the main database. Subjects never create hits.
+False, missing, or reordered hints
 therefore cannot change hits, citations, snippets, counts, truncation, or
 result order.
 
@@ -956,44 +1171,43 @@ safe. Failed `.tmp` bytes and successful `.held` prior bytes remain retained;
 name collisions are preserved while a different exclusive staging name is
 tried.
 
-The schema-v2 journal is one immutable prepared image: it contains the exact
-catalog-before state, catalog-after image, commit, and ordered targets, and is
-never replaced with a later phase. After all targets, the repository publishes
-immutable commit history and the current catalog last. Completed journal
-retirement compares its exact hash before an exclusive no-replace move to
-`.completed` staging.
+The schema-1 application journal is one immutable prepared image: it contains
+the content-bearing request, exact catalog-before state, schema-2 catalog-after
+image, immutable content-free application record, and ordered target facts. It
+is never replaced with a later phase. After publishing and verifying every
+target, the repository publishes the immutable application record, publishes
+the current-membership catalog last, and verifies both. Journal retirement
+compares its exact hash before an exclusive no-replace move to `.completed`
+staging.
 
-Outside recovery, every artifact read or commit audits the complete permanent
-commit ledger against the catalog before trusting an entry or publishing new
-bytes. The catalog path set must equal the union of every artifact path in every
-non-exempt commit, every entry must exactly match its referenced commit, and
-every immutable commit file must have the repository's exact canonical JSON
-bytes. Semantic reformatting is not repaired. Every ledger commit permanently
-reserves its one manuscript identity. For a repeated core path, the current
-entry must reference the unique newest offset-aware commit instant; an equal
-newest tie or older projection fails closed. Missing, subset, malformed, extra,
-duplicate-reservation, noncanonical, or otherwise mismatched ledger/catalog
-state also fails closed; catalog loss does not free paths and is never rewritten,
-reconstructed, or migrated. See
+Outside recovery, an authoritative catalog or application lookup audits the
+complete ordered application-record history against the current catalog. It
+replays each record's final artifacts, manuscript rename lineage, and deletion
+provenance; the resulting current membership must equal the catalog exactly.
+Application record names, sequence, schema, canonical JSON, correlation,
+operation facts, and results must also agree. Missing catalogs beside records,
+sequence gaps, unexpected entries, noncanonical bytes, or any mismatch fail
+closed and are not reconstructed or converted. Historical lineage remains in
+immutable records even when a path is no longer a current catalog member. See
 [Canonical writing artifacts](../reference/writing-artifacts.md#provenance-and-work-history).
 
-At exact catalog-before recovery, an on-disk pending commit is exempt only when
-its canonical bytes exactly match the journal. It contributes no expected paths
-or newest-core candidate; paths and core authority from all older established
-commits remain required. Projected and stored catalog-after include that commit
-in the full path, exact-entry, and unique-newest audit.
+At exact catalog-before recovery, an application record that the journal
+describes may be absent or may already contain the journal's exact immutable
+bytes. Recovery publishes it only after every target has reached the new state.
+The projected and stored catalog-after image must then equal the complete
+ordered application history, including that record.
 
-On the next catalog or publication access, an exact catalog-before position rolls forward;
-an exact catalog-after position is verified without republishing. A catalog
-matching neither image, target divergence, changed or missing journal bytes,
-missing/divergent published commit, or invalid authoritative transaction state
-writes a persistent marker and blocks all later catalog/publication access.
-Safe filesystem-source discovery and reads remain independent. Every `.tmp`,
-`.held`, `.retired`, and `.completed` file is retained under non-authoritative
-staging, ignored by transaction recovery and catalog listing, and may accumulate.
-Only JSON entries in `transactions/` are authoritative; any unexpected entry
-there blocks recovery. This avoids partial eligibility but is not one
-transaction with logs, debate state, results, or provider state. See
+On the next repository-owned artifact access, an exact catalog-before position
+rolls forward; an exact catalog-after position is verified without
+republishing. A catalog matching neither image, target divergence, changed or
+missing journal bytes, a missing/divergent application record, or invalid
+authoritative transaction state writes a persistent marker and blocks later
+repository artifact access. Every `.tmp`, `.held`, `.retired`, and `.completed`
+file is retained under non-authoritative staging, ignored by transaction
+recovery and catalog listing, and may accumulate. Only JSON entries in
+`transactions/` are authoritative; any unexpected entry there blocks recovery.
+This avoids partial eligibility but is not one transaction with logs, debate
+state, results, or provider state. See
 [Canonical writing artifacts](../reference/writing-artifacts.md).
 
 Conversation identities still use exclusive creation, and their metadata and

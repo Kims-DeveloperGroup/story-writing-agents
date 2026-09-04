@@ -7,7 +7,7 @@ import inspect
 import sys
 import uuid
 from collections.abc import Callable
-from dataclasses import dataclass, field, replace
+from dataclasses import replace
 from types import TracebackType
 from typing import Mapping, TypeVar
 
@@ -26,7 +26,6 @@ from ..agents import (
     LEAD_ORCHESTRATOR,
     PLOT_ARCHITECT,
     ROSTER,
-    SPECIALIST_IDS,
 )
 from ..backend import AgentBackend, backend_configuration_snapshot
 from ..cli_context import (
@@ -37,19 +36,9 @@ from ..cli_context import (
 )
 from ..conversation_search import (
     CONVERSATION_MEMORY_POLICY,
-    ConversationMemoryService,
-    ConversationSearchQuery,
-    ConversationSearchScope,
-)
-from ..conversation_retrieval import (
-    ConversationRetrievalProgressEvent,
-    ConversationRetrievalProgressPhase,
-    ConversationRetrievalResult,
-    ConversationRetrievalSource,
-)
-from ..conversation_rag_composition import (
-    ConversationRagCompositionError,
-    compose_local_conversation_rag_runtime,
+    CollaborationHistorySearchQuery,
+    CollaborationHistorySearchScope,
+    CollaborationHistoryService,
 )
 from ..conversation_storage.contracts import ConversationStorageServices
 from ..conversation_storage.selection import (
@@ -64,23 +53,19 @@ from ..debug_log import (
     WorkspaceDebugLog,
 )
 from ..conversations import (
-    CONVERSATION_CONTEXT_POLICY,
-    ConversationCatalog,
-    ConversationContextWindow,
-    ConversationEvent,
-    ConversationEventKind,
+    CollaborationHistoryProjection,
+    CollaborationNextAction,
+    CollaborationReadableRecord,
+    CollaborationStepState,
     ConversationMetadata,
     ConversationStatus,
     normalize_conversation_subject,
-    select_bounded_conversation_context,
 )
 from ..errors import (
     BackendProtocolError,
     ConfigurationError,
     ConversationNotFoundError,
-    ConversationRetrievalObserverError,
     DirectiveError,
-    ProgressObserverError,
     SessionExistsError,
     SessionNotFoundError,
     WorkspaceFormatError,
@@ -98,7 +83,6 @@ from ..interactive_commands import (
     ActionKind,
     InteractiveAction,
     parse_interactive_line,
-    project_provider_text_span,
 )
 from ..interactive_settings import (
     SETTINGS_LANGUAGES,
@@ -127,14 +111,10 @@ from ..interactive_settings import (
 from ..interactive_terminal import (
     AdvisoryProgressError,
     InteractiveAdvisoryProgress,
-    InteractiveDebateProgress,
-    InteractiveCompositionInput,
     InteractiveMainInput,
     InputPresentation,
-    format_agent_reply_content,
     AttachmentKind,
     Choice,
-    ComposeMode,
     ConfirmationResult,
     ControlOutcome,
     ControlOutcomeKind,
@@ -144,14 +124,10 @@ from ..interactive_terminal import (
     InteractiveExternalViewer,
     InteractivePickerInput,
     InteractivePromptInput,
-    ReferenceInputFailure,
-    ReferenceInputFailureKind,
-    ReferenceInputScope,
     InteractiveSemanticOutput,
     InteractiveTerminal,
     ListView,
     Message,
-    MessagePresentation,
     Notice,
     Panel,
     Picker,
@@ -162,15 +138,6 @@ from ..interactive_terminal import (
     SpeakerAccent,
     TerminalActionKind,
     ViewState,
-)
-from ..models import (
-    DebateContextMode,
-    DebateContextRequest,
-    DebateProgressEvent,
-    DebateProgressPhase,
-    DebateResult,
-    DebateStatus,
-    InputKind,
 )
 from ..orchestrator import StoryRuntime
 from ..provider_auth import ProviderAuthSnapshot
@@ -185,24 +152,13 @@ from ..provider_catalog import (
     ProviderEffort,
     ProviderModel,
 )
-from ..run_inputs import read_draft_file
 from ..session_lifecycle import (
     SessionAccessState,
     SessionDurableState,
     SessionLifecycleState,
     provider_work_is_ready,
 )
-from ..workspace import (
-    FilesystemConversationEventStore,
-    Workspace,
-)
-from ..writing_artifacts import (
-    ArtifactReferenceDirectiveError,
-    MAX_VIEWER_UTF8_BYTES,
-    ReferenceAuthorizationErrorCode,
-    ReferenceOperationFailure,
-    manuscript_artifact_path,
-)
+from ..workspace import Workspace
 from ._conversation_policy import (
     ConversationCatalogProtocolFailure,
     classify_conversation_failure,
@@ -214,6 +170,7 @@ from ._conversation_policy import (
     validate_catalog_entries,
     validate_catalog_metadata,
     validate_conversation_reference,
+    validate_history_snapshot,
     validate_search_result_handles,
     validate_transcript_page,
     visible_conversation_handle,
@@ -230,31 +187,26 @@ from ._exchange_viewer import (
     prepare_agent_exchange_view,
 )
 from ._runtime_policy import (
-    ContextProgressProjection,
     DebateContextInspectionFacts,
     DebateInspectionFacts,
-    classify_advisory_turn_failure,
-    classify_consensus_execution_failure,
     classify_inspection_failure,
-    classify_progress_callback_failure,
-    interactive_code_for_debate_failure,
-    validate_consensus_result,
-    validate_context_execution_progress,
-    validate_conversation_retrieval_progress,
-    validate_conversation_retrieval_result,
     validate_debate_context_inspection,
     validate_debate_inspection,
-    validate_debate_progress,
     validate_session_inspection,
 )
 from ._session_policy import (
     RECOVERABLE_SESSION_ERROR_CODES,
+    SessionTransitionAssessment,
+    SessionTransitionOperation,
     classify_session_failure,
     next_session_action,
+    project_transition_assessment,
     require_correlated_state,
     require_lifecycle_state,
     require_ready_access_state,
     require_released_state,
+    require_transition_assessment,
+    transition_operation_is_allowed,
 )
 
 
@@ -269,8 +221,9 @@ _LOBBY_COMMAND_HINT = (
 _DEBUG_LOG_NOTICE = "If available, workspace-relative: debug_logs/runtime.jsonl"
 _SESSION_RESUME_COMMAND = "/session resume"
 _CONVERSATION_RESUME_COMMAND = "/conversation resume"
-_AGENT_ROUTE_ALIASES = frozenset(
-    alias for route in AGENT_ROUTES for alias in route.aliases
+_DIRECT_EXECUTION_UNAVAILABLE = (
+    "Direct story execution is unavailable in this integration stage. "
+    "Session, conversation, history, search, and inspection remain available."
 )
 _AGENT_SPEAKER_ACCENTS = {
     LEAD_ORCHESTRATOR: SpeakerAccent.CYAN,
@@ -302,29 +255,6 @@ _SETTINGS_UNARMED = object()
 
 
 _ExceptionState = tuple[BaseException, TracebackType | None]
-
-
-@dataclass(frozen=True, slots=True)
-class _PendingConversationRagQuery:
-    """Retain one private next-turn query in its exact process-local scope."""
-
-    session_id: str
-    conversation_id: str
-    query: str = field(repr=False)
-
-    def __post_init__(self) -> None:
-        """Validate exact scope identifiers and the bounded private query."""
-
-        Workspace.validate_identifier(self.session_id)
-        Workspace.validate_identifier(
-            self.conversation_id,
-            label="conversation ID",
-        )
-        ConversationSearchQuery(
-            text=self.query,
-            limit=20,
-            include_archived=False,
-        )
 
 
 def _effective_settings_provider(
@@ -377,36 +307,6 @@ def _compact_execution_profile(profile: AgentExecutionProfile) -> str:
         f"({_provider_display_name(profile.provider)}/"
         f"{_execution_value(profile.model)}/"
         f"{_execution_value(profile.effort)})"
-    )
-
-
-def _compact_reply_metadata(
-    profile: AgentExecutionProfile,
-    *,
-    confirmation: str,
-    thread_status: str,
-) -> str:
-    """Render compact turn-specific execution evidence beneath a reply header."""
-
-    if confirmation not in {"confirmed", "pending"}:
-        raise ValueError("confirmation must be pending or confirmed")
-    qualifiers = [thread_status.replace("_", " ")]
-    if confirmation == "pending":
-        qualifiers.append("pending")
-    if any(
-        source is ExecutionValueSource.LAUNCH_OVERRIDE
-        for source in (
-            profile.provider_source,
-            profile.model_source,
-            profile.effort_source,
-        )
-    ):
-        qualifiers.append("launch override")
-    return (
-        f"{_provider_display_name(profile.provider)} / "
-        f"{_execution_value(profile.model)} / "
-        f"{_execution_value(profile.effort)} · "
-        + " · ".join(qualifiers)
     )
 
 
@@ -700,10 +600,8 @@ class InteractiveController:
     Construction borrows collaborators without I/O. ``run_session_lobby`` is
     single-use; once it starts, this controller closes the backend on every
     exit and releases any attachment it can still identify safely. The retained
-    ``StoryRuntime`` exclusively owns provider turns, transcript outcomes, and
-    consensus durability; one attachment-scoped memory service owns provider-free
-    search/read access. The controller only validates and renders trusted debate
-    progress and results.
+    ``StoryRuntime`` owns management and inspection while one attachment-scoped
+    collaboration-history service owns provider-free search/read access.
     """
 
     __slots__ = (
@@ -712,32 +610,23 @@ class InteractiveController:
         "_backend",
         "_closed",
         "_conversation_catalog",
-        "_conversation_event_store",
-        "_conversation_memory_service",
-        "_conversation_rag_startup_unavailable",
+        "_collaboration_history_service",
         "_conversation_storage_services",
-        "_composition_input",
         "_context",
         "_debug_log",
         "_error_write_count",
         "_external_viewer",
-        "_last_started_debate_by_session",
         "_main_input",
         "_picker_input",
         "_prompt_input",
         "_provider_catalog",
-        "_pending_rag_query",
         "_advisory_progress",
-        "_debate_progress",
         "_runner",
         "_runtime",
         "_semantic_output",
         "_show_message_details",
         "_focused_conversation",
-        "_debate_message_offsets",
-        "_debate_last_conflict_targets",
         "_started",
-        "_target_agent_id",
         "_terminal",
         "_workspace",
     )
@@ -749,20 +638,20 @@ class InteractiveController:
         backend: AgentBackend,
         terminal: InteractiveTerminal,
         *,
-        conversation_catalog: ConversationCatalog | None = None,
         conversation_storage_services: ConversationStorageServices | None = None,
         auth_coordinator: InteractiveAuthCoordinator | None = None,
         provider_catalog: ProviderCatalogService | None = None,
     ) -> None:
-        """Bind collaborators and construct one shared transcript adapter.
+        """Bind collaborators and construct one shared v2 storage bundle.
 
         The four positional arguments remain the established construction
-        contract. An omitted keyword-only catalog creates the workspace-backed
-        adapter; injected conversation-catalog, authentication, and provider-
-        catalog collaborators are retained as borrowed state and are never
-        closed by this controller. An omitted provider catalog creates the
-        command-free workspace-bound default. The event store is shared by the
-        retained runtime and later attachment-scoped memory services.
+        contract. An omitted keyword-only storage bundle creates the selected
+        workspace-backed services; injected storage, authentication, and
+        provider-catalog collaborators are retained as borrowed state and are
+        never closed by this controller. An omitted provider catalog creates
+        the command-free workspace-bound default. The collaboration event store
+        is shared by the retained runtime and later attachment-scoped history
+        services.
         Construction performs no provider call, filesystem write, or access
         claim.
         """
@@ -791,7 +680,10 @@ class InteractiveController:
         ):
             raise TypeError("provider_catalog must provide discover")
         self._workspace = workspace
-        self._debug_log = WorkspaceDebugLog(workspace)
+        self._debug_log = WorkspaceDebugLog(
+            workspace,
+            defer_until_session=True,
+        )
         self._error_write_count = 0
         self._context = context
         self._backend = backend
@@ -806,16 +698,7 @@ class InteractiveController:
         self._prompt_input = InteractivePromptInput(terminal)
         self._external_viewer = InteractiveExternalViewer(terminal)
         self._advisory_progress = InteractiveAdvisoryProgress(terminal)
-        self._debate_progress = InteractiveDebateProgress(terminal)
-        self._composition_input = InteractiveCompositionInput(terminal)
         self._main_input = InteractiveMainInput(terminal)
-        if (
-            conversation_storage_services is not None
-            and conversation_catalog is not None
-        ):
-            raise TypeError(
-                "conversation_storage_services conflicts with conversation_catalog"
-            )
         if (
             conversation_storage_services is not None
             and type(conversation_storage_services) is not ConversationStorageServices
@@ -823,42 +706,18 @@ class InteractiveController:
             raise TypeError(
                 "conversation_storage_services must be ConversationStorageServices"
             )
-        startup_configuration = backend_configuration_snapshot(backend)
-        rag_service = None
-        self._conversation_rag_startup_unavailable = False
-        if startup_configuration.system_defaults.conversation_rag_provider == "local":
-            if conversation_storage_services is None:
-                self._conversation_rag_startup_unavailable = True
-            else:
-                try:
-                    rag_composition = compose_local_conversation_rag_runtime(
-                        workspace,
-                        automatic_enabled=(
-                            startup_configuration.system_defaults.conversation_rag_automatic
-                        ),
-                    )
-                except ConversationRagCompositionError:
-                    self._conversation_rag_startup_unavailable = True
-                else:
-                    rag_service = rag_composition.service
-        if conversation_storage_services is None and conversation_catalog is None:
+        if conversation_storage_services is None:
             self._runtime = StoryRuntime(workspace, backend)
             conversation_storage_services = self._runtime.conversation_storage_services
             if type(conversation_storage_services) is not ConversationStorageServices:
                 raise TypeError("runtime storage services are invalid")
-        elif conversation_storage_services is not None:
+        else:
             self._runtime = StoryRuntime(
                 workspace,
                 backend,
                 conversation_storage_services=conversation_storage_services,
-                conversation_rag_service=rag_service,
             )
-        resolved_catalog = (
-            conversation_storage_services.catalog
-            if conversation_storage_services is not None
-            else conversation_catalog
-        )
-        assert resolved_catalog is not None
+        resolved_catalog = conversation_storage_services.catalog
         if any(
             not callable(getattr(resolved_catalog, operation, None))
             for operation in _CONVERSATION_CATALOG_OPERATIONS
@@ -866,28 +725,9 @@ class InteractiveController:
             raise TypeError("conversation_catalog must implement ConversationCatalog")
         self._conversation_storage_services = conversation_storage_services
         self._conversation_catalog = resolved_catalog
-        self._conversation_event_store = (
-            conversation_storage_services.event_store
-            if conversation_storage_services is not None
-            else FilesystemConversationEventStore(
-                workspace,
-                catalog=resolved_catalog,
-            )
-        )
-        if conversation_storage_services is None:
-            self._runtime = StoryRuntime(
-                workspace,
-                backend,
-                conversation_event_store=self._conversation_event_store,
-            )
-        self._conversation_memory_service: ConversationMemoryService | None = None
-        self._pending_rag_query: _PendingConversationRagQuery | None = None
+        self._collaboration_history_service: CollaborationHistoryService | None = None
         self._attached_session_id: str | None = None
         self._focused_conversation: ConversationMetadata | None = None
-        self._target_agent_id = LEAD_ORCHESTRATOR
-        self._last_started_debate_by_session: dict[str, str] = {}
-        self._debate_message_offsets: dict[tuple[str, str], int] = {}
-        self._debate_last_conflict_targets: dict[tuple[str, str], tuple[str, ...]] = {}
         self._runner: asyncio.Runner | None = None
         self._started = False
         self._closed = False
@@ -981,22 +821,6 @@ class InteractiveController:
             Notice(text, label=label, role=role, state=state)
         )
 
-    def _write_conversation_rag_startup_warning(self) -> None:
-        """Render one fixed warning when configured local RAG was unavailable."""
-
-        if not self._conversation_rag_startup_unavailable:
-            return
-        self._write_notice(
-            (
-                "Conversation RAG is unavailable for this shell. Verify the "
-                "pinned rag extra and restart; settings remain available and "
-                "configuration was not changed."
-            ),
-            label="conversation RAG",
-            role=SemanticRole.WARNING,
-            state=ViewState.ERROR,
-        )
-
     def _write_counted_list_row(
         self,
         title: str,
@@ -1017,67 +841,6 @@ class InteractiveController:
             )
         )
 
-    def _write_run_record(
-        self,
-        debate_id: str,
-        *,
-        title: str | None = None,
-        fields: tuple[Field, ...] = (),
-        content: str | None = None,
-        role: SemanticRole = SemanticRole.DEFAULT,
-        state: ViewState = ViewState.IDLE,
-    ) -> None:
-        """Write one established debate callback as one semantic record."""
-
-        self._semantic_output.write_component(
-            Record(
-                f"run {debate_id}",
-                title=title,
-                fields=fields,
-                content=content,
-                role=role,
-                state=state,
-            )
-        )
-
-    @staticmethod
-    def _debate_progress_style(
-        phase: DebateProgressPhase,
-    ) -> tuple[SemanticRole, ViewState]:
-        """Return stable Outcome role/state decoration for one progress phase."""
-
-        if phase is DebateProgressPhase.CONSENSUS:
-            return SemanticRole.SUCCESS, ViewState.COMPLETED
-        if phase in {
-            DebateProgressPhase.DEADLOCK,
-            DebateProgressPhase.FAILED,
-        }:
-            return SemanticRole.ERROR, ViewState.ERROR
-        if phase is DebateProgressPhase.INTERRUPTED:
-            return SemanticRole.WARNING, ViewState.CANCELLED
-        return SemanticRole.INFO, ViewState.LOADING
-
-    @staticmethod
-    def _debate_progress_display_name(phase: DebateProgressPhase) -> str:
-        """Return the trusted heading label for one supported progress phase."""
-
-        display_names = {
-            DebateProgressPhase.STARTED: "Started",
-            DebateProgressPhase.DRAFTED: "Drafted",
-            DebateProgressPhase.AUDIT_STARTED: "Audit started",
-            DebateProgressPhase.AUDIT_COMPLETED: "Audit completed",
-            DebateProgressPhase.SYNTHESIZED: "Synthesized",
-            DebateProgressPhase.ARTIFACTS_COMMITTED: "Artifacts committed",
-            DebateProgressPhase.CONSENSUS: "Consensus",
-            DebateProgressPhase.DEADLOCK: "Deadlock",
-            DebateProgressPhase.FAILED: "Failed",
-            DebateProgressPhase.INTERRUPTED: "Interrupted",
-        }
-        try:
-            return display_names[phase]
-        except KeyError as error:
-            raise RuntimeError("Unsupported debate progress phase.") from error
-
     @staticmethod
     def _agent_display_name(agent_id: str) -> str:
         """Return one short display label for known and internal IDs."""
@@ -1094,41 +857,119 @@ class InteractiveController:
             return "artifact_store"
         return agent_id.replace("_", " ")
 
-    def _conversation_event_message(self, event: ConversationEvent) -> Message:
-        """Project one durable transcript event into its human message view."""
+    @staticmethod
+    def _collaboration_record_view(record: CollaborationReadableRecord) -> Record:
+        """Render one validated event identity and its closed readable fields."""
 
-        if event.kind is ConversationEventKind.USER_MESSAGE:
-            sender = f"You → {AGENT_SPECS[event.recipient].display_name}"
-            accent = SpeakerAccent.MAGENTA
-        elif event.kind is ConversationEventKind.AGENT_REPLY:
-            sender = f"{AGENT_SPECS[event.sender].display_name} → You"
-            accent = _AGENT_SPEAKER_ACCENTS[event.sender]
-        else:
-            assert event.kind is ConversationEventKind.RUNTIME_ERROR
-            sender = "Runtime → You"
-            accent = SpeakerAccent.CYAN
-
-        metadata = f"Sequence: {event.sequence}"
-        if self._show_message_details:
-            metadata += (
-                f" · Turn: {event.turn_id}"
-                f" · Kind: {event.kind.value}"
-                f" · IDs: {event.sender} → {event.recipient}"
+        sender = record.sender.agent_id or record.sender.kind.value
+        recipient = record.recipient.agent_id or record.recipient.kind.value
+        readable_fields = tuple(
+            Field(
+                (
+                    field.key.value
+                    + (
+                        ""
+                        if field.assignment_ordinal is None
+                        else f"[{field.assignment_ordinal}]"
+                    )
+                    + (
+                        ""
+                        if field.input_ordinal is None
+                        else f"[{field.input_ordinal}]"
+                    )
+                ),
+                field.text,
             )
-        is_agent_reply = event.kind is ConversationEventKind.AGENT_REPLY
-        return Message(
-            sender,
-            (
-                format_agent_reply_content(event.content)
-                if is_agent_reply
-                else event.content
-            ),
-            role=(SemanticRole.AGENT if is_agent_reply else SemanticRole.DEFAULT),
-            state=ViewState.COMPLETED,
-            presentation=MessagePresentation.CHAT_BLOCK,
-            metadata=metadata,
-            accent=accent,
+            for field in record.fields
         )
+        return Record(
+            f"event {record.event_id}",
+            fields=(
+                Field("Sequence", str(record.sequence)),
+                Field("Turn", record.turn_id),
+                Field("Step", record.step_id),
+                Field("Kind", record.kind.value),
+                Field("Direction", record.direction.value),
+                Field("Actors", f"{sender} → {recipient}"),
+                *readable_fields,
+            ),
+            state=ViewState.COMPLETED,
+        )
+
+    @staticmethod
+    def _collaboration_state_meaning(
+        projection: CollaborationHistoryProjection,
+    ) -> tuple[str, str]:
+        """Return the durable state and its direct user-facing meaning."""
+
+        meanings = {
+            CollaborationStepState.AWAITING_CONFIRMATION: (
+                "A proposal is waiting for your confirmation."
+            ),
+            CollaborationStepState.RECONFIRMATION_REQUIRED: (
+                "The earlier confirmation is no longer sufficient; review and "
+                "confirm the updated proposal."
+            ),
+            CollaborationStepState.CONFIRMED: (
+                "You confirmed the proposal; execution has not started yet."
+            ),
+            CollaborationStepState.RUNNING: (
+                "The confirmed work is currently being executed."
+            ),
+            CollaborationStepState.COMPLETED: (
+                "The confirmed work completed and its result is recorded."
+            ),
+            CollaborationStepState.REJECTED: (
+                "You rejected the proposal; that work will not execute."
+            ),
+            CollaborationStepState.SUPERSEDED: (
+                "A newer proposal replaced this proposal."
+            ),
+            CollaborationStepState.INTERRUPTED: (
+                "Execution stopped before a complete outcome was recorded."
+            ),
+            CollaborationStepState.FAILED: (
+                "Execution failed and the failure outcome is recorded."
+            ),
+            CollaborationStepState.OUTCOME_UNKNOWN: (
+                "Execution may have occurred, but its outcome cannot be proven."
+            ),
+            CollaborationStepState.RECOVERY_REQUIRED: (
+                "History requires operator inspection before any safe continuation."
+            ),
+        }
+        state = projection.current_state
+        if state is None:
+            return "empty", "No collaboration event has been recorded yet."
+        return state.value, meanings[state]
+
+    @staticmethod
+    def _collaboration_next_action_meaning(
+        action: CollaborationNextAction,
+    ) -> str:
+        """Explain history-derived guidance without granting execution authority."""
+
+        return {
+            CollaborationNextAction.NONE: "No history-derived action is pending.",
+            CollaborationNextAction.SUBMIT_CONFIRMATION: (
+                "Review the proposal and submit a confirmation decision."
+            ),
+            CollaborationNextAction.START_OR_RECONFIRM: (
+                "Start confirmed work, or reconfirm if its basis changed."
+            ),
+            CollaborationNextAction.FINALIZE_RESULT: (
+                "Record the terminal result for the running work."
+            ),
+            CollaborationNextAction.CONTINUE_WITH_LEAD: (
+                "Continue the conversation with the lead agent."
+            ),
+            CollaborationNextAction.INSPECT_AND_RESOLVE_OUTCOME: (
+                "Inspect durable evidence and resolve the uncertain outcome."
+            ),
+            CollaborationNextAction.REPAIR_AUTHORITATIVE_HISTORY: (
+                "Repair authoritative history before continuing."
+            ),
+        }[action]
 
     @staticmethod
     def _agent_display_chain(agent_ids: tuple[str, ...]) -> str:
@@ -1138,213 +979,6 @@ class InteractiveController:
             InteractiveController._agent_display_name(agent_id)
             for agent_id in agent_ids
         )
-
-    @staticmethod
-    def _debate_message_key(event: DebateProgressEvent) -> tuple[str, str]:
-        """Return one stable key for debate-local in-memory cursors."""
-
-        return (event.session_id, event.debate_id)
-
-    def _debate_handoff_for_phase(
-        self,
-        event: DebateProgressEvent,
-    ) -> tuple[tuple[str, ...], tuple[str, ...], str]:
-        """Map a progress phase to readable sender/recipient/action."""
-
-        phase = event.phase
-        if phase is DebateProgressPhase.STARTED:
-            if event.input_kind is InputKind.DRAFT:
-                return (
-                    ("user",),
-                    (EXECUTION_SPECIALIST,),
-                    "Ask Execution Specialist to author revision 0 from the supplied draft.",
-                )
-            return (
-                ("user",),
-                (EXECUTION_SPECIALIST,),
-                "Start drafting revision 0 from user input.",
-            )
-        if phase is DebateProgressPhase.DRAFTED:
-            return (
-                (EXECUTION_SPECIALIST,),
-                tuple(SPECIALIST_IDS),
-                "Draft complete; request specialist audits.",
-            )
-        if phase is DebateProgressPhase.AUDIT_STARTED:
-            return (
-                (LEAD_ORCHESTRATOR,),
-                tuple(SPECIALIST_IDS),
-                "Dispatch specialist audit for the current revision.",
-            )
-        if phase is DebateProgressPhase.AUDIT_COMPLETED:
-            if event.conflicting_agents:
-                return (
-                    tuple(event.conflicting_agents),
-                    (LEAD_ORCHESTRATOR,),
-                    "Conflicts found; return critiques to orchestrator.",
-                )
-            return (
-                tuple(SPECIALIST_IDS),
-                (LEAD_ORCHESTRATOR,),
-                "No conflicts found; return approvals to orchestrator.",
-            )
-        if phase is DebateProgressPhase.SYNTHESIZED:
-            return (
-                (LEAD_ORCHESTRATOR,),
-                tuple(SPECIALIST_IDS),
-                "Synthesize revision from proposals and feedback; re-audit all specialists.",
-            )
-        if phase is DebateProgressPhase.ARTIFACTS_COMMITTED:
-            return (
-                (LEAD_ORCHESTRATOR,),
-                ("filesystem",),
-                "Finalize draft and commit artifact updates.",
-            )
-        if phase is DebateProgressPhase.CONSENSUS:
-            return (
-                (LEAD_ORCHESTRATOR,),
-                ("user",),
-                "Consensus reached; provide final result.",
-            )
-        if phase is DebateProgressPhase.DEADLOCK:
-            return (
-                (LEAD_ORCHESTRATOR,),
-                ("user",),
-                "Deadlock detected; user input is required.",
-            )
-        if phase is DebateProgressPhase.FAILED:
-            return (
-                (LEAD_ORCHESTRATOR,),
-                ("runtime",),
-                "Debate failed and will be closed with an error.",
-            )
-        return (
-            ("runtime",),
-            ("user",),
-            "Persist interrupted state and return for retry.",
-        )
-
-    @staticmethod
-    def _debate_progress_outcome(event: DebateProgressEvent) -> str:
-        """Return the fixed phase-specific outcome sentence."""
-
-        phase = event.phase
-        if phase is DebateProgressPhase.STARTED:
-            return f"Started {event.input_kind.value} consensus."
-        if phase is DebateProgressPhase.DRAFTED:
-            return "Drafted revision r0."
-        if phase is DebateProgressPhase.AUDIT_STARTED:
-            return (
-                f"Audit started for {event.revision_id} at round {event.round_number}."
-            )
-        if phase is DebateProgressPhase.AUDIT_COMPLETED:
-            conflicts = (
-                ", ".join(event.conflicting_agents)
-                if event.conflicting_agents
-                else "none"
-            )
-            return (
-                f"Audit completed for {event.revision_id} at round "
-                f"{event.round_number}; conflicts: {conflicts}."
-            )
-        if phase is DebateProgressPhase.SYNTHESIZED:
-            return f"Synthesized {event.revision_id} at round {event.round_number}."
-        if phase is DebateProgressPhase.ARTIFACTS_COMMITTED:
-            updates = ", ".join(event.core_updates) if event.core_updates else "none"
-            return (
-                f"Artifacts committed for {event.revision_id}: "
-                f"{event.manuscript_path}; core updates: {updates}."
-            )
-        if phase is DebateProgressPhase.CONSENSUS:
-            return (
-                f"Consensus reached on {event.revision_id} after "
-                f"{event.round_number} revision rounds."
-            )
-        if phase is DebateProgressPhase.DEADLOCK:
-            return (
-                f"Deadlock on {event.revision_id} after "
-                f"{event.round_number} revision rounds."
-            )
-        if phase is DebateProgressPhase.FAILED:
-            assert event.failure_kind is not None
-            return f"Run failed ({event.failure_kind.value})."
-        assert phase is DebateProgressPhase.INTERRUPTED
-        return "Run interrupted after durable state transition."
-
-    def _debate_speech_sections(
-        self,
-        event: DebateProgressEvent,
-        *,
-        start: int,
-    ) -> tuple[tuple[Section, ...], Notice | None, int]:
-        """Read and group one uncommitted chronological speech suffix."""
-
-        try:
-            messages = self._workspace.read_debate_messages(
-                event.session_id,
-                event.debate_id,
-            )
-        except (OSError, WorkspaceFormatError, WorkspaceSecurityError):
-            return (
-                (),
-                Notice(
-                    "Agent sayings unavailable; the debate log could not be read.",
-                    label="agent-saying",
-                    role=SemanticRole.WARNING,
-                    state=ViewState.ERROR,
-                ),
-                start,
-            )
-
-        if start > len(messages):
-            start = 0
-        sections: list[Section] = []
-        group_key: tuple[str, int, str] | None = None
-        group_messages: list[Message] = []
-
-        def append_group() -> None:
-            """Append the current nonempty persisted speech group."""
-
-            if group_key is None:
-                return
-            phase, round_number, revision = group_key
-            sections.append(
-                Section(
-                    (
-                        f"Speeches · {phase} · round {round_number} · "
-                        f"revision {revision or 'n/a'}"
-                    ),
-                    tuple(group_messages),
-                )
-            )
-
-        for item in messages[start:]:
-            if item.sender not in AGENT_SPECS:
-                continue
-            item_group_key = (item.phase, item.round, item.revision)
-            if group_key is not None and item_group_key != group_key:
-                append_group()
-                group_messages = []
-            group_key = item_group_key
-            group_messages.append(
-                Message(
-                    self._agent_display_name(item.sender),
-                    (
-                        "Agent error details are unavailable."
-                        if item.kind == "error"
-                        else format_agent_reply_content(item.content)
-                    ),
-                    role=SemanticRole.AGENT,
-                    state=ViewState.COMPLETED,
-                    presentation=MessagePresentation.CHAT_BLOCK,
-                    metadata=(
-                        f"Kind: {item.kind}" if self._show_message_details else None
-                    ),
-                    accent=_AGENT_SPEAKER_ACCENTS[item.sender],
-                )
-            )
-        append_group()
-        return tuple(sections), None, len(messages)
 
     @staticmethod
     def _debate_inspection_record(facts: DebateInspectionFacts) -> Record:
@@ -1441,7 +1075,6 @@ class InteractiveController:
         try:
             try:
                 self._runner = asyncio.Runner()
-                self._write_conversation_rag_startup_warning()
                 startup_requested_exit = self._enter_initial_session(requested_session)
                 if startup_requested_exit:
                     exit_code = 0
@@ -1564,15 +1197,16 @@ class InteractiveController:
             return
         access_acquired = False
         try:
+            before = self._backend.get_session_lifecycle(session_id)
+            require_lifecycle_state(before, session_id)
+            if before.durable_state is not SessionDurableState.ABSENT:
+                raise SessionExistsError(f"session already exists: {session_id}")
             configured = self._backend.validate_provider_configuration(session_id)
             if configured is not True:
                 raise BackendProtocolError(
                     "provider configuration validation returned a non-true value"
                 )
-            before = self._backend.get_session_lifecycle(session_id)
-            require_lifecycle_state(before, session_id)
-            if before.durable_state is not SessionDurableState.ABSENT:
-                raise SessionExistsError(f"session already exists: {session_id}")
+            self._backend.provision_session_resources(session_id)
             acquired = self._backend.create_session_with_access(session_id)
             access_acquired = True
             require_ready_access_state(acquired, session_id)
@@ -1696,15 +1330,15 @@ class InteractiveController:
 
         newly_acquired = False
         try:
+            before = self._backend.get_session_lifecycle(session_id)
+            require_lifecycle_state(before, session_id)
+            if before.durable_state is SessionDurableState.ABSENT:
+                raise SessionNotFoundError(f"session not found: {session_id}")
             configured = self._backend.validate_provider_configuration(session_id)
             if configured is not True:
                 raise BackendProtocolError(
                     "provider configuration validation returned a non-true value"
                 )
-            before = self._backend.get_session_lifecycle(session_id)
-            require_lifecycle_state(before, session_id)
-            if before.durable_state is SessionDurableState.ABSENT:
-                raise SessionNotFoundError(f"session not found: {session_id}")
             newly_acquired = before.access_state is not SessionAccessState.HELD_HERE
             if before.durable_state is SessionDurableState.PAUSED:
                 acquired = self._backend.reopen_session_with_access(session_id)
@@ -1747,17 +1381,26 @@ class InteractiveController:
             self._present_destination_conversation_failure(exc)
             return
         try:
-            memory_service = (
-                ConversationMemoryService(
-                    ConversationSearchScope(session_id),
-                    conversation_storage_services=(self._conversation_storage_services),
-                )
-                if self._conversation_storage_services is not None
-                else ConversationMemoryService(
-                    ConversationSearchScope(session_id),
-                    self._conversation_catalog,
-                    self._conversation_event_store,
-                )
+            assessment = self._assess_session_transition(
+                state,
+                SessionTransitionOperation.ENTER_DESTINATION,
+                focused_conversation,
+            )
+        except Exception as exc:
+            self._release_uncommitted_destination(session_id)
+            self._present_session_failure(exc, session_id)
+            return
+        if not transition_operation_is_allowed(
+            assessment,
+            SessionTransitionOperation.ENTER_DESTINATION,
+        ):
+            self._release_uncommitted_destination(session_id)
+            self._write_transition_denial(assessment)
+            return
+        try:
+            history_service = CollaborationHistoryService(
+                CollaborationHistorySearchScope(session_id),
+                conversation_storage_services=self._conversation_storage_services,
             )
         except Exception:
             self._release_uncommitted_destination(session_id)
@@ -1769,14 +1412,67 @@ class InteractiveController:
                 session_id,
                 attachment,
                 focused_conversation,
-                memory_service,
+                history_service,
             )
             return
         self._switch_attached_session(
             session_id,
             attachment,
             focused_conversation,
-            memory_service,
+            history_service,
+        )
+
+    def _assess_session_transition(
+        self,
+        lifecycle: SessionLifecycleState,
+        operation: SessionTransitionOperation,
+        conversation: ConversationMetadata | None,
+    ) -> SessionTransitionAssessment:
+        """Delegate exact active or idle transition evidence to the backend."""
+
+        conversation_id = (
+            conversation.conversation_id if conversation is not None else None
+        )
+        assessment = self._backend.assess_session_transition(
+            lifecycle_state=lifecycle,
+            requested_operation=operation,
+            conversation_id=conversation_id,
+            collaboration_store=(
+                self._conversation_storage_services.event_store
+                if conversation_id is not None
+                else None
+            ),
+        )
+        return require_transition_assessment(
+            assessment,
+            expected_session=lifecycle.session_id,
+            expected_conversation=conversation_id,
+            requested_operation=operation,
+        )
+
+    def _write_transition_denial(
+        self,
+        assessment: SessionTransitionAssessment,
+    ) -> None:
+        """Present only fixed content-safe transition assessment fields."""
+
+        projection = project_transition_assessment(assessment)
+        self._semantic_output.write_component(
+            Record(
+                "session transition",
+                fields=(
+                    Field("Scope", projection.scope),
+                    Field("State", projection.state),
+                    Field("Next action", projection.next_action),
+                    Field("Owner", projection.owner),
+                    Field("Failure", projection.failure_code),
+                    Field(
+                        "Allowed operations",
+                        ", ".join(projection.allowed_operations) or "none",
+                    ),
+                ),
+                state=ViewState.ERROR,
+            )
         )
 
     def _load_destination_conversation(
@@ -1832,9 +1528,9 @@ class InteractiveController:
         session_id: str,
         attachment: AttachmentKind,
         focused_conversation: ConversationMetadata | None,
-        memory_service: ConversationMemoryService,
+        history_service: CollaborationHistoryService,
     ) -> None:
-        """Persist and commit one destination with its scoped memory service.
+        """Persist and commit one destination with its scoped history service.
 
         The default is written only after access acquisition. A write failure
         releases the destination before it is reported; failed release makes
@@ -1850,7 +1546,7 @@ class InteractiveController:
             session_id,
             attachment,
             focused_conversation,
-            memory_service,
+            history_service,
         )
 
     def _switch_attached_session(
@@ -1858,19 +1554,39 @@ class InteractiveController:
         destination_session: str,
         attachment: AttachmentKind,
         focused_conversation: ConversationMetadata | None,
-        memory_service: ConversationMemoryService,
+        history_service: CollaborationHistoryService,
     ) -> None:
         """Save the destination default before replacing source and read scope.
 
-        Destination acquisition has already succeeded. Default-write failure
-        releases it and preserves the source. Source-release failure after the
-        default write is not rolled back; owned resources are closed best
-        effort and the process exits with ``cleanup_failed``. The candidate
-        memory service commits only after source access is released.
+        Destination enter and source leave assessments have already succeeded.
+        Default-write failure releases the destination and preserves the
+        source. Source-release failure after the default write is not rolled
+        back; owned resources are closed best effort and the process exits with
+        ``cleanup_failed``. The candidate history service commits only after
+        source access is released.
         """
 
         source_session = self._attached_session_id
         assert source_session is not None
+        try:
+            source_lifecycle = self._backend.get_session_lifecycle(source_session)
+            require_ready_access_state(source_lifecycle, source_session)
+            assessment = self._assess_session_transition(
+                source_lifecycle,
+                SessionTransitionOperation.LEAVE_SOURCE,
+                self._focused_conversation,
+            )
+        except Exception as exc:
+            self._release_uncommitted_destination(destination_session)
+            self._present_session_failure(exc, source_session)
+            return
+        if not transition_operation_is_allowed(
+            assessment,
+            SessionTransitionOperation.LEAVE_SOURCE,
+        ):
+            self._release_uncommitted_destination(destination_session)
+            self._write_transition_denial(assessment)
+            return
         next_context = self._persist_destination_default(destination_session)
         if next_context is None:
             return
@@ -1879,13 +1595,13 @@ class InteractiveController:
             require_released_state(released, source_session)
         except Exception:
             self._abandon_known_attachment_for_cleanup_abort()
-        self._conversation_memory_service = None
+        self._collaboration_history_service = None
         self._commit_attached_session(
             next_context,
             destination_session,
             attachment,
             focused_conversation,
-            memory_service,
+            history_service,
         )
 
     def _persist_destination_default(
@@ -1942,9 +1658,9 @@ class InteractiveController:
         session_id: str,
         attachment: AttachmentKind,
         focused_conversation: ConversationMetadata | None,
-        memory_service: ConversationMemoryService,
+        history_service: CollaborationHistoryService,
     ) -> None:
-        """Commit attachment, memory scope, routing, and orientation together.
+        """Commit attachment, memory scope, and orientation together.
 
         Destination access and the story-session default are already durable.
         This method performs no backend or catalog lifecycle operation and
@@ -1954,8 +1670,7 @@ class InteractiveController:
         self._context = context
         self._attached_session_id = session_id
         self._focused_conversation = focused_conversation
-        self._conversation_memory_service = memory_service
-        self._target_agent_id = LEAD_ORCHESTRATOR
+        self._collaboration_history_service = history_service
         self._trace_debug(
             DebugOperation.ATTACHMENT,
             DebugPhase.SUCCEEDED,
@@ -1968,15 +1683,17 @@ class InteractiveController:
                 DebugPhase.SUCCEEDED,
                 session_id=session_id,
                 conversation_id=focused_conversation.conversation_id,
-                agent_id=self._target_agent_id,
                 outcome=DebugOutcome.COMPLETED,
             )
-        self._terminal.write_session_orientation(
-            str(self._workspace.root),
-            session_id,
-            attachment,
-            self._target_agent_id,
-            history_count=None,
+        self._semantic_output.write_component(
+            Record(
+                "session",
+                fields=(
+                    Field("Workspace", str(self._workspace.root)),
+                    Field("Session", f"{session_id} ({attachment.value})"),
+                ),
+                state=ViewState.COMPLETED,
+            )
         )
 
     def _provider_work_is_ready(self, state: SessionLifecycleState) -> bool:
@@ -2001,13 +1718,12 @@ class InteractiveController:
         Main Ctrl-C clears only the current input operation. Main EOF, quit, or
         EOF during a call-local subject or confirmation read returns 0. Each
         attached input revalidates its current conversation scope and presents
-        it only when its semantic snapshot changed. Advisory turns run
-        sequentially, and fatal transition or turn uncertainty reaches the
-        outer backend cleanup boundary.
+        it only when its semantic snapshot changed. Fatal transition uncertainty
+        reaches the outer backend cleanup boundary.
         """
 
         unpresented_scope = object()
-        last_presented_scope: object | tuple[str, str | None, str | None, str] = (
+        last_presented_scope: object | tuple[str, str | None, str | None] = (
             unpresented_scope
         )
         while True:
@@ -2017,17 +1733,10 @@ class InteractiveController:
                 last_presented_scope = self._write_attached_conversation_scope(
                     last_presented_scope
                 )
-            terminal_action = self._main_input.read_main_with_references(
+            terminal_action = self._main_input.read_main(
                 self._main_resume_choices,
-                self._main_reference_scope,
-                self._reference_paths,
-                self._reference_text,
                 session_id=self._attached_session_id,
-                agent_id=(
-                    self._target_agent_id
-                    if self._attached_session_id is not None
-                    else None
-                ),
+                agent_id=None,
                 header_provider=self._main_runtime_header,
             )
             if terminal_action.kind is TerminalActionKind.INTERRUPT:
@@ -2046,7 +1755,7 @@ class InteractiveController:
                 return 0
 
     def _main_runtime_header(self, buffer: str, cursor: int) -> Notice:
-        """Project the exact active or one-shot execution target while editing."""
+        """Project the deterministic integration-stage execution boundary."""
 
         if not isinstance(buffer, str):
             raise TypeError("buffer must be a string")
@@ -2054,60 +1763,11 @@ class InteractiveController:
             raise TypeError("cursor must be an integer")
         if cursor < 0 or cursor > len(buffer):
             raise ValueError("cursor must identify a buffer boundary")
-        if self._attached_session_id is None:
-            return Notice(
-                "Attach a story session to activate an agent execution profile.",
-                label="active runtime",
-                role=SemanticRole.MUTED,
-                state=ViewState.EMPTY,
-            )
-
-        agent_id = self._target_agent_id
-        one_shot = False
-        if buffer.startswith("@"):
-            token_end = len(buffer)
-            for index, character in enumerate(buffer):
-                if character in " \t":
-                    token_end = index
-                    break
-            alias = buffer[1:token_end]
-            routed = next(
-                (route.agent_id for route in AGENT_ROUTES if alias in route.aliases),
-                None,
-            )
-            if routed is not None:
-                agent_id = routed
-                one_shot = True
-
-        label = "one-shot runtime" if one_shot else "active runtime"
-        if not self._show_message_details:
-            return Notice(
-                AGENT_SPECS[agent_id].display_name,
-                label=label,
-                role=SemanticRole.INFO,
-                state=ViewState.COMPLETED,
-            )
-
-        profile = self._backend.execution_profile(agent_id)
-        confirmation = self._backend.execution_profile_confirmation(agent_id)
         return Notice(
-            (
-                f"{AGENT_SPECS[agent_id].display_name} · "
-                f"{_provider_display_name(profile.provider)} · "
-                f"model {_execution_value(profile.model)} · "
-                f"effort {_execution_value(profile.effort)} · {confirmation}"
-            ),
-            label=label,
-            role=(
-                SemanticRole.INFO
-                if confirmation == "confirmed"
-                else SemanticRole.WARNING
-            ),
-            state=(
-                ViewState.COMPLETED
-                if confirmation == "confirmed"
-                else ViewState.LOADING
-            ),
+            _DIRECT_EXECUTION_UNAVAILABLE,
+            label="integration stage",
+            role=SemanticRole.MUTED,
+            state=ViewState.EMPTY,
         )
 
     def _main_resume_choices(
@@ -2203,58 +1863,6 @@ class InteractiveController:
         except Exception:
             return None
 
-    def _main_reference_scope(
-        self,
-        buffer: str,
-        cursor: int,
-    ) -> ReferenceInputScope | None:
-        """Project only attached, focused provider text into terminal input."""
-
-        if self._attached_session_id is None or self._focused_conversation is None:
-            return None
-        span = project_provider_text_span(buffer, cursor)
-        if span is None:
-            return None
-        return ReferenceInputScope(span.start, span.end)
-
-    @staticmethod
-    def _composition_reference_scope(
-        buffer: str,
-        cursor: int,
-    ) -> ReferenceInputScope:
-        """Expose exactly one RUN/CHAT composition buffer as provider text."""
-
-        if type(buffer) is not str:
-            raise TypeError("buffer must be a string")
-        if type(cursor) is not int:
-            raise TypeError("cursor must be an integer")
-        if cursor < 0 or cursor > len(buffer):
-            raise ValueError("cursor must identify a buffer boundary")
-        return ReferenceInputScope(0, len(buffer))
-
-    def _reference_paths(self) -> tuple[str, ...]:
-        """Borrow one current canonical path snapshot from the repository."""
-
-        try:
-            return self._runtime.artifacts.list_paths()
-        except (OSError, WorkspaceFormatError, WorkspaceSecurityError):
-            raise ReferenceInputFailure(ReferenceInputFailureKind.UNAVAILABLE) from None
-
-    def _reference_text(self, path: str) -> str:
-        """Borrow one revalidated bounded artifact body for the viewer."""
-
-        try:
-            return self._runtime.artifacts.read_text(
-                path,
-                max_bytes=MAX_VIEWER_UTF8_BYTES,
-            )
-        except WorkspaceSecurityError:
-            raise ReferenceInputFailure(ReferenceInputFailureKind.STALE) from None
-        except WorkspaceFormatError:
-            raise ReferenceInputFailure(ReferenceInputFailureKind.UNREADABLE) from None
-        except OSError:
-            raise ReferenceInputFailure(ReferenceInputFailureKind.UNAVAILABLE) from None
-
     def _dispatch_session_lobby_action(
         self,
         action: InteractiveAction,
@@ -2262,20 +1870,17 @@ class InteractiveController:
     ) -> bool:
         """Record and execute one fixed parsed interactive command."""
 
-        self._synchronize_pending_rag_scope()
         session_id = self._attached_session_id
         conversation_id = (
             None
             if self._focused_conversation is None
             else self._focused_conversation.conversation_id
         )
-        agent_id = self._target_agent_id if session_id is not None else None
         self._trace_debug(
             DebugOperation.INTERACTIVE_COMMAND,
             DebugPhase.STARTED,
             session_id=session_id,
             conversation_id=conversation_id,
-            agent_id=agent_id,
         )
         error_write_count = self._error_write_count
         try:
@@ -2294,7 +1899,6 @@ class InteractiveController:
                 exc,
                 session_id=session_id,
                 conversation_id=conversation_id,
-                agent_id=agent_id,
                 phase=DebugPhase.CANCELLED,
                 outcome=DebugOutcome.INTERRUPTED,
             )
@@ -2305,11 +1909,8 @@ class InteractiveController:
                 exc,
                 session_id=session_id,
                 conversation_id=conversation_id,
-                agent_id=agent_id,
             )
             raise
-        finally:
-            self._synchronize_pending_rag_scope()
         rejected = self._error_write_count > error_write_count
         self._trace_debug(
             DebugOperation.INTERACTIVE_COMMAND,
@@ -2319,9 +1920,6 @@ class InteractiveController:
                 None
                 if self._focused_conversation is None
                 else self._focused_conversation.conversation_id
-            ),
-            agent_id=(
-                self._target_agent_id if self._attached_session_id is not None else None
             ),
             outcome=(DebugOutcome.REJECTED if rejected else DebugOutcome.COMPLETED),
         )
@@ -2337,10 +1935,9 @@ class InteractiveController:
         ``original_line`` is used only to choose the trusted parse-error
         category. Global help/status, directives, inspection, focused history,
         roster, story-session navigation, search, and transcript reads remain
-        provider-free; routed and consensus content use the retained runtime.
-        The returned boolean signals loop exit; command-specific state changes
-        are delegated to their owners, and fatal failures reach outer cleanup
-        without local resource acquisition.
+        provider-free. The returned boolean signals loop exit; command-specific
+        state changes are delegated to their owners, and fatal failures reach
+        outer cleanup without local resource acquisition.
         """
 
         if action.kind is ActionKind.IGNORED:
@@ -2369,7 +1966,6 @@ class InteractiveController:
         if action.kind is ActionKind.SESSION_PAUSE:
             return self._pause_attached_session()
         if action.kind is ActionKind.QUIT:
-            self._pending_rag_query = None
             return True
         if action.kind is ActionKind.PARSE_ERROR:
             self._write_parser_error(action, original_line)
@@ -2393,24 +1989,6 @@ class InteractiveController:
         if action.kind is ActionKind.HISTORY:
             self._write_focused_conversation_history(action)
             return False
-        if action.kind is ActionKind.SET_TARGET:
-            self._set_target_agent(action)
-            return False
-        if action.kind is ActionKind.RAG:
-            self._arm_conversation_rag_query(action)
-            return False
-        if action.kind in {
-            ActionKind.MESSAGE,
-            ActionKind.ROUTED_MESSAGE,
-        }:
-            self._run_advisory_turn(action)
-            return False
-        if action.kind in {
-            ActionKind.RUN,
-            ActionKind.RUN_FRESH,
-            ActionKind.DRAFT_FILE,
-        }:
-            return self._run_consensus_action(action)
         if action.kind in {ActionKind.SEARCH, ActionKind.TRANSCRIPT}:
             if self._attached_session_id is None:
                 self._write_error(
@@ -5057,8 +4635,8 @@ class InteractiveController:
             ConversationStorageSelectionFailure.PROVISIONING_FAILED: (
                 "SQLite conversation storage is unavailable or invalid."
             ),
-            ConversationStorageSelectionFailure.MIGRATION_REQUIRED: (
-                "Migrate the active conversations to the requested backend first."
+            ConversationStorageSelectionFailure.TRANSFER_REQUIRED: (
+                "Transfer the active conversations to the requested backend first."
             ),
             ConversationStorageSelectionFailure.PARITY_MISMATCH: (
                 "Fresh conversation archive parity does not match."
@@ -5098,7 +4676,7 @@ class InteractiveController:
         )
 
     def _write_agent_roster(self) -> None:
-        """Render canonical agents with their compact active execution profiles."""
+        """Render canonical read-only agent metadata and configuration status."""
 
         profiles = {
             profile.agent_id: profile for profile in self._backend.execution_profiles()
@@ -5109,7 +4687,6 @@ class InteractiveController:
                 title=AGENT_SPECS[route.agent_id].display_name,
                 fields=(
                     Field("ID", route.agent_id),
-                    Field("Aliases", ", ".join(route.aliases)),
                     Field("Advisory domain", route.advisory_domain),
                     self._execution_profile_field(
                         profiles[route.agent_id],
@@ -5266,14 +4843,6 @@ class InteractiveController:
                     Field("Current attachment", attached_session or "none"),
                     Field("Default conversation", default_conversation or "none"),
                     Field("Current focus", focused_id or "none"),
-                    Field(
-                        "Agent focus",
-                        (
-                            self._target_agent_id
-                            if attached_session is not None
-                            else "none"
-                        ),
-                    ),
                     Field("Provider readiness", "yes" if provider_ready else "no"),
                     Field("Next action", next_action),
                 ),
@@ -5283,13 +4852,13 @@ class InteractiveController:
 
         if attached_session is None:
             return
-        if type(self._conversation_memory_service) is not ConversationMemoryService:
+        if type(self._collaboration_history_service) is not CollaborationHistoryService:
             raise _ControllerAbort(
                 InteractiveError(InteractiveErrorCode.INTERNAL_ERROR)
             )
         if focus is None:
             self._write_notice(
-                "Conversation focus: none | Context: unavailable | Last run: none.",
+                "Conversation focus: none | Context: unavailable.",
                 label="context",
                 role=SemanticRole.MUTED,
                 state=ViewState.EMPTY,
@@ -5310,7 +4879,7 @@ class InteractiveController:
                     InteractiveError(InteractiveErrorCode.CONVERSATION_ARCHIVED)
                 )
                 return
-            events, context = self._read_focused_transcript_snapshot(current)
+            records, projection = self._read_focused_history_snapshot(current)
         except ConversationNotFoundError as exc:
             self._present_conversation_failure(exc)
             return
@@ -5334,69 +4903,33 @@ class InteractiveController:
             Record(
                 "context",
                 fields=(
-                    Field("History displayed", f"{len(events)}/{len(events)} events"),
-                    Field("Complete turns", str(context.total_complete_turns)),
+                    Field("History records", str(len(records))),
+                    Field("Last sequence", str(projection.last_sequence)),
                     Field(
-                        "Context retained",
-                        f"{context.retained_turns} turns, {len(context.events)} events",
+                        "Current state",
+                        self._collaboration_state_meaning(projection)[0],
                     ),
-                    Field("Omitted turns", str(context.omitted_turns)),
                     Field(
-                        "UTF-8 bytes",
-                        (
-                            f"{context.retained_utf8_bytes}/"
-                            f"{CONVERSATION_CONTEXT_POLICY.max_utf8_bytes}"
+                        "User meaning", self._collaboration_state_meaning(projection)[1]
+                    ),
+                    Field("Next safe action", projection.next_safe_action.value),
+                    Field(
+                        "Next action meaning",
+                        self._collaboration_next_action_meaning(
+                            projection.next_safe_action
                         ),
                     ),
-                    Field(
-                        "Turn cap",
-                        str(CONVERSATION_CONTEXT_POLICY.max_complete_turns),
-                    ),
-                    Field(
-                        "Truncated",
-                        f"{'yes' if context.truncated else 'no'}.",
-                    ),
                 ),
-                state=ViewState.COMPLETED,
+                state=(ViewState.EMPTY if not records else ViewState.COMPLETED),
             ),
         )
-        last_debate = self._last_started_debate_by_session.get(attached_session)
-        if last_debate is None:
-            self._semantic_output.write_component(
-                Record(
-                    "result",
-                    fields=(
-                        Field("Search", "available, active-only"),
-                        Field("Last interactive run", "none."),
-                    ),
-                    state=ViewState.COMPLETED,
-                )
+        self._semantic_output.write_component(
+            Record(
+                "result",
+                fields=(Field("Search", "available, active-only"),),
+                state=ViewState.COMPLETED,
             )
-        else:
-            try:
-                debate_facts, context_facts = self._read_safe_debate_inspection(
-                    attached_session,
-                    last_debate,
-                    include_context=True,
-                )
-            except Exception as exc:
-                self._present_runtime_inspection_failure(exc)
-                return
-            last_items: list[Record | Notice] = [
-                self._debate_inspection_record(debate_facts)
-            ]
-            if debate_facts.status != "not_found":
-                last_items.append(self._debate_context_component(context_facts))
-            self._semantic_output.write_component(
-                Panel(
-                    "Result",
-                    (
-                        Field("Search", "available, active-only"),
-                        Section("Last interactive run", tuple(last_items)),
-                    ),
-                    state=ViewState.COMPLETED,
-                )
-            )
+        )
 
     def _apply_attached_runtime_directive(
         self,
@@ -5525,14 +5058,12 @@ class InteractiveController:
         self,
         action: InteractiveAction,
     ) -> None:
-        """Render the focused transcript snapshot and context accounting.
+        """Render structured collaboration history and current durable state.
 
         The command requires an attached active focus. It reads the
-        authoritative event store exactly once, derives bounded context from
-        that exact tuple, and displays either all events or the requested newest
-        suffix in chronological order. No cursor, mutation, search, or provider
-        operation occurs. Ctrl-C stops rendering after any completed rows and
-        returns to the same attached prompt.
+        authoritative event store exactly once and validates the full history
+        before rendering a requested suffix. No cursor, mutation, search, or
+        provider operation occurs.
         """
 
         try:
@@ -5558,7 +5089,7 @@ class InteractiveController:
         if focused is None:
             return
         try:
-            events, context = self._read_focused_transcript_snapshot(focused)
+            records, projection = self._read_focused_history_snapshot(focused)
         except _ControllerAbort:
             raise
         except Exception as exc:
@@ -5567,12 +5098,12 @@ class InteractiveController:
             self._present_transcript_service_failure(exc)
             return
 
-        displayed = events if action.count is None else events[-action.count :]
+        displayed = records if action.count is None else records[-action.count :]
         total_count = len(displayed)
         for position, event in enumerate(displayed, start=1):
             self._write_counted_list_row(
                 "History",
-                self._conversation_event_message(event),
+                self._collaboration_record_view(event),
                 position=position,
                 total_count=total_count,
             )
@@ -5582,62 +5113,63 @@ class InteractiveController:
                 fields=(
                     Field(
                         "History displayed",
-                        f"{len(displayed)}/{len(events)} events",
+                        f"{len(displayed)}/{len(records)} records",
                     ),
-                    Field("Complete turns", str(context.total_complete_turns)),
+                    Field("Last sequence", str(projection.last_sequence)),
                     Field(
-                        "Context retained",
-                        f"{context.retained_turns} turns, {len(context.events)} events",
+                        "Current state",
+                        self._collaboration_state_meaning(projection)[0],
                     ),
-                    Field("Omitted turns", str(context.omitted_turns)),
                     Field(
-                        "UTF-8 bytes",
-                        (
-                            f"{context.retained_utf8_bytes}/"
-                            f"{CONVERSATION_CONTEXT_POLICY.max_utf8_bytes}"
+                        "User meaning",
+                        self._collaboration_state_meaning(projection)[1],
+                    ),
+                    Field("Next safe action", projection.next_safe_action.value),
+                    Field(
+                        "Next action meaning",
+                        self._collaboration_next_action_meaning(
+                            projection.next_safe_action
                         ),
-                    ),
-                    Field(
-                        "Turn cap",
-                        str(CONVERSATION_CONTEXT_POLICY.max_complete_turns),
-                    ),
-                    Field(
-                        "Truncated",
-                        f"{'yes' if context.truncated else 'no'}.",
                     ),
                 ),
                 state=(ViewState.EMPTY if not displayed else ViewState.COMPLETED),
             ),
         )
 
-    def _read_focused_transcript_snapshot(
+    def _read_focused_history_snapshot(
         self,
         focused: ConversationMetadata,
-    ) -> tuple[tuple[ConversationEvent, ...], ConversationContextWindow]:
-        """Read the focused transcript once and derive canonical context.
+    ) -> tuple[
+        tuple[CollaborationReadableRecord, ...],
+        CollaborationHistoryProjection,
+    ]:
+        """Read and fully validate the focused v2 history exactly once.
 
-        The retained filesystem adapter remains the authoritative read owner;
-        the pure selector consumes the exact immutable tuple it returns. The
-        method performs no append, provider call, search, or private reach-through.
+        The selected v2 event store remains the authoritative read owner; the
+        pure selector consumes the exact immutable tuple it returns. The method
+        performs no append, provider call, search, or private reach-through.
         """
 
         session_id = self._attached_session_id
         assert session_id is not None
-        events = self._conversation_event_store.read(
+        events = self._conversation_storage_services.event_store.read(
             session_id,
             focused.conversation_id,
         )
-        context = select_bounded_conversation_context(events)
-        return events, context
+        return validate_history_snapshot(
+            events,
+            session_id=session_id,
+            conversation_id=focused.conversation_id,
+        )
 
     def _inspect_attached_runtime(self, action: InteractiveAction) -> None:
         """Render a safe attached-session or debate inspection projection.
 
         Bare inspection lists only whitelisted persisted debate summaries.
         Explicit IDs are read exactly as supplied, while ``last`` resolves the
-        process-local latest accepted STARTED run for this attached session.
-        Inspection never updates that mapping or renders persisted content,
-        errors, raw state, provider data, or candidate text.
+        final persisted debate summary for this attached session. Inspection
+        never renders persisted content, errors, raw state, provider data, or
+        candidate text.
         """
 
         assert action.kind is ActionKind.INSPECT
@@ -5673,18 +5205,23 @@ class InteractiveController:
             return
 
         if action.argument == "last":
-            debate_id = self._last_started_debate_by_session.get(session_id)
-            if debate_id is None:
+            try:
+                summaries = validate_session_inspection(
+                    self._runtime.inspect_session(session_id),
+                    session_id=session_id,
+                )
+            except Exception as exc:
+                self._present_runtime_inspection_failure(exc)
+                return
+            if not summaries:
                 self._write_notice(
-                    (
-                        "No interactive consensus run has started in "
-                        f"session {session_id} during this process."
-                    ),
+                    f"No persisted debates were found in session {session_id}.",
                     label="result",
                     role=SemanticRole.MUTED,
                     state=ViewState.EMPTY,
                 )
                 return
+            debate_id = summaries[-1].debate_id
         else:
             debate_id = action.argument
 
@@ -6109,1320 +5646,6 @@ class InteractiveController:
 
         self._present_memory_error(classify_inspection_failure(failure))
 
-    def _synchronize_pending_rag_scope(self) -> None:
-        """Discard a pending query after its exact attachment scope changes."""
-
-        pending = self._pending_rag_query
-        if pending is None:
-            return
-        conversation_id = (
-            None
-            if self._focused_conversation is None
-            else self._focused_conversation.conversation_id
-        )
-        if (
-            pending.session_id != self._attached_session_id
-            or pending.conversation_id != conversation_id
-        ):
-            self._pending_rag_query = None
-
-    def _arm_conversation_rag_query(self, action: InteractiveAction) -> None:
-        """Replace one exact-scope private query without provider or durability."""
-
-        assert action.kind is ActionKind.RAG
-        assert action.rag_query is not None
-        if self._attached_session_id is None:
-            self._write_error(
-                InteractiveError(InteractiveErrorCode.SESSION_NOT_ATTACHED)
-            )
-            return
-        focused = self._require_active_conversation_focus()
-        if focused is None:
-            return
-        self._pending_rag_query = _PendingConversationRagQuery(
-            session_id=self._attached_session_id,
-            conversation_id=focused.conversation_id,
-            query=action.rag_query,
-        )
-        self._write_notice(
-            (
-                "Conversation RAG is armed for the next ordinary, /say, or "
-                "routed story turn in this conversation."
-            ),
-            label="conversation RAG",
-            role=SemanticRole.SUCCESS,
-            state=ViewState.COMPLETED,
-        )
-
-    def _consume_pending_rag_query(
-        self,
-        *,
-        session_id: str,
-        conversation_id: str,
-    ) -> str | None:
-        """Consume one matching query only after its advisory coroutine enters."""
-
-        pending = self._pending_rag_query
-        if pending is None:
-            return None
-        if (
-            pending.session_id != session_id
-            or pending.conversation_id != conversation_id
-        ):
-            self._pending_rag_query = None
-            return None
-        self._pending_rag_query = None
-        return pending.query
-
-    def _set_target_agent(self, action: InteractiveAction) -> None:
-        """Set one attached process's sticky responder without provider work.
-
-        The validated action supplies a canonical agent and the method returns
-        no value. An unattached controller renders ``session_not_attached``;
-        success mutates only process-local routing and needs no cleanup.
-        """
-
-        assert action.kind is ActionKind.SET_TARGET
-        assert action.agent_id is not None
-        if self._attached_session_id is None:
-            self._write_error(
-                InteractiveError(InteractiveErrorCode.SESSION_NOT_ATTACHED)
-            )
-            return
-        self._target_agent_id = action.agent_id
-        self._write_notice(
-            f"Sticky target set to {action.agent_id}.",
-            label="routing",
-            role=SemanticRole.SUCCESS,
-            state=ViewState.COMPLETED,
-        )
-
-    def _run_advisory_turn(self, action: InteractiveAction) -> None:
-        """Run one focused-conversation retrieval turn through the runtime.
-
-        ``MESSAGE`` uses the sticky target and ``ROUTED_MESSAGE`` uses its
-        one-shot canonical agent without changing sticky state. The method
-        revalidates attachment and focus, passes the retained attachment-
-        scoped memory service, validates and renders content-free progress,
-        and submits exactly one coroutine to the controller-owned Runner before
-        rendering the validated answer and sources. A first Ctrl-C is successful
-        before coroutine entry only when the Runner is quiescent, or after entry
-        only when cancellation reaches and joins the runtime coroutine.
-        ``StoryRuntime`` remains the sole durability owner. Typed semantic and
-        budget failures return to the prompt; observer, invalid-result, or
-        uncertain ownership failures abort into the ordered cleanup boundary.
-        """
-
-        if self._attached_session_id is None:
-            self._write_error(
-                InteractiveError(InteractiveErrorCode.SESSION_NOT_ATTACHED)
-            )
-            return
-        focused = self._require_active_conversation_focus()
-        if focused is None:
-            return
-
-        session_id = self._attached_session_id
-        assert session_id is not None
-        assert action.text is not None
-        turn_text = action.text
-        if action.kind is ActionKind.ROUTED_MESSAGE:
-            assert action.agent_id is not None
-            agent_id = action.agent_id
-        else:
-            assert action.kind is ActionKind.MESSAGE
-            agent_id = self._target_agent_id
-        display_name = AGENT_SPECS[agent_id].display_name
-        execution_profile = (
-            self._backend.execution_profile(agent_id)
-            if self._show_message_details
-            else None
-        )
-
-        memory_service = self._conversation_memory_service
-        if type(memory_service) is not ConversationMemoryService:
-            raise _ControllerAbort(
-                InteractiveError(InteractiveErrorCode.INTERNAL_ERROR)
-            )
-        runner = self._runner
-        if runner is None:
-            raise _ControllerAbort(
-                InteractiveError(InteractiveErrorCode.INTERNAL_ERROR)
-            )
-        self._semantic_output.write_accepted_input(
-            Message(
-                f"You → {display_name}",
-                turn_text,
-                role=SemanticRole.DEFAULT,
-                state=ViewState.COMPLETED,
-                presentation=MessagePresentation.CHAT_BLOCK,
-                accent=SpeakerAccent.MAGENTA,
-            )
-        )
-        progress_events: list[ConversationRetrievalProgressEvent] = []
-        context_operations: dict[
-            tuple[str, str, str, str, str, str],
-            ContextProgressProjection,
-        ] = {}
-        progress_callback_failure: BaseException | None = None
-        supports_context_progress = bool(
-            "context_event_sink"
-            in inspect.signature(
-                self._runtime.converse_with_retrieval
-            ).parameters
-            and getattr(
-                self._runtime,
-                "conversation_storage_services",
-                None,
-            )
-            is not None
-        )
-
-        def accept_and_render_progress(
-            event: ConversationRetrievalProgressEvent,
-        ) -> None:
-            """Retain callback failure identity while accepting one event."""
-
-            nonlocal progress_callback_failure
-            try:
-                self._accept_conversation_retrieval_progress(
-                    event,
-                    expected_session_id=session_id,
-                    expected_conversation_id=focused.conversation_id,
-                    expected_agent_id=agent_id,
-                    events=progress_events,
-                )
-            except BaseException as exc:
-                progress_callback_failure = exc
-                raise
-
-        def accept_and_render_context_progress(event: object) -> None:
-            """Validate generic lifecycle facts and retain callback failures."""
-
-            nonlocal progress_callback_failure
-            try:
-                self._accept_context_progress(
-                    event,
-                    expected_session_id=session_id,
-                    expected_subject_kind="conversation",
-                    expected_subject_id=focused.conversation_id,
-                    expected_agent_id=agent_id,
-                    operations=context_operations,
-                    suppress_retrieval_actions=True,
-                )
-            except BaseException as exc:
-                progress_callback_failure = exc
-                raise
-
-        operation_entered = False
-        cancellation_reached_operation = False
-        operation_joined = False
-
-        async def run_joined_advisory_operation() -> ConversationRetrievalResult:
-            """Await the turn while recording cancellation and final joining."""
-
-            nonlocal operation_entered
-            nonlocal cancellation_reached_operation
-            nonlocal operation_joined
-            operation_entered = True
-            try:
-                rag_query = self._consume_pending_rag_query(
-                    session_id=session_id,
-                    conversation_id=focused.conversation_id,
-                )
-                context_observer = (
-                    {"context_event_sink": accept_and_render_context_progress}
-                    if supports_context_progress
-                    else {}
-                )
-                return await self._runtime.converse_with_retrieval(
-                    session_id,
-                    focused.conversation_id,
-                    agent_id,
-                    turn_text,
-                    memory_service=memory_service,
-                    progress_sink=accept_and_render_progress,
-                    rag_query=rag_query,
-                    **context_observer,
-                )
-            except asyncio.CancelledError:
-                cancellation_reached_operation = True
-                raise
-            finally:
-                operation_joined = True
-
-        operation_coroutine = run_joined_advisory_operation()
-        progress_coroutine = self._advisory_progress.run(operation_coroutine)
-        try:
-            result = runner.run(progress_coroutine)
-        except KeyboardInterrupt:
-            if progress_callback_failure is not None:
-                raise _ControllerAbort(
-                    classify_progress_callback_failure(progress_callback_failure)
-                ) from None
-            if not operation_entered:
-                cancellation_is_safe = self._interactive_runner_is_quiescent()
-            else:
-                cancellation_is_safe = (
-                    cancellation_reached_operation and operation_joined
-                )
-            if not cancellation_is_safe:
-                raise _ControllerAbort(
-                    InteractiveError(InteractiveErrorCode.OPERATION_INTERRUPTED)
-                ) from None
-            self._write_notice(
-                f"{display_name} turn was interrupted.",
-                label="cancelled",
-                role=SemanticRole.WARNING,
-                state=ViewState.CANCELLED,
-            )
-            self._write_notice(
-                (
-                    "The story session remains attached; the affected "
-                    "provider thread may restart on the next message."
-                ),
-                label="hint",
-                state=ViewState.COMPLETED,
-            )
-            return
-        except asyncio.CancelledError:
-            raise _ControllerAbort(
-                InteractiveError(InteractiveErrorCode.OPERATION_INTERRUPTED)
-            ) from None
-        except ConversationRetrievalObserverError as exc:
-            raise _ControllerAbort(
-                classify_progress_callback_failure(
-                    progress_callback_failure or exc.__cause__ or exc
-                )
-            ) from None
-        except AdvisoryProgressError:
-            raise _ControllerAbort(
-                InteractiveError(InteractiveErrorCode.INTERNAL_ERROR)
-            ) from None
-        except Exception as exc:
-            if progress_callback_failure is not None:
-                raise _ControllerAbort(
-                    classify_progress_callback_failure(progress_callback_failure)
-                ) from None
-            self._present_advisory_turn_failure(exc)
-            return
-        finally:
-            if not operation_entered:
-                operation_coroutine.close()
-                progress_coroutine.close()
-
-        if supports_context_progress and (
-            len(context_operations) != 1
-            or any(
-                not event.terminal or event.kind != "checkpoint_advanced"
-                for event in context_operations.values()
-            )
-        ):
-            raise _ControllerAbort(
-                InteractiveError(InteractiveErrorCode.INTERNAL_ERROR)
-            )
-        try:
-            result = validate_conversation_retrieval_result(
-                result,
-                expected_session_id=session_id,
-                expected_conversation_id=focused.conversation_id,
-                expected_agent_id=agent_id,
-                progress_events=tuple(progress_events),
-            )
-        except (AttributeError, TypeError, ValueError):
-            raise _ControllerAbort(
-                InteractiveError(InteractiveErrorCode.INTERNAL_ERROR)
-            ) from None
-        self._render_conversation_rag_outcome(result)
-        if result.context.truncated:
-            event_count = len(result.context.events)
-            retained_turns = result.context.retained_turns
-            omitted_turns = result.context.omitted_turns
-            self._semantic_output.write_component(
-                Record(
-                    "context",
-                    fields=(
-                        Field(
-                            "Context truncated",
-                            (
-                                f"{event_count} "
-                                f"{'event' if event_count == 1 else 'events'} "
-                                "retained across "
-                                f"{retained_turns} "
-                                f"{'turn' if retained_turns == 1 else 'turns'}; "
-                                f"{omitted_turns} earlier "
-                                f"{'turn' if omitted_turns == 1 else 'turns'} "
-                                "omitted."
-                            ),
-                        ),
-                    ),
-                    role=SemanticRole.WARNING,
-                    state=ViewState.COMPLETED,
-                ),
-            )
-        metadata = None
-        if self._show_message_details:
-            assert execution_profile is not None
-            confirmation = self._backend.execution_profile_confirmation(agent_id)
-            thread_status = self._backend.execution_profile_thread_status(agent_id)
-            metadata = _compact_reply_metadata(
-                execution_profile,
-                confirmation=confirmation,
-                thread_status=thread_status,
-            )
-        self._semantic_output.write_component(
-            Message(
-                f"{display_name} → You",
-                format_agent_reply_content(result.content),
-                role=SemanticRole.AGENT,
-                state=ViewState.COMPLETED,
-                presentation=MessagePresentation.CHAT_BLOCK,
-                metadata=metadata,
-                accent=_AGENT_SPEAKER_ACCENTS[agent_id],
-            )
-        )
-        self._render_conversation_retrieval_sources(result.sources)
-
-    def _render_conversation_rag_outcome(
-        self,
-        result: ConversationRetrievalResult,
-    ) -> None:
-        """Render only the fixed content-free facts of one attempted preflight."""
-
-        attempt = result.rag_outcome
-        if attempt is None:
-            return
-        self._semantic_output.write_component(
-            Record(
-                "context",
-                fields=(
-                    Field("Conversation RAG", attempt.outcome.value),
-                    Field("Reason", attempt.reason.value),
-                ),
-                role=(
-                    SemanticRole.SUCCESS
-                    if attempt.outcome.value == "complete"
-                    else SemanticRole.WARNING
-                ),
-                state=ViewState.COMPLETED,
-            )
-        )
-
-    def _accept_conversation_retrieval_progress(
-        self,
-        event: ConversationRetrievalProgressEvent,
-        *,
-        expected_session_id: str,
-        expected_conversation_id: str,
-        expected_agent_id: str,
-        events: list[ConversationRetrievalProgressEvent],
-    ) -> None:
-        """Validate, render, and retain one trusted retrieval progress fact.
-
-        The exact event is reconstructed and correlated with this advisory turn.
-        Search/read started-completed pairs and their action indexes must follow
-        the bounded phase order. Rendering mutates terminal output only; invalid
-        input or writer failure propagates through the runtime observer boundary
-        and cannot add transcript events here.
-        """
-
-        canonical = validate_conversation_retrieval_progress(
-            event,
-            expected_session_id=expected_session_id,
-            expected_conversation_id=expected_conversation_id,
-            expected_agent_id=expected_agent_id,
-            previous=events[-1] if events else None,
-        )
-        self._render_conversation_retrieval_progress(canonical)
-        events.append(canonical)
-
-    def _accept_context_progress(
-        self,
-        event: object,
-        *,
-        expected_session_id: str,
-        expected_subject_kind: str,
-        expected_subject_id: str | None,
-        expected_agent_id: str | None,
-        operations: dict[
-            tuple[str, str, str, str, str, str],
-            ContextProgressProjection,
-        ],
-        suppress_retrieval_actions: bool,
-    ) -> None:
-        """Validate, render, and retain one generic context lifecycle fact."""
-
-        canonical = validate_context_execution_progress(
-            event,
-            expected_session_id=expected_session_id,
-            expected_subject_kind=expected_subject_kind,
-            expected_subject_id=expected_subject_id,
-            expected_agent_id=expected_agent_id,
-            previous_by_operation=operations,
-        )
-        self._render_context_progress(
-            canonical,
-            suppress_retrieval_actions=suppress_retrieval_actions,
-        )
-        operations[canonical.operation_key] = canonical
-
-    def _render_context_progress(
-        self,
-        event: ContextProgressProjection,
-        *,
-        suppress_retrieval_actions: bool,
-    ) -> None:
-        """Render only fixed wording and validated content-free counters."""
-
-        if event.subject_kind == "debate":
-            assert event.phase is not None and event.round_number is not None
-            prefix = (
-                f"{event.agent_id} · round {event.round_number} · "
-                f"{event.phase}: "
-            )
-        else:
-            prefix = ""
-        kind = event.kind
-        if kind in {"bootstrap", "delta"}:
-            assert event.selected_source_count is not None
-            assert event.selected_source_utf8_bytes is not None
-            assert event.omitted_searchable_source_count is not None
-            text = (
-                f"{prefix}{kind}: {event.selected_source_count} selected / "
-                f"{event.selected_source_utf8_bytes:,} bytes; "
-                f"{event.omitted_searchable_source_count} searchable"
-            )
-            self._write_notice(text, label="context", state=ViewState.LOADING)
-            return
-        if kind == "omission":
-            # The preceding plan line already renders these exact facts.
-            return
-        if suppress_retrieval_actions and kind in {
-            "search_started",
-            "search_completed",
-            "read_started",
-            "read_completed",
-        }:
-            return
-        if kind == "search_started":
-            assert event.action_index is not None
-            text = f"{prefix}search action {event.action_index} started"
-            state = ViewState.LOADING
-            role = SemanticRole.INFO
-        elif kind == "search_completed":
-            assert event.action_index is not None
-            assert event.search_hit_count is not None
-            assert event.truncated is not None
-            text = (
-                f"{prefix}search action {event.action_index} completed: "
-                f"{event.search_hit_count} hits; truncated: "
-                f"{'yes' if event.truncated else 'no'}"
-            )
-            state = ViewState.COMPLETED
-            role = SemanticRole.INFO
-        elif kind == "read_started":
-            assert event.action_index is not None
-            text = f"{prefix}read action {event.action_index} started"
-            state = ViewState.LOADING
-            role = SemanticRole.INFO
-        elif kind == "read_completed":
-            assert event.retrieved_source_count is not None
-            assert event.retrieved_source_utf8_bytes is not None
-            text = (
-                f"{prefix}read {event.retrieved_source_count} sources / "
-                f"{event.retrieved_source_utf8_bytes:,} bytes"
-            )
-            state = ViewState.COMPLETED
-            role = SemanticRole.INFO
-        elif kind == "answer_authorized":
-            text = f"{prefix}answer accepted"
-            state = ViewState.COMPLETED
-            role = SemanticRole.SUCCESS
-        elif kind == "invalidated":
-            text = f"{prefix}source invalidated"
-            state = ViewState.ERROR
-            role = SemanticRole.ERROR
-        elif kind == "budget_exhausted":
-            text = f"{prefix}context budget exhausted"
-            state = ViewState.ERROR
-            role = SemanticRole.ERROR
-        elif kind == "action_exhausted":
-            text = f"{prefix}context actions exhausted"
-            state = ViewState.ERROR
-            role = SemanticRole.ERROR
-        elif kind == "tainted":
-            text = f"{prefix}provider context tainted"
-            state = ViewState.ERROR
-            role = SemanticRole.WARNING
-        elif kind == "checkpoint_advanced":
-            text = f"{prefix}checkpoint advanced"
-            state = ViewState.COMPLETED
-            role = SemanticRole.SUCCESS
-        else:
-            assert kind == "checkpoint_not_advanced"
-            text = f"{prefix}checkpoint not advanced"
-            state = ViewState.ERROR
-            role = SemanticRole.ERROR
-        self._write_notice(text, label="context", role=role, state=state)
-
-    def _render_conversation_retrieval_progress(
-        self,
-        event: ConversationRetrievalProgressEvent,
-    ) -> None:
-        """Render one validated content-free fact with the fixed context copy.
-
-        Only decimal typed counters, the fixed phase wording, and ``yes``/``no``
-        truncation are written through the existing sanitized status renderer.
-        No conversation transcript, controller state, or provider resource is
-        mutated; terminal writer failures propagate unchanged.
-        """
-
-        phase = event.phase
-        if phase is ConversationRetrievalProgressPhase.SEARCH_STARTED:
-            self._write_notice(
-                f"Retrieval search action {event.action_index} started.",
-                label="context",
-                state=ViewState.LOADING,
-            )
-            return
-        elif phase is ConversationRetrievalProgressPhase.SEARCH_COMPLETED:
-            title = None
-            fields = (
-                Field(
-                    f"Retrieval search action {event.action_index} completed",
-                    (
-                        f"{event.search_hit_count} hits; "
-                        f"{event.observation_utf8_bytes} observation bytes; "
-                        f"truncated: {'yes' if event.truncated else 'no'}."
-                    ),
-                ),
-            )
-        elif phase is ConversationRetrievalProgressPhase.READ_STARTED:
-            self._write_notice(
-                f"Retrieval read action {event.action_index} started.",
-                label="context",
-                state=ViewState.LOADING,
-            )
-            return
-        else:
-            assert phase is ConversationRetrievalProgressPhase.READ_COMPLETED
-            title = None
-            fields = (
-                Field(
-                    f"Retrieval read action {event.action_index} completed",
-                    (
-                        f"{event.transcript_turn_count} turns; "
-                        f"{event.transcript_event_count} events; "
-                        f"{event.observation_utf8_bytes} observation bytes; "
-                        f"truncated: {'yes' if event.truncated else 'no'}."
-                    ),
-                ),
-            )
-        self._semantic_output.write_component(
-            Record(
-                "context",
-                title=title,
-                fields=fields,
-                state=ViewState.COMPLETED,
-            )
-        )
-
-    def _render_conversation_retrieval_sources(
-        self,
-        sources: tuple[ConversationRetrievalSource, ...],
-    ) -> None:
-        """Render validated ordered sources through existing sanitized status I/O.
-
-        Subject-only citations omit event fields. Exact event citations always
-        include sequence; detailed presentation also includes turn and event
-        kind. Rendering is non-durable and does not mutate focus, routing,
-        memory, or transcripts. Invalid sources and terminal writer failures
-        propagate to fatal controller cleanup.
-        """
-
-        for ordinal, source in enumerate(sources, start=1):
-            citation = source.citation
-            fields = [
-                Field("Subject", source.subject),
-                Field("Conversation", citation.conversation_id),
-            ]
-            if citation.sequence is not None:
-                assert citation.turn_id is not None
-                assert citation.event_kind is not None
-                if self._show_message_details:
-                    fields.append(Field("Turn", citation.turn_id))
-                fields.append(Field("Sequence", str(citation.sequence)))
-                if self._show_message_details:
-                    fields.append(Field("Kind", citation.event_kind.value))
-            self._semantic_output.write_component(
-                Record(
-                    "context",
-                    title=f"Source {ordinal}",
-                    fields=tuple(fields),
-                    state=ViewState.COMPLETED,
-                )
-            )
-
-    def _run_consensus_action(self, action: InteractiveAction) -> bool:
-        """Execute one interactive prompt, fresh prompt, or draft-file debate.
-
-        The attached session and focused active conversation are revalidated
-        before composition or file access. Bare ``/run`` submits only a terminal
-        ``SEND`` result; cancel and interrupt discard locally, while compose EOF
-        requests normal shell exit. Draft files use the shared strict loader.
-        Accepted input reaches the controller-owned Runner, and runtime context,
-        sidecar, progress, provider, result, and artifact durability remain owned
-        by ``StoryRuntime``. A joined cancellation returns to the shell only with
-        trusted interruption proof or confirmed pre-start state.
-        """
-
-        if self._attached_session_id is None:
-            self._write_error(
-                InteractiveError(InteractiveErrorCode.SESSION_NOT_ATTACHED)
-            )
-            return False
-        focused = self._require_active_conversation_focus()
-        if focused is None:
-            return False
-
-        output_path = action.output_path
-        while True:
-            if output_path is None:
-                outcome = self._prompt_input.read_prompt(
-                    Prompt(
-                        "Manuscript output",
-                        scope="consensus",
-                        instruction=(
-                            "Enter a create-only PART/PATH.md beneath manuscript/."
-                        ),
-                    ),
-                    transient=True,
-                )
-                if outcome.kind is ControlOutcomeKind.EOF:
-                    return True
-                if outcome.kind in {
-                    ControlOutcomeKind.CANCEL,
-                    ControlOutcomeKind.INTERRUPT,
-                }:
-                    return False
-                if outcome.kind is not ControlOutcomeKind.COMMIT:
-                    raise _ControllerAbort(
-                        InteractiveError(InteractiveErrorCode.INTERNAL_ERROR)
-                    )
-                assert outcome.text is not None
-                output_path = outcome.text
-            try:
-                manuscript_artifact_path(output_path)
-            except (TypeError, ValueError):
-                self._write_notice(
-                    "Output must be a safe PART/PATH.md beneath manuscript/.",
-                    label="Invalid output",
-                    role=SemanticRole.ERROR,
-                    state=ViewState.ERROR,
-                )
-                output_path = None
-                continue
-            break
-        assert output_path is not None
-
-        if action.kind is ActionKind.RUN:
-            prompt = action.text
-            if prompt is None:
-                composed = self._composition_input.compose(
-                    ComposeMode.RUN,
-                    reference_scope_provider=self._composition_reference_scope,
-                    reference_paths_provider=self._reference_paths,
-                    reference_text_reader=self._reference_text,
-                )
-                if composed.kind is TerminalActionKind.EOF:
-                    return True
-                if composed.kind in {
-                    TerminalActionKind.CANCEL,
-                    TerminalActionKind.INTERRUPT,
-                }:
-                    return False
-                if composed.kind is not TerminalActionKind.SEND:
-                    raise _ControllerAbort(
-                        InteractiveError(InteractiveErrorCode.INTERNAL_ERROR)
-                    )
-                assert composed.text is not None
-                prompt = composed.text
-            input_kind = InputKind.PROMPT
-            context_mode = DebateContextMode.INCLUDED
-            payload = prompt
-        elif action.kind is ActionKind.RUN_FRESH:
-            assert action.text is not None
-            input_kind = InputKind.PROMPT
-            context_mode = DebateContextMode.FRESH
-            payload = action.text
-        else:
-            assert action.kind is ActionKind.DRAFT_FILE
-            assert action.argument is not None
-            try:
-                payload = read_draft_file(action.argument)
-            except ConfigurationError:
-                self._write_error(
-                    InteractiveError(InteractiveErrorCode.DRAFT_INPUT_INVALID)
-                )
-                return False
-            input_kind = InputKind.DRAFT
-            context_mode = DebateContextMode.INCLUDED
-
-        draft_payload_was_empty = input_kind is InputKind.DRAFT and payload == ""
-        session_id = self._attached_session_id
-        assert session_id is not None
-        request = DebateContextRequest(
-            conversation_id=focused.conversation_id,
-            mode=context_mode,
-        )
-        runner = self._runner
-        if runner is None:
-            raise _ControllerAbort(
-                InteractiveError(InteractiveErrorCode.INTERNAL_ERROR)
-            )
-        if input_kind is InputKind.PROMPT:
-            self._semantic_output.write_accepted_input(
-                Message(
-                    "You → Consensus",
-                    payload,
-                    role=SemanticRole.DEFAULT,
-                    state=ViewState.COMPLETED,
-                    presentation=MessagePresentation.CHAT_BLOCK,
-                    accent=SpeakerAccent.MAGENTA,
-                )
-            )
-        context_fields = [Field("Output", output_path)]
-        if input_kind is InputKind.DRAFT:
-            assert action.argument is not None
-            context_fields.append(Field("Source", action.argument))
-        self._semantic_output.write_component(
-            Record(
-                "context",
-                title="Consensus request",
-                fields=tuple(context_fields),
-                state=ViewState.COMPLETED,
-            )
-        )
-        progress_events: list[DebateProgressEvent] = []
-        context_operations: dict[
-            tuple[str, str, str, str, str, str],
-            ContextProgressProjection,
-        ] = {}
-        progress_callback_failure: BaseException | None = None
-        context_runtime_method = (
-            self._runtime.run_prompt
-            if input_kind is InputKind.PROMPT
-            else self._runtime.run_draft
-        )
-        supports_context_progress = bool(
-            "context_event_sink"
-            in inspect.signature(context_runtime_method).parameters
-            and getattr(
-                self._runtime,
-                "conversation_storage_services",
-                None,
-            )
-            is not None
-        )
-
-        def accept_and_render_progress(event: DebateProgressEvent) -> None:
-            """Retain callback failure identity while accepting one event."""
-
-            nonlocal progress_callback_failure
-            try:
-                self._accept_debate_progress(
-                    event,
-                    expected_session_id=session_id,
-                    expected_input_kind=input_kind,
-                    expected_context_mode=context_mode,
-                    events=progress_events,
-                )
-            except BaseException as exc:
-                progress_callback_failure = exc
-                raise
-
-        def accept_and_render_context_progress(event: object) -> None:
-            """Validate each interleaved debate-agent context operation."""
-
-            nonlocal progress_callback_failure
-            try:
-                if not progress_events:
-                    raise ValueError(
-                        "context progress preceded debate progress identity"
-                    )
-                self._accept_context_progress(
-                    event,
-                    expected_session_id=session_id,
-                    expected_subject_kind="debate",
-                    expected_subject_id=progress_events[0].debate_id,
-                    expected_agent_id=None,
-                    operations=context_operations,
-                    suppress_retrieval_actions=False,
-                )
-            except BaseException as exc:
-                progress_callback_failure = exc
-                raise
-
-        operation_entered = False
-        cancellation_reached_operation = False
-        operation_joined = False
-
-        async def run_joined_consensus_operation() -> DebateResult:
-            """Await the debate while recording cancellation and final joining."""
-
-            nonlocal operation_entered
-            nonlocal cancellation_reached_operation
-            nonlocal operation_joined
-            operation_entered = True
-            try:
-                context_observer = (
-                    {"context_event_sink": accept_and_render_context_progress}
-                    if supports_context_progress
-                    else {}
-                )
-                if input_kind is InputKind.PROMPT:
-                    return await self._runtime.run_prompt(
-                        session_id,
-                        payload,
-                        output_path=output_path,
-                        conversation_context=request,
-                        progress_sink=accept_and_render_progress,
-                        **context_observer,
-                    )
-                return await self._runtime.run_draft(
-                    session_id,
-                    payload,
-                    output_path=output_path,
-                    conversation_context=request,
-                    progress_sink=accept_and_render_progress,
-                    **context_observer,
-                )
-            except asyncio.CancelledError:
-                cancellation_reached_operation = True
-                raise
-            finally:
-                operation_joined = True
-
-        operation_coroutine = run_joined_consensus_operation()
-        progress_coroutine = self._debate_progress.run(operation_coroutine)
-        try:
-            result = runner.run(progress_coroutine)
-        except KeyboardInterrupt:
-            if progress_callback_failure is not None:
-                raise _ControllerAbort(
-                    classify_progress_callback_failure(progress_callback_failure)
-                ) from None
-            if not operation_entered:
-                if not self._interactive_runner_is_quiescent():
-                    raise _ControllerAbort(
-                        InteractiveError(InteractiveErrorCode.OPERATION_INTERRUPTED)
-                    ) from None
-                self._write_consensus_cancelled_before_start()
-                return False
-            if not cancellation_reached_operation or not operation_joined:
-                raise _ControllerAbort(
-                    InteractiveError(InteractiveErrorCode.OPERATION_INTERRUPTED)
-                ) from None
-            self._present_joined_consensus_cancellation(
-                session_id,
-                progress_events,
-            )
-            return False
-        except asyncio.CancelledError:
-            raise _ControllerAbort(
-                InteractiveError(InteractiveErrorCode.OPERATION_INTERRUPTED)
-            ) from None
-        except ProgressObserverError as exc:
-            raise _ControllerAbort(
-                classify_progress_callback_failure(
-                    progress_callback_failure or exc.__cause__ or exc
-                )
-            ) from None
-        except AdvisoryProgressError:
-            raise _ControllerAbort(
-                InteractiveError(InteractiveErrorCode.INTERNAL_ERROR)
-            ) from None
-        except Exception as exc:
-            if progress_callback_failure is not None:
-                raise _ControllerAbort(
-                    classify_progress_callback_failure(progress_callback_failure)
-                ) from None
-            self._present_consensus_execution_failure(
-                exc,
-                draft_payload_was_empty=draft_payload_was_empty,
-                progress_events=progress_events,
-            )
-            return False
-        finally:
-            if not operation_entered:
-                operation_coroutine.close()
-                progress_coroutine.close()
-
-        try:
-            terminal_event, artifact_event = validate_consensus_result(
-                result,
-                expected_session_id=session_id,
-                expected_input_kind=input_kind,
-                progress_events=tuple(progress_events),
-            )
-        except (TypeError, ValueError):
-            raise _ControllerAbort(
-                InteractiveError(InteractiveErrorCode.INTERNAL_ERROR)
-            ) from None
-        if supports_context_progress and (
-            any(not event.terminal for event in context_operations.values())
-            or (
-                result.status in {
-                    DebateStatus.CONSENSUS,
-                    DebateStatus.DEADLOCK,
-                }
-                and (
-                    not context_operations
-                    or any(
-                        event.kind != "checkpoint_advanced"
-                        for event in context_operations.values()
-                    )
-                )
-            )
-        ):
-            raise _ControllerAbort(
-                InteractiveError(InteractiveErrorCode.INTERNAL_ERROR)
-            )
-        self._present_consensus_result(result, terminal_event, artifact_event)
-        return False
-
-    def _present_joined_consensus_cancellation(
-        self,
-        session_id: str,
-        progress_events: list[DebateProgressEvent],
-    ) -> None:
-        """Render a joined cancellation or fail closed without durable proof.
-
-        A trusted terminal ``INTERRUPTED`` event proves the immutable persisted
-        outcome and has already rendered its sole run row. An entered operation
-        with no event is still unproven because reservation may precede progress.
-        Every entered run without that terminal proof fails closed rather than
-        treating Runner quiescence or retained access as durability evidence.
-        """
-
-        terminal_event = progress_events[-1] if progress_events else None
-        if (
-            terminal_event is not None
-            and terminal_event.phase is DebateProgressPhase.INTERRUPTED
-        ):
-            self._write_notice(
-                f"Debate {terminal_event.debate_id} was marked interrupted.",
-                label="cancelled",
-                role=SemanticRole.WARNING,
-                state=ViewState.CANCELLED,
-            )
-            self._write_notice(
-                "It cannot resume. Use /run to create a new debate.",
-                label="hint",
-                state=ViewState.COMPLETED,
-            )
-            self._write_notice(
-                f'"{session_id}" remains ready and attached.',
-                label="session",
-                role=SemanticRole.SUCCESS,
-                state=ViewState.COMPLETED,
-            )
-            return
-
-        self._write_error_best_effort(
-            InteractiveError(InteractiveErrorCode.OPERATION_INTERRUPTED)
-        )
-        self._abandon_known_attachment_for_cleanup_abort()
-
-    def _write_consensus_cancelled_before_start(self) -> None:
-        """Render the fixed pre-reservation cancellation acknowledgement."""
-
-        self._write_notice(
-            "Consensus run was cancelled before start.",
-            label="cancelled",
-            role=SemanticRole.WARNING,
-            state=ViewState.CANCELLED,
-        )
-
-    def _interactive_runner_is_quiescent(self) -> bool:
-        """Return whether the owned Runner has no unfinished public tasks."""
-
-        runner = self._runner
-        if runner is None:
-            return False
-        try:
-            return not asyncio.all_tasks(runner.get_loop())
-        except (Exception, KeyboardInterrupt):
-            return False
-
-    def _accept_debate_progress(
-        self,
-        event: DebateProgressEvent,
-        *,
-        expected_session_id: str,
-        expected_input_kind: InputKind,
-        expected_context_mode: DebateContextMode,
-        events: list[DebateProgressEvent],
-    ) -> None:
-        """Validate, render, and retain one trusted runtime progress event.
-
-        Only exact built-in events with matching run identity and legal phase
-        succession are accepted. ``INTERRUPTED`` may be first when cancellation
-        follows reservation but precedes ``STARTED``; only an accepted
-        ``STARTED`` updates the process-local per-session ``last`` mapping.
-        Rendering uses typed fields and fixed copy only; invalid events or
-        terminal writer failures propagate to the runtime sink boundary, which
-        owns interruption and observer-error semantics.
-        """
-
-        canonical = validate_debate_progress(
-            event,
-            expected_session_id=expected_session_id,
-            expected_input_kind=expected_input_kind,
-            expected_context_mode=expected_context_mode,
-            previous=events[-1] if events else None,
-        )
-        key = self._debate_message_key(canonical)
-        candidate_offset = self._render_debate_progress(canonical)
-        self._debate_message_offsets[key] = candidate_offset
-        if canonical.phase is DebateProgressPhase.STARTED:
-            self._debate_last_conflict_targets[key] = ()
-        elif canonical.phase is DebateProgressPhase.AUDIT_COMPLETED:
-            self._debate_last_conflict_targets[key] = canonical.conflicting_agents
-        events.append(canonical)
-        if canonical.phase is DebateProgressPhase.STARTED:
-            self._last_started_debate_by_session[canonical.session_id] = (
-                canonical.debate_id
-            )
-
-    def _render_debate_progress(self, event: DebateProgressEvent) -> int:
-        """Build and atomically write one validated phase presentation."""
-
-        key = self._debate_message_key(event)
-        phase = event.phase
-        role, outcome_state = self._debate_progress_style(phase)
-        panel_state = (
-            ViewState.IDLE
-            if outcome_state is ViewState.LOADING
-            else outcome_state
-        )
-        committed_offset = self._debate_message_offsets.get(key, 0)
-        start = 0 if phase is DebateProgressPhase.STARTED else committed_offset
-        if phase is DebateProgressPhase.STARTED:
-            conflicts: tuple[str, ...] = ()
-        elif phase is DebateProgressPhase.AUDIT_COMPLETED:
-            conflicts = event.conflicting_agents
-        else:
-            conflicts = self._debate_last_conflict_targets.get(key, ())
-
-        from_agents, to_agents, action = self._debate_handoff_for_phase(event)
-        fields = [
-            Field("Debate ID", event.debate_id),
-            Field("Phase", phase.value),
-            Field("Round", str(event.round_number)),
-            Field("Revision", event.revision_id or "n/a"),
-        ]
-        if self._show_message_details:
-            fields.append(
-                Field(
-                    "Handoff",
-                    f"{self._agent_display_chain(from_agents)} -> "
-                    f"{self._agent_display_chain(to_agents)}",
-                )
-            )
-        fields.extend(
-            (
-                Field("Action", action),
-                Field(
-                    "Outcome",
-                    self._debate_progress_outcome(event),
-                    role=role,
-                    state=outcome_state,
-                ),
-                Field(
-                    "Conflicts",
-                    self._agent_display_chain(conflicts) if conflicts else "none",
-                ),
-            )
-        )
-
-        panel_items: list[Field | Notice | Section] = list(fields)
-        if phase is DebateProgressPhase.STARTED:
-            if event.context_mode is DebateContextMode.INCLUDED:
-                panel_items.append(
-                    Notice(
-                        (
-                            f"Included {event.context_event_count} "
-                            "focused-conversation events; "
-                            f"{event.context_omitted_turns} earlier turns omitted."
-                        ),
-                        label="context",
-                        state=ViewState.COMPLETED,
-                    )
-                )
-            elif event.context_mode is DebateContextMode.FRESH:
-                panel_items.append(
-                    Notice(
-                        "Fresh run; no conversation events were included.",
-                        label="context",
-                        state=ViewState.COMPLETED,
-                    )
-                )
-
-        sections, warning, candidate_offset = self._debate_speech_sections(
-            event,
-            start=start,
-        )
-        if warning is not None:
-            panel_items.append(warning)
-        panel_items.extend(sections)
-        panel = Panel(
-            f"Debate phase · {self._debate_progress_display_name(phase)}",
-            tuple(panel_items),
-            state=panel_state,
-        )
-        self._semantic_output.write_component(panel)
-        return candidate_offset
-
-    def _present_consensus_result(
-        self,
-        result: DebateResult,
-        terminal_event: DebateProgressEvent,
-        artifact_event: DebateProgressEvent | None,
-    ) -> None:
-        """Render only trusted terminal metadata from a validated result.
-
-        Workspace failures first prove the same ready access held here. No
-        terminal outcome exposes provider or result prose.
-        """
-
-        if result.status is DebateStatus.CONSENSUS:
-            assert artifact_event is not None
-            updates = ", ".join(artifact_event.core_updates) or "none"
-            self._write_run_record(
-                result.debate_id,
-                title="Consensus",
-                fields=(
-                    Field("revision", str(terminal_event.revision_id)),
-                    Field("revision rounds", str(terminal_event.round_number)),
-                    Field("manuscript", str(artifact_event.manuscript_path)),
-                    Field("core updates", f"{updates}."),
-                ),
-                role=SemanticRole.SUCCESS,
-                state=ViewState.COMPLETED,
-            )
-            return
-        if result.status is DebateStatus.DEADLOCK:
-            code = InteractiveErrorCode.CONSENSUS_DEADLOCK
-        else:
-            assert terminal_event.failure_kind is not None
-            code = interactive_code_for_debate_failure(terminal_event.failure_kind)
-        self._present_consensus_error_after_required_attachment_check(code)
-
-    def _present_consensus_execution_failure(
-        self,
-        failure: Exception,
-        *,
-        draft_payload_was_empty: bool,
-        progress_events: list[DebateProgressEvent],
-    ) -> None:
-        """Select a fixed pre-result error from trusted controller evidence.
-
-        The exact empty-draft flag and accepted progress history decide whether
-        a recoverable code is safe; ambiguous failures abort. Workspace errors
-        require attachment proof before output, and exception prose is never
-        rendered.
-        """
-
-        error = self._reference_interactive_error(failure) or (
-            classify_consensus_execution_failure(
-                failure,
-                draft_payload_was_empty=draft_payload_was_empty,
-                progress_events=tuple(progress_events),
-            )
-        )
-        if error.code is InteractiveErrorCode.INTERNAL_ERROR:
-            raise _ControllerAbort(error) from None
-        self._present_consensus_error_after_required_attachment_check(error.code)
-
-    def _present_consensus_error_after_required_attachment_check(
-        self,
-        code: InteractiveErrorCode,
-    ) -> None:
-        """Render a fixed consensus error after any required access proof.
-
-        Workspace errors return to the prompt only when public state proves the
-        the same ready access held here. Failed proof uses the existing fatal
-        cleanup boundary before any terminal error is written; other codes
-        render immediately without changing consensus mappings.
-        """
-
-        if code in {
-            InteractiveErrorCode.SESSION_NOT_FOUND,
-            InteractiveErrorCode.SESSION_PAUSED,
-            InteractiveErrorCode.SESSION_ACCESS_BLOCKED,
-            InteractiveErrorCode.SESSION_OWNERSHIP_UNKNOWN,
-            InteractiveErrorCode.WORKSPACE_VERSION_UNSUPPORTED,
-            InteractiveErrorCode.WORKSPACE_INVALID,
-            InteractiveErrorCode.WORKSPACE_UNSAFE,
-        }:
-            self._confirm_attachment_after_command_failure()
-        self._write_error(InteractiveError(code))
-
-    def _present_advisory_turn_failure(self, failure: Exception) -> None:
-        """Render one typed turn failure or abort when recovery is uncertain.
-
-        Exception classes, never exception prose, select the result. Missing
-        conversations clear only stale effective in-memory focus, leaving the
-        persisted default and catalog untouched. Session/workspace failures
-        require proof that ready access remains held here. Unknown failures
-        abort, while runtime remains the sole owner of durable turn outcomes.
-        """
-
-        error = self._reference_interactive_error(failure) or (
-            classify_advisory_turn_failure(failure)
-        )
-        if error.code is InteractiveErrorCode.INTERNAL_ERROR:
-            raise _ControllerAbort(error)
-        if error.code is InteractiveErrorCode.CONVERSATION_NOT_FOUND:
-            self._focused_conversation = None
-        if error.code in {
-            InteractiveErrorCode.SESSION_INVALID,
-            InteractiveErrorCode.SESSION_EXISTS,
-            InteractiveErrorCode.SESSION_NOT_FOUND,
-            InteractiveErrorCode.SESSION_PAUSED,
-            InteractiveErrorCode.SESSION_ACCESS_BLOCKED,
-            InteractiveErrorCode.SESSION_OWNERSHIP_UNKNOWN,
-            InteractiveErrorCode.WORKSPACE_VERSION_UNSUPPORTED,
-            InteractiveErrorCode.WORKSPACE_INVALID,
-            InteractiveErrorCode.WORKSPACE_UNSAFE,
-        }:
-            self._confirm_attachment_after_command_failure()
-        self._write_error(error)
-
-    @staticmethod
-    def _reference_interactive_error(
-        failure: Exception,
-    ) -> InteractiveError | None:
-        """Map explicit-reference failures without exposing exception prose."""
-
-        if isinstance(failure, ArtifactReferenceDirectiveError):
-            return InteractiveError(InteractiveErrorCode.COMMAND_INVALID)
-        if not isinstance(failure, ReferenceOperationFailure):
-            return None
-        if failure.code in {
-            ReferenceAuthorizationErrorCode.PROVIDER_FAILURE,
-            ReferenceAuthorizationErrorCode.CAPABILITY_CONSUMED,
-            ReferenceAuthorizationErrorCode.CORRELATION_MISMATCH,
-            ReferenceAuthorizationErrorCode.INVALID_TRANSITION,
-        }:
-            code = InteractiveErrorCode.PROVIDER_PROTOCOL_ERROR
-        elif failure.code is ReferenceAuthorizationErrorCode.CANCELLED:
-            code = InteractiveErrorCode.OPERATION_CANCELLED
-        else:
-            code = InteractiveErrorCode.WORKSPACE_INVALID
-        return InteractiveError(code)
-
     def _write_unavailable_lobby_command_error(self) -> None:
         """Render the stable later-feature error without mutating controller state."""
 
@@ -7453,19 +5676,18 @@ class InteractiveController:
 
         try:
             try:
-                query = ConversationSearchQuery(action.text)
+                query = CollaborationHistorySearchQuery(action.text)
             except (TypeError, ValueError):
                 self._write_error(
                     InteractiveError(InteractiveErrorCode.COMMAND_INVALID)
                 )
                 return
-            normalized_query = normalize_conversation_subject(query.text)
             self._semantic_output.write_component(
                 Record(
                     "context",
                     title="Search request",
                     fields=(
-                        Field("Query", normalized_query),
+                        Field("Query", query.text),
                         Field("Scope", "active"),
                     ),
                     state=ViewState.COMPLETED,
@@ -7478,13 +5700,13 @@ class InteractiveController:
                 self._present_memory_catalog_or_reference_failure(exc)
                 return
 
-            memory_service = self._conversation_memory_service
-            if memory_service is None:
+            history_service = self._collaboration_history_service
+            if history_service is None:
                 raise _ControllerAbort(
                     InteractiveError(InteractiveErrorCode.INTERNAL_ERROR)
                 )
             try:
-                result = memory_service.search(query)
+                result = history_service.search(query)
                 handles = validate_search_result_handles(
                     result,
                     query=query,
@@ -7501,24 +5723,16 @@ class InteractiveController:
                 start=1,
             ):
                 citation = hit.citation
-                citation_values = (
-                    citation.turn_id,
-                    citation.sequence,
-                    citation.event_kind,
+                metadata = next(
+                    entry
+                    for entry in entries
+                    if entry.conversation_id == citation.conversation_id
                 )
-                if all(value is None for value in citation_values):
-                    citation_value = f"conversation {handle}"
-                elif any(value is None for value in citation_values):
-                    raise ValueError(
-                        "citation turn ID, sequence, and kind must be present together"
-                    )
-                else:
-                    citation_value = (
-                        f"conversation {handle}, turn {citation.turn_id}, "
-                        f"sequence {citation.sequence}, kind "
-                        f"{citation.event_kind.value}"
-                    )
-                archived = hit.status is ConversationStatus.ARCHIVED
+                citation_value = (
+                    f"conversation {handle}, event {citation.event_id}, "
+                    f"sequence {citation.sequence}, field {citation.field_key.value}, "
+                    f"range {citation.start_codepoint}:{citation.end_codepoint}"
+                )
                 self._write_counted_list_row(
                     "Search results",
                     Record(
@@ -7526,14 +5740,13 @@ class InteractiveController:
                         fields=(
                             Field(
                                 "Status",
-                                "archived" if archived else "active",
+                                "active",
                             ),
-                            Field("Match", hit.match_kind.value),
-                            Field("Subject", hit.subject),
+                            Field("Subject (display only)", metadata.subject),
                             Field("Citation", citation_value),
                             Field("Snippet", hit.snippet),
                         ),
-                        role=(SemanticRole.MUTED if archived else SemanticRole.DEFAULT),
+                        role=SemanticRole.DEFAULT,
                         state=ViewState.COMPLETED,
                     ),
                     position=position,
@@ -7542,7 +5755,7 @@ class InteractiveController:
             self._write_notice(
                 (
                     f"Search returned {len(result.hits)} of "
-                    f"{result.matched_conversations} matching conversations."
+                    f"{result.matched_fields} matching readable fields."
                 ),
                 label="result",
                 role=(SemanticRole.MUTED if not result.hits else SemanticRole.SUCCESS),
@@ -7589,11 +5802,13 @@ class InteractiveController:
                 self._present_memory_catalog_or_reference_failure(exc)
                 return
 
-            memory_service = self._conversation_memory_service
-            if memory_service is None:
-                raise _ControllerAbort(
-                    InteractiveError(InteractiveErrorCode.INTERNAL_ERROR)
-                )
+            history_service = CollaborationHistoryService(
+                CollaborationHistorySearchScope(
+                    session_id,
+                    include_archived=True,
+                ),
+                conversation_storage_services=self._conversation_storage_services,
+            )
             start_sequence = action.start_sequence or 1
             page_limit = action.count or CONVERSATION_MEMORY_POLICY.default_page_events
             handle = visible_conversation_handle(metadata, entries)
@@ -7610,10 +5825,10 @@ class InteractiveController:
                 )
             )
             try:
-                page = memory_service.read_transcript(
+                page = history_service.read_history(
                     metadata.conversation_id,
                     start_sequence=start_sequence,
-                    max_events=page_limit,
+                    max_records=page_limit,
                 )
                 page = validate_transcript_page(
                     page,
@@ -7626,25 +5841,25 @@ class InteractiveController:
                 self._present_transcript_service_failure(exc)
                 return
 
-            total_count = len(page.events)
-            for position, event in enumerate(page.events, start=1):
+            total_count = len(page.records)
+            for position, event in enumerate(page.records, start=1):
                 self._write_counted_list_row(
                     "Transcript",
-                    self._conversation_event_message(event),
+                    self._collaboration_record_view(event),
                     position=position,
                     total_count=total_count,
                 )
             self._write_notice(
-                f"Transcript page returned {len(page.events)} events.",
+                f"Transcript page returned {len(page.records)} records.",
                 label="result",
-                role=(SemanticRole.MUTED if not page.events else SemanticRole.SUCCESS),
-                state=(ViewState.EMPTY if not page.events else ViewState.COMPLETED),
+                role=(SemanticRole.MUTED if not page.records else SemanticRole.SUCCESS),
+                state=(ViewState.EMPTY if not page.records else ViewState.COMPLETED),
             )
             if page.next_cursor is not None:
                 self._write_notice(
                     (
                         f"Continue with /transcript {handle} "
-                        f"{page.next_cursor.max_events} --from "
+                        f"{page.next_cursor.max_records} --from "
                         f"{page.next_cursor.next_sequence}."
                     ),
                     label="hint",
@@ -7710,8 +5925,8 @@ class InteractiveController:
 
     def _write_attached_conversation_scope(
         self,
-        last_presented: object | tuple[str, str | None, str | None, str],
-    ) -> tuple[str, str | None, str | None, str]:
+        last_presented: object | tuple[str, str | None, str | None],
+    ) -> tuple[str, str | None, str | None]:
         """Revalidate current focus and present it only when semantically changed.
 
         The current metadata is revalidated against the complete catalog so a
@@ -7767,14 +5982,18 @@ class InteractiveController:
             session_id,
             handle,
             subject,
-            self._target_agent_id,
         )
         if current_scope != last_presented:
-            self._terminal.write_conversation_scope(
-                session_id=session_id,
-                conversation_handle=handle,
-                conversation_subject=subject,
-                agent_id=self._target_agent_id,
+            self._semantic_output.write_component(
+                Record(
+                    "conversation",
+                    fields=(
+                        Field("Session", session_id),
+                        Field("Conversation", handle or "none"),
+                        Field("Subject", subject or "none"),
+                    ),
+                    state=(ViewState.EMPTY if handle is None else ViewState.COMPLETED),
+                )
             )
         return current_scope
 
@@ -7850,7 +6069,6 @@ class InteractiveController:
             DebugPhase.SUCCEEDED,
             session_id=session_id,
             conversation_id=created.conversation_id,
-            agent_id=self._target_agent_id,
             outcome=DebugOutcome.COMPLETED,
         )
         handle = self._visible_handle_after_mutation(created)
@@ -8098,7 +6316,6 @@ class InteractiveController:
             DebugPhase.SUCCEEDED,
             session_id=session_id,
             conversation_id=focused.conversation_id,
-            agent_id=self._target_agent_id,
             outcome=DebugOutcome.COMPLETED,
         )
         self._write_notice(
@@ -8695,6 +6912,19 @@ class InteractiveController:
             self._write_session_pause_cancelled_status()
             return False
         try:
+            current = self._backend.get_session_lifecycle(session_id)
+            require_ready_access_state(current, session_id)
+            assessment = self._assess_session_transition(
+                current,
+                SessionTransitionOperation.PAUSE_SESSION,
+                self._focused_conversation,
+            )
+            if not transition_operation_is_allowed(
+                assessment,
+                SessionTransitionOperation.PAUSE_SESSION,
+            ):
+                self._write_transition_denial(assessment)
+                return False
             state = self._backend.pause_session_and_release_access(session_id)
             state = require_lifecycle_state(state, session_id)
             if (
@@ -8712,9 +6942,7 @@ class InteractiveController:
 
         self._attached_session_id = None
         self._focused_conversation = None
-        self._conversation_memory_service = None
-        self._pending_rag_query = None
-        self._target_agent_id = LEAD_ORCHESTRATOR
+        self._collaboration_history_service = None
         self._trace_debug(
             DebugOperation.ATTACHMENT,
             DebugPhase.SUCCEEDED,
@@ -8748,13 +6976,7 @@ class InteractiveController:
         action: InteractiveAction,
         original_line: str,
     ) -> None:
-        """Render a routed-agent or general parse error from original syntax.
-
-        The raw line's first exact ASCII-delimited token, never parser error
-        prose, selects ``agent_invalid`` for ``@``, ``/to``, and ``/agent``
-        forms. The method returns no value, mutates no state, and relies on the
-        terminal writer to sanitize copy; writer failure needs no local cleanup.
-        """
+        """Render a persona-specific or general error from original syntax."""
 
         assert action.kind is ActionKind.PARSE_ERROR
         assert action.error is not None
@@ -8778,17 +7000,8 @@ class InteractiveController:
 
     @staticmethod
     def _parse_error_targets_agent(original_line: str) -> bool:
-        """Return whether a parse failure identifies an invalid agent route.
+        """Return whether a parse failure identifies an invalid persona agent."""
 
-        Direct routing forms are always agent-scoped. For legacy ``/persona``
-        and canonical ``/override persona``, only an explicitly supplied
-        unknown agent argument is agent-scoped; missing or malformed persona
-        syntax remains ``command_invalid``. The pure check uses exact ASCII
-        delimiters and never inspects parser failure prose.
-        """
-
-        if original_line.startswith("@"):
-            return True
         first_delimiter = next(
             (
                 index
@@ -8798,8 +7011,6 @@ class InteractiveController:
             len(original_line),
         )
         command = original_line[:first_delimiter]
-        if command in {"/to", "/agent"}:
-            return True
         if first_delimiter == len(original_line):
             return False
         arguments = tuple(
@@ -8813,9 +7024,7 @@ class InteractiveController:
             agent_arguments = arguments[1:]
         else:
             return False
-        return bool(agent_arguments) and (
-            agent_arguments[0] not in _AGENT_ROUTE_ALIASES
-        )
+        return bool(agent_arguments)
 
     def _present_session_failure(
         self,
@@ -8880,8 +7089,7 @@ class InteractiveController:
 
         self._attached_session_id = None
         self._focused_conversation = None
-        self._conversation_memory_service = None
-        self._pending_rag_query = None
+        self._collaboration_history_service = None
         raise _ControllerAbort(InteractiveError(InteractiveErrorCode.CLEANUP_FAILED))
 
     def _write_error_best_effort(self, error: InteractiveError) -> bool:
@@ -8930,7 +7138,6 @@ class InteractiveController:
         runner = self._runner
         discard_runner_state_after_cleanup = runner is None
         attached_session = self._attached_session_id
-        self._pending_rag_query = None
         if runner is not None:
             try:
                 runner.close()
@@ -9010,8 +7217,7 @@ class InteractiveController:
             self._runner = None
         self._attached_session_id = None
         self._focused_conversation = None
-        self._conversation_memory_service = None
-        self._pending_rag_query = None
+        self._collaboration_history_service = None
         self._closed = True
 
         if cleanup_failed and not cleanup_error_reported:

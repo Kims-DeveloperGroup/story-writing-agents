@@ -205,6 +205,7 @@ class SettingsModelContractTests(SettingsTestCase):
                 "workspace",
                 "configuration",
                 "provider_overrides",
+                "persist_missing",
             ),
             validate_settings_persona_catalog: ("workspace", "baseline"),
         }

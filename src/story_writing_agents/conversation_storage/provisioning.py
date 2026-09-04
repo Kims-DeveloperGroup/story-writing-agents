@@ -11,7 +11,7 @@ from enum import StrEnum
 from pathlib import Path
 from typing import Any, Callable, Mapping, TextIO
 
-from ..workspace import Workspace
+from ..workspace.core import Workspace
 from .contracts import (
     ConversationStorageCapability,
     ConversationStorageMutationLease,

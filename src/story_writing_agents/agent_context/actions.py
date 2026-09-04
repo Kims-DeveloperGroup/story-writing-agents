@@ -44,6 +44,9 @@ __all__ = [
     "ContextSourceBoundaryKind",
     "ContextSourceEvidence",
     "ContextSourceHandle",
+    "ContextSourceStatusKind",
+    "ContextSourceStatusReceipt",
+    "ContextZeroHitSearchReceipt",
     "serialize_context_action_observation",
 ]
 
@@ -104,17 +107,24 @@ class ContextActionKind(StrEnum):
 
 
 class ContextSourceBoundaryKind(StrEnum):
-    """Exact record boundaries supported by canonical context sources."""
+    """Exact line or record boundaries supported by canonical context sources."""
 
     WHOLE = "whole"
     ARTIFACT_LINES = "artifact_lines"
-    CONVERSATION_TURNS = "conversation_turns"
     RECORDS = "records"
+
+
+class ContextSourceStatusKind(StrEnum):
+    """Closed content-free status of one canonical core artifact."""
+
+    PRESENT = "present"
+    EMPTY = "empty"
+    ABSENT = "absent"
 
 
 _SOURCE_BOUNDARY = {
     ContextSourceKind.WRITING_ARTIFACT: ContextSourceBoundaryKind.ARTIFACT_LINES,
-    ContextSourceKind.CONVERSATION: ContextSourceBoundaryKind.CONVERSATION_TURNS,
+    ContextSourceKind.CONVERSATION: ContextSourceBoundaryKind.RECORDS,
     ContextSourceKind.ACTIVE_DEBATE: ContextSourceBoundaryKind.RECORDS,
     ContextSourceKind.OWN_AGENT_STATE: ContextSourceBoundaryKind.RECORDS,
 }
@@ -140,15 +150,9 @@ _ACTION_ERROR_MESSAGES = {
     ContextActionErrorCode.CORRELATION_MISMATCH: (
         "context action correlation does not match"
     ),
-    ContextActionErrorCode.INVALID_TRANSITION: (
-        "context action transition is invalid"
-    ),
-    ContextActionErrorCode.ACTION_LIMIT_EXCEEDED: (
-        "context action limit exceeded"
-    ),
-    ContextActionErrorCode.SEARCH_LIMIT_EXCEEDED: (
-        "context search limit exceeded"
-    ),
+    ContextActionErrorCode.INVALID_TRANSITION: ("context action transition is invalid"),
+    ContextActionErrorCode.ACTION_LIMIT_EXCEEDED: ("context action limit exceeded"),
+    ContextActionErrorCode.SEARCH_LIMIT_EXCEEDED: ("context search limit exceeded"),
     ContextActionErrorCode.READ_LIMIT_EXCEEDED: "context read limit exceeded",
     ContextActionErrorCode.OBSERVATION_LIMIT_EXCEEDED: (
         "context observation limit exceeded"
@@ -157,9 +161,7 @@ _ACTION_ERROR_MESSAGES = {
     ContextActionErrorCode.OUTSTANDING_READ: (
         "context read delivery remains outstanding"
     ),
-    ContextActionErrorCode.ANSWER_NOT_AUTHORIZED: (
-        "context answer is not authorized"
-    ),
+    ContextActionErrorCode.ANSWER_NOT_AUTHORIZED: ("context answer is not authorized"),
 }
 
 
@@ -423,7 +425,7 @@ class ContextSearchQuery:
 
 @dataclass(frozen=True, slots=True)
 class ContextSourceBoundary:
-    """One exact whole, line, complete-turn, or record boundary."""
+    """One exact whole, line, or record boundary."""
 
     kind: ContextSourceBoundaryKind
     start: int | None = None
@@ -445,12 +447,6 @@ class ContextSourceBoundary:
         end = _positive(self.end)
         if end < start:
             raise _invalid()
-        if self.kind is ContextSourceBoundaryKind.CONVERSATION_TURNS:
-            if self.first_id is None or self.last_id is None:
-                raise _invalid()
-            _safe_identity(self.first_id)
-            _safe_identity(self.last_id)
-            return
         if self.first_id is not None or self.last_id is not None:
             raise _invalid()
 
@@ -465,24 +461,6 @@ class ContextSourceBoundary:
         """Construct one one-based inclusive artifact line boundary."""
 
         return cls(ContextSourceBoundaryKind.ARTIFACT_LINES, start, end)
-
-    @classmethod
-    def conversation_turns(
-        cls,
-        first_sequence: int,
-        last_sequence: int,
-        first_turn_id: str,
-        last_turn_id: str,
-    ) -> ContextSourceBoundary:
-        """Construct one complete-turn sequence and identity boundary."""
-
-        return cls(
-            ContextSourceBoundaryKind.CONVERSATION_TURNS,
-            first_sequence,
-            last_sequence,
-            first_turn_id,
-            last_turn_id,
-        )
 
     @classmethod
     def records(cls, start: int, end: int) -> ContextSourceBoundary:
@@ -577,8 +555,7 @@ class ContextAnswerAction:
         if (
             type(self.used_handles) is not tuple
             or any(
-                type(handle) is not ContextSourceHandle
-                for handle in self.used_handles
+                type(handle) is not ContextSourceHandle for handle in self.used_handles
             )
             or len({handle.value for handle in self.used_handles})
             != len(self.used_handles)
@@ -654,6 +631,7 @@ class ContextSearchObservation:
     correlation: ContextActionCorrelation
     hits: tuple[ContextSearchHit, ...]
     truncated: bool
+    zero_hit_receipt: ContextZeroHitSearchReceipt | None = None
 
     def __post_init__(self) -> None:
         if type(self.correlation) is not ContextActionCorrelation:
@@ -687,12 +665,119 @@ class ContextSearchObservation:
                     CONTEXT_ACTION_POLICY.max_hits_per_source_query
                 ):
                     raise _invalid()
+        complete_zero_hit = not self.hits and not self.truncated
+        if complete_zero_hit is not (self.zero_hit_receipt is not None):
+            raise _invalid()
+        if (
+            self.zero_hit_receipt is not None
+            and self.zero_hit_receipt.correlation != self.correlation
+        ):
+            raise _invalid()
+
+
+@dataclass(frozen=True, slots=True)
+class ContextSourceStatusReceipt:
+    """Invocation-local proof of one canonical core artifact's exact status."""
+
+    evidence_id: str
+    source_id: str
+    locator: str
+    status: ContextSourceStatusKind
+    ordinal: int
+    manifest_digest: str
+    revision: str | None
+    source_digest: str | None
+    source_utf8_bytes: int
+
+    def __post_init__(self) -> None:
+        if self.evidence_id != f"status_{_positive(self.ordinal)}":
+            raise _invalid()
+        _safe_identity(self.source_id)
+        locator = _strict_text(self.locator)
+        if locator.startswith("/") or "\\" in locator or ".." in locator.split("/"):
+            raise _invalid()
+        if type(self.status) is not ContextSourceStatusKind:
+            raise _invalid()
+        _safe_digest(self.manifest_digest)
+        source_bytes = _nonnegative(self.source_utf8_bytes)
+        if self.status is ContextSourceStatusKind.ABSENT:
+            if (
+                self.revision is not None
+                or self.source_digest is not None
+                or source_bytes
+            ):
+                raise _invalid()
+            return
+        if self.revision is None or self.source_digest is None:
+            raise _invalid()
+        _safe_digest(self.revision)
+        digest = _safe_digest(self.source_digest)
+        empty_digest = f"sha256:{hashlib.sha256(b'').hexdigest()}"
+        if self.status is ContextSourceStatusKind.EMPTY:
+            if source_bytes != 0 or digest != empty_digest:
+                raise _invalid()
+        elif source_bytes == 0:
+            raise _invalid()
+
+
+@dataclass(frozen=True, slots=True)
+class ContextZeroHitSearchReceipt:
+    """Proof that one bounded authorized SEARCH completed with no hits."""
+
+    evidence_id: str
+    correlation: ContextActionCorrelation
+    manifest_digest: str
+    authorized_source_ids: tuple[str, ...]
+    authorized_source_kinds: tuple[ContextSourceKind, ...]
+    authorized_source_fingerprint: str
+    query_digest: str
+    query_count: int
+    artifact_path_prefix: str | None = None
+
+    def __post_init__(self) -> None:
+        if type(self.correlation) is not ContextActionCorrelation:
+            raise _invalid()
+        if self.evidence_id != f"search_{self.correlation.action_index}":
+            raise _invalid()
+        _safe_digest(self.manifest_digest)
+        _safe_digest(self.authorized_source_fingerprint)
+        _safe_digest(self.query_digest)
+        if type(self.authorized_source_ids) is not tuple or any(
+            type(item) is not str for item in self.authorized_source_ids
+        ):
+            raise _invalid()
+        for source_id in self.authorized_source_ids:
+            _safe_identity(source_id)
+        if len(set(self.authorized_source_ids)) != len(self.authorized_source_ids):
+            raise _invalid()
+        if (
+            type(self.authorized_source_kinds) is not tuple
+            or not self.authorized_source_kinds
+            or any(
+                type(item) is not ContextSourceKind
+                for item in self.authorized_source_kinds
+            )
+            or self.authorized_source_kinds
+            != tuple(
+                kind
+                for kind in _SEARCHABLE_SOURCE_KIND_ORDER
+                if kind in self.authorized_source_kinds
+            )
+        ):
+            raise _invalid()
+        if _positive(self.query_count) > CONTEXT_ACTION_POLICY.max_queries_per_search:
+            raise _invalid()
+        if self.artifact_path_prefix is not None:
+            if self.authorized_source_kinds != (ContextSourceKind.WRITING_ARTIFACT,):
+                raise _invalid()
+            _artifact_directory_prefix(self.artifact_path_prefix)
 
 
 @dataclass(frozen=True, slots=True)
 class ContextEvidenceReceipt:
     """Content-free identity and digest receipt for one completed read."""
 
+    evidence_id: str
     handle: ContextSourceHandle
     source_id: str
     source_kind: ContextSourceKind
@@ -703,8 +788,22 @@ class ContextEvidenceReceipt:
     boundary: ContextSourceBoundary
     boundary_digest: str
     boundary_utf8_bytes: int
+    originating_search_action_index: int
+    completing_read_action_index: int
 
     def __post_init__(self) -> None:
+        read_index = _positive(self.completing_read_action_index)
+        origin_index = _positive(self.originating_search_action_index)
+        if origin_index >= read_index or not self.evidence_id.startswith(
+            f"read_{read_index}_"
+        ):
+            raise _invalid()
+        try:
+            ordinal = int(self.evidence_id.removeprefix(f"read_{read_index}_"))
+        except ValueError:
+            raise _invalid() from None
+        if ordinal < 1 or self.evidence_id != f"read_{read_index}_{ordinal}":
+            raise _invalid()
         if type(self.handle) is not ContextSourceHandle:
             raise _invalid()
         _safe_identity(self.source_id)
@@ -781,6 +880,8 @@ class ContextAnswerAuthorization:
     completed_evidence: tuple[ContextEvidenceReceipt, ...]
     completed_read_digest: str
     used_evidence: tuple[ContextEvidenceReceipt, ...]
+    core_statuses: tuple[ContextSourceStatusReceipt, ...]
+    zero_hit_searches: tuple[ContextZeroHitSearchReceipt, ...]
     reference_operation_id: str | None
     mandatory_references: tuple[MandatoryReferenceReservation, ...]
 
@@ -804,6 +905,27 @@ class ContextAnswerAuthorization:
             for receipt in self.used_evidence
         ):
             raise _invalid()
+        if type(self.core_statuses) is not tuple or any(
+            type(receipt) is not ContextSourceStatusReceipt
+            for receipt in self.core_statuses
+        ):
+            raise _invalid()
+        if tuple(item.ordinal for item in self.core_statuses) != tuple(
+            range(1, len(self.core_statuses) + 1)
+        ):
+            raise _invalid()
+        if type(self.zero_hit_searches) is not tuple or any(
+            type(receipt) is not ContextZeroHitSearchReceipt
+            for receipt in self.zero_hit_searches
+        ):
+            raise _invalid()
+        all_evidence_ids = (
+            *(item.evidence_id for item in self.core_statuses),
+            *(item.evidence_id for item in self.zero_hit_searches),
+            *(item.evidence_id for item in self.used_evidence),
+        )
+        if len(set(all_evidence_ids)) != len(all_evidence_ids):
+            raise _invalid()
         completed_by_handle = {
             item.handle.value: item for item in self.completed_evidence
         }
@@ -817,9 +939,11 @@ class ContextAnswerAuthorization:
             )
         ):
             raise _invalid()
-        if len({item.handle.value for item in self.used_evidence}) != len(
-            self.used_evidence
-        ) or len(self.used_evidence) > CONTEXT_ACTION_POLICY.max_cumulative_handles:
+        if (
+            len({item.handle.value for item in self.used_evidence})
+            != len(self.used_evidence)
+            or len(self.used_evidence) > CONTEXT_ACTION_POLICY.max_cumulative_handles
+        ):
             raise _invalid()
         if self.completed_read_digest != _completed_evidence_digest(
             self.completed_evidence
@@ -874,7 +998,10 @@ def _receipt_value(receipt: ContextEvidenceReceipt) -> dict[str, object]:
         "boundary": _boundary_value(receipt.boundary),
         "boundary_digest": receipt.boundary_digest,
         "boundary_utf8_bytes": receipt.boundary_utf8_bytes,
+        "completing_read_action_index": receipt.completing_read_action_index,
+        "evidence_id": receipt.evidence_id,
         "handle": receipt.handle.value,
+        "originating_search_action_index": receipt.originating_search_action_index,
         "provenance": {
             "authority_kind": receipt.provenance.authority_kind.value,
             "locator": receipt.provenance.locator,
@@ -884,6 +1011,21 @@ def _receipt_value(receipt: ContextEvidenceReceipt) -> dict[str, object]:
         "source_id": receipt.source_id,
         "source_kind": receipt.source_kind.value,
         "source_utf8_bytes": receipt.source_utf8_bytes,
+    }
+
+
+def _zero_hit_value(receipt: ContextZeroHitSearchReceipt) -> dict[str, object]:
+    return {
+        "authorized_source_ids": list(receipt.authorized_source_ids),
+        "authorized_source_fingerprint": receipt.authorized_source_fingerprint,
+        "authorized_source_kinds": [
+            item.value for item in receipt.authorized_source_kinds
+        ],
+        "artifact_path_prefix": receipt.artifact_path_prefix,
+        "evidence_id": receipt.evidence_id,
+        "manifest_digest": receipt.manifest_digest,
+        "query_count": receipt.query_count,
+        "query_digest": receipt.query_digest,
     }
 
 
@@ -1028,6 +1170,11 @@ def serialize_context_action_observation(
         payload: object = [
             "s",
             observation.truncated,
+            (
+                None
+                if observation.zero_hit_receipt is None
+                else _zero_hit_value(observation.zero_hit_receipt)
+            ),
             [
                 [
                     hit.query_index,
@@ -1082,6 +1229,7 @@ def serialize_context_action_observation(
                     ),
                     _SOURCE_KIND_WIRE_CODE[item.receipt.source_kind],
                     handle_value(item.receipt.handle),
+                    item.receipt.evidence_id,
                     item.content,
                 ]
                 for item in observation.evidence
@@ -1113,6 +1261,11 @@ def serialize_context_action_observation(
             ],
             "kind": "search_observation",
             "truncated": observation.truncated,
+            "zero_hit_receipt": (
+                None
+                if observation.zero_hit_receipt is None
+                else _zero_hit_value(observation.zero_hit_receipt)
+            ),
         }
     elif type(observation) is ContextReadObservation:
         payload = {
@@ -1140,8 +1293,4 @@ def serialize_context_action_observation(
         raise _invalid()
     if compact:
         return encoded
-    return (
-        f"{_BEGIN_UNTRUSTED_STORY_DATA}\n"
-        f"{encoded}\n"
-        f"{_END_UNTRUSTED_STORY_DATA}"
-    )
+    return f"{_BEGIN_UNTRUSTED_STORY_DATA}\n{encoded}\n{_END_UNTRUSTED_STORY_DATA}"

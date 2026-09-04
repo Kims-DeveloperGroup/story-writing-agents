@@ -126,7 +126,7 @@ class AgentExchangeContractTests(unittest.TestCase):
                 getattr(contracts, name, WorkspaceAgentExchangeStore),
             )
             self.assertNotIn(name, story_writing_agents.__all__)
-        self.assertEqual(len(story_writing_agents.__all__), 120)
+        self.assertEqual(len(story_writing_agents.__all__), 104)
 
     def test_input_schema_is_exact_frozen_slotted_and_content_hidden(self) -> None:
         self.assertEqual(
