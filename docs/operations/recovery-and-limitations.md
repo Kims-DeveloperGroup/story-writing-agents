@@ -1380,6 +1380,34 @@ main input does not activate it. See the
 [interactive terminal reference](../reference/interactive-terminal.md) and
 [terminal safety boundary](terminal-safety.md#ranged-text-viewer-boundary).
 
+## Live-composer recovery boundary
+
+The package-internal live composer lets later controller work keep an editable
+request visible while an already-confirmed operation runs. It does not decide
+whether the operation committed. A runtime-owned callback supplies the
+authoritative `precommit` or `postcommit` boundary when input is accepted.
+
+| Returned outcome | Proven fact | Safe consumer action |
+| --- | --- | --- |
+| `operation_completed` | The operation finished before terminal input was accepted; its result and exact unfinished editor state are returned. | Present the operation result and preserve the draft/cursor for the next ordinary read. |
+| `replan` | Input was submitted at `precommit`, and cancellation of the exact operation was proved joined. | Re-read authoritative state and plan from the literal submitted text. Slash-prefixed text is not a command here. |
+| `next_turn` | Input was submitted at `postcommit`; the old operation was not cancelled and finalization completed. | Queue the literal text as the next lead turn. Do not roll back or reinterpret the completed operation. |
+| `interrupted` / `eof` | Ctrl-C or EOF was accepted as its own terminal event. | Follow the controller's interruption or shutdown policy; do not treat the buffer as submitted text. |
+| `recovery_required` | The precommit join was uncertain/invalid/failed, the boundary could not be trusted, or postcommit finalization failed or was cancelled. | Preserve durable evidence and stop automatic replay. Inspect runtime state before another mutation. |
+
+Progress frames and a cleared terminal span are not durable-completion proof.
+The terminal driver is the only writer during the span, preserves buffer and
+cursor across redraws, and restores terminal state before returning. If live
+input is unavailable, fallback performs no concurrent read: it lets the
+operation finish and returns `operation_completed` with the initial draft.
+Users therefore retain semantic continuity but cannot edit concurrently in
+that environment.
+
+The current story controller does not call this seam yet. Ordinary shell story
+input remains rejected, so these outcomes are contracts for later controller
+and semantic-presentation consumers rather than a user-accessible recovery
+command.
+
 ## Pause, quit, and cleanup
 
 Declined or interrupted pause confirmation keeps the current attachment; EOF at

@@ -15,6 +15,16 @@ from ._input_lifecycle import (
     TerminalInputMode,
     inspect_live_decoder_spec,
 )
+from ._live_composer import (
+    BoundaryProvider,
+    CancelAndJoin,
+    LiveComposerDeliveryKind,
+    LiveComposerInput,
+    LiveComposerInputKind,
+    LiveComposerResult,
+    LiveOperationBoundary,
+    deliver_live_composer_input,
+)
 from ._external_view import (
     _BorrowedLineViewerHost,
     _require_external_view_frame,
@@ -78,6 +88,7 @@ _MAX_ESCAPE_SEQUENCE_LENGTH = 64
 _ESCAPE_LOOKAHEAD_SECONDS = 0.05
 _DEFAULT_TERMIOS = object()
 _PROGRESS_FRAME_COUNT = 14
+_LIVE_COMPOSER_POLL_SECONDS = 0.025
 _PROGRESS_INTERVAL_SECONDS = 0.08
 _PROGRESS_SGR_FRAMES = (
     "\x1b[1;36m",
@@ -694,6 +705,348 @@ class RawTerminalDriver:
             ) from progress_failure
         assert operation_succeeded
         return result
+
+    async def run_live_composer(
+        self,
+        operation: Awaitable[_T],
+        prompt: str,
+        frame_renderer: Callable[
+            [LineInputState, int, TerminalCapabilities], RenderedInputFrame
+        ],
+        boundary_provider: BoundaryProvider,
+        cancel_and_join: CancelAndJoin,
+        *,
+        initial_state: LineInputState = LineInputState(),
+    ) -> LiveComposerResult:
+        """Keep one literal editor live while an injected operation runs.
+
+        Runtime callbacks own the durable boundary and cancellation decision.
+        This driver owns only terminal input, fixed progress redraw, the single
+        output stream, and exact restoration.
+        """
+
+        if not hasattr(operation, "__await__"):
+            raise TypeError("operation must be awaitable")
+        if type(prompt) is not str:
+            raise TypeError("prompt must be a string")
+        if not callable(frame_renderer):
+            raise TypeError("frame_renderer must be callable")
+        if not callable(boundary_provider):
+            raise TypeError("boundary_provider must be callable")
+        if not callable(cancel_and_join):
+            raise TypeError("cancel_and_join must be callable")
+        if type(initial_state) is not LineInputState:
+            raise TypeError("initial_state must be a LineInputState")
+        if self._progress_active:
+            raise RuntimeError("live composer cannot overlap terminal progress")
+
+        operation_task: asyncio.Future[_T] | None = None
+        with self._input_latch.input_operation():
+            try:
+                observed = self._observe_input_capabilities()
+                capabilities, configuration = self._prepare_input(observed)
+                operation_task = asyncio.ensure_future(operation)
+                if configuration is None:
+                    accepted = await self._read_fallback_live_composer(
+                        operation_task,
+                        prompt,
+                        initial_state,
+                    )
+                else:
+                    accepted = await self._read_raw_live_composer(
+                        operation_task,
+                        prompt,
+                        frame_renderer,
+                        capabilities,
+                        configuration,
+                        initial_state,
+                    )
+            except BaseException:
+                if operation_task is None:
+                    close = getattr(operation, "close", None)
+                    if callable(close):
+                        close()
+                else:
+                    await self._cleanup_failed_live_composer(
+                        operation_task,
+                        boundary_provider,
+                        cancel_and_join,
+                    )
+                raise
+
+        assert operation_task is not None
+        if type(accepted) is LiveComposerResult:
+            return accepted
+        try:
+            boundary = boundary_provider()
+        except Exception:
+            await self._join_without_cancellation(operation_task)
+            return LiveComposerResult(
+                LiveComposerDeliveryKind.RECOVERY_REQUIRED,
+                accepted.state,
+            )
+        if not isinstance(boundary, LiveOperationBoundary):
+            await self._join_without_cancellation(operation_task)
+            return LiveComposerResult(
+                LiveComposerDeliveryKind.RECOVERY_REQUIRED,
+                accepted.state,
+            )
+        try:
+            resolved = await deliver_live_composer_input(
+                accepted,
+                operation_task,
+                lambda: boundary,
+                cancel_and_join,
+            )
+        except Exception:
+            operation_task.cancel()
+            try:
+                await operation_task
+            except BaseException:
+                pass
+            raise
+        if boundary is LiveOperationBoundary.POSTCOMMIT:
+            try:
+                await operation_task
+            except asyncio.CancelledError:
+                if not operation_task.cancelled():
+                    raise
+                return LiveComposerResult(
+                    LiveComposerDeliveryKind.RECOVERY_REQUIRED,
+                    accepted.state,
+                )
+            except Exception:
+                return LiveComposerResult(
+                    LiveComposerDeliveryKind.RECOVERY_REQUIRED,
+                    accepted.state,
+                )
+            return resolved
+        if operation_task.done():
+            # Retrieve any terminal failure so it cannot become an unobserved
+            # task exception after the runtime proved the join.
+            if not operation_task.cancelled():
+                operation_task.exception()
+            return resolved
+        operation_task.cancel()
+        try:
+            await operation_task
+        except asyncio.CancelledError:
+            pass
+        return LiveComposerResult(
+            LiveComposerDeliveryKind.RECOVERY_REQUIRED,
+            accepted.state,
+        )
+
+    async def _join_without_cancellation(
+        self,
+        operation_task: asyncio.Future[object],
+    ) -> None:
+        """Retrieve one owned task without guessing its durable boundary."""
+
+        try:
+            await operation_task
+        except Exception:
+            pass
+
+    async def _cleanup_failed_live_composer(
+        self,
+        operation_task: asyncio.Future[object],
+        boundary_provider: BoundaryProvider,
+        cancel_and_join: CancelAndJoin,
+    ) -> None:
+        """Best-effort join one operation after terminal-side failure."""
+
+        if operation_task.done():
+            if not operation_task.cancelled():
+                operation_task.exception()
+            return
+        try:
+            boundary = boundary_provider()
+        except Exception:
+            await self._join_without_cancellation(operation_task)
+            return
+        if boundary is LiveOperationBoundary.POSTCOMMIT:
+            await self._join_without_cancellation(operation_task)
+            return
+        if boundary is not LiveOperationBoundary.PRECOMMIT:
+            await self._join_without_cancellation(operation_task)
+            return
+        try:
+            await cancel_and_join(operation_task)
+        except BaseException:
+            pass
+        if not operation_task.done():
+            operation_task.cancel()
+            try:
+                await operation_task
+            except BaseException:
+                pass
+
+    async def _read_fallback_live_composer(
+        self,
+        operation_task: asyncio.Future[_T],
+        prompt: str,
+        state: LineInputState,
+    ) -> LiveComposerInput | LiveComposerResult:
+        """Finish confirmed work without blocking on incapable terminal input."""
+
+        del prompt
+        return LiveComposerResult(
+            LiveComposerDeliveryKind.OPERATION_COMPLETED,
+            state,
+            operation_result=await operation_task,
+        )
+
+    async def _read_raw_live_composer(
+        self,
+        operation_task: asyncio.Future[_T],
+        prompt: str,
+        frame_renderer: Callable[
+            [LineInputState, int, TerminalCapabilities], RenderedInputFrame
+        ],
+        capabilities: TerminalCapabilities,
+        configuration: _TerminalConfiguration,
+        initial_state: LineInputState,
+    ) -> LiveComposerInput | LiveComposerResult:
+        """Poll one raw editor and operation without creating an input worker."""
+
+        try:
+            _activate_terminal(configuration)
+        except BaseException as setup_failure:
+            _restore_terminal_or_raise(configuration, setup_failure)
+            raise
+
+        display = _LiveEditorState()
+        state = initial_state
+        frame = 0
+        active_failure: BaseException | None = None
+        result: LiveComposerInput | LiveComposerResult | None = None
+        try:
+            display.rendered_cursor_row = self._redraw_live_composer(
+                prompt, state, frame, display, frame_renderer, capabilities
+            )
+            while result is None:
+                if operation_task.done():
+                    result = LiveComposerResult(
+                        LiveComposerDeliveryKind.OPERATION_COMPLETED,
+                        state,
+                        operation_result=operation_task.result(),
+                    )
+                    break
+                readable, _writable, _exceptional = _select.select(
+                    (configuration.input_descriptor,), (), (), 0
+                )
+                if readable or self._input_latch.live_reader.has_pending_codepoint:
+                    character = self._read_character()
+                    event = self._live_composer_key_event(
+                        character, configuration, display
+                    )
+                    if event is not None:
+                        updated, outcome = self._line_transition(state, event)
+                        if type(updated) is not LineInputState:
+                            raise TypeError(
+                                "line transition must return a LineInputState"
+                            )
+                        if outcome is not None and type(outcome) is not ControlOutcome:
+                            raise TypeError(
+                                "line transition must return a ControlOutcome or None"
+                            )
+                        state = updated
+                        if outcome is not None:
+                            if outcome.kind is ControlOutcomeKind.COMMIT:
+                                result = LiveComposerInput(
+                                    LiveComposerInputKind.SUBMIT, state
+                                )
+                            elif outcome.kind is ControlOutcomeKind.INTERRUPT:
+                                result = LiveComposerInput(
+                                    LiveComposerInputKind.INTERRUPT, state
+                                )
+                            elif outcome.kind is ControlOutcomeKind.EOF:
+                                result = LiveComposerInput(
+                                    LiveComposerInputKind.EOF, state
+                                )
+                            else:
+                                raise ValueError(
+                                    "live composer received an unsupported outcome"
+                                )
+                        if result is None:
+                            display.rendered_cursor_row = self._redraw_live_composer(
+                                prompt,
+                                state,
+                                frame,
+                                display,
+                                frame_renderer,
+                                capabilities,
+                            )
+                    continue
+                await asyncio.sleep(_LIVE_COMPOSER_POLL_SECONDS)
+                frame = (frame + 1) % _PROGRESS_FRAME_COUNT
+                display.rendered_cursor_row = self._redraw_live_composer(
+                    prompt, state, frame, display, frame_renderer, capabilities
+                )
+            self._clear_live_display(display, line_break=False)
+        except BaseException as failure:
+            active_failure = failure
+            try:
+                self._clear_live_display(display, line_break=True)
+            except BaseException:
+                pass
+
+        _restore_terminal_or_raise(configuration, active_failure)
+        if active_failure is not None:
+            raise active_failure
+        assert result is not None
+        return result
+
+    def _redraw_live_composer(
+        self,
+        prompt: str,
+        state: LineInputState,
+        frame: int,
+        display: _LiveEditorState,
+        renderer: Callable[
+            [LineInputState, int, TerminalCapabilities], RenderedInputFrame
+        ],
+        capabilities: TerminalCapabilities,
+    ) -> int:
+        rendered = renderer(state, frame, capabilities)
+        if type(rendered) is not RenderedInputFrame:
+            raise TypeError("frame_renderer must return a RenderedInputFrame")
+        if rendered.width != capabilities.width:
+            raise ValueError("live composer frame width must match capabilities")
+        return self._redraw_live_display(
+            prompt,
+            capabilities.width,
+            display,
+            state,
+            _empty_suggestion_preview,
+            rendered,
+            capabilities,
+            None,
+            None,
+            None,
+        )
+
+    def _live_composer_key_event(
+        self,
+        character: str,
+        configuration: _TerminalConfiguration,
+        display: _LiveEditorState,
+    ) -> KeyEvent | None:
+        configured = _configured_control_event(character, configuration)
+        if configured is not None:
+            display.escape_sequence = None
+            return configured
+        if display.escape_sequence is not None:
+            event, reprocess = _consume_escape_character(display, character)
+            if event is not None:
+                return event
+            if not reprocess:
+                return None
+        if character == "\x1b":
+            display.escape_sequence = character
+            return None
+        return _key_event(character, configuration)
 
     async def _run_progress_frames(
         self,

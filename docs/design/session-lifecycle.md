@@ -197,6 +197,44 @@ components, not durable lifecycle states. The current controller exposes no
 provider-text input span, so main-input `$`/`$$` does not enter those components
 and creates no reference operation.
 
+## Live-composer operation boundary
+
+The terminal package also exposes one package-internal live composer for later
+controller integration. It runs an injected confirmed operation and an
+ordinary line editor under the driver's existing input latch. The driver owns
+raw input, fixed progress redraw, one output stream, and terminal restoration;
+runtime callbacks own the durable boundary plus cancellation-and-join proof.
+The component neither infers a commit from presentation nor performs a domain
+write.
+
+Accepted input is resolved operation-first:
+
+```text
+operation finishes first -> operation_completed + preserved editor state
+submit at PRECOMMIT      -> cancel and join -> replan, or recovery_required
+submit at POSTCOMMIT     -> wait only       -> next_turn, or recovery_required
+Ctrl-C / EOF             -> interrupted / eof (never submission)
+```
+
+The immutable editor state carries the exact buffer and cursor through every
+redraw and terminal outcome. A submitted slash prefix remains literal text.
+At `PRECOMMIT`, only a proved `joined` result may expose that text as `replan`;
+an exception, invalid result, or `uncertain` join closes as
+`recovery_required` without replay text. At `POSTCOMMIT`, cancellation is
+forbidden: the operation must finish before `next_turn` is returned, and a
+failed or cancelled finalization becomes `recovery_required`. The raw driver
+is the sole terminal writer throughout the span.
+
+An incapable terminal does not start a concurrent blocking reader. It waits
+for the operation, returns `operation_completed`, and preserves the initial
+draft for a later ordinary read. This fallback preserves semantic continuity,
+but it does not provide live editing.
+
+These are terminal/runtime handoff contracts, not session lifecycle states.
+They do not make public story execution available, reconstruct confirmation
+authority, or decide durable completion. The controller integration and
+semantic rendering that consume these results remain separate work.
+
 See [Story sessions](../guides/story-sessions.md),
 [Backend and sessions](../reference/backend-and-sessions.md), and
 [recovery](../operations/recovery-and-limitations.md).
