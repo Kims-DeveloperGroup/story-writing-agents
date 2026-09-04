@@ -30,7 +30,7 @@ predicted_critical_path_savings_seconds=root_sequential_estimate-(parallel_criti
 
 ## Model Selection
 
-Load `$subagent-model-selection` before any dispatch model, effort, or context decision.
+Load `$subagent-model-selection` before any dispatch model or effort decision.
 That skill exclusively defines the algorithm.
 
 ## Control

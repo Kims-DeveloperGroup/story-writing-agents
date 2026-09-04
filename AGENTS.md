@@ -59,7 +59,7 @@ mandatory gain calculation, exceptions, fast path, and ownership rules.
 ### Root-Capability Routing
 
 Load `$subagent-model-selection` before choosing, requesting, overriding, or inheriting a
-child context, model, or reasoning effort.
+child model or reasoning effort.
 
 ### Role, Mode, and Control Gate
 

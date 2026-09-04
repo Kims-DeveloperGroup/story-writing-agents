@@ -261,23 +261,36 @@ class RepositoryAgentPolicyTests(unittest.TestCase):
             "Never dispatch for a deterministic command",
         )
 
-    def test_root_capability_context_and_complexity_are_canonical(self) -> None:
+    def test_root_effective_model_and_effort_resolution_is_canonical(self) -> None:
         section = self.selection_sections["## Resolve Inputs"]
-        expected_rows = (
+        self.assertTerms(
+            section,
+            "Resolve effective root model/effort after aliases, defaults, session overrides, and runtime child settings/pairs",
+        )
+        forbidden = (
+            "dispatch_context_tokens",
+            "context_model_target",
+            "|Context|Tokens|",
             "|`compact`|<=8,192|",
             "|`moderate`|8,193--32,768|",
             "|`large`|32,769--131,072|",
-            "|`oversized`|>131,072 or no verified output/reasoning fit|",
-        )
-        for row in expected_rows:
-            with self.subTest(row=row):
-                self.assertIn(row, section)
-        self.assertTerms(
-            section,
-            "`dispatch_context_tokens` counts only the task packet, intentionally inherited turns, attachments, preloads, and irreducible child material",
+            "|`oversized`|>131,072",
+            "no verified output/reasoning fit",
+            "Unknown fit is oversized",
+            "compact/moderate floor Luna",
             "`observed|estimated|unavailable`, method, and confidence",
-            "Unknown fit is oversized. Narrow or split it without relaxing root ceilings",
+            "context count/class/method/confidence",
+            "dispatch context",
+            "child context",
         )
+        for source_name, source in (
+            ("selector", self.selection_source),
+            ("routing", self.routing_source),
+            ("agents", self.agents_source),
+        ):
+            for term in forbidden:
+                with self.subTest(source=source_name, forbidden=term):
+                    self.assertNotIn(term, source)
 
     def test_root_capability_quality_and_role_targets_are_canonical(self) -> None:
         section = self.selection_sections["## Classify Work"]
@@ -298,8 +311,8 @@ class RepositoryAgentPolicyTests(unittest.TestCase):
         self.assertTerms(
             section,
             "Roles default routine; index-only work keeps its actual class",
-            "Context affects only model: compact/moderate floor Luna; large floors Sol",
-            "Complexity and risk alone control effort",
+            "Task/role classification controls model",
+            "Complexity and risk control effort",
         )
 
     def test_root_capability_clamps_and_orders_each_axis_independently(self) -> None:
@@ -308,7 +321,7 @@ class RepositoryAgentPolicyTests(unittest.TestCase):
         self.assertEqual(
             blocks[0].splitlines(),
             [
-                "desired_model=max(task_model_target,role_model_target,context_model_target)",
+                "desired_model=max(task_model_target,role_model_target)",
                 "desired_effort=max(task_effort_target,role_effort_target)",
                 "capped_model=min(desired_model,root_effective_model)",
                 "capped_effort=min(desired_effort,root_effective_effort)",
@@ -339,7 +352,7 @@ class RepositoryAgentPolicyTests(unittest.TestCase):
     def test_root_capability_routing_evidence_is_complete(self) -> None:
         self.assertTerms(
             self.selection_sections["## Record the Decision"],
-            "Record root/source; context count/class/method/confidence; complexity/triggers; role target; desired/capped/selected/compatible pairs; limitation; and fallback/inheritance reason",
+            "Record root/source; complexity/triggers; role target; desired/capped/selected/compatible pairs; limitation; and fallback/inheritance reason",
             "exclusions, accepted decisions, observable criteria",
             "`observed|inferred|proposed|unknown` evidence",
             "uncertainty stops",
@@ -363,16 +376,11 @@ class RepositoryAgentPolicyTests(unittest.TestCase):
 
     def test_model_selection_contract_is_exclusive_to_selector(self) -> None:
         selector_only_terms = (
-            "dispatch_context_tokens",
-            "|`compact`|<=8,192|",
-            "|`moderate`|8,193--32,768|",
-            "|`large`|32,769--131,072|",
-            "|`oversized`|>131,072 or no verified output/reasoning fit|",
             "|`routine`|Mechanical/reversible; no unresolved judgment/material risk|`gpt-5.6-terra`|`medium`|",
             "|`standard`|Bounded semantics; one established responsibility|`gpt-5.6-sol`|`high`|",
             "|`complex`|Ambiguity/unknown cause; multi-domain/boundary/API/compatibility/migration/security/authorization/concurrency/process/PTY/lifecycle/persistence/resource ownership/difficult nonlocal edges|`gpt-5.6-sol`|`xhigh`|",
             "|`critical`|Two interacting complex triggers",
-            "desired_model=max(task_model_target,role_model_target,context_model_target)",
+            "desired_model=max(task_model_target,role_model_target)",
             "desired_effort=max(task_effort_target,role_effort_target)",
             "capped_model=min(desired_model,root_effective_model)",
             "capped_effort=min(desired_effort,root_effective_effort)",
@@ -395,7 +403,7 @@ class RepositoryAgentPolicyTests(unittest.TestCase):
                 self.assertNotIn(term, self.routing_source)
         self.assertTerms(
             self.routing_sections["## Model Selection"],
-            "Load `$subagent-model-selection` before any dispatch model, effort, or context decision",
+            "Load `$subagent-model-selection` before any dispatch model or effort decision",
             "That skill exclusively defines the algorithm",
         )
 
@@ -477,11 +485,11 @@ class RepositoryAgentPolicyTests(unittest.TestCase):
     def test_model_selector_load_boundaries_are_exact(self) -> None:
         self.assertTerms(
             self.agents_source,
-            "Load `$subagent-model-selection` before choosing, requesting, overriding, or inheriting a child context, model, or reasoning effort",
+            "Load `$subagent-model-selection` before choosing, requesting, overriding, or inheriting a child model or reasoning effort",
         )
         self.assertTerms(
             self.routing_sections["## Model Selection"],
-            "Load `$subagent-model-selection` before any dispatch model, effort, or context decision",
+            "Load `$subagent-model-selection` before any dispatch model or effort decision",
             "That skill exclusively defines the algorithm",
         )
 
@@ -832,7 +840,7 @@ class RepositoryAgentPolicyTests(unittest.TestCase):
     def test_agents_loads_skills_at_positive_and_negative_boundaries(self) -> None:
         expected_descriptions = {
             "subagent-model-selection": (
-                "Use before selecting, requesting, overriding, or inheriting a subagent model, reasoning effort, or dispatch context",
+                "Use before selecting, requesting, overriding, or inheriting a subagent model, reasoning effort",
                 "Excludes root-session configuration and story-runtime agents",
             ),
             "subagent-routing": (
@@ -856,7 +864,7 @@ class RepositoryAgentPolicyTests(unittest.TestCase):
             self.agents_source,
             "Load `$github-task-lifecycle` for every GitHub-tracked task",
             "Load `$subagent-routing` before evaluating or dispatching any subagent",
-            "Load `$subagent-model-selection` before choosing, requesting, overriding, or inheriting a child context, model, or reasoning effort",
+            "Load `$subagent-model-selection` before choosing, requesting, overriding, or inheriting a child model or reasoning effort",
             "Load `$adaptive-verification` before planning, executing, reusing, escalating, or accepting evidence for any nontrivial tracked change",
         )
         self.assertTerms(
