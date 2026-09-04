@@ -24,9 +24,6 @@ from story_writing_agents.cli_context import (
     load_cli_context,
     load_default_conversation,
 )
-from story_writing_agents.conversation_storage import (
-    CONVERSATION_STORAGE_MUTATION_GUARD_PATH,
-)
 from story_writing_agents.conversation_storage.filesystem import (
     FilesystemCollaborationEventStore,
 )
@@ -3255,11 +3252,15 @@ print(
         compact_fields = "".join(
             re.sub(r"\x1b\[[0-9;]*[A-Za-z]", "", initial_fields).split()
         )
-        self.assertIn("Provider—Current:Codex", compact_fields)
+        self.assertIn("Provider(disabled)—Current:Codex", compact_fields)
+        self.assertIn(
+            "Disabled:Setbyalaunchoverride;read-onlyinthisshell.",
+            compact_fields,
+        )
         self.assertIn("Model—Current:providerdefault", compact_fields)
         self.assertIn("Effort—Current:providerdefault", compact_fields)
         model_picker_mark = process.output_mark()
-        process.send_text("\x1b[B\n")
+        process.send_text("\n")
         model_picker = process.wait_for_text("GPT PTY", after=model_picker_mark)
         self.assertIn("GPT PTY", model_picker)
         self.assertIn("gpt-pty", model_picker)
@@ -3524,19 +3525,7 @@ print(
             self.assertNotIn(f"{_VISIBLE_PROGRESS_FRAMES[0]}\n", output)
             return output
 
-        provider = open_delayed_picker(
-            "\n",
-            "Provider\nContext: Plot & Structure Architect",
-        )
-        self.assertIn("Codex", provider)
-        return_mark = process.output_mark()
-        process.send_text("\x1b")
-        process.wait_for_text(
-            "Agent settings\nContext: Plot & Structure Architect",
-            after=return_mark,
-        )
-
-        model = open_delayed_picker("\x1b[B\n", "GPT PTY")
+        model = open_delayed_picker("\n", "GPT PTY")
         self.assertIn("Model\nContext: Plot & Structure Architect", model)
         return_mark = process.output_mark()
         process.send_text("\x1b")
@@ -3599,15 +3588,17 @@ print(
         process.send_text("\x1b[B\n")
         fields = process.wait_for_text("Agent settings", after=mark)
         compact_fields = "".join(fields.split())
-        self.assertIn("ProviderCurrent:Codex", compact_fields)
+        self.assertIn("Provider(disabled)Current:Codex", compact_fields)
         self.assertIn("ModelCurrent:providerdefault", compact_fields)
         self.assertIn("EffortCurrent:providerdefault", compact_fields)
+        plain_fields = self.plain_terminal_text(fields)
+        self.assertIn("1. Provider (disabled)", plain_fields)
+        self.assertIn("Current: Codex", plain_fields)
         self.assertIn(
-            "> 1. Provider\n     Current: Codex",
-            self.plain_terminal_text(fields),
+            "Disabled:Setbyalaunchoverride;read-onlyinthisshell.",
+            compact_fields,
         )
-        self.assertNotIn(" — Current:", self.plain_terminal_text(fields))
-        process.send_text("\x1b[B\n")
+        process.send_text("\n")
         process.wait_for_text("GPT PTY", after=mark)
         self.assertNotRegex(
             process.text_after(mark),
@@ -3878,7 +3869,6 @@ print(
         )
         before = _durable_tree(self.workspace.root)
         coordinated = dict(before)
-        coordinated[CONVERSATION_STORAGE_MUTATION_GUARD_PATH] = b""
         process = self._spawn_cli(())
         process.wait_for_text("Provider authentication")
 
@@ -3967,7 +3957,7 @@ print(
         self.assertEqual(process.wait_for_exit(), 0, process.normalized_text)
         self.assertEqual(
             self.workspace.read_json("config/system_defaults.json")["default_backend"],
-            "codex",
+            None,
         )
         self.assertFalse(self.provider_log.exists())
         self.assertNotIn(
@@ -4034,7 +4024,7 @@ print(
         self.assertEqual(process.wait_for_exit(), 0, process.normalized_text)
         self.assertEqual(
             self.workspace.read_json("config/system_defaults.json")["default_backend"],
-            "codex",
+            None,
         )
         self.assertEqual(
             self.workspace.read_json("config/agent_configs.json")["plot_architect"][
@@ -4284,6 +4274,7 @@ ProviderAuthService.probe_all = delayed_probe_all
 AgentBackend.list_session_lifecycles = delayed_list_sessions
 FilesystemConversationCatalog.list = delayed_list_conversations
 InteractiveController._main_resume_choices = lambda self, buffer, cursor: None
+InteractiveController._persist_missing_auth_default = lambda self, snapshot, **kwargs: None
 raise SystemExit(cli.main([]))
 """
         process = self._spawn_python(
@@ -5123,10 +5114,12 @@ print(
         self.assertIn("Choices: y/yes or n/no", confirmation)
         process.send_line("yes")
         process.wait_for_text("Archived ", after=mark)
-        process.wait_for_text("Subject: Second Subject", after=mark)
-        process.wait_for_text("story[alpha]> ", after=mark)
+        ready_mark = process.output_mark()
+        process.wait_for_text("Subject: Second Subject", after=ready_mark)
+        process.wait_for_text("story[alpha]> ", after=ready_mark)
 
         mark = process.output_mark()
+        process.send_text("cancel me")
         process.send_interrupt()
         process.wait_for_text("story[alpha]> ", after=mark)
         process.send_line("/quit")
@@ -5481,7 +5474,6 @@ print(
         process.send_interrupt()
         self.assertEqual(process.wait_for_exit(), 0, process.normalized_text)
         coordinated = dict(before)
-        coordinated[CONVERSATION_STORAGE_MUTATION_GUARD_PATH] = b""
         self.assertEqual(_durable_tree(self.workspace.root), coordinated)
         self.assertFalse(self.provider_log.exists())
 

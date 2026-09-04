@@ -214,6 +214,10 @@ class WritingArtifactRepository:
     def read_text(self, path: str, *, max_bytes: int | None = None) -> str:
         """Read one safe current canonical filesystem source."""
 
+        if max_bytes is not None and (
+            type(max_bytes) is not int or max_bytes <= 0
+        ):
+            raise ValueError("max_bytes must be None or a positive integer")
         with self._locked_sources():
             return self._sources.read_text(path, max_bytes=max_bytes)
 

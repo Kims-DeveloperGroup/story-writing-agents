@@ -55,3 +55,31 @@ selections. A failed node is rerun directly after correction; a completed valid
 selection is not repeated after unrelated documentation or test-only changes.
 The issue checklist is checked only after every retained selection and the
 final graph/index/API checks pass on the integrated head.
+
+## Integrated-head verification ledger
+
+The warning-strict discovery contained 2,209 tests after excluding the
+separately executed scenario and RAG selections. Evidence was collected in
+nonoverlapping 250-node shards and retained after unrelated changes:
+
+- shards 0, 250, and 500 completed through their original results plus exact
+  corrected-node reruns;
+- shard 750 passed 250 nodes with one intentional skip;
+- shard 1000 completed through its original results plus the 55-node affected
+  controller selection and three exact corrected-node reruns;
+- shard 1250 completed through 230 original passes plus corrected affected
+  selections: management 5/5, settings 24/24, and PTY 54 original passes plus
+  four exact corrected-node passes;
+- shard 1500 passed 250/250;
+- shard 1750 completed through its original passing nodes plus corrected
+  affected selections: public API 37/37, session lifecycle 25/25, and packaging
+  2/2; and
+- shard 2000 completed through its original passing nodes plus five exact
+  corrected-node passes.
+
+Supplemental focused evidence includes scenarios 71/71, conversation RAG
+29/29, Codex backend 100/100, recovery 33/33, cancellation 6/6, and boundary
+nodes 10/10. Changed-file Ruff, diff whitespace, and source compile checks also
+pass. These results are acceptance evidence for this integrated head; they do
+not authorize replaying a failed shard from its first node or representing a
+narrow focused result as a new full-suite run.

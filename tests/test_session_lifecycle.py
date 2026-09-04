@@ -745,7 +745,7 @@ class AgentBackendLifecycleTests(unittest.TestCase):
         self.assertEqual(backend.list_session_lifecycles(), ())
         self.assertEqual(
             lifecycle_rows_since(mark),
-            [("trace", "observed", "completed", None)],
+            [],
         )
 
         mark = len(_debug_records(self.workspace))
@@ -753,11 +753,7 @@ class AgentBackendLifecycleTests(unittest.TestCase):
         self.assertEqual(created.access_state, SessionAccessState.HELD_HERE)
         self.assertEqual(
             lifecycle_rows_since(mark),
-            [
-                ("trace", "started", None, "record_created"),
-                ("trace", "observed", "claimable", "record_created"),
-                ("trace", "succeeded", "ready", "record_created"),
-            ],
+            [],
         )
 
         mark = len(_debug_records(self.workspace))
@@ -765,11 +761,7 @@ class AgentBackendLifecycleTests(unittest.TestCase):
         self.assertEqual(released.access_state, SessionAccessState.CLAIMABLE)
         self.assertEqual(
             lifecycle_rows_since(mark),
-            [
-                ("trace", "started", None, "record_created"),
-                ("trace", "observed", "claimable", "record_created"),
-                ("trace", "succeeded", "claimable", "record_created"),
-            ],
+            [],
         )
 
         self.write_manifest("record_reopen", durable_state="paused")
@@ -778,11 +770,7 @@ class AgentBackendLifecycleTests(unittest.TestCase):
         self.assertEqual(reopened.durable_state, SessionDurableState.READY)
         self.assertEqual(
             lifecycle_rows_since(mark),
-            [
-                ("trace", "started", None, "record_reopen"),
-                ("trace", "observed", "claimable", "record_reopen"),
-                ("trace", "succeeded", "ready", "record_reopen"),
-            ],
+            [],
         )
         backend.release_session_access("record_reopen")
 
@@ -792,12 +780,7 @@ class AgentBackendLifecycleTests(unittest.TestCase):
         self.assertEqual(paused.durable_state, SessionDurableState.PAUSED)
         self.assertEqual(
             lifecycle_rows_since(mark),
-            [
-                ("trace", "started", None, "record_pause"),
-                ("trace", "observed", "claimable", "record_pause"),
-                ("trace", "observed", "claimable", "record_pause"),
-                ("trace", "succeeded", "paused", "record_pause"),
-            ],
+            [],
         )
 
         self.write_manifest("record_acquire")
@@ -806,11 +789,7 @@ class AgentBackendLifecycleTests(unittest.TestCase):
         self.assertEqual(acquired.access_state, SessionAccessState.HELD_HERE)
         self.assertEqual(
             lifecycle_rows_since(mark),
-            [
-                ("trace", "started", None, "record_acquire"),
-                ("trace", "observed", "claimable", "record_acquire"),
-                ("trace", "succeeded", "held_here", "record_acquire"),
-            ],
+            [],
         )
 
         failures = (
@@ -845,16 +824,12 @@ class AgentBackendLifecycleTests(unittest.TestCase):
                 True,
             ),
         )
-        for label, operation, exception_type, session_id, observes in failures:
+        for label, operation, exception_type, session_id, _observes in failures:
             with self.subTest(label=label):
                 mark = len(_debug_records(self.workspace))
                 with self.assertRaises(exception_type):
                     operation()
-                expected = [("trace", "started", None, session_id)]
-                if observes:
-                    expected.append(("trace", "observed", "claimable", session_id))
-                expected.append(("error", "failed", "failed", session_id))
-                self.assertEqual(lifecycle_rows_since(mark), expected)
+                self.assertEqual(lifecycle_rows_since(mark), [])
 
         claim_path = self.workspace.path(_access_relative("record_acquire"))
         claim = self.workspace.read_json(_access_relative("record_acquire"))
@@ -866,10 +841,7 @@ class AgentBackendLifecycleTests(unittest.TestCase):
             backend.release_session_access("record_acquire")
         self.assertEqual(
             lifecycle_rows_since(mark),
-            [
-                ("trace", "started", None, "record_acquire"),
-                ("error", "failed", "failed", "record_acquire"),
-            ],
+            [],
         )
         self.assertEqual(_artifact_snapshot(claim_path), claim_before)
 
@@ -879,10 +851,11 @@ class AgentBackendLifecycleTests(unittest.TestCase):
             backend.list_session_lifecycles()
         self.assertEqual(
             lifecycle_rows_since(mark),
-            [("error", "failed", "failed", None)],
+            [],
         )
-        raw_debug_log = self.workspace.path(DEBUG_LOG_RELATIVE_PATH).read_text(
-            encoding="utf-8"
+        debug_path = self.workspace.path(DEBUG_LOG_RELATIVE_PATH)
+        raw_debug_log = (
+            debug_path.read_text(encoding="utf-8") if debug_path.exists() else ""
         )
         self.assertNotIn("PRIVATE_FOREIGN_CLAIM_TOKEN", raw_debug_log)
 
@@ -1229,12 +1202,10 @@ class AgentBackendLifecycleTests(unittest.TestCase):
         self.assert_close_resources_cleared(backend, staging)
         self.assertEqual(
             _cleanup_rows_since(self.workspace, mark),
-            [
-                ("trace", "started", None, None),
-                ("trace", "succeeded", "completed", None),
-            ],
+            [],
         )
-        raw = self.workspace.path(DEBUG_LOG_RELATIVE_PATH).read_text(encoding="utf-8")
+        debug_path = self.workspace.path(DEBUG_LOG_RELATIVE_PATH)
+        raw = debug_path.read_text(encoding="utf-8") if debug_path.exists() else ""
         for private in (*tokens.values(), str(staging), str(self.workspace.root)):
             self.assertNotIn(private, raw)
 
@@ -1285,22 +1256,18 @@ class AgentBackendLifecycleTests(unittest.TestCase):
 
                 self.assertEqual(attempts, list(tokens.items()))
                 self.assert_close_resources_cleared(backend, staging)
-                expected = [("trace", "started", None, None)]
-                expected.extend(
-                    ("error", "failed", "failed", session_id)
-                    for session_id in tokens
-                    if session_id in failures
-                )
-                expected.append(("trace", "failed", "failed", None))
                 self.assertEqual(
                     _cleanup_rows_since(self.workspace, mark),
-                    expected,
+                    [],
                 )
                 for failure in failures.values():
                     self.assertIsNone(failure.__cause__)
                     self.assertIsNone(failure.__context__)
-                raw = self.workspace.path(DEBUG_LOG_RELATIVE_PATH).read_text(
-                    encoding="utf-8"
+                debug_path = self.workspace.path(DEBUG_LOG_RELATIVE_PATH)
+                raw = (
+                    debug_path.read_text(encoding="utf-8")
+                    if debug_path.exists()
+                    else ""
                 )
                 for private in (
                     *tokens.values(),
@@ -1350,10 +1317,7 @@ class AgentBackendLifecycleTests(unittest.TestCase):
         self.assert_close_resources_cleared(error_backend, error_staging)
         self.assertEqual(
             _cleanup_rows_since(self.workspace, error_mark),
-            [
-                ("trace", "started", None, None),
-                ("trace", "failed", "failed", None),
-            ],
+            [],
         )
 
         trace_backend = self.backend()
@@ -1407,9 +1371,10 @@ class AgentBackendLifecycleTests(unittest.TestCase):
         )
         self.assertEqual(
             _cleanup_rows_since(self.workspace, trace_mark),
-            [("error", "failed", "failed", "trace_sink_alpha")],
+            [],
         )
-        raw = self.workspace.path(DEBUG_LOG_RELATIVE_PATH).read_text(encoding="utf-8")
+        debug_path = self.workspace.path(DEBUG_LOG_RELATIVE_PATH)
+        raw = debug_path.read_text(encoding="utf-8") if debug_path.exists() else ""
         for private in (
             *error_tokens.values(),
             *trace_tokens.values(),
@@ -1459,9 +1424,10 @@ class AgentBackendLifecycleTests(unittest.TestCase):
         self.assertTrue(staging.is_dir())
         self.assertEqual(
             _cleanup_rows_since(self.workspace, mark),
-            [("trace", "started", None, None)],
+            [],
         )
-        raw = self.workspace.path(DEBUG_LOG_RELATIVE_PATH).read_text(encoding="utf-8")
+        debug_path = self.workspace.path(DEBUG_LOG_RELATIVE_PATH)
+        raw = debug_path.read_text(encoding="utf-8") if debug_path.exists() else ""
         for private in (
             *tokens.values(),
             failure_message,

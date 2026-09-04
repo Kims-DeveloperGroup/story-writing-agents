@@ -490,11 +490,18 @@ def _record_cli_error(
         pass
 
 
-def _create_cli_debug_log(workspace: Workspace) -> WorkspaceDebugLog | None:
+def _create_cli_debug_log(
+    workspace: Workspace,
+    *,
+    defer_until_session: bool = False,
+) -> WorkspaceDebugLog | None:
     """Create one optional CLI logger without changing command behavior."""
 
     try:
-        return WorkspaceDebugLog(workspace, defer_until_session=True)
+        return WorkspaceDebugLog(
+            workspace,
+            defer_until_session=defer_until_session,
+        )
     except BaseException:
         return None
 
@@ -828,7 +835,7 @@ def _run_interactive_cli(arguments: argparse.Namespace) -> int:
     except Exception as exc:
         _write_interactive_cli_error(_classify_workspace_entry_failure(exc))
         return 2
-    debug_log = _create_cli_debug_log(workspace)
+    debug_log = _create_cli_debug_log(workspace, defer_until_session=True)
     _trace_cli(
         debug_log,
         DebugOperation.WORKSPACE_DISCOVERY,

@@ -640,7 +640,7 @@ class WorkspaceV2RejectionTests(WorkspaceV2GitTestCase):
         ambiguous = self.repository("ambiguous")
         first = canonical_initializer_scaffold()[0]
         target = ambiguous / first.path
-        target.parent.mkdir(parents=True)
+        target.parent.mkdir(parents=True, exist_ok=True)
         target.write_bytes(first.content)
         cases.append(("ambiguous", WorkspaceFormatError))
 
