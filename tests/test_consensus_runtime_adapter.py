@@ -1,0 +1,377 @@
+"""Provider-free tests for the consensus runtime adapter boundary."""
+
+from __future__ import annotations
+
+from dataclasses import replace
+import unittest
+
+from story_writing_agents.consensus import (
+    ConsensusAuditVerdict,
+    ConsensusDecision,
+    ConsensusDurability,
+    ConsensusEvent,
+    ConsensusExecutionCoordinator,
+    ConsensusInputKind,
+    ConsensusPhase,
+    ConsensusPhaseDecision,
+    ConsensusPhaseState,
+    ConsensusProviderResult,
+    ConsensusRuntimeAdapter,
+    ConsensusRuntimeDecision,
+    ConsensusStoredWorkflow,
+    ConsensusWorkflowSubmission,
+    prepare_consensus_phase,
+)
+
+
+_PROMPT = "1" * 64
+_DRAFT = "2" * 64
+_CANDIDATE = "3" * 64
+
+
+class FakeConsensusPort:
+    def __init__(self) -> None:
+        self.counter = 0
+        self.workflows = {}
+        self.provider_calls = []
+        self.append_calls = []
+        self.interrupt_calls = []
+        self.fail_append_number = None
+        self.interrupt_result = True
+        self.invoke_hook = None
+
+    def new_id(self, prefix):
+        self.counter += 1
+        return f"{prefix}-{self.counter}"
+
+    def create_workflow(self, submission, request_event):
+        key = (submission.session_id, submission.conversation_id, submission.workflow_id)
+        if key in self.workflows:
+            raise ValueError("duplicate workflow")
+        self.workflows[key] = ConsensusStoredWorkflow(submission, (request_event,))
+
+    def load_workflow(self, session_id, conversation_id, workflow_id):
+        return self.workflows.get((session_id, conversation_id, workflow_id))
+
+    def append_event(self, session_id, conversation_id, workflow_id, expected_tail, event):
+        key = (session_id, conversation_id, workflow_id)
+        stored = self.workflows[key]
+        self.append_calls.append((expected_tail, event))
+        if self.fail_append_number == len(self.append_calls):
+            raise OSError("append durability unknown")
+        if expected_tail != len(stored.events):
+            raise ValueError("stale fake append")
+        self.workflows[key] = ConsensusStoredWorkflow(
+            stored.submission, stored.events + (event,)
+        )
+
+    def invoke_provider(self, invocation):
+        self.provider_calls.append(invocation)
+        if self.invoke_hook is not None:
+            return self.invoke_hook(invocation)
+        return ConsensusProviderResult("4" * 64, _CANDIDATE)
+
+    def interrupt_provider(
+        self, session_id, conversation_id, workflow_id, phase_request_id
+    ):
+        self.interrupt_calls.append(
+            (session_id, conversation_id, workflow_id, phase_request_id)
+        )
+        return self.interrupt_result
+
+
+class ConsensusRuntimeAdapterTests(unittest.TestCase):
+    def setUp(self) -> None:
+        self.port = FakeConsensusPort()
+        self.adapter = ConsensusRuntimeAdapter(self.port)
+
+    def exact_decision(self, inspection, choice=ConsensusDecision.CONFIRM):
+        stored = self.port.load_workflow(
+            inspection.submission.session_id,
+            inspection.submission.conversation_id,
+            inspection.submission.workflow_id,
+        )
+        request_event = stored.events[-1]
+        request = request_event.payload
+        return ConsensusRuntimeDecision(
+            session_id=inspection.submission.session_id,
+            conversation_id=inspection.submission.conversation_id,
+            workflow_id=inspection.submission.workflow_id,
+            phase_request_id=request.phase_request_id,
+            proposal_id=request.proposal_id,
+            revision_id=request.revision_id,
+            request_digest=request.request_digest,
+            request_event_id=request_event.event_id,
+            request_event_sequence=request_event.sequence,
+            current_tail_sequence=request_event.sequence,
+            confirmation_id=self.port.new_id("confirmation"),
+            decision=choice,
+            revision_request="Revise the draft." if choice is ConsensusDecision.REVISE else None,
+        )
+
+    def submit_prompt(self):
+        return self.adapter.submit_prompt(
+            session_id="session-1",
+            conversation_id="conversation-1",
+            input_digest=_PROMPT,
+        )
+
+    def test_prompt_and_supplied_draft_have_exact_distinct_metadata(self) -> None:
+        prompt = self.submit_prompt()
+        supplied = self.adapter.submit_supplied_draft(
+            session_id="session-1",
+            conversation_id="conversation-1",
+            draft_digest=_DRAFT,
+        )
+        self.assertEqual(
+            (prompt.submission.input_kind, prompt.submission.input_digest),
+            (ConsensusInputKind.PROMPT, _PROMPT),
+        )
+        self.assertEqual(
+            (supplied.submission.input_kind, supplied.submission.input_digest),
+            (ConsensusInputKind.SUPPLIED_DRAFT, _DRAFT),
+        )
+        for inspection in (prompt, supplied):
+            self.assertEqual(inspection.projection.phase, ConsensusPhase.DRAFT)
+            self.assertEqual(inspection.projection.revision_id, "r0")
+            self.assertIsNone(inspection.projection.candidate_digest)
+            self.assertTrue(inspection.capability_available)
+
+    def test_submit_inspect_and_confirm_use_exact_durable_request(self) -> None:
+        submitted = self.submit_prompt()
+        inspected = self.adapter.inspect(
+            session_id="session-1",
+            conversation_id="conversation-1",
+            workflow_id=submitted.submission.workflow_id,
+        )
+        self.assertEqual(inspected, submitted)
+        result = self.adapter.confirm(self.exact_decision(inspected))
+        self.assertEqual(result.decision_durability, ConsensusDurability.CONFIRMED)
+        self.assertEqual(result.execution.state, ConsensusPhaseState.COMPLETED)
+        self.assertEqual(result.inspection.projection.state, ConsensusPhaseState.COMPLETED)
+        self.assertFalse(result.inspection.capability_available)
+        self.assertEqual(len(self.port.provider_calls), 1)
+        invocation = self.port.provider_calls[0]
+        self.assertEqual(
+            (
+                invocation.workflow_id,
+                invocation.proposal_id,
+                invocation.revision_id,
+                invocation.input_digest,
+                invocation.candidate_digest,
+            ),
+            (
+                submitted.submission.workflow_id,
+                submitted.submission.proposal_id,
+                "r0",
+                _PROMPT,
+                None,
+            ),
+        )
+
+    def test_reject_and_revise_append_terminal_state_without_provider(self) -> None:
+        expected = {
+            ConsensusDecision.REJECT: ConsensusPhaseState.REJECTED,
+            ConsensusDecision.REVISE: ConsensusPhaseState.SUPERSEDED,
+        }
+        for choice, state in expected.items():
+            with self.subTest(choice=choice):
+                port = FakeConsensusPort()
+                adapter = ConsensusRuntimeAdapter(port)
+                inspection = adapter.submit_prompt(
+                    session_id="session-1",
+                    conversation_id="conversation-1",
+                    input_digest=_PROMPT,
+                )
+                self.port = port
+                result = adapter.decide(self.exact_decision(inspection, choice))
+                self.assertIsNone(result.execution)
+                self.assertEqual(result.inspection.projection.state, state)
+                self.assertEqual(port.provider_calls, [])
+                self.assertFalse(result.inspection.capability_available)
+
+    def test_stale_tail_and_request_mismatch_preserve_fresh_authority(self) -> None:
+        inspection = self.submit_prompt()
+        exact = self.exact_decision(inspection)
+        for stale in (
+            replace(exact, current_tail_sequence=2),
+            replace(exact, request_event_id="stale-event"),
+            replace(exact, request_digest="f" * 64),
+            replace(exact, phase_request_id="stale-request"),
+        ):
+            with self.subTest(stale=stale):
+                with self.assertRaisesRegex(ValueError, "does not match"):
+                    self.adapter.confirm(stale)
+                self.assertEqual(self.port.provider_calls, [])
+                self.assertTrue(
+                    self.adapter.inspect(
+                        session_id="session-1",
+                        conversation_id="conversation-1",
+                        workflow_id=inspection.submission.workflow_id,
+                    ).capability_available
+                )
+        self.assertEqual(
+            self.adapter.confirm(exact).execution.state,
+            ConsensusPhaseState.COMPLETED,
+        )
+
+    def test_restart_loses_authority_and_cannot_replay_confirmation(self) -> None:
+        inspection = self.submit_prompt()
+        decision = self.exact_decision(inspection)
+        restarted = ConsensusRuntimeAdapter(self.port)
+        resumed = restarted.resume(
+            session_id="session-1",
+            conversation_id="conversation-1",
+            workflow_id=inspection.submission.workflow_id,
+        )
+        self.assertFalse(resumed.capability_available)
+        with self.assertRaisesRegex(ValueError, "authority is unavailable"):
+            restarted.confirm(decision)
+        self.assertEqual(self.port.provider_calls, [])
+        self.assertEqual(len(self.port.append_calls), 0)
+
+        completed = self.adapter.confirm(decision)
+        self.assertEqual(completed.execution.state, ConsensusPhaseState.COMPLETED)
+        with self.assertRaisesRegex(ValueError, "no pending confirmation"):
+            restarted.confirm(decision)
+
+    def test_decision_running_and_terminal_append_uncertainty_are_visible(self) -> None:
+        expected = (
+            (1, ConsensusDurability.UNKNOWN, None, 0),
+            (2, ConsensusDurability.CONFIRMED, ConsensusPhaseState.RECOVERY_REQUIRED, 0),
+            (3, ConsensusDurability.CONFIRMED, ConsensusPhaseState.RECOVERY_REQUIRED, 1),
+        )
+        for append_number, decision_durability, execution_state, provider_count in expected:
+            with self.subTest(append_number=append_number):
+                port = FakeConsensusPort()
+                adapter = ConsensusRuntimeAdapter(port)
+                inspection = adapter.submit_prompt(
+                    session_id="session-1",
+                    conversation_id="conversation-1",
+                    input_digest=_PROMPT,
+                )
+                self.port = port
+                port.fail_append_number = append_number
+                result = adapter.confirm(self.exact_decision(inspection))
+                self.assertEqual(result.decision_durability, decision_durability)
+                self.assertEqual(
+                    result.execution.state if result.execution is not None else None,
+                    execution_state,
+                )
+                self.assertTrue(result.inspection.recovery_required)
+                self.assertFalse(result.inspection.capability_available)
+                self.assertEqual(len(port.provider_calls), provider_count)
+
+    def test_interrupt_closes_running_phase_and_deadlock_resume_is_nonpublishing(self) -> None:
+        inspection = self.submit_prompt()
+        captured_interruptions = []
+
+        def interrupt_during_provider(_invocation):
+            captured_interruptions.append(
+                self.adapter.interrupt(
+                    session_id="session-1",
+                    conversation_id="conversation-1",
+                    workflow_id=inspection.submission.workflow_id,
+                )
+            )
+            raise InterruptedError("provider stopped")
+
+        self.port.invoke_hook = interrupt_during_provider
+        result = self.adapter.confirm(self.exact_decision(inspection))
+        self.assertEqual(captured_interruptions[0].projection.state, ConsensusPhaseState.INTERRUPTED)
+        self.assertEqual(len(self.port.interrupt_calls), 1)
+        self.assertTrue(result.inspection.recovery_required)
+
+        deadlocked = self._deadlocked_workflow()
+        port = FakeConsensusPort()
+        key = (
+            deadlocked.submission.session_id,
+            deadlocked.submission.conversation_id,
+            deadlocked.submission.workflow_id,
+        )
+        port.workflows[key] = deadlocked
+        resumed = ConsensusRuntimeAdapter(port).resume(
+            session_id=key[0], conversation_id=key[1], workflow_id=key[2]
+        )
+        self.assertEqual(resumed.projection.state, ConsensusPhaseState.DEADLOCKED)
+        self.assertFalse(resumed.projection.publication_allowed)
+        self.assertFalse(resumed.capability_available)
+        self.assertFalse(resumed.recovery_required)
+        self.assertEqual(port.provider_calls, [])
+
+    def _deadlocked_workflow(self) -> ConsensusStoredWorkflow:
+        owner = object()
+        history = []
+        prior = None
+        candidate = None
+        for phase in (ConsensusPhase.DRAFT, ConsensusPhase.AUDIT, ConsensusPhase.SYNTHESIS):
+            tail = len(history)
+            request, capability = prepare_consensus_phase(
+                owner=owner,
+                workflow_id="deadlock-workflow",
+                phase_request_id=f"request-{phase.value}",
+                proposal_id="deadlock-proposal",
+                phase=phase,
+                revision_id="r0",
+                input_digest=_PROMPT,
+                candidate_digest=candidate,
+                base_tail_sequence=tail,
+                previous_result_event_id=prior,
+            )
+            request_event = ConsensusEvent(f"request-{tail + 1}", tail + 1, request)
+            decision = ConsensusPhaseDecision(
+                confirmation_id=f"confirmation-{tail + 1}",
+                phase_request_id=request.phase_request_id,
+                request_event_id=request_event.event_id,
+                request_event_sequence=request_event.sequence,
+                proposal_id=request.proposal_id,
+                revision_id=request.revision_id,
+                request_digest=request.request_digest,
+                decision=ConsensusDecision.CONFIRM,
+            )
+            decision_event = ConsensusEvent(f"decision-{tail + 2}", tail + 2, decision)
+            history.extend((request_event, decision_event))
+
+            def invoke(invocation):
+                if invocation.phase is ConsensusPhase.DRAFT:
+                    return ConsensusProviderResult("5" * 64, _CANDIDATE)
+                if invocation.phase is ConsensusPhase.AUDIT:
+                    return ConsensusProviderResult(
+                        f"{invocation.ordinal + 5}" * 64,
+                        invocation.candidate_digest,
+                        audit_verdict=ConsensusAuditVerdict.APPROVE,
+                    )
+                return ConsensusProviderResult(
+                    "9" * 64, invocation.candidate_digest, deadlocked=True
+                )
+
+            receipt = ConsensusExecutionCoordinator(
+                owner=owner,
+                append_event=history.append,
+                invoke_provider=invoke,
+                event_id_factory=lambda kind, sequence, phase=phase: (
+                    f"{phase.value}-{kind}-{sequence}"
+                ),
+            ).execute(
+                request=request,
+                capability=capability,
+                request_event=request_event,
+                decision_event=decision_event,
+                current_tail_sequence=decision_event.sequence,
+            )
+            prior = receipt.terminal_event.event_id
+            candidate = receipt.terminal_event.payload.candidate_digest
+
+        submission = ConsensusWorkflowSubmission(
+            session_id="deadlock-session",
+            conversation_id="deadlock-conversation",
+            workflow_id="deadlock-workflow",
+            proposal_id="deadlock-proposal",
+            input_kind=ConsensusInputKind.PROMPT,
+            input_digest=_PROMPT,
+        )
+        return ConsensusStoredWorkflow(submission, tuple(history))
+
+
+if __name__ == "__main__":
+    unittest.main()
