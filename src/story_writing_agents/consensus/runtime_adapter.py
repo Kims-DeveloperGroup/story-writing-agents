@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass
-from enum import StrEnum
 from typing import Protocol
 
 from .contracts import (
@@ -27,6 +26,13 @@ from .execution import (
     ConsensusPhaseInvocation,
     ConsensusProviderResult,
 )
+from .serialization import (
+    ConsensusInputKind,
+    ConsensusRuntimeConflict,
+    ConsensusRuntimeOutcomeUnknown,
+    ConsensusStoredWorkflow,
+    ConsensusWorkflowSubmission,
+)
 from .projection import (
     ConsensusEvent,
     ConsensusNextAction,
@@ -37,74 +43,6 @@ from .projection import (
 
 _ID = re.compile(r"[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}")
 _DIGEST = re.compile(r"[0-9a-f]{64}")
-
-
-class ConsensusInputKind(StrEnum):
-    """The two accepted sources for execution-authored revision zero."""
-
-    PROMPT = "prompt"
-    SUPPLIED_DRAFT = "supplied_draft"
-
-
-@dataclass(frozen=True, slots=True)
-class ConsensusWorkflowSubmission:
-    """Durable input identity stored beside a consensus event history."""
-
-    execution_identity: ConsensusExecutionIdentity
-    workflow_id: str
-    proposal_id: str
-    input_kind: ConsensusInputKind
-    input_material: ConsensusMaterialHandle
-
-    def __post_init__(self) -> None:
-        for value in (self.workflow_id, self.proposal_id):
-            _identifier(value)
-        if type(self.execution_identity) is not ConsensusExecutionIdentity:
-            raise TypeError("consensus submission execution identity is invalid")
-        if type(self.input_kind) is not ConsensusInputKind:
-            raise TypeError("consensus input kind is invalid")
-        if type(self.input_material) is not ConsensusMaterialHandle:
-            raise TypeError("consensus submission material handle is invalid")
-
-    @property
-    def input_digest(self) -> str:
-        return self.input_material.digest
-
-    @property
-    def session_id(self) -> str:
-        return self.execution_identity.session_id
-
-    @property
-    def conversation_id(self) -> str:
-        return self.execution_identity.conversation_id
-
-
-@dataclass(frozen=True, slots=True)
-class ConsensusStoredWorkflow:
-    """One submission and its complete authoritative event history."""
-
-    submission: ConsensusWorkflowSubmission
-    events: tuple[ConsensusEvent, ...]
-
-    def __post_init__(self) -> None:
-        if type(self.submission) is not ConsensusWorkflowSubmission:
-            raise TypeError("consensus stored submission is invalid")
-        projection = project_consensus(self.events)
-        if not self.events or type(self.events[0].payload) is not ConsensusPhaseRequest:
-            raise ValueError("consensus stored workflow has no initial request")
-        request = self.events[0].payload
-        if (
-            projection.workflow_id != self.submission.workflow_id
-            or projection.proposal_id != self.submission.proposal_id
-            or request.input_material != self.submission.input_material
-            or request.execution_identity != self.submission.execution_identity
-            or any(
-                event.payload.execution_identity
-                != self.submission.execution_identity
-                for event in self.events
-            )
-        ):
-            raise ValueError("consensus stored workflow identity is inconsistent")
 
 
 class ConsensusRuntimePort(Protocol):
@@ -362,7 +300,7 @@ class ConsensusRuntimeAdapter:
                 projection.last_sequence,
                 decision_event,
             )
-        except (Exception, KeyboardInterrupt):
+        except (ConsensusRuntimeOutcomeUnknown, KeyboardInterrupt):
             return ConsensusRuntimeDecisionResult(
                 inspection=self._inspection_after_uncertain_append(stored),
                 execution=None,
@@ -405,7 +343,7 @@ class ConsensusRuntimeAdapter:
                     decision_event.sequence,
                     terminal_event,
                 )
-            except (Exception, KeyboardInterrupt):
+            except (ConsensusRuntimeOutcomeUnknown, KeyboardInterrupt):
                 return ConsensusRuntimeDecisionResult(
                     inspection=self._inspection_after_uncertain_append(after_decision),
                     execution=None,
@@ -454,7 +392,7 @@ class ConsensusRuntimeAdapter:
                 decision_event=decision_event,
                 current_tail_sequence=decision_event.sequence,
             )
-        except (Exception, KeyboardInterrupt):
+        except (ConsensusRuntimeOutcomeUnknown, KeyboardInterrupt):
             return ConsensusRuntimeDecisionResult(
                 inspection=self._inspection_after_uncertain_append(after_decision),
                 execution=None,
@@ -466,7 +404,7 @@ class ConsensusRuntimeAdapter:
                 conversation_id=decision.conversation_id,
                 workflow_id=decision.workflow_id,
             )
-        except (Exception, KeyboardInterrupt):
+        except (ConsensusRuntimeOutcomeUnknown, KeyboardInterrupt):
             inspection = self._inspection_after_uncertain_append(after_decision)
         if execution.recovery_required:
             inspection = ConsensusRuntimeInspection(
@@ -553,7 +491,7 @@ class ConsensusRuntimeAdapter:
                 projection.last_sequence,
                 event,
             )
-        except (Exception, KeyboardInterrupt):
+        except (ConsensusRuntimeOutcomeUnknown, KeyboardInterrupt):
             return self._inspection_after_uncertain_append(stored)
         return self.inspect(
             session_id=session_id,
@@ -760,6 +698,8 @@ __all__ = [
     "ConsensusRuntimeDecision",
     "ConsensusRuntimeDecisionResult",
     "ConsensusRuntimeInspection",
+    "ConsensusRuntimeConflict",
+    "ConsensusRuntimeOutcomeUnknown",
     "ConsensusRuntimePort",
     "ConsensusStoredWorkflow",
     "ConsensusWorkflowSubmission",

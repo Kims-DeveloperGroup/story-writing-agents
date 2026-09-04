@@ -540,6 +540,63 @@ class WorkspaceV2InitializationTests(WorkspaceV2GitTestCase):
             (".gitkeep",),
         )
 
+    def test_consensus_storage_roots_and_dynamic_state_survive_reopen(self) -> None:
+        workspace = self.initialize_workspace_fixture("consensus-state")
+        root = workspace.root
+        material_root = root / "agent_states/orchestrator_state/consensus_materials/v1"
+        workflow_root = root / "agent_states/orchestrator_state/consensus_workflows/v2"
+        self.assertTrue(material_root.is_dir())
+        self.assertTrue(workflow_root.is_dir())
+
+        from story_writing_agents.consensus import (
+            ConsensusEvent,
+            ConsensusInputKind,
+            ConsensusPhase,
+            ConsensusStoredWorkflow,
+            ConsensusWorkflowSubmission,
+            prepare_consensus_phase,
+        )
+        from story_writing_agents.consensus.contracts import (
+            ConsensusExecutionIdentity,
+            candidate_material_handle,
+        )
+        from story_writing_agents.consensus.event_store import ConsensusEventStore
+
+        identity = ConsensusExecutionIdentity("session-1", "conversation-1")
+        material = candidate_material_handle("1" * 64)
+        request, _ = prepare_consensus_phase(
+            owner=self,
+            workflow_id="workflow-1",
+            phase_request_id="request-1",
+            proposal_id="proposal-1",
+            execution_identity=identity,
+            phase=ConsensusPhase.DRAFT,
+            revision_id="r0",
+            input_material=material,
+            candidate_material=None,
+            base_tail_sequence=0,
+        )
+        submission = ConsensusWorkflowSubmission(
+            execution_identity=identity,
+            workflow_id="workflow-1",
+            proposal_id="proposal-1",
+            input_kind=ConsensusInputKind.PROMPT,
+            input_material=material,
+        )
+        ConsensusEventStore(workspace).create_workflow(
+            submission,
+            ConsensusEvent("request-event", 1, request),
+        )
+        reopened = Workspace(root)
+        self.assertIsInstance(reopened, Workspace)
+        loaded = ConsensusEventStore(reopened).load_workflow(
+            "session-1", "conversation-1", "workflow-1"
+        )
+        self.assertEqual(loaded, ConsensusStoredWorkflow(
+            submission,
+            (ConsensusEvent("request-event", 1, request),),
+        ))
+
 
 class WorkspaceV2RejectionTests(WorkspaceV2GitTestCase):
     """Prove legacy, ambiguous, unsafe, and unexpected states fail closed."""

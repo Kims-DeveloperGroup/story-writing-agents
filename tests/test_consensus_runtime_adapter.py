@@ -28,6 +28,7 @@ from story_writing_agents.consensus.contracts import (
     candidate_material_handle,
 )
 from story_writing_agents.consensus.execution import ConsensusPhaseOutputKind
+from story_writing_agents.consensus.serialization import ConsensusRuntimeOutcomeUnknown
 
 
 _PROMPT = "1" * 64
@@ -70,7 +71,7 @@ class FakeConsensusPort:
         stored = self.workflows[key]
         self.append_calls.append((expected_tail, event))
         if self.fail_append_number == len(self.append_calls):
-            raise OSError("append durability unknown")
+            raise ConsensusRuntimeOutcomeUnknown("append durability unknown")
         if expected_tail != len(stored.events):
             raise ValueError("stale fake append")
         self.workflows[key] = ConsensusStoredWorkflow(

@@ -53,6 +53,8 @@ WORKSPACE_DIRECTORIES: tuple[str, ...] = (
     "config/persona_templates/alternative_templates",
     "core_documents",
     "agent_states/orchestrator_state/conversation_defaults",
+    "agent_states/orchestrator_state/consensus_materials/v1",
+    "agent_states/orchestrator_state/consensus_workflows/v2",
     "agent_states/orchestrator_state/sessions",
     "agent_states/orchestrator_state/provider_sessions",
     "agent_states/plot_architect_state",
@@ -583,10 +585,14 @@ def decode_initialization_journal(payload: bytes) -> WorkspaceInitializationJour
 
 
 def canonical_initializer_scaffold() -> tuple[WorkspaceScaffoldEntry, ...]:
-    """Return the complete exact 22-file initializer manifest selection."""
+    """Return the complete exact initializer manifest selection."""
 
     entries: dict[str, bytes] = {
         WORKSPACE_MARKER_PATH: encode_workspace_marker(),
+        ".gitignore": (
+            b"/agent_states/orchestrator_state/consensus_materials/v1/*\n"
+            b"/agent_states/orchestrator_state/consensus_workflows/v2/*\n"
+        ),
         "config/system_defaults.json": _canonical_json(dict(DEFAULT_SYSTEM_CONFIG)),
         "config/agent_configs.json": _canonical_json(
             {agent_id: dict(DEFAULT_AGENT_CONFIGS[agent_id]) for agent_id in ROSTER}
@@ -612,7 +618,7 @@ def canonical_initializer_scaffold() -> tuple[WorkspaceScaffoldEntry, ...]:
         WorkspaceScaffoldEntry(path, entries[path])
         for path in sorted(entries, key=lambda item: item.encode("utf-8"))
     )
-    if len(result) != 24:
+    if len(result) != 25:
         raise WorkspaceFormatError("workspace scaffold definition is invalid")
     return result
 

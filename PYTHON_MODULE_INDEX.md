@@ -16,9 +16,9 @@ Source root: `src/`
 
 Package root: `src/story_writing_agents/`
 
-Importable production units indexed: 129.
+Importable production units indexed: 130.
 
-Direct internal dependency edges indexed: 499.
+Direct internal dependency edges indexed: 504.
 
 Directed internal dependency cycles indexed: 0.
 
@@ -43,7 +43,7 @@ __main__ -> cli -> conversation_rag_cli
                  |               -> backend/config/conversations/debug_log/directives
                  |               -> conversation_rag_runtime
                  |               -> conversation_storage.composition/contracts
-                 |               -> consensus.contracts/consensus.execution
+                 |               -> consensus.contracts/consensus.execution/consensus.event_store/consensus.material_store
                  |               -> errors/prompts/workspace
                  |               -> writing_artifacts/repository/runtime_references
                  -> backend -> agent_context/agent_context.service
@@ -70,9 +70,10 @@ consensus -> consensus.contracts/consensus.execution/consensus.projection/consen
 consensus.contracts -> agents/writing_artifacts.catalog
 consensus.execution -> agents/consensus.contracts/consensus.projection
 consensus.projection -> consensus.contracts
-consensus.runtime_adapter -> consensus.contracts/consensus.execution/consensus.projection
-consensus.serialization -> consensus.contracts/consensus.projection/consensus.runtime_adapter
+consensus.runtime_adapter -> consensus.contracts/consensus.execution/consensus.projection/consensus.serialization
+consensus.serialization -> consensus.contracts/consensus.projection
 consensus.material_store -> consensus.contracts/errors
+consensus.event_store -> errors/workspace/consensus.serialization
 
 interactive_controller._core -> interactive_controller._session_policy
                              -> interactive_controller._conversation_policy
@@ -179,7 +180,7 @@ conversation_storage.sqlite -> conversation_literal_search/conversation_search
                             -> errors/workspace.core
                             -> conversation_storage.sqlite_database
                             -> conversation_storage.sqlite_search_index
-orchestrator -> artifact_proposals/backend/config/consensus.contracts/consensus.execution
+orchestrator -> artifact_proposals/backend/config/consensus.contracts/consensus.execution/consensus.event_store/consensus.material_store
              -> conversation_rag_runtime/debug_log/directives
              -> conversation_storage.composition/contracts
              -> errors/git.story_commit_contracts/git.story_commits
@@ -1753,7 +1754,7 @@ every intermediate arrow. The current runtime graph is acyclic.
 - **Responsibility:** Bridge stepwise phase-confirmed consensus operations to
   explicit StoryRuntime-owned persistence, provider, identity, and interruption
   ports.
-- **Supported surface:** Direct-module `__all__` exports exactly eight input,
+- **Supported surface:** Direct-module `__all__` exports exactly ten input,
   runtime-adapter, decision, inspection, port, stored-workflow, and submission
   names. The consensus package facade re-exports them.
 - Submission and decision inputs carry opaque material handles rather than
@@ -1762,7 +1763,7 @@ every intermediate arrow. The current runtime graph is acyclic.
   event to one session/conversation; `request_next_phase` creates the next
   separately confirmed request from a terminal tail.
 - **Direct internal dependencies:** `consensus.contracts`,
-  `consensus.execution`, and `consensus.projection`.
+  `consensus.execution`, `consensus.projection`, and `consensus.serialization`.
 - **State, resources, and side effects:** Retains only injected runtime ports
   and a process-local confirmation-capability map. Durable workflow and
   provider effects are delegated through the port; importing performs no
@@ -1774,19 +1775,20 @@ every intermediate arrow. The current runtime graph is acyclic.
 ### `story_writing_agents.consensus.serialization`
 
 - **Source:** `src/story_writing_agents/consensus/serialization.py`
-- **Responsibility:** Provide deterministic bounded JSON serialization and
-  deserialization for validated consensus workflows without content bodies or
-  runtime capabilities.
+- **Responsibility:** Own immutable durable consensus workflow submission,
+  stored-history, input-kind, conflict, and outcome-unknown values, plus
+  deterministic bounded JSON serialization and deserialization without
+  content bodies or runtime capabilities.
 - **Supported surface:** Direct-module `__all__` exports exactly three names:
   `CONSENSUS_SERIALIZATION_SCHEMA_VERSION`,
   `deserialize_consensus_workflow`, and `serialize_consensus_workflow`. The
   consensus package facade re-exports them. The current schema version is 2
   and serializes the execution identity alongside workflow events.
-- **Direct internal dependencies:** `consensus.contracts`,
-  `consensus.projection`, and `consensus.runtime_adapter`.
-- **State, resources, and side effects:** Pure codec over validated values;
-  it owns no retained external state and performs no filesystem, provider,
-  network, subprocess, or import-time operational I/O.
+- **Direct internal dependencies:** `consensus.contracts` and
+  `consensus.projection`.
+- **State, resources, and side effects:** Pure immutable value validation and
+  codec over validated values; it owns no retained external state and performs
+  no filesystem, provider, network, subprocess, or import-time operational I/O.
 - **Primary verification/documentation:**
   `tests/test_consensus_projection.py` and
   `docs/design/consensus-workflow.md`.
@@ -1810,6 +1812,29 @@ every intermediate arrow. The current runtime graph is acyclic.
   network, subprocess, or import-time operational I/O.
 - **Primary verification/documentation:**
   `tests/test_consensus_material_store.py` and
+  `docs/design/consensus-workflow.md`.
+
+### `story_writing_agents.consensus.event_store`
+
+- **Source:** `src/story_writing_agents/consensus/event_store.py`
+- **Responsibility:** Own durable compare-and-append persistence for
+  identity-bound schema-v2 consensus workflows, including create collision,
+  expected-tail conflict, and outcome-unknown handling.
+- **Supported surface:** Direct-module `__all__` exports exactly eleven
+  store, workflow, event, input-kind, and typed persistence error names. The
+  workflow and event values are defined by `consensus.serialization` and
+  re-exported here for the runtime boundary; the package facade does not
+  export this store.
+- **Direct internal dependencies:** `errors`, `workspace`, and
+  `consensus.serialization`.
+- **State, resources, and side effects:** Retains one ready `Workspace`
+  collaborator. It owns the canonical
+  `agent_states/orchestrator_state/consensus_workflows/v2` files, a locked
+  compare-and-append mutation boundary, atomic serialization, fail-closed
+  existence checks, and typed conflict/outcome-unknown results. It performs no
+  provider, network, subprocess, artifact, or Git authority operation.
+- **Primary verification/documentation:**
+  `tests/test_consensus_runtime_adapter.py` (runtime-port integration) and
   `docs/design/consensus-workflow.md`.
 
 ### `story_writing_agents.consensus.contracts`
@@ -5739,7 +5764,8 @@ every intermediate arrow. The current runtime graph is acyclic.
 - **Direct internal dependencies:** `agent_context.accounting`,
   `agent_context.manifest`, `agent_context.planning`, `agent_context.service`,
   `agent_context.sources`, `agents`, `artifact_proposals`, `backend`, `config`,
-  `consensus.contracts`, `consensus.execution`, `conversations`,
+  `consensus.contracts`, `consensus.execution`, `consensus.event_store`,
+  `consensus.material_store`, `conversations`,
   `git.story_commit_contracts`, `git.story_commits`,
   `conversation_rag_runtime`, `conversation_storage.composition`,
   `conversation_storage.contracts`, `debug_log`, `directives`, `errors`,
@@ -5749,7 +5775,8 @@ every intermediate arrow. The current runtime graph is acyclic.
 - **State, resources, and side effects:** Retains workspace, prompt/config, one
   composed v2 `ConversationStorageServices` bundle, optional RAG service,
   artifact repository, backend snapshot, one workspace-scoped
-  `AgentContextService`, quiescent binding state, per-conversation async locks,
+  `AgentContextService`, consensus material and workflow stores, quiescent
+  binding state, per-conversation async locks,
   private confirmed-step and artifact-application capabilities, and live
   execution-attempt markers.
   Runtime and bound sessions expose the same storage bundle; no raw
@@ -6195,7 +6222,8 @@ every intermediate arrow. The current runtime graph is acyclic.
   `git.session_contracts`.
 - **State, resources, and side effects:** Owns the exact schema version, marker
   and initialization-journal paths, four canonical empty core identities,
-  directory set, and 22 sorted initializer entries. It embeds and re-exports
+  directory set (including the runtime-internal consensus material and
+  workflow directories), and 22 sorted initializer entries. It embeds and re-exports
   the session branch/ref/sibling-worktree values owned by
   `git.session_contracts` so marker bytes remain unchanged. Current
   configuration/persona/role-prompt bytes remain unchanged.
