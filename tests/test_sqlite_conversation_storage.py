@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import ast
+import multiprocessing
 import os
 import sqlite3
 import subprocess
@@ -967,21 +968,36 @@ class SQLiteProvisioningConcurrencyTests(unittest.TestCase):
     @unittest.skipUnless(os.name == "posix", "requires POSIX advisory locking")
     def test_spawned_process_provisioners_install_one_complete_database(self) -> None:
         workspace = initialized_workspace(self)
-        processes = [_spawn_worker("provision", workspace) for _ in range(2)]
-        self.addCleanup(lambda: _cleanup_processes(processes))
-        for process in processes:
-            assert process.stdout is not None
-            self.assertEqual(process.stdout.readline(), "ready\n")
-        for process in processes:
-            assert process.stdin is not None
-            process.stdin.write("x")
-            process.stdin.flush()
-        for process in processes:
-            assert process.stdout is not None
-            self.assertEqual(process.stdout.readline(), "provisioned\n")
-            process.wait(timeout=10.0)
-            stderr = process.stderr.read() if process.stderr is not None else ""
-            self.assertEqual(process.returncode, 0, stderr)
+        context = multiprocessing.get_context("spawn")
+        start = context.Event()
+        results = context.Queue()
+        processes = [
+            context.Process(
+                target=_provision_process,
+                args=(workspace, start, results),
+            )
+            for _ in range(2)
+        ]
+        try:
+            for process in processes:
+                process.start()
+            start.set()
+            for process in processes:
+                process.join(timeout=15)
+            alive = tuple(process.is_alive() for process in processes)
+            exitcodes = tuple(process.exitcode for process in processes)
+            outcomes = [results.get(timeout=2) for _ in processes]
+        finally:
+            for process in processes:
+                if process.is_alive():
+                    process.terminate()
+                    process.join(timeout=5)
+                process.close()
+            results.close()
+            results.join_thread()
+        self.assertEqual(alive, (False,) * len(processes))
+        self.assertEqual(exitcodes, (0,) * len(processes))
+        self.assertEqual(outcomes, ["provisioned", "provisioned"])
         self.assertIs(
             preflight_sqlite_conversation_storage(workspace).capability,
             ConversationStorageCapability.READY,
@@ -991,6 +1007,18 @@ class SQLiteProvisioningConcurrencyTests(unittest.TestCase):
             list(target.parent.glob(".conversation_storage.sqlite3.*.tmp")),
             [],
         )
+
+
+def _provision_process(workspace: Workspace, start: object, results: object) -> None:
+    """Provision through one transferred authorized workspace lease."""
+
+    start.wait()  # type: ignore[attr-defined]
+    try:
+        provision(workspace)
+    except BaseException as exc:
+        results.put(("unexpected", type(exc).__name__, str(exc)))  # type: ignore[attr-defined]
+        raise
+    results.put("provisioned")  # type: ignore[attr-defined]
 
 
 def _capture_failure(failures: list[BaseException], operation) -> None:  # type: ignore[no-untyped-def]
@@ -1018,49 +1046,6 @@ def _run_two_way_race(operation):  # type: ignore[no-untyped-def]
         if thread.is_alive():
             raise AssertionError("race worker did not terminate")
     return successes, failures
-
-
-def _spawn_worker(
-    mode: str,
-    workspace,
-    session: str = "session_a",
-    conversation: str = "conversation_a",
-    turn: str = "turn_a",
-):  # type: ignore[no-untyped-def]
-    repository = Path(__file__).resolve().parents[1]
-    environment = os.environ.copy()
-    environment["PYTHONPATH"] = os.pathsep.join(
-        (str(repository / "src"), str(repository))
-    )
-    environment["PYTHONDONTWRITEBYTECODE"] = "1"
-    return subprocess.Popen(
-        [
-            sys.executable,
-            "-m",
-            "tests.sqlite_conversation_storage_fixture",
-            mode,
-            os.fspath(workspace.root),
-            session,
-            conversation,
-            turn,
-        ],
-        cwd=repository,
-        env=environment,
-        stdin=subprocess.PIPE,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-        text=True,
-    )
-
-
-def _cleanup_processes(processes: list[subprocess.Popen[str]]) -> None:
-    for process in processes:
-        if process.poll() is None:
-            process.kill()
-            process.wait(timeout=5.0)
-        for stream in (process.stdin, process.stdout, process.stderr):
-            if stream is not None:
-                stream.close()
 
 
 if __name__ == "__main__":

@@ -14,7 +14,6 @@ from pathlib import Path
 from unittest import mock
 
 import story_writing_agents
-from story_writing_agents import Workspace
 from story_writing_agents.agents import EXECUTION_SPECIALIST
 from story_writing_agents.writing_artifacts import (
     MAX_REFERENCE_TOTAL_BYTES,
@@ -47,6 +46,8 @@ from story_writing_agents.writing_artifacts.authorization import (
 from story_writing_agents.writing_artifacts.repository import (
     WritingArtifactRepository,
 )
+
+from tests.helpers import initialize_test_workspace
 
 
 _CORE_PATH = "core_documents/global_outline.md"
@@ -141,7 +142,7 @@ class ReferenceRepositoryTestCase(unittest.TestCase):
         temporary = tempfile.TemporaryDirectory()
         self.addCleanup(temporary.cleanup)
         self.root = Path(temporary.name)
-        Workspace(self.root).initialize()
+        initialize_test_workspace(self.root)
         self.repository = WritingArtifactRepository(self.root)
         self.manuscript_bytes = b"alpha\r\nbeta\ngamma\rfour\xe2\x80\xa8five"
         self.core_bytes = b"core-one\ncore-two\n"
@@ -981,8 +982,10 @@ class ReferenceDriftAndLifetimeTests(ReferenceRepositoryTestCase):
             ReferenceOperationState.TERMINATED,
         )
 
-        second = self.root / "second-root"
-        Workspace(second).initialize()
+        second_temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(second_temporary.cleanup)
+        second = Path(second_temporary.name)
+        initialize_test_workspace(second)
         repository = WritingArtifactRepository(second)
         repository.commit_consensus(
             output_path="part-01/seed.md",

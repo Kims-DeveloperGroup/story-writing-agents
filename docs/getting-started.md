@@ -31,10 +31,12 @@ story smoke
 ```
 
 Success is compact JSON with `"status":"passed"` and
-`"provider_tested":false`. It verifies workspace initialization, one persisted
-directive, one conversation-catalog record, empty schema-v2 history/search/page
-projections, and unchanged execution artifacts. It does not generate a story,
-create a transcript or debate, or validate a provider.
+`"provider_tested":false`. Temporary smoke uses the real initializer, verifies
+one persisted directive, one conversation-catalog record, empty schema-v2
+history/search/page projections, and unchanged execution artifacts, then
+removes the whole temporary workspace. It does not generate a story, create a
+transcript or debate, or validate a provider. A missing effective Git identity
+is reported because smoke never invents one.
 
 ## 3. Initialize a workspace
 
@@ -43,11 +45,51 @@ story init ./first-story
 cd ./first-story
 ```
 
-Initialization creates the canonical directories, configuration, and four role
-prompt files without creating story documents. Existing files are preserved
-unless the explicit prompt-overwrite option is used.
+Initialization accepts only an absent path, an empty safe directory, or one
+exact interrupted-v2 journal. Success has this shape:
+
+```json
+{
+  "workspace": "/absolute/path/to/first-story"
+}
+```
+
+The result is one strict schema-v2 workspace with the exact packaged scaffold,
+four zero-byte core documents, and one parentless local `main` commit named
+`Initialize story workspace`. Git supplies the effective author and committer;
+the runtime never invents an identity. The initialization journal is absent and
+the worktree is clean when success is printed.
+
+Rerunning `story init` on that unchanged root validates it without rewriting,
+staging, or committing. A legacy, markerless, arbitrary nonempty, nested-Git,
+dirty, or drifted root is preserved and rejected. There is no prompt-overwrite,
+migration, compatibility, upgrade, or adoption mode; create a new workspace
+instead.
+
+To verify the completed root without changing it:
+
+```bash
+story smoke --workspace .
+```
+
+That explicit form reports only `workspace_initialized` and
+`execution_artifacts_unchanged`, uses `null` session/conversation IDs, and
+creates no directive, catalog record, diagnostic, or other residue.
 
 ## 4. Manage a session and conversation
+
+The v2 marker records exact session names, but `story init` does not create a
+session branch, sibling worktree, or internal runtime ref. Session Create and
+Reopen use the package-internal resource seam to provision or verify that
+isolation before attaching a destination. The original `main` root remains the pristine
+initialization baseline; it is not the location or authorization for later
+story/runtime writes.
+
+The retained management commands below describe the installed management
+surface. A provider-session `ready` result is distinct from Git transition
+assessment and does not authorize Apply, commit, or checkpoint work. Writing
+mutable state directly into the original baseline makes a fresh v2 readiness
+check fail closed.
 
 ```bash
 story
@@ -112,6 +154,8 @@ around an earlier direct path. The selected filesystem or SQLite bundle uses
 the sole schema-v2 collaboration event store for provider-free inspection and
 Python lead/consultation writes. #454 owns whole-workspace rejection of
 unsupported history.
+Strict workspace-v2 readiness rejects unsupported whole-workspace state before
+these services activate.
 
 ## 6. Use the Python lead API
 

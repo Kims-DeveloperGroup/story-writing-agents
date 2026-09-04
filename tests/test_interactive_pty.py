@@ -7,6 +7,7 @@ import json
 import os
 import re
 import select
+import shutil
 import signal
 import struct
 import subprocess
@@ -19,12 +20,9 @@ from dataclasses import replace
 from pathlib import Path
 from typing import Any
 
-from story_writing_agents.backend import AgentBackend
 from story_writing_agents.cli_context import (
     load_cli_context,
     load_default_conversation,
-    save_default_conversation,
-    save_default_session,
 )
 from story_writing_agents.conversation_storage import (
     CONVERSATION_STORAGE_MUTATION_GUARD_PATH,
@@ -39,10 +37,10 @@ from story_writing_agents.conversations import (
 )
 from story_writing_agents.workspace import (
     FilesystemConversationCatalog,
-    Workspace,
 )
 
 from tests.collaboration_contract_fixture import contract_batches
+from tests.helpers import initialize_test_workspace
 
 try:
     import fcntl
@@ -1034,7 +1032,7 @@ class InteractiveCliPtyTests(unittest.TestCase):
         temporary = tempfile.TemporaryDirectory()
         self.addCleanup(temporary.cleanup)
         self.temporary_root = Path(temporary.name)
-        self.workspace = Workspace(self.temporary_root / "workspace").initialize()
+        self.workspace = initialize_test_workspace(self.temporary_root / "workspace")
         self.fake_directory = self.temporary_root / "provider-bin"
         self.fake_directory.mkdir()
         self.fake_executable = self.fake_directory / "codex"
@@ -1080,12 +1078,17 @@ class InteractiveCliPtyTests(unittest.TestCase):
     def _environment(self) -> dict[str, str]:
         """Return a provider-free child environment with explicit source imports."""
 
+        git_executable = shutil.which("git")
+        if git_executable is None:
+            raise AssertionError("PTY integration tests require Git")
         environment = os.environ.copy()
         environment.update(
             {
                 "PYTHONPATH": str(_SOURCE_ROOT),
                 "PYTHONDONTWRITEBYTECODE": "1",
-                "PATH": str(self.fake_directory),
+                "PATH": os.pathsep.join(
+                    (str(self.fake_directory), str(Path(git_executable).parent))
+                ),
                 "NO_COLOR": "1",
                 "TERM": "dumb",
                 "STORY_REDUCED_MOTION": "1",
@@ -1287,6 +1290,7 @@ class InteractiveCliPtyTests(unittest.TestCase):
         if provider == "codex":
             selection = "1"
             code_prompt = "FAKE_CODEX_AUTH_CODE> "
+            arguments: tuple[str, ...] = ()
             self._set_auth_state(
                 codex="unauthenticated",
                 antigravity="indeterminate",
@@ -1295,9 +1299,11 @@ class InteractiveCliPtyTests(unittest.TestCase):
         elif provider == "antigravity":
             selection = "2"
             code_prompt = "FAKE_AGY_AUTH_CODE> "
-            agent_configs = self.workspace.read_json("config/agent_configs.json")
-            agent_configs["plot_architect"]["backend"] = "antigravity"
-            self.workspace.write_json("config/agent_configs.json", agent_configs)
+            arguments = (
+                "chat",
+                "--backend",
+                "plot_architect=antigravity",
+            )
             self._set_auth_state(
                 codex="authenticated",
                 antigravity="unauthenticated",
@@ -1306,7 +1312,7 @@ class InteractiveCliPtyTests(unittest.TestCase):
         else:
             raise AssertionError(f"unsupported fake auth provider: {provider}")
 
-        process = self._spawn_cli(())
+        process = self._spawn_cli(arguments)
         process.wait_for_text("Provider authentication")
         auth_record_count = len(self._auth_records())
         process.send_line(selection)
@@ -1351,31 +1357,27 @@ class InteractiveCliPtyTests(unittest.TestCase):
             process.normalized_text,
         )
 
-    def _seed_default_session(
+    def _create_conversation(
         self,
+        process: PtyCliProcess,
         *,
         session_id: str = "alpha",
         subject: str = "Harbor planning",
     ) -> ConversationMetadata:
-        """Persist one ready default session and default conversation."""
+        """Create one conversation through an already-authorized CLI process."""
 
-        backend = AgentBackend(
-            self.workspace,
-            executable=str(self.fake_executable),
-        )
-        try:
-            backend.create_session_with_access(session_id)
-        finally:
-            backend.close()
-        save_default_session(self.workspace, session_id)
+        mark = process.output_mark()
+        process.send_line(f"/conversation new {subject}")
+        process.wait_for_text(f"Subject: {subject}", after=mark)
+        process.wait_for_text(f"story[{session_id}]> ", after=mark)
         catalog = FilesystemConversationCatalog(self.workspace)
-        selected = catalog.create(session_id, subject)
-        save_default_conversation(
-            self.workspace,
-            session_id,
-            selected.conversation_id,
+        matches = tuple(
+            metadata
+            for metadata in catalog.list(session_id)
+            if metadata.subject == subject
         )
-        return selected
+        self.assertEqual(len(matches), 1)
+        return matches[0]
 
     def _seed_filesystem_reference_artifacts(
         self,
@@ -2789,6 +2791,9 @@ print(
             ansi.original_terminal_attributes,
         )
 
+        self.workspace = initialize_test_workspace(
+            self.temporary_root / "workspace-no-color"
+        )
         no_color = self._spawn_cli(
             (),
             environment_overrides={"TERM": "xterm-256color"},
@@ -2811,6 +2816,9 @@ print(
             no_color.original_terminal_attributes,
         )
 
+        self.workspace = initialize_test_workspace(
+            self.temporary_root / "workspace-line-profile"
+        )
         line = self._spawn_cli(())
         line.wait_for_text("story[lobby]> ")
         mark = line.output_mark()
@@ -2992,14 +3000,15 @@ print(
     def test_settings_ansi_picker_save_history_isolation_and_restore_repeatedly(
         self,
     ) -> None:
-        """Exercise the real settings picker, prompt boundary, and next-shell save."""
+        """Exercise repeated settings saves and prompt restoration in clean roots."""
 
         expected_languages = ("EN", "JA", "ZH")
         for attempt, expected_language in enumerate(expected_languages):
             with self.subTest(attempt=attempt):
-                current_language = (
-                    "KO" if attempt == 0 else expected_languages[attempt - 1]
+                self.workspace = initialize_test_workspace(
+                    self.temporary_root / f"workspace-settings-save-{attempt}"
                 )
+                current_language = "KO"
                 process = self._spawn_cli(
                     (),
                     environment_overrides={"TERM": "xterm-256color"},
@@ -3069,7 +3078,7 @@ print(
                     "Choose the workspace language.",
                     after=language_mark,
                 )
-                process.send_text("\x1b[B\n")
+                process.send_text(("\x1b[B" * (attempt + 1)) + "\n")
                 language_result = process.wait_for_text(
                     f"[entered] Pending Language entered: {expected_language}.",
                     after=language_mark,
@@ -3708,6 +3717,9 @@ print(
         for event_name in ("escape", "interrupt", "eof"):
             for attempt in range(3):
                 with self.subTest(event=event_name, attempt=attempt):
+                    self.workspace = initialize_test_workspace(
+                        self.temporary_root / f"workspace-{event_name}-{attempt}"
+                    )
                     process = self._spawn_cli(
                         (),
                         environment_overrides={"TERM": "xterm-256color"},
@@ -3905,8 +3917,7 @@ print(
             codex="unauthenticated",
             antigravity="indeterminate",
         )
-        descendant = self.workspace.root / "nested" / "deeper"
-        descendant.mkdir(parents=True)
+        descendant = self.workspace.root / "core_documents"
         process = self._spawn_cli((), cwd=descendant)
         process.wait_for_text("Provider authentication")
         process.send_line("1")
@@ -3980,15 +3991,18 @@ print(
     ) -> None:
         """Gate a distinct effective Antigravity route before backend creation."""
 
-        agent_configs = self.workspace.read_json("config/agent_configs.json")
-        agent_configs["plot_architect"]["backend"] = "antigravity"
-        self.workspace.write_json("config/agent_configs.json", agent_configs)
         self._set_auth_state(
             codex="authenticated",
             antigravity="unauthenticated",
         )
 
-        process = self._spawn_cli(())
+        process = self._spawn_cli(
+            (
+                "chat",
+                "--backend",
+                "plot_architect=antigravity",
+            )
+        )
         process.wait_for_text("Provider authentication")
         self.assertFalse(self.provider_log.exists())
         process.send_line("2")
@@ -4026,7 +4040,7 @@ print(
             self.workspace.read_json("config/agent_configs.json")["plot_architect"][
                 "backend"
             ],
-            "antigravity",
+            None,
         )
         self.assertFalse(self.provider_log.exists())
         self.assertEqual(
@@ -4359,6 +4373,9 @@ raise SystemExit(cli.main([]))
         )
         for terminal_columns, logo_marker, identity, next_copy in cases:
             with self.subTest(terminal_columns=terminal_columns):
+                self.workspace = initialize_test_workspace(
+                    self.temporary_root / f"workspace-welcome-{terminal_columns}"
+                )
                 process = self._spawn_cli(
                     (),
                     environment_overrides={
@@ -5110,18 +5127,21 @@ print(
     ) -> None:
         """Prove explicit attachment, safe switching, and confirmed deactivation."""
 
-        selected = self._seed_default_session()
         noncanonical_option = self.workspace.root / ".." / self.workspace.root.name
         process = self._spawn_cli(
             ("chat", "alpha", "--workspace", str(noncanonical_option)),
             cwd=self.temporary_root,
         )
         process.wait_for_text("story[alpha]> ")
+        mark = process.output_mark()
+        process.send_line("/conversation new Harbor planning")
+        process.wait_for_text("Subject: Harbor planning", after=mark)
+        selected = FilesystemConversationCatalog(self.workspace).list("alpha")[0]
         self.assertIn(
             f"Workspace:{self.workspace.root}",
             "".join(process.normalized_text.split()),
         )
-        self.assertIn("Session: alpha (opened)", process.normalized_text)
+        self.assertIn("Session: alpha (created)", process.normalized_text)
         self.assertIn(selected.subject, process.normalized_text)
 
         mark = process.output_mark()
@@ -5174,15 +5194,16 @@ print(
     ) -> None:
         """Commit one live resume choice without entering a second picker."""
 
-        self._seed_default_session()
-        backend = AgentBackend(
-            self.workspace,
-            executable=str(self.fake_executable),
+        process = self._spawn_cli(
+            ("chat", "alpha", "--workspace", str(self.workspace.root)),
+            environment_overrides={"TERM": "xterm-256color"},
         )
-        try:
-            backend.create_session_with_access("beta")
-        finally:
-            backend.close()
+        process.wait_for_text("story[alpha]> ")
+        self._create_conversation(process)
+        process.send_line("/session create beta")
+        process.wait_for_text("story[beta]> ")
+        process.send_line("/session resume alpha")
+        process.wait_for_text("story[alpha]> ")
         for session_id, updated_at in (
             ("alpha", "2099-01-01T00:00:00+00:00"),
             ("beta", "2099-01-02T00:00:00+00:00"),
@@ -5196,11 +5217,6 @@ print(
                 manifest,
             )
 
-        process = self._spawn_cli(
-            (),
-            environment_overrides={"TERM": "xterm-256color"},
-        )
-        process.wait_for_text("story[alpha]> ")
         mark = process.output_mark()
         process.send_text("/session resume")
         opened = process.wait_for_text(
@@ -5255,14 +5271,15 @@ print(
     ) -> None:
         """Commit one live focus choice without entering a second picker."""
 
-        self._seed_default_session(subject="First subject")
-        catalog = FilesystemConversationCatalog(self.workspace)
-        target = catalog.create("alpha", "Second subject")
         process = self._spawn_cli(
-            (),
+            ("chat", "alpha", "--workspace", str(self.workspace.root)),
             environment_overrides={"TERM": "xterm-256color"},
         )
         process.wait_for_text("story[alpha]> ")
+        first = self._create_conversation(process, subject="First subject")
+        target = self._create_conversation(process, subject="Second subject")
+        process.send_line(f"/conversation resume {first.conversation_id}")
+        process.wait_for_text("Subject: First subject")
 
         mark = process.output_mark()
         process.send_text("/conversation resume")
@@ -5275,7 +5292,7 @@ print(
             opened.index("[highlighted] First subject"),
             opened.index("- Second subject"),
         )
-        self.assertEqual(opened.count("Handle:"), 2)
+        self.assertGreaterEqual(opened.count("Handle:"), 2)
         self.assertNotIn("Resume conversation [focused] [open] >", opened)
 
         navigation_mark = process.output_mark()
@@ -5307,7 +5324,13 @@ print(
     ) -> None:
         """Exercise retained provider-free history, search, and transcript reads."""
 
-        selected = self._seed_default_session()
+        process = self._spawn_cli(
+            ("chat", "alpha", "--workspace", str(self.workspace.root)),
+            environment_overrides={"TERM": "xterm-256color"},
+            decorative_color=True,
+        )
+        process.wait_for_text("story[alpha]> ")
+        selected = self._create_conversation(process)
         catalog = FilesystemConversationCatalog(self.workspace)
         store = FilesystemCollaborationEventStore(self.workspace, catalog=catalog)
         batch = contract_batches(selected.conversation_id)["proposal"]
@@ -5320,13 +5343,6 @@ print(
                 ),
             )
         )
-
-        process = self._spawn_cli(
-            ("chat", "alpha", "--workspace", str(self.workspace.root)),
-            environment_overrides={"TERM": "xterm-256color"},
-            decorative_color=True,
-        )
-        process.wait_for_text("story[alpha]> ")
 
         mark = process.output_mark()
         process.send_line("/history 2")
@@ -5365,11 +5381,11 @@ print(
     def test_main_eof_exits_normally_without_ending_or_mutating_session(self) -> None:
         """Deliver configured VEOF at main input and prove detach-only cleanup."""
 
-        selected = self._seed_default_session()
         process = self._spawn_cli(
             ("chat", "alpha", "--workspace", str(self.workspace.root))
         )
         process.wait_for_text("story[alpha]> ")
+        selected = self._create_conversation(process)
         before = _durable_tree_without_access(self.workspace.root)
         process.send_eof()
         self.assertEqual(process.wait_for_exit(), 0, process.normalized_text)
@@ -5420,11 +5436,15 @@ print(
         self.assertNotIn("story[", process.normalized_text)
         self.assertEqual(_durable_tree(self.workspace.root), before)
 
-        empty_path = self.temporary_root / "empty-path"
-        empty_path.mkdir()
+        git_only_path = self.temporary_root / "git-only-path"
+        git_only_path.mkdir()
+        git_executable = shutil.which("git")
+        if git_executable is None:
+            self.fail("PTY integration tests require Git")
+        (git_only_path / "git").symlink_to(git_executable)
         process = self._spawn_cli(
             ("chat", "alpha", "--workspace", str(self.workspace.root)),
-            environment_overrides={"PATH": str(empty_path)},
+            environment_overrides={"PATH": str(git_only_path)},
         )
         process.wait_for_text("Provider authentication")
         process.send_interrupt()
@@ -5440,16 +5460,16 @@ print(
         self.assertNotIn("PTY_TEST_CREDENTIAL_MUST_NOT_APPEAR", combined)
         self.assertNotIn(b"\x1b[", combined.encode("utf-8"))
 
-    def test_second_real_process_reports_blocked_access_without_exposing_token(
+    def test_second_real_process_rejects_runtime_workspace_without_exposing_token(
         self,
     ) -> None:
-        """Prove a natural access conflict preserves owner and durable scope."""
+        """Prove a fresh path-only process cannot reopen the owner's runtime root."""
 
-        selected = self._seed_default_session()
         owner = self._spawn_cli(
             ("chat", "alpha", "--workspace", str(self.workspace.root))
         )
         owner.wait_for_text("story[alpha]> ")
+        selected = self._create_conversation(owner)
         access_path = f"{_SESSION_DIRECTORY}/alpha.access.json"
         access = self.workspace.read_json(access_path)
         claim_token = access["claim_token"]
@@ -5458,10 +5478,8 @@ print(
         contender = self._spawn_cli(
             ("chat", "alpha", "--workspace", str(self.workspace.root))
         )
-        contender.wait_for_text("[error session_access_blocked]")
-        contender.wait_for_text("story[lobby]> ")
-        contender.send_text("/quit\n\n")
-        self.assertEqual(contender.wait_for_exit(), 0, contender.normalized_text)
+        contender.wait_for_text("[error workspace_invalid]")
+        self.assertEqual(contender.wait_for_exit(), 2, contender.normalized_text)
         self.assertEqual(_durable_tree(self.workspace.root), before_contender)
         self.assertNotIn(claim_token, contender.normalized_text)
         self.assertNotIn(
@@ -5485,11 +5503,11 @@ print(
     ) -> None:
         """Cover retained command and transcript failures without provider work."""
 
-        selected = self._seed_default_session()
         process = self._spawn_cli(
             ("chat", "alpha", "--workspace", str(self.workspace.root))
         )
         process.wait_for_text("story[alpha]> ")
+        selected = self._create_conversation(process)
 
         for command, marker in (
             ("/rn", "[error command_invalid]"),

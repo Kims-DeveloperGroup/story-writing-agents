@@ -72,6 +72,7 @@ from .agent_exchanges.capture import (
 from .antigravity_adapter import AntigravityAdapter
 from .config import ConfigurationSnapshot, ConfigManager
 from .codex_adapter import CodexAdapter
+from .conversations import CollaborationEventStore
 from .conversation_retrieval import (
     CONVERSATION_RETRIEVAL_POLICY,
     ConversationRetrievalAction,
@@ -112,6 +113,7 @@ from .errors import (
     WorkspaceSecurityError,
     WorkspaceVersionUnsupportedError,
 )
+from .git.session_contracts import GitSessionResourceInspection
 from .models import (
     AgentDefinition,
     AgentReply,
@@ -149,6 +151,15 @@ from .session_lifecycle import (
     SessionLifecycleState,
     provider_work_is_ready,
 )
+from .session_recovery import (
+    SessionArtifactApplicationEvidence,
+    SessionReviewedProposalEvidence,
+)
+from .session_recovery.transition_assessment import (
+    SessionTransitionAssessment,
+    SessionTransitionAssessor,
+    SessionTransitionOperation,
+)
 from .writing_artifacts.read_actions import (
     ArtifactLineRange,
     ArtifactReference,
@@ -162,6 +173,10 @@ from .writing_artifacts.read_actions import (
     ReferenceReadResult,
 )
 from .workspace import Workspace
+from .workspace.initialization import (
+    provision_session_resources as _provision_session_resources,
+    require_ready_session_resources as _require_ready_session_resources,
+)
 
 
 _SESSION_SCHEMA_VERSION = 2
@@ -2312,6 +2327,55 @@ class AgentBackend:
             outcome=DebugOutcome.COMPLETED,
         )
         return result
+
+    def provision_session_resources(
+        self,
+        session_id: str,
+    ) -> GitSessionResourceInspection:
+        """Provision and verify one exact Git triple without provider work."""
+
+        self._ensure_open()
+        session = self.workspace.validate_identifier(session_id)
+        provisioned = _provision_session_resources(self.workspace.root, session)
+        verified = _require_ready_session_resources(self.workspace.root, session)
+        if verified != provisioned:
+            raise BackendProtocolError(
+                "session resources changed during provisioning"
+            )
+        return provisioned
+
+    def assess_session_transition(
+        self,
+        *,
+        lifecycle_state: SessionLifecycleState,
+        requested_operation: SessionTransitionOperation,
+        conversation_id: str | None = None,
+        collaboration_store: CollaborationEventStore | None = None,
+        reviewed_proposal: SessionReviewedProposalEvidence | None = None,
+        artifact_application: SessionArtifactApplicationEvidence | None = None,
+    ) -> SessionTransitionAssessment:
+        """Delegate once to transition assessment and return its exact result."""
+
+        self._ensure_open()
+        if type(requested_operation) is not SessionTransitionOperation:
+            raise BackendProtocolError(
+                "session transition operation is invalid"
+            )
+        assessment = SessionTransitionAssessor(self.workspace.root).inspect(
+            lifecycle_state=lifecycle_state,
+            conversation_id=conversation_id,
+            collaboration_store=collaboration_store,
+            reviewed_proposal=reviewed_proposal,
+            artifact_application=artifact_application,
+        )
+        if (
+            type(assessment) is not SessionTransitionAssessment
+            or assessment.session_id != lifecycle_state.session_id
+        ):
+            raise BackendProtocolError(
+                "session transition assessment is invalid"
+            )
+        return assessment
 
     def validate_provider_configuration(self, session_id: str) -> bool:
         """Validate every provider route without lifecycle or provider mutation.

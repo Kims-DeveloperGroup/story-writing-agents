@@ -1,9 +1,10 @@
 # Package API and exports
 
 The package exposes management, a Python lead-turn/confirmed-consultation and
-reviewed-artifact-proposal workflow, generic backend/model contracts, and
-schema-v2 collaboration components. This does not connect story execution to
-the installed shell or grant artifact Apply or Git authority.
+reviewed-artifact-proposal workflow, generic backend/model contracts,
+schema-v2 collaboration components, and a direct safe Git boundary. These
+exports do not connect story execution to the installed shell or grant artifact
+Apply or Git authority.
 
 ## Facade inventory
 
@@ -16,13 +17,17 @@ The stable inventories in this revision are:
 | `story_writing_agents.conversation_search` | 18 | Schema-v2 search, exact citations, paging, and history service |
 | `story_writing_agents.conversation_retrieval` | 24 | Low-level provider search/read-history/answer contracts |
 | `story_writing_agents.conversation_storage` | 63 | Storage composition, provenance, activation, archive, and transfer contracts |
+| `story_writing_agents.git` | 24 | Fixed local topology, external-operation inspection, exact baseline, status, diff-metadata, and log-metadata contracts and adapter |
+| `story_writing_agents.session_recovery` | 10 | Pure correlated session-recovery evidence and projection contracts |
 | `story_writing_agents.workspace` | 3 | `Workspace`, `initialize_workspace`, and `FilesystemConversationCatalog` |
-| `story_writing_agents.writing_artifacts` | 62 | Canonical artifact/reference values plus pure exact change-set and relationship-policy contracts |
+| `story_writing_agents.writing_artifacts` | 76 | Canonical artifact/reference values plus pure exact change-set, relationship-policy, and artifact-application contracts |
 | `story_writing_agents.artifact_proposals` | 16 | Direct-only pure intent, evidence, exact candidate, reviewer-map, and strict candidate-codec contracts |
 
-The production graph has 100 modules, 379 dependency edges, no cycles, and 104
+The production graph has 122 modules, 468 dependency edges, no cycles, and 104
 package-root exports. The conversations facade contributes 86 event exports
 and 24 context exports; its bindings are identical to the owner bindings.
+Session-transition integration contributes accepted orchestration-facing edges
+without adding an assessment facade export.
 
 Import the management facade explicitly:
 
@@ -42,13 +47,79 @@ component seams, not alternate runtime execution entry points. The exact list
 is authoritative in `story_writing_agents.__all__` and is checked against the
 project module index.
 
+<a id="safe-git-boundary"></a>
+
+## Safe Git boundary
+
+The direct `story_writing_agents.git` facade exports 23 pure contracts and the
+sole `GitRepositoryAdapter`. All 24 names are intentionally absent from the
+104-name package-root facade. The adapter exposes exactly seven typed operations:
+
+```python
+from story_writing_agents.git import GitRepositoryAdapter
+
+adapter = GitRepositoryAdapter(absolute_workspace_root)
+topology = adapter.inspect_topology()
+external_operation = adapter.inspect_external_operation()
+inspection = adapter.inspect_baseline(manifest)
+created = adapter.create_baseline(manifest)
+status = adapter.status()
+diff = adapter.diff_metadata()
+log = adapter.log_metadata()
+```
+
+The boundary can create or verify only the exact fixed `main` root commit and
+return bounded content-free repository metadata. It has no arbitrary command
+runner, provider, remote, migration, session branch/worktree, or later-commit
+operation. The internal schema-v2 workspace initializer now composes this
+adapter with its exact 22-file manifest; callers cannot supply a CLI manifest
+or use that initialization authorization for a later commit.
+See [Safe Git adapter and story baseline](git-adapter.md) for the manifest,
+identity, topology, retry, security, and sample input/output contracts.
+
+Separate direct modules implement the package-internal #504 session-resource
+contracts, fixed Git process owner, and inspect/list/provision/require-ready
+operations. Three more direct modules own the common-Git repository lease,
+pure session-history contracts, and durable session-history storage; the fixed
+process owner also exposes closed profiles and the exact internal checkpoint
+index value. Three #509 direct modules now own pure story-commit values,
+candidate preparation/revalidation, and exact decision/execution/recovery.
+Two #510 direct modules own the closed session-runtime path/delta contracts and
+exact internal-ref checkpoint execution/recovery; they reuse the shared
+history, lease, and typed internal-checkpoint process profile.
+None is re-exported by the project, Git, or workspace facade; they do not
+expand the 104/22/3 export counts and are not a stable application API or
+arbitrary Git capability. Installed session Create now composes exact resource
+provisioning through `AgentBackend`; application evidence and confirmation
+remain owned by their existing workflow boundaries. See
+[Package-internal session Git resources](git-adapter.md#package-internal-session-git-resources),
+[exact story commits](git-adapter.md#package-internal-exact-story-commits), and
+[session checkpoints](git-adapter.md#package-internal-session-checkpoints).
+
+The three-name `story_writing_agents.workspace` facade remains unchanged:
+
+```python
+from story_writing_agents.workspace import (
+    FilesystemConversationCatalog,
+    Workspace,
+    initialize_workspace,
+)
+```
+
+`Workspace.initialize()` and `initialize_workspace(root)` intentionally have
+no prompt-overwrite parameter. Pure marker/journal/scaffold ownership and the
+descriptor-bound initialization/readiness/discovery lifecycle live in two
+package-internal modules with empty exports. They do not enlarge the workspace
+or package-root facade.
+
 Canonical artifact value contracts live in
 `story_writing_agents.writing_artifacts`, but are intentionally absent from the
-104-name package-root facade. Its exact 62-name facade includes immutable path,
+104-name package-root facade. Its exact 76-name facade includes immutable path,
 catalog, kind, reference, and filesystem `ArtifactSourceIdentity` values;
 content-free authorization, operation history/state, read-request/action,
 `ReferenceOperationFailure`, and parser contracts; and the 16 pure exact
-change-set symbols and 15 pure relationship-policy symbols below.
+change-set symbols, 15 pure relationship-policy symbols, and 14 pure artifact-
+application contract symbols below.
 Filesystem-backed `WritingArtifactRepository`, content-bearing read results,
 private capabilities, runtime coordinators, the ranged viewer, and interactive
 activation values remain internal. The current management controller does not
@@ -138,6 +209,257 @@ review domains to canonical specialists. It has no package-root or
 confirmation, Apply, write, publication, or Git operation. Runtime owns
 complete-state capture and passes it into candidate construction. See
 [Agent contracts](agent-contracts.md#reviewed-artifact-proposal-contracts).
+
+<a id="correlated-session-recovery-api"></a>
+
+## Correlated session-recovery contracts
+
+`story_writing_agents.session_recovery` is a ten-name package facade for a
+pure, read-nothing recovery projection:
+
+```python
+from story_writing_agents.session_recovery import (
+    SessionArtifactApplicationEvidence,
+    SessionRecoveryError,
+    SessionRecoveryEvidence,
+    SessionRecoveryFailureCode,
+    SessionRecoveryNextAction,
+    SessionRecoveryOwner,
+    SessionRecoveryResult,
+    SessionRecoveryState,
+    SessionReviewedProposalEvidence,
+    reconcile_session_recovery,
+)
+
+result = reconcile_session_recovery(evidence)
+```
+
+These are the facade's exact ten exports. They are intentionally absent from
+the 104-name package root. The evidence and result values are frozen, slotted,
+exactly typed, and provider-free. `reconcile_session_recovery()` accepts only
+one already assembled `SessionRecoveryEvidence`; it reads no lifecycle store,
+conversation history, artifact repository, filesystem, Git repository, or
+session. It calls no provider and cannot mutate, replay, continue, abort,
+reset, clean, or execute a recovery action.
+
+The caller supplies facts from the existing authoritative owners: lifecycle,
+collaboration history, session Git resources, external-Git inspection,
+session history, repository status and commit metadata, plus any reviewed
+proposal, artifact application, story-commit candidate/operation, or
+checkpoint operation. `SessionReviewedProposalEvidence` binds the exact
+session/conversation/history tail to proposal and candidate revisions and
+digests, the change set, relationship validation, correlation ID, and any
+application-confirmation request and visible choices.
+`SessionArtifactApplicationEvidence` is the mandatory session-bound wrapper
+around an `ArtifactApplicationResult`; a bare workspace result is insufficient
+to establish `applied_not_committed`. Both authoritative terminal application
+results are valid: `applied` must match the exact unstaged affected paths,
+while idempotent `unchanged` must accompany a clean Git status. Dirty, staged,
+or unmerged status beside `unchanged` is a repository contradiction, not new
+work to infer. The relationship-validation digest is also an owner-supplied
+fact: the classifier compares it across reviewed and application evidence and
+checks the embedded change-set/validation state digests, but does not privately
+recompute the tagged relationship digest.
+
+After exact shape checks, classification is deterministic and content-free.
+Cross-owner contradictions, missing predecessors, repository mismatches, or a
+non-`none` external Git operation fail closed. A recovery-required owner
+outranks unresolved outcomes; an unresolved owner outranks ordinary workflow
+progress. Otherwise the result reports the furthest exactly correlated closed
+state, so a proved commit supersedes its earlier staged/application/review
+facts. The result carries only correlation identifiers, its responsible owner,
+one failure code, and one safe next-action label. It carries no story text and
+the label is guidance, never executable authority.
+
+`GitSessionHistoryInspection` remains authoritative even when a caller omits
+the optional detailed commit or checkpoint record. A compact operation entry
+in `recovery_required` or `outcome_unknown` therefore still projects that
+state with `story_commit` or `checkpoint` ownership. When a detailed record is
+supplied, it must match exactly one compact entry. A preserved checkpoint index
+without its matching detailed checkpoint record instead fails closed as
+`missing_predecessor` owned by `checkpoint`; the classifier does not guess its
+operation state from the index.
+
+This contract classifies active correlated workflows only and rejects an idle
+shape as `unsupported_shape`. The separate package-internal transition
+assessor described below supplies the stable idle proof. There is no codec,
+pre-v2 reader, migration, or legacy compatibility path. The internal
+reconciler gathers active owner facts; lifecycle integration preserves its
+result and enforces the returned operation set. Neither behavior is exported
+by this facade. See
+[Correlated session-recovery projection](../operations/recovery-and-limitations.md#correlated-session-recovery-projection)
+for every state, safe action, and sample input/output.
+
+<a id="correlated-session-recovery-reconciliation"></a>
+
+### Read-only owner reconciliation
+
+Internal integration code can use the one-name direct module:
+
+```python
+from story_writing_agents.session_recovery.reconciliation import (
+    SessionRecoveryReconciler,
+)
+
+reconciler = SessionRecoveryReconciler(workspace_root, collaboration_store)
+result = reconciler.inspect(
+    lifecycle_state=lifecycle_state,
+    conversation_id=conversation_id,
+    reviewed_proposal=reviewed_proposal,
+    artifact_application=artifact_application,
+)
+```
+
+The exact signatures are:
+
+```text
+SessionRecoveryReconciler(
+    workspace_root: Path,
+    collaboration_store: CollaborationEventStore,
+) -> None
+inspect(
+    *,
+    lifecycle_state: SessionLifecycleState,
+    conversation_id: str,
+    reviewed_proposal: SessionReviewedProposalEvidence | None = None,
+    artifact_application: SessionArtifactApplicationEvidence | None = None,
+) -> SessionRecoveryResult
+```
+
+`SessionRecoveryReconciler` is the direct module's only export. It is absent
+from `story_writing_agents.session_recovery` and the project root. Construction
+performs no I/O and retains only the normalized absolute workspace root and
+the caller's collaboration-store port; it owns no repository, adapter, lock,
+history, journal, process, capability, or lifecycle.
+
+Inspection first validates inputs and derives the session only from the
+supplied lifecycle value. Owner observation proceeds only for exact
+`ready + held_here`; the reconciler never acquires, reopens, pauses, switches,
+or releases access. It then performs this closed sequence:
+
+1. Read collaboration history, session resources, and the complete session-
+   history snapshot as generation A.
+2. When application evidence was supplied, ask the artifact repository for
+   that exact application ID. Never reconstruct or submit an Apply request.
+3. Inspect the external Git operation and status in the exact linked session
+   worktree, then uniquely select candidate, commit, and checkpoint records by
+   their complete session/proposal/application/candidate/correlation facts.
+4. Only when generation A claims a committed story operation, read the current
+   linked-worktree log; other states perform no log read.
+5. Read collaboration, resources, history, external Git, and status again as
+   generation B. Compare each owner independently and reject mixed
+   generations.
+6. Repeat correlation selection, verify any claimed commit against stable
+   status and the first current-`HEAD` log entry, construct
+   `SessionRecoveryEvidence`, and delegate ordinary state precedence to the
+   pure `reconcile_session_recovery()` classifier.
+
+The artifact lookup uses that owner's recovery-before-read behavior. It may
+complete or verify an already-journaled application before returning its
+original immutable result. That is owner-controlled maintenance, not a new
+workflow mutation: the reconciler never calls `apply_artifact_changes()`,
+starts provider work, reconstructs authority, replays an operation, stages or
+commits Git, mutates lifecycle state, cleans evidence, or executes the
+projected next action. The result remains content-free. See the
+[stable owner flow and user scenarios](../operations/recovery-and-limitations.md#session-recovery-owner-reconciliation).
+
+<a id="session-transition-assessment-api"></a>
+
+### Story-session transition assessment
+
+Internal integration code can inspect whether an idle or active story session
+has enough stable evidence for a later transition:
+
+```python
+from story_writing_agents.session_recovery.transition_assessment import (
+    SessionTransitionAssessment,
+    SessionTransitionAssessmentState,
+    SessionTransitionAssessor,
+    SessionTransitionNextAction,
+    SessionTransitionOperation,
+    SessionTransitionScope,
+)
+
+assessor = SessionTransitionAssessor(workspace_root)
+assessment = assessor.inspect(
+    lifecycle_state=lifecycle_state,
+    conversation_id=conversation_id,
+    collaboration_store=collaboration_store,
+    reviewed_proposal=reviewed_proposal,
+    artifact_application=artifact_application,
+)
+```
+
+Those six names are the direct module's exact exports. None is exported by
+`story_writing_agents.session_recovery` or the project root. The exact
+signatures are:
+
+```text
+SessionTransitionAssessor(workspace_root: Path) -> None
+inspect(
+    *,
+    lifecycle_state: SessionLifecycleState,
+    conversation_id: str | None = None,
+    collaboration_store: CollaborationEventStore | None = None,
+    reviewed_proposal: SessionReviewedProposalEvidence | None = None,
+    artifact_application: SessionArtifactApplicationEvidence | None = None,
+) -> SessionTransitionAssessment
+```
+
+The package-supported backend consumes this direct-module boundary through:
+
+```text
+AgentBackend.assess_session_transition(
+    *, lifecycle_state: SessionLifecycleState,
+    requested_operation: SessionTransitionOperation,
+    conversation_id: str | None = None,
+    collaboration_store: CollaborationEventStore | None = None,
+    reviewed_proposal: SessionReviewedProposalEvidence | None = None,
+    artifact_application: SessionArtifactApplicationEvidence | None = None,
+) -> SessionTransitionAssessment
+```
+
+The method validates the exact operation enum, constructs one call-local
+assessor, delegates once, requires matching session identity, and returns the
+same assessment object. The operation is then consumed by the CLI/controller
+against `allowed_operations`; it is not forwarded as execution authority.
+
+Construction accepts one normalized absolute `Path`, retains only that root,
+and performs no I/O. Active inspection requires both `conversation_id` and
+`collaboration_store`. It creates one call-local `SessionRecoveryReconciler`,
+delegates exactly once, preserves that exact nested recovery result, and does
+not reread or reinterpret its owners. Idle inspection requires both active
+inputs to be absent and rejects reviewed-proposal or application evidence. It
+first requires lifecycle `ready + held_here`, then observes session resources,
+complete session history, external Git, and linked-worktree status as
+generation A and again as generation B. It returns `idle_ready` only when the
+two generations agree and prove ready resources, no external Git operation, a
+clean exact session branch and tip, closed story-commit history, matching story
+and checkpoint tips (or their initial tips when no commit exists), and no
+running, uncertain, recovery-required, staged, or preserved-index operation.
+
+`SessionTransitionAssessment` contains exactly `session_id`, optional
+`conversation_id`, `scope`, `state`, `next_action`, optional `owner`,
+`failure_code`, ordered `allowed_operations`, and an optional exact
+`recovery_result`. It contains no story/provider content, proof path, branch or
+ref, proof or repository/worktree identity digest, process identity, live
+handle, or executable capability. Inspection does not acquire or release a
+claim, call a provider, apply an artifact, run a Git command that mutates
+state, pause a session, or perform any allowed operation or process-lifecycle
+action. It adds no codec or persisted format, so there is no migration or
+compatibility reader.
+
+Installed Create/Reopen and interactive destination attachment consume
+`enter_destination`; interactive switching additionally consumes
+`leave_source`; Pause consumes `pause_session`. An eligible persisted active
+conversation default supplies the conversation/store pair. Missing or archived
+defaults use idle evidence. Noninteractive JSON exposes only the fixed outer
+fields and the fixed nested `SessionRecoveryResult`; interactive denial exposes
+only the six content-safe presentation fields. Neither path reconstructs
+reviewed evidence, confirmation choices, story bytes, or a capability, and no
+provider runs during assessment. The result remains transition evidence, not
+Apply, commit, or provider authority. See the
+[canonical permission matrix and examples](../operations/recovery-and-limitations.md#session-transition-assessment).
 
 <a id="structured-collaboration-history-boundary"></a>
 
@@ -252,7 +574,8 @@ uses the same v2 port.
 
 If the filesystem owner sees `transcript.jsonl`, or the SQLite owner sees any
 row in `conversation_events`, it rejects the owning boundary before mutation.
-#454 owns the later whole-workspace rejection boundary.
+Strict schema-v2 workspace readiness also rejects unsupported whole-workspace
+state before normal activation.
 
 See [Collaboration history](collaboration-history.md),
 [transcripts](conversation-transcripts.md), and

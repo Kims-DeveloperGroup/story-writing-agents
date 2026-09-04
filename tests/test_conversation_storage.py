@@ -10,6 +10,7 @@ import sys
 import tempfile
 import threading
 import unittest
+from copy import copy
 from dataclasses import FrozenInstanceError
 from pathlib import Path
 from typing import get_type_hints
@@ -84,12 +85,13 @@ from story_writing_agents.conversation_storage.filesystem import (
 from story_writing_agents.conversations import CollaborationEventStore
 
 from tests.collaboration_contract_fixture import contract_batches
+from tests.helpers import initialize_test_workspace
 
 
 def _initialized_workspace(test_case: unittest.TestCase) -> Workspace:
     temporary = tempfile.TemporaryDirectory()
     test_case.addCleanup(temporary.cleanup)
-    return Workspace(temporary.name).initialize()
+    return initialize_test_workspace(temporary.name)
 
 
 def _namespace_snapshot(root: Path) -> dict[str, bytes | None]:
@@ -585,10 +587,11 @@ class ConversationStorageServicesTests(unittest.TestCase):
         self.assertIsInstance(catalog, FilesystemConversationCatalog)
         self.assertIsInstance(event_store, FilesystemCollaborationEventStore)
         self.assertIsInstance(search, ReferenceCollaborationHistorySearch)
+        pinned_workspace = getattr(catalog, "workspace")
 
         workspace.root = other_root
-        setattr(catalog, "workspace", Workspace(other_root))
-        setattr(event_store, "workspace", Workspace(other_root))
+        setattr(catalog, "workspace", other)
+        setattr(event_store, "workspace", other)
         setattr(event_store, "catalog", other_services.catalog)
         setattr(search, "_catalog", other_services.catalog)
         setattr(search, "_event_store", other_services.event_store)
@@ -620,7 +623,7 @@ class ConversationStorageServicesTests(unittest.TestCase):
         )
         self.assertEqual(receipt.first_sequence, 1)
         self.assertEqual(
-            FilesystemConversationCatalog(Workspace(pinned_root)).get(
+            FilesystemConversationCatalog(pinned_workspace).get(
                 "session_a",
                 metadata.conversation_id,
             ),
@@ -964,7 +967,7 @@ class ConversationStorageActivationStateTests(unittest.TestCase):
         ).encode("utf-8")
         self.assertEqual(_marker_path(workspace).read_bytes(), expected_bytes)
         self.assertEqual(
-            load_conversation_storage_activation_state(Workspace(workspace.root)),
+            load_conversation_storage_activation_state(workspace),
             expected,
         )
 
@@ -972,6 +975,7 @@ class ConversationStorageActivationStateTests(unittest.TestCase):
         self,
     ) -> None:
         workspace = _initialized_workspace(self)
+        pinned_workspace = copy(workspace)
         pinned_root = workspace.root
         other = _initialized_workspace(self)
         other_root = other.root
@@ -1036,7 +1040,7 @@ class ConversationStorageActivationStateTests(unittest.TestCase):
         self.assertEqual(read_roots, [pinned_root])
         self.assertEqual(write_roots, [pinned_root])
         self.assertEqual(
-            load_conversation_storage_activation_state(Workspace(pinned_root)),
+            load_conversation_storage_activation_state(pinned_workspace),
             expected,
         )
         self.assertEqual(_namespace_snapshot(other_root), other_before)

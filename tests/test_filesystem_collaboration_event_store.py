@@ -10,6 +10,7 @@ import tempfile
 import threading
 import unittest
 from contextlib import contextmanager
+from copy import copy
 from dataclasses import dataclass, replace
 from datetime import datetime, timedelta
 from pathlib import Path
@@ -51,6 +52,7 @@ from tests.collaboration_contract_fixture import (
     SESSION_ID,
     contract_batches,
 )
+from tests.helpers import initialize_test_workspace
 
 
 @dataclass(slots=True)
@@ -68,7 +70,7 @@ class _Harness:
 def _harness():
     temporary = tempfile.TemporaryDirectory()
     try:
-        workspace = Workspace(temporary.name).initialize()
+        workspace = initialize_test_workspace(temporary.name)
         catalog = FilesystemConversationCatalog(workspace)
         metadata = catalog.create(SESSION_ID, "Filesystem v2 contract")
         directory = (
@@ -114,6 +116,8 @@ def _process_append_worker(root: str, payload: bytes, start, results) -> None:
     start.wait()
     try:
         receipt = FilesystemCollaborationEventStore(root).append_batch(batch)
+    except WorkspaceFormatError as exc:
+        results.put(("workspace_rejected", str(exc)))
     except CollaborationAppendError as exc:
         results.put(("failure", exc.failure.value))
     except BaseException as exc:  # pragma: no cover - diagnostic branch
@@ -143,10 +147,19 @@ class FilesystemCollaborationEventStorePersistenceTests(unittest.TestCase):
                     for path in value.workspace.root.rglob("*")
                 )
             )
+            with self.assertRaisesRegex(
+                WorkspaceFormatError,
+                "workspace contains an undeclared directory",
+            ):
+                FilesystemCollaborationEventStore(value.workspace.root)
+            with self.assertRaisesRegex(
+                WorkspaceFormatError,
+                "workspace contains an undeclared directory",
+            ):
+                FilesystemCollaborationEventStore(os.fspath(value.workspace.root))
             stores = (
                 FilesystemCollaborationEventStore(value.workspace),
-                FilesystemCollaborationEventStore(value.workspace.root),
-                FilesystemCollaborationEventStore(os.fspath(value.workspace.root)),
+                FilesystemCollaborationEventStore(copy(value.workspace)),
             )
             self.assertEqual(
                 before,
@@ -212,7 +225,7 @@ class FilesystemCollaborationEventStorePersistenceTests(unittest.TestCase):
                 project_collaboration_history(events),
             )
             self.assertEqual(
-                FilesystemCollaborationEventStore(value.workspace.root).read(
+                FilesystemCollaborationEventStore(copy(value.workspace)).read(
                     SESSION_ID,
                     value.conversation_id,
                 ),
@@ -596,6 +609,15 @@ class FilesystemCollaborationEventStoreConcurrencyTests(unittest.TestCase):
 
     def _run_process_race(self, *, identical: bool) -> list[tuple[object, ...]]:
         with _harness() as value:
+            before = tuple(
+                sorted(
+                    (
+                        path.relative_to(value.workspace.root),
+                        None if path.is_dir() else path.read_bytes(),
+                    )
+                    for path in value.workspace.root.rglob("*")
+                )
+            )
             first = contract_batches(value.conversation_id)["proposal"]
             second = first if identical else self._different_batch(first)
             context = multiprocessing.get_context("spawn")
@@ -642,26 +664,40 @@ class FilesystemCollaborationEventStoreConcurrencyTests(unittest.TestCase):
                     event.sequence
                     for event in value.store.read(SESSION_ID, value.conversation_id)
                 ),
-                tuple(range(1, len(first.events) + 1)),
+                (),
             )
             self.assertEqual(list(value.history_path.parent.glob("*.tmp")), [])
+            self.assertEqual(
+                tuple(
+                    sorted(
+                        (
+                            path.relative_to(value.workspace.root),
+                            None if path.is_dir() else path.read_bytes(),
+                        )
+                        for path in value.workspace.root.rglob("*")
+                    )
+                ),
+                before,
+            )
             return observed
 
-    def test_spawned_processes_serialize_different_and_identical_candidates(
+    def test_spawned_processes_reject_path_only_runtime_workspace_without_mutation(
         self,
     ) -> None:
         different = self._run_process_race(identical=False)
         self.assertEqual(
-            sorted((item[0], item[1]) for item in different),
-            [("failure", "stale_sequence"), ("receipt", "APPENDED")],
+            sorted(different),
+            [
+                (
+                    "workspace_rejected",
+                    "workspace contains an undeclared directory",
+                ),
+                (
+                    "workspace_rejected",
+                    "workspace contains an undeclared directory",
+                ),
+            ],
         )
-        identical = self._run_process_race(identical=True)
-        self.assertEqual(
-            sorted((item[0], item[1]) for item in identical),
-            [("receipt", "ALREADY_COMMITTED"), ("receipt", "APPENDED")],
-        )
-        receipts = sorted(identical, key=lambda item: item[1])
-        self.assertEqual(receipts[0][3:], receipts[1][3:])
 
 
 class FilesystemCollaborationEventStoreFailureTests(unittest.TestCase):

@@ -82,10 +82,10 @@ _SQLITE_EXPORTS = (
 
 
 def _append_outcome(
-    workspace_root: str,
+    workspace: Workspace,
     batch: CollaborationEventBatch,
 ) -> tuple[object, ...]:
-    store = SQLiteCollaborationEventStore(workspace_root)
+    store = SQLiteCollaborationEventStore(workspace)
     try:
         receipt = store.append_batch(batch)
     except CollaborationAppendError as exc:
@@ -102,7 +102,7 @@ def _append_outcome(
 
 
 def _spawn_append_worker(
-    workspace_root: str,
+    workspace: Workspace,
     encoded_batch: bytes,
     start: Any,
     results: Any,
@@ -110,7 +110,7 @@ def _spawn_append_worker(
     start.wait()
     try:
         outcome = _append_outcome(
-            workspace_root,
+            workspace,
             decode_collaboration_batch(encoded_batch),
         )
     except BaseException as exc:
@@ -196,7 +196,7 @@ class SQLiteCollaborationEventStoreFirstSliceTests(unittest.TestCase):
 
         def append(batch: CollaborationEventBatch) -> None:
             barrier.wait()
-            results.put(_append_outcome(str(workspace.root), batch))
+            results.put(_append_outcome(workspace, batch))
 
         threads = (
             threading.Thread(target=append, args=(first,)),
@@ -225,7 +225,7 @@ class SQLiteCollaborationEventStoreFirstSliceTests(unittest.TestCase):
             context.Process(
                 target=_spawn_append_worker,
                 args=(
-                    str(workspace.root),
+                    workspace,
                     encode_collaboration_batch(first),
                     start,
                     results,
@@ -234,7 +234,7 @@ class SQLiteCollaborationEventStoreFirstSliceTests(unittest.TestCase):
             context.Process(
                 target=_spawn_append_worker,
                 args=(
-                    str(workspace.root),
+                    workspace,
                     encode_collaboration_batch(second),
                     start,
                     results,

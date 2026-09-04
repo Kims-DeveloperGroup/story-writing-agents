@@ -30,12 +30,18 @@ Start with `story` or `story chat [SESSION]`. The interactive commands are:
 /session pause
 ```
 
-- Create makes an absent session ready, attaches it, and saves it as default.
+- Create verifies an absent lifecycle, validates configuration, provisions the
+  exact session Git resources, creates a ready lifecycle, and assesses entry
+  before attaching and saving the default.
 - Resume attaches a ready session or reopens a paused session. Omitting the
-  name opens a picker when choices exist.
-- Switching acquires the destination before releasing the source.
-- Pause asks for confirmation, persists `paused`, releases access, and clears
-  this shell's attachment.
+  name opens a picker when choices exist. Entry is assessed after the
+  destination's active persisted conversation default is loaded, if one
+  exists.
+- Switching assesses the acquired destination first, then assesses whether the
+  current source may be left. The destination default changes only after both
+  operations are allowed.
+- Pause asks for confirmation, then assesses the attached session before it
+  persists `paused`, releases access, and clears this shell's attachment.
 - `/quit` and EOF release access without pausing. Defaults remain.
 
 The noninteractive lifecycle surface uses `create`, `reopen`, and `pause`:
@@ -47,8 +53,49 @@ story session reopen novel --workspace .
 ```
 
 Each successful command prints JSON containing `session_id`, `durable_state`,
-and `access_state`. Create and reopen return after releasing their temporary
-claim, so successful noninteractive reports are ready and claimable.
+`access_state`, and a content-safe `assessment`. Create and reopen return after
+releasing their temporary claim, so successful noninteractive reports are
+ready and claimable. A denied transition prints JSON and exits 2 without
+performing that transition.
+
+Create now provisions and verifies the exact Git branch, sibling worktree, and
+internal ref before lifecycle creation. Reopen does not create missing
+resources: transition assessment requires the already-correlated triple. The
+Git-resource states `absent`, `provisioning`, `ready`, `outcome_unknown`, and
+`recovery_required` remain a separate state machine documented in
+[Workspaces](workspaces.md#session-git-resources).
+
+Create/Reopen do not roll back completed resource or paused-to-ready lifecycle
+work when a later assessment or default step fails. They release a newly held
+claim when possible and preserve the resulting durable facts. Inspect the
+reported state before retrying.
+
+### What transition assessment means
+
+An eligible persisted conversation default makes assessment `active`; a
+missing or archived default makes it `idle`. Active assessment preserves the
+nested correlated recovery facts. Idle assessment instead requires two equal
+observations of lifecycle, resources, history, external Git, and linked-
+worktree status.
+
+| Assessment shown to you | Allowed lifecycle operations | What to do next |
+| --- | --- | --- |
+| `idle_ready` / `begin_with_lead` | Enter, leave, pause | Continue through the lead. |
+| Active `proposed`, `reviewed`, `awaiting_application`, `committed`, or `rejected` / `follow_active_recovery` | Enter, leave, pause | Follow the nested recovery result's exact next action. |
+| Active `applied_not_committed` or `staged` / `follow_active_recovery` | Enter only | Attach to inspect; do not leave or pause the owner. |
+| `outcome_unknown` / `inspect_owner_outcome` | None | Preserve evidence and inspect the named owner. |
+| `recovery_required` / `operator_recovery` | None | Stop automated mutation and perform explicit operator recovery. |
+
+For ordinary active progress the outer `owner` is null and `failure_code` is
+`none`; the nested result names the workflow owner and its exact next action.
+For uncertainty or recovery, the outer result copies the nested owner and
+failure code and allows nothing. Assessment invokes no story provider and
+does not reveal or recreate confirmation choices, content, or capability. An
+allowed transition is not Apply or commit authority: runtime content writes
+still require the existing lead/user confirmation path.
+
+See the [CLI JSON examples](../reference/cli.md#session-transition-json) and
+[complete recovery matrix](../operations/recovery-and-limitations.md#session-transition-assessment).
 
 ## Conversation workflow
 
@@ -166,6 +213,11 @@ change this result. No currently public terminal span activates `$` or `$$`.
 ## Recovery
 
 - Use `/status` after an interrupted lifecycle or settings operation.
+- When a transition record shows `outcome_unknown`, preserve all evidence and
+  follow `inspect_owner_outcome` for the displayed owner. When it shows
+  `recovery_required`, stop automated mutation and follow `operator_recovery`.
+- Do not use reset, abort, cleanup, claim deletion, or default removal to make
+  an uncertain session appear idle or safe.
 - Use `/session list` and `/conversation list --all` to rediscover IDs.
 - Use `/inspect` only for persisted debates; an absent result is expected in a
   fresh management-only workspace.

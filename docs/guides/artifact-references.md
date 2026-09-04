@@ -79,6 +79,36 @@ range remains an instruction to read exactly that range, not prompt content
 copied by a UI. References grant read-only context: they do not authorize an
 artifact change, specialist execution, or Git operation.
 
+## What happens when an attached source is later applied
+
+The #520 repository seam can apply an exact request through direct runtime
+components, but it does not refresh an agent's prompt context or mutate an
+earlier reference capture. Suppose a caller has captured:
+
+```text
+${manuscript/part-01/scenes/opening.md}#L12-L24
+```
+
+If a later application patches or replaces that file, renames it, or deletes
+it, revalidating the old authorization at the caller-named
+`after_application` checkpoint returns reference `drift`. Rename and delete
+still validate the old source path, so moving or removing it also invalidates
+the capture.
+
+```text
+input: old reference authorization + checkpoint="after_application"
+output: ReferenceAuthorizationError.code.value = "drift"
+history: prior evidence and invocation events retained
+         + one terminal operation event for checkpoint/outcome
+safe next action: capture the intended source again from current files
+```
+
+That checkpoint is a reference-revalidation label, not a Git or session
+checkpoint. The old bytes are not silently replaced, and the old authorization
+cannot continue. The application itself also does not invoke an agent/provider,
+confirm Apply, or stage/commit Git. #491 will own the no-call Reject/Revise and
+confirmed-Apply workflow; Git remains a separate later confirmed action.
+
 ## Prepare files safely now
 
 Users may create or inspect canonical source files with ordinary filesystem

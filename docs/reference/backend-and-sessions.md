@@ -350,6 +350,16 @@ AgentBackend.release_session_access(session_id: str) -> SessionLifecycleState
 AgentBackend.create_session_with_access(session_id: str) -> SessionLifecycleState
 AgentBackend.reopen_session_with_access(session_id: str) -> SessionLifecycleState
 AgentBackend.pause_session_and_release_access(session_id: str) -> SessionLifecycleState
+AgentBackend.provision_session_resources(session_id: str) -> GitSessionResourceInspection
+AgentBackend.assess_session_transition(
+    *,
+    lifecycle_state: SessionLifecycleState,
+    requested_operation: SessionTransitionOperation,
+    conversation_id: str | None = None,
+    collaboration_store: CollaborationEventStore | None = None,
+    reviewed_proposal: SessionReviewedProposalEvidence | None = None,
+    artifact_application: SessionArtifactApplicationEvidence | None = None,
+) -> SessionTransitionAssessment
 ```
 
 These are the complete lifecycle surface:
@@ -364,13 +374,38 @@ These are the complete lifecycle surface:
 | `create_session_with_access` | Exclusively create a ready V2 manifest and retain access. |
 | `reopen_session_with_access` | Acquire and make paused state ready; ready state is byte-preserving. |
 | `pause_session_and_release_access` | Acquire, make paused, and release access. |
+| `provision_session_resources` | Delegate one exact Create provision, require ready verification, and return the identity-preserved resource inspection. It performs no lifecycle creation or provider work. |
+| `assess_session_transition` | Validate the requested operation type, construct one call-local assessor, delegate once, require the returned session identity, and return the exact result including nested recovery evidence. It performs no transition or provider work. |
 
-Create and reopen deliberately do not perform configuration validation; their
-caller does so first. Provider work uses the mandatory synchronous sequence
-validation → lifecycle pre-read → acquisition → correlated lifecycle post-read.
-Missing is `SessionNotFoundError`, paused provider work is
+Create and reopen lifecycle primitives deliberately do not perform
+configuration validation; their caller does so first. Installed Create uses
+lifecycle absence pre-read → configuration validation → Git-resource
+provision/ready verification → lifecycle creation/acquisition → correlated
+post-read → entry assessment. Installed Reopen uses lifecycle pre-read →
+configuration validation → lifecycle acquire/reopen → correlated post-read →
+active-or-idle entry assessment. Pause acquires if needed, assesses active or
+idle evidence, then calls the pause primitive only when `pause_session` is
+allowed. Provider work uses the mandatory synchronous sequence validation →
+lifecycle pre-read → acquisition → correlated lifecycle post-read. Missing is `SessionNotFoundError`, paused provider work is
 `SessionPausedError`, live local ownership is `SessionAccessBlockedError`, and
 unprovable ownership is `SessionOwnershipUnknownError`.
+
+`requested_operation` is consumed by the CLI/controller against the returned
+ordered `allowed_operations`; it is not transition authority passed into the
+assessor. Active assessment requires the conversation ID and collaboration
+store together and delegates to recovery reconciliation. Idle assessment
+requires both absent and proves stable lifecycle, resource, history, external-
+Git, branch, status, and tip facts. A missing or archived persisted default is
+idle evidence. The backend neither reconstructs reviewed/application evidence
+nor exposes a confirmation capability for installed lifecycle commands.
+
+For normal active recovery the outer state is `active`, outer owner is null,
+failure is `none`, and the nested result supplies its workflow owner and next
+action. `proposed`, `reviewed`, `awaiting_application`, `committed`, and
+`rejected` allow enter/leave/pause; `applied_not_committed` and `staged` allow
+entry only. `outcome_unknown` and `recovery_required` expose the responsible
+owner and exact failure and allow nothing. See the
+[canonical matrix](../operations/recovery-and-limitations.md#session-transition-assessment).
 
 ## Ownership, correlation, and cleanup
 

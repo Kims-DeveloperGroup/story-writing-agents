@@ -54,7 +54,9 @@ from story_writing_agents import (
     SessionAccessState,
     SessionDurableState,
     Verdict,
+    Workspace,
 )
+from story_writing_agents import cli as cli_module
 from story_writing_agents.conversation_retrieval import (
     CONVERSATION_RETRIEVAL_POLICY,
     ConversationRagAttemptOutcome,
@@ -8918,6 +8920,7 @@ class ConcreteBackendCliTests(unittest.TestCase):
         workspace_path = Path(temporary.name) / "workspace"
         with contextlib.redirect_stdout(io.StringIO()):
             self.assertEqual(main(["init", str(workspace_path)]), 0)
+        workspace = Workspace(workspace_path).require_ready()
 
         for action, durable in (
             ("create", "ready"),
@@ -8930,6 +8933,11 @@ class ConcreteBackendCliTests(unittest.TestCase):
                 mock.patch(
                     "story_writing_agents.backend.shutil.which",
                     return_value="/fake/codex",
+                ),
+                mock.patch.object(
+                    cli_module,
+                    "resolve_workspace",
+                    return_value=workspace,
                 ),
             ):
                 exit_code = main(

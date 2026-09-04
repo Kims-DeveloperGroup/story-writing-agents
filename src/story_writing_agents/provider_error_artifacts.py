@@ -724,11 +724,6 @@ def _open_guard(directories: _ArtifactDirectories) -> int:
     """Open or exclusively create the verified advisory guard."""
 
     _verify_directories(directories)
-    existing = _stat_optional(
-        directories,
-        _GUARD_FILENAME,
-        maximum_size=1,
-    )
     flags = os.O_RDWR
     for flag_name in (
         "O_CLOEXEC",
@@ -738,14 +733,20 @@ def _open_guard(directories: _ArtifactDirectories) -> int:
         "O_NONBLOCK",
     ):
         flags |= getattr(os, flag_name, 0)
-    if existing is None:
-        flags |= os.O_CREAT | os.O_EXCL
-    descriptor = os.open(
-        _GUARD_FILENAME,
-        flags,
-        0o600,
-        dir_fd=directories.artifact_descriptor,
-    )
+    try:
+        descriptor = os.open(
+            _GUARD_FILENAME,
+            flags | os.O_CREAT | os.O_EXCL,
+            0o600,
+            dir_fd=directories.artifact_descriptor,
+        )
+    except FileExistsError:
+        descriptor = os.open(
+            _GUARD_FILENAME,
+            flags,
+            0o600,
+            dir_fd=directories.artifact_descriptor,
+        )
     try:
         try:
             os.set_inheritable(descriptor, False)

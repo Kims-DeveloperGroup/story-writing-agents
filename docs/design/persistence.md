@@ -720,42 +720,39 @@ recovery uses `execution_profile_recovery_required`, error level, failed phase,
 and `activation_state: "recovery_required"`. A no-op, cancelled save, or
 pre-persist failure emits no successful transition.
 
-`Workspace` owns canonical-root resolution, containment, no-symlink checks, its
-per-instance meaningful root identity, package-internal root open/reverification
-helpers, and the `debug_logs/` scaffold declaration. An existing directory binds
-at construction; a specifically missing root remains pending for one valid
-`initialize()` attempt; any other unavailable identity never silently rebinds
-on that instance. Invalid `overwrite_prompts` input raises `TypeError` before
-I/O without consuming the pending attempt. The first valid attempt becomes
-terminal before capability checks or mutation and preflights the full required
-descriptor-relative directory and atomic-file capability set. It creates
-missing canonical-root components beneath opened parent descriptors, verifies
-the opened final root against its named identity, and retains that root
-descriptor across every topology and default write.
+Workspace lifecycle persistence has three owners. Internal `workspace.schema`
+defines the pure canonical v2 marker, initializing journal, exact 22-file
+scaffold, four empty core identities, and static session naming policy.
+Internal `workspace.initialization` owns root classification, descriptor-bound
+journal/scaffold convergence, Git composition, ready verification, and nearest-
+recognizable-boundary discovery. `workspace.core` owns the public `Workspace`
+object, generic contained persistence, and package-internal root helpers, and
+delegates lifecycle policy instead of interpreting a second schema.
 
-Pending child directories and file parents are traversed relative to the
-retained root without following names. File writes stage exclusive temporary
-regular files and verify both the temporary and installed identities.
-Create-only installation preserves existing non-symlink entries without
-replacement; prompt overwrite remains limited to the four canonical role
-prompts. After all writes, the canonical root is rewalked and matched to the
-retained identity. Successful identity is recorded only after the retained
-descriptor closes.
+Construction is observational. Missing and empty roots remain pending; one
+exact journal-backed partial root is initializing; one exact clean baseline is
+ready. Recognizable legacy, arbitrary nonempty, malformed, dirty, drifted, or
+unsafe state fails closed. Before mutation, initialization rejects repository
+ancestors and unsupported Git topology and preflights descriptor-relative,
+no-follow, exclusive-create, synchronization, identity, and cleanup support.
 
-The first `OSError`, `KeyboardInterrupt`, or `SystemExit` propagates unchanged,
-with an active body failure taking precedence over cleanup failure. Safely
-created components and intended partial data on the retained root are not
-rolled back. After any failure before complete writes, rewalk, and cleanup,
-later `initialize()` calls reject with the established identity-unavailable
-`OSError` before root or child I/O and never retry. Calls after success and roots
-that existed at construction retain their established pathname behavior. A new
-`Workspace` makes its own construction-time identity probe.
+The first scaffold mutation is the strict
+`.story-writing-agents-initialize-v2.json` containing schema version `2`, state
+`initializing`, and the exact manifest digest. The owner installs only missing
+byte-identical scaffold entries, then composes the #448 adapter for one
+parentless `main` commit named `Initialize story workspace` using the effective
+Git author and committer. It verifies the complete baseline with only the
+untracked journal, removes and synchronizes that journal, then verifies the
+exact clean baseline again. `story init` emits no debug record after the
+baseline.
 
-An existing directory whose construction-time probe is unavailable or
-nonmeaningful follows the established, separate limitation: normal
-pathname-based initialization may still create its scaffold, but that instance
-never gains a diagnostic root identity and diagnostic storage fails closed.
-Those helpers are not project-root exports.
+Failures preserve exact durable partial progress. The failed `Workspace` object
+becomes terminal before any second attempt; a fresh object/process must
+reclassify and may resume only the exact journal plus matching bytes. Clean
+ready reopen is read-only. Unknown or divergent state is never overwritten,
+reset, migrated, or adopted. `Workspace.require_ready()` checks the readiness
+captured for that object and is not a live rescan; fresh supported entry points
+construct and validate a fresh object before activation.
 
 For each supported storage attempt, the internal writer owns the lifetimes of
 the root, debug-directory, guard, and active-log descriptors. It creates or opens
@@ -777,21 +774,18 @@ Ordinary `Workspace` domain I/O remains pathname-based and may observe a real
 directory installed later at the same root path. It is not an identity-pinned
 filesystem snapshot or a transaction across operations.
 
-Explicit CLI smoke initializes and retains one identity-bearing `Workspace`,
-then passes that exact instance to `run_smoke`. The workflow treats a supplied
-workspace as caller-owned and borrows it. Every fresh workspace-bound catalog,
-event store, runtime, and memory service inside the workflow also borrows that
-instance; service freshness never rebinds workspace identity.
-Implicit smoke creates, initializes, and removes its own temporary `Workspace`.
-The smoke contract accepts a `Workspace` or `None`, so the CLI does not
-reconstruct the explicit workspace from a path for handoff or post-run
-diagnostics. CLI and smoke diagnostic-handle acquisition and every submission
-have separate `BaseException` guards. After CLI initialization or discovery
-succeeds, hint eligibility is recorded before optional handle acquisition; that
-eligibility, not handle presence or record success, controls a later fixed
-failure hint. A replaced or unavailable bound root can therefore omit a record,
-but cannot redirect diagnostics or change the smoke report, stderr, exception,
-or exit.
+Explicit CLI smoke resolves an already ready v2 root and its smoke owner
+constructs another fresh `Workspace` to reverify exact clean state. This path
+does not create a debug-log handle, directive, catalog, event, session, or other
+record. It returns null session/conversation IDs and only initialization plus
+unchanged-execution checks. `retained:true` describes the caller-owned path,
+not retained smoke output.
+
+Implicit smoke creates, initializes, exercises, and removes its own temporary
+workspace. It uses the real identity-sensitive initializer and can exercise
+debug, directive, catalog, and empty-history owners before the directory is
+deleted. Identity or initialization failures propagate while temporary cleanup
+still runs.
 
 The low-level writer attempts cleanup for every independently acquired
 descriptor and lock and drops ordinary `Exception` failures. An original body
@@ -800,8 +794,8 @@ cleanup process-control failure propagates after later cleanup attempts. Each of
 the five consumers adds a private `BaseException` guard around submissions, so
 diagnostic failure or an absent record cannot replace established results,
 exceptions, cancellation, persistence, cleanup, output, or exits.
-Explicit smoke retains best-effort records; implicit smoke removes them with its
-temporary workspace.
+Explicit smoke writes no record; implicit smoke removes any best-effort record
+with its temporary workspace.
 
 For the five synchronous provider-free `StoryRuntime` methods—directive
 application, runtime-override saving, and session, debate, or context
@@ -897,8 +891,10 @@ artifact source content. Later operation and invocation events are
 create-only, canonically encoded records with contiguous sequences and
 contiguous invocation ordinals. A delivery event is durable before selected
 bytes leave the repository boundary. The same repository lease serializes
-these evidence writes with source reads and filesystem-identity revalidation;
-it does not load the publication catalog or run transaction recovery.
+these evidence writes with source reads, filesystem-identity revalidation, and
+artifact application recovery. Recovery runs before the authoritative
+source/reference observation, while reference evidence remains outside the
+application catalog and ledger.
 
 Durable evidence contains schema and operation/invocation identity,
 path/range, content-free filesystem source identity, hashes, counts,
@@ -925,37 +921,107 @@ its duplicated message list. Agent history remains owner-isolated and bounded,
 though provider output in visible fields may still be sensitive.
 
 Terminal result creation and lifecycle transition finish before terminal
-progress. Approved artifact publication is a separate recoverable transaction:
-one immutable schema-v2 journal records the exact catalog-before state,
-catalog-after image, commit, and ordered manuscript/core targets. It is not
-rewritten as publication advances. The repository publishes and verifies target
-bytes, writes immutable commit history, publishes the catalog last, then
-exclusively retires the unchanged completed journal to non-authoritative
-staging. The next artifact access rolls forward only from exact catalog-before
-or verifies an exact catalog-after state; any other catalog position or missing,
-replaced, or divergent authority writes a persistent block marker and fails all
-later artifact access closed. Retained `.tmp`, `.held`, `.retired`, and
-`.completed` staging files are ignored by recovery and catalog listing and may
-accumulate.
+progress. Artifact application is a separate recoverable transaction and still
+does not combine debate messages, lifecycle/result state, conversations,
+configuration, provider state, or Git into one transaction.
 
-Immutable commits are also the permanent manuscript-reservation ledger, not
-just history for current catalog rows. Each access globally audits exact commit
-records against the catalog. Each immutable commit file must equal the
-repository's canonical JSON bytes, catalog paths equal the union of every
-artifact path in all non-exempt commits, and each entry exactly matches its
-referenced commit. Reformatting is divergence, not a conversion input.
+Private `writing_artifacts._application_store` is the sole persistence
+interpreter for #519. `WritingArtifactRepository` owns one in-process lock and
+one permanent workspace lease; every authoritative source, explicit-reference,
+catalog, and application operation acquires both and runs recovery before it
+reads current artifact authority. The private store uses existing
+descriptor-safe storage and is not exported. #520 adds the module-supported
+internal `apply_artifact_changes(request)` repository seam; neither repository
+nor store is exported by a package facade. #491 will separately supply lead/user
+Apply-confirmation authority.
 
-Commit times are offset-aware instants. For a repeated core path, the catalog
-must select the unique newest normalized instant; an equal-newest tie or older
-projection fails closed. Generated timestamps are strictly later than every
-ledger instant even across wall-clock rollback, and an unrepresentable next
-instant fails before mutation. During exact catalog-before recovery, only the
-pending journal's already published byte-identical canonical commit is exempt:
-it contributes no paths or newest-core candidate, while all older established
-authority remains required. Projected and exact catalog-after audit the full
-commit set without an exemption. Catalog loss, subsets, malformed/noncanonical
-or extra commits, mismatches, and duplicate manuscript reservations fail closed
-instead of being rewritten, reconstructed, or converted.
+The seam accepts exactly one frozen `ArtifactApplicationRequest`, never prose,
+a mapping, a mutable wrapper, or a subclass. The request owns its exact
+content-bearing change set and sorted canonical `attached_core_paths`; those
+paths are review evidence, not implicit write targets. Before taking the lease,
+the repository revalidates the request shape and correlation. It then takes one
+process lock and lease and delegates once to the private store, which rereads
+the complete current state and recomputes change-set and relationship authority
+before journaling. The immutable result is `applied` for the first effective
+invocation or `unchanged` for an exact completed retry. The request/result pair,
+not the result alone, supplies operation classification plus affected, final,
+rename-lineage, and deletion facts; a result is not a complete catalog.
+
+One immutable schema-1 transaction journal contains the exact request and target
+bytes, catalog-before and schema-2 catalog-after images, and the immutable
+content-free application record. Under the same lease the store:
+
+```text
+revalidates current bytes, relationships, and all request correlations
+-> publishes the content-bearing journal
+-> publishes each ordered create/patch/replace/rename/delete target
+-> publishes the immutable content-free application record
+-> publishes the current-membership catalog last
+-> verifies the complete new authority
+-> retires the unchanged journal to non-authoritative staging
+```
+
+A rename has separate source and destination targets. Core identities allow
+create/patch/replace but never rename/delete. The application does not stage or
+commit Git. The catalog retains only current paths; immutable records retain the
+exact historical result, including manuscript rename lineage and deletion
+provenance.
+
+This is recovery-before-read atomicity, not simultaneous multi-file filesystem
+replacement. A raw external reader may see partial target publication after a
+crash. A repository reader first recovers: at exact catalog-before it permits
+only each target's recorded old/new value and rolls forward; at exact
+catalog-after it verifies all new targets and the record; any other position or
+divergent evidence creates/preserves `recovery_blocked.json` and returns no
+authoritative data. Recovery also precedes reference reads, so agent context
+cannot observe a repository-returned partial application.
+
+Failure after revalidation but before the journal leaves old authority and a
+fresh retry may apply once. Failure from journal publication through catalog or
+journal retirement is completed or verified by recovery. A byte-identical retry
+after a completed application or lost response returns `unchanged` with the
+original exact result facts and no republish. Reusing the application ID with
+different request bytes is correlation drift and fails without mutation.
+
+Immediate base-state drift maps to public content-free `drift`; malformed or
+unsafe durable state maps to `corruption`; a durable recovery-block marker maps
+to `recovery_required`. These errors do not expose story bytes or underlying
+exception context. A recoverable interruption with an exact journal is instead
+completed or verified before the next repository-owned authoritative access.
+
+This seam neither confirms nor rejects a proposal, refreshes prompt context,
+calls a provider or agent, nor stages or commits Git. Reject and Revise mean
+#491 does not invoke it. A later story-commit action must independently inspect
+the applied state and obtain fresh Git-specific authority.
+
+The additive `inspect_artifact_application(application_id)` method shares the
+same repository boundary but never calls the apply path. It validates one exact
+safe built-in string before locking, then acquires one process lock and lease,
+delegates once to the store, recovers pending journals, and audits the complete
+ordered record history against the schema-2 current catalog before lookup. An
+existing identity returns its original immutable `applied` result; it never
+converts that history to retry-state `unchanged`. A safe absent identity returns
+`None` only after the same recovery/audit succeeds. First access may bootstrap
+the standard repository lock/state directories. Recovery may finish an existing
+journal, but inspection never initiates a new application or reconstructs its
+content-bearing request; without pending recovery it creates no artifact,
+application record, journal, or catalog entry.
+
+Invalid IDs fail as `INVALID_IDENTIFIER` before the lease; malformed persisted
+authority maps to content-safe `CORRUPTION`; a block marker or unrecoverable
+journal maps to `RECOVERY_REQUIRED`. The result exposes content-free
+path/digest/correlation/lineage/delete facts. The method neither infers session
+ownership nor touches provider, context, confirmation, agent, or Git state. A
+later #527 owner must supply its own stored session/application correlation
+before using this application fact.
+
+Application records, catalog, and results contain paths, identifiers, digests,
+current membership, lineage, and delete provenance but no story bodies.
+Transaction journals and staging residue can contain exact plaintext story
+bytes. A nonempty legacy `commits/` directory, catalog schema 1, transaction
+schema 2, malformed ledger, or noncanonical/aliased evidence is preserved and
+fails closed; there is no migration, compatibility, reconstruction, or
+normalization route.
 
 The permanent repository readiness triple has its own durability boundary:
 primary lock, anchor, and `ready` are exact hard-link names for one regular inode

@@ -956,7 +956,15 @@ class ConversationRagArgparseTests(unittest.TestCase):
     def _main(self, arguments: list[str]) -> tuple[int, str, str]:
         stdout = io.StringIO()
         stderr = io.StringIO()
-        with contextlib.redirect_stdout(stdout), contextlib.redirect_stderr(stderr):
+        with (
+            mock.patch.object(
+                cli_module,
+                "resolve_workspace",
+                return_value=self.workspace,
+            ),
+            contextlib.redirect_stdout(stdout),
+            contextlib.redirect_stderr(stderr),
+        ):
             code = cli_module.main(arguments)
         return code, stdout.getvalue(), stderr.getvalue()
 

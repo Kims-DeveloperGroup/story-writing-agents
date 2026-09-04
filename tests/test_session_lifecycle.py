@@ -32,6 +32,7 @@ from story_writing_agents import (
     SessionLifecycleState,
     SessionNotFoundError,
     SessionOwnershipUnknownError,
+    Workspace,
     WorkspaceFormatError,
     WorkspaceVersionUnsupportedError,
     provider_work_is_ready,
@@ -43,6 +44,14 @@ from story_writing_agents import session_lifecycle as lifecycle_module
 from story_writing_agents.debug_log import (
     DEBUG_LOG_RELATIVE_PATH,
     WorkspaceDebugLog,
+)
+from story_writing_agents.session_recovery import SessionRecoveryFailureCode
+from story_writing_agents.session_recovery.transition_assessment import (
+    SessionTransitionAssessment,
+    SessionTransitionAssessmentState,
+    SessionTransitionNextAction,
+    SessionTransitionOperation,
+    SessionTransitionScope,
 )
 
 from tests.helpers import initialized_workspace
@@ -182,7 +191,7 @@ def _cleanup_rows_since(
 
 
 def _race_for_dead_claim(
-    workspace_root: str,
+    workspace: Workspace,
     ready: Any,
     start: Any,
     release: Any,
@@ -190,7 +199,7 @@ def _race_for_dead_claim(
 ) -> None:
     """Contend for a dead claim while keeping the winning process live."""
 
-    backend = AgentBackend(workspace_root, executable=sys.executable)
+    backend = AgentBackend(workspace, executable=sys.executable)
     ready.put(True)
     if not start.wait(10):
         results.put(("timeout",))
@@ -267,6 +276,16 @@ class SessionLifecycleContractTests(unittest.TestCase):
             "create_session_with_access": ("self", "session_id"),
             "reopen_session_with_access": ("self", "session_id"),
             "pause_session_and_release_access": ("self", "session_id"),
+            "provision_session_resources": ("self", "session_id"),
+            "assess_session_transition": (
+                "self",
+                "lifecycle_state",
+                "requested_operation",
+                "conversation_id",
+                "collaboration_store",
+                "reviewed_proposal",
+                "artifact_application",
+            ),
         }
         for method_name, parameters in expected.items():
             with self.subTest(method=method_name):
@@ -445,7 +464,7 @@ class SessionLifecycleContractTests(unittest.TestCase):
             ]
         )
         source_files = tuple(source_root.rglob("*.py"))
-        self.assertEqual(len(source_files), 100)
+        self.assertEqual(len(source_files), 122)
         self.assertTrue(
             {
                 source_root / "artifact_proposals.py",
@@ -455,6 +474,8 @@ class SessionLifecycleContractTests(unittest.TestCase):
                 source_root / "conversations" / "events.py",
                 source_root / "workspace" / "__init__.py",
                 source_root / "workspace" / "core.py",
+                source_root / "workspace" / "initialization.py",
+                source_root / "workspace" / "schema.py",
                 source_root / "conversation_storage" / "archive.py",
                 source_root / "conversation_storage" / "filesystem.py",
                 source_root / "conversation_storage" / "filesystem_archive.py",
@@ -478,8 +499,8 @@ class SessionLifecycleContractTests(unittest.TestCase):
         index = (source_root.parents[1] / "PYTHON_MODULE_INDEX.md").read_text(
             encoding="utf-8"
         )
-        self.assertIn("Importable production units indexed: 100.", index)
-        self.assertIn("Direct internal dependency edges indexed: 379.", index)
+        self.assertIn("Importable production units indexed: 122.", index)
+        self.assertIn("Direct internal dependency edges indexed: 468.", index)
         self.assertIn("Directed internal dependency cycles indexed: 0.", index)
         headings = tuple(re.findall(r"^### `([^`]+)`$", index, flags=re.MULTILINE))
         expected_modules: set[str] = set()
@@ -489,10 +510,10 @@ class SessionLifecycleContractTests(unittest.TestCase):
             if parts[-1] == "__init__":
                 parts = parts[:-1]
             expected_modules.add(".".join(("story_writing_agents", *parts)))
-        self.assertEqual(len(headings), 100)
-        self.assertEqual(len(set(headings)), 100)
+        self.assertEqual(len(headings), 122)
+        self.assertEqual(len(set(headings)), 122)
         self.assertEqual(set(headings), expected_modules)
-        self.assertIn("facade now contains exactly 117 exports", index)
+        self.assertIn("facade contains exactly 117 exports", index)
         self.assertIn("context and events owners contain 24 and 86 respectively", index)
         self.assertIn("Exactly 24 owning-module names in `__all__`", index)
         self.assertIn("Exactly 86 owning-module names in `__all__`", index)
@@ -505,7 +526,7 @@ class SessionLifecycleContractTests(unittest.TestCase):
             index,
         )
         self.assertIn("exports no schema-v2 collaboration name", index)
-        self.assertIn("Exactly 62 names in `__all__`", index)
+        self.assertIn("Exactly 63 names in `__all__`", index)
         for module_name in (
             "story_writing_agents.conversations",
             "story_writing_agents.conversations.catalog",
@@ -515,6 +536,8 @@ class SessionLifecycleContractTests(unittest.TestCase):
             "story_writing_agents.conversation_storage.filesystem",
             "story_writing_agents.workspace",
             "story_writing_agents.workspace.core",
+            "story_writing_agents.workspace.initialization",
+            "story_writing_agents.workspace.schema",
             "story_writing_agents.writing_artifacts.change_sets",
             "story_writing_agents.writing_artifacts.relationship_policy",
         ):
@@ -549,6 +572,68 @@ class AgentBackendLifecycleTests(unittest.TestCase):
         backend = AgentBackend(self.workspace, executable=sys.executable)
         self.addCleanup(backend.close)
         return backend
+
+    def test_provision_and_assessment_delegate_once_preserving_exact_identity(
+        self,
+    ) -> None:
+        backend = self.backend()
+        resource = object()
+        lifecycle = SessionLifecycleState(
+            session_id="session",
+            durable_state=SessionDurableState.READY,
+            access_state=SessionAccessState.HELD_HERE,
+            owner_hostname="localhost",
+            owner_pid=42,
+            created_at=_CREATED,
+            updated_at=_UPDATED,
+        )
+        assessment = SessionTransitionAssessment(
+            session_id="session",
+            conversation_id=None,
+            scope=SessionTransitionScope.IDLE,
+            state=SessionTransitionAssessmentState.IDLE_READY,
+            next_action=SessionTransitionNextAction.BEGIN_WITH_LEAD,
+            owner=None,
+            failure_code=SessionRecoveryFailureCode.NONE,
+            allowed_operations=tuple(SessionTransitionOperation),
+            recovery_result=None,
+        )
+        assessor = mock.Mock()
+        assessor.inspect.return_value = assessment
+        with (
+            mock.patch.object(
+                backend_module,
+                "_provision_session_resources",
+                return_value=resource,
+            ) as provision,
+            mock.patch.object(
+                backend_module,
+                "_require_ready_session_resources",
+                return_value=resource,
+            ) as verify,
+            mock.patch.object(
+                backend_module,
+                "SessionTransitionAssessor",
+                return_value=assessor,
+            ) as assessor_type,
+        ):
+            self.assertIs(backend.provision_session_resources("session"), resource)
+            observed = backend.assess_session_transition(
+                lifecycle_state=lifecycle,
+                requested_operation=SessionTransitionOperation.PAUSE_SESSION,
+            )
+
+        provision.assert_called_once_with(self.workspace.root, "session")
+        verify.assert_called_once_with(self.workspace.root, "session")
+        assessor_type.assert_called_once_with(self.workspace.root)
+        assessor.inspect.assert_called_once_with(
+            lifecycle_state=lifecycle,
+            conversation_id=None,
+            collaboration_store=None,
+            reviewed_proposal=None,
+            artifact_application=None,
+        )
+        self.assertIs(observed, assessment)
 
     def prepare_close_state(
         self,
@@ -1489,7 +1574,7 @@ class AgentBackendLifecycleTests(unittest.TestCase):
         processes = [
             context.Process(
                 target=_race_for_dead_claim,
-                args=(str(self.workspace.root), ready, start, release, results),
+                args=(self.workspace, ready, start, release, results),
             )
             for _ in range(2)
         ]

@@ -48,6 +48,7 @@ from tests.conversation_catalog_contract import (
     CONVERSATION_CATALOG_METHODS,
     ConversationCatalogContractMixin,
 )
+from tests.helpers import initialize_test_workspace
 from tests.collaboration_contract_fixture import (
     COLLABORATION_CONTEXT_EXPORTS,
     COLLABORATION_EVENT_EXPORTS,
@@ -305,7 +306,7 @@ class FilesystemConversationCatalogContractTests(
     def make_catalog(self) -> ConversationCatalog:
         temporary = tempfile.TemporaryDirectory()
         self.addCleanup(temporary.cleanup)
-        self.workspace = Workspace(temporary.name).initialize()
+        self.workspace = initialize_test_workspace(temporary.name)
         self.services = compose_filesystem_conversation_storage(self.workspace)
         return self.services.catalog
 
@@ -347,15 +348,13 @@ class FilesystemConversationCatalogPersistenceTests(unittest.TestCase):
             ["metadata.json"],
         )
 
-        reloaded = FilesystemConversationCatalog(Workspace(workspace.root))
+        reloaded = FilesystemConversationCatalog(workspace)
         self.assertEqual(
             reloaded.get("story_session", metadata.conversation_id),
             metadata,
         )
 
-    def test_absent_catalog_reads_as_empty_without_mutating_legacy_workspace(
-        self,
-    ) -> None:
+    def test_unready_legacy_workspace_is_rejected_without_mutation(self) -> None:
         workspace = self.new_workspace(initialize=False)
         legacy = workspace.root / "legacy.jsonl"
         legacy.write_bytes(b"legacy bytes\n")
@@ -367,8 +366,9 @@ class FilesystemConversationCatalogPersistenceTests(unittest.TestCase):
         }
         catalog = FilesystemConversationCatalog(workspace)
 
-        self.assertEqual(catalog.list("legacy_session"), ())
-        with self.assertRaises(ConversationNotFoundError):
+        with self.assertRaisesRegex(WorkspaceFormatError, "workspace is not ready"):
+            catalog.list("legacy_session")
+        with self.assertRaisesRegex(WorkspaceFormatError, "workspace is not ready"):
             catalog.get("legacy_session", "missing_conversation")
 
         after = {

@@ -91,6 +91,8 @@ from story_writing_agents.writing_artifacts.repository import (
     WritingArtifactRepository,
 )
 
+from tests.helpers import initialize_test_workspace
+
 
 _PRIVATE_INPUT = "PRIVATE_CURRENT_INPUT_한🙂"
 _PRIVATE_DEFINITION = "PRIVATE_STABLE_DEFINITION"
@@ -459,7 +461,7 @@ class ContextExecutionTestCase(unittest.IsolatedAsyncioTestCase):
     def setUp(self) -> None:
         temporary = tempfile.TemporaryDirectory(prefix="context-execution-")
         self.addCleanup(temporary.cleanup)
-        self.workspace = Workspace(temporary.name).initialize()
+        self.workspace = initialize_test_workspace(temporary.name)
         self.service = AgentContextService(self.workspace)
         self.repository = WritingArtifactRepository(self.workspace.root)
 

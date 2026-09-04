@@ -7,7 +7,7 @@ import uuid
 from pathlib import Path
 from typing import Any
 
-from .agents import AGENT_SPECS, EXECUTION_SPECIALIST, ROSTER
+from .agents import EXECUTION_SPECIALIST
 from .conversation_search import (
     CollaborationHistorySearchQuery,
     CollaborationHistorySearchScope,
@@ -30,11 +30,7 @@ from .debug_log import (
     WorkspaceDebugLog,
 )
 from .orchestrator import StoryRuntime
-from .workspace import (
-    WORKSPACE_DIRECTORIES,
-    Workspace,
-    initialize_workspace,
-)
+from .workspace import Workspace, initialize_workspace
 
 
 _SUBJECT = "Smoke collaboration contract"
@@ -114,10 +110,24 @@ def run_smoke(workspace: Workspace | None = None) -> tuple[dict[str, Any], int]:
             )
     if not isinstance(workspace, Workspace):
         raise TypeError("workspace must be a Workspace or None")
-    return _run_provider_free_smoke_in_workspace(
-        workspace,
-        mode="persistent",
-        retained=True,
+    return _run_read_only_smoke(workspace)
+
+
+def _run_read_only_smoke(workspace: Workspace) -> tuple[dict[str, Any], int]:
+    """Verify an explicit clean v2 root without creating diagnostic state."""
+
+    Workspace(workspace.root).require_ready()
+    return (
+        _report(
+            workspace=workspace,
+            mode="persistent",
+            retained=True,
+            session_id=None,
+            conversation_id=None,
+            status="passed",
+            checks=[_CHECK_NAMES[0], _CHECK_NAMES[7]],
+        ),
+        0,
     )
 
 
@@ -307,17 +317,9 @@ def _run_provider_free_smoke_in_workspace(
 
 
 def _verify_workspace_initialized(workspace: Workspace) -> None:
-    """Validate supplied workspace directories and prompts without mutation."""
+    """Require the supplied instance's exact v2 readiness lease."""
 
-    ready = all(
-        workspace.path(relative).is_dir()
-        for relative in WORKSPACE_DIRECTORIES
-        if relative != "debug_logs"
-    ) and all(
-        workspace.path(AGENT_SPECS[agent_id].system_prompt_file).is_file()
-        for agent_id in ROSTER
-    )
-    _require(ready, _CHECK_NAMES[0])
+    workspace.require_ready()
 
 
 def _verify_directive(runtime: StoryRuntime, session_id: str) -> None:
@@ -398,7 +400,7 @@ def _report(
     workspace: Workspace,
     mode: str,
     retained: bool,
-    session_id: str,
+    session_id: str | None,
     conversation_id: str | None,
     status: str,
     checks: list[str],

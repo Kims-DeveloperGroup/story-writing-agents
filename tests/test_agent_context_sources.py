@@ -53,6 +53,7 @@ from story_writing_agents.writing_artifacts.repository import (
 )
 
 from tests.collaboration_contract_fixture import contract_batches
+from tests.helpers import initialize_test_workspace
 
 
 _PRIVATE_SOURCE = "PRIVATE_SOURCE_한🙂"
@@ -159,7 +160,7 @@ class _SourceFixture(unittest.TestCase):
     def setUp(self) -> None:
         temporary = tempfile.TemporaryDirectory(prefix="context-sources-")
         self.addCleanup(temporary.cleanup)
-        self.workspace = Workspace(temporary.name).initialize()
+        self.workspace = initialize_test_workspace(temporary.name)
         self.repository = WritingArtifactRepository(self.workspace.root)
 
     def publish(
@@ -339,15 +340,18 @@ class RealAuthorityAdapterTests(_SourceFixture):
             ("core_documents\\global_outline.md", ContextSourceErrorCode.SOURCE_UNSAFE),
             ("/core_documents/global_outline.md", ContextSourceErrorCode.SOURCE_UNSAFE),
             ("discussion_logs/private.md", ContextSourceErrorCode.AUTHORITY_MISMATCH),
-            (
-                "core_documents/character_sheets.md",
-                ContextSourceErrorCode.SOURCE_MISSING,
-            ),
         ):
             with self.subTest(locator=locator):
                 with self.assertRaises(ContextSourceError) as caught:
                     adapter.capture(locator, CONTEXT_SOURCE_POLICY)
                 self.assertEqual(caught.exception.code, code)
+        self.assertEqual(
+            adapter.capture(
+                "core_documents/character_sheets.md",
+                CONTEXT_SOURCE_POLICY,
+            ).content,
+            b"",
+        )
 
     def test_assignment_local_artifact_allowlist_filters_inventory_and_capture(
         self,
@@ -423,6 +427,8 @@ class RealAuthorityAdapterTests(_SourceFixture):
             {
                 "core_documents/global_outline.md",
                 "core_documents/character_sheets.md",
+                "core_documents/narrative_rules.md",
+                "core_documents/part_outlines.md",
                 "manuscript/part-01/chapter-01.md",
             },
         )

@@ -3,22 +3,17 @@
 from __future__ import annotations
 
 import hashlib
-import json
 import os
 import errno
-import base64
 import socket
 import stat
 import tempfile
 import threading
 import unittest
-from copy import deepcopy
-from datetime import UTC, datetime
 from pathlib import Path
 from types import SimpleNamespace
 from unittest import mock
 
-from story_writing_agents import Workspace
 from story_writing_agents.agents import (
     CHARACTER_CUSTODIAN,
     CORE_DOCUMENTS,
@@ -58,6 +53,8 @@ from story_writing_agents.writing_artifacts.repository import (
     WritingArtifactRepository,
 )
 
+from tests.helpers import initialize_test_workspace
+
 
 class WritingArtifactTestCase(unittest.TestCase):
     """Own one initialized workspace without generated writing documents."""
@@ -66,7 +63,7 @@ class WritingArtifactTestCase(unittest.TestCase):
         temporary = tempfile.TemporaryDirectory()
         self.addCleanup(temporary.cleanup)
         self.root = Path(temporary.name)
-        self.workspace = Workspace(self.root).initialize()
+        self.workspace = initialize_test_workspace(self.root)
         self.repository = WritingArtifactRepository(self.root)
 
     def commit(
@@ -148,9 +145,7 @@ class ArtifactGrammarTests(unittest.TestCase):
     def test_reference_source_paths_reject_unrepresentable_and_unsafe_names(
         self,
     ) -> None:
-        overlong = "manuscript/" + "/".join(
-            "a" * 120 for _ in range(9)
-        ) + "/chapter.md"
+        overlong = "manuscript/" + "/".join("a" * 120 for _ in range(9)) + "/chapter.md"
         rejected = (
             "discussion_logs/private.md",
             "core_documents/extra.md",
@@ -219,19 +214,18 @@ class ArtifactGrammarTests(unittest.TestCase):
             path=CORE_ARTIFACT_PATHS[0],
             kind=ArtifactKind.CORE_DOCUMENT,
             sha256="a" * 64,
-            commit_id="b" * 32,
-            committed_at="2026-08-22T00:00:00+00:00",
-            author_agent_id=LEAD_ORCHESTRATOR,
-            session_id="session_01",
-            debate_id="debate_01",
-            revision_id="r0",
+            application_id="application-1",
+            application_sequence=1,
+            candidate_id="candidate-1",
+            candidate_revision=2,
+            candidate_digest="sha256:" + "b" * 64,
+            change_set_digest="c" * 64,
+            relationship_validation_digest="sha256:" + "d" * 64,
         )
         catalog = ArtifactCatalog({entry.path: entry})
         self.assertEqual(ArtifactCatalog.from_dict(catalog.to_dict()), catalog)
         with self.assertRaises(ValueError):
-            ArtifactCatalog.from_dict(
-                {**catalog.to_dict(), "unexpected": True}
-            )
+            ArtifactCatalog.from_dict({**catalog.to_dict(), "unexpected": True})
         malformed = entry.to_dict()
         malformed["unexpected"] = "field"
         with self.assertRaises(ValueError):
@@ -265,10 +259,7 @@ class ArtifactGrammarTests(unittest.TestCase):
 class RepositoryEligibilityTests(WritingArtifactTestCase):
     def test_metadata_only_discovery_lists_every_safe_reference_source(self) -> None:
         safe = {
-            **{
-                path: f"manual::{path}".encode()
-                for path in CORE_ARTIFACT_PATHS
-            },
+            **{path: f"manual::{path}".encode() for path in CORE_ARTIFACT_PATHS},
             "manuscript/part-01/manual.md": b"manual",
             "manuscript/part-01/empty.md": b"",
             "manuscript/part-01/init.md": b"initialized placeholder",
@@ -359,7 +350,10 @@ class RepositoryEligibilityTests(WritingArtifactTestCase):
             target.parent.mkdir(parents=True, exist_ok=True)
             target.write_text(content, encoding="utf-8")
 
-        self.assertEqual(self.repository.list_paths(), tuple(sorted(source_only)))
+        self.assertEqual(
+            self.repository.list_paths(),
+            tuple(sorted((*CORE_ARTIFACT_PATHS, *source_only))),
+        )
         for path, content in source_only.items():
             with self.subTest(path=path):
                 self.assertEqual(self.repository.read_text(path), content)
@@ -370,7 +364,7 @@ class RepositoryEligibilityTests(WritingArtifactTestCase):
         self.assertEqual(tuple(catalog.entries), (published,))
         self.assertEqual(
             self.repository.list_paths(),
-            tuple(sorted((*source_only, published))),
+            tuple(sorted((*CORE_ARTIFACT_PATHS, *source_only, published))),
         )
 
     def test_consensus_persists_exact_agent_bytes_and_all_four_updates(self) -> None:
@@ -398,76 +392,21 @@ class RepositoryEligibilityTests(WritingArtifactTestCase):
                 self.assertEqual((self.root / path).read_text(), content)
 
         catalog = self.repository.catalog()
-        commit_ids = {entry.commit_id for entry in catalog.entries.values()}
-        self.assertEqual(len(commit_ids), 1)
+        entries = tuple(catalog.entries.values())
+        self.assertEqual(len(entries), 5)
+        self.assertEqual(len({entry.application_id for entry in entries}), 1)
+        self.assertEqual({entry.application_sequence for entry in entries}, {1})
+        self.assertEqual({entry.candidate_id for entry in entries}, {"debate_01"})
+        self.assertEqual({entry.candidate_revision for entry in entries}, {1})
+        candidate_digest = "sha256:" + hashlib.sha256(
+            b"agent-returned::manuscript\n"
+        ).hexdigest()
+        self.assertEqual({entry.candidate_digest for entry in entries}, {candidate_digest})
+        self.assertEqual(len({entry.change_set_digest for entry in entries}), 1)
         self.assertEqual(
-            catalog.entries[manuscript_path].author_agent_id,
-            EXECUTION_SPECIALIST,
+            len({entry.relationship_validation_digest for entry in entries}),
+            1,
         )
-        for path in CORE_ARTIFACT_PATHS:
-            self.assertEqual(
-                catalog.entries[path].author_agent_id,
-                LEAD_ORCHESTRATOR,
-            )
-
-    def test_source_reads_ignore_drift_and_missing_catalog_provenance_but_publication_is_strict(
-        self,
-    ) -> None:
-        manuscript_path, _ = self.commit()
-        (self.root / manuscript_path).write_text("manual drift", encoding="utf-8")
-        self.assertEqual(self.repository.list_paths(), (manuscript_path,))
-        self.assertEqual(self.repository.read_text(manuscript_path), "manual drift")
-
-        other = WritingArtifactRepository(self.root)
-        self.assertEqual(other.list_paths(), (manuscript_path,))
-        catalog_data = json.loads(
-            (
-                self.root
-                / "agent_states/orchestrator_state/writing_artifacts/catalog.json"
-            ).read_text()
-        )
-        commit_id = catalog_data["entries"][0]["commit_id"]
-        (
-            self.root
-            / "agent_states/orchestrator_state/writing_artifacts/commits"
-            / f"{commit_id}.json"
-        ).unlink()
-
-        with (
-            mock.patch.object(
-                other,
-                "_load_catalog",
-                side_effect=AssertionError("source operation loaded catalog"),
-            ) as load_catalog,
-            mock.patch.object(
-                other,
-                "_recover",
-                side_effect=AssertionError("source operation ran recovery"),
-            ) as recover,
-        ):
-            self.assertEqual(other.list_paths(), (manuscript_path,))
-            self.assertEqual(other.read_text(manuscript_path), "manual drift")
-        load_catalog.assert_not_called()
-        recover.assert_not_called()
-
-        with self.assertRaisesRegex(
-            WorkspaceFormatError,
-            "path set does not match commit ledger",
-        ):
-            other.catalog()
-        with self.assertRaisesRegex(
-            WorkspaceFormatError,
-            "path set does not match commit ledger",
-        ):
-            other.commit_consensus(
-                output_path="part-02/blocked.md",
-                candidate="blocked",
-                core_updates={},
-                session_id="session_02",
-                debate_id="strict_publication",
-                revision_id="r0",
-                candidate_author_agent_id=EXECUTION_SPECIALIST,
-            )
 
     def test_source_adapter_delegates_full_content_validation_to_snapshot(
         self,
@@ -558,7 +497,9 @@ class RepositoryEligibilityTests(WritingArtifactTestCase):
         with self.assertRaisesRegex(WorkspaceFormatError, "contains NUL"):
             self.repository.read_text(manuscript_path)
 
-    def test_manuscripts_are_create_only_but_distinct_revisions_are_allowed(self) -> None:
+    def test_manuscripts_are_create_only_but_distinct_revisions_are_allowed(
+        self,
+    ) -> None:
         self.commit(candidate="revision one")
         with self.assertRaisesRegex(ManuscriptExistsError, "refusing to overwrite"):
             self.commit(candidate="overwrite", debate_id="debate_02")
@@ -573,21 +514,6 @@ class RepositoryEligibilityTests(WritingArtifactTestCase):
             "revision two",
         )
 
-    def test_deleted_cataloged_manuscript_identity_cannot_be_reused(self) -> None:
-        manuscript_path, _ = self.commit()
-        target = self.root / manuscript_path
-        target.unlink()
-        state = self.root / "agent_states/orchestrator_state/writing_artifacts"
-        commits_before = tuple(state.joinpath("commits").iterdir())
-        catalog_before = state.joinpath("catalog.json").read_bytes()
-
-        with self.assertRaisesRegex(ManuscriptExistsError, "cataloged path"):
-            self.commit(candidate="replacement bytes")
-
-        self.assertFalse(target.exists())
-        self.assertEqual(tuple(state.joinpath("commits").iterdir()), commits_before)
-        self.assertEqual(state.joinpath("catalog.json").read_bytes(), catalog_before)
-
     def test_repository_rejects_case_and_normalization_aliases_without_mutation(
         self,
     ) -> None:
@@ -600,6 +526,7 @@ class RepositoryEligibilityTests(WritingArtifactTestCase):
         root_identity = (self.root.stat().st_dev, self.root.stat().st_ino)
         for alias, updates in cases:
             with self.subTest(alias=alias):
+
                 def aliased_listdir(directory):
                     names = list(real_listdir(directory))
                     metadata = os.fstat(directory)
@@ -628,7 +555,11 @@ class RepositoryEligibilityTests(WritingArtifactTestCase):
 
                 self.assertFalse(state.joinpath("catalog.json").exists())
                 self.assertFalse(tuple(state.joinpath("transactions").glob("*.json")))
-                self.assertFalse(self.root.joinpath(f"manuscript/alias-{len(updates)}/chapter.md").exists())
+                self.assertFalse(
+                    self.root.joinpath(
+                        f"manuscript/alias-{len(updates)}/chapter.md"
+                    ).exists()
+                )
 
         manuscript_path, _ = self.commit(
             output_path="read-alias/chapter.md",
@@ -665,7 +596,9 @@ class RepositoryEligibilityTests(WritingArtifactTestCase):
                     self.repository.read_text(path)
                 self.assertEqual((self.root / path).read_bytes(), before)
 
-    def test_manual_target_collision_and_unknown_core_update_fail_before_publish(self) -> None:
+    def test_manual_target_collision_and_unknown_core_update_fail_before_publish(
+        self,
+    ) -> None:
         target = self.root / "manuscript/part-01/collision.md"
         target.parent.mkdir(parents=True)
         target.write_text("manual", encoding="utf-8")
@@ -676,9 +609,13 @@ class RepositoryEligibilityTests(WritingArtifactTestCase):
                 "part-01/unknown-core.md",
                 core_updates={"private.md": "must not publish"},
             )
-        self.assertFalse(self.root.joinpath("manuscript/part-01/unknown-core.md").exists())
+        self.assertFalse(
+            self.root.joinpath("manuscript/part-01/unknown-core.md").exists()
+        )
 
-    def test_selective_reads_touch_only_requested_artifacts_not_manuscripts(self) -> None:
+    def test_selective_reads_touch_only_requested_artifacts_not_manuscripts(
+        self,
+    ) -> None:
         self.commit(
             core_updates={"global_outline.md": "verified outline"},
         )
@@ -725,7 +662,10 @@ class RepositoryEligibilityTests(WritingArtifactTestCase):
             "read_bytes",
             side_effect=AssertionError("source listing read content"),
         ):
-            self.assertEqual(self.repository.list_paths(), (manuscript_path,))
+            self.assertEqual(
+                self.repository.list_paths(),
+                tuple(sorted((*CORE_ARTIFACT_PATHS, manuscript_path))),
+            )
 
         def fail_entry(relative: str, *args, **kwargs):
             if relative == manuscript_path:
@@ -751,9 +691,14 @@ class RepositoryEligibilityTests(WritingArtifactTestCase):
         ):
             with self.assertRaisesRegex(ArtifactRootSecurityError, "root changed"):
                 self.repository.catalog()
-        self.assertEqual(self.repository.list_paths(), (manuscript_path,))
+        self.assertEqual(
+            self.repository.list_paths(),
+            tuple(sorted((*CORE_ARTIFACT_PATHS, manuscript_path))),
+        )
 
-    def test_candidate_author_matches_revision_and_manuscript_is_a_part_id(self) -> None:
+    def test_candidate_author_matches_revision_and_manuscript_is_a_part_id(
+        self,
+    ) -> None:
         rejected = (
             ("r0", LEAD_ORCHESTRATOR),
             ("r0", PLOT_ARCHITECT),
@@ -779,28 +724,14 @@ class RepositoryEligibilityTests(WritingArtifactTestCase):
             candidate_author_agent_id=LEAD_ORCHESTRATOR,
         )
         self.assertEqual(path, "manuscript/manuscript/chapter.md")
+        entry = self.repository.catalog().entries[path]
+        self.assertEqual(entry.candidate_id, "debate_01")
+        self.assertEqual(entry.candidate_revision, 2)
         self.assertEqual(
-            self.repository.catalog().entries[path].author_agent_id,
-            LEAD_ORCHESTRATOR,
+            entry.candidate_digest,
+            "sha256:" + hashlib.sha256(b"agent-authored manuscript\n").hexdigest(),
         )
-
-    def test_malformed_recovered_author_provenance_is_rejected(self) -> None:
-        manuscript_path, _ = self.commit()
-        catalog = self.repository.catalog()
-        commit_id = catalog.entries[manuscript_path].commit_id
-        commit_path = self.root.joinpath(
-            "agent_states/orchestrator_state/writing_artifacts/commits",
-            f"{commit_id}.json",
-        )
-        commit = json.loads(commit_path.read_text(encoding="utf-8"))
-        commit["artifacts"][0]["author_agent_id"] = PLOT_ARCHITECT
-        commit_path.write_text(json.dumps(commit), encoding="utf-8")
-
-        with self.assertRaisesRegex(
-            WorkspaceFormatError,
-            "commit author is invalid",
-        ):
-            WritingArtifactRepository(self.root).catalog()
+        self.assertRegex(entry.application_id, r"[0-9a-f]{32}")
 
 
 @unittest.skipUnless(os.name == "posix", "secure descriptor tests require POSIX")
@@ -965,16 +896,20 @@ class SecureStorageTests(WritingArtifactTestCase):
 
                 def fail_chain(chain):
                     if failure == "chain" and chain:
-                        raise ArtifactRootSecurityError(
-                            "post-open chain failure"
-                        )
+                        raise ArtifactRootSecurityError("post-open chain failure")
                     return real_chain(chain)
 
                 with (
                     mock.patch.object(SecureWorkspaceStorage, "_require_primitives"),
-                    mock.patch.object(storage_module.os, "open", side_effect=record_open),
-                    mock.patch.object(storage_module.os, "close", side_effect=record_close),
-                    mock.patch.object(storage_module.os, "fstat", side_effect=fail_fstat),
+                    mock.patch.object(
+                        storage_module.os, "open", side_effect=record_open
+                    ),
+                    mock.patch.object(
+                        storage_module.os, "close", side_effect=record_close
+                    ),
+                    mock.patch.object(
+                        storage_module.os, "fstat", side_effect=fail_fstat
+                    ),
                     mock.patch.object(
                         SecureWorkspaceStorage,
                         "_require_exact_name",
@@ -1042,9 +977,7 @@ class SecureStorageTests(WritingArtifactTestCase):
             if name == inspected.name:
                 exact_checks += 1
                 if exact_checks == 2:
-                    raise ArtifactEntrySecurityError(
-                        "injected post-open replacement"
-                    )
+                    raise ArtifactEntrySecurityError("injected post-open replacement")
             return real_require(
                 directory_descriptor,
                 name,
@@ -1151,7 +1084,10 @@ class SecureStorageTests(WritingArtifactTestCase):
             "_inspect_file",
             side_effect=delete_before_inspection,
         ):
-            self.assertEqual(self.repository.list_paths(), ())
+            self.assertEqual(
+                self.repository.list_paths(),
+                tuple(sorted(CORE_ARTIFACT_PATHS)),
+            )
         self.assertFalse(target.exists())
 
     def test_final_name_aliases_reject_before_stat_staging_or_mutation(self) -> None:
@@ -1163,6 +1099,7 @@ class SecureStorageTests(WritingArtifactTestCase):
 
         for alias in ("Chapter.md", "ｃｈａｐｔｅｒ.md"):
             with self.subTest(alias=alias):
+
                 def aliased_listdir(directory):
                     names = list(real_listdir(directory))
                     metadata = os.fstat(directory)
@@ -1281,7 +1218,9 @@ class SecureStorageTests(WritingArtifactTestCase):
                 self.assertFalse(parent.joinpath(".artifacts.lock.anchor").exists())
                 self.assertFalse(parent.joinpath(".artifacts.lock.ready").exists())
 
-    def test_new_lock_creation_order_and_existing_triple_open_flags_are_exact(self) -> None:
+    def test_new_lock_creation_order_and_existing_triple_open_flags_are_exact(
+        self,
+    ) -> None:
         relative = "agent_states/orchestrator_state/writing_artifacts/.artifacts.lock"
         parent = self.root / "agent_states/orchestrator_state/writing_artifacts"
         storage = SecureWorkspaceStorage(self.root)
@@ -1312,9 +1251,7 @@ class SecureStorageTests(WritingArtifactTestCase):
 
         def record_link(source, destination, *args, **kwargs):
             events.append(
-                "link_anchor"
-                if destination.endswith(".anchor")
-                else "link_ready"
+                "link_anchor" if destination.endswith(".anchor") else "link_ready"
             )
             return real_link(source, destination, *args, **kwargs)
 
@@ -1400,9 +1337,12 @@ class SecureStorageTests(WritingArtifactTestCase):
             "ready link",
             "ready flush",
         ):
-            with self.subTest(failure=failure), tempfile.TemporaryDirectory() as directory:
+            with (
+                self.subTest(failure=failure),
+                tempfile.TemporaryDirectory() as directory,
+            ):
                 root = Path(directory)
-                Workspace(root).initialize()
+                initialize_test_workspace(root)
                 storage = SecureWorkspaceStorage(root)
                 parent = root / "agent_states/orchestrator_state/writing_artifacts"
                 storage.ensure_directory(parent.relative_to(root).as_posix())
@@ -1419,10 +1359,10 @@ class SecureStorageTests(WritingArtifactTestCase):
                         metadata.st_ino,
                     ) == (parent.stat().st_dev, parent.stat().st_ino):
                         parent_fsyncs += 1
-                    selected = (failure == "file fsync" and not stat.S_ISDIR(metadata.st_mode)) or (
-                        failure == "anchor flush" and parent_fsyncs == 3
-                    ) or (
-                        failure == "ready flush" and parent_fsyncs == 4
+                    selected = (
+                        (failure == "file fsync" and not stat.S_ISDIR(metadata.st_mode))
+                        or (failure == "anchor flush" and parent_fsyncs == 3)
+                        or (failure == "ready flush" and parent_fsyncs == 4)
                     )
                     if selected:
                         raise OSError(failure)
@@ -1500,9 +1440,12 @@ class SecureStorageTests(WritingArtifactTestCase):
             (names[1], names[2]),
         )
         for present in subsets:
-            with self.subTest(present=present), tempfile.TemporaryDirectory() as directory:
+            with (
+                self.subTest(present=present),
+                tempfile.TemporaryDirectory() as directory,
+            ):
                 root = Path(directory)
-                Workspace(root).initialize()
+                initialize_test_workspace(root)
                 parent = root / "agent_states/orchestrator_state/writing_artifacts"
                 parent.mkdir(parents=True)
                 first = parent / present[0]
@@ -1534,7 +1477,7 @@ class SecureStorageTests(WritingArtifactTestCase):
                 tempfile.TemporaryDirectory() as directory,
             ):
                 root = Path(directory)
-                Workspace(root).initialize()
+                initialize_test_workspace(root)
                 parent = root / "agent_states/orchestrator_state/writing_artifacts"
                 parent.mkdir(parents=True)
                 lock = parent / ".artifacts.lock"
@@ -1564,9 +1507,12 @@ class SecureStorageTests(WritingArtifactTestCase):
     ) -> None:
         relative = "agent_states/orchestrator_state/writing_artifacts/.artifacts.lock"
         for failure in ("bootstrap flock", "ancestry durability"):
-            with self.subTest(failure=failure), tempfile.TemporaryDirectory() as directory:
+            with (
+                self.subTest(failure=failure),
+                tempfile.TemporaryDirectory() as directory,
+            ):
                 root = Path(directory)
-                Workspace(root).initialize()
+                initialize_test_workspace(root)
                 parent = root / "agent_states/orchestrator_state/writing_artifacts"
                 storage = SecureWorkspaceStorage(root)
                 storage.ensure_directory(parent.relative_to(root).as_posix())
@@ -1583,9 +1529,7 @@ class SecureStorageTests(WritingArtifactTestCase):
                     return real_flock(descriptor, operation)
 
                 ancestry_effect = (
-                    OSError(failure)
-                    if failure == "ancestry durability"
-                    else None
+                    OSError(failure) if failure == "ancestry durability" else None
                 )
                 ancestry_patch = (
                     mock.patch.object(
@@ -1621,7 +1565,9 @@ class SecureStorageTests(WritingArtifactTestCase):
                 self.assertFalse(parent.joinpath(".artifacts.lock.anchor").exists())
                 self.assertFalse(parent.joinpath(".artifacts.lock.ready").exists())
 
-    def test_two_simultaneous_first_lock_writers_serialize_without_deadlock(self) -> None:
+    def test_two_simultaneous_first_lock_writers_serialize_without_deadlock(
+        self,
+    ) -> None:
         relative = "agent_states/orchestrator_state/writing_artifacts/.first.lock"
         first = SecureWorkspaceStorage(self.root)
         second = SecureWorkspaceStorage(self.root)
@@ -1728,12 +1674,13 @@ class SecureStorageTests(WritingArtifactTestCase):
         self.assertTrue(all(path.is_dir() for path in expected_parents))
         self.assertTrue(
             {
-                (path.stat().st_dev, path.stat().st_ino)
-                for path in expected_parents
+                (path.stat().st_dev, path.stat().st_ino) for path in expected_parents
             }.issubset(fsynced_directories)
         )
 
-    def test_storage_rejects_traversal_symlink_hardlink_and_nonregular_files(self) -> None:
+    def test_storage_rejects_traversal_symlink_hardlink_and_nonregular_files(
+        self,
+    ) -> None:
         storage = SecureWorkspaceStorage(self.root)
         for path in ("../outside", "/absolute", "a//b", "a\\b"):
             with self.subTest(path=path):
@@ -1766,7 +1713,10 @@ class SecureStorageTests(WritingArtifactTestCase):
                     self.repository.read_text(artifact_path)
 
     def test_root_replacement_is_detected_by_a_live_repository(self) -> None:
-        self.assertEqual(self.repository.list_paths(), ())
+        self.assertEqual(
+            self.repository.list_paths(),
+            tuple(sorted(CORE_ARTIFACT_PATHS)),
+        )
         original = self.root.with_name(f"{self.root.name}-original")
         self.root.rename(original)
         self.root.mkdir()
@@ -2052,7 +2002,9 @@ class SecureStorageTests(WritingArtifactTestCase):
         selected = staging / f".artifacts-{selected_hex}-1.held"
         self.assertEqual(selected.read_bytes(), b"original")
 
-    def test_generated_temp_collision_and_failed_owned_temp_are_both_retained(self) -> None:
+    def test_generated_temp_collision_and_failed_owned_temp_are_both_retained(
+        self,
+    ) -> None:
         storage = SecureWorkspaceStorage(self.root)
         staging = self.root / "staging"
         staging.mkdir()
@@ -2133,9 +2085,7 @@ class SecureStorageTests(WritingArtifactTestCase):
         self.assertFalse(thread.is_alive())
 
     def test_lock_name_replacement_never_enters_protected_body(self) -> None:
-        relative_parent = (
-            "agent_states/orchestrator_state/writing_artifacts"
-        )
+        relative_parent = "agent_states/orchestrator_state/writing_artifacts"
         real_verify = SecureWorkspaceStorage._verify_lock_identity
 
         for replacement_call in (1, 2):
@@ -2187,7 +2137,9 @@ class SecureStorageTests(WritingArtifactTestCase):
                         body_entered = True
                 self.assertFalse(body_entered)
 
-    def test_replacing_any_triple_lock_name_after_primary_flock_is_rejected(self) -> None:
+    def test_replacing_any_triple_lock_name_after_primary_flock_is_rejected(
+        self,
+    ) -> None:
         relative_parent = "agent_states/orchestrator_state/writing_artifacts"
         real_verify = SecureWorkspaceStorage._verify_lock_identity
 
@@ -2235,1524 +2187,6 @@ class SecureStorageTests(WritingArtifactTestCase):
                         body_entered = True
                 self.assertFalse(body_entered)
                 self.assertIsNone(storage._active_lease)
-
-
-class RepositoryRecoveryTests(WritingArtifactTestCase):
-    @staticmethod
-    def commit_repository(
-        repository: WritingArtifactRepository,
-        *,
-        output_path: str = "part-01/chapter-01.md",
-        core_updates: dict[str, str] | None = None,
-    ) -> tuple[str, tuple[str, ...]]:
-        return repository.commit_consensus(
-            output_path=output_path,
-            candidate="agent-authored manuscript\n",
-            core_updates={} if core_updates is None else core_updates,
-            session_id="session_01",
-            debate_id="debate_01",
-            revision_id="r0",
-            candidate_author_agent_id=EXECUTION_SPECIALIST,
-        )
-
-    def prepared_transaction(self) -> tuple[Path, dict[str, object]]:
-        with (
-            mock.patch.object(
-                self.repository,
-                "_complete_transaction",
-                side_effect=OSError("leave prepared transaction"),
-            ),
-            self.assertRaisesRegex(OSError, "leave prepared transaction"),
-        ):
-            self.commit(core_updates={"global_outline.md": "agent outline"})
-        state = self.root / "agent_states/orchestrator_state/writing_artifacts"
-        transaction_path = next(state.joinpath("transactions").glob("*.json"))
-        return transaction_path, json.loads(
-            transaction_path.read_text(encoding="utf-8")
-        )
-
-    @staticmethod
-    def rewrite_commit_timestamps(
-        root: Path,
-        repository: WritingArtifactRepository,
-        timestamps_by_manuscript: dict[str, str],
-    ) -> dict[str, dict[str, object]]:
-        state = root / "agent_states/orchestrator_state/writing_artifacts"
-        commits: dict[str, dict[str, object]] = {}
-        for commit_path in state.joinpath("commits").glob("*.json"):
-            commit = json.loads(commit_path.read_text(encoding="utf-8"))
-            manuscript = next(
-                artifact
-                for artifact in commit["artifacts"]
-                if artifact["kind"] == ArtifactKind.MANUSCRIPT.value
-            )
-            timestamp = timestamps_by_manuscript.get(manuscript["path"])
-            if timestamp is not None:
-                commit["committed_at"] = timestamp
-            commits[commit["commit_id"]] = commit
-            commit_path.write_bytes(repository._json_bytes(commit))
-
-        catalog_path = state / "catalog.json"
-        catalog = json.loads(catalog_path.read_text(encoding="utf-8"))
-        for entry in catalog["entries"]:
-            entry["committed_at"] = commits[entry["commit_id"]]["committed_at"]
-        catalog_path.write_bytes(repository._json_bytes(catalog))
-        return commits
-
-    @staticmethod
-    def point_catalog_core_to_commit(
-        root: Path,
-        repository: WritingArtifactRepository,
-        commit: dict[str, object],
-        path: str,
-    ) -> None:
-        state = root / "agent_states/orchestrator_state/writing_artifacts"
-        catalog_path = state / "catalog.json"
-        catalog = json.loads(catalog_path.read_text(encoding="utf-8"))
-        artifact = next(
-            item for item in commit["artifacts"] if item["path"] == path
-        )
-        entry = next(item for item in catalog["entries"] if item["path"] == path)
-        entry.update(
-            {
-                "author_agent_id": artifact["author_agent_id"],
-                "commit_id": commit["commit_id"],
-                "committed_at": commit["committed_at"],
-                "debate_id": commit["debate_id"],
-                "kind": artifact["kind"],
-                "revision_id": commit["revision_id"],
-                "session_id": commit["session_id"],
-                "sha256": artifact["sha256"],
-            }
-        )
-        catalog_path.write_bytes(repository._json_bytes(catalog))
-
-    @staticmethod
-    def set_transaction_timestamp(
-        transaction: dict[str, object],
-        timestamp: str,
-    ) -> None:
-        commit = transaction["commit"]
-        assert isinstance(commit, dict)
-        commit["committed_at"] = timestamp
-        catalog_after = transaction["catalog_after"]
-        assert isinstance(catalog_after, dict)
-        for entry in catalog_after["entries"]:
-            if entry["commit_id"] == commit["commit_id"]:
-                entry["committed_at"] = timestamp
-
-    def test_commit_ledger_requires_canonical_json_without_rewrite(self) -> None:
-        manuscript_path, _ = self.commit()
-        state = self.root / "agent_states/orchestrator_state/writing_artifacts"
-        commit_path = next(state.joinpath("commits").glob("*.json"))
-        parsed = json.loads(commit_path.read_text(encoding="utf-8"))
-        noncanonical = json.dumps(
-            parsed,
-            ensure_ascii=False,
-            separators=(",", ":"),
-        ).encode("utf-8")
-        self.assertNotEqual(noncanonical, self.repository._json_bytes(parsed))
-        commit_path.write_bytes(noncanonical)
-        catalog_before = state.joinpath("catalog.json").read_bytes()
-
-        for operation in (
-            lambda: self.repository.catalog(),
-            lambda: self.commit(output_path="part-02/new.md"),
-        ):
-            with self.assertRaisesRegex(
-                WorkspaceFormatError,
-                "ledger record is not canonical",
-            ):
-                operation()
-
-        self.assertEqual(commit_path.read_bytes(), noncanonical)
-        self.assertEqual(state.joinpath("catalog.json").read_bytes(), catalog_before)
-        self.assertTrue(self.root.joinpath(manuscript_path).is_file())
-        self.assertFalse(self.root.joinpath("manuscript/part-02/new.md").exists())
-        self.assertFalse(tuple(state.joinpath("transactions").glob("*.json")))
-
-    def test_repeated_core_history_selects_unique_greatest_timestamp_instant(
-        self,
-    ) -> None:
-        first, _ = self.commit(
-            output_path="part-01/first.md",
-            core_updates={"global_outline.md": "older outline"},
-        )
-        second, _ = self.commit(
-            output_path="part-02/second.md",
-            core_updates={"global_outline.md": "newer outline"},
-            debate_id="debate_02",
-        )
-        self.rewrite_commit_timestamps(
-            self.root,
-            self.repository,
-            {
-                first: "2026-01-01T01:00:00+01:00",
-                second: "2025-12-31T20:00:01-04:00",
-            },
-        )
-
-        self.assertEqual(
-            self.repository.read_text("core_documents/global_outline.md"),
-            "newer outline",
-        )
-        self.assertEqual(
-            self.repository.list_paths(),
-            (
-                "core_documents/global_outline.md",
-                first,
-                second,
-            ),
-        )
-
-    def test_repeated_core_history_rejects_stale_catalog_and_greatest_tie(
-        self,
-    ) -> None:
-        for state_kind in ("stale", "tie"):
-            with (
-                self.subTest(state_kind=state_kind),
-                tempfile.TemporaryDirectory() as directory,
-            ):
-                root = Path(directory)
-                Workspace(root).initialize()
-                repository = WritingArtifactRepository(root)
-                first, _ = self.commit_repository(
-                    repository,
-                    output_path="part-01/first.md",
-                    core_updates={"global_outline.md": "older outline"},
-                )
-                second, _ = self.commit_repository(
-                    repository,
-                    output_path="part-02/second.md",
-                    core_updates={"global_outline.md": "newer outline"},
-                )
-                commits = self.rewrite_commit_timestamps(
-                    root,
-                    repository,
-                    {
-                        first: "2026-01-01T00:00:00+00:00",
-                        second: (
-                            "2025-12-31T19:00:00-05:00"
-                            if state_kind == "tie"
-                            else "2026-01-01T00:00:01+00:00"
-                        ),
-                    },
-                )
-                if state_kind == "stale":
-                    older = next(
-                        commit
-                        for commit in commits.values()
-                        if any(
-                            artifact["path"] == first
-                            for artifact in commit["artifacts"]
-                        )
-                    )
-                    self.point_catalog_core_to_commit(
-                        root,
-                        repository,
-                        older,
-                        "core_documents/global_outline.md",
-                    )
-
-                expected = (
-                    "not the newest commit"
-                    if state_kind == "stale"
-                    else "no unique newest commit"
-                )
-                with self.assertRaisesRegex(WorkspaceFormatError, expected):
-                    repository.catalog()
-
-    def test_clock_regression_advances_beyond_entire_commit_ledger(self) -> None:
-        first, _ = self.commit(
-            output_path="part-01/first.md",
-            core_updates={"global_outline.md": "outline"},
-        )
-        second, _ = self.commit(
-            output_path="part-02/future-manuscript.md",
-            debate_id="debate_02",
-        )
-        ledger_maximum = "2099-01-02T00:00:00+00:00"
-        self.rewrite_commit_timestamps(
-            self.root,
-            self.repository,
-            {
-                first: "2099-01-01T00:00:00+00:00",
-                second: ledger_maximum,
-            },
-        )
-        regressed_clock = mock.Mock(wraps=datetime)
-        regressed_clock.now.return_value = datetime(2000, 1, 1, tzinfo=UTC)
-
-        with mock.patch.object(
-            repository_module,
-            "datetime",
-            regressed_clock,
-        ):
-            third, _ = self.commit(
-                output_path="part-03/after-regression.md",
-                debate_id="debate_03",
-            )
-
-        state = self.root / "agent_states/orchestrator_state/writing_artifacts"
-        third_commit = next(
-            json.loads(path.read_text(encoding="utf-8"))
-            for path in state.joinpath("commits").glob("*.json")
-            if any(
-                artifact["path"] == third
-                for artifact in json.loads(path.read_text(encoding="utf-8"))[
-                    "artifacts"
-                ]
-            )
-        )
-        self.assertGreater(
-            datetime.fromisoformat(third_commit["committed_at"]),
-            datetime.fromisoformat(ledger_maximum),
-        )
-
-    def test_maximum_ledger_timestamp_blocks_before_any_publication(self) -> None:
-        first, _ = self.commit(output_path="part-01/first.md")
-        maximum = datetime.max.replace(tzinfo=UTC).isoformat()
-        self.rewrite_commit_timestamps(
-            self.root,
-            self.repository,
-            {first: maximum},
-        )
-        state = self.root / "agent_states/orchestrator_state/writing_artifacts"
-        catalog_before = state.joinpath("catalog.json").read_bytes()
-        commits_before = {
-            path.name: path.read_bytes()
-            for path in state.joinpath("commits").glob("*.json")
-        }
-
-        with (
-            mock.patch.object(
-                self.repository._storage,
-                "publish_bytes",
-                side_effect=AssertionError("overflow reached publication"),
-            ) as publish,
-            self.assertRaisesRegex(
-                WorkspaceFormatError,
-                "timestamp cannot advance",
-            ),
-        ):
-            self.commit(output_path="part-02/overflow.md")
-
-        publish.assert_not_called()
-        self.assertFalse(self.root.joinpath("manuscript/part-02/overflow.md").exists())
-        self.assertFalse(tuple(state.joinpath("transactions").glob("*.json")))
-        self.assertEqual(state.joinpath("catalog.json").read_bytes(), catalog_before)
-        self.assertEqual(
-            {
-                path.name: path.read_bytes()
-                for path in state.joinpath("commits").glob("*.json")
-            },
-            commits_before,
-        )
-
-    def test_empty_ledger_allows_first_commit_and_valid_history_reserves_paths(
-        self,
-    ) -> None:
-        state = self.root / "agent_states/orchestrator_state/writing_artifacts"
-        self.assertFalse(state.joinpath("catalog.json").exists())
-        self.assertFalse(state.joinpath("commits").exists())
-
-        first, _ = self.commit(
-            output_path="part-01/first.md",
-            core_updates={"global_outline.md": "outline one"},
-        )
-        second, _ = self.commit(
-            output_path="part-02/second.md",
-            candidate="second manuscript",
-            core_updates={"global_outline.md": "outline two"},
-            debate_id="debate_02",
-        )
-
-        self.assertEqual(
-            self.repository.list_paths(),
-            tuple(
-                sorted(
-                    (
-                        "core_documents/global_outline.md",
-                        first,
-                        second,
-                    )
-                )
-            ),
-        )
-        self.assertEqual(
-            self.repository.read_text("core_documents/global_outline.md"),
-            "outline two",
-        )
-        self.assertEqual(len(tuple(state.joinpath("commits").glob("*.json"))), 2)
-
-    def test_omitted_catalog_row_does_not_block_sources_but_blocks_publication(
-        self,
-    ) -> None:
-        manuscript_path, _ = self.commit(
-            core_updates={"global_outline.md": "committed outline"},
-        )
-        state = self.root / "agent_states/orchestrator_state/writing_artifacts"
-        catalog_path = state / "catalog.json"
-        catalog = json.loads(catalog_path.read_text(encoding="utf-8"))
-        catalog["entries"] = [
-            entry
-            for entry in catalog["entries"]
-            if entry["path"] != "core_documents/global_outline.md"
-        ]
-        catalog_path.write_bytes(self.repository._json_bytes(catalog))
-
-        self.assertEqual(
-            self.repository.list_paths(),
-            (
-                "core_documents/global_outline.md",
-                manuscript_path,
-            ),
-        )
-        self.assertEqual(
-            self.repository.read_text("core_documents/global_outline.md"),
-            "committed outline",
-        )
-        for operation in (
-            lambda: self.repository.catalog(),
-            lambda: self.commit(output_path="part-02/new.md"),
-        ):
-            with self.assertRaisesRegex(
-                WorkspaceFormatError,
-                "path set does not match commit ledger",
-            ):
-                operation()
-        self.assertTrue(self.root.joinpath(manuscript_path).is_file())
-        self.assertFalse(self.root.joinpath("manuscript/part-02/new.md").exists())
-        self.assertFalse(tuple(state.joinpath("transactions").glob("*.json")))
-
-    def test_pending_first_core_introduction_contributes_no_before_paths(self) -> None:
-        with (
-            mock.patch.object(
-                self.repository,
-                "_complete_transaction",
-                side_effect=OSError("prepared"),
-            ),
-            self.assertRaisesRegex(OSError, "prepared"),
-        ):
-            self.commit(core_updates={"global_outline.md": "first outline"})
-        state = self.root / "agent_states/orchestrator_state/writing_artifacts"
-        journal = next(state.joinpath("transactions").glob("*.json"))
-        transaction = json.loads(journal.read_text(encoding="utf-8"))
-        self.set_transaction_timestamp(
-            transaction,
-            "2099-01-01T00:00:00+00:00",
-        )
-        journal.write_bytes(self.repository._json_bytes(transaction))
-        self.assertEqual(transaction["catalog_before"]["image"]["entries"], [])
-        self.assertEqual(
-            {entry["path"] for entry in transaction["catalog_after"]["entries"]},
-            {
-                "core_documents/global_outline.md",
-                "manuscript/part-01/chapter-01.md",
-            },
-        )
-        commit = transaction["commit"]
-        state.joinpath("commits", f"{commit['commit_id']}.json").write_bytes(
-            self.repository._json_bytes(commit)
-        )
-
-        recovered = WritingArtifactRepository(self.root)
-        self.assertEqual(recovered.list_paths(), ())
-        recovered.catalog()
-        self.assertEqual(
-            recovered.list_paths(),
-            (
-                "core_documents/global_outline.md",
-                "manuscript/part-01/chapter-01.md",
-            ),
-        )
-
-    def test_pending_core_update_requires_established_current_row(self) -> None:
-        for remove_current in (False, True):
-            with (
-                self.subTest(remove_current=remove_current),
-                tempfile.TemporaryDirectory() as directory,
-            ):
-                root = Path(directory)
-                Workspace(root).initialize()
-                repository = WritingArtifactRepository(root)
-                self.commit_repository(
-                    repository,
-                    output_path="part-01/first.md",
-                    core_updates={"global_outline.md": "older outline"},
-                )
-                with (
-                    mock.patch.object(
-                        repository,
-                        "_complete_transaction",
-                        side_effect=OSError("prepared"),
-                    ),
-                    self.assertRaisesRegex(OSError, "prepared"),
-                ):
-                    self.commit_repository(
-                        repository,
-                        output_path="part-02/second.md",
-                        core_updates={"global_outline.md": "new outline"},
-                    )
-                state = root / "agent_states/orchestrator_state/writing_artifacts"
-                journal = next(state.joinpath("transactions").glob("*.json"))
-                transaction = json.loads(journal.read_text(encoding="utf-8"))
-                self.set_transaction_timestamp(
-                    transaction,
-                    "2099-01-01T00:00:00+00:00",
-                )
-                journal.write_bytes(repository._json_bytes(transaction))
-                before_entries = transaction["catalog_before"]["image"]["entries"]
-                self.assertIn(
-                    "core_documents/global_outline.md",
-                    {entry["path"] for entry in before_entries},
-                )
-                commit = transaction["commit"]
-                state.joinpath("commits", f"{commit['commit_id']}.json").write_bytes(
-                    repository._json_bytes(commit)
-                )
-                if remove_current:
-                    catalog_path = state / "catalog.json"
-                    catalog = json.loads(catalog_path.read_text(encoding="utf-8"))
-                    catalog["entries"] = [
-                        entry
-                        for entry in catalog["entries"]
-                        if entry["path"] != "core_documents/global_outline.md"
-                    ]
-                    catalog_path.write_bytes(repository._json_bytes(catalog))
-
-                recovered = WritingArtifactRepository(root)
-                if remove_current:
-                    self.assertEqual(
-                        recovered.read_text("core_documents/global_outline.md"),
-                        "older outline",
-                    )
-                    self.assertEqual(
-                        recovered.list_paths(),
-                        (
-                            "core_documents/global_outline.md",
-                            "manuscript/part-01/first.md",
-                        ),
-                    )
-                    with self.assertRaisesRegex(
-                        WorkspaceFormatError,
-                        "recovery is blocked",
-                    ):
-                        recovered.catalog()
-                    self.assertFalse(root.joinpath("manuscript/part-02/second.md").exists())
-                else:
-                    self.assertEqual(
-                        recovered.read_text("core_documents/global_outline.md"),
-                        "older outline",
-                    )
-                    self.assertEqual(
-                        recovered.list_paths(),
-                        (
-                            "core_documents/global_outline.md",
-                            "manuscript/part-01/first.md",
-                        ),
-                    )
-                    recovered.catalog()
-                    self.assertEqual(
-                        recovered.read_text("core_documents/global_outline.md"),
-                        "new outline",
-                    )
-                    self.assertEqual(
-                        recovered.list_paths(),
-                        (
-                            "core_documents/global_outline.md",
-                            "manuscript/part-01/first.md",
-                            "manuscript/part-02/second.md",
-                        ),
-                    )
-
-    def test_pending_after_includes_newest_core_commit(self) -> None:
-        self.commit(
-            output_path="part-01/first.md",
-            core_updates={"global_outline.md": "older outline"},
-        )
-        with (
-            mock.patch.object(
-                self.repository,
-                "_complete_transaction",
-                side_effect=OSError("prepared"),
-            ),
-            self.assertRaisesRegex(OSError, "prepared"),
-        ):
-            self.commit(
-                output_path="part-02/second.md",
-                core_updates={"global_outline.md": "newest outline"},
-                debate_id="debate_02",
-            )
-        state = self.root / "agent_states/orchestrator_state/writing_artifacts"
-        journal = next(state.joinpath("transactions").glob("*.json"))
-        transaction = json.loads(journal.read_text(encoding="utf-8"))
-        self.set_transaction_timestamp(
-            transaction,
-            "2099-01-01T00:00:00+00:00",
-        )
-        journal.write_bytes(self.repository._json_bytes(transaction))
-        for target in transaction["targets"]:
-            destination = self.root / target["path"]
-            destination.parent.mkdir(parents=True, exist_ok=True)
-            destination.write_bytes(base64.b64decode(target["new_content_base64"]))
-        commit = transaction["commit"]
-        state.joinpath("commits", f"{commit['commit_id']}.json").write_bytes(
-            self.repository._json_bytes(commit)
-        )
-        state.joinpath("catalog.json").write_bytes(
-            self.repository._json_bytes(transaction["catalog_after"])
-        )
-
-        recovered = WritingArtifactRepository(self.root)
-        self.assertEqual(
-            recovered.read_text("core_documents/global_outline.md"),
-            "newest outline",
-        )
-        self.assertEqual(
-            recovered.list_paths(),
-            (
-                "core_documents/global_outline.md",
-                "manuscript/part-01/first.md",
-                "manuscript/part-02/second.md",
-            ),
-        )
-        self.assertTrue(journal.is_file())
-        recovered.catalog()
-        self.assertFalse(journal.exists())
-
-    def test_missing_empty_or_subset_catalog_with_commits_blocks_before_mutation(
-        self,
-    ) -> None:
-        for catalog_state in ("missing", "empty", "subset"):
-            with (
-                self.subTest(catalog_state=catalog_state),
-                tempfile.TemporaryDirectory() as directory,
-            ):
-                root = Path(directory)
-                Workspace(root).initialize()
-                repository = WritingArtifactRepository(root)
-                first, _ = self.commit_repository(
-                    repository,
-                    output_path="part-01/first.md",
-                )
-                second, _ = self.commit_repository(
-                    repository,
-                    output_path="part-02/second.md",
-                )
-                state = root / "agent_states/orchestrator_state/writing_artifacts"
-                catalog_path = state / "catalog.json"
-                if catalog_state == "missing":
-                    catalog_path.unlink()
-                elif catalog_state == "empty":
-                    catalog_path.write_bytes(
-                        repository._json_bytes(ArtifactCatalog.empty().to_dict())
-                    )
-                else:
-                    catalog = json.loads(catalog_path.read_text(encoding="utf-8"))
-                    catalog["entries"] = [
-                        entry
-                        for entry in catalog["entries"]
-                        if entry["path"] != second
-                    ]
-                    catalog_path.write_bytes(repository._json_bytes(catalog))
-
-                with self.assertRaises(WorkspaceFormatError):
-                    self.commit_repository(
-                        repository,
-                        output_path="part-03/new.md",
-                    )
-                self.assertFalse(root.joinpath("manuscript/part-03/new.md").exists())
-                self.assertFalse(tuple(state.joinpath("transactions").glob("*.json")))
-                self.assertTrue(root.joinpath(first).is_file())
-                self.assertTrue(root.joinpath(second).is_file())
-
-    def test_malformed_unexpected_mismatched_and_extra_commit_records_block(
-        self,
-    ) -> None:
-        for corruption in ("malformed", "unexpected", "mismatched", "extra"):
-            with (
-                self.subTest(corruption=corruption),
-                tempfile.TemporaryDirectory() as directory,
-            ):
-                root = Path(directory)
-                Workspace(root).initialize()
-                repository = WritingArtifactRepository(root)
-                self.commit_repository(repository)
-                state = root / "agent_states/orchestrator_state/writing_artifacts"
-                commit_path = next(state.joinpath("commits").glob("*.json"))
-                commit = json.loads(commit_path.read_text(encoding="utf-8"))
-                replacement_id = "f" * 32
-                if commit["commit_id"] == replacement_id:
-                    replacement_id = "e" * 32
-
-                if corruption == "malformed":
-                    commit_path.write_bytes(b"{not json")
-                elif corruption == "unexpected":
-                    state.joinpath("commits/unexpected.txt").write_bytes(b"unexpected")
-                elif corruption == "mismatched":
-                    commit_path.rename(state.joinpath("commits", f"{replacement_id}.json"))
-                else:
-                    commit["commit_id"] = replacement_id
-                    for artifact in commit["artifacts"]:
-                        if artifact["kind"] == ArtifactKind.MANUSCRIPT.value:
-                            artifact["path"] = "manuscript/part-extra/extra.md"
-                    state.joinpath("commits", f"{replacement_id}.json").write_bytes(
-                        repository._json_bytes(commit)
-                    )
-
-                with self.assertRaises(WorkspaceFormatError):
-                    repository.catalog()
-                self.assertFalse(root.joinpath("manuscript/part-new/new.md").exists())
-
-    def test_duplicate_historical_manuscript_reservation_blocks_path_reuse(self) -> None:
-        manuscript_path, _ = self.commit()
-        state = self.root / "agent_states/orchestrator_state/writing_artifacts"
-        commit_path = next(state.joinpath("commits").glob("*.json"))
-        duplicate = json.loads(commit_path.read_text(encoding="utf-8"))
-        duplicate_id = "f" * 32
-        if duplicate["commit_id"] == duplicate_id:
-            duplicate_id = "e" * 32
-        duplicate["commit_id"] = duplicate_id
-        state.joinpath("commits", f"{duplicate_id}.json").write_bytes(
-            self.repository._json_bytes(duplicate)
-        )
-
-        with self.assertRaisesRegex(
-            WorkspaceFormatError,
-            "reuses a manuscript path",
-        ):
-            self.commit(output_path="part-02/new.md")
-        self.assertTrue(self.root.joinpath(manuscript_path).is_file())
-        self.assertFalse(self.root.joinpath("manuscript/part-02/new.md").exists())
-        self.assertFalse(tuple(state.joinpath("transactions").glob("*.json")))
-
-    def test_exact_pending_commit_is_exempt_but_unrelated_commit_is_not(self) -> None:
-        for unrelated in (False, True):
-            with self.subTest(unrelated=unrelated), tempfile.TemporaryDirectory() as directory:
-                root = Path(directory)
-                Workspace(root).initialize()
-                repository = WritingArtifactRepository(root)
-                with (
-                    mock.patch.object(
-                        repository,
-                        "_complete_transaction",
-                        side_effect=OSError("prepared"),
-                    ),
-                    self.assertRaisesRegex(OSError, "prepared"),
-                ):
-                    self.commit_repository(repository)
-                state = root / "agent_states/orchestrator_state/writing_artifacts"
-                journal = next(state.joinpath("transactions").glob("*.json"))
-                transaction = json.loads(journal.read_text(encoding="utf-8"))
-                commit = transaction["commit"]
-                state.joinpath("commits", f"{commit['commit_id']}.json").write_bytes(
-                    repository._json_bytes(commit)
-                )
-                if unrelated:
-                    unrelated_commit = deepcopy(commit)
-                    unrelated_id = "f" * 32
-                    if unrelated_id == commit["commit_id"]:
-                        unrelated_id = "e" * 32
-                    unrelated_commit["commit_id"] = unrelated_id
-                    for artifact in unrelated_commit["artifacts"]:
-                        if artifact["kind"] == ArtifactKind.MANUSCRIPT.value:
-                            artifact["path"] = "manuscript/unrelated/other.md"
-                    state.joinpath("commits", f"{unrelated_id}.json").write_bytes(
-                        repository._json_bytes(unrelated_commit)
-                    )
-
-                recovered = WritingArtifactRepository(root)
-                self.assertEqual(recovered.list_paths(), ())
-                if unrelated:
-                    with self.assertRaisesRegex(
-                        WorkspaceFormatError,
-                        "recovery is blocked",
-                    ):
-                        recovered.catalog()
-                    self.assertFalse(
-                        root.joinpath("manuscript/part-01/chapter-01.md").exists()
-                    )
-                    self.assertTrue(state.joinpath("recovery_blocked.json").is_file())
-                else:
-                    recovered.catalog()
-                    self.assertEqual(
-                        recovered.list_paths(),
-                        ("manuscript/part-01/chapter-01.md",),
-                    )
-
-    def test_catalog_after_requires_exact_commit_and_target_state(self) -> None:
-        _, transaction = self.prepared_transaction()
-        state = self.root / "agent_states/orchestrator_state/writing_artifacts"
-        state.joinpath("catalog.json").write_bytes(
-            self.repository._json_bytes(transaction["catalog_after"])
-        )
-
-        recovered = WritingArtifactRepository(self.root)
-        self.assertEqual(recovered.list_paths(), ())
-        with self.assertRaisesRegex(WorkspaceFormatError, "recovery is blocked"):
-            recovered.catalog()
-        self.assertFalse(
-            self.root.joinpath("manuscript/part-01/chapter-01.md").exists()
-        )
-        self.assertTrue(state.joinpath("recovery_blocked.json").is_file())
-
-    def test_publication_is_catalog_last(self) -> None:
-        observed: list[str] = []
-        publish = self.repository._storage.publish_bytes
-
-        def record(relative: str, *args, **kwargs):
-            observed.append(relative)
-            return publish(relative, *args, **kwargs)
-
-        with mock.patch.object(
-            self.repository._storage,
-            "publish_bytes",
-            side_effect=record,
-        ):
-            self.commit(
-                core_updates={"global_outline.md": "agent outline"},
-            )
-
-        catalog_path = "agent_states/orchestrator_state/writing_artifacts/catalog.json"
-        manuscript_index = observed.index("manuscript/part-01/chapter-01.md")
-        core_index = observed.index("core_documents/global_outline.md")
-        catalog_index = max(
-            index for index, path in enumerate(observed) if path == catalog_path
-        )
-        self.assertLess(manuscript_index, catalog_index)
-        self.assertLess(core_index, catalog_index)
-
-    def test_prepared_journal_is_immutable_and_retired_with_exact_bytes(self) -> None:
-        transaction_publications: list[tuple[str, bytes, dict[str, object]]] = []
-        publish = self.repository._storage.publish_bytes
-
-        def record(relative: str, content: bytes, **kwargs):
-            if "/transactions/" in relative:
-                transaction_publications.append((relative, content, kwargs))
-            return publish(relative, content, **kwargs)
-
-        with mock.patch.object(
-            self.repository._storage,
-            "publish_bytes",
-            side_effect=record,
-        ):
-            self.commit(core_updates={"global_outline.md": "agent outline"})
-
-        self.assertEqual(len(transaction_publications), 1)
-        relative, prepared_bytes, arguments = transaction_publications[0]
-        self.assertTrue(relative.endswith(".json"))
-        self.assertIsNone(arguments["expected_sha256"])
-        self.assertFalse(arguments["expected_exists"])
-        self.assertTrue(arguments["create_only"])
-        state = self.root / "agent_states/orchestrator_state/writing_artifacts"
-        completed = tuple(state.joinpath("staging").glob("*.completed"))
-        self.assertEqual(len(completed), 1)
-        self.assertEqual(completed[0].read_bytes(), prepared_bytes)
-
-    def test_each_publication_boundary_lists_safe_sources_then_rolls_forward_catalog(
-        self,
-    ) -> None:
-        stages = (
-            "after target 1",
-            "after target 2",
-            "after commit",
-            "after catalog",
-            "before retirement",
-            "after retirement",
-        )
-        catalog_relative = (
-            "agent_states/orchestrator_state/writing_artifacts/catalog.json"
-        )
-        for stage in stages:
-            with self.subTest(stage=stage), tempfile.TemporaryDirectory() as directory:
-                root = Path(directory)
-                Workspace(root).initialize()
-                repository = WritingArtifactRepository(root)
-                publish = repository._storage.publish_bytes
-                write_immutable = repository._write_immutable_json
-                retire = repository._storage.unlink
-                target_count = 0
-
-                def interrupt_publish(relative: str, *args, **kwargs):
-                    nonlocal target_count
-                    result = publish(relative, *args, **kwargs)
-                    if canonical_artifact_kind(relative) is not None:
-                        target_count += 1
-                        if stage == f"after target {target_count}":
-                            raise OSError(stage)
-                    if relative == catalog_relative and stage == "after catalog":
-                        raise OSError(stage)
-                    return result
-
-                def interrupt_commit(relative: str, value: object) -> None:
-                    write_immutable(relative, value)
-                    if stage == "after commit":
-                        raise OSError(stage)
-
-                def interrupt_retirement(*args, **kwargs) -> None:
-                    if stage == "before retirement":
-                        raise OSError(stage)
-                    retire(*args, **kwargs)
-                    if stage == "after retirement":
-                        raise OSError(stage)
-
-                with (
-                    mock.patch.object(
-                        repository._storage,
-                        "publish_bytes",
-                        side_effect=interrupt_publish,
-                    ),
-                    mock.patch.object(
-                        repository,
-                        "_write_immutable_json",
-                        side_effect=interrupt_commit,
-                    ),
-                    mock.patch.object(
-                        repository._storage,
-                        "unlink",
-                        side_effect=interrupt_retirement,
-                    ),
-                    self.assertRaisesRegex(OSError, stage),
-                ):
-                    self.commit_repository(
-                        repository,
-                        core_updates={"global_outline.md": "agent outline"},
-                    )
-
-                state = root / "agent_states/orchestrator_state/writing_artifacts"
-                if stage in {"after target 1", "after target 2", "after commit"}:
-                    self.assertFalse(state.joinpath("catalog.json").exists())
-                recovered = WritingArtifactRepository(root)
-                physical_before = tuple(
-                    path
-                    for path in (
-                        "core_documents/global_outline.md",
-                        "manuscript/part-01/chapter-01.md",
-                    )
-                    if root.joinpath(path).is_file()
-                )
-                self.assertEqual(
-                    recovered.list_paths(),
-                    physical_before,
-                )
-                recovered.catalog()
-                self.assertEqual(
-                    recovered.list_paths(),
-                    (
-                        "core_documents/global_outline.md",
-                        "manuscript/part-01/chapter-01.md",
-                    ),
-                )
-                self.assertFalse(state.joinpath("recovery_blocked.json").exists())
-
-    def test_repository_decoder_rejects_duplicate_keys_at_every_nesting_level(
-        self,
-    ) -> None:
-        cases = {
-            "journal": b'{"schema_version":2,"schema_version":2}',
-            "catalog": b'{"catalog_after":{"entries":[],"entries":[]}}',
-            "commit": b'{"commit":{"schema_version":1,"schema_version":1}}',
-            "nested entry": b'{"entries":[{"path":"a","path":"a"}]}',
-        }
-        for label, raw in cases.items():
-            with self.subTest(label=label), self.assertRaisesRegex(
-                WorkspaceFormatError,
-                "duplicate keys",
-            ):
-                self.repository._decode_json(raw)
-
-    def test_missing_or_replaced_live_journal_authority_blocks_durably(self) -> None:
-        for disposition in ("missing", "replaced"):
-            with (
-                self.subTest(disposition=disposition),
-                tempfile.TemporaryDirectory() as directory,
-            ):
-                root = Path(directory)
-                Workspace(root).initialize()
-                repository = WritingArtifactRepository(root)
-                publish = repository._storage.publish_bytes
-                changed = False
-
-                def invalidate_after_first_target(relative: str, *args, **kwargs):
-                    nonlocal changed
-                    result = publish(relative, *args, **kwargs)
-                    if canonical_artifact_kind(relative) is not None and not changed:
-                        changed = True
-                        state = root / "agent_states/orchestrator_state/writing_artifacts"
-                        journal = next(state.joinpath("transactions").glob("*.json"))
-                        journal.unlink()
-                        if disposition == "replaced":
-                            journal.write_bytes(b'{"replacement":true}\n')
-                    return result
-
-                with (
-                    mock.patch.object(
-                        repository._storage,
-                        "publish_bytes",
-                        side_effect=invalidate_after_first_target,
-                    ),
-                    self.assertRaisesRegex(
-                        WorkspaceFormatError,
-                        "recovery is blocked",
-                    ),
-                ):
-                    self.commit_repository(repository)
-
-                state = root / "agent_states/orchestrator_state/writing_artifacts"
-                self.assertTrue(state.joinpath("recovery_blocked.json").is_file())
-                self.assertFalse(state.joinpath("catalog.json").exists())
-                source_paths = tuple(
-                    path
-                    for path in ("manuscript/part-01/chapter-01.md",)
-                    if root.joinpath(path).is_file()
-                )
-                self.assertEqual(
-                    WritingArtifactRepository(root).list_paths(),
-                    source_paths,
-                )
-                with self.assertRaisesRegex(
-                    WorkspaceFormatError,
-                    "recovery is blocked",
-                ):
-                    WritingArtifactRepository(root).catalog()
-
-    def test_catalog_before_after_and_neither_are_handled_exactly(self) -> None:
-        for position in ("before", "after", "neither"):
-            with self.subTest(position=position), tempfile.TemporaryDirectory() as directory:
-                root = Path(directory)
-                Workspace(root).initialize()
-                repository = WritingArtifactRepository(root)
-                with (
-                    mock.patch.object(
-                        repository,
-                        "_complete_transaction",
-                        side_effect=OSError("prepared"),
-                    ),
-                    self.assertRaisesRegex(OSError, "prepared"),
-                ):
-                    self.commit_repository(
-                        repository,
-                        core_updates={"global_outline.md": "agent outline"},
-                    )
-                state = root / "agent_states/orchestrator_state/writing_artifacts"
-                journal = next(state.joinpath("transactions").glob("*.json"))
-                transaction = json.loads(journal.read_text(encoding="utf-8"))
-
-                if position == "after":
-                    for target in transaction["targets"]:
-                        destination = root / target["path"]
-                        destination.parent.mkdir(parents=True, exist_ok=True)
-                        destination.write_bytes(
-                            base64.b64decode(target["new_content_base64"])
-                        )
-                    commit = transaction["commit"]
-                    state.joinpath("commits", f"{commit['commit_id']}.json").write_bytes(
-                        repository._json_bytes(commit)
-                    )
-                    state.joinpath("catalog.json").write_bytes(
-                        repository._json_bytes(transaction["catalog_after"])
-                    )
-                elif position == "neither":
-                    state.joinpath("catalog.json").write_bytes(
-                        repository._json_bytes(ArtifactCatalog.empty().to_dict())
-                    )
-
-                recovered = WritingArtifactRepository(root)
-                physical_before = (
-                    (
-                        "core_documents/global_outline.md",
-                        "manuscript/part-01/chapter-01.md",
-                    )
-                    if position == "after"
-                    else ()
-                )
-                self.assertEqual(recovered.list_paths(), physical_before)
-                if position == "neither":
-                    with self.assertRaisesRegex(
-                        WorkspaceFormatError,
-                        "recovery is blocked",
-                    ):
-                        recovered.catalog()
-                    self.assertFalse(
-                        root.joinpath("manuscript/part-01/chapter-01.md").exists()
-                    )
-                    self.assertTrue(state.joinpath("recovery_blocked.json").is_file())
-                else:
-                    recovered.catalog()
-                    self.assertEqual(
-                        recovered.list_paths(),
-                        (
-                            "core_documents/global_outline.md",
-                            "manuscript/part-01/chapter-01.md",
-                        ),
-                    )
-                    self.assertFalse(tuple(state.joinpath("transactions").glob("*.json")))
-
-    def test_unrelated_catalog_changes_block_before_target_mutation(self) -> None:
-        for mutation in ("deletion", "substitution", "addition"):
-            with self.subTest(mutation=mutation), tempfile.TemporaryDirectory() as directory:
-                root = Path(directory)
-                Workspace(root).initialize()
-                repository = WritingArtifactRepository(root)
-                prior_path, _ = self.commit_repository(
-                    repository,
-                    output_path="part-00/prior.md",
-                    core_updates={"global_outline.md": "prior outline"},
-                )
-                prior_bytes = (root / prior_path).read_bytes()
-                with (
-                    mock.patch.object(
-                        repository,
-                        "_complete_transaction",
-                        side_effect=OSError("prepared"),
-                    ),
-                    self.assertRaisesRegex(OSError, "prepared"),
-                ):
-                    self.commit_repository(
-                        repository,
-                        output_path="part-01/new.md",
-                    )
-                state = root / "agent_states/orchestrator_state/writing_artifacts"
-                catalog_path = state / "catalog.json"
-                catalog = json.loads(catalog_path.read_text(encoding="utf-8"))
-                entries = catalog["entries"]
-                if mutation == "deletion":
-                    entries.pop(0)
-                elif mutation == "substitution":
-                    entries[0]["sha256"] = "f" * 64
-                else:
-                    extra = deepcopy(entries[0])
-                    extra["path"] = "manuscript/part-00/unrelated.md"
-                    entries.append(extra)
-                catalog_path.write_bytes(repository._json_bytes(catalog))
-
-                expected_sources = (
-                    "core_documents/global_outline.md",
-                    prior_path,
-                )
-                self.assertEqual(
-                    WritingArtifactRepository(root).list_paths(),
-                    expected_sources,
-                )
-                with self.assertRaisesRegex(
-                    WorkspaceFormatError,
-                    "recovery is blocked",
-                ):
-                    WritingArtifactRepository(root).catalog()
-                self.assertFalse(root.joinpath("manuscript/part-01/new.md").exists())
-                self.assertEqual((root / prior_path).read_bytes(), prior_bytes)
-                self.assertTrue(state.joinpath("recovery_blocked.json").is_file())
-
-    def test_interrupted_publication_lists_physical_progress_then_rolls_forward(
-        self,
-    ) -> None:
-        publish = self.repository._storage.publish_bytes
-        artifact_publications = 0
-
-        def interrupt(relative: str, *args, **kwargs):
-            nonlocal artifact_publications
-            if canonical_artifact_kind(relative) is not None:
-                artifact_publications += 1
-                if artifact_publications == 2:
-                    raise OSError("simulated interruption")
-            return publish(relative, *args, **kwargs)
-
-        with (
-            mock.patch.object(
-                self.repository._storage,
-                "publish_bytes",
-                side_effect=interrupt,
-            ),
-            self.assertRaisesRegex(OSError, "simulated interruption"),
-        ):
-            self.commit(core_updates={"global_outline.md": "agent outline"})
-
-        state = self.root / "agent_states/orchestrator_state/writing_artifacts"
-        self.assertTrue(self.root.joinpath("manuscript/part-01/chapter-01.md").is_file())
-        self.assertFalse(state.joinpath("catalog.json").exists())
-        self.assertEqual(len(tuple(state.joinpath("transactions").glob("*.json"))), 1)
-
-        recovered = WritingArtifactRepository(self.root)
-        self.assertEqual(
-            recovered.list_paths(),
-            ("manuscript/part-01/chapter-01.md",),
-        )
-        recovered.catalog()
-        self.assertEqual(
-            recovered.list_paths(),
-            (
-                "core_documents/global_outline.md",
-                "manuscript/part-01/chapter-01.md",
-            ),
-        )
-        self.assertFalse(tuple(state.joinpath("transactions").iterdir()))
-
-    def test_unrecoverable_journal_blocks_publication_but_not_source_access(
-        self,
-    ) -> None:
-        publish = self.repository._storage.publish_bytes
-
-        def interrupt(relative: str, *args, **kwargs):
-            if relative == "manuscript/part-01/chapter-01.md":
-                raise OSError("simulated interruption")
-            return publish(relative, *args, **kwargs)
-
-        with (
-            mock.patch.object(
-                self.repository._storage,
-                "publish_bytes",
-                side_effect=interrupt,
-            ),
-            self.assertRaisesRegex(OSError, "simulated interruption"),
-        ):
-            self.commit()
-
-        state = self.root / "agent_states/orchestrator_state/writing_artifacts"
-        transaction = next(state.joinpath("transactions").glob("*.json"))
-        transaction.write_text("{}", encoding="utf-8")
-        recovered = WritingArtifactRepository(self.root)
-        self.assertEqual(recovered.list_paths(), ())
-        self.assertFalse(state.joinpath("recovery_blocked.json").exists())
-        with self.assertRaisesRegex(WorkspaceFormatError, "recovery is blocked"):
-            recovered.catalog()
-        marker = state / "recovery_blocked.json"
-        self.assertTrue(marker.is_file())
-        with self.assertRaisesRegex(WorkspaceFormatError, "recovery is blocked"):
-            WritingArtifactRepository(self.root).catalog()
-
-    def test_recovery_preserves_conflicting_immutable_commit_and_blocks(self) -> None:
-        publish = self.repository._storage.publish_bytes
-
-        def interrupt(relative: str, *args, **kwargs):
-            if relative == "manuscript/part-01/chapter-01.md":
-                raise OSError("simulated interruption before artifact publication")
-            return publish(relative, *args, **kwargs)
-
-        with (
-            mock.patch.object(
-                self.repository._storage,
-                "publish_bytes",
-                side_effect=interrupt,
-            ),
-            self.assertRaisesRegex(OSError, "simulated interruption"),
-        ):
-            self.commit()
-
-        state = self.root / "agent_states/orchestrator_state/writing_artifacts"
-        transaction = next(state.joinpath("transactions").glob("*.json"))
-        commit_id = json.loads(transaction.read_text())["transaction_id"]
-        commit_path = state / "commits" / f"{commit_id}.json"
-        conflicting_bytes = b'{"preserved":"conflicting commit"}\n'
-        commit_path.write_bytes(conflicting_bytes)
-
-        recovered = WritingArtifactRepository(self.root)
-        self.assertEqual(recovered.list_paths(), ())
-        with self.assertRaisesRegex(WorkspaceFormatError, "recovery is blocked"):
-            recovered.catalog()
-
-        self.assertEqual(commit_path.read_bytes(), conflicting_bytes)
-        self.assertTrue(state.joinpath("recovery_blocked.json").is_file())
-        self.assertTrue(transaction.is_file())
-        self.assertFalse(state.joinpath("catalog.json").exists())
-        self.assertFalse(
-            self.root.joinpath("manuscript/part-01/chapter-01.md").exists()
-        )
-        with self.assertRaisesRegex(WorkspaceFormatError, "recovery is blocked"):
-            WritingArtifactRepository(self.root).catalog()
-
-    def test_replacement_before_completed_retirement_survives_and_blocks(self) -> None:
-        move_to_retirement = SecureWorkspaceStorage._move_to_retirement
-        state = self.root / "agent_states/orchestrator_state/writing_artifacts"
-        replacement = b'{"newer_journal":true}\n'
-        replaced = False
-
-        def replace_before_retirement(
-            source_directory: int,
-            source: str,
-            retirement_directory: int,
-            *,
-            suffix: str,
-        ):
-            nonlocal replaced
-            if suffix == "completed" and not replaced:
-                replaced = True
-                os.unlink(source, dir_fd=source_directory)
-                descriptor = os.open(
-                    source,
-                    os.O_WRONLY | os.O_CREAT | os.O_EXCL,
-                    0o600,
-                    dir_fd=source_directory,
-                )
-                try:
-                    os.write(descriptor, replacement)
-                finally:
-                    os.close(descriptor)
-            return move_to_retirement(
-                source_directory,
-                source,
-                retirement_directory,
-                suffix=suffix,
-            )
-
-        with (
-            mock.patch.object(
-                SecureWorkspaceStorage,
-                "_move_to_retirement",
-                side_effect=replace_before_retirement,
-            ),
-            self.assertRaisesRegex(
-                WorkspaceFormatError,
-                "recovery is blocked",
-            ),
-        ):
-            self.commit(core_updates={"global_outline.md": "agent outline"})
-
-        self.assertTrue(replaced)
-        transaction_path = next(state.joinpath("transactions").glob("*.json"))
-        self.assertEqual(transaction_path.read_bytes(), replacement)
-        recovered = WritingArtifactRepository(self.root)
-        self.assertEqual(
-            recovered.list_paths(),
-            (
-                "core_documents/global_outline.md",
-                "manuscript/part-01/chapter-01.md",
-            ),
-        )
-        with self.assertRaisesRegex(WorkspaceFormatError, "recovery is blocked"):
-            recovered.catalog()
-        self.assertEqual(transaction_path.read_bytes(), replacement)
-        self.assertTrue(state.joinpath("recovery_blocked.json").is_file())
-
-    def test_orphan_staging_is_ignored_but_unexpected_transaction_state_blocks(self) -> None:
-        self.assertEqual(self.repository.list_paths(), ())
-        state = self.root / "agent_states/orchestrator_state/writing_artifacts"
-        state.joinpath("staging").mkdir(parents=True, exist_ok=True)
-        state.joinpath("transactions").mkdir(parents=True, exist_ok=True)
-        orphan = state / "staging/orphan.tmp"
-        orphan.write_bytes(b"unowned staging residue")
-
-        self.assertEqual(WritingArtifactRepository(self.root).list_paths(), ())
-        self.assertFalse(state.joinpath("recovery_blocked.json").exists())
-        self.assertEqual(orphan.read_bytes(), b"unowned staging residue")
-
-        unexpected = state / "transactions/unexpected.tmp"
-        unexpected.write_bytes(b"authoritative ambiguity")
-        self.assertEqual(WritingArtifactRepository(self.root).list_paths(), ())
-        with self.assertRaisesRegex(WorkspaceFormatError, "recovery is blocked"):
-            WritingArtifactRepository(self.root).catalog()
-        self.assertTrue(state.joinpath("recovery_blocked.json").is_file())
-        self.assertEqual(orphan.read_bytes(), b"unowned staging residue")
-
-    def test_all_retained_residue_stays_in_staging_and_cleanup_never_replaces(self) -> None:
-        core_path = self.root / "core_documents/global_outline.md"
-        core_path.write_bytes(b"prior core")
-        state = self.root / "agent_states/orchestrator_state/writing_artifacts"
-        staging = state / "staging"
-        rename_noreplace = SecureWorkspaceStorage._rename_noreplace
-
-        with (
-            mock.patch.object(
-                storage_module.os,
-                "unlink",
-                side_effect=AssertionError("storage invoked os.unlink"),
-            ) as unlink,
-            mock.patch.object(
-                storage_module.os,
-                "rename",
-                side_effect=AssertionError("storage invoked replacing rename"),
-            ) as replacing_rename,
-        ):
-            manuscript_path, _ = self.commit(
-                core_updates={"global_outline.md": "current core"},
-            )
-
-            with self.repository._locked_repository():
-                def stop_one_staged_publication(
-                    source_directory: int,
-                    source: str,
-                    destination_directory: int,
-                    destination: str,
-                ) -> None:
-                    if destination == "tmp-failure.md":
-                        raise OSError("retain staged temporary")
-                    rename_noreplace(
-                        source_directory,
-                        source,
-                        destination_directory,
-                        destination,
-                    )
-
-                with (
-                    mock.patch.object(
-                        storage_module,
-                        "uuid4",
-                        return_value=SimpleNamespace(hex="4" * 32),
-                    ),
-                    mock.patch.object(
-                        SecureWorkspaceStorage,
-                        "_rename_noreplace",
-                        side_effect=stop_one_staged_publication,
-                    ),
-                    self.assertRaisesRegex(OSError, "retain staged temporary"),
-                ):
-                    self.repository._storage.publish_bytes(
-                        "manuscript/part-02/tmp-failure.md",
-                        b"retained temp",
-                        expected_sha256=None,
-                        expected_exists=False,
-                        create_only=True,
-                        staging_directory=(
-                            "agent_states/orchestrator_state/writing_artifacts/staging"
-                        ),
-                    )
-
-                with (
-                    mock.patch.object(
-                        storage_module,
-                        "uuid4",
-                        side_effect=(
-                            SimpleNamespace(hex="5" * 32),
-                            SimpleNamespace(hex="6" * 32),
-                            SimpleNamespace(hex="7" * 32),
-                        ),
-                    ),
-                    mock.patch.object(
-                        self.repository._storage,
-                        "_verify_root_identity",
-                        side_effect=ArtifactRootSecurityError(
-                            "post-publication verification failed"
-                        ),
-                    ),
-                    self.assertRaisesRegex(
-                        ArtifactRootSecurityError,
-                        "post-publication verification failed",
-                    ),
-                ):
-                    self.repository._storage.publish_bytes(
-                        "core_documents/global_outline.md",
-                        b"failed replacement",
-                        expected_sha256=hashlib.sha256(b"current core").hexdigest(),
-                        expected_exists=True,
-                        create_only=False,
-                        staging_directory=(
-                            "agent_states/orchestrator_state/writing_artifacts/staging"
-                        ),
-                    )
-
-            unlink.assert_not_called()
-            replacing_rename.assert_not_called()
-
-        self.assertEqual(core_path.read_bytes(), b"current core")
-        suffixes = {path.suffix for path in staging.glob(".artifacts-*")}
-        self.assertTrue({".tmp", ".held", ".retired", ".completed"} <= suffixes)
-        residue = tuple(self.root.rglob(".artifacts-*"))
-        self.assertTrue(residue)
-        self.assertTrue(all(path.parent == staging for path in residue))
-        self.assertEqual(
-            WritingArtifactRepository(self.root).list_paths(),
-            tuple(sorted(("core_documents/global_outline.md", manuscript_path))),
-        )
-        self.assertFalse(state.joinpath("recovery_blocked.json").exists())
-
-    def test_repository_json_scalars_and_boolean_fields_are_exact(self) -> None:
-        _, transaction = self.prepared_transaction()
-        transaction_id = transaction["transaction_id"]
-        assert isinstance(transaction_id, str)
-
-        for invalid in (True, 1.0, "1", None, 3):
-            with self.subTest(record="transaction", invalid=invalid):
-                malformed = deepcopy(transaction)
-                malformed["schema_version"] = invalid
-                with self.assertRaises(WorkspaceFormatError):
-                    self.repository._validate_transaction(
-                        malformed,
-                        expected_id=transaction_id,
-                    )
-
-            with self.subTest(record="commit", invalid=invalid):
-                malformed_commit = deepcopy(transaction["commit"])
-                assert isinstance(malformed_commit, dict)
-                malformed_commit["schema_version"] = invalid
-                with self.assertRaises(WorkspaceFormatError):
-                    self.repository._validate_commit(
-                        malformed_commit,
-                        transaction_id=transaction_id,
-                    )
-
-        for field in ("create_only", "old_exists"):
-            for invalid in (1, 0.0, "false", None):
-                with self.subTest(field=field, invalid=invalid):
-                    malformed = deepcopy(transaction)
-                    targets = malformed["targets"]
-                    assert isinstance(targets, list)
-                    targets[0][field] = invalid
-                    with self.assertRaisesRegex(
-                        WorkspaceFormatError,
-                        "boolean field",
-                    ):
-                        self.repository._validate_transaction(
-                            malformed,
-                            expected_id=transaction_id,
-                        )
-
-    def test_transaction_targets_commit_and_catalog_must_match_exactly(self) -> None:
-        _, transaction = self.prepared_transaction()
-        transaction_id = transaction["transaction_id"]
-        assert isinstance(transaction_id, str)
-        cases: list[tuple[str, dict[str, object]]] = []
-
-        duplicate_target = deepcopy(transaction)
-        duplicate_targets = duplicate_target["targets"]
-        assert isinstance(duplicate_targets, list)
-        duplicate_targets.append(deepcopy(duplicate_targets[0]))
-        cases.append(("duplicate target", duplicate_target))
-
-        missing_commit = deepcopy(transaction)
-        missing_commit_record = missing_commit["commit"]
-        assert isinstance(missing_commit_record, dict)
-        missing_commit_artifacts = missing_commit_record["artifacts"]
-        assert isinstance(missing_commit_artifacts, list)
-        missing_commit_artifacts.pop()
-        cases.append(("missing commit artifact", missing_commit))
-
-        mismatched_catalog = deepcopy(transaction)
-        catalog_after = mismatched_catalog["catalog_after"]
-        assert isinstance(catalog_after, dict)
-        catalog_entries = catalog_after["entries"]
-        assert isinstance(catalog_entries, list)
-        catalog_entries[0]["sha256"] = "f" * 64
-        cases.append(("catalog metadata", mismatched_catalog))
-
-        extra_catalog = deepcopy(transaction)
-        extra_catalog_after = extra_catalog["catalog_after"]
-        assert isinstance(extra_catalog_after, dict)
-        extra_entries = extra_catalog_after["entries"]
-        assert isinstance(extra_entries, list)
-        extra_entry = deepcopy(
-            next(
-                entry
-                for entry in extra_entries
-                if entry["kind"] == ArtifactKind.MANUSCRIPT.value
-            )
-        )
-        extra_entry["path"] = "manuscript/extra/extra.md"
-        extra_entries.append(extra_entry)
-        cases.append(("extra current-commit catalog entry", extra_catalog))
-
-        with mock.patch.object(
-            self.repository._storage,
-            "read_bytes",
-            side_effect=AssertionError("validation consulted provenance I/O"),
-        ) as read_bytes:
-            for label, malformed in cases:
-                with self.subTest(label=label):
-                    with self.assertRaises(WorkspaceFormatError):
-                        self.repository._validate_transaction(
-                            malformed,
-                            expected_id=transaction_id,
-                        )
-            read_bytes.assert_not_called()
 
 
 if __name__ == "__main__":

@@ -14,7 +14,7 @@ inspection and the Python lead front channel.
 
 | You can do now | You cannot do in this stage |
 | --- | --- |
-| Initialize a writing workspace. | Send an ordinary shell line to an agent. |
+| Initialize and verify one strict Git-backed schema-v2 writing workspace. | Send an ordinary shell line to an agent. |
 | Create, resume, list, and pause story sessions. | Route a line to an agent or select a sticky target. |
 | Create, list, focus, rename, archive, search, and read conversations. | Start a debate or publish a manuscript from the installed CLI. |
 | Apply directives and edit workspace settings. | Open `$`/`$$` artifact pickers from shell input. |
@@ -23,7 +23,23 @@ inspection and the Python lead front channel.
 | Ask the lead to form an exact create/patch/replace/rename/delete candidate; confirm its disclosed specialist review; inspect an immutable reviewed proposal. | Apply that candidate, grant write authority, stage files, or commit through this stage. |
 | Propose one provider-free direct specialist advisory and confirm its execution. | Apply a core-document/manuscript change or create a Git commit. |
 | Use schema-v2 collaboration contracts, stores, archive/transfer, readable projection, search, and paging APIs. | Bypass the runtime with a removed direct-run method. |
-| Run a provider-free management/storage smoke check. | Use smoke as evidence of provider behavior or story quality. |
+| Run a disposable management/storage smoke or verify an existing workspace without changing it. | Use smoke as evidence of provider behavior or story quality. |
+
+The runtime also has package-internal, provider-free Git infrastructure. It can
+inspect, list, provision, and require one exact session branch, sibling
+worktree, and internal ref. It can now durably record content-free candidates
+and monotonic commit/checkpoint operation states under the common Git
+directory, serialize them with provisioning, and run fixed Git operations
+through closed process profiles. The package-internal story-commit service can
+now prepare an exact content-free candidate and execute one literal local
+session-branch commit after a fresh structured Commit decision. A separate
+package-internal checkpoint service can commit exact owner-supplied runtime
+state deltas to only the session internal ref through an isolated index. None
+of these internal commit or checkpoint services is a user command. Installed
+session lifecycle paths provision and verify correlated Git resources, but
+artifact application and commit confirmation remain separate later integration
+boundaries. No CLI or lead path invokes checkpoints merely because a provider
+session is `ready`.
 
 Python callers can call `lead_turn()` and `decide_lead_step()` without an agent
 selector. A lead turn can return a direct answer, question, critique, or
@@ -81,14 +97,38 @@ accepted shell content invokes a story provider.
 
 ## Quick start
 
+Configure an effective Git author and committer according to your normal Git
+policy, then initialize an absent path or empty directory:
+
 ```bash
 story init ./my-story
 cd ./my-story
-story smoke
-story
+story smoke --workspace .
 ```
 
-At `story[lobby]>`, manage and inspect local state:
+Successful initialization prints the absolute workspace path:
+
+```json
+{
+  "workspace": "/absolute/path/to/my-story"
+}
+```
+
+It creates one strict schema-v2 workspace, four zero-byte core documents, and
+one clean local `main` root commit named `Initialize story workspace`. The
+initializer writes no story content. Repeating `story init` on that unchanged
+workspace validates it without rewriting, staging, or committing again.
+
+The initialization root is the pristine `main` baseline. `story init` records
+the session branch/ref/worktree grammar but creates none of those resources.
+Session Create and Reopen use the package-internal resource seam to provision
+or verify the exact correlated triple while leaving that root clean.
+Do not start mutable session work in the baseline or treat initialization or
+resource provisioning as authorization for a later story commit.
+
+The installed shell retains this management grammar and attaches an eligible
+session destination only after transition assessment accepts the isolated
+session worktree:
 
 ```text
 /session create novel
@@ -121,7 +161,9 @@ terminal capabilities; the sentence and behavior are stable.
 story smoke
 ```
 
-Smoke creates a temporary workspace and verifies exactly these checks:
+Without `--workspace`, smoke creates a temporary workspace through the real
+initializer, exercises management/storage wiring, and removes the complete
+directory. It verifies exactly these checks:
 
 ```json
 {
@@ -143,11 +185,15 @@ Smoke creates a temporary workspace and verifies exactly these checks:
 The actual report is compact one-line JSON and also includes generated session
 and conversation IDs plus workspace metadata. It proves management, catalog,
 and empty schema-v2 projections work together. It creates no transcript,
-debate, specialist state, provider exchange, or manuscript.
+debate, specialist state, provider exchange, or manuscript. Because it invokes
+the real initializer, a missing effective Git identity is reported rather than
+silently substituted.
 
-Use `story smoke --workspace PATH` to retain the initialized workspace,
-directive, catalog metadata, and bounded diagnostics. See the
-[smoke guide](docs/guides/smoke-test.md).
+`story smoke --workspace PATH` is different: it requires an already clean v2
+workspace and performs only `workspace_initialized` and
+`execution_artifacts_unchanged`. Its session and conversation IDs are `null`,
+and it creates no directive, catalog record, history, debug entry, or other
+residue. See the [smoke guide](docs/guides/smoke-test.md).
 
 ## Supported commands
 
@@ -234,6 +280,14 @@ provider-text span, so `$` and `$$` do not open a picker there. See
   artifact modification, consensus, and Git operations are not.
 - Confirming a consultation starts only the disclosed read-only provider work.
   It never confirms an artifact change or Git commit.
+- Initialization accepts only an absent/empty root or one exact resumable
+  initialization journal. It never adopts, overwrites, upgrades, or migrates a
+  legacy or arbitrary nonempty directory.
+- A dirty or drifted original `main` root is preserved and reported as requiring
+  recovery. Exact correlated session branches, sibling worktrees, internal
+  refs, content-free session history, exact confirmed story commits, and
+  closed-path internal checkpoints are supported internally. These internal
+  capabilities do not grant the lead Apply, commit, or checkpoint authority.
 - Smoke is intentionally provider-free and story-free.
 - Workspace configuration, histories, diagnostics, and artifacts are local
   plaintext unless the surrounding environment protects them.
@@ -253,6 +307,7 @@ provider-text span, so `$` and `$$` do not open a picker there. See
 - [Provider-free smoke](docs/guides/smoke-test.md)
 - [CLI reference](docs/reference/cli.md)
 - [Runtime API](docs/reference/runtime-api.md)
+- [Safe Git baseline, session resources, and exact internal commits](docs/reference/git-adapter.md)
 - [System design](docs/design/overview.md)
 
 ## Development
