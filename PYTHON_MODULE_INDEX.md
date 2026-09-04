@@ -16,9 +16,9 @@ Source root: `src/`
 
 Package root: `src/story_writing_agents/`
 
-Importable production units indexed: 130.
+Importable production units indexed: 131.
 
-Direct internal dependency edges indexed: 506.
+Direct internal dependency edges indexed: 509.
 
 Directed internal dependency cycles indexed: 0.
 
@@ -110,6 +110,7 @@ interactive_terminal._core -> agents/interactive_commands
                            -> interactive_terminal._controls
                            -> interactive_terminal._driver
                            -> interactive_terminal._external_view
+                           -> interactive_terminal._live_composer
                            -> interactive_terminal._model
                            -> interactive_terminal._reference_activation
                            -> interactive_terminal._render
@@ -117,8 +118,10 @@ interactive_terminal._core -> agents/interactive_commands
                            -> interactive_terminal._viewer_model
                            -> interactive_terminal._viewer_render
 interactive_terminal._controls -> interactive_terminal._model
+interactive_terminal._live_composer -> interactive_terminal._model
 interactive_terminal._driver -> interactive_terminal._input_lifecycle
                              -> interactive_terminal._external_view
+                             -> interactive_terminal._live_composer
                              -> interactive_terminal._model
                              -> interactive_terminal._reference_activation
                              -> interactive_terminal._viewer_model
@@ -4752,6 +4755,11 @@ every intermediate arrow. The current runtime graph is acyclic.
   exposes no driver, stream, capability, raw-mode, geometry, or external
   package type, retains no operation after `open`, and does not change the
   exact 12-name `__all__` or any public `InteractiveTerminal` method.
+  Unlisted package-internal `InteractiveLiveComposer` binds the immutable live
+  input, authoritative durable-boundary, cancellation/join, delivery, and
+  recovery vocabulary to callback or stream terminals. It preserves the exact
+  12-name supported facade surface and grants no provider, artifact, Git, or
+  lead authority.
 - **Direct internal dependencies:** `interactive_terminal._core`.
 - **State, resources, and side effects:** Owns no terminal resource or mutable
   process state. Import deterministically canonicalizes supported public object
@@ -5079,6 +5087,34 @@ every intermediate arrow. The current runtime graph is acyclic.
   `docs/design/interactive-cli-design-system.md`, and
   `docs/operations/terminal-safety.md`.
 
+### `story_writing_agents.interactive_terminal._live_composer`
+
+- **Source:** `src/story_writing_agents/interactive_terminal/_live_composer.py`
+- **Responsibility:** Define live-steering delivery and interruption contracts.
+- **Supported surface:** Package-internal immutable `LiveComposerInput` and
+  `LiveComposerResult` values correlate exact `LineInputState` buffers and
+  cursors with distinct submit, interrupt, EOF, operation-completed, replan,
+  next-turn, and recovery-required outcomes. `LiveOperationBoundary` admits
+  only authoritative `precommit` or `postcommit` classifications;
+  `LiveComposerJoinStatus` distinguishes proved joins from uncertainty; and
+  `deliver_live_composer_input` requires an injected boundary classifier plus
+  cancellation/join collaborator over the exact owned awaitable. Literal
+  submitted text, including slash-prefixed text, is never parsed here.
+- **Direct internal dependencies:** `interactive_terminal._model`.
+- **State, resources, and side effects:** Immutable values and one async
+  call-local settlement function only. The module owns no task creation,
+  terminal, stream, raw mode, renderer, provider, artifact, Git, runtime,
+  persistence, or import-time resource. It never infers a durable boundary or
+  invokes cancellation after an authoritative postcommit classification.
+- **Primary verification/documentation:**
+  `tests/test_interactive_live_composer.py`,
+  `tests/test_interactive_pty.py`,
+  `docs/guides/lead-agent-collaboration.md`,
+  `docs/design/session-lifecycle.md`,
+  `docs/reference/interactive-terminal.md`,
+  `docs/operations/recovery-and-limitations.md`, and
+  `docs/operations/terminal-safety.md`.
+
 ### `story_writing_agents.interactive_terminal._viewer_model`
 
 - **Source:** `src/story_writing_agents/interactive_terminal/_viewer_model.py`
@@ -5269,6 +5305,17 @@ every intermediate arrow. The current runtime graph is acyclic.
   renderers and timing, progressively display the fixed four-frame welcome or
   one transient authentication notice, and establish a fresh post-provider
   output boundary before results without introducing a general animation API.
+  Package-internal `run_live_composer` owns one raw-capable async input and
+  operation join. It polls without an input worker, redraws from the exact
+  immutable buffer/cursor through an injected width-correlated frame renderer,
+  and clears and restores the terminal on every result. Input-first delivery
+  delegates authoritative precommit/postcommit classification and exact-task
+  cancellation/join to the live-composer contract. Precommit uncertainty and
+  postcommit finalization failure become recovery-required without replay;
+  postcommit never invokes cancellation. Ordinary fallback awaits the
+  operation and returns operation-completed with the exact initial draft and
+  cursor; later text uses the normal next-turn reader, so confirmed work never
+  stalls while preserving the closed result vocabulary.
   The private welcome-renderer contract carries physical terminal width
   separately from capabilities whose width is the active projection bound.
   This keeps physical 48- and 32-column layout tiers identical across animated
@@ -5291,6 +5338,7 @@ every intermediate arrow. The current runtime graph is acyclic.
   records or the external viewer API.
 - **Direct internal dependencies:** `interactive_terminal._input_lifecycle`,
   `interactive_terminal._external_view`,
+  `interactive_terminal._live_composer`,
   `interactive_terminal._model`, `interactive_terminal._reference_activation`,
   and
   `interactive_terminal._viewer_model`.
@@ -5368,7 +5416,13 @@ every intermediate arrow. The current runtime graph is acyclic.
   task on the controller's existing event loop, serializes persistent writes by
   clearing and redrawing the indicator, cancels and joins the peer task after a
   worker or operation failure, and clears all indicator state before returning.
-  It creates no OS thread or import-time task. Each startup presentation uses
+  It creates no OS thread or import-time task. A live-composer call similarly
+  retains one operation task, immutable editor state, escape suffix, frame
+  index, and renderer only until its terminal result. Raw input, progress
+  redraw, semantic writes, cleanup, and restoration remain serialized through
+  this driver; no separately scheduled input or writer task can outlive the
+  call. Fallback starts no input worker, awaits confirmed work, and retains the
+  initial draft for the normal next turn. Each startup presentation uses
   the same synchronous input-operation exclusion without selecting the
   irreversible input mode. A permanently selected fallback remains static and
   performs no delay or termios operation. An undecided driver may inspect a
@@ -5573,6 +5627,13 @@ every intermediate arrow. The current runtime graph is acyclic.
   advisory, consensus, and Settings option-read awaitable wrappers: callback construction remains
   visually silent, and stream construction injects the pure fixed-row
   renderer into the sole driver without exposing capabilities or streams.
+  Resource-free `InteractiveLiveComposer` binds one injected operation,
+  width-correlated progress/input renderer, authoritative boundary classifier,
+  and exact-task cancellation/join callback. Callback construction uses the
+  same operation-completed fallback with exact initial editor state; stream
+  construction delegates concurrent editing, redraw, and cleanup to the sole
+  driver. Neither route interprets submitted text or acquires
+  provider, artifact, Git, persistence, or lead authority.
   Resource-free
   `InteractiveStartupPresentation` similarly binds the fixed, prefix-free
   welcome plus semantic authentication guidance and result notices. The core
@@ -5593,6 +5654,7 @@ every intermediate arrow. The current runtime graph is acyclic.
 - **Direct internal dependencies:** `agents`, `interactive_commands`,
   `interactive_terminal._controls`, `interactive_terminal._driver`,
   `interactive_terminal._external_view`,
+  `interactive_terminal._live_composer`,
   `interactive_terminal._model`, `interactive_terminal._reference_activation`,
   `interactive_terminal._render`,
   `interactive_terminal._viewer_controls`,
@@ -5605,7 +5667,11 @@ every intermediate arrow. The current runtime graph is acyclic.
   keys, writes, flushes, restoration, readiness, irreversible input-source
   selection, persistent incremental decoding, and the bounded process-local
   main-input history store, plus advisory indicator task and cleanup to one
-  driver. Main completion, call-local choice, palette, reference scope/catalog/
+  driver. Live-composer awaitables, exact editor state, frame renderers, boundary
+  classifiers, and cancellation/join callbacks are call-local. Callback
+  fallback awaits confirmed work without opening input and retains the initial
+  draft/cursor; it owns no background input worker or terminal resource.
+  Main completion, call-local choice, palette, reference scope/catalog/
   read callbacks, and composition providers plus semantic input renderers are
   selected per call and never retained by that driver. The buffer-aware
   contextual header provider is also selected per call and never retained;

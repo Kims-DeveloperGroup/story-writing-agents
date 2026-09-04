@@ -59,6 +59,54 @@ The runtime never treats a conversational “yes” as confirmation. A
 confirmation is a structured decision bound to the exact request, revision,
 and digest shown to you.
 
+### Compose the next request while confirmed work runs
+
+The terminal package now has a live-composer boundary for a later controller
+integration. On a capable terminal, it can keep one ordinary editor open while
+already-confirmed runtime work continues. Progress redraws preserve the exact
+buffer and cursor, and the same terminal driver remains the only writer to the
+terminal. Typed text is literal: for example, submitting `/status` through
+this composer delivers that exact text; it does not execute the shell command
+parser.
+
+What happens when you submit depends on the authoritative runtime boundary,
+not on what the progress animation appears to show:
+
+| Runtime boundary when input is accepted | What the terminal does | Result for the next lead step |
+| --- | --- | --- |
+| `precommit` | Requests cancellation and waits for the exact running operation to join. | A proved join returns `replan` with the literal text. The lead can plan again from authoritative state. An uncertain or failed join returns `recovery_required` and does not deliver the text for replay. |
+| `postcommit` | Does not cancel or roll back the operation; it waits for finalization. | Success returns `next_turn` with the literal text. Failure or cancellation during finalization returns `recovery_required`. |
+| Operation completes before input is accepted | Closes the live span with the operation result. | `operation_completed` preserves the current unfinished buffer and cursor for the caller's next normal read. |
+
+For example, a later controller can present this interaction:
+
+```text
+Lead: Your confirmed continuity review is running.
+story> Please also compare /status wording with ${core_documents/narrative_rules.md}
+       [review progress redraws here; text and cursor remain editable]
+```
+
+If Enter is accepted before the durable commit boundary and cancellation joins,
+the component returns:
+
+```text
+kind: replan
+text: "Please also compare /status wording with ${core_documents/narrative_rules.md}"
+```
+
+If the durable boundary has already been crossed, it instead waits for that
+operation and returns the same text as `next_turn`; it never rolls the completed
+effect back. Ctrl-C returns `interrupted`, EOF returns `eof`, and Enter returns
+submission, so those inputs cannot be confused with one another.
+
+This leaf does **not** make ordinary shell story input available. The current
+controller still rejects story instructions before a provider call, and it
+does not yet route confirmed lead work through the live composer. Later
+controller and presentation work must map these closed outcomes into lead
+replanning and semantic output. Terminal completion is only presentation
+evidence: durable runtime state remains the authority for whether work
+committed, needs recovery, or may start another lead turn.
+
 ## References and context
 
 An attached reference is an indicator of what the agents should read. It is not

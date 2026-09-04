@@ -57,6 +57,16 @@ from ._external_view import (
     _BorrowedLineViewerHost,
     ExternalViewOperation,
 )
+from ._live_composer import (
+    BoundaryProvider,
+    CancelAndJoin,
+    LiveComposerDeliveryKind,
+    LiveComposerInput as LiveComposerInput,
+    LiveComposerInputKind as LiveComposerInputKind,
+    LiveComposerJoinStatus as LiveComposerJoinStatus,
+    LiveComposerResult,
+    LiveOperationBoundary as LiveOperationBoundary,
+)
 from ._model import (
     CapabilityProfile,
     Choice,
@@ -71,6 +81,7 @@ from ._model import (
     InputPresentation,
     InputPromptView,
     ListView,
+    LineInputState,
     MainCommandControlState,
     MainInputControlState as MainInputControlState,
     MainInputHistoryState as MainInputHistoryState,
@@ -534,6 +545,7 @@ class InteractiveTerminal:
         "_advisory_progress",
         "_debate_progress",
         "_external_view_open",
+        "_live_composer",
         "_read_line",
         "_width",
         "_write_text",
@@ -608,6 +620,7 @@ class InteractiveTerminal:
         )
         self._advisory_progress = _plain_advisory_progress
         self._debate_progress = _plain_debate_progress
+        self._live_composer = _plain_live_composer_runner(read_line, width)
         self._write_text = write_text
         self._width = width
         self._capability_provider = lambda: _plain_capabilities(width)
@@ -1845,6 +1858,40 @@ class InteractiveDebateProgress:
         return await self._run(operation)
 
 
+class InteractiveLiveComposer:
+    """Bind one terminal's package-internal live steering capability."""
+
+    __slots__ = ("_run",)
+
+    def __init__(self, terminal: InteractiveTerminal) -> None:
+        if not isinstance(terminal, InteractiveTerminal):
+            raise TypeError("terminal must be an InteractiveTerminal")
+        self._run = terminal._live_composer
+
+    async def run(
+        self,
+        operation: Awaitable[object],
+        prompt: str,
+        frame_renderer: Callable[
+            [LineInputState, int, TerminalCapabilities], RenderedInputFrame
+        ],
+        boundary_provider: BoundaryProvider,
+        cancel_and_join: CancelAndJoin,
+        *,
+        initial_state: LineInputState = LineInputState(),
+    ) -> LiveComposerResult:
+        """Run one live editor without acquiring domain-side authority."""
+
+        return await self._run(
+            operation,
+            prompt,
+            frame_renderer,
+            boundary_provider,
+            cancel_and_join,
+            initial_state=initial_state,
+        )
+
+
 def build_contextual_terminal(
     read_line: Callable[[str], str],
     write_text: Callable[[str], None],
@@ -1949,6 +1996,51 @@ async def _plain_debate_progress(operation: Awaitable[object]) -> object:
     """Keep callback and non-TTY consensus execution visually silent."""
 
     return await operation
+
+
+def _plain_live_composer_runner(
+    read_line: Callable[[str], str],
+    width: int,
+) -> Callable[..., Awaitable[LiveComposerResult]]:
+    """Adapt an ordinary reader to the live composer's closed outcomes.
+
+    Line fallback cannot provide simultaneous editing, so it finishes the
+    confirmed operation without opening a blocking input callback and retains
+    the initial draft for the caller's normal next-turn read.
+    """
+
+    if not callable(read_line):
+        raise TypeError("read_line must be callable")
+
+    async def run(
+        operation: Awaitable[object],
+        prompt: str,
+        frame_renderer: Callable[
+            [LineInputState, int, TerminalCapabilities], RenderedInputFrame
+        ],
+        boundary_provider: BoundaryProvider,
+        cancel_and_join: CancelAndJoin,
+        *,
+        initial_state: LineInputState = LineInputState(),
+    ) -> LiveComposerResult:
+        if not hasattr(operation, "__await__"):
+            raise TypeError("operation must be awaitable")
+        if type(prompt) is not str:
+            raise TypeError("prompt must be a string")
+        if not callable(frame_renderer):
+            raise TypeError("frame_renderer must be callable")
+        if not callable(boundary_provider) or not callable(cancel_and_join):
+            raise TypeError("live composer collaborators must be callable")
+        if type(initial_state) is not LineInputState:
+            raise TypeError("initial_state must be a LineInputState")
+
+        return LiveComposerResult(
+            LiveComposerDeliveryKind.OPERATION_COMPLETED,
+            initial_state,
+            operation_result=await operation,
+        )
+
+    return run
 
 
 def _plain_picker_reader(
@@ -2545,6 +2637,7 @@ def build_stream_terminal(
 
     terminal._advisory_progress = run_advisory_progress
     terminal._debate_progress = run_debate_progress
+    terminal._live_composer = driver.run_live_composer
     terminal._capability_provider = driver.capabilities
     return terminal
 
