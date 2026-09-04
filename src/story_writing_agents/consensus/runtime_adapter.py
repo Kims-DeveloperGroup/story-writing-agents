@@ -10,6 +10,7 @@ from typing import Protocol
 from .contracts import (
     ConsensusConfirmationCapability,
     ConsensusDecision,
+    ConsensusExecutionIdentity,
     ConsensusMaterialHandle,
     ConsensusPhase,
     ConsensusPhaseDecision,
@@ -17,6 +18,7 @@ from .contracts import (
     ConsensusPhaseResult,
     ConsensusPhaseState,
     prepare_consensus_phase,
+    prepare_next_consensus_phase,
 )
 from .execution import (
     ConsensusDurability,
@@ -25,7 +27,12 @@ from .execution import (
     ConsensusPhaseInvocation,
     ConsensusProviderResult,
 )
-from .projection import ConsensusEvent, ConsensusProjection, project_consensus
+from .projection import (
+    ConsensusEvent,
+    ConsensusNextAction,
+    ConsensusProjection,
+    project_consensus,
+)
 
 
 _ID = re.compile(r"[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}")
@@ -43,21 +50,17 @@ class ConsensusInputKind(StrEnum):
 class ConsensusWorkflowSubmission:
     """Durable input identity stored beside a consensus event history."""
 
-    session_id: str
-    conversation_id: str
+    execution_identity: ConsensusExecutionIdentity
     workflow_id: str
     proposal_id: str
     input_kind: ConsensusInputKind
     input_material: ConsensusMaterialHandle
 
     def __post_init__(self) -> None:
-        for value in (
-            self.session_id,
-            self.conversation_id,
-            self.workflow_id,
-            self.proposal_id,
-        ):
+        for value in (self.workflow_id, self.proposal_id):
             _identifier(value)
+        if type(self.execution_identity) is not ConsensusExecutionIdentity:
+            raise TypeError("consensus submission execution identity is invalid")
         if type(self.input_kind) is not ConsensusInputKind:
             raise TypeError("consensus input kind is invalid")
         if type(self.input_material) is not ConsensusMaterialHandle:
@@ -66,6 +69,14 @@ class ConsensusWorkflowSubmission:
     @property
     def input_digest(self) -> str:
         return self.input_material.digest
+
+    @property
+    def session_id(self) -> str:
+        return self.execution_identity.session_id
+
+    @property
+    def conversation_id(self) -> str:
+        return self.execution_identity.conversation_id
 
 
 @dataclass(frozen=True, slots=True)
@@ -86,6 +97,12 @@ class ConsensusStoredWorkflow:
             projection.workflow_id != self.submission.workflow_id
             or projection.proposal_id != self.submission.proposal_id
             or request.input_material != self.submission.input_material
+            or request.execution_identity != self.submission.execution_identity
+            or any(
+                event.payload.execution_identity
+                != self.submission.execution_identity
+                for event in self.events
+            )
         ):
             raise ValueError("consensus stored workflow identity is inconsistent")
 
@@ -140,8 +157,7 @@ class ConsensusRuntimePort(Protocol):
 class ConsensusRuntimeDecision:
     """Exact structured decision bound to the current durable request tail."""
 
-    session_id: str
-    conversation_id: str
+    execution_identity: ConsensusExecutionIdentity
     workflow_id: str
     phase_request_id: str
     proposal_id: str
@@ -156,8 +172,6 @@ class ConsensusRuntimeDecision:
 
     def __post_init__(self) -> None:
         for value in (
-            self.session_id,
-            self.conversation_id,
             self.workflow_id,
             self.phase_request_id,
             self.proposal_id,
@@ -165,6 +179,8 @@ class ConsensusRuntimeDecision:
             self.confirmation_id,
         ):
             _identifier(value)
+        if type(self.execution_identity) is not ConsensusExecutionIdentity:
+            raise TypeError("consensus decision execution identity is invalid")
         if type(self.request_event_sequence) is not int or self.request_event_sequence < 1:
             raise ValueError("consensus decision request sequence is invalid")
         if type(self.current_tail_sequence) is not int or self.current_tail_sequence < 1:
@@ -172,6 +188,14 @@ class ConsensusRuntimeDecision:
         if type(self.decision) is not ConsensusDecision:
             raise TypeError("consensus runtime decision is invalid")
         _digest(self.request_digest)
+
+    @property
+    def session_id(self) -> str:
+        return self.execution_identity.session_id
+
+    @property
+    def conversation_id(self) -> str:
+        return self.execution_identity.conversation_id
 
 
 @dataclass(frozen=True, slots=True)
@@ -299,6 +323,7 @@ class ConsensusRuntimeAdapter:
             or decision.proposal_id != request.proposal_id
             or decision.revision_id != request.revision_id
             or decision.request_digest != request.request_digest
+            or decision.execution_identity != request.execution_identity
         ):
             raise ValueError("consensus runtime decision does not match the current request")
 
@@ -315,6 +340,7 @@ class ConsensusRuntimeAdapter:
             request_event_id=request_event.event_id,
             request_event_sequence=request_event.sequence,
             proposal_id=request.proposal_id,
+            execution_identity=request.execution_identity,
             revision_id=request.revision_id,
             request_digest=request.request_digest,
             decision=decision.decision,
@@ -360,6 +386,7 @@ class ConsensusRuntimeAdapter:
                     decision_event_id=decision_event.event_id,
                     decision_event_sequence=decision_event.sequence,
                     proposal_id=request.proposal_id,
+                    execution_identity=request.execution_identity,
                     phase=request.phase,
                     revision_id=request.revision_id,
                     request_digest=request.request_digest,
@@ -509,6 +536,7 @@ class ConsensusRuntimeAdapter:
             decision_event_id=decision_event.event_id,
             decision_event_sequence=decision_event.sequence,
             proposal_id=request.proposal_id,
+            execution_identity=request.execution_identity,
             phase=request.phase,
             revision_id=request.revision_id,
             request_digest=request.request_digest,
@@ -548,6 +576,52 @@ class ConsensusRuntimeAdapter:
             workflow_id=workflow_id,
         )
 
+    def request_next_phase(
+        self,
+        *,
+        session_id: str,
+        conversation_id: str,
+        workflow_id: str,
+    ) -> ConsensusRuntimeInspection:
+        """Create one explicit separately confirmed request from a terminal tail."""
+
+        stored = self._load(session_id, conversation_id, workflow_id)
+        projection = project_consensus(stored.events)
+        if projection.next_action is not ConsensusNextAction.REQUEST_NEXT_PHASE:
+            raise ValueError("consensus workflow cannot request its next phase")
+        request_event = _current_request_event(stored.events)
+        terminal_event = stored.events[-1]
+        if type(terminal_event.payload) is not ConsensusPhaseResult:
+            raise ValueError("consensus workflow has no terminal phase result")
+        request, capability = prepare_next_consensus_phase(
+            owner=self,
+            current_request=request_event.payload,
+            terminal_result=terminal_event.payload,
+            terminal_event_id=terminal_event.event_id,
+            terminal_sequence=terminal_event.sequence,
+            phase_request_id=self._new_id("consensus-request"),
+        )
+        event = ConsensusEvent(
+            self._new_id("consensus-event"),
+            terminal_event.sequence + 1,
+            request,
+        )
+        self._port.append_event(
+            session_id,
+            conversation_id,
+            workflow_id,
+            terminal_event.sequence,
+            event,
+        )
+        self._capabilities[
+            self._capability_key(stored.submission, request.phase_request_id)
+        ] = capability
+        return ConsensusRuntimeInspection(
+            submission=stored.submission,
+            projection=project_consensus(stored.events + (event,)),
+            capability_available=True,
+        )
+
     def _submit(
         self,
         *,
@@ -563,11 +637,13 @@ class ConsensusRuntimeAdapter:
         workflow_id = self._new_id("consensus-workflow")
         proposal_id = self._new_id("consensus-proposal")
         phase_request_id = self._new_id("consensus-request")
+        execution_identity = ConsensusExecutionIdentity(session_id, conversation_id)
         request, capability = prepare_consensus_phase(
             owner=self,
             workflow_id=workflow_id,
             phase_request_id=phase_request_id,
             proposal_id=proposal_id,
+            execution_identity=execution_identity,
             phase=ConsensusPhase.DRAFT,
             revision_id="r0",
             input_material=input_material,
@@ -576,8 +652,7 @@ class ConsensusRuntimeAdapter:
         )
         request_event = ConsensusEvent(self._new_id("consensus-event"), 1, request)
         submission = ConsensusWorkflowSubmission(
-            session_id=session_id,
-            conversation_id=conversation_id,
+            execution_identity=execution_identity,
             workflow_id=workflow_id,
             proposal_id=proposal_id,
             input_kind=input_kind,

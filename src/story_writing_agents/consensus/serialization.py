@@ -9,6 +9,7 @@ from .contracts import (
     ConsensusAudit,
     ConsensusAuditVerdict,
     ConsensusDecision,
+    ConsensusExecutionIdentity,
     ConsensusMaterialHandle,
     ConsensusPhase,
     ConsensusPhaseDecision,
@@ -24,7 +25,7 @@ from .runtime_adapter import (
 )
 
 
-CONSENSUS_SERIALIZATION_SCHEMA_VERSION = 1
+CONSENSUS_SERIALIZATION_SCHEMA_VERSION = 2
 _MAX_SERIALIZED_BYTES = 16 * 1024 * 1024
 
 
@@ -79,8 +80,7 @@ def deserialize_consensus_workflow(value: bytes) -> ConsensusStoredWorkflow:
 
 def _submission_to_json(value: ConsensusWorkflowSubmission) -> dict[str, Any]:
     return {
-        "session_id": value.session_id,
-        "conversation_id": value.conversation_id,
+        "execution_identity": _identity_to_json(value.execution_identity),
         "workflow_id": value.workflow_id,
         "proposal_id": value.proposal_id,
         "input_kind": value.input_kind.value,
@@ -92,8 +92,7 @@ def _submission_from_json(value: object) -> ConsensusWorkflowSubmission:
     raw = _object(
         value,
         {
-            "session_id",
-            "conversation_id",
+            "execution_identity",
             "workflow_id",
             "proposal_id",
             "input_kind",
@@ -102,8 +101,7 @@ def _submission_from_json(value: object) -> ConsensusWorkflowSubmission:
         "submission",
     )
     return ConsensusWorkflowSubmission(
-        session_id=raw["session_id"],
-        conversation_id=raw["conversation_id"],
+        execution_identity=_identity_from_json(raw["execution_identity"]),
         workflow_id=raw["workflow_id"],
         proposal_id=raw["proposal_id"],
         input_kind=ConsensusInputKind(raw["input_kind"]),
@@ -119,6 +117,7 @@ def _event_to_json(event: ConsensusEvent) -> dict[str, Any]:
             "workflow_id": payload.workflow_id,
             "phase_request_id": payload.phase_request_id,
             "proposal_id": payload.proposal_id,
+            "execution_identity": _identity_to_json(payload.execution_identity),
             "phase": payload.phase.value,
             "revision_id": payload.revision_id,
             "revision_number": payload.revision_number,
@@ -136,6 +135,7 @@ def _event_to_json(event: ConsensusEvent) -> dict[str, Any]:
             "request_event_id": payload.request_event_id,
             "request_event_sequence": payload.request_event_sequence,
             "proposal_id": payload.proposal_id,
+            "execution_identity": _identity_to_json(payload.execution_identity),
             "revision_id": payload.revision_id,
             "request_digest": payload.request_digest,
             "decision": payload.decision.value,
@@ -149,6 +149,7 @@ def _event_to_json(event: ConsensusEvent) -> dict[str, Any]:
             "decision_event_id": payload.decision_event_id,
             "decision_event_sequence": payload.decision_event_sequence,
             "proposal_id": payload.proposal_id,
+            "execution_identity": _identity_to_json(payload.execution_identity),
             "phase": payload.phase.value,
             "revision_id": payload.revision_id,
             "request_digest": payload.request_digest,
@@ -190,6 +191,7 @@ def _request_from_json(value: object) -> ConsensusPhaseRequest:
             "workflow_id",
             "phase_request_id",
             "proposal_id",
+            "execution_identity",
             "phase",
             "revision_id",
             "revision_number",
@@ -205,6 +207,7 @@ def _request_from_json(value: object) -> ConsensusPhaseRequest:
         workflow_id=raw["workflow_id"],
         phase_request_id=raw["phase_request_id"],
         proposal_id=raw["proposal_id"],
+        execution_identity=_identity_from_json(raw["execution_identity"]),
         phase=ConsensusPhase(raw["phase"]),
         revision_id=raw["revision_id"],
         revision_number=raw["revision_number"],
@@ -225,6 +228,7 @@ def _decision_from_json(value: object) -> ConsensusPhaseDecision:
             "request_event_id",
             "request_event_sequence",
             "proposal_id",
+            "execution_identity",
             "revision_id",
             "request_digest",
             "decision",
@@ -238,6 +242,7 @@ def _decision_from_json(value: object) -> ConsensusPhaseDecision:
         request_event_id=raw["request_event_id"],
         request_event_sequence=raw["request_event_sequence"],
         proposal_id=raw["proposal_id"],
+        execution_identity=_identity_from_json(raw["execution_identity"]),
         revision_id=raw["revision_id"],
         request_digest=raw["request_digest"],
         decision=ConsensusDecision(raw["decision"]),
@@ -254,6 +259,7 @@ def _result_from_json(value: object) -> ConsensusPhaseResult:
             "decision_event_id",
             "decision_event_sequence",
             "proposal_id",
+            "execution_identity",
             "phase",
             "revision_id",
             "request_digest",
@@ -276,6 +282,7 @@ def _result_from_json(value: object) -> ConsensusPhaseResult:
         decision_event_id=raw["decision_event_id"],
         decision_event_sequence=raw["decision_event_sequence"],
         proposal_id=raw["proposal_id"],
+        execution_identity=_identity_from_json(raw["execution_identity"]),
         phase=ConsensusPhase(raw["phase"]),
         revision_id=raw["revision_id"],
         request_digest=raw["request_digest"],
@@ -323,6 +330,20 @@ def _material_to_json(value: ConsensusMaterialHandle) -> dict[str, str]:
     if type(value) is not ConsensusMaterialHandle:
         raise TypeError("consensus material handle cannot be serialized")
     return {"locator": value.locator, "digest": value.digest}
+
+
+def _identity_to_json(value: ConsensusExecutionIdentity) -> dict[str, str]:
+    if type(value) is not ConsensusExecutionIdentity:
+        raise TypeError("consensus execution identity cannot be serialized")
+    return {
+        "session_id": value.session_id,
+        "conversation_id": value.conversation_id,
+    }
+
+
+def _identity_from_json(value: object) -> ConsensusExecutionIdentity:
+    raw = _object(value, {"session_id", "conversation_id"}, "execution identity")
+    return ConsensusExecutionIdentity(raw["session_id"], raw["conversation_id"])
 
 
 def _optional_material_to_json(
