@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from dataclasses import dataclass
 from enum import StrEnum
 from typing import Protocol
@@ -12,6 +13,7 @@ from .contracts import (
     ConsensusAudit,
     ConsensusAuditVerdict,
     ConsensusConfirmationCapability,
+    ConsensusMaterialHandle,
     ConsensusPhase,
     ConsensusPhaseDecision,
     ConsensusPhaseRequest,
@@ -33,6 +35,17 @@ class ConsensusDurability(StrEnum):
     NOT_ATTEMPTED = "not_attempted"
 
 
+class ConsensusPhaseOutputKind(StrEnum):
+    """Closed semantic shape returned by a trusted provider adapter."""
+
+    CANDIDATE = "candidate"
+    AUDIT = "audit"
+    SYNTHESIS = "synthesis"
+    FINALIZATION = "finalization"
+    DEADLOCK = "deadlock"
+    FAILURE = "failure"
+
+
 @dataclass(frozen=True, slots=True)
 class ConsensusPhaseInvocation:
     """Exact content-free assignment supplied to a provider adapter."""
@@ -42,31 +55,64 @@ class ConsensusPhaseInvocation:
     proposal_id: str
     phase: ConsensusPhase
     revision_id: str
-    input_digest: str
-    candidate_digest: str | None
+    input_material: ConsensusMaterialHandle
+    candidate_material: ConsensusMaterialHandle | None
     agent_id: str
     ordinal: int
+
+    @property
+    def input_digest(self) -> str:
+        return self.input_material.digest
+
+    @property
+    def candidate_digest(self) -> str | None:
+        return None if self.candidate_material is None else self.candidate_material.digest
 
 
 @dataclass(frozen=True, slots=True)
 class ConsensusProviderResult:
     """Validated digest-only result returned by a provider adapter."""
 
+    kind: ConsensusPhaseOutputKind
     result_digest: str
-    candidate_digest: str | None
+    candidate_material: ConsensusMaterialHandle | None
     audit_verdict: ConsensusAuditVerdict | None = None
     next_phase: ConsensusPhase | None = None
-    deadlocked: bool = False
 
     def __post_init__(self) -> None:
+        if type(self.kind) is not ConsensusPhaseOutputKind:
+            raise TypeError("consensus provider output kind is invalid")
         _digest(self.result_digest)
-        _optional_digest(self.candidate_digest)
+        if self.candidate_material is not None and type(self.candidate_material) is not ConsensusMaterialHandle:
+            raise TypeError("consensus provider candidate handle is invalid")
         if self.audit_verdict is not None and type(self.audit_verdict) is not ConsensusAuditVerdict:
             raise TypeError("consensus provider audit verdict is invalid")
         if self.next_phase is not None and type(self.next_phase) is not ConsensusPhase:
             raise TypeError("consensus provider next phase is invalid")
-        if type(self.deadlocked) is not bool:
-            raise TypeError("consensus provider deadlock flag is invalid")
+        if self.kind is ConsensusPhaseOutputKind.AUDIT:
+            if self.candidate_material is None or self.audit_verdict is None or self.next_phase is not None:
+                raise ValueError("consensus audit output is incomplete")
+        elif self.kind is ConsensusPhaseOutputKind.SYNTHESIS:
+            if self.candidate_material is None or self.audit_verdict is not None or self.next_phase not in {ConsensusPhase.REPAIR, ConsensusPhase.FINALIZATION}:
+                raise ValueError("consensus synthesis output is incomplete")
+        elif self.kind in {
+            ConsensusPhaseOutputKind.CANDIDATE,
+            ConsensusPhaseOutputKind.FINALIZATION,
+            ConsensusPhaseOutputKind.DEADLOCK,
+        }:
+            if self.candidate_material is None or self.audit_verdict is not None or self.next_phase is not None:
+                raise ValueError("consensus provider output shape is invalid")
+        elif self.kind is ConsensusPhaseOutputKind.FAILURE:
+            if self.candidate_material is not None or self.audit_verdict is not None or self.next_phase is not None:
+                raise ValueError("consensus provider failure output is invalid")
+
+    @property
+    def candidate_digest(self) -> str | None:
+        return None if self.candidate_material is None else self.candidate_material.digest
+
+    @property
+    def deadlocked(self) -> bool:
+        return self.kind is ConsensusPhaseOutputKind.DEADLOCK
 
 
 class ConsensusEventAppender(Protocol):
@@ -78,7 +124,7 @@ class ConsensusEventAppender(Protocol):
 class ConsensusProviderInvoker(Protocol):
     """Execute exactly one provider-neutral consensus assignment."""
 
-    def __call__(self, invocation: ConsensusPhaseInvocation, /) -> ConsensusProviderResult: ...
+    async def __call__(self, invocation: ConsensusPhaseInvocation, /) -> ConsensusProviderResult: ...
 
 
 class ConsensusEventIdFactory(Protocol):
@@ -126,7 +172,7 @@ class ConsensusExecutionCoordinator:
         self._invoke = invoke_provider
         self._id_factory = event_id_factory
 
-    def execute(
+    async def execute(
         self,
         *,
         request: ConsensusPhaseRequest,
@@ -206,7 +252,7 @@ class ConsensusExecutionCoordinator:
         invocations: list[ConsensusPhaseInvocation] = []
         outputs: list[ConsensusProviderResult] = []
         try:
-            result = self._invoke_phase(
+            result = await self._invoke_phase(
                 request,
                 decision_event,
                 running_id,
@@ -223,7 +269,7 @@ class ConsensusExecutionCoordinator:
                 candidate_digest=request.candidate_digest,
                 prior_result_event_id=running_id,
             )
-        except (KeyboardInterrupt, InterruptedError):
+        except (asyncio.CancelledError, KeyboardInterrupt, InterruptedError):
             result = self._result(
                 request=request,
                 decision_event=decision_event,
@@ -265,7 +311,7 @@ class ConsensusExecutionCoordinator:
             provider_results=tuple(outputs),
         )
 
-    def _invoke_phase(
+    async def _invoke_phase(
         self,
         request: ConsensusPhaseRequest,
         decision_event: ConsensusEvent,
@@ -286,17 +332,19 @@ class ConsensusExecutionCoordinator:
                 proposal_id=request.proposal_id,
                 phase=request.phase,
                 revision_id=request.revision_id,
-                input_digest=request.input_digest,
-                candidate_digest=request.candidate_digest,
+                input_material=request.input_material,
+                candidate_material=request.candidate_material,
                 agent_id=agent_id,
                 ordinal=ordinal,
             )
             invocations.append(invocation)
-            output = self._invoke(invocation)
+            output = await self._invoke(invocation)
             if type(output) is not ConsensusProviderResult:
                 raise TypeError("consensus provider result is invalid")
             _validate_provider_result(request, output)
             outputs.append(output)
+            if output.kind is ConsensusPhaseOutputKind.FAILURE:
+                raise RuntimeError("consensus provider reported a definite failure")
 
         if request.phase in {ConsensusPhase.AUDIT, ConsensusPhase.REAUDIT}:
             audits = tuple(
@@ -381,36 +429,41 @@ def _validate_provider_result(
     request: ConsensusPhaseRequest,
     result: ConsensusProviderResult,
 ) -> None:
+    if result.kind is ConsensusPhaseOutputKind.FAILURE:
+        return
     if request.phase in {ConsensusPhase.AUDIT, ConsensusPhase.REAUDIT}:
         if (
-            result.candidate_digest != request.candidate_digest
+            result.kind is not ConsensusPhaseOutputKind.AUDIT
+            or result.candidate_material != request.candidate_material
             or result.audit_verdict is None
             or result.next_phase is not None
-            or result.deadlocked
         ):
             raise ValueError("consensus audit provider result is invalid")
         return
     if result.audit_verdict is not None:
         raise ValueError("nonaudit consensus result cannot vote")
     if request.phase is ConsensusPhase.DRAFT:
-        valid = result.candidate_digest is not None and result.next_phase is None and not result.deadlocked
+        valid = (
+            result.kind is ConsensusPhaseOutputKind.CANDIDATE
+            and result.candidate_material != request.input_material
+        )
     elif request.phase is ConsensusPhase.REPAIR:
         valid = (
-            result.candidate_digest is not None
-            and result.candidate_digest != request.candidate_digest
-            and result.next_phase is None
-            and not result.deadlocked
+            result.kind is ConsensusPhaseOutputKind.CANDIDATE
+            and result.candidate_material != request.candidate_material
         )
     elif request.phase is ConsensusPhase.SYNTHESIS:
-        valid = result.candidate_digest == request.candidate_digest and (
-            (result.deadlocked and result.next_phase is None)
-            or (not result.deadlocked and result.next_phase in {ConsensusPhase.REPAIR, ConsensusPhase.FINALIZATION})
+        valid = result.candidate_material == request.candidate_material and (
+            result.kind
+            in {
+                ConsensusPhaseOutputKind.SYNTHESIS,
+                ConsensusPhaseOutputKind.DEADLOCK,
+            }
         )
     else:
         valid = (
-            result.candidate_digest == request.candidate_digest
-            and result.next_phase is None
-            and not result.deadlocked
+            result.kind is ConsensusPhaseOutputKind.FINALIZATION
+            and result.candidate_material == request.candidate_material
         )
     if not valid:
         raise ValueError("consensus provider result does not match its phase")
@@ -455,6 +508,7 @@ __all__ = [
     "ConsensusExecutionCoordinator",
     "ConsensusExecutionReceipt",
     "ConsensusPhaseInvocation",
+    "ConsensusPhaseOutputKind",
     "ConsensusProviderInvoker",
     "ConsensusProviderOutcomeUnknown",
     "ConsensusProviderResult",

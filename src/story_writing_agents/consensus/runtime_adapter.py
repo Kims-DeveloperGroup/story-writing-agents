@@ -10,6 +10,7 @@ from typing import Protocol
 from .contracts import (
     ConsensusConfirmationCapability,
     ConsensusDecision,
+    ConsensusMaterialHandle,
     ConsensusPhase,
     ConsensusPhaseDecision,
     ConsensusPhaseRequest,
@@ -47,7 +48,7 @@ class ConsensusWorkflowSubmission:
     workflow_id: str
     proposal_id: str
     input_kind: ConsensusInputKind
-    input_digest: str
+    input_material: ConsensusMaterialHandle
 
     def __post_init__(self) -> None:
         for value in (
@@ -59,7 +60,12 @@ class ConsensusWorkflowSubmission:
             _identifier(value)
         if type(self.input_kind) is not ConsensusInputKind:
             raise TypeError("consensus input kind is invalid")
-        _digest(self.input_digest)
+        if type(self.input_material) is not ConsensusMaterialHandle:
+            raise TypeError("consensus submission material handle is invalid")
+
+    @property
+    def input_digest(self) -> str:
+        return self.input_material.digest
 
 
 @dataclass(frozen=True, slots=True)
@@ -79,7 +85,7 @@ class ConsensusStoredWorkflow:
         if (
             projection.workflow_id != self.submission.workflow_id
             or projection.proposal_id != self.submission.proposal_id
-            or request.input_digest != self.submission.input_digest
+            or request.input_material != self.submission.input_material
         ):
             raise ValueError("consensus stored workflow identity is inconsistent")
 
@@ -114,7 +120,7 @@ class ConsensusRuntimePort(Protocol):
         /,
     ) -> None: ...
 
-    def invoke_provider(
+    async def invoke_provider(
         self,
         invocation: ConsensusPhaseInvocation,
         /,
@@ -213,7 +219,7 @@ class ConsensusRuntimeAdapter:
         *,
         session_id: str,
         conversation_id: str,
-        input_digest: str,
+        input_material: ConsensusMaterialHandle,
     ) -> ConsensusRuntimeInspection:
         """Submit prompt input for an execution-authored draft revision zero."""
 
@@ -221,7 +227,7 @@ class ConsensusRuntimeAdapter:
             session_id=session_id,
             conversation_id=conversation_id,
             input_kind=ConsensusInputKind.PROMPT,
-            input_digest=input_digest,
+            input_material=input_material,
         )
 
     def submit_supplied_draft(
@@ -229,7 +235,7 @@ class ConsensusRuntimeAdapter:
         *,
         session_id: str,
         conversation_id: str,
-        draft_digest: str,
+        draft_material: ConsensusMaterialHandle,
     ) -> ConsensusRuntimeInspection:
         """Submit a complete draft for execution transformation into revision zero."""
 
@@ -237,7 +243,7 @@ class ConsensusRuntimeAdapter:
             session_id=session_id,
             conversation_id=conversation_id,
             input_kind=ConsensusInputKind.SUPPLIED_DRAFT,
-            input_digest=draft_digest,
+            input_material=draft_material,
         )
 
     def inspect(
@@ -267,7 +273,7 @@ class ConsensusRuntimeAdapter:
             },
         )
 
-    def decide(
+    async def decide(
         self,
         decision: ConsensusRuntimeDecision,
     ) -> ConsensusRuntimeDecisionResult:
@@ -414,7 +420,7 @@ class ConsensusRuntimeAdapter:
             ),
         )
         try:
-            execution = coordinator.execute(
+            execution = await coordinator.execute(
                 request=request,
                 capability=capability,
                 request_event=request_event,
@@ -448,7 +454,7 @@ class ConsensusRuntimeAdapter:
             decision_durability=ConsensusDurability.CONFIRMED,
         )
 
-    def confirm(
+    async def confirm(
         self,
         decision: ConsensusRuntimeDecision,
     ) -> ConsensusRuntimeDecisionResult:
@@ -458,7 +464,7 @@ class ConsensusRuntimeAdapter:
             raise TypeError("decision must be ConsensusRuntimeDecision")
         if decision.decision is not ConsensusDecision.CONFIRM:
             raise ValueError("consensus confirm requires a Confirm decision")
-        return self.decide(decision)
+        return await self.decide(decision)
 
     def interrupt(
         self,
@@ -548,11 +554,12 @@ class ConsensusRuntimeAdapter:
         session_id: str,
         conversation_id: str,
         input_kind: ConsensusInputKind,
-        input_digest: str,
+        input_material: ConsensusMaterialHandle,
     ) -> ConsensusRuntimeInspection:
         _identifier(session_id)
         _identifier(conversation_id)
-        _digest(input_digest)
+        if type(input_material) is not ConsensusMaterialHandle:
+            raise TypeError("consensus input material handle is invalid")
         workflow_id = self._new_id("consensus-workflow")
         proposal_id = self._new_id("consensus-proposal")
         phase_request_id = self._new_id("consensus-request")
@@ -563,8 +570,8 @@ class ConsensusRuntimeAdapter:
             proposal_id=proposal_id,
             phase=ConsensusPhase.DRAFT,
             revision_id="r0",
-            input_digest=input_digest,
-            candidate_digest=None,
+            input_material=input_material,
+            candidate_material=None,
             base_tail_sequence=0,
         )
         request_event = ConsensusEvent(self._new_id("consensus-event"), 1, request)
@@ -574,7 +581,7 @@ class ConsensusRuntimeAdapter:
             workflow_id=workflow_id,
             proposal_id=proposal_id,
             input_kind=input_kind,
-            input_digest=input_digest,
+            input_material=input_material,
         )
         self._port.create_workflow(submission, request_event)
         key = self._capability_key(submission, phase_request_id)

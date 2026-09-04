@@ -25,14 +25,21 @@ from story_writing_agents.consensus import (
     prepare_consensus_phase,
     project_consensus,
 )
+from story_writing_agents.consensus.contracts import ConsensusMaterialHandle
+from story_writing_agents.consensus.execution import ConsensusPhaseOutputKind
 
 
 _INPUT = "1" * 64
 _CANDIDATE = "2" * 64
 _NEW_CANDIDATE = "3" * 64
+_INPUT_MATERIAL = ConsensusMaterialHandle("material-input", _INPUT)
+_CANDIDATE_MATERIAL = ConsensusMaterialHandle("material-candidate", _CANDIDATE)
+_NEW_CANDIDATE_MATERIAL = ConsensusMaterialHandle(
+    "material-new-candidate", _NEW_CANDIDATE
+)
 
 
-class ConsensusExecutionTests(unittest.TestCase):
+class ConsensusExecutionTests(unittest.IsolatedAsyncioTestCase):
     def setUp(self) -> None:
         self.owner = object()
 
@@ -43,7 +50,7 @@ class ConsensusExecutionTests(unittest.TestCase):
         tail: int = 0,
         previous: str | None = None,
         request_id: str = "request-1",
-        candidate: str | None = _CANDIDATE,
+        candidate: ConsensusMaterialHandle | None = _CANDIDATE_MATERIAL,
     ):
         if phase is ConsensusPhase.DRAFT:
             candidate = None
@@ -54,8 +61,8 @@ class ConsensusExecutionTests(unittest.TestCase):
             proposal_id="proposal-1",
             phase=phase,
             revision_id="r0",
-            input_digest=_INPUT,
-            candidate_digest=candidate,
+            input_material=_INPUT_MATERIAL,
+            candidate_material=candidate,
             base_tail_sequence=tail,
             previous_result_event_id=previous,
         )
@@ -76,22 +83,32 @@ class ConsensusExecutionTests(unittest.TestCase):
         return request_event, ConsensusEvent(f"decision-event-{start + 1}", start + 1, decision)
 
     @staticmethod
-    def valid_result(invocation):
+    async def valid_result(invocation):
         if invocation.phase in {ConsensusPhase.AUDIT, ConsensusPhase.REAUDIT}:
             return ConsensusProviderResult(
+                kind=ConsensusPhaseOutputKind.AUDIT,
                 result_digest=f"{invocation.ordinal + 3}" * 64,
-                candidate_digest=invocation.candidate_digest,
+                candidate_material=invocation.candidate_material,
                 audit_verdict=ConsensusAuditVerdict.APPROVE,
             )
         if invocation.phase in {ConsensusPhase.DRAFT, ConsensusPhase.REPAIR}:
-            return ConsensusProviderResult("4" * 64, _NEW_CANDIDATE)
+            return ConsensusProviderResult(
+                ConsensusPhaseOutputKind.CANDIDATE,
+                "4" * 64,
+                _NEW_CANDIDATE_MATERIAL,
+            )
         if invocation.phase is ConsensusPhase.SYNTHESIS:
             return ConsensusProviderResult(
+                ConsensusPhaseOutputKind.SYNTHESIS,
                 "5" * 64,
-                invocation.candidate_digest,
+                invocation.candidate_material,
                 next_phase=ConsensusPhase.FINALIZATION,
             )
-        return ConsensusProviderResult("6" * 64, invocation.candidate_digest)
+        return ConsensusProviderResult(
+            ConsensusPhaseOutputKind.FINALIZATION,
+            "6" * 64,
+            invocation.candidate_material,
+        )
 
     def coordinator(self, append, invoke):
         return ConsensusExecutionCoordinator(
@@ -101,10 +118,10 @@ class ConsensusExecutionTests(unittest.TestCase):
             event_id_factory=lambda kind, sequence: f"{kind}-event-{sequence}",
         )
 
-    def execute(self, phase, append, invoke):
+    async def execute(self, phase, append, invoke):
         request, capability = self.request(phase)
         request_event, decision_event = self.events(request)
-        receipt = self.coordinator(append, invoke).execute(
+        receipt = await self.coordinator(append, invoke).execute(
             request=request,
             capability=capability,
             request_event=request_event,
@@ -113,7 +130,7 @@ class ConsensusExecutionTests(unittest.TestCase):
         )
         return request, request_event, decision_event, capability, receipt
 
-    def test_all_six_phase_routes_are_exact_and_running_precedes_provider(self) -> None:
+    async def test_all_six_phase_routes_are_exact_and_running_precedes_provider(self) -> None:
         routes = {
             ConsensusPhase.DRAFT: ((EXECUTION_SPECIALIST,), ConsensusPhase.AUDIT),
             ConsensusPhase.AUDIT: (
@@ -137,11 +154,11 @@ class ConsensusExecutionTests(unittest.TestCase):
                     order.append(("append", event.payload.state))
                     appended.append(event)
 
-                def invoke(invocation):
+                async def invoke(invocation):
                     order.append(("invoke", invocation.agent_id))
-                    return self.valid_result(invocation)
+                    return await self.valid_result(invocation)
 
-                request, _, _, _, receipt = self.execute(phase, append, invoke)
+                request, _, _, _, receipt = await self.execute(phase, append, invoke)
                 self.assertEqual(order[0], ("append", ConsensusPhaseState.RUNNING))
                 self.assertEqual(
                     tuple(item.agent_id for item in receipt.provider_invocations),
@@ -180,14 +197,14 @@ class ConsensusExecutionTests(unittest.TestCase):
                 )
                 self.assertEqual(appended, [receipt.running_event, receipt.terminal_event])
 
-    def test_tail_request_decision_binding_and_capability_replay_fail_before_callbacks(self) -> None:
+    async def test_tail_request_decision_binding_and_capability_replay_fail_before_callbacks(self) -> None:
         calls = []
         request, capability = self.request(ConsensusPhase.DRAFT)
         request_event, decision_event = self.events(request)
         coordinator = self.coordinator(calls.append, lambda invocation: self.valid_result(invocation))
 
         with self.assertRaisesRegex(ValueError, "tail has drifted"):
-            coordinator.execute(
+            await coordinator.execute(
                 request=request,
                 capability=capability,
                 request_event=request_event,
@@ -195,7 +212,7 @@ class ConsensusExecutionTests(unittest.TestCase):
                 current_tail_sequence=3,
             )
         self.assertEqual(calls, [])
-        receipt = coordinator.execute(
+        receipt = await coordinator.execute(
             request=request,
             capability=capability,
             request_event=request_event,
@@ -204,7 +221,7 @@ class ConsensusExecutionTests(unittest.TestCase):
         )
         self.assertEqual(receipt.state, ConsensusPhaseState.COMPLETED)
         with self.assertRaisesRegex(ValueError, "already consumed"):
-            coordinator.execute(
+            await coordinator.execute(
                 request=request,
                 capability=capability,
                 request_event=request_event,
@@ -214,7 +231,7 @@ class ConsensusExecutionTests(unittest.TestCase):
 
         other, other_capability = self.request(ConsensusPhase.DRAFT, request_id="request-other")
         with self.assertRaisesRegex(ValueError, "does not match its request"):
-            coordinator.execute(
+            await coordinator.execute(
                 request=request,
                 capability=other_capability,
                 request_event=ConsensusEvent("other-request", 1, other),
@@ -222,13 +239,14 @@ class ConsensusExecutionTests(unittest.TestCase):
                 current_tail_sequence=2,
             )
 
-    def test_three_auditor_conflict_is_preserved_in_terminal_result(self) -> None:
+    async def test_three_auditor_conflict_is_preserved_in_terminal_result(self) -> None:
         appended = []
 
-        def invoke(invocation):
+        async def invoke(invocation):
             return ConsensusProviderResult(
+                kind=ConsensusPhaseOutputKind.AUDIT,
                 result_digest=f"{invocation.ordinal + 3}" * 64,
-                candidate_digest=invocation.candidate_digest,
+                candidate_material=invocation.candidate_material,
                 audit_verdict=(
                     ConsensusAuditVerdict.CONFLICT
                     if invocation.agent_id == CHARACTER_CUSTODIAN
@@ -236,7 +254,7 @@ class ConsensusExecutionTests(unittest.TestCase):
                 ),
             )
 
-        _, _, _, _, receipt = self.execute(
+        _, _, _, _, receipt = await self.execute(
             ConsensusPhase.AUDIT, appended.append, invoke
         )
         audits = receipt.terminal_event.payload.audits
@@ -250,7 +268,7 @@ class ConsensusExecutionTests(unittest.TestCase):
         ))
         self.assertFalse(receipt.terminal_event.payload.unanimous)
 
-    def test_provider_failures_map_to_exact_terminal_states(self) -> None:
+    async def test_provider_failures_map_to_exact_terminal_states(self) -> None:
         cases = (
             (RuntimeError("failed"), ConsensusPhaseState.FAILED),
             (InterruptedError("interrupted"), ConsensusPhaseState.INTERRUPTED),
@@ -260,10 +278,10 @@ class ConsensusExecutionTests(unittest.TestCase):
             with self.subTest(expected=expected):
                 appended = []
 
-                def invoke(_invocation):
+                async def invoke(_invocation):
                     raise failure
 
-                _, _, _, _, receipt = self.execute(
+                _, _, _, _, receipt = await self.execute(
                     ConsensusPhase.DRAFT, appended.append, invoke
                 )
                 self.assertEqual(receipt.state, expected)
@@ -271,16 +289,20 @@ class ConsensusExecutionTests(unittest.TestCase):
                 self.assertEqual(len(appended), 2)
                 self.assertEqual(appended[0].payload.state, ConsensusPhaseState.RUNNING)
 
-    def test_append_uncertainty_never_invokes_early_or_claims_durability(self) -> None:
+    async def test_append_uncertainty_never_invokes_early_or_claims_durability(self) -> None:
         invoked = []
 
         def fail_running(_event):
             raise OSError("append outcome unknown")
 
-        _, _, _, _, receipt = self.execute(
+        async def record_invocation(invocation):
+            invoked.append(invocation)
+            return await self.valid_result(invocation)
+
+        _, _, _, _, receipt = await self.execute(
             ConsensusPhase.DRAFT,
             fail_running,
-            lambda invocation: invoked.append(invocation) or self.valid_result(invocation),
+            record_invocation,
         )
         self.assertEqual(invoked, [])
         self.assertTrue(receipt.recovery_required)
@@ -296,7 +318,7 @@ class ConsensusExecutionTests(unittest.TestCase):
             if len(appends) == 2:
                 raise OSError("terminal append outcome unknown")
 
-        _, _, _, _, receipt = self.execute(
+        _, _, _, _, receipt = await self.execute(
             ConsensusPhase.DRAFT, fail_terminal, self.valid_result
         )
         self.assertTrue(receipt.recovery_required)
@@ -306,10 +328,10 @@ class ConsensusExecutionTests(unittest.TestCase):
         )
         self.assertEqual(len(receipt.provider_invocations), 1)
 
-    def test_coordinator_events_project_and_deadlock_never_allows_publication(self) -> None:
+    async def test_coordinator_events_project_and_deadlock_never_allows_publication(self) -> None:
         history = []
 
-        def run_phase(phase, candidate, next_result_id, provider, previous=None):
+        async def run_phase(phase, candidate, next_result_id, provider, previous=None):
             tail = len(history)
             request, capability = self.request(
                 phase,
@@ -326,7 +348,7 @@ class ConsensusExecutionTests(unittest.TestCase):
                 invoke_provider=provider,
                 event_id_factory=lambda kind, sequence: f"{phase.value}-{kind}-{sequence}",
             )
-            receipt = coordinator.execute(
+            receipt = await coordinator.execute(
                 request=request,
                 capability=capability,
                 request_event=request_event,
@@ -336,30 +358,30 @@ class ConsensusExecutionTests(unittest.TestCase):
             self.assertEqual(receipt.terminal_event.event_id, next_result_id)
             return receipt
 
-        draft = run_phase(
+        draft = await run_phase(
             ConsensusPhase.DRAFT,
             None,
             "draft-terminal-4",
             self.valid_result,
         )
-        audit = run_phase(
+        audit = await run_phase(
             ConsensusPhase.AUDIT,
-            _NEW_CANDIDATE,
+            _NEW_CANDIDATE_MATERIAL,
             "audit-terminal-8",
             self.valid_result,
             draft.terminal_event.event_id,
         )
 
-        def deadlock(invocation):
+        async def deadlock(invocation):
             return ConsensusProviderResult(
+                ConsensusPhaseOutputKind.DEADLOCK,
                 "9" * 64,
-                invocation.candidate_digest,
-                deadlocked=True,
+                invocation.candidate_material,
             )
 
-        synthesis = run_phase(
+        synthesis = await run_phase(
             ConsensusPhase.SYNTHESIS,
-            _NEW_CANDIDATE,
+            _NEW_CANDIDATE_MATERIAL,
             "synthesis-terminal-12",
             deadlock,
             audit.terminal_event.event_id,

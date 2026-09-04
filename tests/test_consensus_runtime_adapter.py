@@ -22,11 +22,16 @@ from story_writing_agents.consensus import (
     ConsensusWorkflowSubmission,
     prepare_consensus_phase,
 )
+from story_writing_agents.consensus.contracts import ConsensusMaterialHandle
+from story_writing_agents.consensus.execution import ConsensusPhaseOutputKind
 
 
 _PROMPT = "1" * 64
 _DRAFT = "2" * 64
 _CANDIDATE = "3" * 64
+_PROMPT_MATERIAL = ConsensusMaterialHandle("material-prompt", _PROMPT)
+_DRAFT_MATERIAL = ConsensusMaterialHandle("material-draft", _DRAFT)
+_CANDIDATE_MATERIAL = ConsensusMaterialHandle("material-candidate", _CANDIDATE)
 
 
 class FakeConsensusPort:
@@ -65,11 +70,15 @@ class FakeConsensusPort:
             stored.submission, stored.events + (event,)
         )
 
-    def invoke_provider(self, invocation):
+    async def invoke_provider(self, invocation):
         self.provider_calls.append(invocation)
         if self.invoke_hook is not None:
-            return self.invoke_hook(invocation)
-        return ConsensusProviderResult("4" * 64, _CANDIDATE)
+            return await self.invoke_hook(invocation)
+        return ConsensusProviderResult(
+            ConsensusPhaseOutputKind.CANDIDATE,
+            "4" * 64,
+            _CANDIDATE_MATERIAL,
+        )
 
     def interrupt_provider(
         self, session_id, conversation_id, workflow_id, phase_request_id
@@ -80,7 +89,7 @@ class FakeConsensusPort:
         return self.interrupt_result
 
 
-class ConsensusRuntimeAdapterTests(unittest.TestCase):
+class ConsensusRuntimeAdapterTests(unittest.IsolatedAsyncioTestCase):
     def setUp(self) -> None:
         self.port = FakeConsensusPort()
         self.adapter = ConsensusRuntimeAdapter(self.port)
@@ -113,7 +122,7 @@ class ConsensusRuntimeAdapterTests(unittest.TestCase):
         return self.adapter.submit_prompt(
             session_id="session-1",
             conversation_id="conversation-1",
-            input_digest=_PROMPT,
+            input_material=_PROMPT_MATERIAL,
         )
 
     def test_prompt_and_supplied_draft_have_exact_distinct_metadata(self) -> None:
@@ -121,7 +130,7 @@ class ConsensusRuntimeAdapterTests(unittest.TestCase):
         supplied = self.adapter.submit_supplied_draft(
             session_id="session-1",
             conversation_id="conversation-1",
-            draft_digest=_DRAFT,
+            draft_material=_DRAFT_MATERIAL,
         )
         self.assertEqual(
             (prompt.submission.input_kind, prompt.submission.input_digest),
@@ -137,7 +146,7 @@ class ConsensusRuntimeAdapterTests(unittest.TestCase):
             self.assertIsNone(inspection.projection.candidate_digest)
             self.assertTrue(inspection.capability_available)
 
-    def test_submit_inspect_and_confirm_use_exact_durable_request(self) -> None:
+    async def test_submit_inspect_and_confirm_use_exact_durable_request(self) -> None:
         submitted = self.submit_prompt()
         inspected = self.adapter.inspect(
             session_id="session-1",
@@ -145,7 +154,7 @@ class ConsensusRuntimeAdapterTests(unittest.TestCase):
             workflow_id=submitted.submission.workflow_id,
         )
         self.assertEqual(inspected, submitted)
-        result = self.adapter.confirm(self.exact_decision(inspected))
+        result = await self.adapter.confirm(self.exact_decision(inspected))
         self.assertEqual(result.decision_durability, ConsensusDurability.CONFIRMED)
         self.assertEqual(result.execution.state, ConsensusPhaseState.COMPLETED)
         self.assertEqual(result.inspection.projection.state, ConsensusPhaseState.COMPLETED)
@@ -169,7 +178,7 @@ class ConsensusRuntimeAdapterTests(unittest.TestCase):
             ),
         )
 
-    def test_reject_and_revise_append_terminal_state_without_provider(self) -> None:
+    async def test_reject_and_revise_append_terminal_state_without_provider(self) -> None:
         expected = {
             ConsensusDecision.REJECT: ConsensusPhaseState.REJECTED,
             ConsensusDecision.REVISE: ConsensusPhaseState.SUPERSEDED,
@@ -181,16 +190,16 @@ class ConsensusRuntimeAdapterTests(unittest.TestCase):
                 inspection = adapter.submit_prompt(
                     session_id="session-1",
                     conversation_id="conversation-1",
-                    input_digest=_PROMPT,
+                    input_material=_PROMPT_MATERIAL,
                 )
                 self.port = port
-                result = adapter.decide(self.exact_decision(inspection, choice))
+                result = await adapter.decide(self.exact_decision(inspection, choice))
                 self.assertIsNone(result.execution)
                 self.assertEqual(result.inspection.projection.state, state)
                 self.assertEqual(port.provider_calls, [])
                 self.assertFalse(result.inspection.capability_available)
 
-    def test_stale_tail_and_request_mismatch_preserve_fresh_authority(self) -> None:
+    async def test_stale_tail_and_request_mismatch_preserve_fresh_authority(self) -> None:
         inspection = self.submit_prompt()
         exact = self.exact_decision(inspection)
         for stale in (
@@ -201,7 +210,7 @@ class ConsensusRuntimeAdapterTests(unittest.TestCase):
         ):
             with self.subTest(stale=stale):
                 with self.assertRaisesRegex(ValueError, "does not match"):
-                    self.adapter.confirm(stale)
+                    await self.adapter.confirm(stale)
                 self.assertEqual(self.port.provider_calls, [])
                 self.assertTrue(
                     self.adapter.inspect(
@@ -211,11 +220,11 @@ class ConsensusRuntimeAdapterTests(unittest.TestCase):
                     ).capability_available
                 )
         self.assertEqual(
-            self.adapter.confirm(exact).execution.state,
+            (await self.adapter.confirm(exact)).execution.state,
             ConsensusPhaseState.COMPLETED,
         )
 
-    def test_restart_loses_authority_and_cannot_replay_confirmation(self) -> None:
+    async def test_restart_loses_authority_and_cannot_replay_confirmation(self) -> None:
         inspection = self.submit_prompt()
         decision = self.exact_decision(inspection)
         restarted = ConsensusRuntimeAdapter(self.port)
@@ -226,16 +235,16 @@ class ConsensusRuntimeAdapterTests(unittest.TestCase):
         )
         self.assertFalse(resumed.capability_available)
         with self.assertRaisesRegex(ValueError, "authority is unavailable"):
-            restarted.confirm(decision)
+            await restarted.confirm(decision)
         self.assertEqual(self.port.provider_calls, [])
         self.assertEqual(len(self.port.append_calls), 0)
 
-        completed = self.adapter.confirm(decision)
+        completed = await self.adapter.confirm(decision)
         self.assertEqual(completed.execution.state, ConsensusPhaseState.COMPLETED)
         with self.assertRaisesRegex(ValueError, "no pending confirmation"):
-            restarted.confirm(decision)
+            await restarted.confirm(decision)
 
-    def test_decision_running_and_terminal_append_uncertainty_are_visible(self) -> None:
+    async def test_decision_running_and_terminal_append_uncertainty_are_visible(self) -> None:
         expected = (
             (1, ConsensusDurability.UNKNOWN, None, 0),
             (2, ConsensusDurability.CONFIRMED, ConsensusPhaseState.RECOVERY_REQUIRED, 0),
@@ -248,11 +257,11 @@ class ConsensusRuntimeAdapterTests(unittest.TestCase):
                 inspection = adapter.submit_prompt(
                     session_id="session-1",
                     conversation_id="conversation-1",
-                    input_digest=_PROMPT,
+                    input_material=_PROMPT_MATERIAL,
                 )
                 self.port = port
                 port.fail_append_number = append_number
-                result = adapter.confirm(self.exact_decision(inspection))
+                result = await adapter.confirm(self.exact_decision(inspection))
                 self.assertEqual(result.decision_durability, decision_durability)
                 self.assertEqual(
                     result.execution.state if result.execution is not None else None,
@@ -262,11 +271,11 @@ class ConsensusRuntimeAdapterTests(unittest.TestCase):
                 self.assertFalse(result.inspection.capability_available)
                 self.assertEqual(len(port.provider_calls), provider_count)
 
-    def test_interrupt_closes_running_phase_and_deadlock_resume_is_nonpublishing(self) -> None:
+    async def test_interrupt_closes_running_phase_and_deadlock_resume_is_nonpublishing(self) -> None:
         inspection = self.submit_prompt()
         captured_interruptions = []
 
-        def interrupt_during_provider(_invocation):
+        async def interrupt_during_provider(_invocation):
             captured_interruptions.append(
                 self.adapter.interrupt(
                     session_id="session-1",
@@ -277,12 +286,12 @@ class ConsensusRuntimeAdapterTests(unittest.TestCase):
             raise InterruptedError("provider stopped")
 
         self.port.invoke_hook = interrupt_during_provider
-        result = self.adapter.confirm(self.exact_decision(inspection))
+        result = await self.adapter.confirm(self.exact_decision(inspection))
         self.assertEqual(captured_interruptions[0].projection.state, ConsensusPhaseState.INTERRUPTED)
         self.assertEqual(len(self.port.interrupt_calls), 1)
         self.assertTrue(result.inspection.recovery_required)
 
-        deadlocked = self._deadlocked_workflow()
+        deadlocked = await self._deadlocked_workflow()
         port = FakeConsensusPort()
         key = (
             deadlocked.submission.session_id,
@@ -299,7 +308,7 @@ class ConsensusRuntimeAdapterTests(unittest.TestCase):
         self.assertFalse(resumed.recovery_required)
         self.assertEqual(port.provider_calls, [])
 
-    def _deadlocked_workflow(self) -> ConsensusStoredWorkflow:
+    async def _deadlocked_workflow(self) -> ConsensusStoredWorkflow:
         owner = object()
         history = []
         prior = None
@@ -313,8 +322,8 @@ class ConsensusRuntimeAdapterTests(unittest.TestCase):
                 proposal_id="deadlock-proposal",
                 phase=phase,
                 revision_id="r0",
-                input_digest=_PROMPT,
-                candidate_digest=candidate,
+                input_material=_PROMPT_MATERIAL,
+                candidate_material=candidate,
                 base_tail_sequence=tail,
                 previous_result_event_id=prior,
             )
@@ -332,20 +341,27 @@ class ConsensusRuntimeAdapterTests(unittest.TestCase):
             decision_event = ConsensusEvent(f"decision-{tail + 2}", tail + 2, decision)
             history.extend((request_event, decision_event))
 
-            def invoke(invocation):
+            async def invoke(invocation):
                 if invocation.phase is ConsensusPhase.DRAFT:
-                    return ConsensusProviderResult("5" * 64, _CANDIDATE)
+                    return ConsensusProviderResult(
+                        ConsensusPhaseOutputKind.CANDIDATE,
+                        "5" * 64,
+                        _CANDIDATE_MATERIAL,
+                    )
                 if invocation.phase is ConsensusPhase.AUDIT:
                     return ConsensusProviderResult(
+                        ConsensusPhaseOutputKind.AUDIT,
                         f"{invocation.ordinal + 5}" * 64,
-                        invocation.candidate_digest,
+                        invocation.candidate_material,
                         audit_verdict=ConsensusAuditVerdict.APPROVE,
                     )
                 return ConsensusProviderResult(
-                    "9" * 64, invocation.candidate_digest, deadlocked=True
+                    ConsensusPhaseOutputKind.DEADLOCK,
+                    "9" * 64,
+                    invocation.candidate_material,
                 )
 
-            receipt = ConsensusExecutionCoordinator(
+            receipt = await ConsensusExecutionCoordinator(
                 owner=owner,
                 append_event=history.append,
                 invoke_provider=invoke,
@@ -360,7 +376,8 @@ class ConsensusRuntimeAdapterTests(unittest.TestCase):
                 current_tail_sequence=decision_event.sequence,
             )
             prior = receipt.terminal_event.event_id
-            candidate = receipt.terminal_event.payload.candidate_digest
+            if phase is ConsensusPhase.DRAFT:
+                candidate = _CANDIDATE_MATERIAL
 
         submission = ConsensusWorkflowSubmission(
             session_id="deadlock-session",
@@ -368,7 +385,7 @@ class ConsensusRuntimeAdapterTests(unittest.TestCase):
             workflow_id="deadlock-workflow",
             proposal_id="deadlock-proposal",
             input_kind=ConsensusInputKind.PROMPT,
-            input_digest=_PROMPT,
+            input_material=_PROMPT_MATERIAL,
         )
         return ConsensusStoredWorkflow(submission, tuple(history))
 

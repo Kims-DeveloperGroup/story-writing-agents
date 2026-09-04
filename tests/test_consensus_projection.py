@@ -18,15 +18,25 @@ from story_writing_agents.consensus import (
     ConsensusPhaseDecision,
     ConsensusPhaseResult,
     ConsensusPhaseState,
+    ConsensusInputKind,
+    ConsensusStoredWorkflow,
+    ConsensusWorkflowSubmission,
     consensus_request_digest,
     prepare_consensus_phase,
     project_consensus,
+)
+from story_writing_agents.consensus.contracts import ConsensusMaterialHandle
+from story_writing_agents.consensus.serialization import (
+    deserialize_consensus_workflow,
+    serialize_consensus_workflow,
 )
 
 
 _INPUT = "1" * 64
 _CANDIDATE = "2" * 64
 _REPAIRED = "3" * 64
+_INPUT_MATERIAL = ConsensusMaterialHandle("material-input", _INPUT)
+_CANDIDATE_MATERIAL = ConsensusMaterialHandle("material-candidate", _CANDIDATE)
 
 
 class ConsensusProjectionTests(unittest.TestCase):
@@ -38,7 +48,7 @@ class ConsensusProjectionTests(unittest.TestCase):
         *,
         phase: ConsensusPhase = ConsensusPhase.DRAFT,
         revision_id: str = "r0",
-        candidate_digest: str | None = None,
+        candidate_material: ConsensusMaterialHandle | None = None,
         tail: int = 0,
         previous: str | None = None,
         request_id: str = "request-1",
@@ -50,8 +60,8 @@ class ConsensusProjectionTests(unittest.TestCase):
             proposal_id="proposal-1",
             phase=phase,
             revision_id=revision_id,
-            input_digest=_INPUT,
-            candidate_digest=candidate_digest,
+            input_material=_INPUT_MATERIAL,
+            candidate_material=candidate_material,
             base_tail_sequence=tail,
             previous_result_event_id=previous,
         )
@@ -137,7 +147,9 @@ class ConsensusProjectionTests(unittest.TestCase):
                 proposal_id="proposal-1",
                 phase=ConsensusPhase.DRAFT,
                 revision_id="r0",
+                input_material_locator=_INPUT_MATERIAL.locator,
                 input_digest=_INPUT,
+                candidate_material_locator=None,
                 candidate_digest=None,
                 base_tail_sequence=0,
                 previous_result_event_id=None,
@@ -248,7 +260,7 @@ class ConsensusProjectionTests(unittest.TestCase):
         )
         audit, _ = self.request(
             phase=ConsensusPhase.AUDIT,
-            candidate_digest=_CANDIDATE,
+            candidate_material=_CANDIDATE_MATERIAL,
             tail=3,
             previous="draft-result",
             request_id="request-audit",
@@ -329,6 +341,29 @@ class ConsensusProjectionTests(unittest.TestCase):
         self.assertFalse(deadlock.publication_allowed)
         self.assertFalse(projection.publication_allowed)
         self.assertNotIn("candidate", {item.name for item in fields(deadlock)} - {"candidate_digest"})
+
+    def test_material_handles_serialize_deterministically_without_authority(self) -> None:
+        request, _ = self.request()
+        workflow = ConsensusStoredWorkflow(
+            ConsensusWorkflowSubmission(
+                session_id="session-1",
+                conversation_id="conversation-1",
+                workflow_id=request.workflow_id,
+                proposal_id=request.proposal_id,
+                input_kind=ConsensusInputKind.PROMPT,
+                input_material=_INPUT_MATERIAL,
+            ),
+            (ConsensusEvent("request-event", 1, request),),
+        )
+        encoded = serialize_consensus_workflow(workflow)
+        self.assertEqual(serialize_consensus_workflow(workflow), encoded)
+        self.assertEqual(deserialize_consensus_workflow(encoded), workflow)
+        self.assertIn(b'"locator":"material-input"', encoded)
+        self.assertNotIn(b"capability", encoded)
+        with self.assertRaisesRegex(ValueError, "duplicate fields"):
+            deserialize_consensus_workflow(
+                encoded.replace(b'{"events":', b'{"events":[],"events":', 1)
+            )
 
 
 if __name__ == "__main__":

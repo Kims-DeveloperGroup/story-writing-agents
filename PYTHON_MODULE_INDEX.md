@@ -16,9 +16,9 @@ Source root: `src/`
 
 Package root: `src/story_writing_agents/`
 
-Importable production units indexed: 127.
+Importable production units indexed: 128.
 
-Direct internal dependency edges indexed: 490.
+Direct internal dependency edges indexed: 494.
 
 Directed internal dependency cycles indexed: 0.
 
@@ -65,11 +65,12 @@ __main__ -> cli -> conversation_rag_cli
                  |          -> writing_artifacts.read_actions
                  -> cli_context -> workspace/errors
 
-consensus -> consensus.contracts/consensus.execution/consensus.projection/consensus.runtime_adapter
+consensus -> consensus.contracts/consensus.execution/consensus.projection/consensus.runtime_adapter/consensus.serialization
 consensus.contracts -> agents
 consensus.execution -> agents/consensus.contracts/consensus.projection
 consensus.projection -> consensus.contracts
 consensus.runtime_adapter -> consensus.contracts/consensus.execution/consensus.projection
+consensus.serialization -> consensus.contracts/consensus.projection/consensus.runtime_adapter
 
 interactive_controller._core -> interactive_controller._session_policy
                              -> interactive_controller._conversation_policy
@@ -1703,15 +1704,15 @@ every intermediate arrow. The current runtime graph is acyclic.
 
 - **Source:** `src/story_writing_agents/consensus/__init__.py`
 - **Responsibility:** Provide the package-level facade for provider-independent,
-  phase-confirmed consensus contracts, execution, runtime adaptation, and
-  projection.
-- **Supported surface:** Package `__all__` exports exactly 34 consensus
-  contract, execution, runtime-adapter, projection, enum, capability, digest,
-  and preparation names.
+  phase-confirmed consensus contracts, execution, runtime adaptation,
+  serialization, and projection.
+- **Supported surface:** Package `__all__` exports exactly 39 consensus
+  contract, execution, runtime-adapter, serialization, projection, enum,
+  capability, digest, and preparation names.
   These names are intentionally absent from the project-root facade.
 - **Direct internal dependencies:** `consensus.contracts`,
-  `consensus.execution`, `consensus.projection`, and
-  `consensus.runtime_adapter`.
+  `consensus.execution`, `consensus.projection`,
+  `consensus.runtime_adapter`, and `consensus.serialization`.
 - **State, resources, and side effects:** Owns no persistent or external
   resource. Importing only binds immutable domain definitions and performs no
   filesystem, provider, network, subprocess, or import-time operational I/O.
@@ -1725,9 +1726,11 @@ every intermediate arrow. The current runtime graph is acyclic.
 - **Responsibility:** Execute one exact confirmed consensus phase through
   injectable provider and event-appender ports, returning content-free
   durability and terminal-state evidence.
-- **Supported surface:** Direct-module `__all__` exports exactly nine
-  invocation, provider, durability, coordinator, receipt, protocol, and
-  outcome types. The consensus package facade re-exports them.
+- **Supported surface:** Direct-module `__all__` exports exactly ten
+  invocation, provider-output, durability, coordinator, receipt, protocol,
+  and outcome types. The consensus package facade re-exports them.
+- Provider invocation is asynchronous and transports opaque material handles;
+  provider output is classified by the closed `ConsensusPhaseOutputKind` enum.
 - **Direct internal dependencies:** `agents`, `consensus.contracts`, and
   `consensus.projection`.
 - **State, resources, and side effects:** Retains only injected ports and
@@ -1746,6 +1749,8 @@ every intermediate arrow. The current runtime graph is acyclic.
 - **Supported surface:** Direct-module `__all__` exports exactly eight input,
   runtime-adapter, decision, inspection, port, stored-workflow, and submission
   names. The consensus package facade re-exports them.
+- Submission and decision inputs carry opaque material handles rather than
+  content bytes, and provider invocation/confirmed decisions are asynchronous.
 - **Direct internal dependencies:** `consensus.contracts`,
   `consensus.execution`, and `consensus.projection`.
 - **State, resources, and side effects:** Retains only injected runtime ports
@@ -1756,13 +1761,32 @@ every intermediate arrow. The current runtime graph is acyclic.
   `tests/test_consensus_runtime_adapter.py` and
   `docs/design/consensus-workflow.md`.
 
+### `story_writing_agents.consensus.serialization`
+
+- **Source:** `src/story_writing_agents/consensus/serialization.py`
+- **Responsibility:** Provide deterministic bounded JSON serialization and
+  deserialization for validated consensus workflows without content bodies or
+  runtime capabilities.
+- **Supported surface:** Direct-module `__all__` exports exactly three names:
+  `CONSENSUS_SERIALIZATION_SCHEMA_VERSION`,
+  `deserialize_consensus_workflow`, and `serialize_consensus_workflow`. The
+  consensus package facade re-exports them.
+- **Direct internal dependencies:** `consensus.contracts`,
+  `consensus.projection`, and `consensus.runtime_adapter`.
+- **State, resources, and side effects:** Pure codec over validated values;
+  it owns no retained external state and performs no filesystem, provider,
+  network, subprocess, or import-time operational I/O.
+- **Primary verification/documentation:**
+  `tests/test_consensus_projection.py` and
+  `docs/design/consensus-workflow.md`.
+
 ### `story_writing_agents.consensus.contracts`
 
 - **Source:** `src/story_writing_agents/consensus/contracts.py`
 - **Responsibility:** Define immutable provider-independent phase, decision,
-  audit, result, digest, and confirmation-capability contracts for one
-  consensus lineage.
-- **Supported surface:** Direct-module `__all__` exports exactly 12
+  material-handle, audit, result, digest, and confirmation-capability
+  contracts for one consensus lineage.
+- **Supported surface:** Direct-module `__all__` exports exactly 13
   consensus contract names and preparation/digest functions; the package
   facade re-exports them.
 - **Direct internal dependencies:** `agents`.
