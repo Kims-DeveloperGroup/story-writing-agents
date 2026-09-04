@@ -1,4 +1,4 @@
-"""Phase-confirmed consensus contracts, projection, and execution."""
+"""Phase-confirmed consensus contracts, execution, adaptation, and serialization."""
 
 from .contracts import (
     CONSENSUS_AUDITORS,
@@ -6,6 +6,7 @@ from .contracts import (
     ConsensusAuditVerdict,
     ConsensusConfirmationCapability,
     ConsensusDecision,
+    ConsensusMaterialHandle,
     ConsensusPhase,
     ConsensusPhaseDecision,
     ConsensusPhaseRequest,
@@ -21,6 +22,7 @@ from .execution import (
     ConsensusExecutionCoordinator,
     ConsensusExecutionReceipt,
     ConsensusPhaseInvocation,
+    ConsensusPhaseOutputKind,
     ConsensusProviderInvoker,
     ConsensusProviderOutcomeUnknown,
     ConsensusProviderResult,
@@ -42,9 +44,15 @@ from .runtime_adapter import (
     ConsensusStoredWorkflow,
     ConsensusWorkflowSubmission,
 )
+from .serialization import (
+    CONSENSUS_SERIALIZATION_SCHEMA_VERSION,
+    deserialize_consensus_workflow,
+    serialize_consensus_workflow,
+)
 
 __all__ = [
     "CONSENSUS_AUDITORS",
+    "CONSENSUS_SERIALIZATION_SCHEMA_VERSION",
     "ConsensusAudit",
     "ConsensusAuditVerdict",
     "ConsensusConfirmationCapability",
@@ -56,10 +64,12 @@ __all__ = [
     "ConsensusExecutionCoordinator",
     "ConsensusExecutionReceipt",
     "ConsensusInputKind",
+    "ConsensusMaterialHandle",
     "ConsensusNextAction",
     "ConsensusPayload",
     "ConsensusPhase",
     "ConsensusPhaseInvocation",
+    "ConsensusPhaseOutputKind",
     "ConsensusPhaseDecision",
     "ConsensusPhaseRequest",
     "ConsensusPhaseResult",
@@ -76,6 +86,8 @@ __all__ = [
     "ConsensusStoredWorkflow",
     "ConsensusWorkflowSubmission",
     "consensus_request_digest",
+    "deserialize_consensus_workflow",
     "prepare_consensus_phase",
     "project_consensus",
+    "serialize_consensus_workflow",
 ]

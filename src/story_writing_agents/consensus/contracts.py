@@ -71,6 +71,18 @@ class ConsensusAuditVerdict(StrEnum):
 
 
 @dataclass(frozen=True, slots=True)
+class ConsensusMaterialHandle:
+    """Opaque runtime-owned locator bound to immutable material bytes."""
+
+    locator: str
+    digest: str
+
+    def __post_init__(self) -> None:
+        _identifier(self.locator)
+        _digest(self.digest)
+
+
+@dataclass(frozen=True, slots=True)
 class ConsensusAudit:
     """Content-free identity of one current-revision specialist audit."""
 
@@ -100,8 +112,8 @@ class ConsensusPhaseRequest:
     phase: ConsensusPhase
     revision_id: str
     revision_number: int
-    input_digest: str
-    candidate_digest: str | None
+    input_material: ConsensusMaterialHandle
+    candidate_material: ConsensusMaterialHandle | None
     base_tail_sequence: int
     previous_result_event_id: str | None
     request_digest: str
@@ -115,12 +127,14 @@ class ConsensusPhaseRequest:
             raise ValueError("consensus revision number is invalid")
         if _revision(self.revision_id) != f"r{self.revision_number}":
             raise ValueError("consensus revision identity is inconsistent")
-        _digest(self.input_digest)
-        _optional_digest(self.candidate_digest)
+        if type(self.input_material) is not ConsensusMaterialHandle:
+            raise TypeError("consensus input material handle is invalid")
+        if self.candidate_material is not None and type(self.candidate_material) is not ConsensusMaterialHandle:
+            raise TypeError("consensus candidate material handle is invalid")
         if self.phase is ConsensusPhase.DRAFT:
-            if self.revision_number != 0 or self.candidate_digest is not None:
+            if self.revision_number != 0 or self.candidate_material is not None:
                 raise ValueError("draft phase must create revision zero")
-        elif self.candidate_digest is None:
+        elif self.candidate_material is None:
             raise ValueError("post-draft phase requires a candidate digest")
         if type(self.base_tail_sequence) is not int or self.base_tail_sequence < 0:
             raise ValueError("consensus base tail is invalid")
@@ -132,12 +146,24 @@ class ConsensusPhaseRequest:
             proposal_id=self.proposal_id,
             phase=self.phase,
             revision_id=self.revision_id,
-            input_digest=self.input_digest,
+            input_material_locator=self.input_material.locator,
+            input_digest=self.input_material.digest,
+            candidate_material_locator=(
+                None if self.candidate_material is None else self.candidate_material.locator
+            ),
             candidate_digest=self.candidate_digest,
             base_tail_sequence=self.base_tail_sequence,
             previous_result_event_id=self.previous_result_event_id,
         ):
             raise ValueError("consensus phase request digest is invalid")
+
+    @property
+    def input_digest(self) -> str:
+        return self.input_material.digest
+
+    @property
+    def candidate_digest(self) -> str | None:
+        return None if self.candidate_material is None else self.candidate_material.digest
 
 
 @dataclass(frozen=True, slots=True)
@@ -300,8 +326,8 @@ def prepare_consensus_phase(
     proposal_id: str,
     phase: ConsensusPhase,
     revision_id: str,
-    input_digest: str,
-    candidate_digest: str | None,
+    input_material: ConsensusMaterialHandle,
+    candidate_material: ConsensusMaterialHandle | None,
     base_tail_sequence: int,
     previous_result_event_id: str | None = None,
 ) -> tuple[ConsensusPhaseRequest, ConsensusConfirmationCapability]:
@@ -309,6 +335,11 @@ def prepare_consensus_phase(
 
     if owner is None:
         raise TypeError("consensus capability owner is required")
+    if type(input_material) is not ConsensusMaterialHandle or (
+        candidate_material is not None
+        and type(candidate_material) is not ConsensusMaterialHandle
+    ):
+        raise TypeError("consensus material handles are invalid")
     revision_number = int(revision_id.removeprefix("r")) if _REVISION.fullmatch(revision_id) else -1
     request = ConsensusPhaseRequest(
         workflow_id=workflow_id,
@@ -317,8 +348,8 @@ def prepare_consensus_phase(
         phase=phase,
         revision_id=revision_id,
         revision_number=revision_number,
-        input_digest=input_digest,
-        candidate_digest=candidate_digest,
+        input_material=input_material,
+        candidate_material=candidate_material,
         base_tail_sequence=base_tail_sequence,
         previous_result_event_id=previous_result_event_id,
         request_digest=consensus_request_digest(
@@ -327,8 +358,14 @@ def prepare_consensus_phase(
             proposal_id=proposal_id,
             phase=phase,
             revision_id=revision_id,
-            input_digest=input_digest,
-            candidate_digest=candidate_digest,
+            input_material_locator=input_material.locator,
+            input_digest=input_material.digest,
+            candidate_material_locator=(
+                None if candidate_material is None else candidate_material.locator
+            ),
+            candidate_digest=(
+                None if candidate_material is None else candidate_material.digest
+            ),
             base_tail_sequence=base_tail_sequence,
             previous_result_event_id=previous_result_event_id,
         ),
@@ -408,6 +445,7 @@ __all__ = [
     "ConsensusAuditVerdict",
     "ConsensusConfirmationCapability",
     "ConsensusDecision",
+    "ConsensusMaterialHandle",
     "ConsensusPhase",
     "ConsensusPhaseDecision",
     "ConsensusPhaseRequest",
