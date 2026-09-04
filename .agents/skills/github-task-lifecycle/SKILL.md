@@ -1,8 +1,8 @@
 ---
 name: github-task-lifecycle
 description: >-
-  Use for GitHub-tracked planning/inspection/mutation/integration/cleanup; excludes
-  untracked/story-runtime work.
+  GitHub-tracked work: supplies/guards planning,linking,branching,PR,integration,cleanup
+  commands; excludes untracked/story-runtime work.
 ---
 
 [GITHUB_WORKFLOW.md](../../../GITHUB_WORKFLOW.md): authorization/metadata;

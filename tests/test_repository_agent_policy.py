@@ -683,19 +683,23 @@ class RepositoryAgentPolicyTests(unittest.TestCase):
     def test_agents_loads_skills_at_positive_and_negative_boundaries(self) -> None:
         descriptions = {
             "adaptive-verification": (
-                "Use for nontrivial tracked-change evidence planning/running/reuse/escalation/acceptance",
+                "Use for nontrivial-tracked-changes",
+                "selects/budgets/deduplicates/reuses/escalates evidence for sufficiency",
                 "excludes conversation/story execution",
             ),
             "github-task-lifecycle": (
-                "Use for GitHub-tracked planning/inspection/mutation/integration/cleanup",
+                "GitHub-tracked work",
+                "supplies/guards planning,linking,branching,PR,integration,cleanup commands",
                 "excludes untracked/story-runtime work",
             ),
             "subagent-model-selection": (
-                "Use for subagent model/effort selection/override/inheritance",
-                "excludes root/story agents",
+                "Subagent model/effort decisions",
+                "derives root-capped selection/override/inheritance",
+                "excludes root/story-runtime agents",
             ),
             "subagent-routing": (
-                "Use for development-subagent evaluation/dispatch/control/handoff/join/retry",
+                "Development-subagent routing",
+                "validates/evaluates/dispatches/controls/joins/retries packets",
                 "excludes story/root-only work",
             ),
         }

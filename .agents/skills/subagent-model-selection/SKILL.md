@@ -1,7 +1,8 @@
 ---
 name: subagent-model-selection
 description: >-
-  Use for subagent model/effort selection/override/inheritance; excludes root/story agents.
+  Subagent model/effort decisions: derives root-capped selection/override/inheritance;
+  excludes root/story-runtime agents.
 ---
 
 Resolve root model/effort after aliases/defaults/session overrides/runtime child pairs.

@@ -1,8 +1,8 @@
 ---
 name: subagent-routing
 description: >-
-  Use for development-subagent evaluation/dispatch/control/handoff/join/retry; excludes
-  story/root-only work.
+  Development-subagent routing: validates/evaluates/dispatches/controls/joins/retries packets;
+  excludes story/root-only work.
 ---
 
 `predicted_critical_path_savings_seconds=root_sequential_estimate-(parallel_critical_path+spawn_wait_handoff_synthesis_overhead)`

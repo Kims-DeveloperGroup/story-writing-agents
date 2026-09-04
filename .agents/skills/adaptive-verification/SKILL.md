@@ -1,8 +1,8 @@
 ---
 name: adaptive-verification
 description: >-
-  Use for nontrivial tracked-change evidence planning/running/reuse/escalation/acceptance;
-  excludes conversation/story execution.
+  Use for nontrivial-tracked-changes; selects/budgets/deduplicates/reuses/escalates evidence
+  for sufficiency; excludes conversation/story execution.
 ---
 
 [AGENTS.md](../../../AGENTS.md) governs. Root exclusively owns selection/authorization/budget/
