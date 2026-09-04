@@ -738,14 +738,25 @@ def _open_guard(directories: _ArtifactDirectories) -> int:
         "O_NONBLOCK",
     ):
         flags |= getattr(os, flag_name, 0)
-    if existing is None:
-        flags |= os.O_CREAT | os.O_EXCL
-    descriptor = os.open(
-        _GUARD_FILENAME,
-        flags,
-        0o600,
-        dir_fd=directories.artifact_descriptor,
-    )
+    create = existing is None
+    try:
+        descriptor = os.open(
+            _GUARD_FILENAME,
+            flags | (os.O_CREAT | os.O_EXCL if create else 0),
+            0o600,
+            dir_fd=directories.artifact_descriptor,
+        )
+    except FileExistsError:
+        if not create:
+            raise
+        # Another process won the first-use exclusive create. Open only that
+        # winner through the same no-follow descriptor-relative boundary; the
+        # verification below rejects replacement, non-regular, or linked leaves.
+        descriptor = os.open(
+            _GUARD_FILENAME,
+            flags,
+            dir_fd=directories.artifact_descriptor,
+        )
     try:
         try:
             os.set_inheritable(descriptor, False)
