@@ -16,9 +16,9 @@ Source root: `src/`
 
 Package root: `src/story_writing_agents/`
 
-Importable production units indexed: 131.
+Importable production units indexed: 132.
 
-Direct internal dependency edges indexed: 509.
+Direct internal dependency edges indexed: 514.
 
 Directed internal dependency cycles indexed: 0.
 
@@ -4670,6 +4670,11 @@ every intermediate arrow. The current runtime graph is acyclic.
   accent values; `ListView` accepts messages alongside its established record
   and field rows. These bindings support count-aware dense semantic and
   attributed-message views without changing the package-supported surface.
+  `InteractiveTerminal.write_collaboration_events` accepts one validated,
+  strictly ordered durable conversation suffix, skips records at or before an
+  explicit restart cursor, writes every later event exactly once, and returns
+  the last rendered sequence. Compact and details-enabled projections retain
+  the same semantic payload; details add only durable record identity.
   Callback construction discards accepted-input
   projections because its ordinary reader already owns the visible echo, while
   stream construction routes them through the sole driver's selected input
@@ -5202,6 +5207,34 @@ every intermediate arrow. The current runtime graph is acyclic.
   `docs/design/interactive-cli-design-system.md`, and
   `docs/operations/terminal-safety.md`.
 
+### `story_writing_agents.interactive_terminal._collaboration_view`
+
+- **Source:** `src/story_writing_agents/interactive_terminal/_collaboration_view.py`
+- **Responsibility:** Project validated durable collaboration events into safe,
+  complete semantic terminal views.
+- **Supported surface:** Package-internal `project_collaboration_event` maps the
+  closed schema-v2 collaboration payload family to one `Panel` per durable
+  event. Proposals retain complete assignments, content-free source indicators,
+  user impact, side effects, exact proposal identity, and bounded cost.
+  Artifact and local-commit requests show affected paths, bounded byte/hunk
+  facts, choices, prohibited effects, and the separate Apply/Commit/paired-push
+  boundaries without rendering artifact bytes. Step states provide fixed
+  user-facing meanings and next actions. `validate_collaboration_event_order`
+  rejects mixed conversation scope, duplicate sequence, and out-of-order input
+  before presentation. Details mode adds durable record identity but cannot
+  remove semantic content.
+- **Direct internal dependencies:** `conversations`, `writing_artifacts`, and
+  `interactive_terminal._model`.
+- **State, resources, and side effects:** Pure validated projection only. It
+  reads no store, invokes no provider, writes no stream, and owns no terminal,
+  artifact, Git, or runtime state. Closed payload dispatch fails on unknown
+  types. Raw create/replace/patch bytes and private provider state are never
+  projected.
+- **Primary verification/documentation:**
+  `tests/test_interactive_collaboration_view.py`,
+  `docs/reference/interactive-terminal.md`, and
+  `docs/guides/lead-agent-collaboration.md`.
+
 ### `story_writing_agents.interactive_terminal._driver`
 
 - **Source:** `src/story_writing_agents/interactive_terminal/_driver.py`
@@ -5534,6 +5567,9 @@ every intermediate arrow. The current runtime graph is acyclic.
   callback-width semantics remain compatible. Main prompt projection accepts
   lobby scope with neither identity, attached session-only scope, or the
   established session-plus-agent scope; agent-without-session remains invalid.
+  `write_collaboration_events` owns validated durable-order delivery and a
+  monotonic restart cursor while delegating pure payload projection to
+  `_collaboration_view`; it performs no runtime or storage read.
   `write_error` alone adds the
   optional keyword-only `debug_log_path` presentation seam: `None` preserves
   the established error record exactly, and supplied validated text becomes
@@ -5652,7 +5688,8 @@ every intermediate arrow. The current runtime graph is acyclic.
   external-view lifecycle. Neither route imports the required external viewer
   package, exposes terminal resources, nor retains operation, frame, input,
   search, or navigation state after return or failure.
-- **Direct internal dependencies:** `agents`, `interactive_commands`,
+- **Direct internal dependencies:** `agents`, `conversations`,
+  `interactive_commands`, `interactive_terminal._collaboration_view`,
   `interactive_terminal._controls`, `interactive_terminal._driver`,
   `interactive_terminal._external_view`,
   `interactive_terminal._live_composer`,

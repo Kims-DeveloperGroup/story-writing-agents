@@ -485,6 +485,54 @@ A deadlocked debate is resumable by its existing step and lineage. The lead can
 propose a focused continuation that carries the original inputs and reply
 events; you do not need to copy a deadlocked candidate into a new conversation.
 
+## What the durable exchange looks like
+
+The terminal renders each validated collaboration event once in its durable
+sequence. A proposal is not summarized into opaque prose; the user sees the
+identity and limits that the confirmation control will bind:
+
+```text
+--- Collaboration · message ---------------------------------------------------
+  Sequence: 7
+  From: lead:lead_orchestrator
+  To: user
+  Step: step_scene_review
+  Proposal: proposal_scene_review
+  Revision: 1
+  Digest: sha256:...
+  Purpose: Check the scene against plot and character evidence.
+  User impact: Read-only specialist advice; no files or Git state change.
+  Side effects: provider_invocation
+  Assignments
+  - assignment_plot · plot_architect
+    Round: 1
+    Inputs: outline
+    Maximum provider calls: 3
+    Compare the scene decision with the global outline.
+  Required sources
+  - outline
+    Reference: ${core_documents/global_outline.md}#L20-L44
+    State: present
+  Bounded cost
+    Round: 1/2
+    Maximum additional calls: 7
+    Physical call limit: 12
+  [confirmation] Choose the exact Confirm, Reject, or Revise control.
+```
+
+After review, artifact panels show paths, operation kinds, base/projected
+digests, and bounded hunk/byte counts without printing replacement text. The
+Apply request says that it changes artifacts but does not stage or commit. The
+later Commit request names the branch, paths, proposed message, effective
+impact, and prohibited remote effects. A local commit result explicitly says
+that a paired remote push has not been authorized.
+
+Compact and details-enabled modes contain the same semantic proposal,
+assignment, confirmation, result, failure, and recovery facts. Details add only
+durable event/batch identity. Plain and ANSI terminals use the same component
+tree, and a restart cursor prevents already rendered sequence numbers from
+appearing twice.
+
 ## State meanings and next actions
 
 ### Cooperation state
