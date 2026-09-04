@@ -18,7 +18,7 @@ Package root: `src/story_writing_agents/`
 
 Importable production units indexed: 130.
 
-Direct internal dependency edges indexed: 504.
+Direct internal dependency edges indexed: 505.
 
 Directed internal dependency cycles indexed: 0.
 
@@ -43,7 +43,7 @@ __main__ -> cli -> conversation_rag_cli
                  |               -> backend/config/conversations/debug_log/directives
                  |               -> conversation_rag_runtime
                  |               -> conversation_storage.composition/contracts
-                 |               -> consensus.contracts/consensus.execution/consensus.event_store/consensus.material_store
+                 |               -> consensus.contracts/consensus.execution/consensus.event_store/consensus.material_store/consensus.runtime_adapter
                  |               -> errors/prompts/workspace
                  |               -> writing_artifacts/repository/runtime_references
                  -> backend -> agent_context/agent_context.service
@@ -180,7 +180,7 @@ conversation_storage.sqlite -> conversation_literal_search/conversation_search
                             -> errors/workspace.core
                             -> conversation_storage.sqlite_database
                             -> conversation_storage.sqlite_search_index
-orchestrator -> artifact_proposals/backend/config/consensus.contracts/consensus.execution/consensus.event_store/consensus.material_store
+orchestrator -> artifact_proposals/backend/config/consensus.contracts/consensus.execution/consensus.event_store/consensus.material_store/consensus.runtime_adapter
              -> conversation_rag_runtime/debug_log/directives
              -> conversation_storage.composition/contracts
              -> errors/git.story_commit_contracts/git.story_commits
@@ -5761,11 +5761,15 @@ every intermediate arrow. The current runtime graph is acyclic.
   complete `ArtifactReviewedProposal` lineage and preserves its false
   artifact-write, Apply-authority, and Git-action flags; it does not apply or
   authorize an artifact change.
+  The same runtime facade implements the existing consensus runtime port and
+  exposes stepwise submit, inspect, decide/confirm, interrupt, resume, and
+  next-phase operations; `RuntimeSession` provides session-bound wrappers for
+  those operations without adding another owner or public package export.
 - **Direct internal dependencies:** `agent_context.accounting`,
   `agent_context.manifest`, `agent_context.planning`, `agent_context.service`,
   `agent_context.sources`, `agents`, `artifact_proposals`, `backend`, `config`,
   `consensus.contracts`, `consensus.execution`, `consensus.event_store`,
-  `consensus.material_store`, `conversations`,
+  `consensus.material_store`, `consensus.runtime_adapter`, `conversations`,
   `git.story_commit_contracts`, `git.story_commits`,
   `conversation_rag_runtime`, `conversation_storage.composition`,
   `conversation_storage.contracts`, `debug_log`, `directives`, `errors`,
@@ -5775,7 +5779,8 @@ every intermediate arrow. The current runtime graph is acyclic.
 - **State, resources, and side effects:** Retains workspace, prompt/config, one
   composed v2 `ConversationStorageServices` bundle, optional RAG service,
   artifact repository, backend snapshot, one workspace-scoped
-  `AgentContextService`, consensus material and workflow stores, quiescent
+  `AgentContextService`, consensus material and workflow stores, one consensus
+  runtime adapter, exact phase-request provider-task ownership, quiescent
   binding state, per-conversation async locks,
   private confirmed-step and artifact-application capabilities, and live
   execution-attempt markers.
@@ -5798,8 +5803,12 @@ every intermediate arrow. The current runtime graph is acyclic.
   successful Apply/unchanged outcomes may disclose one exact local commit
   request. A matching single-use Commit decision delegates staging and the
   literal local commit to the established story-commit service. No path
-  performs a remote Git mutation or merge, starts consensus, or exposes
-  provider-native agent orchestration.
+  performs a remote Git mutation or merge or exposes provider-native agent
+  orchestration. Consensus submissions persist digest-addressed material;
+  confirmed phases resolve candidate handles only through the material store,
+  authorize artifact handles through call-local runtime-reference operations,
+  invoke an exact bound agent, persist draft/repair reply text as unpublished
+  material, and cancel only tasks owned by the exact phase request.
 - **Primary verification/documentation:** `tests/test_lead_orchestration.py`,
   `tests/test_artifact_proposal_orchestration.py`,
   `tests/test_lead_artifact_application.py`,
@@ -5807,6 +5816,8 @@ every intermediate arrow. The current runtime graph is acyclic.
   `tests/test_specialist_orchestration.py`,
   `tests/test_public_api_and_cli.py`,
   `tests/test_runtime_reference_integration.py`,
+  `tests/test_consensus_runtime_adapter.py`,
+  `tests/test_consensus_runtime_correlation.py`,
   `tests/test_interactive_management.py`,
   `tests/test_interactive_cancellation.py`, and
   `tests/test_session_lifecycle.py`; `docs/guides/lead-agent.md`,
