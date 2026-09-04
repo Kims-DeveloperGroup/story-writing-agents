@@ -46,7 +46,7 @@ class WorkspaceSessionResourceCompositionTests(GitSessionResourceGitTestCase):
                 self.assertFalse(hasattr(workspace_facade, operation.__name__))
                 self.assertFalse(hasattr(story_writing_agents, operation.__name__))
         self.assertEqual(len(story_writing_agents.__all__), 104)
-        self.assertEqual(len(git_facade.__all__), 22)
+        self.assertEqual(len(git_facade.__all__), 24)
         self.assertEqual(len(workspace_facade.__all__), 3)
 
     def test_main_and_session_discovery_return_nearest_typed_identity(self) -> None:

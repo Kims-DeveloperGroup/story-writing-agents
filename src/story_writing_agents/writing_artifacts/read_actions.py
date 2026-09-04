@@ -12,7 +12,7 @@ from .authorization import (
     ReferenceInvocationCorrelation,
 )
 from .references import (
-    ArtifactLineRange,
+    ArtifactLineRange as ArtifactLineRange,
     ArtifactReference,
     ArtifactReferenceBatch,
 )

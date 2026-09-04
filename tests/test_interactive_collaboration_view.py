@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import unittest
+import subprocess
 from dataclasses import replace
+from pathlib import Path
 
 from story_writing_agents.interactive_terminal import InteractiveTerminal
 from story_writing_agents.interactive_terminal import _collaboration_view
@@ -236,7 +238,20 @@ class ArtifactAndGitCollaborationViewTests(unittest.IsolatedAsyncioTestCase):
             self.assertNotIn("Use restrained close-third narration.", rendered)
             self.assertNotIn("provider_private", rendered)
         finally:
+            common_git = subprocess.run(
+                ("git", "rev-parse", "--path-format=absolute", "--git-common-dir"),
+                cwd=case.workspace.root,
+                capture_output=True,
+                check=True,
+                text=True,
+            ).stdout.strip()
+            subprocess.run(
+                ("git", "worktree", "remove", "--", str(case.workspace.root)),
+                cwd=Path(common_git).parent,
+                check=True,
+            )
             case.doCleanups()
+            case.temporary.cleanup()
 
 
 if __name__ == "__main__":

@@ -6,8 +6,6 @@ import ast
 import json
 import os
 import subprocess
-import sys
-import tempfile
 import unittest
 from pathlib import Path
 from unittest import mock
@@ -28,7 +26,6 @@ from story_writing_agents.writing_artifacts.repository import (
     WritingArtifactRepository,
 )
 
-from tests.helpers import initialize_test_workspace
 from tests.test_artifact_application_store_lifecycle import (
     _ApplicationStoreTestCase,
     _apply,
@@ -414,8 +411,8 @@ class ArtifactApplicationBoundaryTests(_ApplicationStoreTestCase):
                     resolved = resolve(target)
                     if resolved is not None and resolved != module:
                         edges.add((module, resolved))
-        self.assertEqual(len(modules), 117)
-        self.assertEqual(len(edges), 424)
+        self.assertEqual(len(modules), 132)
+        self.assertEqual(len(edges), 514)
         store = "story_writing_agents.writing_artifacts._application_store"
         repository = "story_writing_agents.writing_artifacts.repository"
         self.assertEqual(
@@ -458,8 +455,8 @@ class ArtifactApplicationBoundaryTests(_ApplicationStoreTestCase):
         for module in modules:
             visit(module)
         index = (_ROOT / "PYTHON_MODULE_INDEX.md").read_text(encoding="utf-8")
-        self.assertIn("Importable production units indexed: 117.", index)
-        self.assertIn("Direct internal dependency edges indexed: 424.", index)
+        self.assertIn("Importable production units indexed: 132.", index)
+        self.assertIn("Direct internal dependency edges indexed: 514.", index)
         self.assertIn("Directed internal dependency cycles indexed: 0.", index)
         self.assertIn(
             "### `story_writing_agents.writing_artifacts._application_store`",

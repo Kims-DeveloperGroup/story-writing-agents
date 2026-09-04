@@ -42,7 +42,6 @@ from story_writing_agents.writing_artifacts import _storage as storage_module
 from story_writing_agents.writing_artifacts import (
     filesystem_sources as filesystem_sources_module,
 )
-from story_writing_agents.writing_artifacts import repository as repository_module
 from story_writing_agents.writing_artifacts._storage import (
     ArtifactEntrySecurityError,
     ArtifactLeaseSecurityError,

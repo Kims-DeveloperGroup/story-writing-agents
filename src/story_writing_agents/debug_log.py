@@ -177,12 +177,33 @@ class WorkspaceDebugLog:
     that record; process-control exceptions continue to propagate.
     """
 
-    __slots__ = ("_workspace",)
+    __slots__ = ("_defer_until_session", "_workspace")
 
-    def __init__(self, workspace: Workspace) -> None:
+    def __init__(
+        self,
+        workspace: Workspace,
+        *,
+        defer_until_session: bool = False,
+    ) -> None:
         if not isinstance(workspace, Workspace):
             raise TypeError("workspace must be a Workspace")
+        if type(defer_until_session) is not bool:
+            raise TypeError("defer_until_session must be a boolean")
         self._workspace = workspace
+        self._defer_until_session = defer_until_session
+
+    def _writes_are_deferred(self) -> bool:
+        """Keep the pristine initialization root untouched before attachment."""
+
+        if not self._defer_until_session:
+            return False
+        session_directory = self._workspace.root / (
+            "agent_states/orchestrator_state/sessions"
+        )
+        try:
+            return not any(session_directory.glob("*.json"))
+        except OSError:
+            return True
 
     @property
     def path(self) -> Path:
@@ -367,7 +388,8 @@ class WorkspaceDebugLog:
                 + b"\n"
             )
             if len(payload) <= DEBUG_LOG_MAX_BYTES:
-                self._append(payload)
+                if not self._writes_are_deferred():
+                    self._append(payload)
         except Exception:
             return
 
@@ -388,6 +410,8 @@ class WorkspaceDebugLog:
         """Build and append one exact record while suppressing ordinary failures."""
 
         try:
+            if self._writes_are_deferred():
+                return
             record = self._build_record(
                 level=level,
                 component=component,

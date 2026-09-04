@@ -814,7 +814,6 @@ class SessionRecoveryBoundaryTests(unittest.TestCase):
         observed = _observe(histories=(RuntimeError("PRIVATE PROSE"),))
         self.assertIs(observed.result.state, SessionRecoveryState.RECOVERY_REQUIRED)
         self.assertNotIn("PRIVATE PROSE", repr(observed.result))
-        reconciler = SessionRecoveryReconciler(_WORKSPACE, _Store((_history(), _history())))
         self.assertEqual(
             set(SessionRecoveryReconciler.__slots__),
             {"_workspace_root", "_collaboration_store"},
@@ -839,8 +838,8 @@ class SessionRecoveryBoundaryTests(unittest.TestCase):
         self.assertNotIn("git.process", dependencies)
         self.assertNotIn("git.session_history", dependencies)
         index = (_ROOT / "PYTHON_MODULE_INDEX.md").read_text()
-        self.assertIn("Importable production units indexed: 120.", index)
-        self.assertIn("Direct internal dependency edges indexed: 441.", index)
+        self.assertIn("Importable production units indexed: 132.", index)
+        self.assertIn("Direct internal dependency edges indexed: 514.", index)
         self.assertIn("Directed internal dependency cycles indexed: 0.", index)
         self.assertIn("tests/test_session_recovery_reconciliation.py", index)
 

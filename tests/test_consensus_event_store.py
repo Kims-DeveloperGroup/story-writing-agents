@@ -99,6 +99,9 @@ class _DurableConsensusPort:
     def interrupt_provider(self, *_args):
         return True
 
+    def verify_consensus_material(self, material):
+        return material is not None
+
 
 class ConsensusEventStoreTests(unittest.TestCase):
     def setUp(self) -> None:

@@ -4422,6 +4422,26 @@ raise SystemExit(cli.main([]))
             "".join(process.normalized_text.split()),
         )
         self.assertIn("Session: lobby\n", process.normalized_text)
+        self.assertEqual(
+            subprocess.run(
+                ("git", "status", "--porcelain=v1", "--untracked-files=all"),
+                cwd=self.workspace.root,
+                capture_output=True,
+                check=True,
+            ).stdout,
+            b"",
+        )
+        self.assertIsNone(
+            self.workspace.read_json("config/system_defaults.json")[
+                "default_backend"
+            ]
+        )
+        self.assertFalse(
+            self.workspace.path(
+                "agent_states/orchestrator_state/provider_route_generations.json"
+            ).exists()
+        )
+        self.assertFalse(self.workspace.path("debug_logs/runtime.jsonl").exists())
 
         process.send_line("/session create alpha")
         process.wait_for_text("story[alpha]> ")
@@ -4438,6 +4458,15 @@ raise SystemExit(cli.main([]))
         self.assertFalse(self.provider_log.exists())
         self.assertNotIn("[suggestions]", process.normalized_text)
         self.assertNotIn("PTY_TEST_CREDENTIAL_MUST_NOT_APPEAR", process.normalized_text)
+        self.assertEqual(
+            subprocess.run(
+                ("git", "status", "--porcelain=v1", "--untracked-files=all"),
+                cwd=self.workspace.root,
+                capture_output=True,
+                check=True,
+            ).stdout,
+            b"",
+        )
 
     def test_capable_main_editor_previews_edits_clears_and_restores(self) -> None:
         """Exercise live suggestions and exact PTY cleanup without side effects."""

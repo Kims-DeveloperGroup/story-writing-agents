@@ -210,6 +210,12 @@ class CollaborationValueContractTests(unittest.TestCase):
                 "artifact_reviewed_proposal",
                 "artifact_proposal_state",
                 "artifact_review_failure",
+                "artifact_application_request",
+                "artifact_application_decision",
+                "artifact_application_result",
+                "story_commit_request",
+                "story_commit_decision",
+                "story_commit_result",
             ),
             CollaborationActorKind: (
                 "user",
@@ -1457,9 +1463,9 @@ import story_writing_agents
 import story_writing_agents.conversations as facade
 import story_writing_agents.conversations.context as context
 import story_writing_agents.conversations.events as events
-assert len(facade.__all__) == 117
-assert len(events.__all__) == 86
-assert len(context.__all__) == 24
+assert len(facade.__all__) == 134
+assert len(events.__all__) == 98
+assert len(context.__all__) == 28
 assert facade.CollaborationProposal is events.CollaborationProposal
 assert facade.CollaborationEventStore is context.CollaborationEventStore
 assert not hasattr(story_writing_agents, "CollaborationProposal")

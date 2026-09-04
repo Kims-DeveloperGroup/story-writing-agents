@@ -3,13 +3,10 @@
 > **Availability:** `story init` creates and validates one exact Git-backed
 > schema-v2 initialization root. It does not run an agent, write story content,
 > create a session resource, or authorize a later story commit. A separate
-> package-internal seam can now materialize exact session Git resources, but
-> current `story session` commands do not call it until #455. Another internal
-> seam persists content-free commit/checkpoint evidence. An internal service
-> can now execute exact confirmed story commits, while #491 and #492 still own
-> application production and the user-facing lead confirmation UI. A second
-> internal service can now checkpoint a closed set of session runtime paths;
-> neither service is wired to a command or lead action.
+> runtime materializes exact session Git resources when a user creates a
+> session. Separate runtime services apply confirmed artifact changes, prepare
+> and execute confirmed local commits, and checkpoint the closed internal state
+> families without treating those controls as interchangeable.
 
 Key terms: **initialization root**—the pristine `main` baseline; **marker**—the
 strict `config/workspace.json` identity; **journal**—the temporary durable
@@ -96,6 +93,18 @@ git -C ./my-novel status --porcelain
 The outputs are `main`, `1`, `Initialize story workspace`, and no status rows.
 Repeating `story init ./my-novel` prints the same workspace JSON after
 validation and leaves the commit count at one.
+
+The committed `.gitignore` names only runtime-owned state families such as
+provider-session records, conversation history, locks, and debug logs. Those
+bytes are checkpointed through the internal session history instead of story
+commits. It does not ignore core documents, manuscript files, configuration,
+agent prompts, or arbitrary new paths. Consequently, opening the lobby and
+creating the first session preserves a clean `main` status while an unrelated
+user file still makes readiness fail closed.
+
+Provider authentication at lobby startup is also nonpersistent. If no default
+provider has been saved, the authenticated choice is held in memory for that
+process; only an explicit Settings save may change `config/system_defaults.json`.
 
 Initialization itself emits no debug-log event. A successful root has no
 initialization journal or other untracked initializer residue.

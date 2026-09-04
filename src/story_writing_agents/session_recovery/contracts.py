@@ -377,9 +377,7 @@ def reconcile_session_recovery(
     history = evidence.collaboration_history
     reviewed = evidence.reviewed_proposal
     application = evidence.artifact_application
-    candidate = evidence.story_commit_candidate
     commit = evidence.story_commit_operation
-    checkpoint = evidence.checkpoint_operation
 
     if _is_fresh_idle(evidence):
         _raise_error(SessionRecoveryFailureCode.UNSUPPORTED_SHAPE)

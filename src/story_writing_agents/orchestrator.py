@@ -6394,11 +6394,16 @@ class StoryRuntime:
                     in item.authorized_source_kinds
                 ):
                     current_descriptors.extend(
-                        descriptor
-                        for descriptor in descriptors
-                        if item.artifact_path_prefix is None
-                        or descriptor.provenance.locator.startswith(
-                            item.artifact_path_prefix
+                        sorted(
+                            (
+                                descriptor
+                                for descriptor in descriptors
+                                if item.artifact_path_prefix is None
+                                or descriptor.provenance.locator.startswith(
+                                    item.artifact_path_prefix
+                                )
+                            ),
+                            key=lambda descriptor: descriptor.source_id,
                         )
                     )
                 if (
@@ -6407,27 +6412,30 @@ class StoryRuntime:
                 ):
                     services = self.conversation_storage_services
                     current_descriptors.extend(
-                        descriptor
-                        for descriptor in FocusedConversationSourceAdapter(
-                            services.catalog,
-                            services.event_store,
-                            scope,
-                            conversation_id,
-                            include_same_session_active=True,
-                            include_searchable_history=True,
-                        ).inventory(CONTEXT_SOURCE_POLICY)
+                        sorted(
+                            FocusedConversationSourceAdapter(
+                                services.catalog,
+                                services.event_store,
+                                scope,
+                                conversation_id,
+                                include_same_session_active=True,
+                                include_searchable_history=True,
+                            ).inventory(CONTEXT_SOURCE_POLICY),
+                            key=lambda descriptor: descriptor.source_id,
+                        )
                     )
                 if CollaborationInputKind.AGENT_STATE in item.authorized_source_kinds:
                     current_descriptors.extend(
-                        descriptor
-                        for descriptor in OwnAgentStateSourceAdapter(
-                            self.workspace,
-                            scope,
-                        ).inventory(CONTEXT_SOURCE_POLICY)
+                        sorted(
+                            OwnAgentStateSourceAdapter(
+                                self.workspace,
+                                scope,
+                            ).inventory(CONTEXT_SOURCE_POLICY),
+                            key=lambda descriptor: descriptor.source_id,
+                        )
                     )
                 if (
-                    item.manifest_digest != manifest_digest
-                    or tuple(descriptor.source_id for descriptor in current_descriptors)
+                    tuple(descriptor.source_id for descriptor in current_descriptors)
                     != item.authorized_source_ids
                     or self._lead_authorized_source_fingerprint(
                         tuple(current_descriptors)

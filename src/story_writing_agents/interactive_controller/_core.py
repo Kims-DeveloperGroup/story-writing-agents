@@ -680,7 +680,10 @@ class InteractiveController:
         ):
             raise TypeError("provider_catalog must provide discover")
         self._workspace = workspace
-        self._debug_log = WorkspaceDebugLog(workspace)
+        self._debug_log = WorkspaceDebugLog(
+            workspace,
+            defer_until_session=True,
+        )
         self._error_write_count = 0
         self._context = context
         self._backend = backend

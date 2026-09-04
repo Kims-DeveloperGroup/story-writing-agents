@@ -792,8 +792,8 @@ class SessionTransitionAssessmentTests(unittest.TestCase):
             )
         )
         index = (_ROOT / "PYTHON_MODULE_INDEX.md").read_text(encoding="utf-8")
-        self.assertIn("Importable production units indexed: 121.", index)
-        self.assertIn("Direct internal dependency edges indexed: 456.", index)
+        self.assertIn("Importable production units indexed: 132.", index)
+        self.assertIn("Direct internal dependency edges indexed: 514.", index)
         self.assertIn("Directed internal dependency cycles indexed: 0.", index)
         self.assertIn("tests/test_session_transition_assessment.py", index)
 

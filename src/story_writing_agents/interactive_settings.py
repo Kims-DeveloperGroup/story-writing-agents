@@ -783,12 +783,15 @@ def reconcile_provider_route_generations(
     configuration: ConfigurationSnapshot,
     *,
     provider_overrides: Mapping[str, str] | None = None,
+    persist_missing: bool = True,
 ) -> tuple[bytes, Mapping[str, ProviderRouteEntry]]:
     """Load durable routes and safely advance manual provider changes."""
 
     _require_workspace(workspace)
     if type(configuration) is not ConfigurationSnapshot:
         raise TypeError("configuration must be a ConfigurationSnapshot")
+    if type(persist_missing) is not bool:
+        raise TypeError("persist_missing must be a boolean")
     target = workspace.path(_PROVIDER_ROUTE_GENERATIONS_PATH)
     before = (
         _read_exact_bytes(workspace, _PROVIDER_ROUTE_GENERATIONS_PATH)
@@ -805,7 +808,7 @@ def reconcile_provider_route_generations(
         else _decode_provider_routes(before)
     )
     reconciled: dict[str, ProviderRouteEntry] = {}
-    changed = before is None
+    changed = before is None and persist_missing
     for agent_id in ROSTER:
         current = routes[agent_id]
         provider = _configured_provider(
@@ -822,7 +825,7 @@ def reconcile_provider_route_generations(
                 current.generation + 1,
             )
     expected = _provider_routes_bytes(reconciled)
-    if changed or before != expected:
+    if changed or before != expected and before is not None:
         try:
             workspace.write_text(
                 _PROVIDER_ROUTE_GENERATIONS_PATH,

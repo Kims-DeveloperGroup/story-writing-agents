@@ -102,6 +102,7 @@ class LeadStoryCommitTests(LeadOrchestrationTestCase):
 
     def setUp(self) -> None:
         temporary = tempfile.TemporaryDirectory(prefix="lead-story-commit-")
+        self.temporary = temporary
         self.addCleanup(temporary.cleanup)
         main = Workspace(temporary.name).initialize()
         self.session_id = "story_session"

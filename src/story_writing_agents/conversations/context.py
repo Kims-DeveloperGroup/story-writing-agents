@@ -60,7 +60,6 @@ from .events import (
     ArtifactApplicationDecisionKind,
     ArtifactApplicationOutcomeKind,
     StoryCommitDecisionPayload,
-    StoryCommitNextAction,
     StoryCommitOutcomeKind,
     StoryCommitRequestPayload,
     StoryCommitResultPayload,
