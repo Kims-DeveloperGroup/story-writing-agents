@@ -6,7 +6,11 @@ from dataclasses import dataclass
 from enum import StrEnum
 
 from .contracts import (
+    ConsensusAuditVerdict,
     ConsensusDecision,
+    ConsensusContinuation,
+    ConsensusContinuationMode,
+    ConsensusMaterialHandle,
     ConsensusPhase,
     ConsensusPhaseDecision,
     ConsensusPhaseRequest,
@@ -27,6 +31,7 @@ class ConsensusNextAction(StrEnum):
     REQUEST_NEXT_PHASE = "request_next_phase"
     INSPECT_FAILURE = "inspect_failure"
     OPERATOR_RECOVERY = "operator_recovery"
+    CONTINUE_DEADLOCK = "continue_deadlock"
     NONE = "none"
 
 
@@ -67,6 +72,16 @@ class ConsensusProjection:
     last_sequence: int = 0
     next_action: ConsensusNextAction = ConsensusNextAction.NONE
     publication_allowed: bool = False
+    continuation_mode: ConsensusContinuationMode | None = None
+    source_workflow_id: str | None = None
+    source_result_event_id: str | None = None
+    source_revision_id: str | None = None
+    source_candidate_digest: str | None = None
+    ruling_digest: str | None = None
+    ruling_present: bool = False
+    added_revision_rounds: int = 0
+    remaining_revision_rounds: int = 0
+    terminal: bool = False
 
 
 def project_consensus(events: tuple[ConsensusEvent, ...]) -> ConsensusProjection:
@@ -88,6 +103,9 @@ def project_consensus(events: tuple[ConsensusEvent, ...]) -> ConsensusProjection
     result: ConsensusPhaseResult | None = None
     result_event: ConsensusEvent | None = None
     prior_terminal: tuple[ConsensusPhaseResult, ConsensusEvent] | None = None
+    continuation: ConsensusContinuation | None = None
+    continuation_repairs = 0
+    latest_conflicts: tuple[ConsensusMaterialHandle, ...] = ()
 
     for expected_sequence, event in enumerate(events, start=1):
         if event.sequence != expected_sequence or event.event_id in seen_event_ids:
@@ -105,7 +123,25 @@ def project_consensus(events: tuple[ConsensusEvent, ...]) -> ConsensusProjection
                     raise ValueError("first consensus request has prior lineage")
             elif payload.workflow_id != workflow_id or payload.proposal_id != proposal_id:
                 raise ValueError("consensus lineage identity changed")
-            _validate_request_transition(payload, prior_terminal)
+            _validate_request_transition(
+                payload,
+                prior_terminal,
+                request,
+                latest_conflicts,
+            )
+            if payload.continuation is not None:
+                if continuation is None:
+                    continuation = payload.continuation
+                elif payload.continuation != continuation:
+                    if (
+                        prior_terminal is None
+                        or prior_terminal[0].state is not ConsensusPhaseState.DEADLOCKED
+                        or payload.continuation.source_result_event_id
+                        != prior_terminal[1].event_id
+                    ):
+                        raise ValueError("consensus continuation lineage changed")
+                    continuation = payload.continuation
+                    continuation_repairs = 0
             request, request_event = payload, event
             decision = decision_event = result = result_event = None
         elif type(payload) is ConsensusPhaseDecision:
@@ -147,8 +183,28 @@ def project_consensus(events: tuple[ConsensusEvent, ...]) -> ConsensusProjection
                 raise ValueError("consensus result candidate lineage changed")
             _validate_result_transition(payload, decision, result, result_event)
             result, result_event = payload, event
+            if (
+                payload.state is ConsensusPhaseState.COMPLETED
+                and payload.phase is ConsensusPhase.REPAIR
+                and request.continuation is not None
+                and request.continuation == continuation
+            ):
+                continuation_repairs += 1
+                if continuation_repairs > continuation.added_revision_rounds:
+                    raise ValueError(
+                        "consensus continuation revision budget is exhausted"
+                    )
             if payload.state in _TERMINAL_STATES:
                 prior_terminal = payload, event
+                if payload.state is ConsensusPhaseState.COMPLETED and payload.phase in {
+                    ConsensusPhase.AUDIT,
+                    ConsensusPhase.REAUDIT,
+                }:
+                    latest_conflicts = tuple(
+                        item.conflict_material
+                        for item in payload.audits
+                        if item.verdict is ConsensusAuditVerdict.CONFLICT
+                    )
 
     if request is None or request_event is None:
         raise ValueError("consensus history has no request")
@@ -166,6 +222,34 @@ def project_consensus(events: tuple[ConsensusEvent, ...]) -> ConsensusProjection
         last_sequence=events[-1].sequence,
         next_action=action,
         publication_allowed=False,
+        continuation_mode=None if continuation is None else continuation.mode,
+        source_workflow_id=None
+        if continuation is None
+        else continuation.source_workflow_id,
+        source_result_event_id=None
+        if continuation is None
+        else continuation.source_result_event_id,
+        source_revision_id=None
+        if continuation is None
+        else continuation.source_revision_id,
+        source_candidate_digest=(
+            None
+            if continuation is None
+            else continuation.source_candidate_material.digest
+        ),
+        ruling_digest=None
+        if continuation is None
+        else continuation.ruling_material.digest,
+        ruling_present=continuation is not None,
+        added_revision_rounds=(
+            0 if continuation is None else continuation.added_revision_rounds
+        ),
+        remaining_revision_rounds=(
+            0
+            if continuation is None
+            else continuation.added_revision_rounds - continuation_repairs
+        ),
+        terminal=state in _TERMINAL_STATES,
     )
 
 
@@ -186,14 +270,45 @@ _TERMINAL_STATES = frozenset(
 def _validate_request_transition(
     request: ConsensusPhaseRequest,
     prior: tuple[ConsensusPhaseResult, ConsensusEvent] | None,
+    prior_request: ConsensusPhaseRequest | None,
+    latest_conflicts: tuple[ConsensusMaterialHandle, ...],
 ) -> None:
     if prior is None:
+        linked = request.continuation
+        if (
+            linked is not None
+            and linked.mode is ConsensusContinuationMode.LINKED_WORKFLOW
+        ):
+            if (
+                request.phase is not ConsensusPhase.REPAIR
+                or request.previous_result_event_id is not None
+                or request.revision_id != linked.source_revision_id
+                or request.candidate_material != linked.source_candidate_material
+            ):
+                raise ValueError("linked consensus continuation is invalid")
+            return
         if request.phase is not ConsensusPhase.DRAFT or request.revision_id != "r0":
             raise ValueError("consensus lineage must begin with draft revision zero")
         return
     result, event = prior
     if request.previous_result_event_id != event.event_id:
         raise ValueError("consensus request does not extend the current result")
+    if result.state is ConsensusPhaseState.DEADLOCKED:
+        continuation = request.continuation
+        if (
+            continuation is None
+            or continuation.mode is not ConsensusContinuationMode.RESUME_IN_PLACE
+            or request.phase is not ConsensusPhase.REPAIR
+            or continuation.source_result_event_id != event.event_id
+            or continuation.source_revision_id != result.revision_id
+            or continuation.source_candidate_material.digest != result.candidate_digest
+            or request.candidate_material != continuation.source_candidate_material
+            or continuation.conflict_materials != latest_conflicts
+        ):
+            raise ValueError("in-place consensus continuation is stale or incomplete")
+        return
+    if prior_request is not None and request.continuation != prior_request.continuation:
+        raise ValueError("consensus continuation lineage was not retained")
     if result.state is ConsensusPhaseState.SUPERSEDED:
         if (
             request.phase is not result.phase
@@ -267,7 +382,7 @@ def _visible_state(
         ConsensusPhaseState.RECOVERY_REQUIRED: ConsensusNextAction.OPERATOR_RECOVERY,
         ConsensusPhaseState.REJECTED: ConsensusNextAction.NONE,
         ConsensusPhaseState.SUPERSEDED: ConsensusNextAction.REQUEST_NEXT_PHASE,
-        ConsensusPhaseState.DEADLOCKED: ConsensusNextAction.NONE,
+        ConsensusPhaseState.DEADLOCKED: ConsensusNextAction.CONTINUE_DEADLOCK,
     }
     return result.state, actions[result.state]
 

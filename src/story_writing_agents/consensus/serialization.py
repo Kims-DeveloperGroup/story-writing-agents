@@ -11,6 +11,8 @@ from typing import Any
 from .contracts import (
     ConsensusAudit,
     ConsensusAuditVerdict,
+    ConsensusContinuation,
+    ConsensusContinuationMode,
     ConsensusDecision,
     ConsensusExecutionIdentity,
     ConsensusMaterialHandle,
@@ -31,6 +33,7 @@ class ConsensusInputKind(StrEnum):
 
     PROMPT = "prompt"
     SUPPLIED_DRAFT = "supplied_draft"
+    CONTINUATION = "continuation"
 
 
 class ConsensusRuntimeConflict(RuntimeError):
@@ -50,6 +53,7 @@ class ConsensusWorkflowSubmission:
     proposal_id: str
     input_kind: ConsensusInputKind
     input_material: ConsensusMaterialHandle
+    continuation: ConsensusContinuation | None = None
 
     def __post_init__(self) -> None:
         if any(
@@ -63,6 +67,19 @@ class ConsensusWorkflowSubmission:
             raise TypeError("consensus input kind is invalid")
         if type(self.input_material) is not ConsensusMaterialHandle:
             raise TypeError("consensus submission material handle is invalid")
+        if self.input_kind is ConsensusInputKind.CONTINUATION:
+            if (
+                type(self.continuation) is not ConsensusContinuation
+                or self.continuation.mode
+                is not ConsensusContinuationMode.LINKED_WORKFLOW
+            ):
+                raise ValueError(
+                    "linked consensus submission requires continuation lineage"
+                )
+        elif self.continuation is not None:
+            raise ValueError(
+                "ordinary consensus submission cannot carry continuation lineage"
+            )
 
     @property
     def input_digest(self) -> str:
@@ -95,6 +112,10 @@ class ConsensusStoredWorkflow:
             projection.workflow_id != self.submission.workflow_id
             or projection.proposal_id != self.submission.proposal_id
             or request.input_material != self.submission.input_material
+            or (
+                request.continuation != self.submission.continuation
+                and self.submission.input_kind is ConsensusInputKind.CONTINUATION
+            )
             or request.execution_identity != self.submission.execution_identity
             or any(
                 event.payload.execution_identity != self.submission.execution_identity
@@ -104,7 +125,7 @@ class ConsensusStoredWorkflow:
             raise ValueError("consensus stored workflow identity is inconsistent")
 
 
-CONSENSUS_SERIALIZATION_SCHEMA_VERSION = 2
+CONSENSUS_SERIALIZATION_SCHEMA_VERSION = 3
 _MAX_SERIALIZED_BYTES = 16 * 1024 * 1024
 
 
@@ -164,6 +185,7 @@ def _submission_to_json(value: ConsensusWorkflowSubmission) -> dict[str, Any]:
         "proposal_id": value.proposal_id,
         "input_kind": value.input_kind.value,
         "input_material": _material_to_json(value.input_material),
+        "continuation": _continuation_to_json(value.continuation),
     }
 
 
@@ -176,6 +198,7 @@ def _submission_from_json(value: object) -> ConsensusWorkflowSubmission:
             "proposal_id",
             "input_kind",
             "input_material",
+            "continuation",
         },
         "submission",
     )
@@ -185,6 +208,7 @@ def _submission_from_json(value: object) -> ConsensusWorkflowSubmission:
         proposal_id=raw["proposal_id"],
         input_kind=ConsensusInputKind(raw["input_kind"]),
         input_material=_material_from_json(raw["input_material"]),
+        continuation=_continuation_from_json(raw["continuation"]),
     )
 
 
@@ -204,6 +228,7 @@ def _event_to_json(event: ConsensusEvent) -> dict[str, Any]:
             "candidate_material": _optional_material_to_json(payload.candidate_material),
             "base_tail_sequence": payload.base_tail_sequence,
             "previous_result_event_id": payload.previous_result_event_id,
+            "continuation": _continuation_to_json(payload.continuation),
             "request_digest": payload.request_digest,
         }
     elif type(payload) is ConsensusPhaseDecision:
@@ -278,6 +303,7 @@ def _request_from_json(value: object) -> ConsensusPhaseRequest:
             "candidate_material",
             "base_tail_sequence",
             "previous_result_event_id",
+            "continuation",
             "request_digest",
         },
         "request",
@@ -295,6 +321,7 @@ def _request_from_json(value: object) -> ConsensusPhaseRequest:
         base_tail_sequence=raw["base_tail_sequence"],
         previous_result_event_id=raw["previous_result_event_id"],
         request_digest=raw["request_digest"],
+        continuation=_continuation_from_json(raw["continuation"]),
     )
 
 
@@ -381,6 +408,7 @@ def _audit_to_json(value: ConsensusAudit) -> dict[str, Any]:
         "candidate_digest": value.candidate_digest,
         "verdict": value.verdict.value,
         "audit_digest": value.audit_digest,
+        "conflict_material": _optional_material_to_json(value.conflict_material),
     }
 
 
@@ -393,6 +421,7 @@ def _audit_from_json(value: object) -> ConsensusAudit:
             "candidate_digest",
             "verdict",
             "audit_digest",
+            "conflict_material",
         },
         "audit",
     )
@@ -402,6 +431,56 @@ def _audit_from_json(value: object) -> ConsensusAudit:
         candidate_digest=raw["candidate_digest"],
         verdict=ConsensusAuditVerdict(raw["verdict"]),
         audit_digest=raw["audit_digest"],
+        conflict_material=_optional_material_from_json(raw["conflict_material"]),
+    )
+
+
+def _continuation_to_json(value: ConsensusContinuation | None) -> dict[str, Any] | None:
+    if value is None:
+        return None
+    return {
+        "mode": value.mode.value,
+        "source_workflow_id": value.source_workflow_id,
+        "source_result_event_id": value.source_result_event_id,
+        "source_revision_id": value.source_revision_id,
+        "source_candidate_material": _material_to_json(value.source_candidate_material),
+        "conflict_materials": [
+            _material_to_json(item) for item in value.conflict_materials
+        ],
+        "ruling_material": _material_to_json(value.ruling_material),
+        "added_revision_rounds": value.added_revision_rounds,
+    }
+
+
+def _continuation_from_json(value: object) -> ConsensusContinuation | None:
+    if value is None:
+        return None
+    raw = _object(
+        value,
+        {
+            "mode",
+            "source_workflow_id",
+            "source_result_event_id",
+            "source_revision_id",
+            "source_candidate_material",
+            "conflict_materials",
+            "ruling_material",
+            "added_revision_rounds",
+        },
+        "continuation",
+    )
+    conflicts = raw["conflict_materials"]
+    if type(conflicts) is not list or len(conflicts) > 3:
+        raise ValueError("serialized consensus continuation conflicts are invalid")
+    return ConsensusContinuation(
+        mode=ConsensusContinuationMode(raw["mode"]),
+        source_workflow_id=raw["source_workflow_id"],
+        source_result_event_id=raw["source_result_event_id"],
+        source_revision_id=raw["source_revision_id"],
+        source_candidate_material=_material_from_json(raw["source_candidate_material"]),
+        conflict_materials=tuple(_material_from_json(item) for item in conflicts),
+        ruling_material=_material_from_json(raw["ruling_material"]),
+        added_revision_rounds=raw["added_revision_rounds"],
     )
 
 

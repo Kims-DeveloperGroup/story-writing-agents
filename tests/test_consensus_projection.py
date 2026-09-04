@@ -42,9 +42,7 @@ _INPUT = "1" * 64
 _CANDIDATE = "2" * 64
 _REPAIRED = "3" * 64
 _IDENTITY = ConsensusExecutionIdentity("session-1", "conversation-1")
-_INPUT_MATERIAL = artifact_material_handle(
-    "core_documents/global_outline.md", _INPUT
-)
+_INPUT_MATERIAL = artifact_material_handle("core_documents/global_outline.md", _INPUT)
 _CANDIDATE_MATERIAL = candidate_material_handle(_CANDIDATE)
 
 
@@ -94,7 +92,9 @@ class ConsensusProjectionTests(unittest.TestCase):
             revision_id=request.revision_id,
             request_digest=request.request_digest,
             decision=choice,
-            revision_request="Repair the conflict." if choice is ConsensusDecision.REVISE else None,
+            revision_request="Repair the conflict."
+            if choice is ConsensusDecision.REVISE
+            else None,
         )
 
     @staticmethod
@@ -143,6 +143,11 @@ class ConsensusProjectionTests(unittest.TestCase):
                     else ConsensusAuditVerdict.APPROVE
                 ),
                 audit_digest=f"{index + 4}" * 64,
+                conflict_material=(
+                    candidate_material_handle(f"{index + 6}" * 64)
+                    if index == conflict_at
+                    else None
+                ),
             )
             for index, specialist in enumerate(CONSENSUS_AUDITORS)
         )
@@ -171,12 +176,18 @@ class ConsensusProjectionTests(unittest.TestCase):
         )
         request_event = ConsensusEvent("event-request", 1, request)
         decision = self.decision(request, request_event)
-        projected = project_consensus((request_event, ConsensusEvent("event-decision", 2, decision)))
+        projected = project_consensus(
+            (request_event, ConsensusEvent("event-decision", 2, decision))
+        )
         self.assertEqual(projected.state, ConsensusPhaseState.CONFIRMED)
-        self.assertEqual(projected.next_action, ConsensusNextAction.START_CONFIRMED_PHASE)
+        self.assertEqual(
+            projected.next_action, ConsensusNextAction.START_CONFIRMED_PHASE
+        )
         self.assertFalse(projected.publication_allowed)
 
-    def test_projection_rejects_stale_free_form_duplicate_and_reordered_history(self) -> None:
+    def test_projection_rejects_stale_free_form_duplicate_and_reordered_history(
+        self,
+    ) -> None:
         request, _ = self.request()
         request_event = ConsensusEvent("event-request", 1, request)
         decision = self.decision(request, request_event)
@@ -194,7 +205,9 @@ class ConsensusProjectionTests(unittest.TestCase):
                 (
                     request_event,
                     ConsensusEvent(
-                        "event-decision", 2, replace(decision, request_event_id="other-event")
+                        "event-decision",
+                        2,
+                        replace(decision, request_event_id="other-event"),
                     ),
                 )
             )
@@ -211,34 +224,105 @@ class ConsensusProjectionTests(unittest.TestCase):
         awaiting = project_consensus((request_event,))
         self.assertEqual(
             (awaiting.state, awaiting.next_action),
-            (ConsensusPhaseState.AWAITING_CONFIRMATION, ConsensusNextAction.REQUEST_DECISION),
+            (
+                ConsensusPhaseState.AWAITING_CONFIRMATION,
+                ConsensusNextAction.REQUEST_DECISION,
+            ),
         )
 
         cases = (
-            (ConsensusDecision.CONFIRM, None, ConsensusPhaseState.CONFIRMED, ConsensusNextAction.START_CONFIRMED_PHASE),
-            (ConsensusDecision.REJECT, None, ConsensusPhaseState.CONFIRMED, ConsensusNextAction.WAIT_FOR_PHASE),
-            (ConsensusDecision.REVISE, None, ConsensusPhaseState.CONFIRMED, ConsensusNextAction.WAIT_FOR_PHASE),
-            (ConsensusDecision.CONFIRM, ConsensusPhaseState.RUNNING, ConsensusPhaseState.RUNNING, ConsensusNextAction.WAIT_FOR_PHASE),
-            (ConsensusDecision.CONFIRM, ConsensusPhaseState.COMPLETED, ConsensusPhaseState.COMPLETED, ConsensusNextAction.REQUEST_NEXT_PHASE),
-            (ConsensusDecision.CONFIRM, ConsensusPhaseState.INTERRUPTED, ConsensusPhaseState.INTERRUPTED, ConsensusNextAction.INSPECT_FAILURE),
-            (ConsensusDecision.CONFIRM, ConsensusPhaseState.FAILED, ConsensusPhaseState.FAILED, ConsensusNextAction.INSPECT_FAILURE),
-            (ConsensusDecision.CONFIRM, ConsensusPhaseState.OUTCOME_UNKNOWN, ConsensusPhaseState.OUTCOME_UNKNOWN, ConsensusNextAction.OPERATOR_RECOVERY),
-            (ConsensusDecision.CONFIRM, ConsensusPhaseState.RECOVERY_REQUIRED, ConsensusPhaseState.RECOVERY_REQUIRED, ConsensusNextAction.OPERATOR_RECOVERY),
-            (ConsensusDecision.REJECT, ConsensusPhaseState.REJECTED, ConsensusPhaseState.REJECTED, ConsensusNextAction.NONE),
-            (ConsensusDecision.REVISE, ConsensusPhaseState.SUPERSEDED, ConsensusPhaseState.SUPERSEDED, ConsensusNextAction.REQUEST_NEXT_PHASE),
-            (ConsensusDecision.CONFIRM, ConsensusPhaseState.DEADLOCKED, ConsensusPhaseState.DEADLOCKED, ConsensusNextAction.NONE),
+            (
+                ConsensusDecision.CONFIRM,
+                None,
+                ConsensusPhaseState.CONFIRMED,
+                ConsensusNextAction.START_CONFIRMED_PHASE,
+            ),
+            (
+                ConsensusDecision.REJECT,
+                None,
+                ConsensusPhaseState.CONFIRMED,
+                ConsensusNextAction.WAIT_FOR_PHASE,
+            ),
+            (
+                ConsensusDecision.REVISE,
+                None,
+                ConsensusPhaseState.CONFIRMED,
+                ConsensusNextAction.WAIT_FOR_PHASE,
+            ),
+            (
+                ConsensusDecision.CONFIRM,
+                ConsensusPhaseState.RUNNING,
+                ConsensusPhaseState.RUNNING,
+                ConsensusNextAction.WAIT_FOR_PHASE,
+            ),
+            (
+                ConsensusDecision.CONFIRM,
+                ConsensusPhaseState.COMPLETED,
+                ConsensusPhaseState.COMPLETED,
+                ConsensusNextAction.REQUEST_NEXT_PHASE,
+            ),
+            (
+                ConsensusDecision.CONFIRM,
+                ConsensusPhaseState.INTERRUPTED,
+                ConsensusPhaseState.INTERRUPTED,
+                ConsensusNextAction.INSPECT_FAILURE,
+            ),
+            (
+                ConsensusDecision.CONFIRM,
+                ConsensusPhaseState.FAILED,
+                ConsensusPhaseState.FAILED,
+                ConsensusNextAction.INSPECT_FAILURE,
+            ),
+            (
+                ConsensusDecision.CONFIRM,
+                ConsensusPhaseState.OUTCOME_UNKNOWN,
+                ConsensusPhaseState.OUTCOME_UNKNOWN,
+                ConsensusNextAction.OPERATOR_RECOVERY,
+            ),
+            (
+                ConsensusDecision.CONFIRM,
+                ConsensusPhaseState.RECOVERY_REQUIRED,
+                ConsensusPhaseState.RECOVERY_REQUIRED,
+                ConsensusNextAction.OPERATOR_RECOVERY,
+            ),
+            (
+                ConsensusDecision.REJECT,
+                ConsensusPhaseState.REJECTED,
+                ConsensusPhaseState.REJECTED,
+                ConsensusNextAction.NONE,
+            ),
+            (
+                ConsensusDecision.REVISE,
+                ConsensusPhaseState.SUPERSEDED,
+                ConsensusPhaseState.SUPERSEDED,
+                ConsensusNextAction.REQUEST_NEXT_PHASE,
+            ),
+            (
+                ConsensusDecision.CONFIRM,
+                ConsensusPhaseState.DEADLOCKED,
+                ConsensusPhaseState.DEADLOCKED,
+                ConsensusNextAction.CONTINUE_DEADLOCK,
+            ),
         )
         for index, (choice, result_state, visible, action) in enumerate(cases):
             with self.subTest(choice=choice, result_state=result_state):
                 decision = self.decision(
-                    request, request_event, choice, confirmation_id=f"confirmation-{index}"
+                    request,
+                    request_event,
+                    choice,
+                    confirmation_id=f"confirmation-{index}",
                 )
                 events = [request_event, ConsensusEvent("decision-event", 2, decision)]
                 if result_state is not None:
-                    candidate = _CANDIDATE if result_state in {
-                        ConsensusPhaseState.COMPLETED,
-                        ConsensusPhaseState.DEADLOCKED,
-                    } else None
+                    candidate = (
+                        _CANDIDATE
+                        if result_state
+                        in {
+                            ConsensusPhaseState.COMPLETED,
+                            ConsensusPhaseState.DEADLOCKED,
+                        }
+                        else None
+                    )
                     next_phase = (
                         ConsensusPhase.AUDIT
                         if result_state is ConsensusPhaseState.COMPLETED
@@ -258,13 +342,19 @@ class ConsensusProjectionTests(unittest.TestCase):
                         )
                     )
                 projected = project_consensus(tuple(events))
-                self.assertEqual((projected.state, projected.next_action), (visible, action))
+                self.assertEqual(
+                    (projected.state, projected.next_action), (visible, action)
+                )
                 self.assertFalse(projected.publication_allowed)
 
-    def test_audit_completion_requires_three_ordered_current_revision_audits(self) -> None:
+    def test_audit_completion_requires_three_ordered_current_revision_audits(
+        self,
+    ) -> None:
         draft, _ = self.request()
         draft_event = ConsensusEvent("draft-request", 1, draft)
-        draft_decision = ConsensusEvent("draft-decision", 2, self.decision(draft, draft_event))
+        draft_decision = ConsensusEvent(
+            "draft-decision", 2, self.decision(draft, draft_event)
+        )
         draft_result = self.result(
             draft,
             draft_decision,
@@ -281,7 +371,9 @@ class ConsensusProjectionTests(unittest.TestCase):
         )
         audit_event = ConsensusEvent("audit-request", 4, audit)
         audit_decision = ConsensusEvent(
-            "audit-decision", 5, self.decision(audit, audit_event, confirmation_id="confirmation-audit")
+            "audit-decision",
+            5,
+            self.decision(audit, audit_event, confirmation_id="confirmation-audit"),
         )
         audit_result = self.result(
             audit,
@@ -310,7 +402,9 @@ class ConsensusProjectionTests(unittest.TestCase):
             (replace(self.audits()[0], revision_id="r1"), *self.audits()[1:]),
         ):
             with self.subTest(invalid_audits=invalid_audits):
-                with self.assertRaisesRegex(ValueError, "three current audits|every specialist|stale"):
+                with self.assertRaisesRegex(
+                    ValueError, "three current audits|every specialist|stale"
+                ):
                     self.result(
                         audit,
                         audit_decision,
@@ -320,7 +414,9 @@ class ConsensusProjectionTests(unittest.TestCase):
                         next_phase=ConsensusPhase.SYNTHESIS,
                     )
 
-    def test_confirmation_is_owner_bound_single_use_nonserializable_and_not_reconstructed(self) -> None:
+    def test_confirmation_is_owner_bound_single_use_nonserializable_and_not_reconstructed(
+        self,
+    ) -> None:
         request, capability = self.request()
         request_event = ConsensusEvent("request-event", 1, request)
         decision = self.decision(request, request_event)
@@ -336,10 +432,14 @@ class ConsensusProjectionTests(unittest.TestCase):
         projection = project_consensus((request_event,))
         self.assertFalse(any("capability" in item.name for item in fields(projection)))
 
-    def test_deadlock_retains_digest_only_lineage_without_publication_or_candidate_copy(self) -> None:
+    def test_deadlock_retains_digest_only_lineage_without_publication_or_candidate_copy(
+        self,
+    ) -> None:
         request, _ = self.request()
         request_event = ConsensusEvent("request-event", 1, request)
-        decision_event = ConsensusEvent("decision-event", 2, self.decision(request, request_event))
+        decision_event = ConsensusEvent(
+            "decision-event", 2, self.decision(request, request_event)
+        )
         deadlock = self.result(
             request,
             decision_event,
@@ -351,12 +451,19 @@ class ConsensusProjectionTests(unittest.TestCase):
         )
         self.assertEqual(projection.candidate_digest, _CANDIDATE)
         self.assertEqual(projection.state, ConsensusPhaseState.DEADLOCKED)
-        self.assertEqual(projection.next_action, ConsensusNextAction.NONE)
+        self.assertEqual(
+            projection.next_action,
+            ConsensusNextAction.CONTINUE_DEADLOCK,
+        )
         self.assertFalse(deadlock.publication_allowed)
         self.assertFalse(projection.publication_allowed)
-        self.assertNotIn("candidate", {item.name for item in fields(deadlock)} - {"candidate_digest"})
+        self.assertNotIn(
+            "candidate", {item.name for item in fields(deadlock)} - {"candidate_digest"}
+        )
 
-    def test_material_handles_serialize_deterministically_without_authority(self) -> None:
+    def test_material_handles_serialize_deterministically_without_authority(
+        self,
+    ) -> None:
         request, _ = self.request()
         workflow = ConsensusStoredWorkflow(
             ConsensusWorkflowSubmission(
@@ -371,10 +478,8 @@ class ConsensusProjectionTests(unittest.TestCase):
         encoded = serialize_consensus_workflow(workflow)
         self.assertEqual(serialize_consensus_workflow(workflow), encoded)
         self.assertEqual(deserialize_consensus_workflow(encoded), workflow)
-        self.assertIn(
-            b'"locator":"artifact:core_documents/global_outline.md"', encoded
-        )
-        self.assertIn(b'"schema_version":2', encoded)
+        self.assertIn(b'"locator":"artifact:core_documents/global_outline.md"', encoded)
+        self.assertIn(b'"schema_version":3', encoded)
         self.assertIn(
             b'"execution_identity":{"conversation_id":"conversation-1",'
             b'"session_id":"session-1"}',
@@ -386,7 +491,9 @@ class ConsensusProjectionTests(unittest.TestCase):
                 encoded.replace(b'{"events":', b'{"events":[],"events":', 1)
             )
 
-    def test_material_locator_factories_accept_only_canonical_candidate_and_artifact_locations(self) -> None:
+    def test_material_locator_factories_accept_only_canonical_candidate_and_artifact_locations(
+        self,
+    ) -> None:
         self.assertEqual(
             candidate_material_handle(_CANDIDATE),
             ConsensusMaterialHandle(f"candidate:{_CANDIDATE}", _CANDIDATE),
@@ -407,7 +514,9 @@ class ConsensusProjectionTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "material locator"):
             ConsensusMaterialHandle("material-input", _INPUT)
 
-    def test_next_phase_preparation_preserves_identity_tail_and_revision_rules(self) -> None:
+    def test_next_phase_preparation_preserves_identity_tail_and_revision_rules(
+        self,
+    ) -> None:
         draft, _ = self.request()
         draft_request_event = ConsensusEvent("draft-request", 1, draft)
         draft_decision = ConsensusEvent(
@@ -474,7 +583,9 @@ class ConsensusProjectionTests(unittest.TestCase):
             phase_request_id="request-reaudit",
         )
         self.assertEqual(reaudit.revision_id, "r1")
-        self.assertEqual(reaudit.candidate_material, candidate_material_handle(_REPAIRED))
+        self.assertEqual(
+            reaudit.candidate_material, candidate_material_handle(_REPAIRED)
+        )
 
 
 if __name__ == "__main__":

@@ -6,6 +6,7 @@ import asyncio
 from dataclasses import replace
 import hashlib
 import unittest
+from unittest import mock
 
 from story_writing_agents import AgentReply, Phase, StoryRuntime
 from story_writing_agents.agents import (
@@ -15,6 +16,8 @@ from story_writing_agents.agents import (
     PLOT_ARCHITECT,
 )
 from story_writing_agents.consensus import (
+    ConsensusContinuation,
+    ConsensusContinuationMode,
     ConsensusDecision,
     ConsensusInputKind,
     ConsensusPhase,
@@ -126,9 +129,7 @@ def _decision(
         confirmation_id=runtime.new_id("confirmation"),
         decision=choice,
         revision_request=(
-            "Please revise this phase."
-            if choice is ConsensusDecision.REVISE
-            else None
+            "Please revise this phase." if choice is ConsensusDecision.REVISE else None
         ),
     )
 
@@ -261,7 +262,9 @@ class ConsensusStoryRuntimeBridgeTests(unittest.IsolatedAsyncioTestCase):
         artifact.write_text("drifted outline\n", encoding="utf-8")
         calls_before = len(self.backend.requests)
         with self.assertRaisesRegex(ValueError, "authorization is stale"):
-            await self.runtime.invoke_provider(replace(invocation, phase_request_id="stale"))
+            await self.runtime.invoke_provider(
+                replace(invocation, phase_request_id="stale")
+            )
         self.assertEqual(len(self.backend.requests), calls_before)
 
     async def test_phase_mapping_is_exact_and_finalization_is_read_only(self) -> None:
@@ -304,7 +307,12 @@ class ConsensusStoryRuntimeBridgeTests(unittest.IsolatedAsyncioTestCase):
             for path in self.workspace.path("manuscript").rglob("*")
             if path.is_file()
         }
-        for phase, (agent_id, ordinal, expected_phase, phase_candidate) in expected.items():
+        for phase, (
+            agent_id,
+            ordinal,
+            expected_phase,
+            phase_candidate,
+        ) in expected.items():
             with self.subTest(phase=phase):
                 invocation = ConsensusPhaseInvocation(
                     workflow_id="workflow-routes",
@@ -343,6 +351,85 @@ class ConsensusStoryRuntimeBridgeTests(unittest.IsolatedAsyncioTestCase):
             manuscript_before,
         )
 
+    async def test_continuation_repair_receives_ruling_and_conflicts_and_wrapper_binds_session(
+        self,
+    ) -> None:
+        source = self.materials.put_text("source request")
+        candidate = self.materials.put_text("exact deadlocked candidate")
+        ruling = self.materials.put_text("keep the reveal in chapter three")
+        conflicts = (
+            self.materials.put_text("timeline conflict"),
+            self.materials.put_text("character motivation conflict"),
+            self.materials.put_text("scene execution conflict"),
+        )
+        continuation = ConsensusContinuation(
+            mode=ConsensusContinuationMode.RESUME_IN_PLACE,
+            source_workflow_id="workflow-source",
+            source_result_event_id="result-source",
+            source_revision_id="r0",
+            source_candidate_material=candidate,
+            conflict_materials=conflicts,
+            ruling_material=ruling,
+            added_revision_rounds=2,
+        )
+        invocation = ConsensusPhaseInvocation(
+            workflow_id="workflow-source",
+            phase_request_id="request-continuation",
+            proposal_id="proposal-source",
+            execution_identity=ConsensusExecutionIdentity(
+                "story_session", "conversation-continuation"
+            ),
+            phase=ConsensusPhase.REPAIR,
+            revision_id="r0",
+            input_material=source,
+            candidate_material=candidate,
+            agent_id=EXECUTION_SPECIALIST,
+            ordinal=1,
+            continuation=continuation,
+        )
+        await self.runtime.invoke_provider(invocation)
+        request = self.backend.requests[-1]
+        self.assertEqual(request.candidate_payload, "exact deadlocked candidate")
+        self.assertIn(
+            "Continuation ruling:\nkeep the reveal in chapter three",
+            request.user_payload,
+        )
+        for conflict in (
+            "timeline conflict",
+            "character motivation conflict",
+            "scene execution conflict",
+        ):
+            self.assertIn(conflict, request.user_payload)
+
+        sentinel = object()
+        with mock.patch.object(
+            StoryRuntime,
+            "continue_consensus_deadlock",
+            autospec=True,
+            return_value=sentinel,
+        ) as continued:
+            result = self.session.continue_consensus_deadlock(
+                "conversation-continuation",
+                "workflow-source",
+                "result-source",
+                12,
+                mode=ConsensusContinuationMode.RESUME_IN_PLACE,
+                ruling="operator ruling",
+                added_revision_rounds=2,
+            )
+        self.assertIs(result, sentinel)
+        continued.assert_called_once_with(
+            self.runtime,
+            "story_session",
+            "conversation-continuation",
+            "workflow-source",
+            "result-source",
+            12,
+            mode=ConsensusContinuationMode.RESUME_IN_PLACE,
+            ruling="operator ruling",
+            added_revision_rounds=2,
+        )
+
     async def test_interrupt_cancels_all_matching_auditors_and_cleans_registry(
         self,
     ) -> None:
@@ -377,7 +464,9 @@ class ConsensusStoryRuntimeBridgeTests(unittest.IsolatedAsyncioTestCase):
             )
             for ordinal, agent_id in enumerate(agents, start=1)
         )
-        tasks = tuple(asyncio.create_task(runtime.invoke_provider(item)) for item in invocations)
+        tasks = tuple(
+            asyncio.create_task(runtime.invoke_provider(item)) for item in invocations
+        )
         await asyncio.wait_for(arrived.wait(), timeout=1)
         self.assertTrue(
             runtime.interrupt_provider(
@@ -388,7 +477,9 @@ class ConsensusStoryRuntimeBridgeTests(unittest.IsolatedAsyncioTestCase):
             )
         )
         outcomes = await asyncio.gather(*tasks, return_exceptions=True)
-        self.assertTrue(all(isinstance(item, asyncio.CancelledError) for item in outcomes))
+        self.assertTrue(
+            all(isinstance(item, asyncio.CancelledError) for item in outcomes)
+        )
         self.assertFalse(
             runtime.interrupt_provider(
                 "story_session",

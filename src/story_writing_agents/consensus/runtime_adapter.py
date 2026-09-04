@@ -8,6 +8,8 @@ from typing import Protocol
 
 from .contracts import (
     ConsensusConfirmationCapability,
+    ConsensusContinuation,
+    ConsensusContinuationMode,
     ConsensusDecision,
     ConsensusExecutionIdentity,
     ConsensusMaterialHandle,
@@ -90,6 +92,12 @@ class ConsensusRuntimePort(Protocol):
         /,
     ) -> bool: ...
 
+    def verify_consensus_material(
+        self,
+        material: ConsensusMaterialHandle,
+        /,
+    ) -> bool: ...
+
 
 @dataclass(frozen=True, slots=True)
 class ConsensusRuntimeDecision:
@@ -168,6 +176,7 @@ class ConsensusRuntimeAdapter:
             "append_event",
             "invoke_provider",
             "interrupt_provider",
+            "verify_consensus_material",
         )
         if port is None or any(not callable(getattr(port, name, None)) for name in required):
             raise TypeError("consensus runtime port is incomplete")
@@ -531,6 +540,12 @@ class ConsensusRuntimeAdapter:
         terminal_event = stored.events[-1]
         if type(terminal_event.payload) is not ConsensusPhaseResult:
             raise ValueError("consensus workflow has no terminal phase result")
+        if (
+            terminal_event.payload.next_phase is ConsensusPhase.REPAIR
+            and projection.continuation_mode is not None
+            and projection.remaining_revision_rounds < 1
+        ):
+            raise ValueError("consensus continuation revision budget is exhausted")
         request, capability = prepare_next_consensus_phase(
             owner=self,
             current_request=request_event.payload,
@@ -559,6 +574,192 @@ class ConsensusRuntimeAdapter:
             projection=project_consensus(stored.events + (event,)),
             capability_available=True,
         )
+
+    def continue_deadlock(
+        self,
+        *,
+        session_id: str,
+        conversation_id: str,
+        source_workflow_id: str,
+        source_result_event_id: str,
+        expected_source_tail_sequence: int,
+        mode: ConsensusContinuationMode,
+        ruling_material: ConsensusMaterialHandle,
+        added_revision_rounds: int,
+    ) -> ConsensusRuntimeInspection:
+        """Prepare a fresh confirmed repair from one exact durable deadlock."""
+
+        if type(mode) is not ConsensusContinuationMode:
+            raise TypeError("consensus continuation mode is invalid")
+        _identifier(source_result_event_id)
+        if (
+            type(expected_source_tail_sequence) is not int
+            or expected_source_tail_sequence < 1
+        ):
+            raise ValueError("consensus continuation source tail is invalid")
+        if type(added_revision_rounds) is not int or added_revision_rounds < 1:
+            raise ValueError("consensus continuation revision budget must be positive")
+        source, terminal_event, source_request, candidate, conflicts = (
+            self._validate_continuation_source(
+                session_id=session_id,
+                conversation_id=conversation_id,
+                source_workflow_id=source_workflow_id,
+                source_result_event_id=source_result_event_id,
+                expected_source_tail_sequence=expected_source_tail_sequence,
+            )
+        )
+        materials = (ruling_material,)
+        if any(
+            type(item) is not ConsensusMaterialHandle
+            or not item.locator.startswith("candidate:")
+            or self._port.verify_consensus_material(item) is not True
+            for item in materials
+        ):
+            raise ValueError("consensus continuation material is unavailable")
+        continuation = ConsensusContinuation(
+            mode=mode,
+            source_workflow_id=source_workflow_id,
+            source_result_event_id=source_result_event_id,
+            source_revision_id=source_request.revision_id,
+            source_candidate_material=candidate,
+            conflict_materials=conflicts,
+            ruling_material=ruling_material,
+            added_revision_rounds=added_revision_rounds,
+        )
+        if mode is ConsensusContinuationMode.RESUME_IN_PLACE:
+            workflow_id = source_workflow_id
+            proposal_id = source.submission.proposal_id
+            base_tail = terminal_event.sequence
+            previous_result = terminal_event.event_id
+        else:
+            workflow_id = self._new_id("consensus-workflow")
+            proposal_id = self._new_id("consensus-proposal")
+            base_tail = 0
+            previous_result = None
+        request, capability = prepare_consensus_phase(
+            owner=self,
+            workflow_id=workflow_id,
+            phase_request_id=self._new_id("consensus-request"),
+            proposal_id=proposal_id,
+            execution_identity=source.submission.execution_identity,
+            phase=ConsensusPhase.REPAIR,
+            revision_id=source_request.revision_id,
+            input_material=source.submission.input_material,
+            candidate_material=candidate,
+            base_tail_sequence=base_tail,
+            previous_result_event_id=previous_result,
+            continuation=continuation,
+        )
+        event = ConsensusEvent(self._new_id("consensus-event"), base_tail + 1, request)
+        if mode is ConsensusContinuationMode.RESUME_IN_PLACE:
+            self._port.append_event(
+                session_id,
+                conversation_id,
+                workflow_id,
+                base_tail,
+                event,
+            )
+            submission = source.submission
+            events = source.events + (event,)
+        else:
+            # Revalidate immediately before the linked create; creation itself has
+            # no provider or artifact side effect and carries only exact handles.
+            current = self._load(session_id, conversation_id, source_workflow_id)
+            if current.events[-1] != terminal_event:
+                raise ValueError("consensus continuation source tail changed")
+            submission = ConsensusWorkflowSubmission(
+                execution_identity=source.submission.execution_identity,
+                workflow_id=workflow_id,
+                proposal_id=proposal_id,
+                input_kind=ConsensusInputKind.CONTINUATION,
+                input_material=source.submission.input_material,
+                continuation=continuation,
+            )
+            self._port.create_workflow(submission, event)
+            events = (event,)
+        self._capabilities[
+            self._capability_key(submission, request.phase_request_id)
+        ] = capability
+        return ConsensusRuntimeInspection(
+            submission=submission,
+            projection=project_consensus(events),
+            capability_available=True,
+        )
+
+    def validate_continuation_source(
+        self,
+        *,
+        session_id: str,
+        conversation_id: str,
+        source_workflow_id: str,
+        source_result_event_id: str,
+        expected_source_tail_sequence: int,
+    ) -> None:
+        """Fail closed on a stale or materially incomplete deadlock source."""
+
+        self._validate_continuation_source(
+            session_id=session_id,
+            conversation_id=conversation_id,
+            source_workflow_id=source_workflow_id,
+            source_result_event_id=source_result_event_id,
+            expected_source_tail_sequence=expected_source_tail_sequence,
+        )
+
+    def _validate_continuation_source(
+        self,
+        *,
+        session_id: str,
+        conversation_id: str,
+        source_workflow_id: str,
+        source_result_event_id: str,
+        expected_source_tail_sequence: int,
+    ) -> tuple[
+        ConsensusStoredWorkflow,
+        ConsensusEvent,
+        ConsensusPhaseRequest,
+        ConsensusMaterialHandle,
+        tuple[ConsensusMaterialHandle, ...],
+    ]:
+        _identifier(source_result_event_id)
+        if (
+            type(expected_source_tail_sequence) is not int
+            or expected_source_tail_sequence < 1
+        ):
+            raise ValueError("consensus continuation source tail is invalid")
+        source = self._load(session_id, conversation_id, source_workflow_id)
+        projection = project_consensus(source.events)
+        terminal_event = source.events[-1]
+        if (
+            projection.state is not ConsensusPhaseState.DEADLOCKED
+            or projection.last_sequence != expected_source_tail_sequence
+            or terminal_event.event_id != source_result_event_id
+            or type(terminal_event.payload) is not ConsensusPhaseResult
+            or terminal_event.payload.state is not ConsensusPhaseState.DEADLOCKED
+            or terminal_event.payload.phase is not ConsensusPhase.SYNTHESIS
+        ):
+            raise ValueError(
+                "consensus continuation source is not the exact deadlock tail"
+            )
+        source_request = _current_request(source.events)
+        candidate = source_request.candidate_material
+        if (
+            candidate is None
+            or candidate.digest != terminal_event.payload.candidate_digest
+            or not candidate.locator.startswith("candidate:")
+        ):
+            raise ValueError("consensus continuation candidate lineage is invalid")
+        audit = _latest_completed_audit(source.events)
+        conflicts = tuple(
+            item.conflict_material
+            for item in audit.audits
+            if item.conflict_material is not None
+        )
+        if not conflicts or any(
+            self._port.verify_consensus_material(item) is not True
+            for item in (candidate, *conflicts)
+        ):
+            raise ValueError("consensus deadlock material is unavailable")
+        return source, terminal_event, source_request, candidate, conflicts
 
     def _submit(
         self,
@@ -680,6 +881,20 @@ def _current_decision_event(events: tuple[ConsensusEvent, ...]) -> ConsensusEven
     raise ValueError("consensus history has no phase decision")
 
 
+def _latest_completed_audit(
+    events: tuple[ConsensusEvent, ...],
+) -> ConsensusPhaseResult:
+    for event in reversed(events):
+        payload = event.payload
+        if (
+            type(payload) is ConsensusPhaseResult
+            and payload.state is ConsensusPhaseState.COMPLETED
+            and payload.phase in {ConsensusPhase.AUDIT, ConsensusPhase.REAUDIT}
+        ):
+            return payload
+    raise ValueError("consensus deadlock has no completed audit")
+
+
 def _identifier(value: object) -> str:
     if type(value) is not str or _ID.fullmatch(value) is None:
         raise ValueError("consensus runtime identifier is invalid")
@@ -694,6 +909,7 @@ def _digest(value: object) -> str:
 
 __all__ = [
     "ConsensusInputKind",
+    "ConsensusContinuationMode",
     "ConsensusRuntimeAdapter",
     "ConsensusRuntimeDecision",
     "ConsensusRuntimeDecisionResult",

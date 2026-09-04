@@ -67,6 +67,17 @@ StoryRuntime.resume_consensus(
 StoryRuntime.request_next_consensus_phase(
     session_id: str, conversation_id: str, workflow_id: str,
 ) -> ConsensusRuntimeInspection
+StoryRuntime.continue_consensus_deadlock(
+    session_id: str,
+    conversation_id: str,
+    source_workflow_id: str,
+    source_result_event_id: str,
+    expected_source_tail_sequence: int,
+    *,
+    mode: ConsensusContinuationMode,
+    ruling: str,
+    added_revision_rounds: int,
+) -> ConsensusRuntimeInspection
 ```
 
 `RuntimeSession` exposes the same names without `session_id`. Its decision
@@ -76,6 +87,7 @@ from `story_writing_agents.consensus`:
 ```python
 from story_writing_agents.consensus import (
     ConsensusDecision,
+    ConsensusContinuationMode,
     ConsensusDurability,
     ConsensusNextAction,
     ConsensusPhase,
@@ -140,8 +152,10 @@ The projection states are `awaiting_confirmation`, `confirmed`, `running`,
 `completed`, `interrupted`, `failed`, `outcome_unknown`, `recovery_required`,
 `rejected`, `superseded`, and `deadlocked`. `next_action` is one of
 `request_decision`, `start_confirmed_phase`, `wait_for_phase`,
-`request_next_phase`, `inspect_failure`, `operator_recovery`, or `none`.
-`publication_allowed` is always false.
+`request_next_phase`, `inspect_failure`, `operator_recovery`,
+`continue_deadlock`, or `none`.
+`publication_allowed` is always false. A terminal deadlock reports
+`next_action=continue_deadlock`.
 
 The normal phase graph is DRAFT → AUDIT → SYNTHESIS. Lead synthesis selects
 REPAIR → REAUDIT → SYNTHESIS, FINALIZATION, or deadlock. Every phase is a new
@@ -154,6 +168,29 @@ by a separately confirmed Git Commit.
 an inspection operation: it never resumes/replays a provider call or recreates
 confirmation authority after restart. `outcome_unknown` and
 `recovery_required` require operator reconciliation.
+
+`continue_consensus_deadlock()` prepares, but does not execute, one fresh
+REPAIR request from an exact terminal synthesis deadlock. `mode` is
+`ConsensusContinuationMode.RESUME_IN_PLACE` or
+`ConsensusContinuationMode.LINKED_WORKFLOW`; `ruling` is stored as immutable
+content-addressed material; and `added_revision_rounds` must be positive. The
+caller supplies the source result event ID and current tail sequence from the
+same durable inspection. Candidate and conflict text are never arguments.
+
+The returned projection exposes continuation mode, source workflow/result/
+revision, source candidate digest, ruling digest/presence, added rounds, and
+remaining rounds. It is `repair awaiting_confirmation`, so the caller must
+obtain a new user decision and call `confirm_consensus()`. Each later REAUDIT,
+SYNTHESIS, and FINALIZATION likewise requires a newly prepared request and
+confirmation. Revise/replacement consumes no continuation round; only a
+completed REPAIR does. Consensus workflow serialization format version 3
+rejects older workflow bytes without migration.
+
+Validation rejects stale or foreign source identities, cross-session access,
+changed lineage, missing immutable material, and exhausted/invalid budgets
+before any provider or artifact mutation. Restarted inspection never rebuilds
+the one-use capability, and interruption never replays provider work. There is
+no installed CLI or interactive continuation route.
 
 Provider input is an `AgentRequest` with the runtime-selected agent, phase,
 revision, fixed task text, input, and current candidate. Canonical artifact
@@ -552,6 +589,16 @@ RuntimeSession.resume_consensus(
 ) -> ConsensusRuntimeInspection
 RuntimeSession.request_next_consensus_phase(
     conversation_id: str, workflow_id: str,
+) -> ConsensusRuntimeInspection
+RuntimeSession.continue_consensus_deadlock(
+    conversation_id: str,
+    source_workflow_id: str,
+    source_result_event_id: str,
+    expected_source_tail_sequence: int,
+    *,
+    mode: ConsensusContinuationMode,
+    ruling: str,
+    added_revision_rounds: int,
 ) -> ConsensusRuntimeInspection
 await RuntimeSession.lead_turn(
     conversation_id: str,

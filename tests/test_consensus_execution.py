@@ -37,10 +37,12 @@ from story_writing_agents.consensus.execution import ConsensusPhaseOutputKind
 _INPUT = "1" * 64
 _CANDIDATE = "2" * 64
 _NEW_CANDIDATE = "3" * 64
+_CONFLICT = "7" * 64
 _IDENTITY = ConsensusExecutionIdentity("session-1", "conversation-1")
 _INPUT_MATERIAL = artifact_material_handle("manuscript/part-1/source.md", _INPUT)
 _CANDIDATE_MATERIAL = candidate_material_handle(_CANDIDATE)
 _NEW_CANDIDATE_MATERIAL = candidate_material_handle(_NEW_CANDIDATE)
+_CONFLICT_MATERIAL = candidate_material_handle(_CONFLICT)
 
 
 class ConsensusExecutionTests(unittest.IsolatedAsyncioTestCase):
@@ -86,7 +88,9 @@ class ConsensusExecutionTests(unittest.IsolatedAsyncioTestCase):
             request_digest=request.request_digest,
             decision=ConsensusDecision.CONFIRM,
         )
-        return request_event, ConsensusEvent(f"decision-event-{start + 1}", start + 1, decision)
+        return request_event, ConsensusEvent(
+            f"decision-event-{start + 1}", start + 1, decision
+        )
 
     @staticmethod
     async def valid_result(invocation):
@@ -136,7 +140,9 @@ class ConsensusExecutionTests(unittest.IsolatedAsyncioTestCase):
         )
         return request, request_event, decision_event, capability, receipt
 
-    async def test_all_six_phase_routes_are_exact_and_running_precedes_provider(self) -> None:
+    async def test_all_six_phase_routes_are_exact_and_running_precedes_provider(
+        self,
+    ) -> None:
         routes = {
             ConsensusPhase.DRAFT: ((EXECUTION_SPECIALIST,), ConsensusPhase.AUDIT),
             ConsensusPhase.AUDIT: (
@@ -148,7 +154,10 @@ class ConsensusExecutionTests(unittest.IsolatedAsyncioTestCase):
                 (PLOT_ARCHITECT, CHARACTER_CUSTODIAN, EXECUTION_SPECIALIST),
                 ConsensusPhase.SYNTHESIS,
             ),
-            ConsensusPhase.SYNTHESIS: ((LEAD_ORCHESTRATOR,), ConsensusPhase.FINALIZATION),
+            ConsensusPhase.SYNTHESIS: (
+                (LEAD_ORCHESTRATOR,),
+                ConsensusPhase.FINALIZATION,
+            ),
             ConsensusPhase.FINALIZATION: ((LEAD_ORCHESTRATOR,), None),
         }
         for phase, (expected_agents, expected_next) in routes.items():
@@ -198,18 +207,26 @@ class ConsensusExecutionTests(unittest.IsolatedAsyncioTestCase):
                         ),
                     )
                 self.assertEqual(receipt.state, ConsensusPhaseState.COMPLETED)
-                self.assertEqual(receipt.terminal_event.payload.next_phase, expected_next)
+                self.assertEqual(
+                    receipt.terminal_event.payload.next_phase, expected_next
+                )
                 self.assertEqual(
                     (receipt.running_durability, receipt.terminal_durability),
                     (ConsensusDurability.CONFIRMED, ConsensusDurability.CONFIRMED),
                 )
-                self.assertEqual(appended, [receipt.running_event, receipt.terminal_event])
+                self.assertEqual(
+                    appended, [receipt.running_event, receipt.terminal_event]
+                )
 
-    async def test_tail_request_decision_binding_and_capability_replay_fail_before_callbacks(self) -> None:
+    async def test_tail_request_decision_binding_and_capability_replay_fail_before_callbacks(
+        self,
+    ) -> None:
         calls = []
         request, capability = self.request(ConsensusPhase.DRAFT)
         request_event, decision_event = self.events(request)
-        coordinator = self.coordinator(calls.append, lambda invocation: self.valid_result(invocation))
+        coordinator = self.coordinator(
+            calls.append, lambda invocation: self.valid_result(invocation)
+        )
 
         with self.assertRaisesRegex(ValueError, "tail has drifted"):
             await coordinator.execute(
@@ -237,7 +254,9 @@ class ConsensusExecutionTests(unittest.IsolatedAsyncioTestCase):
                 current_tail_sequence=2,
             )
 
-        other, other_capability = self.request(ConsensusPhase.DRAFT, request_id="request-other")
+        other, other_capability = self.request(
+            ConsensusPhase.DRAFT, request_id="request-other"
+        )
         with self.assertRaisesRegex(ValueError, "does not match its request"):
             await coordinator.execute(
                 request=request,
@@ -264,27 +283,39 @@ class ConsensusExecutionTests(unittest.IsolatedAsyncioTestCase):
                     if invocation.agent_id == CHARACTER_CUSTODIAN
                     else ConsensusAuditVerdict.APPROVE
                 ),
+                conflict_material=(
+                    _CONFLICT_MATERIAL
+                    if invocation.agent_id == CHARACTER_CUSTODIAN
+                    else None
+                ),
             )
 
         _, _, _, _, receipt = await self.execute(
             ConsensusPhase.AUDIT, appended.append, invoke
         )
         audits = receipt.terminal_event.payload.audits
-        self.assertEqual(tuple(item.specialist_id for item in audits), (
-            PLOT_ARCHITECT, CHARACTER_CUSTODIAN, EXECUTION_SPECIALIST
-        ))
-        self.assertEqual(tuple(item.verdict for item in audits), (
-            ConsensusAuditVerdict.APPROVE,
-            ConsensusAuditVerdict.CONFLICT,
-            ConsensusAuditVerdict.APPROVE,
-        ))
+        self.assertEqual(
+            tuple(item.specialist_id for item in audits),
+            (PLOT_ARCHITECT, CHARACTER_CUSTODIAN, EXECUTION_SPECIALIST),
+        )
+        self.assertEqual(
+            tuple(item.verdict for item in audits),
+            (
+                ConsensusAuditVerdict.APPROVE,
+                ConsensusAuditVerdict.CONFLICT,
+                ConsensusAuditVerdict.APPROVE,
+            ),
+        )
         self.assertFalse(receipt.terminal_event.payload.unanimous)
 
     async def test_provider_failures_map_to_exact_terminal_states(self) -> None:
         cases = (
             (RuntimeError("failed"), ConsensusPhaseState.FAILED),
             (InterruptedError("interrupted"), ConsensusPhaseState.INTERRUPTED),
-            (ConsensusProviderOutcomeUnknown("unknown"), ConsensusPhaseState.OUTCOME_UNKNOWN),
+            (
+                ConsensusProviderOutcomeUnknown("unknown"),
+                ConsensusPhaseState.OUTCOME_UNKNOWN,
+            ),
         )
         for failure, expected in cases:
             with self.subTest(expected=expected):
@@ -301,7 +332,9 @@ class ConsensusExecutionTests(unittest.IsolatedAsyncioTestCase):
                 self.assertEqual(len(appended), 2)
                 self.assertEqual(appended[0].payload.state, ConsensusPhaseState.RUNNING)
 
-    async def test_append_uncertainty_never_invokes_early_or_claims_durability(self) -> None:
+    async def test_append_uncertainty_never_invokes_early_or_claims_durability(
+        self,
+    ) -> None:
         invoked = []
 
         def fail_running(_event):
@@ -340,7 +373,9 @@ class ConsensusExecutionTests(unittest.IsolatedAsyncioTestCase):
         )
         self.assertEqual(len(receipt.provider_invocations), 1)
 
-    async def test_coordinator_events_project_and_deadlock_never_allows_publication(self) -> None:
+    async def test_coordinator_events_project_and_deadlock_never_allows_publication(
+        self,
+    ) -> None:
         history = []
 
         async def run_phase(phase, candidate, next_result_id, provider, previous=None):
@@ -358,7 +393,8 @@ class ConsensusExecutionTests(unittest.IsolatedAsyncioTestCase):
                 owner=self.owner,
                 append_event=history.append,
                 invoke_provider=provider,
-                event_id_factory=lambda kind, sequence: f"{phase.value}-{kind}-{sequence}",
+                event_id_factory=lambda kind,
+                sequence: f"{phase.value}-{kind}-{sequence}",
             )
             receipt = await coordinator.execute(
                 request=request,
@@ -401,7 +437,10 @@ class ConsensusExecutionTests(unittest.IsolatedAsyncioTestCase):
         projected = project_consensus(tuple(history))
         self.assertEqual(synthesis.state, ConsensusPhaseState.DEADLOCKED)
         self.assertEqual(projected.state, ConsensusPhaseState.DEADLOCKED)
-        self.assertEqual(projected.next_action, ConsensusNextAction.NONE)
+        self.assertEqual(
+            projected.next_action,
+            ConsensusNextAction.CONTINUE_DEADLOCK,
+        )
         self.assertEqual(projected.candidate_digest, _NEW_CANDIDATE)
         self.assertFalse(synthesis.terminal_event.payload.publication_allowed)
         self.assertFalse(projected.publication_allowed)

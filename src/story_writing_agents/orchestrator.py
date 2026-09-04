@@ -88,6 +88,7 @@ from .config import ConfigurationSnapshot, ConfigManager
 from .consensus.contracts import (
     CONSENSUS_AUDITORS,
     ConsensusAuditVerdict,
+    ConsensusContinuationMode,
     ConsensusMaterialHandle,
     ConsensusPhase,
 )
@@ -898,14 +899,25 @@ class StoryRuntime:
                 digest,
                 authored_material,
             )
-        if authored_material is not None:
-            raise ValueError("only authored candidate output accepts new material")
         candidate = invocation.candidate_material
         if candidate is None:
             raise ValueError("consensus phase requires candidate material")
         if invocation.phase in {ConsensusPhase.AUDIT, ConsensusPhase.REAUDIT}:
             if reply.kind is not AgentReplyKind.AUDIT or type(reply.verdict) is not Verdict:
                 raise ValueError("consensus audit reply is invalid")
+            conflict = reply.verdict is Verdict.CONFLICT
+            if conflict:
+                if (
+                    authored_material is None
+                    or authored_material.digest
+                    != hashlib.sha256(
+                        reply.content.encode("utf-8", errors="strict")
+                    ).hexdigest()
+                    or not authored_material.locator.startswith("candidate:")
+                ):
+                    raise ValueError("consensus conflict critique material is invalid")
+            elif authored_material is not None:
+                raise ValueError("consensus approval cannot retain critique material")
             return ConsensusProviderResult(
                 (
                     ConsensusPhaseOutputKind.AUDIT
@@ -915,7 +927,10 @@ class StoryRuntime:
                 digest,
                 candidate,
                 ConsensusAuditVerdict(reply.verdict.value),
+                conflict_material=authored_material,
             )
+        if authored_material is not None:
+            raise ValueError("consensus phase does not accept authored material")
         if invocation.phase is ConsensusPhase.SYNTHESIS:
             if reply.kind is AgentReplyKind.DEADLOCK and reply.deadlocked:
                 return ConsensusProviderResult(
@@ -1046,6 +1061,24 @@ class StoryRuntime:
         try:
             input_text, reference_operation = self._resolve_consensus_input(invocation)
             candidate_text = self._resolve_consensus_candidate(invocation)
+            if invocation.continuation is not None:
+                ruling = self._consensus_material_store.read_text(
+                    invocation.continuation.ruling_material
+                )
+                conflicts = tuple(
+                    self._consensus_material_store.read_text(item)
+                    for item in invocation.continuation.conflict_materials
+                )
+                input_text = "\n\n".join(
+                    (
+                        input_text,
+                        "Continuation ruling:\n" + ruling,
+                        *(
+                            f"Unresolved conflict {index}:\n{text}"
+                            for index, text in enumerate(conflicts, 1)
+                        ),
+                    )
+                )
             definition = self.prompts.build_contextual_definition(
                 session_id=invocation.execution_identity.session_id,
                 agent_id=invocation.agent_id,
@@ -1077,6 +1110,13 @@ class StoryRuntime:
             authored_material = None
             if invocation.phase in {ConsensusPhase.DRAFT, ConsensusPhase.REPAIR}:
                 authored_material = self._consensus_material_store.put_text(reply.content)
+            elif (
+                invocation.phase in {ConsensusPhase.AUDIT, ConsensusPhase.REAUDIT}
+                and reply.verdict is Verdict.CONFLICT
+            ):
+                authored_material = self._consensus_material_store.put_text(
+                    reply.content
+                )
             return self.map_consensus_provider_reply(
                 invocation,
                 reply,
@@ -1111,6 +1151,16 @@ class StoryRuntime:
             return False
         for task in active:
             task.cancel()
+        return True
+
+    def verify_consensus_material(
+        self,
+        material: ConsensusMaterialHandle,
+        /,
+    ) -> bool:
+        """Verify one immutable unpublished material handle without exposing bytes."""
+
+        self._consensus_material_store.inspect(material)
         return True
 
     def _resolve_consensus_input(
@@ -1242,6 +1292,45 @@ class StoryRuntime:
             session_id=session_id,
             conversation_id=conversation_id,
             workflow_id=workflow_id,
+        )
+
+    def continue_consensus_deadlock(
+        self,
+        session_id: str,
+        conversation_id: str,
+        source_workflow_id: str,
+        source_result_event_id: str,
+        expected_source_tail_sequence: int,
+        *,
+        mode: ConsensusContinuationMode,
+        ruling: str,
+        added_revision_rounds: int,
+    ) -> ConsensusRuntimeInspection:
+        """Prepare, but never execute, one exact deadlock continuation repair."""
+
+        self.workspace.validate_identifier(session_id)
+        self.workspace.validate_identifier(conversation_id, label="conversation ID")
+        if type(mode) is not ConsensusContinuationMode:
+            raise TypeError("consensus continuation mode is invalid")
+        if type(added_revision_rounds) is not int or added_revision_rounds < 1:
+            raise ValueError("consensus continuation revision budget must be positive")
+        self.consensus.validate_continuation_source(
+            session_id=session_id,
+            conversation_id=conversation_id,
+            source_workflow_id=source_workflow_id,
+            source_result_event_id=source_result_event_id,
+            expected_source_tail_sequence=expected_source_tail_sequence,
+        )
+        ruling_material = self._consensus_material_store.put_text(ruling)
+        return self.consensus.continue_deadlock(
+            session_id=session_id,
+            conversation_id=conversation_id,
+            source_workflow_id=source_workflow_id,
+            source_result_event_id=source_result_event_id,
+            expected_source_tail_sequence=expected_source_tail_sequence,
+            mode=mode,
+            ruling_material=ruling_material,
+            added_revision_rounds=added_revision_rounds,
         )
 
     def consensus_artifact_review_handoff(
@@ -8004,6 +8093,28 @@ class RuntimeSession:
             self.session_id,
             conversation_id,
             workflow_id,
+        )
+
+    def continue_consensus_deadlock(
+        self,
+        conversation_id: str,
+        source_workflow_id: str,
+        source_result_event_id: str,
+        expected_source_tail_sequence: int,
+        *,
+        mode: ConsensusContinuationMode,
+        ruling: str,
+        added_revision_rounds: int,
+    ) -> ConsensusRuntimeInspection:
+        return self.runtime.continue_consensus_deadlock(
+            self.session_id,
+            conversation_id,
+            source_workflow_id,
+            source_result_event_id,
+            expected_source_tail_sequence,
+            mode=mode,
+            ruling=ruling,
+            added_revision_rounds=added_revision_rounds,
         )
 
     async def lead_turn(

@@ -1550,8 +1550,8 @@ workflow](privacy-and-provider.md#rejected-provider-response-artifacts).
 - Public shell story input is unavailable. Ordinary/routed/removed shell input
   is rejected before provider, history, RAG, reference, progress, or artifact
   work. Python lead turns, structured decisions, and confirmed read-only
-  specialist/synthesis execution are available; they stop before artifact
-  mutation, consensus, or Git work.
+  specialist/synthesis execution and separately confirmed consensus are
+  available; they stop before artifact mutation or Git work.
 - Runtime enforces structural evidence scope/status/receipt rules for lead
   judgments, but it does not perform semantic NLP verification, prove provider
   comprehension, or guarantee that the lead selected every relevant artifact.
@@ -1577,6 +1577,37 @@ workflow](privacy-and-provider.md#rejected-provider-response-artifacts).
   and the independent supplied-text viewer remain generic components. Python
   lead input accepts `${path}` and `${path}#Lx-Ly`; no shell input activates
   `$`/`$$` or exposes a selection API.
+
+<a id="consensus-deadlock-continuation-recovery"></a>
+
+## Consensus deadlock-continuation recovery
+
+A terminal consensus deadlock publishes nothing. Applications may stop there,
+resume the same workflow, or create a linked workflow through the Python
+`continue_consensus_deadlock()` API. The continuation must name the exact
+deadlock result and current tail, and supplies only a ruling plus a positive
+additional repair-round budget. Runtime reuses immutable candidate and
+unresolved-critique handles; do not copy their text into a new prompt.
+
+| Observation | Safe response |
+| --- | --- |
+| Source tail/result, session/conversation, candidate lineage, or material does not match | Reinspect the exact source. Do not retry with guessed IDs or copied content. No provider or artifact mutation occurred. |
+| Continuation is `awaiting_confirmation` with capability available | Show its exact REPAIR request and ask for a fresh Confirm, Reject, or Revise decision. |
+| Restarted linked continuation is awaiting confirmation without capability | Do not reconstruct authority. Reinspect the still-terminal source and prepare a new linked continuation if it remains exact. |
+| Restarted in-place continuation is awaiting confirmation without capability | Do not replay the repair. Preserve and inspect it; use explicit operator/application recovery or begin a separate new workflow. |
+| Revise closes a REPAIR request | Prepare its explicit replacement; no repair round was consumed. |
+| Completed REPAIR leaves rounds | Request and confirm REAUDIT, then SYNTHESIS. One round was consumed. |
+| A repair successor is requested with no rounds left | Stop or obtain a new explicit continuation from the latest exact deadlock. Nothing is published. |
+| Provider interruption has a proved cancellation | Preserve the `interrupted` terminal result; do not replay it. |
+| Provider outcome or durability is uncertain | Stop automation and perform operator reconciliation. Never assume the repair ran or repeat it. |
+| Continuation reaches FINALIZATION | Treat it only as a read-only handoff. Artifact Apply and Git Commit each require their own later confirmation. |
+
+Both continuation modes preserve immutable provenance. `resume_in_place`
+appends to the source workflow; `linked_workflow` preserves that source as a
+terminal record and creates a distinct linked workflow. Repeated deadlocks
+remain nonpublishing. Strict consensus workflow serialization format version 3
+has no migration or legacy reader. The installed CLI and interactive shell
+provide no continuation command; use the Python runtime API.
 
 See [Session lifecycle](../design/session-lifecycle.md),
 [Troubleshooting](../guides/troubleshooting.md), and

@@ -22,7 +22,7 @@ inspection and the Python lead front channel.
 | Call the Python lead API with ordered artifact references; confirm a one-to-three-specialist consultation; receive typed replies and lead synthesis. | Treat consultation confirmation as artifact, consensus, or Git execution. |
 | Ask the lead to form an exact create/patch/replace/rename/delete candidate; confirm its disclosed specialist review; inspect an immutable reviewed proposal. | Apply that candidate, grant write authority, stage files, or commit through this stage. |
 | Propose one provider-free direct specialist advisory and confirm its execution. | Apply a core-document/manuscript change or create a Git commit. |
-| Use the Python API to submit a prompt or complete draft, inspect and separately confirm every consensus phase, interrupt active work, and inspect durable state after restart. | Start or advance consensus from the installed shell, treat finalization as artifact publication, or reuse confirmation authority after restart. |
+| Use the Python API to submit a prompt or complete draft, inspect and separately confirm every consensus phase, interrupt active work, inspect durable state after restart, and continue an exact deadlock in place or as a linked workflow without copying its candidate. | Start or advance consensus from the installed shell, treat finalization as artifact publication, or reuse confirmation authority after restart. |
 | Use schema-v2 collaboration contracts, stores, archive/transfer, readable projection, search, and paging APIs. | Bypass the runtime with a removed direct-run method. |
 | Run a disposable management/storage smoke or verify an existing workspace without changing it. | Use smoke as evidence of provider behavior or story quality. |
 
@@ -230,7 +230,10 @@ methods. Confirmation executes the disclosed read-only consultation through
 `decide_lead_step()`. Both facades also expose a phase-confirmed consensus API:
 submit prompt/draft input, inspect, decide or confirm the exact phase,
 explicitly request its successor, interrupt, and resume inspection. There is
-no public unconfirmed specialist dispatch, artifact publication, consensus
+also an explicit deadlock-continuation call that binds the source result,
+unresolved critique material, operator ruling, and added repair-round budget;
+it prepares a fresh REPAIR confirmation and never copies candidate text. There
+is no public unconfirmed specialist dispatch, artifact publication, consensus
 shell command, or Git method. The package root no longer exports the broad
 `Runtime` or `Session` aliases.
 

@@ -13,6 +13,7 @@ from .contracts import (
     ConsensusAudit,
     ConsensusAuditVerdict,
     ConsensusConfirmationCapability,
+    ConsensusContinuation,
     ConsensusExecutionIdentity,
     ConsensusMaterialHandle,
     ConsensusPhase,
@@ -62,10 +63,16 @@ class ConsensusPhaseInvocation:
     candidate_material: ConsensusMaterialHandle | None
     agent_id: str
     ordinal: int
+    continuation: ConsensusContinuation | None = None
 
     def __post_init__(self) -> None:
         if type(self.execution_identity) is not ConsensusExecutionIdentity:
             raise TypeError("consensus invocation execution identity is invalid")
+        if (
+            self.continuation is not None
+            and type(self.continuation) is not ConsensusContinuation
+        ):
+            raise TypeError("consensus invocation continuation is invalid")
 
     @property
     def input_digest(self) -> str:
@@ -85,6 +92,7 @@ class ConsensusProviderResult:
     candidate_material: ConsensusMaterialHandle | None
     audit_verdict: ConsensusAuditVerdict | None = None
     next_phase: ConsensusPhase | None = None
+    conflict_material: ConsensusMaterialHandle | None = None
 
     def __post_init__(self) -> None:
         if type(self.kind) is not ConsensusPhaseOutputKind:
@@ -96,6 +104,11 @@ class ConsensusProviderResult:
             raise TypeError("consensus provider audit verdict is invalid")
         if self.next_phase is not None and type(self.next_phase) is not ConsensusPhase:
             raise TypeError("consensus provider next phase is invalid")
+        if self.conflict_material is not None and (
+            type(self.conflict_material) is not ConsensusMaterialHandle
+            or not self.conflict_material.locator.startswith("candidate:")
+        ):
+            raise TypeError("consensus provider conflict material is invalid")
         if self.kind in {
             ConsensusPhaseOutputKind.AUDIT,
             ConsensusPhaseOutputKind.CONFLICT,
@@ -111,18 +124,38 @@ class ConsensusProviderResult:
                 or self.next_phase is not None
             ):
                 raise ValueError("consensus audit output is incomplete")
+            if (self.kind is ConsensusPhaseOutputKind.CONFLICT) != (
+                self.conflict_material is not None
+            ):
+                raise ValueError("consensus conflict output material is incomplete")
         elif self.kind is ConsensusPhaseOutputKind.SYNTHESIS:
-            if self.candidate_material is None or self.audit_verdict is not None or self.next_phase not in {ConsensusPhase.REPAIR, ConsensusPhase.FINALIZATION}:
+            if (
+                self.candidate_material is None
+                or self.audit_verdict is not None
+                or self.next_phase
+                not in {ConsensusPhase.REPAIR, ConsensusPhase.FINALIZATION}
+                or self.conflict_material is not None
+            ):
                 raise ValueError("consensus synthesis output is incomplete")
         elif self.kind in {
             ConsensusPhaseOutputKind.CANDIDATE,
             ConsensusPhaseOutputKind.FINALIZATION,
             ConsensusPhaseOutputKind.DEADLOCK,
         }:
-            if self.candidate_material is None or self.audit_verdict is not None or self.next_phase is not None:
+            if (
+                self.candidate_material is None
+                or self.audit_verdict is not None
+                or self.next_phase is not None
+                or self.conflict_material is not None
+            ):
                 raise ValueError("consensus provider output shape is invalid")
         elif self.kind is ConsensusPhaseOutputKind.FAILURE:
-            if self.candidate_material is not None or self.audit_verdict is not None or self.next_phase is not None:
+            if (
+                self.candidate_material is not None
+                or self.audit_verdict is not None
+                or self.next_phase is not None
+                or self.conflict_material is not None
+            ):
                 raise ValueError("consensus provider failure output is invalid")
 
     @property
@@ -356,6 +389,7 @@ class ConsensusExecutionCoordinator:
                 candidate_material=request.candidate_material,
                 agent_id=agent_id,
                 ordinal=ordinal,
+                continuation=request.continuation,
             )
             invocations.append(invocation)
             output = await self._invoke(invocation)
@@ -374,6 +408,7 @@ class ConsensusExecutionCoordinator:
                     candidate_digest=request.candidate_digest or "",
                     verdict=output.audit_verdict,
                     audit_digest=output.result_digest,
+                    conflict_material=output.conflict_material,
                 )
                 for invocation, output in zip(invocations, outputs, strict=True)
             )
