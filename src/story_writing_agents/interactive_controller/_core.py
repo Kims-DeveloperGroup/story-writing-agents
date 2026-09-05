@@ -133,6 +133,8 @@ from ..interactive_terminal import (
     Picker,
     Prompt,
     Record,
+    ReferenceInputFailure,
+    ReferenceInputFailureKind,
     Section,
     SemanticRole,
     SpeakerAccent,
@@ -186,7 +188,7 @@ from ._exchange_viewer import (
     AgentExchangeViewerError,
     prepare_agent_exchange_view,
 )
-from ._lead_policy import InteractiveLeadAdapter
+from ._lead_policy import InteractiveLeadAdapter, project_lead_reference_scope
 from ._runtime_policy import (
     DebateContextInspectionFacts,
     DebateInspectionFacts,
@@ -1734,12 +1736,26 @@ class InteractiveController:
                 last_presented_scope = self._write_attached_conversation_scope(
                     last_presented_scope
                 )
-            terminal_action = self._main_input.read_main(
-                self._main_resume_choices,
-                session_id=self._attached_session_id,
-                agent_id=None,
-                header_provider=self._main_runtime_header,
-            )
+            if (
+                self._attached_session_id is not None
+                and self._focused_conversation is not None
+            ):
+                terminal_action = self._main_input.read_main_with_references(
+                    self._main_resume_choices,
+                    project_lead_reference_scope,
+                    self._lead_reference_paths,
+                    self._lead_reference_text,
+                    session_id=self._attached_session_id,
+                    agent_id=None,
+                    header_provider=self._main_runtime_header,
+                )
+            else:
+                terminal_action = self._main_input.read_main(
+                    self._main_resume_choices,
+                    session_id=self._attached_session_id,
+                    agent_id=None,
+                    header_provider=self._main_runtime_header,
+                )
             if terminal_action.kind is TerminalActionKind.INTERRUPT:
                 self._write_main_input_cancelled_status()
                 continue
@@ -1754,6 +1770,32 @@ class InteractiveController:
             action = parse_interactive_line(original_line)
             if self._dispatch_session_lobby_action(action, original_line):
                 return 0
+
+    def _lead_reference_paths(self) -> tuple[str, ...]:
+        """List only current canonical writing sources for the main picker."""
+
+        try:
+            return self._runtime.artifacts.list_paths()
+        except (OSError, WorkspaceFormatError, WorkspaceSecurityError):
+            raise ReferenceInputFailure(
+                ReferenceInputFailureKind.UNAVAILABLE
+            ) from None
+
+    def _lead_reference_text(self, path: str) -> str:
+        """Read one selected canonical source for the independent range viewer."""
+
+        try:
+            return self._runtime.artifacts.read_text(path)
+        except FileNotFoundError:
+            raise ReferenceInputFailure(ReferenceInputFailureKind.STALE) from None
+        except WorkspaceFormatError:
+            raise ReferenceInputFailure(
+                ReferenceInputFailureKind.UNREADABLE
+            ) from None
+        except (OSError, WorkspaceSecurityError):
+            raise ReferenceInputFailure(
+                ReferenceInputFailureKind.UNAVAILABLE
+            ) from None
 
     def _main_runtime_header(self, buffer: str, cursor: int) -> Notice:
         """Project the focused lead-input boundary."""

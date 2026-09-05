@@ -28,6 +28,7 @@ from ..interactive_terminal import (
     InteractiveSemanticOutput,
     Notice,
     Prompt,
+    ReferenceInputScope,
     SemanticRole,
     ViewState,
 )
@@ -93,6 +94,23 @@ _COMMIT_CHOICES = tuple(
     )
     for decision in StoryCommitDecision
 )
+
+
+def project_lead_reference_scope(
+    buffer: str,
+    cursor: int,
+) -> ReferenceInputScope | None:
+    """Bound reference activation to one ordinary lead-input buffer."""
+
+    if type(buffer) is not str:
+        raise TypeError("buffer must be a string")
+    if type(cursor) is not int:
+        raise TypeError("cursor must be an integer")
+    if cursor < 0 or cursor > len(buffer):
+        raise ValueError("cursor must identify a buffer boundary")
+    if not buffer or buffer.isspace() or buffer.startswith("/"):
+        return None
+    return ReferenceInputScope(0, len(buffer))
 
 
 class InteractiveLeadAdapter:

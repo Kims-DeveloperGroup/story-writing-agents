@@ -4329,8 +4329,11 @@ every intermediate arrow. The current runtime graph is acyclic.
   quit. It has no consensus, draft, one-shot RAG, sticky-target, direct
   specialist route, or duplicated artifact/Git execution path. The controller
   delegates ordinary input to its private lead adapter and passes exact input
-  text to the session-bound runtime. It consumes the session policy's exact
-  transition values and
+  text to the session-bound runtime. Focused main input binds the established
+  reference-aware terminal route to the runtime artifact repository's safe
+  recursive path inventory and bounded viewer read; the submitted line retains
+  only canonical whole-file or line-range indicators. It consumes the session
+  policy's exact transition values and
   fixed content-safe denial projection without adding a direct assessor-module
   dependency.
 - **Direct internal dependencies:** `agent_exchanges`, `agents`, `backend`,
@@ -4355,7 +4358,10 @@ every intermediate arrow. The current runtime graph is acyclic.
   reconfirmation, running, terminal, unknown-outcome, and recovery meanings.
   Each path validates the complete authoritative result before partial
   rendering. Focused lead input may call providers only through the runtime
-  API and terminal progress lifecycle; history inspection performs no bind,
+  API and terminal progress lifecycle. Its call-local reference collaborators
+  may list current canonical writing paths and read one selected source for the
+  independent range viewer; they do not authorize provider reads or attach
+  content to the submitted input. History inspection performs no bind,
   provider call, append, RAG mutation, reference read, artifact operation,
   progress emission, debate, or manuscript write.
   Session creation provisions resources before lifecycle creation. Destination
@@ -4389,7 +4395,8 @@ every intermediate arrow. The current runtime graph is acyclic.
   receives a separate exact Commit/Reject/Revise gate with one freshly minted
   user confirmation ID. Consultation confirmation never implies either later
   authority. Recovery-required and outcome-unknown results are rendered without
-  replay or decision controls.
+  replay or decision controls. Package-internal `project_lead_reference_scope`
+  limits reference activation to the complete ordinary non-command input span.
 - **Direct internal dependencies:** `conversations`, `interactive_terminal`,
   `interactive_terminal._collaboration_view`, and `orchestrator`.
 - **State, resources, and side effects:** Borrows one runtime session, controller
