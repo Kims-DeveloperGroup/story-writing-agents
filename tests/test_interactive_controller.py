@@ -2065,6 +2065,98 @@ class ControllerStartupTests(ControllerTestCase):
 class ControllerConversationStartupTests(ControllerTestCase):
     """Verify saved conversation restoration and nested session switching."""
 
+    def test_focused_lead_references_survive_quit_reopen_and_continue(self) -> None:
+        workspace = self.make_workspace()
+        self.seed_session(
+            workspace,
+            "session",
+            durable_state=SessionDurableState.READY,
+        )
+        save_default_session(workspace, "session")
+        metadata = _conversation_metadata(
+            _UNIQUE_C,
+            "Opening",
+            session_id="session",
+        )
+        catalog = MemoryConversationCatalog((metadata,))
+        save_default_conversation(workspace, "session", metadata.conversation_id)
+        first_line = (
+            "Review ${core_documents/global_outline.md} and "
+            "${core_documents/character_sheets.md}#L1-L1"
+        )
+        second_line = "Continue from ${core_documents/narrative_rules.md}"
+        lead_calls: list[tuple[str, str, str]] = []
+        reference_calls: list[tuple[object, ...]] = []
+        original_reference_read = terminal_module.InteractiveMainInput.read_main_with_references
+
+        def reference_read(
+            input_owner: object,
+            *args: object,
+            **kwargs: object,
+        ) -> object:
+            reference_calls.append((*args, kwargs))
+            return original_reference_read(input_owner, *args, **kwargs)  # type: ignore[arg-type]
+
+        async def lead_turn(
+            runtime_session: RuntimeSession,
+            conversation_id: str,
+            text: str,
+        ) -> LeadTurnResult:
+            lead_calls.append((runtime_session.session_id, conversation_id, text))
+            return LeadTurnResult(
+                runtime_session.session_id,
+                conversation_id,
+                f"turn-{len(lead_calls)}",
+                f"step-{len(lead_calls)}",
+                LeadOutcomeKind.RECOMMENDATION,
+                f"Lead response {len(lead_calls)}.",
+                None,
+                CollaborationStepState.COMPLETED,
+                None,
+                CollaborationNextAction.CONTINUE_WITH_LEAD,
+            )
+
+        with (
+            mock.patch.object(RuntimeSession, "lead_turn", lead_turn),
+            mock.patch.object(
+                terminal_module.InteractiveMainInput,
+                "read_main_with_references",
+                reference_read,
+            ),
+        ):
+            first, _backend, first_callbacks = self.make_controller(
+                workspace,
+                first_line,
+                "/quit",
+                conversation_catalog=catalog,
+            )
+            self.assertEqual(first.run_session_lobby(), 0)
+            reopened, _backend, reopened_callbacks = self.make_controller(
+                workspace,
+                second_line,
+                "/quit",
+                conversation_catalog=catalog,
+            )
+            self.assertEqual(reopened.run_session_lobby(), 0)
+
+        self.assertEqual(
+            lead_calls,
+            [
+                ("session", metadata.conversation_id, first_line),
+                ("session", metadata.conversation_id, second_line),
+            ],
+        )
+        self.assertEqual(len(reference_calls), 4)
+        self.assertTrue(
+            all(call[-1]["session_id"] == "session" for call in reference_calls)
+        )
+        self.assertIn("Lead response 1.", "".join(first_callbacks.records))
+        self.assertIn("Lead response 2.", "".join(reopened_callbacks.records))
+        self.assertEqual(
+            load_default_conversation(workspace, "session"),
+            metadata.conversation_id,
+        )
+
     def test_malformed_or_unsafe_initial_selection_aborts_and_detaches(self) -> None:
         cases = (
             (
@@ -12593,6 +12685,94 @@ class InteractiveLeadAdapterTests(unittest.TestCase):
             )
             self.assertFalse(adapter.submit(_UNIQUE_C, "cancel proposal"))
             self.assertFalse(any(label == "decision" for label, _value in calls))
+
+            calls.clear()
+            current[:] = [self._terminal_turn(CollaborationStepState.COMPLETED)]
+            adapter = lead_policy_module.InteractiveLeadAdapter(
+                session,
+                runner,
+                self._Progress(),  # type: ignore[arg-type]
+                self._Picker(),  # type: ignore[arg-type]
+                self._Prompt(),  # type: ignore[arg-type]
+                self._Output(),  # type: ignore[arg-type]
+            )
+            self.assertFalse(adapter.submit(_UNIQUE_C, "replace the request"))
+            self.assertEqual(
+                calls,
+                [("lead", (_UNIQUE_C, "replace the request"))],
+            )
+
+    def test_failure_interruption_and_recovery_turns_never_replay_authority(
+        self,
+    ) -> None:
+        session = RuntimeSession.__new__(RuntimeSession)
+        runner = asyncio.Runner()
+        self.addCleanup(runner.close)
+        calls: list[tuple[str, str]] = []
+        current: list[LeadTurnResult] = []
+
+        async def lead_turn(
+            _session: RuntimeSession,
+            conversation_id: str,
+            text: str,
+        ) -> LeadTurnResult:
+            calls.append((conversation_id, text))
+            return current[0]
+
+        cases = (
+            (
+                "provider-failure",
+                None,
+                CollaborationNextAction.RETRY_LEAD_TURN,
+            ),
+            (
+                "interrupted",
+                CollaborationStepState.INTERRUPTED,
+                CollaborationNextAction.CONTINUE_WITH_LEAD,
+            ),
+            (
+                "outcome-unknown",
+                CollaborationStepState.OUTCOME_UNKNOWN,
+                CollaborationNextAction.INSPECT_AND_RESOLVE_OUTCOME,
+            ),
+            (
+                "recovery",
+                CollaborationStepState.RECOVERY_REQUIRED,
+                CollaborationNextAction.REPAIR_AUTHORITATIVE_HISTORY,
+            ),
+        )
+        with mock.patch.object(RuntimeSession, "lead_turn", lead_turn):
+            for label, state, next_action in cases:
+                with self.subTest(label=label):
+                    calls.clear()
+                    current[:] = [
+                        LeadTurnResult(
+                            "session",
+                            _UNIQUE_C,
+                            f"turn-{label}",
+                            f"step-{label}",
+                            LeadOutcomeKind.RECOMMENDATION,
+                            f"Visible {label} result.",
+                            None,
+                            state,
+                            None,
+                            next_action,
+                        )
+                    ]
+                    output = self._Output()
+                    adapter = lead_policy_module.InteractiveLeadAdapter(
+                        session,
+                        runner,
+                        self._Progress(),  # type: ignore[arg-type]
+                        self._Picker(),  # type: ignore[arg-type]
+                        self._Prompt(),  # type: ignore[arg-type]
+                        output,  # type: ignore[arg-type]
+                    )
+
+                    self.assertFalse(adapter.submit(_UNIQUE_C, label))
+
+                    self.assertEqual(calls, [(_UNIQUE_C, label)])
+                    self.assertEqual(len(output.components), 1)
 
     def test_artifact_and_commit_controls_are_distinct_and_correlated(self) -> None:
         digest = "sha256:" + "a" * 64
