@@ -3,30 +3,32 @@
 ## Project Role
 
 Read `README.md` first; it governs objective/language/contributions/structure. Maintain this
-Python novel-writing runtime; write fiction only for requested examples/fixtures/tests.
+novel-writing runtime; write fiction only for requested examples/fixtures/tests.
 
 ## Working Method
 
 1. Inspect behavior; define requirements/inventory/constraints/scope/criteria/gates.
-2. Explanation/review/diagnosis/planning authorize no change; implementation only approved
+2. Explanation/review/diagnosis/planning authorize no change; implement only approved
    scope.
 3. Change minimally; preserve unrelated work; verify/diff-review.
 
-Ask when missing requirements materially change design/results. Skills supply procedures but
-never override this file or linked policies.
+Ask when missing requirements materially change design/results. Skills supply procedures;
+never override this file/policies.
 
 ## GitHub Planning Gate
 
-Before branches, worktrees, writers, or edits, record
+Before branches/worktrees/writers/edits record
 `github_planning_gate=not_required|pending|passed|blocked` plus reason. Pending/blocked
-permits read-only work only. Load `$github-task-lifecycle` for GitHub-tracked work and obey
+permits read-only work only. For GitHub-tracked work load `$github-task-lifecycle`; obey
 [GITHUB_WORKFLOW.md](GITHUB_WORKFLOW.md).
 
 Large means `L|XL`; two independent slices/parent criteria; three production modules; two
 domains; modularity/migration coordination; dependency sequencing; multiple
 owners/worktrees/phases; or parent integration. Tests/docs do not count; uncertainty is
-large. Before its writer, verify root/descendants, native relations, canonical Project
-items, and metadata. New scope stops writes; preserve the diff and initialize it.
+large. Before writing verify graph/Project metadata. One-implementation/delivery-unit
+plans stay on their Issue; direct-child-sets/subdivision require >=2 independently-complete
+necessary siblings, created/verified together; otherwise enlarge/update current scope. New
+scope stops writes; preserve diff and initialize it.
 
 ## Subagent Delegation
 
