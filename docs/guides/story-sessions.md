@@ -1,7 +1,9 @@
 # Story sessions and conversations
 
-The TTY shell currently manages and inspects session/conversation state. It
-does not execute story instructions.
+The TTY shell manages and inspects session/conversation state. After a ready
+session is attached and an active conversation is focused, ordinary non-slash
+input goes to the Lead; the runtime keeps provider calls and effects behind
+the documented authority boundaries.
 
 ## State in user terms
 
@@ -83,7 +85,8 @@ worktree status.
 | `idle_ready` / `begin_with_lead` | Enter, leave, pause | Continue through the lead. |
 | Active `ready`, `proposed`, `reviewed`, `awaiting_application`, `committed`, or `rejected` / `follow_active_recovery` | Enter, leave, pause | For `ready`, begin the first lead turn. Otherwise follow the nested recovery result's exact next action. |
 | Active `applied_not_committed` or `staged` / `follow_active_recovery` | Enter only | Attach to inspect; do not leave or pause the owner. |
-| `outcome_unknown` / `inspect_owner_outcome` | None | Preserve evidence and inspect the named owner. |
+| `outcome_unknown` / `inspect_owner_outcome`, owner `collaboration_history`, failure `owner_outcome_unknown` | Enter only | Attach to inspect an unmatched submitted Lead call; do not replay it, leave the owner, or pause the session. |
+| Other `outcome_unknown` / `inspect_owner_outcome` | None | Preserve evidence and inspect the named owner without entering. |
 | `recovery_required` / `operator_recovery` | None | Stop automated mutation and perform explicit operator recovery. |
 
 For ordinary active progress the outer `owner` is null and `failure_code` is
@@ -93,10 +96,14 @@ An exact zero-event conversation is active `ready`, owned by the Lead, with
 state only after the same stable resource, history, external-Git, status, and
 tip checks used for later active recovery.
 For uncertainty or recovery, the outer result copies the nested owner and
-failure code and allows nothing. Assessment invokes no story provider and
-does not reveal or recreate confirmation choices, content, or capability. An
-allowed transition is not Apply or commit authority: runtime content writes
-still require the existing lead/user confirmation path.
+failure code. It normally allows nothing. The only exception is the exact
+`collaboration_history` / `owner_outcome_unknown` result for a proposal-free,
+unmatched submitted Lead call: it allows `ENTER_DESTINATION` so the user can
+inspect that conversation. It does not allow leaving or pausing the owner.
+Assessment invokes no story provider and does not reveal or recreate
+confirmation choices, content, or capability. An allowed entry is not replay,
+resolution, Apply, write, or Commit authority; those effects retain their
+existing runtime and confirmation boundaries.
 
 See the [CLI JSON examples](../reference/cli.md#session-transition-json) and
 [complete recovery matrix](../operations/recovery-and-limitations.md#session-transition-assessment).
@@ -211,8 +218,17 @@ opening the independent range viewer. The inserted durable forms are
 
 - Use `/status` after an interrupted lifecycle or settings operation.
 - When a transition record shows `outcome_unknown`, preserve all evidence and
-  follow `inspect_owner_outcome` for the displayed owner. When it shows
-  `recovery_required`, stop automated mutation and follow `operator_recovery`.
+  follow `inspect_owner_outcome` for the displayed owner. If that owner is
+  `collaboration_history` with failure `owner_outcome_unknown`, the shell may
+  enter only to inspect the unmatched submitted Lead call. Ordinary input then
+  returns the same preserved `State: outcome_unknown` and
+  `Next action: inspect_and_resolve_outcome` without a provider replay or new
+  durable user event. Other outcome-unknown owners remain blocked from entry.
+  When the record shows `recovery_required`, stop automated mutation and
+  follow `operator_recovery`.
+- Entry for inspection does not authorize replay, Apply, artifact writes,
+  Commit, leaving, pausing, or resolution of the uncertain call. Use
+  `/conversation new SUBJECT` for intentionally distinct work.
 - Do not use reset, abort, cleanup, claim deletion, or default removal to make
   an uncertain session appear idle or safe.
 - Use `/session list` and `/conversation list --all` to rediscover IDs.

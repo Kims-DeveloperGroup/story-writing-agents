@@ -73,7 +73,7 @@ and cannot override these rules.
 
 | Users can | Users cannot yet |
 | --- | --- |
-| Converse with the lead through `StoryRuntime.lead_turn()` or `RuntimeSession.lead_turn()`. | Send ordinary story text through the installed shell. |
+| Converse with the lead through focused ordinary input in the installed shell, `StoryRuntime.lead_turn()`, or `RuntimeSession.lead_turn()`. | Send story text before attaching a ready session and focusing an active conversation. |
 | Attach several ordered whole-file or ranged `${path}` references and inspect the result's content-free evidence. | Treat an explicit missing `${path}` as proof of absence; it fails before the substantive lead call. |
 | Receive an evidence-grounded answer, question, critique, recommendation, or consultation proposal. | Assume runtime performed semantic conflict detection or proved that every relevant artifact was selected. |
 | Confirm, reject, or revise the exact current proposal. | Confirm with free text such as `Yes`, or replay stale confirmation fields. |
@@ -1030,6 +1030,54 @@ Restart behavior follows durable facts:
 - unresolved `running` without a live owner/result becomes `outcome_unknown`
   and is never replayed; and
 - corrupt or ambiguous authority becomes `recovery_required`.
+
+### Submitted Lead outcome unavailable after restart
+
+An exact unmatched `SUBMITTED` Lead call is a narrower case than corrupt
+history. It means runtime recorded submission but has neither a validated Lead
+judgment nor a typed outcome failure that closes that call. The visible result
+is stable across process restart:
+
+```text
+[Lead]
+  Outcome: recommendation
+  Lead: The Lead provider call was submitted, but no reliable result was
+        recorded. Do not retry or replay it; authoritative state is preserved.
+        Inspect and resolve the outcome, or create and focus another
+        conversation for intentionally distinct work.
+  Next action: inspect_and_resolve_outcome
+  State: outcome_unknown
+  next action: External work may have happened. Do not replay it; inspect and recover.
+```
+
+For example, after a referenced request reads its required artifact and the
+substantive Lead response becomes unavailable, a user can quit and run:
+
+```text
+$ story chat alpha --workspace /path/to/story
+story[alpha]> Do not replay the submitted call.
+```
+
+The session attaches for inspection. The ordinary line receives the same
+preserved result without a new provider call and without becoming a new
+durable user event. `/conversation new Distinct recovery work` remains
+available when the user intentionally wants separate work.
+
+This is enforced from the validated collaboration projection rather than a
+second raw-event interpretation. Only a proposal-free current Lead invocation
+whose `PREPARED` accounting is followed by unmatched `SUBMITTED` accounting is
+classified as `outcome_unknown` with
+`inspect_and_resolve_outcome`. `PREPARED` alone does not mean external work may
+have happened and is not promoted to this state. The session-recovery result
+names owner `collaboration_history` and failure `owner_outcome_unknown` only
+when no proposal, execution, artifact, Apply, or Commit successor exists.
+
+Transition assessment makes one precise exception for this owner and failure:
+`ENTER_DESTINATION` is allowed so the user can inspect the preserved state.
+`LEAVE_SOURCE` and `PAUSE_SESSION` remain denied, and outcome uncertainty owned
+by story commit, checkpoint, or another subsystem still permits no transition.
+Attaching or entering never authorizes replay, resolution, Apply, artifact
+write, Commit, or any other effect.
 
 Outer cancellation cancels and joins all child tasks, persists every knowable
 result, clears the live marker, and re-raises cancellation to the caller.

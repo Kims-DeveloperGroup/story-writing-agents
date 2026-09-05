@@ -3995,6 +3995,10 @@ every intermediate arrow. The current runtime graph is acyclic.
 ### `story_writing_agents.conversations.context`
 
 - **Source:** `src/story_writing_agents/conversations/context.py`
+- **Responsibility note:** Projection is the sole classifier for an exact
+  unmatched PREPARED-to-SUBMITTED Lead invocation: it exposes proposal-free
+  `OUTCOME_UNKNOWN` with `INSPECT_AND_RESOLVE_OUTCOME`; PREPARED-only history
+  remains distinct and malformed accounting remains rejected.
 - **Responsibility:** Define pure collaboration interaction and history-
   projection contracts.
 - **Supported surface:** Exactly 28 owning-module names in `__all__`: the five
@@ -5886,6 +5890,9 @@ every intermediate arrow. The current runtime graph is acyclic.
 ### `story_writing_agents.orchestrator`
 
 - **Source:** `src/story_writing_agents/orchestrator.py`
+- **Responsibility note:** Immediate and restart Lead recovery consume the
+  collaboration projection's submitted-call classification; only PREPARED-only
+  detection remains local for the established recovery-required path.
 - **Responsibility:** Own the story runtime lifecycle and lead-front-channel
   orchestration.
 - **Supported surface:** Package-supported `StoryRuntime` and
@@ -5943,7 +5950,10 @@ every intermediate arrow. The current runtime graph is acyclic.
   second-round proposal requiring fresh confirmation. Restart normalization
   locally finalizes a result-backed RUNNING step without a provider call and
   converts unresolved or submission-uncertain work to outcome unknown without
-  replay. A submitted lead answer rejected by evidence validation is closed by
+  replay. Durable unmatched `SUBMITTED` Lead calls return the same typed
+  outcome-unknown inspection guidance immediately and after restart, while
+  merely `PREPARED` calls retain recovery-required handling. A submitted lead
+  answer rejected by evidence validation is closed by
   one typed content-free failure event and returns retry authority without a
   successful judgment or replay. A unique non-null artifact-intent declaration
   is classified as an artifact-intent failure even when its untrusted body fails
@@ -6129,6 +6139,9 @@ every intermediate arrow. The current runtime graph is acyclic.
 ### `story_writing_agents.session_recovery.contracts`
 
 - **Source:** `src/story_writing_agents/session_recovery/contracts.py`
+- **Responsibility note:** The package-internal
+  `is_unmatched_submitted_lead_projection` predicate owns the one admissible
+  proposal-free nonempty recovery shape and rejects downstream artifacts.
 - **Responsibility:** Define and deterministically classify immutable evidence
   for one active correlated story-session workflow.
 - **Supported surface:** Exactly the facade's four closed enums, content-safe
@@ -6159,6 +6172,9 @@ every intermediate arrow. The current runtime graph is acyclic.
 ### `story_writing_agents.session_recovery.reconciliation`
 
 - **Source:** `src/story_writing_agents/session_recovery/reconciliation.py`
+- **Responsibility note:** Reconciliation admits that exact proposal-free shape
+  and reports collaboration-history owner outcome uncertainty without reading
+  raw events, repairing history, or replaying work.
 - **Responsibility:** Observe authoritative owners and assemble one stable,
   correlated story-session recovery result without replaying work.
 - **Supported surface:** Direct-module `__all__` contains exactly
@@ -6193,6 +6209,9 @@ every intermediate arrow. The current runtime graph is acyclic.
 ### `story_writing_agents.session_recovery.transition_assessment`
 
 - **Source:** `src/story_writing_agents/session_recovery/transition_assessment.py`
+- **Responsibility note:** Active collaboration-history owner uncertainty allows
+  only enter-destination; leave and pause remain denied, and all other
+  outcome-unknown owners allow no transition operation.
 - **Responsibility:** Assess immutable, content-safe session-transition
   permission from active recovery truth or stable idle owner observations.
 - **Supported surface:** Direct-module `__all__` contains exactly

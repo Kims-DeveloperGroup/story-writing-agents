@@ -22,7 +22,6 @@ from story_writing_agents.agent_context.accounting import (
     account_provider_payload,
 )
 from story_writing_agents.agent_context.service import (
-    ContextExecutionError,
     ContextProviderCallRequest,
     ContextProviderCallResult,
     ContextProviderFailureFacts,
@@ -803,14 +802,19 @@ class LeadOutcomeAndProposalTests(LeadOrchestrationTestCase):
                     )
                     self.assertIs(result.kind, LeadOutcomeKind.RECOMMENDATION)
                 else:
-                    with self.assertRaises(
-                        (BackendProtocolError, ContextExecutionError)
-                    ):
-                        await self.runtime.lead_turn(
-                            self.session_id,
-                            conversation_id,
-                            "Reject a noncanonical outcome.",
-                        )
+                    result = await self.runtime.lead_turn(
+                        self.session_id,
+                        conversation_id,
+                        "Reject a noncanonical outcome.",
+                    )
+                    self.assertIs(
+                        result.state,
+                        CollaborationStepState.OUTCOME_UNKNOWN,
+                    )
+                    self.assertIs(
+                        result.next_action,
+                        CollaborationNextAction.INSPECT_AND_RESOLVE_OUTCOME,
+                    )
                 history = self.history(conversation_id)
                 self.assertFalse(
                     any(
@@ -1294,25 +1298,65 @@ class LeadRecoveryAndAccountingTests(LeadOrchestrationTestCase):
 
         submitted_id = self.conversation("Submitted")
         self.backend.enqueue(_SubmittedFailure(RuntimeError("submitted failure")))
-        with self.assertRaises(RuntimeError):
-            await self.runtime.lead_turn(
-                self.session_id,
-                submitted_id,
-                "Leave SUBMITTED durable.",
-            )
+        submitted_result = await self.runtime.lead_turn(
+            self.session_id,
+            submitted_id,
+            "Leave SUBMITTED durable.",
+        )
         submitted_calls = len(self.backend.calls)
-        submitted_recovery = await self.runtime.lead_turn(
+        submitted_events = self.history(submitted_id)
+        self.assertIs(submitted_result.state, CollaborationStepState.OUTCOME_UNKNOWN)
+        self.assertIs(
+            submitted_result.next_action,
+            CollaborationNextAction.INSPECT_AND_RESOLVE_OUTCOME,
+        )
+        for fragment in (
+            "submitted",
+            "no reliable result",
+            "Do not retry or replay",
+            "state is preserved",
+            "another conversation",
+        ):
+            self.assertIn(fragment, submitted_result.message)
+
+        restart_backend = _LeadBackend()
+        restarted = StoryRuntime(self.workspace, restart_backend)  # type: ignore[arg-type]
+        submitted_recovery = await restarted.lead_turn(
             self.session_id,
             submitted_id,
             "Do not replay SUBMITTED.",
         )
-        self.assertIs(
-            submitted_recovery.state, CollaborationStepState.RECOVERY_REQUIRED
+        self.assertEqual(
+            (
+                submitted_recovery.state,
+                submitted_recovery.next_action,
+                submitted_recovery.message,
+                submitted_recovery.step_id,
+                submitted_recovery.turn_id,
+            ),
+            (
+                submitted_result.state,
+                submitted_result.next_action,
+                submitted_result.message,
+                submitted_result.step_id,
+                submitted_result.turn_id,
+            ),
         )
         self.assertEqual(len(self.backend.calls), submitted_calls)
+        self.assertEqual(restart_backend.calls, [])
+        self.assertEqual(self.history(submitted_id), submitted_events)
+        self.assertEqual(
+            sum(
+                event.kind is CollaborationEventKind.MESSAGE
+                and isinstance(event.payload, CollaborationMessagePayload)
+                and event.payload.content == "Leave SUBMITTED durable."
+                for event in submitted_events
+            ),
+            1,
+        )
         self.assertEqual(
             project_collaboration_history(
-                self.history(submitted_id)
+                submitted_events
             ).physical_calls_spent,
             1,
         )

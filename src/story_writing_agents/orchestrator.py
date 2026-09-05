@@ -4845,7 +4845,22 @@ class StoryRuntime:
                 step_id=projection.current_step_id,
                 turn_id=projection.current_turn_id,
             )
-        if self._has_dangling_lead_call(events):
+        if (
+            projection.current_proposal is None
+            and projection.current_state is CollaborationStepState.OUTCOME_UNKNOWN
+            and projection.next_safe_action
+            is CollaborationNextAction.INSPECT_AND_RESOLVE_OUTCOME
+        ):
+            return self._submitted_lead_outcome_unknown_result(
+                session_id,
+                conversation_id,
+                step_id=projection.current_step_id,
+                turn_id=projection.current_turn_id,
+            )
+        if (
+            self._unmatched_lead_call_state(events)
+            is CollaborationProviderCallState.PREPARED
+        ):
             return self._blocking_lead_result(
                 session_id,
                 conversation_id,
@@ -5059,6 +5074,28 @@ class StoryRuntime:
             result_state,
             None,
             next_action,
+        )
+
+    def _submitted_lead_outcome_unknown_result(
+        self,
+        session_id: str,
+        conversation_id: str,
+        *,
+        step_id: str | None,
+        turn_id: str | None,
+    ) -> LeadTurnResult:
+        """Return the stable non-replay result for one unmatched submitted call."""
+
+        return self._blocking_lead_result(
+            session_id,
+            conversation_id,
+            CollaborationStepState.OUTCOME_UNKNOWN,
+            "The Lead provider call was submitted, but no reliable result was "
+            "recorded. Do not retry or replay it; authoritative state is "
+            "preserved. Inspect and resolve the outcome, or create and focus "
+            "another conversation for intentionally distinct work.",
+            step_id=step_id,
+            turn_id=turn_id,
         )
 
     async def _run_lead_provider_locked(
@@ -5321,6 +5358,25 @@ class StoryRuntime:
             )
         except BaseException as failure:
             reference_failure = reference_operation.failure(failure)
+            _events, projection, history_failure = self._read_lead_history(
+                session_id,
+                conversation_id,
+            )
+            if (
+                history_failure is None
+                and projection is not None
+                and projection.current_proposal is None
+                and projection.current_state
+                is CollaborationStepState.OUTCOME_UNKNOWN
+                and projection.next_safe_action
+                is CollaborationNextAction.INSPECT_AND_RESOLVE_OUTCOME
+            ):
+                return self._submitted_lead_outcome_unknown_result(
+                    session_id,
+                    conversation_id,
+                    step_id=step_id,
+                    turn_id=turn_id,
+                )
             if reference_failure is not None:
                 raise reference_failure from failure
             raise
@@ -7658,8 +7714,13 @@ class StoryRuntime:
         return False
 
     @staticmethod
-    def _has_dangling_lead_call(events: tuple[CollaborationEvent, ...]) -> bool:
+    def _unmatched_lead_call_state(
+        events: tuple[CollaborationEvent, ...],
+    ) -> CollaborationProviderCallState | None:
+        """Return the strongest durable state of an unmatched Lead provider call."""
+
         completed_invocations: set[tuple[str, str]] = set()
+        prepared = False
         for event in reversed(events):
             correlation = (event.step_id, event.turn_id)
             if (
@@ -7675,8 +7736,10 @@ class StoryRuntime:
                 and event.payload.invocation_kind is CollaborationInvocationKind.LEAD
                 and correlation not in completed_invocations
             ):
-                return True
-        return False
+                if event.payload.state is CollaborationProviderCallState.SUBMITTED:
+                    return CollaborationProviderCallState.SUBMITTED
+                prepared = True
+        return CollaborationProviderCallState.PREPARED if prepared else None
 
     def _validate_lead_identity(
         self,
