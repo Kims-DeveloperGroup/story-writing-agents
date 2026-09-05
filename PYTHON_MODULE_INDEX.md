@@ -5943,7 +5943,10 @@ every intermediate arrow. The current runtime graph is acyclic.
   second-round proposal requiring fresh confirmation. Restart normalization
   locally finalizes a result-backed RUNNING step without a provider call and
   converts unresolved or submission-uncertain work to outcome unknown without
-  replay. A submitted lead answer rejected by evidence validation is closed by
+  replay. Durable unmatched `SUBMITTED` Lead calls return the same typed
+  outcome-unknown inspection guidance immediately and after restart, while
+  merely `PREPARED` calls retain recovery-required handling. A submitted lead
+  answer rejected by evidence validation is closed by
   one typed content-free failure event and returns retry authority without a
   successful judgment or replay. A unique non-null artifact-intent declaration
   is classified as an artifact-intent failure even when its untrusted body fails
