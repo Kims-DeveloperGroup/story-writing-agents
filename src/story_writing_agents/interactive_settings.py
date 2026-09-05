@@ -14,6 +14,7 @@ from .config import (
     ConfigurationSnapshot,
     ConfigManager,
     SystemDefaults,
+    decode_provider_route_generations,
 )
 from .errors import (
     ConfigurationError,
@@ -1029,32 +1030,11 @@ def _decode_provider_routes(
 ) -> Mapping[str, ProviderRouteEntry]:
     """Validate and copy exact durable schema-v1 route generation state."""
 
-    value = _decode_json(content, _PROVIDER_ROUTE_GENERATIONS_PATH)
-    if not isinstance(value, dict) or set(value) != {"schema_version", "agents"}:
-        raise WorkspaceFormatError("provider route generations have an invalid schema")
-    if value["schema_version"] != _PROVIDER_ROUTE_GENERATIONS_SCHEMA_VERSION:
-        raise WorkspaceFormatError(
-            "provider route generations have an unsupported schema version"
-        )
-    agents = value["agents"]
-    if not isinstance(agents, dict) or set(agents) != set(ROSTER):
-        raise WorkspaceFormatError(
-            "provider route generations must contain the complete roster"
-        )
-    routes: dict[str, ProviderRouteEntry] = {}
-    try:
-        for agent_id in ROSTER:
-            raw = agents[agent_id]
-            if not isinstance(raw, dict) or set(raw) != {"provider", "generation"}:
-                raise ValueError
-            routes[agent_id] = ProviderRouteEntry(
-                provider=raw["provider"],
-                generation=raw["generation"],
-            )
-    except (ConfigurationError, TypeError, ValueError) as exc:
-        raise WorkspaceFormatError(
-            "provider route generations contain an invalid entry"
-        ) from exc
+    decoded = decode_provider_route_generations(content)
+    routes = {
+        agent_id: ProviderRouteEntry(provider=provider, generation=generation)
+        for agent_id, (provider, generation) in decoded.items()
+    }
     return MappingProxyType(routes)
 
 

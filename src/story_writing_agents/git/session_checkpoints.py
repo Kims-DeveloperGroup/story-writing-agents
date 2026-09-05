@@ -102,13 +102,20 @@ class _CheckpointIntent:
 class SessionCheckpointService:
     """Checkpoint exact owner snapshots without borrowing user Git state."""
 
-    __slots__ = ("_manifest", "_root", "_session_id")
+    __slots__ = (
+        "_allowed_worktree_changes",
+        "_manifest",
+        "_root",
+        "_session_id",
+    )
 
     def __init__(
         self,
         root: str | os.PathLike[str],
         manifest: GitBaselineManifest,
         session_id: str,
+        *,
+        allowed_worktree_changes: tuple[str, ...] = (),
     ) -> None:
         try:
             path = Path(root)
@@ -120,6 +127,7 @@ class SessionCheckpointService:
         self._root = identity.main_root
         self._session_id = identity.session_id
         self._manifest = _reconstruct_manifest(manifest)
+        self._allowed_worktree_changes = allowed_worktree_changes
 
     @_content_free_boundary
     def checkpoint(self, request: SessionCheckpointRequest) -> SessionCheckpointResult:
@@ -136,6 +144,7 @@ class SessionCheckpointService:
                 self._manifest,
                 self._session_id,
                 create=True,
+                allowed_worktree_changes=self._allowed_worktree_changes,
             ) as history:
                 intent = self._prepare(value)
                 if type(intent) is SessionCheckpointResult:
@@ -192,6 +201,7 @@ class SessionCheckpointService:
                 self._root,
                 self._manifest,
                 self._session_id,
+                allowed_worktree_changes=self._allowed_worktree_changes,
             ) as history:
                 return _operation_result(
                     history.read_checkpoint_operation(operation_id)
@@ -213,6 +223,7 @@ class SessionCheckpointService:
                 self._root,
                 self._manifest,
                 self._session_id,
+                allowed_worktree_changes=self._allowed_worktree_changes,
             ) as history:
                 operation = history.read_checkpoint_operation(operation_id)
                 if operation.state is GitSessionHistoryState.RECOVERY_REQUIRED:
@@ -546,6 +557,7 @@ class SessionCheckpointService:
                 self._root,
                 self._manifest,
                 self._session_id,
+                allowed_worktree_changes=self._allowed_worktree_changes,
                 create=True,
             ) as history:
                 current = history.read_checkpoint_operation(operation.operation_id)

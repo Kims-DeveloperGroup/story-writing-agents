@@ -28,6 +28,7 @@ from ..workspace import (
     open_workspace_root_directory,
     verify_workspace_root_directory,
 )
+from ..runtime_state_paths import CONTEXT_LEDGER_DIRECTORY
 from .accounting import (
     ContextComponentBytes,
     ContextComponentKind,
@@ -101,7 +102,7 @@ MAX_CONTEXT_LEDGER_SOURCES = 4096
 MAX_CONTEXT_LEDGER_PROVIDER_CALLS = 32
 CONTEXT_LEDGER_LOCK_TIMEOUT_SECONDS = 5.0
 
-_LEDGER_PATH = ("agent_states", "orchestrator_state", "context_ledger", "v2")
+_LEDGER_PATH = tuple(CONTEXT_LEDGER_DIRECTORY.split("/"))
 _PRIVATE_PATH_START = 2
 _LOCK_RETRY_SECONDS = 0.01
 _MAX_LOCK_FREE_READ_ATTEMPTS = 8

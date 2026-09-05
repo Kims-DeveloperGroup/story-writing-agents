@@ -14,6 +14,7 @@ from typing import NoReturn
 from uuid import uuid4
 
 from ..errors import WorkspaceFormatError, WorkspaceSecurityError
+from ..runtime_state_paths import WRITING_ARTIFACT_DIRECTORY
 from ._storage import SecureWorkspaceStorage
 from .application_contracts import (
     ARTIFACT_APPLICATION_SCHEMA_VERSION,
@@ -63,7 +64,7 @@ from .relationship_policy import (
 )
 
 
-ARTIFACT_STATE_DIRECTORY = "agent_states/orchestrator_state/writing_artifacts"
+ARTIFACT_STATE_DIRECTORY = WRITING_ARTIFACT_DIRECTORY
 ARTIFACT_CATALOG_PATH = f"{ARTIFACT_STATE_DIRECTORY}/catalog.json"
 ARTIFACT_APPLICATIONS_DIRECTORY = f"{ARTIFACT_STATE_DIRECTORY}/applications"
 ARTIFACT_TRANSACTIONS_DIRECTORY = f"{ARTIFACT_STATE_DIRECTORY}/transactions"
