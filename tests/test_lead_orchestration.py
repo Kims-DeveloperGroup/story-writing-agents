@@ -22,7 +22,6 @@ from story_writing_agents.agent_context.accounting import (
     account_provider_payload,
 )
 from story_writing_agents.agent_context.service import (
-    ContextExecutionError,
     ContextProviderCallRequest,
     ContextProviderCallResult,
     ContextProviderFailureFacts,
@@ -803,14 +802,19 @@ class LeadOutcomeAndProposalTests(LeadOrchestrationTestCase):
                     )
                     self.assertIs(result.kind, LeadOutcomeKind.RECOMMENDATION)
                 else:
-                    with self.assertRaises(
-                        (BackendProtocolError, ContextExecutionError)
-                    ):
-                        await self.runtime.lead_turn(
-                            self.session_id,
-                            conversation_id,
-                            "Reject a noncanonical outcome.",
-                        )
+                    result = await self.runtime.lead_turn(
+                        self.session_id,
+                        conversation_id,
+                        "Reject a noncanonical outcome.",
+                    )
+                    self.assertIs(
+                        result.state,
+                        CollaborationStepState.OUTCOME_UNKNOWN,
+                    )
+                    self.assertIs(
+                        result.next_action,
+                        CollaborationNextAction.INSPECT_AND_RESOLVE_OUTCOME,
+                    )
                 history = self.history(conversation_id)
                 self.assertFalse(
                     any(

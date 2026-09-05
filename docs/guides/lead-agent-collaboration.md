@@ -457,7 +457,68 @@ Runtime effect: the reply is stored and shown through the lead; no sibling
                 policy or authority is added.
 ```
 
-## Scenario 8: interruption, restart, and recovery
+## Scenario 8: a submitted Lead result is unavailable
+
+Suppose a referenced request passes its reference read, but the substantive
+Lead call is submitted and its response never becomes an authoritative
+result. The first shell does not expose provider stderr or report an ordinary
+retryable failure. It shows the typed uncertainty instead:
+
+```text
+story[alpha]> Review ${core_documents/global_outline.md} before answering.
+[Lead]
+  Outcome: recommendation
+  Lead: The Lead provider call was submitted, but no reliable result was
+        recorded. Do not retry or replay it; authoritative state is preserved.
+        Inspect and resolve the outcome, or create and focus another
+        conversation for intentionally distinct work.
+  Next action: inspect_and_resolve_outcome
+  State: outcome_unknown
+  next action: External work may have happened. Do not replay it; inspect and recover.
+story[alpha]>
+```
+
+After quitting, reopen the same session and conversation:
+
+```text
+$ story chat alpha --workspace /path/to/story
+story[alpha]> Do not replay the submitted call.
+[Lead]
+  Outcome: recommendation
+  Lead: The Lead provider call was submitted, but no reliable result was
+        recorded. Do not retry or replay it; authoritative state is preserved.
+        Inspect and resolve the outcome, or create and focus another
+        conversation for intentionally distinct work.
+  Next action: inspect_and_resolve_outcome
+  State: outcome_unknown
+  next action: External work may have happened. Do not replay it; inspect and recover.
+story[alpha]> /conversation new Distinct recovery work
+Subject: Distinct recovery work
+```
+
+The ordinary line after restart asks the runtime to continue, but the runtime
+returns the preserved result without a new provider call and does not append
+that line as a new durable user event. Creating and focusing a distinct
+conversation remains available for intentionally new work.
+
+Internally, the collaboration-history projection is the sole classifier. An
+exact proposal-free Lead call with `PREPARED` followed by unmatched
+`SUBMITTED` projects as `outcome_unknown` with
+`inspect_and_resolve_outcome`. A `PREPARED`-only call is different: it proves
+no submission, is not promoted to this state, and must follow its own returned
+recovery action. Session recovery accepts only the exact unmatched-submission
+shape as owner `collaboration_history` with failure
+`owner_outcome_unknown`; downstream proposal, review, Apply, or Commit facts
+make the shape invalid. Transition assessment permits only entry into that
+session for inspection (`ENTER_DESTINATION`). It still blocks leaving or
+pausing that owner, and other `outcome_unknown` owners remain blocked from
+entry too.
+
+Entry is inspection access, not permission to replay or resolve the uncertain
+call. It grants no provider call, Apply, artifact write, Commit, or other
+effect authority.
+
+## Scenario 9: interruption, restart, and recovery
 
 The visible state tells you what happened and what is safe next. Runtime stores
 the state before provider work where needed and never assumes an uncertain call

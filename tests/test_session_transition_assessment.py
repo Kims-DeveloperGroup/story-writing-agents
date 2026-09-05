@@ -606,6 +606,35 @@ class SessionTransitionAssessmentTests(unittest.TestCase):
                     self.assertIsNone(result.owner)
                     self.assertIs(result.failure_code, SessionRecoveryFailureCode.NONE)
 
+    def test_submitted_lead_outcome_allows_only_enter_for_collaboration_owner(
+        self,
+    ) -> None:
+        for owner, expected in (
+            (
+                SessionRecoveryOwner.COLLABORATION_HISTORY,
+                (SessionTransitionOperation.ENTER_DESTINATION,),
+            ),
+            (SessionRecoveryOwner.STORY_COMMIT, ()),
+            (SessionRecoveryOwner.CHECKPOINT, ()),
+        ):
+            recovery = _recovery_result(SessionRecoveryState.OUTCOME_UNKNOWN, owner=owner)
+            reconciler = mock.Mock()
+            reconciler.inspect.return_value = recovery
+            with mock.patch.object(
+                transition_module,
+                "SessionRecoveryReconciler",
+                return_value=reconciler,
+            ):
+                result = SessionTransitionAssessor(_WORKSPACE).inspect(
+                    lifecycle_state=_lifecycle(),
+                    conversation_id=_CONVERSATION,
+                    collaboration_store=object(),  # type: ignore[arg-type]
+                )
+            with self.subTest(owner=owner.value):
+                self.assertIs(result.state, SessionTransitionAssessmentState.OUTCOME_UNKNOWN)
+                self.assertEqual(result.allowed_operations, expected)
+                self.assertIs(result.owner, owner)
+
     def test_lifecycle_gate_matrix_fails_closed(self) -> None:
         cases = (
             (SessionDurableState.READY, SessionAccessState.BLOCKED_BY_LIVE_LOCAL_OWNER, SessionTransitionAssessmentState.OUTCOME_UNKNOWN, SessionRecoveryFailureCode.OWNER_OUTCOME_UNKNOWN),

@@ -2778,6 +2778,17 @@ def _project_validated_collaboration_history(
     assert current_step_id is not None
     current_proposal = proposals.get(current_step_id)
     state = states.get(current_step_id)
+    current_turn_id = events[-1].turn_id
+    unmatched_submitted_lead = any(
+        call_event.step_id == current_step_id
+        and call_event.turn_id == current_turn_id
+        and call.invocation_kind is CollaborationInvocationKind.LEAD
+        and call.state is CollaborationProviderCallState.SUBMITTED
+        and call.invocation_id not in completed_lead_invocations
+        for call_event, call in provider_call_events
+    )
+    if current_proposal is None and state is None and unmatched_submitted_lead:
+        state = CollaborationStepState.OUTCOME_UNKNOWN
     request_event = request_events.get(current_step_id)
     request_id: str | None = None
     decision: CollaborationConfirmationDecision | None = None
@@ -2796,7 +2807,7 @@ def _project_validated_collaboration_history(
         session_id=events[0].session_id,
         conversation_id=events[0].conversation_id,
         last_sequence=events[-1].sequence,
-        current_turn_id=events[-1].turn_id,
+        current_turn_id=current_turn_id,
         current_step_id=current_step_id,
         current_proposal=current_proposal,
         current_state=state,
@@ -2812,6 +2823,8 @@ def _project_validated_collaboration_history(
             and type(events[-1].payload) is StoryCommitRequestPayload
             else CollaborationNextAction.INSPECT_AND_RESOLVE_OUTCOME
             if commit_request is not None and commit_result is None
+            else CollaborationNextAction.INSPECT_AND_RESOLVE_OUTCOME
+            if unmatched_submitted_lead
             else _next_action(state, projection_result)
         ),
         rounds_spent=running_attempts.get(current_step_id, 0),
