@@ -758,6 +758,7 @@ class RepositoryAgentPolicyTests(unittest.TestCase):
     def test_github_authorization_planning_and_relationships_are_exact(self) -> None:
         authority = markdown_section(self.workflow_source, "## Authority and Authorization")
         gate = markdown_section(self.workflow_source, "## Initial Planning Gate")
+        requirement = markdown_section(self.workflow_source, "## Requirement Releases")
         self.assertTerms(
             authority,
             "Implementation also authorizes initial in-scope Issue/ milestone creation or reuse, native relations, canonical Project membership/metadata, and Development-linked task-branch creation after gate passage",
@@ -774,15 +775,31 @@ class RepositoryAgentPolicyTests(unittest.TestCase):
             "Partial failure preserves IDs, repairs gaps, blocks writing, and never duplicates",
         )
         self.assertTerms(
+            requirement,
+            "New work uses organization Issue `Requirement=Must|Recommended|Optional`, replacing Priority",
+            "The old field is renamed `Legacy Priority`; preserve historical values and make no new assignments",
+            "Classify existing Issues only when entering a new phase/Iteration; record basis",
+            "Unset blocks `Ready`",
+            "Dependencies necessary for delivery are `Must`; agents never downgrade `Must` without a user/maintainer decision",
+            "|Initial plan|Classify-all-known-leaves;create-only-nonempty-numbered-`MUST-01`/`RECOMMENDED-01`/`OPTIONAL-01`-release-Issues;use-`-02+`-for-capacity|",
+            "|Release integrity|Dependency-closed/testable/user-usable/complete-features-or-functions;never-scaffolding/half-API/dormant-config;ship-supporting-tests/docs/migrations|",
+            "|Order|Later-may-depend-on-earlier;never-reverse|",
+            "|Capacity|`XS=1,S=2,M=3,L=5,XL=8`;record-release-capacity|",
+        )
+        self.assertTerms(
             self.lifecycle_source,
             "Search every Issue-state; create/reuse root before descendants",
-            "Use one tree-wide logical Iteration",
+            "Use one-Iteration-per-Requirement-release; leaves-inherit; root-tracks-current-`Must`; completed-releases-retain-theirs",
             "Create fields/native relations; re-read complete graph/metadata and unblocked `Ready` leaf",
-            "|Priority|Organization-Issue-field;never-same-named-Project-field|",
+            "|Requirement|Set-organization-Issue-Requirement-`Must`/`Recommended`/`Optional`;record-basis;existing-only-at-new-phase/Iteration;unset-blocks-`Ready`;necessary-dependencies-`Must`;never-agent-downgrade|",
+            "|Release-plan|Classify-all-known-leaves;create-only-nonempty-numbered-tier-releases;record-Size-points/capacity;one-Iteration/publishable-main-PR;verify-completeness/usability/dependency-order/publication/root/follow-ups|",
         )
+        self.assertNotIn("Use one tree-wide logical Iteration", self.lifecycle_source)
+        self.assertNotIn("|Priority|Organization-Issue-field", self.lifecycle_source)
 
     def test_github_branch_status_integration_and_cleanup_are_exact(self) -> None:
         status = markdown_section(self.workflow_source, "## Project Status")
+        requirement = markdown_section(self.workflow_source, "## Requirement Releases")
         self.assertTerms(
             status,
             "|`Backlog`|New/incomplete/reprioritized/pre-start blocked|",
@@ -794,7 +811,16 @@ class RepositoryAgentPolicyTests(unittest.TestCase):
             "blocked never becomes `Done`",
         )
         self.assertTerms(
+            requirement,
+            "|Resize|Preserve-all-`Must`,then-`Recommended`;defer-`Optional`-then-excess-`Recommended`-to-`Backlog`;clear-Iteration/wave;record-reason/reconsideration|",
+            "|Disposition|`Not planned`-only-explicit-rejection;active-pause-needs-approved-partial-state/PR-branch-disposition/recoverability|",
+            "|Oversize|Split-`Must`-into-complete-releases;indivisible-over-cap-needs-capacity-exception|",
+            "|Iteration|One-per-release;leaves-inherit-Iteration/waves;active-statuses-require-it;`Backlog`-may-omit;root-tracks-current-`Must`;completed-releases-retain-theirs|",
+            "|Closure|Each-release-has-publishable-`main`-PR-and-closes-on-publication;root-closes-after-all-`Must`/integration;other-tiers-stay-linked/nonblocking|",
+        )
+        self.assertTerms(
             self.lifecycle_source,
+            "|Resize|Preserve-`Must`-then-`Recommended`;defer-`Optional`-then-excess-`Recommended`-to-`Backlog`;clear-Iteration/wave;record-reason/reconsideration;pause-only-with-approval/partial-state/branch-PR-disposition/recoverability;split-oversize-or-record-exception|",
             "|Bases/order|Parent/standalone=approved-main;child=current-parent;dependencies-wait|",
             "|Parent-PR|After-first-child:create-authorized-draft|",
             "|Final-parent|After-all-children:sync-approved-main;run-final-evidence;Refs-to-Closes;set-`In review`;merge|",

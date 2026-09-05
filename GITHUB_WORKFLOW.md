@@ -50,14 +50,31 @@ closes only after required children/integration; child PR never closes parent.
 - Milestone: every leaf has one active deliverable before `Ready`; parent links it but
   normally remains outside. Record owner/exit/exclusions/due date; close after required
   leaves, recording deferrals.
-- Iteration: sequential never-reused `Iteration NN`, logical not calendar. Every item has
-  one; root/descendants/PRs/new children share it. `wave:NN` orders work. Replanning moves
-  the tree; status never rolls it. `Active work` is `Ready|In progress|In review`; missing
-  iteration stays empty.
+- Iteration: sequential never-reused `Iteration NN`, logical not calendar. `wave:NN` orders
+  work within a release. Status never rolls an Iteration.
 - Labels: exactly one `bug|enhancement|documentation|chore`, one-or-more `area:<name>`,
   optional `wave:NN`, active `blocked`. Never label milestone/iteration/status/priority.
-- Organization Issue Priority is `Urgent|High|Medium|Low`, default `Medium`. Project Size
-  tracks capacity; Estimate requires a unit.
+- Estimate requires a unit; release capacity uses Size points below.
+
+## Requirement Releases
+
+New work uses organization Issue `Requirement=Must|Recommended|Optional`, replacing Priority.
+The old field is renamed `Legacy Priority`; preserve historical values and make no new
+assignments. Classify existing Issues only when entering a new phase/Iteration; record basis. Unset blocks
+`Ready`. Dependencies necessary for delivery are `Must`; agents never downgrade `Must`
+without a user/maintainer decision.
+
+|Rule|Policy|
+|---|---|
+|Initial plan|Classify-all-known-leaves;create-only-nonempty-numbered-`MUST-01`/`RECOMMENDED-01`/`OPTIONAL-01`-release-Issues;use-`-02+`-for-capacity|
+|Release integrity|Dependency-closed/testable/user-usable/complete-features-or-functions;never-scaffolding/half-API/dormant-config;ship-supporting-tests/docs/migrations|
+|Order|Later-may-depend-on-earlier;never-reverse|
+|Capacity|`XS=1,S=2,M=3,L=5,XL=8`;record-release-capacity|
+|Resize|Preserve-all-`Must`,then-`Recommended`;defer-`Optional`-then-excess-`Recommended`-to-`Backlog`;clear-Iteration/wave;record-reason/reconsideration|
+|Disposition|`Not planned`-only-explicit-rejection;active-pause-needs-approved-partial-state/PR-branch-disposition/recoverability|
+|Oversize|Split-`Must`-into-complete-releases;indivisible-over-cap-needs-capacity-exception|
+|Iteration|One-per-release;leaves-inherit-Iteration/waves;active-statuses-require-it;`Backlog`-may-omit;root-tracks-current-`Must`;completed-releases-retain-theirs|
+|Closure|Each-release-has-publishable-`main`-PR-and-closes-on-publication;root-closes-after-all-`Must`/integration;other-tiers-stay-linked/nonblocking|
 
 ## Project Status
 

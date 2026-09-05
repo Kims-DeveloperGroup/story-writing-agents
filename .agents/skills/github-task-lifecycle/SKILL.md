@@ -13,13 +13,16 @@ creation. Separately authorize every push/stage/commit/PR/merge/closure/deletion
 Preflight repository/`gh`-project-scope/Project-fields/milestones/Iterations/dependencies/
 worktrees; stop on missing/mismatch. Mutate/verify once; preserve successes; repair gaps.
 
-Search every Issue-state; create/reuse root before descendants. Resolve IDs. Use one tree-wide
-logical Iteration; creation needs schema authorization. Create fields/native relations; re-read
+Search every Issue-state; create/reuse root before descendants. Resolve IDs. Use
+one-Iteration-per-Requirement-release; leaves-inherit; root-tracks-current-`Must`;
+completed-releases-retain-theirs; creation needs schema authorization. Create fields/native relations; re-read
 complete graph/metadata and unblocked `Ready` leaf.
 
 |Rule|Procedure|
 |---|---|
-|Priority|Organization-Issue-field;never-same-named-Project-field|
+|Requirement|Set-organization-Issue-Requirement-`Must`/`Recommended`/`Optional`;record-basis;existing-only-at-new-phase/Iteration;unset-blocks-`Ready`;necessary-dependencies-`Must`;never-agent-downgrade|
+|Release-plan|Classify-all-known-leaves;create-only-nonempty-numbered-tier-releases;record-Size-points/capacity;one-Iteration/publishable-main-PR;verify-completeness/usability/dependency-order/publication/root/follow-ups|
+|Resize|Preserve-`Must`-then-`Recommended`;defer-`Optional`-then-excess-`Recommended`-to-`Backlog`;clear-Iteration/wave;record-reason/reconsideration;pause-only-with-approval/partial-state/branch-PR-disposition/recoverability;split-oversize-or-record-exception|
 |Bases/order|Parent/standalone=approved-main;child=current-parent;dependencies-wait|
 |Local-branch|Omit-`--track`/`-b`|
 |Parent-PR|After-first-child:create-authorized-draft|
@@ -37,7 +40,7 @@ gh api --method POST "repos/$repository/issues/$parent/sub_issues" -F sub_issue_
 gh api --method POST "repos/$repository/issues/$child/dependencies/blocked_by" -F issue_id="$blocker_id"
 ```
 
-Record parent branch/start SHA; name `issue-<n>-<slug>`; use sibling worktree; preserve
+Record parent branch/start-SHA; name `issue-<n>-<slug>`; use sibling-worktree; preserve
 primary changes. Children need clean/current/GitHub-present parent commits. Legacy
 traceability requires authorized linked PR; stop if unlinked. Keep one worktree/branch; never recreate/
 replace/rebase/force-update/reset/checkout/clean/revert to match.
