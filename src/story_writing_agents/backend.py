@@ -175,6 +175,7 @@ from .writing_artifacts.read_actions import (
     ReferenceReadResult,
 )
 from .workspace import Workspace
+from .runtime_state_paths import CONTEXTUAL_PROVIDER_DIRECTORY
 from .workspace.initialization import (
     provision_session_resources as _provision_session_resources,
     require_ready_session_resources as _require_ready_session_resources,
@@ -185,7 +186,7 @@ _SESSION_SCHEMA_VERSION = 2
 _ACCESS_CLAIM_SCHEMA_VERSION = 2
 _SESSION_DIRECTORY = "agent_states/orchestrator_state/provider_sessions"
 _CONTEXT_THREAD_SCHEMA_VERSION = 1
-_CONTEXT_THREAD_DIRECTORY = f"{_SESSION_DIRECTORY}/.contextual/v1"
+_CONTEXT_THREAD_DIRECTORY = CONTEXTUAL_PROVIDER_DIRECTORY
 _CONTEXT_REFERENCE_TERMINATED_ATTRIBUTE = "_context_reference_terminated"
 _ACCESS_CLAIM_GUARD = f"{_SESSION_DIRECTORY}/.access-claims.lock"
 _UNSUPPORTED_V1_ACCESS_CLAIM_GUARD = f"{_SESSION_DIRECTORY}/.lease-claims.lock"

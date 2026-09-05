@@ -20,6 +20,13 @@ from types import ModuleType, TracebackType
 from typing import Iterator
 
 from ..agents import ROSTER
+from ..agent_exchange_paths import (
+    AGENT_EXCHANGE_GLOBAL_PENDING_FILENAME,
+    AGENT_EXCHANGE_GLOBAL_STATE_FILENAME,
+    AGENT_EXCHANGE_GUARD_FILENAME,
+    AGENT_EXCHANGE_SEGMENT_BACKUP_COUNT,
+    is_agent_exchange_session_filename,
+)
 from ..workspace import (
     Workspace,
     open_workspace_root_directory,
@@ -44,11 +51,11 @@ from .contracts import (
 
 _DEBUG_DIRECTORY_NAME = "debug_logs"
 _STORE_DIRECTORY_NAME = "agent_exchanges"
-_GUARD_FILENAME = ".agent_exchanges.lock"
-_GLOBAL_STATE_FILENAME = ".state.json"
-_GLOBAL_PENDING_FILENAME = ".state.pending"
+_GUARD_FILENAME = AGENT_EXCHANGE_GUARD_FILENAME
+_GLOBAL_STATE_FILENAME = AGENT_EXCHANGE_GLOBAL_STATE_FILENAME
+_GLOBAL_PENDING_FILENAME = AGENT_EXCHANGE_GLOBAL_PENDING_FILENAME
 _SEGMENT_MAX_BYTES = 2_097_152
-_SEGMENT_BACKUP_COUNT = 7
+_SEGMENT_BACKUP_COUNT = AGENT_EXCHANGE_SEGMENT_BACKUP_COUNT
 _LOCK_TIMEOUT_SECONDS = 0.1
 _LOCK_RETRY_SECONDS = 0.01
 _STATE_MAX_BYTES = 512
@@ -1007,18 +1014,7 @@ def _backup_segment_filename(agent_id: str, index: int) -> str:
 def _recognized_session_filename(name: str) -> bool:
     """Report whether a leaf name is exactly owned by this storage schema."""
 
-    for agent_id in ROSTER:
-        if name in {
-            _stream_state_filename(agent_id),
-            _stream_state_pending_filename(agent_id),
-            _segment_pending_filename(agent_id),
-            _active_segment_filename(agent_id),
-        }:
-            return True
-        for index in range(1, _SEGMENT_BACKUP_COUNT + 1):
-            if name == _backup_segment_filename(agent_id, index):
-                return True
-    return False
+    return is_agent_exchange_session_filename(name)
 
 
 def _scan_store(

@@ -11,6 +11,18 @@ from enum import StrEnum
 from pathlib import Path
 from uuid import uuid4
 
+from ..agent_exchange_paths import (
+    is_agent_exchange_runtime_directory,
+    is_agent_exchange_runtime_file,
+)
+from ..runtime_state_paths import (
+    is_orchestrator_runtime_directory,
+    is_orchestrator_runtime_file,
+)
+from ..config import (
+    decode_provider_route_generations,
+    validate_persisted_configuration_bytes,
+)
 from ..errors import (
     ConfigurationError,
     SessionIdError,
@@ -29,6 +41,7 @@ from ..git import (
     GitTopologyKind,
 )
 from ..git.story_commits import StoryCommitService
+from ..git.session_checkpoints import SessionCheckpointService
 from ..git.session_contracts import (
     GIT_SESSION_WORKTREE_SIBLING_SUFFIX,
     GitSessionResourceError,
@@ -54,6 +67,7 @@ from .schema import (
     decode_workspace_marker,
     encode_initialization_journal,
     validate_workspace_identifier,
+    validate_workspace_template_name,
 )
 
 
@@ -62,6 +76,12 @@ _LEGACY_SENTINELS = (
     "config/agent_configs.json",
     "config/persona_templates/default_kim_eun_hee.md",
     "config/agents/lead_orchestrator/AGENTS.md",
+)
+_MUTABLE_CONFIGURATION_PATHS = frozenset(
+    {"config/system_defaults.json", "config/agent_configs.json"}
+)
+_PROVIDER_ROUTE_GENERATIONS_PATH = (
+    "agent_states/orchestrator_state/provider_route_generations.json"
 )
 
 
@@ -298,7 +318,14 @@ def inspect_session_resources(
     """Inspect one session through the bounded workspace-owned composition seam."""
 
     manifest = _baseline_manifest(canonical_initializer_scaffold())
-    return _inspect_git_session_resources(_main_root(root), manifest, session_id)
+    main_root = _main_root(root)
+    allowance = _validated_configuration_allowance(main_root)
+    return _inspect_git_session_resources(
+        main_root,
+        manifest,
+        session_id,
+        allowed_worktree_changes=allowance,
+    )
 
 
 def inspect_session_history(
@@ -307,12 +334,15 @@ def inspect_session_history(
 ) -> GitSessionHistorySnapshot:
     """Return one immutable complete history snapshot without creating storage."""
 
+    main_root = _main_root(root)
     manifest = _baseline_manifest(canonical_initializer_scaffold())
+    allowance = _validated_configuration_allowance(main_root)
     with open_git_session_history(
-        _main_root(root),
+        main_root,
         manifest,
         session_id,
         create=False,
+        allowed_worktree_changes=allowance,
     ) as history:
         return history.snapshot()
 
@@ -332,7 +362,13 @@ def provision_session_resources(
 
     main_root = _main_root(root)
     manifest = _baseline_manifest(canonical_initializer_scaffold())
-    return _provision_git_session_resources(main_root, manifest, session_id)
+    allowance = _validated_configuration_allowance(main_root)
+    return _provision_git_session_resources(
+        main_root,
+        manifest,
+        session_id,
+        allowed_worktree_changes=allowance,
+    )
 
 
 def require_ready_session_resources(
@@ -341,12 +377,34 @@ def require_ready_session_resources(
 ) -> GitSessionResourceInspection:
     """Require one exact ready session triple without mutation."""
 
+    main_root = _main_root(root)
     manifest = _baseline_manifest(canonical_initializer_scaffold())
+    allowance = _validated_configuration_allowance(main_root)
     return _require_ready_git_session_resources(
-        _main_root(root),
+        main_root,
         manifest,
         session_id,
+        allowed_worktree_changes=allowance,
     )
+
+
+def _validated_configuration_allowance(root: Path) -> tuple[str, ...]:
+    """Validate mutable configuration bytes before granting exact Git tolerance."""
+
+    try:
+        identity = _meaningful_directory_identity(
+            os.stat(root, follow_symlinks=False)
+        )
+    except OSError:
+        raise WorkspaceSecurityError("workspace root cannot be inspected") from None
+    if identity is None:
+        raise WorkspaceSecurityError("workspace root is not a safe directory")
+    descriptor = _open_existing_root(root, identity)
+    try:
+        _validate_mutable_configuration(_snapshot_relative_files(descriptor))
+    finally:
+        os.close(descriptor)
+    return tuple(sorted(_MUTABLE_CONFIGURATION_PATHS))
 
 
 def compose_story_commit_service(root: Path, session_id: str) -> StoryCommitService:
@@ -354,8 +412,42 @@ def compose_story_commit_service(root: Path, session_id: str) -> StoryCommitServ
 
     main_root = _main_root(root)
     manifest = _baseline_manifest(canonical_initializer_scaffold())
-    _require_ready_git_session_resources(main_root, manifest, session_id)
-    return StoryCommitService(main_root, manifest, session_id)
+    allowance = _validated_configuration_allowance(main_root)
+    _require_ready_git_session_resources(
+        main_root,
+        manifest,
+        session_id,
+        allowed_worktree_changes=allowance,
+    )
+    return StoryCommitService(
+        main_root,
+        manifest,
+        session_id,
+        allowed_worktree_changes=allowance,
+    )
+
+
+def compose_session_checkpoint_service(
+    root: Path,
+    session_id: str,
+) -> SessionCheckpointService:
+    """Compose checkpoint authority for one freshly validated workspace."""
+
+    main_root = _main_root(root)
+    manifest = _baseline_manifest(canonical_initializer_scaffold())
+    allowance = _validated_configuration_allowance(main_root)
+    _require_ready_git_session_resources(
+        main_root,
+        manifest,
+        session_id,
+        allowed_worktree_changes=allowance,
+    )
+    return SessionCheckpointService(
+        main_root,
+        manifest,
+        session_id,
+        allowed_worktree_changes=allowance,
+    )
 
 
 def discover_workspace_location(start: Path) -> WorkspaceRootDiscovery | None:
@@ -414,7 +506,14 @@ def _verify_ready(
         decode_workspace_marker(marker_bytes)
         assert session_id is not None
         try:
-            _require_ready_git_session_resources(root, manifest, session_id)
+            _require_ready_git_session_resources(
+                root,
+                manifest,
+                session_id,
+                allowed_worktree_changes=_validated_configuration_allowance(
+                    main_root
+                ),
+            )
         except GitSessionResourceError:
             raise WorkspaceFormatError(
                 "workspace session resources require recovery"
@@ -437,18 +536,34 @@ def _verify_ready(
         allowed_files[WORKSPACE_INITIALIZATION_JOURNAL_PATH] = journal_bytes
     elif WORKSPACE_INITIALIZATION_JOURNAL_PATH in snapshot:
         raise WorkspaceFormatError("workspace initialization requires recovery")
+    if not journal_present:
+        _validate_mutable_configuration(snapshot)
+        route_generations = snapshot.get(_PROVIDER_ROUTE_GENERATIONS_PATH)
+        if route_generations is not None:
+            decode_provider_route_generations(route_generations)
     scaffold_snapshot = {
         path: content
         for path, content in snapshot.items()
         if not _is_consensus_runtime_file(path)
         and not _is_conversation_runtime_file(path)
+        and not _is_debug_runtime_file(path)
+        and not is_agent_exchange_runtime_file(path)
+        and not is_orchestrator_runtime_file(path)
         and not _is_interactive_runtime_file(path)
+        and (journal_present or path not in _MUTABLE_CONFIGURATION_PATHS)
     }
+    if not journal_present:
+        for path in _MUTABLE_CONFIGURATION_PATHS:
+            allowed_files.pop(path)
     if scaffold_snapshot != allowed_files:
         raise WorkspaceFormatError("workspace scaffold requires recovery")
     if not journal_present:
         try:
-            inventory = _list_git_session_resources(root, manifest)
+            inventory = _list_git_session_resources(
+                root,
+                manifest,
+                allowed_worktree_changes=tuple(sorted(_MUTABLE_CONFIGURATION_PATHS)),
+            )
         except GitSessionResourceError:
             raise WorkspaceFormatError(
                 "workspace Git resources require recovery"
@@ -601,6 +716,8 @@ def _snapshot_relative_files(descriptor: int) -> dict[str, bytes]:
                 if (
                     relative not in allowed_directories
                     and not candidate_shard
+                    and not is_agent_exchange_runtime_directory(relative)
+                    and not is_orchestrator_runtime_directory(relative)
                     and not _is_conversation_runtime_directory(relative)
                 ):
                     raise WorkspaceFormatError(
@@ -694,6 +811,7 @@ def _is_interactive_runtime_file(path: str) -> bool:
 
     if path in {
         "agent_states/orchestrator_state/cli_context.json",
+        _PROVIDER_ROUTE_GENERATIONS_PATH,
         "agent_states/orchestrator_state/provider_sessions/.access-claims.lock",
         "config/.conversation_storage.lock",
     }:
@@ -707,6 +825,41 @@ def _is_interactive_runtime_file(path: str) -> bool:
     ):
         return False
     return _is_workspace_identifier(parts[3][:-5])
+
+
+def _is_debug_runtime_file(path: str) -> bool:
+    """Recognize only the two established WorkspaceDebugLog-owned leaves."""
+
+    return path in {"debug_logs/.runtime.lock", "debug_logs/runtime.jsonl"}
+
+
+def _validate_mutable_configuration(snapshot: dict[str, bytes]) -> None:
+    """Validate the two runtime-mutable configuration leaves from one snapshot."""
+
+    try:
+        system_content = snapshot["config/system_defaults.json"]
+        agent_content = snapshot["config/agent_configs.json"]
+    except KeyError:
+        raise WorkspaceFormatError("workspace configuration is missing") from None
+
+    def persona_exists(name: str) -> bool:
+        return any(
+            path in snapshot
+            for path in (
+                f"config/persona_templates/{name}.md",
+                f"config/persona_templates/alternative_templates/{name}.md",
+            )
+        )
+
+    try:
+        validate_persisted_configuration_bytes(
+            system_content,
+            agent_content,
+            validate_persona_name=validate_workspace_template_name,
+            persona_exists=persona_exists,
+        )
+    except (ConfigurationError, WorkspaceFormatError, WorkspaceSecurityError):
+        raise WorkspaceFormatError("workspace configuration is invalid") from None
 
 
 def _is_workspace_identifier(value: str) -> bool:

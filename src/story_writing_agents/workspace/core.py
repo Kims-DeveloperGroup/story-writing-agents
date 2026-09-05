@@ -48,11 +48,11 @@ from .schema import (
     WORKSPACE_INITIALIZATION_JOURNAL_PATH,
     WORKSPACE_MARKER_PATH,
     validate_workspace_identifier,
+    validate_workspace_template_name,
 )
 
 
 _SAFE_REFERENCE_OPERATION_ID = re.compile(r"[A-Za-z0-9][A-Za-z0-9_-]{0,127}")
-_SAFE_TEMPLATE = re.compile(r"[A-Za-z0-9][A-Za-z0-9_.-]{0,63}")
 _DEBATE_CONTEXT_EVENT_FIELDS = frozenset(
     {
         "schema_version",
@@ -115,11 +115,7 @@ class Workspace:
 
     @staticmethod
     def validate_template_name(value: str) -> str:
-        if not isinstance(value, str) or _SAFE_TEMPLATE.fullmatch(value) is None:
-            raise WorkspaceSecurityError(
-                "persona template name contains unsafe characters"
-            )
-        return value
+        return validate_workspace_template_name(value)
 
     def initialize(self) -> Workspace:
         """Converge one exact v2 initialization or validate an exact ready root."""

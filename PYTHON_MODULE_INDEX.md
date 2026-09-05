@@ -16,9 +16,9 @@ Source root: `src/`
 
 Package root: `src/story_writing_agents/`
 
-Importable production units indexed: 133.
+Importable production units indexed: 135.
 
-Direct internal dependency edges indexed: 519.
+Direct internal dependency edges indexed: 526.
 
 Directed internal dependency cycles indexed: 0.
 
@@ -198,7 +198,7 @@ agent_context -> agent_context.accounting
 agent_context.accounting -> (standard library only)
 agent_context.actions -> agent_context.manifest/planning
 agent_context.ledger -> agent_context.accounting/manifest/planning
-                     -> workspace
+                     -> runtime_state_paths/workspace
 agent_context.manifest -> (standard library only)
 agent_context.planning -> agent_context.manifest
 agent_context.service -> agent_context.accounting/actions/ledger
@@ -213,7 +213,8 @@ agent_exchanges -> agent_exchanges.contracts/storage
 agent_exchanges.capture -> agent_exchanges.contracts/storage
                         -> provider_adapter/workspace
 agent_exchanges.contracts -> agents/errors
-agent_exchanges.storage -> agents/agent_exchanges.contracts/workspace
+agent_exchange_paths -> agents
+agent_exchanges.storage -> agent_exchange_paths/agents/agent_exchanges.contracts/workspace
 provider_adapter -> agent_context/models
 provider_error_artifacts -> agents/workspace
 provider_auth -> (standard library only)
@@ -267,9 +268,9 @@ artifact_proposals -> agents/writing_artifacts
 workspace -> conversation_storage.filesystem/workspace.core
 workspace.core -> agents/conversations/errors/models
                -> workspace.initialization/workspace.schema/writing_artifacts
-workspace.initialization -> errors/git/git.session_contracts
+workspace.initialization -> agent_exchange_paths/config/errors/git/git.session_contracts
                          -> git.session_history/git.session_resources/git.story_commits
-                         -> workspace.schema
+                         -> runtime_state_paths/workspace.schema
 workspace.schema -> agents/errors/git.session_contracts
 writing_artifacts -> writing_artifacts.application_contracts/authorization/catalog
                   -> writing_artifacts.change_sets/directives/read_actions
@@ -285,7 +286,7 @@ writing_artifacts.runtime_references -> writing_artifacts.authorization/directiv
                                      -> writing_artifacts.read_actions/references/repository
 writing_artifacts.references -> writing_artifacts.catalog
 writing_artifacts._reference_evidence -> writing_artifacts._storage/authorization
-writing_artifacts._application_store -> errors/writing_artifacts._storage
+writing_artifacts._application_store -> errors/runtime_state_paths/writing_artifacts._storage
                                      -> writing_artifacts.application_contracts/catalog
                                      -> writing_artifacts.change_sets/relationship_policy
 writing_artifacts.filesystem_sources -> errors/writing_artifacts._storage
@@ -447,6 +448,25 @@ every intermediate arrow. The current runtime graph is acyclic.
   `docs/reference/configuration/session-storage.md`, and
   `docs/operations/privacy-and-provider.md`.
 
+### `story_writing_agents.agent_exchange_paths`
+
+- **Source:** `src/story_writing_agents/agent_exchange_paths.py`
+- **Responsibility:** Define the pure closed path grammar for agent-exchange
+  runtime resources without importing workspace or storage.
+- **Supported surface:** Package-internal constants and predicates for the
+  exact guard/global-state/global-pending leaves, safe session directories,
+  roster-agent sequence/pending/active leaves, and backup indices 1 through 7.
+  The module has an empty `__all__` and no facade export.
+- **Direct internal dependencies:** `agents`.
+- **State, resources, and side effects:** Pure deterministic path-shape
+  classification only; it performs no filesystem, content, provider, or
+  import-time I/O. `agent_exchanges.storage` remains the content and lifecycle
+  owner, while workspace readiness consumes only these path predicates.
+- **Primary verification/documentation:** `tests/test_agent_exchange_storage.py`
+  and `tests/test_workspace_v2_initialization.py`; agent-exchange persistence
+  and workspace safety documentation remain owned by their documentation
+  specialist.
+
 ### `story_writing_agents.agent_exchanges.capture`
 
 - **Source:** `src/story_writing_agents/agent_exchanges/capture.py`
@@ -498,8 +518,8 @@ every intermediate arrow. The current runtime graph is acyclic.
   strict-UTF-8 JSONL bytes without a writable path or handle. Storage failures
   cross the boundary only as fixed `AgentExchangeFailure` codes and prose;
   `agent_exchanges.capture` owns fail-open submission policy.
-- **Direct internal dependencies:** `agents`, `agent_exchanges.contracts`, and
-  `workspace`.
+- **Direct internal dependencies:** `agent_exchange_paths`, `agents`,
+  `agent_exchanges.contracts`, and `workspace`.
 - **State, resources, and side effects:** Import and construction perform no
   filesystem work. Mutations exclusively own
   `debug_logs/agent_exchanges/`, its independent
@@ -889,7 +909,8 @@ every intermediate arrow. The current runtime graph is acyclic.
   and digest reconstruction map malformed, duplicate, non-reusable, or
   inconsistent alias/cursor state to corruption without loading source bodies.
 - **Direct internal dependencies:** `agent_context.accounting`,
-  `agent_context.manifest`, `agent_context.planning`, and `workspace`.
+  `agent_context.manifest`, `agent_context.planning`, `runtime_state_paths`, and
+  `workspace`.
 - **State, resources, and side effects:** Sole owner of lazy schema-v2 records
   under `agent_states/orchestrator_state/context_ledger/v2/`, hash-only record
   names, a weak in-process writer registry, descriptor-relative traversal,
@@ -1085,6 +1106,7 @@ every intermediate arrow. The current runtime graph is acyclic.
   `conversation_retrieval`, `debug_log`, `errors`, `git.session_contracts`,
   `interactive_settings`,
   `models`, `provider_adapter`, `provider_error_artifacts`, `provider_process`,
+  `runtime_state_paths`,
   `session_lifecycle`, `session_recovery`,
   `session_recovery.transition_assessment`, `workspace`, and
   `workspace.initialization`, plus the provider-neutral
@@ -1691,14 +1713,18 @@ every intermediate arrow. The current runtime graph is acyclic.
   false/null/false without a rewrite, while missing default and agent backend
   keys remain null. Package-internal
   `validate_configuration` validates both persisted documents as one complete
-  candidate, `load_configuration_baseline` captures exact bytes and one
+  candidate, while package-internal `validate_persisted_configuration_bytes`
+  applies that same schema/persona validation to descriptor-captured bytes and
+  `decode_provider_route_generations` validates the canonical roster-complete
+  route-generation state. `load_configuration_baseline` captures exact bytes and one
   immutable value, `commit_configuration` validates and compare-and-sets both
   complete documents, `load_configuration_snapshot` projects the baseline's
   value, and `resolve_from_snapshot` applies live runtime values while resolving
   providers in exact CLI override, explicit agent route, workspace default,
   then Codex order. Existing on-demand loaders and `resolve` retain their
   signatures and delegate to the same validation and resolution rules.
-- **Direct internal dependencies:** `agents`, `errors`, and `workspace`.
+- **Direct internal dependencies:** `agents` and `errors`; `workspace` is a
+  type-checking-only dependency.
 - **State, resources, and side effects:** Owns strict-UTF-8 reads, complete
   schema validation, deterministic projection of canonical twelve-key system
   defaults and roster-complete agent configuration, and the configuration CAS
@@ -2370,6 +2396,9 @@ every intermediate arrow. The current runtime graph is acyclic.
   `__all__`; it exposes `checkpoint`, `inspect`, and `recover`. It is absent
   from all facades and exposes no raw argv, environment, descriptor, repository
   lease, alternate-index path, story bytes, or reusable mutation capability.
+  Workspace composition may supply the same freshly validated exact-config
+  worktree allowance used by session resources; direct construction defaults
+  to strict Git status.
 - **Direct internal dependencies:** `git.contracts`, `git.process`,
   `git.session_checkpoint_contracts`, `git.session_contracts`,
   `git.session_history`, and `git.session_history_contracts`.
@@ -2450,6 +2479,8 @@ every intermediate arrow. The current runtime graph is acyclic.
   publication, monotonic commit/checkpoint operation publication and reads,
   complete content-free inspection, one complete immutable `snapshot()`,
   checkpoint-index allocation, and conservative completed-index cleanup.
+  Opening accepts an optional exact-config worktree allowance for workspace
+  composition and otherwise retains strict session-resource validation.
 - **Direct internal dependencies:** `git.contracts`, `git.process`,
   `git.repository_lock`, `git.session_contracts`,
   `git.session_history_contracts`, and `git.session_resources`.
@@ -2494,6 +2525,13 @@ every intermediate arrow. The current runtime graph is acyclic.
   `require_ready_locked_git_session_resources` for callers already holding the
   shared repository lease. They accept only an exact
   lexical root, canonical baseline manifest, and validated session identifier;
+  the inspect, list, provision, and require-ready operations additionally
+  accept a private optional tuple of exact caller-validated worktree paths and
+  tolerate only unstaged modifications of those identities. Their workspace
+  lifecycle callers freshly validate configuration from a descriptor snapshot
+  before supplying only the two
+  schema-validated mutable configuration paths; every staged, renamed,
+  untracked, duplicate, malformed, or other dirty status remains rejected.
   they expose no descriptor, raw Git output, argv/environment, generic command,
   or reusable mutation capability and are absent from all facades.
 - **Direct internal dependencies:** `git.contracts`, `git.process`,
@@ -2566,6 +2604,8 @@ every intermediate arrow. The current runtime graph is acyclic.
   representations. Public functions expose only the typed boundary; no raw
   argv, environment, descriptor, repository lease, or reusable Git capability
   crosses it.
+  Candidate operations propagate an optional exact-config allowance through
+  session readiness and history while remaining strict by default.
 - **Direct internal dependencies:** `git.contracts`, `git.process`,
   `git.session_history`, `git.session_history_contracts`,
   `git.session_resources`, `git.story_commit_contracts`,
@@ -2604,6 +2644,8 @@ every intermediate arrow. The current runtime graph is acyclic.
   sentinel-closed; each instance is process-, service-, thread-, candidate-,
   confirmation-, and operation-bound, noncopyable, nonpickleable, and consumed
   once before execution I/O.
+  Workspace composition may bind a freshly validated exact-config allowance
+  into the service; direct construction remains strict by default.
 - **Direct internal dependencies:** `git.contracts`, `git.process`,
   `git.session_history`, `git.session_history_contracts`,
   `git.story_commit_candidates`, and `git.story_commit_contracts`.
@@ -4620,7 +4662,8 @@ every intermediate arrow. The current runtime graph is acyclic.
   `validate_settings_persona_catalog`, and compatibility `save_settings_state`.
   Package-internal prepare, commit, restore, read, and
   reconcile seams own the exact configuration/provider-route transaction. The
-  module has no package-facade export.
+  module has no package-facade export. Route-generation persistence and
+  lifecycle remain here while strict decoding delegates to `config`.
 - **Direct internal dependencies:** `agents`, `config`, `errors`, and
   `workspace`.
 - **State, resources, and side effects:** Loading captures the exact strict-
@@ -6268,6 +6311,21 @@ every intermediate arrow. The current runtime graph is acyclic.
   `docs/guides/workspaces.md`, `docs/reference/package-api.md`, and
   `docs/reference/workspace-api.md`.
 
+### `story_writing_agents.runtime_state_paths`
+
+- **Source:** `src/story_writing_agents/runtime_state_paths.py`
+- **Responsibility:** Define pure closed path grammars for context-ledger v2,
+  contextual-provider-session v1, and writing-artifact runtime state.
+- **Supported surface:** Package-internal constants and directory/file
+  predicates only; empty `__all__` and no facade export.
+- **Direct internal dependencies:** None.
+- **State, resources, and side effects:** Deterministic shape validation for
+  exact versions, safe identities, lowercase digests, bounded event ordinals,
+  artifact lock/state leaves, and staging retirement names. Runtime owners
+  retain all content validation and lifecycle authority.
+- **Primary verification/documentation:** Existing owner and workspace tests;
+  documentation remains assigned to its specialist.
+
 ### `story_writing_agents.workspace.core`
 
 - **Source:** `src/story_writing_agents/workspace/core.py`
@@ -6336,12 +6394,12 @@ every intermediate arrow. The current runtime graph is acyclic.
   `WorkspaceRootRole`, `WorkspaceRootInspection`, `WorkspaceRootDiscovery`,
   the inspect/initialize/require-ready and typed nearest-discovery operations,
   plus bounded `inspect_session_resources`, `inspect_session_history`,
-  `compose_story_commit_service`,
+  `compose_story_commit_service`, `compose_session_checkpoint_service`,
   `list_session_resources`, `provision_session_resources`, and
   `require_ready_session_resources` for the future #455 composition. The
   module `__all__` is empty and neither the workspace nor project facade
   exports them.
-- **Direct internal dependencies:** `errors`, the public `git` facade,
+- **Direct internal dependencies:** `agent_exchange_paths`, `config`, `errors`, the public `git` facade,
   `git.session_contracts`, `git.session_history`, `git.session_resources`,
   `git.story_commits`, and `workspace.schema`.
 - **State, resources, and side effects:** Classifies absent, empty,
@@ -6359,7 +6417,15 @@ every intermediate arrow. The current runtime graph is acyclic.
   content-free `ConfigurationError` message; all other Git failures become
   content-free topology or recovery errors with cleared exception graphs.
   Ready-main validation composes the exact clean baseline with an exhaustive
-  correlated session inventory. It recognizes only identifier-bounded canonical
+  correlated session inventory. It validates the two runtime-mutable
+  configuration leaves through `config` before excluding them from immutable
+  scaffold comparison. It likewise validates the exact optional provider-route
+  generation leaf before treating it as interactive runtime state. Session
+  inspect, provision, and require-ready composition freshly revalidates those
+  configuration bytes before granting the same exact-path Git tolerance. It accepts
+  exactly `debug_logs/.runtime.lock` and `debug_logs/runtime.jsonl` as the
+  runtime-owned debug leaves, without accepting sibling debug paths, and recognizes
+  only identifier-bounded canonical
   filesystem-conversation directories and the four owned metadata/transcript/
   collaboration-history/lock leaves as dynamic state. It also recognizes the
   exact CLI context and storage/access lock leaves plus identifier-bounded
@@ -6397,7 +6463,8 @@ every intermediate arrow. The current runtime graph is acyclic.
   initialization journal, topology policy, and canonical scaffold bytes.
 - **Supported surface:** Internal-only marker/journal/scaffold constants and
   frozen values, strict codecs, `validate_workspace_identifier`, and
-  `canonical_initializer_scaffold`; the module `__all__` is empty and no facade
+  `validate_workspace_template_name`, and `canonical_initializer_scaffold`;
+  the module `__all__` is empty and no facade
   exports these names. The established `Workspace` method remains the public
   session-identifier validation surface.
 - **Direct internal dependencies:** `agents`, `errors`, and
@@ -6900,7 +6967,8 @@ every intermediate arrow. The current runtime graph is acyclic.
   drift code; the supported internal typed failure contract distinguishes
   corrupt stored authority from recovery-required state without parsing
   exception prose.
-- **Direct internal dependencies:** `errors`, `writing_artifacts._storage`,
+- **Direct internal dependencies:** `errors`, `runtime_state_paths`,
+  `writing_artifacts._storage`,
   `writing_artifacts.application_contracts`, `writing_artifacts.catalog`,
   `writing_artifacts.change_sets`, and
   `writing_artifacts.relationship_policy`.

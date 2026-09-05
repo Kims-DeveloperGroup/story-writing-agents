@@ -68,12 +68,18 @@ def open_git_session_history(
     session_id: str,
     *,
     create: bool = False,
+    allowed_worktree_changes: tuple[str, ...] = (),
 ) -> Iterator[GitSessionHistory]:
     """Open one history while holding the shared repository serialization lease."""
 
     history: GitSessionHistory | None = None
     try:
-        ready = require_ready_git_session_resources(root, manifest, session_id)
+        ready = require_ready_git_session_resources(
+            root,
+            manifest,
+            session_id,
+            allowed_worktree_changes=allowed_worktree_changes,
+        )
         if ready.state is not GitSessionResourceState.READY:
             raise _history_error(GitSessionHistoryFailureCode.RECOVERY_REQUIRED)
         with lock_git_repository(ready.identity.main_root) as lease:
@@ -81,6 +87,7 @@ def open_git_session_history(
                 lease,
                 manifest,
                 session_id,
+                allowed_worktree_changes=allowed_worktree_changes,
             )
             if locked != ready:
                 ready = locked
