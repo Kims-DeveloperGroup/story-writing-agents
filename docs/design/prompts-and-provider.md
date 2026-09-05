@@ -3,8 +3,9 @@
 > **Status:** this page documents prompt/provider/context components and
 > historical execution accounting. `StoryRuntime.lead_turn()` and confirmed
 > specialist consultations use the current Codex/Antigravity binding, context,
-> reference, and exchange-capture path. The shell has no provider-bound story
-> call, and `$`/`$$` has no main-input scope.
+> reference, and exchange-capture path. The interactive shell now calls that
+> same Lead path from ordinary focused input and supports canonical references;
+> management commands remain provider-free.
 
 Key terms: **definition**—stable context for one role; **fingerprint**—its
 hash-derived identity; **binding**—the provider object for a definition;
@@ -187,7 +188,8 @@ provider-neutral context service. It does not consume the optional
 conversation-RAG collaborator. The service captures current material, builds a
 content-free manifest, and plans bootstrap/delta. If selected material is
 insufficient, wire-v5 SEARCH/READ actions can add exact authorized evidence
-from route-permitted sources. The current shell does not enter this flow.
+from route-permitted sources. Focused Lead input and confirmed collaboration in
+the current shell enter this same provider-context flow.
 
 The dynamic workflow material is role-specific. A specialist assignment
 receives one disclosed instruction, exact ordered input IDs, typed assessment

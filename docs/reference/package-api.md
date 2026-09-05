@@ -2,9 +2,10 @@
 
 The package exposes management, a Python lead-turn/confirmed-consultation and
 reviewed-artifact-proposal workflow, generic backend/model contracts,
-schema-v2 collaboration components, and a direct safe Git boundary. These
-exports do not connect story execution to the installed shell or grant artifact
-Apply or Git authority.
+schema-v2 collaboration components, and a direct safe Git boundary. The
+installed shell connects focused Lead input and separately confirmed
+consultation, Apply, and local Commit controls through runtime-owned authority;
+package imports alone grant none of those effects.
 
 ## Facade inventory
 

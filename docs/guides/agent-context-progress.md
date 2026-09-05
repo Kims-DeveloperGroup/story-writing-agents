@@ -1,8 +1,7 @@
 # Agent-context progress
 
-The typed agent-context lifecycle is used by Python lead turns. The public shell
-has no provider-bound story operation, so it emits no progress for ordinary
-input.
+The typed agent-context lifecycle is used by Python and interactive Lead turns.
+The shell presents content-free progress while provider work is active.
 
 ## Lifecycle meaning
 
@@ -37,8 +36,8 @@ A Python application may render compact lines from the callback:
 [context] checkpoint advanced
 ```
 
-These examples are not current shell output. An ordinary shell line receives
-direct-execution-unavailable guidance before any context plan is created.
+The interactive semantic renderer may vary decoration, but preserves these
+content-free meanings.
 
 ## Direct types
 

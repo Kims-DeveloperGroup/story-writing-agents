@@ -2,9 +2,10 @@
 
 > **Availability:** the `writing_artifacts` subpackage retains canonical path,
 > source discovery/read, reference authorization/evidence, provenance,
-> publication, and recovery components. The Python lead runtime attaches
-> `${path}` references but does not publish or mutate artifacts. Main-input
-> `$`/`$$` activation is unavailable. Existing artifacts and
+> publication, and recovery components. Python and interactive Lead input
+> attach `${path}` references. A separately confirmed interactive Apply can
+> publish the exact reviewed change; Lead conversation alone cannot. Main-input
+> `$`/`$$` activates canonical selection and ranged viewing. Existing artifacts and
 > reference-operation evidence remain inspectable through direct components.
 > The pure exact change-set and relationship-policy contracts documented below
 > remain available independently of those inactive runtime workflows.
@@ -1270,15 +1271,17 @@ The parser API lets callers validate directive grammar, preserve the original
 input, compute the provider-text escape projection, and inspect ordered
 canonical path/range indicators. This parser alone does not
 establish artifact eligibility, read content, supply it to a provider, or
-require an agent read. `lead_turn()` adds those steps for `${...}`. Shell main
-input does not activate `$`/`$$` before parser submission.
+require an agent read. `lead_turn()` adds those steps for `${...}`. Interactive
+Lead input accepts the same indicators directly. `$` opens canonical selection;
+`$$` uses that same picker and then opens the independent range viewer.
 
 ## Authorized reads and lifecycle evidence
 
 > **Availability:** repository authorization, transient delivery, durable
 > content-free evidence, and exact provider-read enforcement are used by
-> Python lead turns. Main input does not activate `$` completion or `$$`
-> ranged viewing.
+> Python and interactive Lead turns. Main input activates `$` whole-file
+> selection and `$$` ranged viewing; the resulting indicator remains
+> identity-only.
 
 The `${canonical/path.md}` and `${canonical/path.md}#Lx-Ly` values remain
 content-free indicators. A caller holding `WritingArtifactRepository` can use

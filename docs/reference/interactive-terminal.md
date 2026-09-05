@@ -1,10 +1,9 @@
 # Interactive terminal component
 
 The terminal component renders sanitized semantic records and collects
-TTY/fallback management input. The current controller uses it for startup,
+TTY/fallback input. The current controller uses it for startup,
 authentication/settings, session/conversation management, local inspection,
-pickers, confirmations, and read-only viewers. It does not expose a current
-provider-bound prompt span.
+pickers, confirmations, read-only viewers, and ordinary Lead conversation.
 
 <a id="public-api"></a>
 <a id="composition-live-suggestions"></a>
@@ -39,7 +38,7 @@ The retained public methods are:
 
 | Purpose | Methods |
 | --- | --- |
-| Read management input | `read_main`, `request_conversation_subject`, `request_confirmation` |
+| Read main/management input | `read_main`, `request_conversation_subject`, `request_confirmation` |
 | Render scope and management data | `write_lobby_orientation`, `write_session_orientation`, `write_conversation_scope`, `write_conversation_list_entry`, `write_conversation_search_hit`, `write_conversation_transcript_event`, `write_agent_roster`, `write_status`, `write_help`, `write_error` |
 | Render durable collaboration | `write_collaboration_events` with an ordered event tuple, optional restart cursor, and optional record details |
 | Agent-targeted conversation composition | `compose` with `ComposeMode.CHAT` and an agent ID |
@@ -104,26 +103,26 @@ Each rendered prompt ends with one ASCII space after `>`; the code block omits
 that invisible trailing cell.
 
 An agent suffix is shown only when the controller supplies a real active agent
-identity. In this integration stage, attached management input does not invent
-one. Supplying an agent without a session is invalid component use.
+identity. Ordinary input still routes to the Lead without requiring a suffix
+or selector. Supplying an agent without a session is invalid component use.
 
 Capable terminals provide exact command completion for the retained parser
 grammar. Fallback streams use ordinary line reads. Submitted management input
 is recorded according to the terminal's bounded main-input history rules;
 picker answers and sensitive settings/authentication input remain isolated.
 
-## Unavailable story input
+## Ordinary lead input
 
-The parser/controller returns a typed command-invalid error containing this
-exact sentence:
+After session attachment and active conversation focus, a nonblank line that
+does not start with `/` is passed literally to `RuntimeSession.lead_turn()`.
+The terminal renders validated `Outcome`, Lead message, evidence/proposal,
+`Next action`, and state guidance. A proposal opens an exact
+Confirm/Reject/Revise picker. Cancelling it leaves the proposal unconfirmed;
+ordinary free text never confirms work.
 
-```text
-Direct story execution is unavailable in this integration stage. Session, conversation, history, search, and inspection remain available.
-```
-
-Semantic rendering can add terminal-specific headings, colors, and hints. The
-sentence is the stable output contract. No user/agent chat block, provider
-progress, reference picker, transcript append, or artifact output follows.
+No session or no focused conversation yields the existing typed prerequisite
+error without a Lead call. Retired execution commands remain unavailable;
+`/run` is unknown and no `story run` command exists.
 
 <a id="exact-search-and-transcript-records"></a>
 
@@ -163,10 +162,11 @@ settings, authentication, and agent-exchange inspection. Capable terminals use
 live selection; line fallback uses bounded numbered choices. Escape/cancel
 restores the caller's scope without turning a choice into a domain mutation.
 
-The independent text viewer and artifact-source picker components remain in
-the terminal implementation for future composition, but current main input has
-no provider-text activation scope. Typing `$` or `$$` therefore does not open
-them.
+In focused Lead input, `$` opens the canonical artifact-source picker. `$$`
+opens the same picker followed by the independent text viewer; Shift+Up/Down
+selects a range, and closing the viewer restores the composer. The controls
+insert `${path}` or `${path}#Lstart-Lend`; file bytes are read later through
+runtime authorization rather than embedded by the control.
 
 `/exchanges` uses a different hosted external viewer. After attachment, the
 controller chooses an immutable scope/agent snapshot and opens the installed

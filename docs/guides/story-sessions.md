@@ -186,33 +186,26 @@ readiness. `/inspect` reads persisted debate metadata if such data exists.
 `/exchanges` opens its scope and agent pickers and then the isolated read-only
 JSONL viewer; it never invokes or replays a provider.
 
-Inspection surfaces can therefore show data created by lower-level tools or an
-earlier integration even though this shell cannot create new story-execution
-records.
+Inspection surfaces show persisted collaboration created by focused Lead turns,
+confirmed steps, or direct lower-level integrations. Inspection itself never
+invokes or replays a provider.
 
 <a id="execution-identity-and-fresh-thread-continuity"></a>
 
 ## What happens to a story instruction
 
-Ordinary text, agent-routed text, and each retired execution command receive
-the same guidance:
-
-```text
-Direct story execution is unavailable in this integration stage. Session, conversation, history, search, and inspection remain available.
-```
-
-This includes ordinary prose, a leading agent route, and the former direct-run,
-draft, message, target, and one-turn RAG forms. They are absent from help and
-completion. The parser/controller rejects them before:
-
-- provider bind or call;
-- transcript or schema-v2 append;
-- RAG or artifact-reference read;
-- progress callback; or
-- core-document/manuscript mutation.
-
-Typing `${core_documents/global_outline.md}` in an ordinary line does not
-change this result. No currently public terminal span activates `$` or `$$`.
+After attachment and active conversation focus, ordinary non-slash text is
+sent literally to the Lead. Leading agent-like text is still Lead input; it is
+not a specialist route. Retired slash execution forms remain unavailable and
+are absent from help/completion. `/run` is unknown. Before a focused Lead turn,
+the controller requires an attached `ready` session and one focused active
+conversation. It then runs reference/context validation and provider work
+through `RuntimeSession.lead_turn()`, records collaboration history, and shows
+content-free progress. A Lead turn never implicitly mutates an artifact;
+review, Apply, and Commit remain separately confirmed. In focused Lead input,
+`$` selects a whole canonical artifact and `$$` selects an artifact before
+opening the independent range viewer. The inserted durable forms are
+`${path}` and `${path}#Lstart-Lend`.
 
 ## Recovery
 
@@ -223,8 +216,8 @@ change this result. No currently public terminal span activates `$` or `$$`.
 - Do not use reset, abort, cleanup, claim deletion, or default removal to make
   an uncertain session appear idle or safe.
 - Use `/session list` and `/conversation list --all` to rediscover IDs.
-- Use `/inspect` only for persisted debates; an absent result is expected in a
-  fresh management-only workspace.
+- Use `/inspect` only for persisted legacy debates; Lead collaboration is read
+  through `/history` and `/transcript`.
 - Use `/quit` to release access without changing durable readiness; use
   confirmed `/session pause` when durable pause is intended.
 

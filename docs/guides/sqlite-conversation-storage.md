@@ -3,12 +3,12 @@
 SQLite is an optional way to keep Story's conversation catalog and schema-v2
 collaboration history in one workspace database. Filesystem storage remains the default,
 and changing storage does not change how `/conversation`, `/search`, or
-`/transcript` work. Ordinary story turns are unavailable in this stage.
+`/transcript` work. Focused ordinary input can create Lead collaboration events.
 
 The database format is exact schema version `2`. The selected service bundle
 uses its `collaboration_events` authority for `/history`, `/search`,
-`/transcript`, and `/status`. Catalog management and those reads are available;
-the shell still cannot create provider-bound collaboration events.
+`/transcript`, and `/status`. Catalog management, reads, and focused Lead turns
+all use the selected collaboration-history authority.
 
 For a new workspace with no conversations, the shortest safe path is:
 
@@ -459,7 +459,7 @@ For a Python integrator, the change is:
 | --- | --- |
 | Archive/transfer depended on the schema-v1 transcript channel. | Archive schema 2 carries exact `CollaborationEvent` values and both backends import/export canonical v2 history. |
 | Filesystem used `transcript.jsonl`; SQLite used `conversation_events`. | Filesystem uses `collaboration-history.jsonl`; SQLite uses `collaboration_events` canonical BLOB rows. Presence of either legacy channel rejects archive/transfer. |
-| No selected service exposed v2 collaboration. | The active shell/runtime bundle now uses the sole v2 storage/inspection service; public provider execution remains unavailable. |
+| No selected service exposed v2 collaboration. | At #477, the active shell/runtime bundle began using the sole v2 storage/inspection service. Later Lead integration added provider execution against that authority. |
 
 The concrete store requires a provisioned schema-v2 database and an existing
 catalog conversation. Its append holds the workspace coordinator, uses

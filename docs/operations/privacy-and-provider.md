@@ -14,9 +14,10 @@
 > They do not make either provider, its executable, the workspace, or the
 > terminal trusted.
 > `StoryRuntime.lead_turn()` and confirmed specialist/synthesis invocations are
-> provider-bound Python story spans. The shell, inline-reference parsing in
-> main input, and `$`/`$$` activation remain inactive. Python lead and
-> consultation references follow the data boundaries documented below.
+> provider-bound story spans reached from Python or ordinary focused shell
+> input. Inline `${...}` references are active; `$` and `$$` activate canonical
+> whole-file and ranged selection in focused Lead input. All Lead/consultation
+> references follow the boundaries below.
 > Settings Model/Effort catalog discovery is also bounded and local; only a
 > user's selected opaque value can be persisted, never provider catalog data.
 
@@ -456,9 +457,10 @@ loads verified plaintext into local process memory and renders it in the
 terminal. A capable viewer uses an alternate screen, but closing it is cleanup,
 not secure erasure from the process, emulator, multiplexer, or remote terminal.
 Fallback prints the complete numbered content into scrollback. Source-list/viewer
-activity is not sent to a provider and creates no durable reference-operation
-evidence. Current main input does not activate that viewer or submit the
-indicator to a provider. Component error output is fixed and content-free.
+activity alone is not sent to a provider and creates no durable
+reference-operation evidence. Submitting the composed Lead input starts the
+separate authorized reference operation. Component error output is fixed and
+content-free.
 
 For a referenced lead, specialist, or synthesis call, the first provider
 payload contains only fixed rules, exact operation/invocation correlation, and the complete
@@ -920,9 +922,10 @@ sources intentionally reveal subject/citation, never
 query/event/candidate/critique/error/model prose.
 
 The retired schema-v1 direct-turn consumer used the following failure-storage
-boundary. It is retained only to interpret preexisting records; current
-ordinary input creates no durable user event or failure transcript. Its
-known-value sanitizer:
+boundary. It is retained only to interpret preexisting records. Current Lead
+input writes schema-v2 collaboration history through its separate authority;
+it does not revive this legacy failure transcript. The legacy known-value
+sanitizer:
 
 - replaces current/context/retrieval variants with `<redacted>` and workspace
   roots with `<workspace>`;

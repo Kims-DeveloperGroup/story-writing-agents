@@ -2,9 +2,11 @@
 
 > **Available:** guarded access recovery, shell workflows, and process-level
 > POSIX PTY verification, including the package-internal ranged viewer.
-> The current shell has no provider-bound prompt span, so main-input `$`/`$$`
-> artifact discovery and selection are inactive. Python lead-turn, confirmed
-> consultation, and decision recovery is available through `StoryRuntime`.
+> Ordinary focused shell input uses the Lead workflow. `$` selects a whole
+> canonical artifact and `$$` opens ranged selection through the independent
+> viewer; direct canonical indicators remain accepted.
+> Python and interactive lead-turn, confirmed
+> consultation, and decision recovery use the same `StoryRuntime` authority.
 > Direct Python conversation archive operations
 > have content-free failures and recognized additive-import recovery. Optional
 > SQLite conversation storage also fails closed. Explicit `/settings` or
@@ -1302,9 +1304,8 @@ different mode.
 ## Ranged-text viewer exits and recovery
 
 The viewer remains an unlisted package-internal supplied-text component rather
-than a command or public API. No provider-bound shell prompt span is currently
-connected; the following describes the internal component contract only. In a
-provider-bound shell prompt span, exact `$$`
+than a command or public API. Focused Lead input is its provider-bound shell
+consumer. In that span, exact `$$`
 immediately opens current-source selection on the second dollar; Enter/Tab
 opens the highlighted source. A complete `$${path}` opens it directly on
 Enter/Tab, while `$` completes a whole-file indicator without viewing. The controller owns
@@ -1375,14 +1376,14 @@ path/range indicator. The viewer itself never receives or preserves the outer
 composer. Multiple ordered references use repeated fresh viewer calls owned by
 that caller.
 
-The independent ranged viewer remains a generic terminal component but current
-main input does not activate it. See the
+The independent ranged viewer is activated by `$$` in focused Lead input and
+returns only an identity-only range indicator to the composer. See the
 [interactive terminal reference](../reference/interactive-terminal.md) and
 [terminal safety boundary](terminal-safety.md#ranged-text-viewer-boundary).
 
 ## Live-composer recovery boundary
 
-The package-internal live composer lets later controller work keep an editable
+The package-internal live composer lets the controller keep an editable
 request visible while an already-confirmed operation runs. It does not decide
 whether the operation committed. A runtime-owned callback supplies the
 authoritative `precommit` or `postcommit` boundary when input is accepted.
@@ -1403,10 +1404,9 @@ operation finish and returns `operation_completed` with the initial draft.
 Users therefore retain semantic continuity but cannot edit concurrently in
 that environment.
 
-The current story controller does not call this seam yet. Ordinary shell story
-input remains rejected, so these outcomes are contracts for later controller
-and semantic-presentation consumers rather than a user-accessible recovery
-command.
+The story controller uses this seam during confirmed work. These outcomes are
+internal transition facts projected as progress/recovery guidance, not a
+user-accessible command.
 
 ## Pause, quit, and cleanup
 
@@ -1575,11 +1575,10 @@ workflow](privacy-and-provider.md#rejected-provider-response-artifacts).
   [Bounded agent context](../guides/agent-context.md#c20-decisions-limits-and-user-impact).
 - Artifact publication is recoverable and catalog-last, but does not share one
   transaction with debate logs, lifecycle, results, or provider state.
-- Public shell story input is unavailable. Ordinary/routed/removed shell input
-  is rejected before provider, history, RAG, reference, progress, or artifact
-  work. Python lead turns, structured decisions, and confirmed read-only
-  specialist/synthesis execution and separately confirmed consensus are
-  available; they stop before artifact mutation or Git work.
+- Ordinary focused shell input calls the Lead. Removed slash execution commands
+  remain unavailable, and there is no raw specialist or `/run` route. Lead
+  consultation, artifact Apply, and local Commit use three separate structured
+  authority boundaries; cancellation or free text grants none of them.
 - Runtime enforces structural evidence scope/status/receipt rules for lead
   judgments, but it does not perform semantic NLP verification, prove provider
   comprehension, or guarantee that the lead selected every relevant artifact.
@@ -1597,14 +1596,14 @@ workflow](privacy-and-provider.md#rejected-provider-response-artifacts).
   The private local FTS5 companion supplies non-authoritative hints only.
 - Optional local conversation RAG defaults off and has explicit noninteractive
   status, enable, rebuild, cited search, disable, and derived-only purge.
-  `/settings` provider/automatic editors preserve next-shell configuration, but
-  the current shell has no provider-bound turn that consumes Automatic. External
+  `/settings` provider/automatic editors preserve next-shell configuration.
+  External
   or network RAG providers and MySQL coupling remain unavailable. Literal
   `/search` is unchanged.
 - Artifact parsing, repository authorization/evidence, provider read actions,
-  and the independent supplied-text viewer remain generic components. Python
-  lead input accepts `${path}` and `${path}#Lx-Ly`; no shell input activates
-  `$`/`$$` or exposes a selection API.
+  and the independent supplied-text viewer back interactive Lead composition.
+  Lead input accepts multiple `${path}` and `${path}#Lx-Ly` indicators; the
+  durable indicator is not embedded file content.
 
 <a id="consensus-deadlock-continuation-recovery"></a>
 

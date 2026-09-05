@@ -317,11 +317,11 @@ The default native authentication probe is `agy models`; it is not part of
 executable with no arguments.
 
 `story chat` performs live native authentication/status and can perform model
-catalog discovery through Settings. Those operations may require credentials
-and network access, but the current shell has no accepted story input that
-invokes an Antigravity story-provider turn. Low-level direct adapter invocation
-can still transmit caller-provided content and consume quota; it is never
-required by the standard test suite.
+catalog discovery through Settings. After session attachment and conversation
+focus, ordinary Lead input and confirmed collaboration can invoke the selected
+Antigravity provider and consume quota. Low-level direct adapter invocation can
+also transmit caller-provided content; it is never required by the standard
+test suite.
 
 See [Privacy and provider exposure](../operations/privacy-and-provider.md),
 [Backend and sessions](../reference/backend-and-sessions.md), and
