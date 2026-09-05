@@ -1,206 +1,130 @@
 # GitHub Workflow Policy
 
-This policy defines how contributors and coding agents use GitHub. It
-supplements [AGENTS.md](AGENTS.md) and
-[COMMIT_POLICY.md](COMMIT_POLICY.md). Agents execute it with
-[AGENT_TASK_RUNBOOK.md](AGENT_TASK_RUNBOOK.md).
+This policy governs tracked work and supplements [AGENTS.md](AGENTS.md) and
+[COMMIT_POLICY.md](COMMIT_POLICY.md). Load
+[`$github-task-lifecycle`](.agents/skills/github-task-lifecycle/SKILL.md) for commands.
 
 ## Authority and Authorization
 
-Code, tests, and detailed docs define behavior; an Issue defines scope and
-completion; Project and organization Issue fields hold planning metadata; and
-a PR holds the diff, review, and evidence. Record maintainer decisions for
-conflicts. Planning data must not silently redefine an Issue.
+Code/tests/docs define behavior; Issues define scope/completion; organization Issue fields
+and Project hold planning; PRs hold diff/review/evidence. Record conflicts; planning never
+silently changes Issue scope.
 
-Relevant read-only inspection is allowed. An explicit implementation request
-also authorizes only the initial-planning mutations below: create or reuse
-in-scope Issues and a milestone, set native relationships, add items to the
-canonical Project, set their planning metadata, and create the in-scope task
-branch through the Issue's Development section after the gate passes.
-Project-schema changes, unrelated Issue edits, staging, commits, other pushes,
-PR actions, review, closure, merge, deletion, and cleanup still require explicit
-authorization. Worktree removal and branch deletion are distinct actions and
-require separate authority.
+Read-only inspection is allowed. Implementation also authorizes initial in-scope Issue/
+milestone creation or reuse, native relations, canonical Project membership/metadata, and
+Development-linked task-branch creation after gate passage. Project-schema changes,
+unrelated edits, stages, commits, other pushes, PR/review/closure/merge/deletion/cleanup need
+explicit authorization. Worktree removal and branch deletion are separate.
 
 ## Initial Planning Gate
 
-Before task branches, worktrees, writers, or tracked edits, record
-`github_planning_gate = not_required | pending | passed | blocked`. Only
-read-only analysis may continue while it is pending.
+Before branches/worktrees/writers/edits record
+`github_planning_gate=not_required|pending|passed|blocked`. Pending permits read-only only.
 
-Work is large when any applies: estimated Size `L`/`XL`; two or more
-independently complete implementation slices or parent integration criteria;
-at least three production modules or two responsibility domains; modularity or
-migration coordination; dependency sequencing; multiple owners, worktrees, or
-delivery phases; or a parent integration branch. Companion tests/docs do not
-count; uncertainty is large.
+Large means `L|XL`; two independent slices/parent criteria; three production modules; two
+domains; modularity/migration coordination; dependency sequencing; multiple
+owners/worktrees/phases; or parent integration. Tests/docs do not count; uncertainty is
+large.
 
-Large work needs one root and all known descendants, including nested parents
-and leaves, before implementation. Use native hierarchy and dependencies. Add
-every item to [Project #1](https://github.com/orgs/Kims-DeveloperGroup/projects/1),
-then set labels and organization Issue Priority plus Project Status and
-Iteration on all items, and milestone and Project Size on each leaf. Verify
-bodies, relationships, fields, approved base, and the first executable leaf
-with a fresh read.
-
-On partial failure, preserve IDs, repair only missing state, and set `blocked`;
-never create duplicates or implementation edits. Gate later scope too.
-`not_required` is limited to read-only work or an approved mechanical
-exception. A nontrivial standalone implementation passes with one Issue and
-Project item; it does not waive planning metadata.
+Large work requires root and all known descendants before implementation. Verify native
+hierarchy/dependencies, [Project #1](https://github.com/orgs/Kims-DeveloperGroup/projects/1)
+membership, required fields/labels/milestones, approved base, and an executable `Ready`
+leaf. Partial failure preserves IDs, repairs gaps, blocks writing, and never duplicates.
+Later scope repeats the gate. `not_required` permits read-only or approved mechanical work;
+nontrivial standalone work still needs one complete Issue/Project item.
 
 ## Issues
 
-Nontrivial feature, bug, dependency, packaging, security, architecture,
-workflow, or public-documentation work requires an Issue. A maintainer may
-approve an exception for a mechanical correction.
+Nontrivial feature, bug, dependency/packaging, security, architecture, workflow, or public
+documentation work needs an Issue unless a maintainer approves a mechanical exception.
+Parents represent initiatives; leaves are independently complete.
 
-Use parents for initiatives and leaves for independently complete functions. A
-root defines its objective, non-goals, integration criteria, child inventory
-and order, risks, evidence, and approved base. A leaf defines its root/parent,
-Project, objective, context, in/out scope, testable completion, verification,
-docs, components, dependencies, constraints, and risks.
-
-Use native parent/sub-issue relationships for hierarchy and `blocked by` for
-dependencies. Do not start with an unfinished prerequisite or expand scope
-without recorded approval.
-
-A parent closes only after all required children and its integration criteria
-are complete. A child pull request must never close its parent.
+Root records objective, non-goals, integration criteria, children/order, risks, evidence,
+base. Leaf records root/parent/Project, objective/context, in/out scope, testable completion,
+verification/docs/components/dependencies/constraints/risks. Use native sub-Issues and
+`blocked by`; never start unfinished prerequisites or expand scope without approval. Root
+closes after all `Must` releases/core integration; linked `Recommended`/`Optional` follow-ups are excluded
+from required children and never block closure. Child PR never closes its parent.
 
 ## Planning Metadata
 
-### Milestone
+- Milestone: every leaf has one active deliverable before `Ready`; parent links it but
+  normally remains outside. Record owner/exit/exclusions/due date; close after required
+  leaves, recording deferrals.
+- Iteration: sequential never-reused `Iteration NN`, logical not calendar. `wave:NN` orders
+  work within a release. Status never rolls an Iteration.
+- Labels: exactly one `bug|enhancement|documentation|chore`, one-or-more `area:<name>`,
+  optional `wave:NN`, active `blocked`. Never label milestone/iteration/status/priority.
+- Estimate requires a unit; release capacity uses Size points below.
 
-A milestone groups a release or deliverable. Every leaf has one active
-milestone before `Ready`; a parent links it but normally remains outside it.
-Name the outcome and record owner, exit criteria, exclusions, and any due date.
-Close it after its required leaves complete and record deferrals.
+## Requirement Releases
 
-### Iteration
+New work uses organization Issue `Requirement=Must|Recommended|Optional`, replacing Priority.
+The old field is renamed `Legacy Priority`; preserve historical values and make no new
+assignments. Classify existing Issues only when entering a new phase/Iteration; record basis. Unset blocks
+`Ready`. Dependencies necessary for delivery are `Must`; agents never downgrade `Must`
+without a user/maintainer decision.
 
-Iteration is a logical initiative group, not a schedule. Use sequential,
-never-reused `Iteration NN`. GitHub's required internal dates/duration never
-control assignment, readiness, priority, or rollover.
-
-Every Project item has one Iteration. The topmost root and all descendants
-share it; standalone Issues are roots; linked PRs and new children inherit it.
-`wave:NN` orders work inside it. Milestone remains the deliverable grouping.
-
-Status never changes Iteration; there is no calendar rollover. Replanning moves
-the whole root tree. `Active work` contains `Ready`, `In progress`, and
-`In review`; `Missing iteration` must stay empty.
-
-### Labels and Fields
-
-Use labels only for durable classification:
-
-- One work type: `bug`, `enhancement`, `documentation`, or `chore`
-- One or more components: `area:<name>`
-- Delivery sequence, when needed: `wave:NN`
-- Active blockage: `blocked`
-
-Do not create milestone, iteration, status, or priority labels. Use `wave:NN`,
-not `priority:NN`. Use the organization Issue `Priority` field: `Urgent`,
-`High`, `Medium`, or `Low`, defaulting to `Medium`. Use Project Size for
-capacity and Estimate only with a defined unit.
+|Rule|Policy|
+|---|---|
+|Initial plan|Classify-all-known-leaves;create-only-nonempty-numbered-`MUST-01`/`RECOMMENDED-01`/`OPTIONAL-01`-release-Issues;use-`-02+`-for-capacity|
+|Release integrity|Dependency-closed/testable/user-usable/complete-features-or-functions;never-scaffolding/half-API/dormant-config;ship-supporting-tests/docs/migrations|
+|Order|Later-may-depend-on-earlier;never-reverse|
+|Capacity|Every-implementation-leaf-needs-Size;`XS=1,S=2,M=3,L=5,XL=8`;release-load=sum-of-unfinished-leaf-points;record-capacity;planned-load-must-not-exceed-it|
+|Resize|Preserve-all-`Must`;select-`Recommended`-by-accepted-user-order;defer-`Optional`-first,then-`Recommended`-that-do-not-fit,to-`Backlog`;clear-Iteration/wave;record-reason/reconsideration|
+|Disposition|`Not planned`-only-explicit-rejection;active-pause-needs-approved-partial-state/PR-branch-disposition/recoverability|
+|Oversize|Split-oversized-work-into-complete-slices/releases;indivisible-over-cap-needs-capacity-exception;preserve-all-`Must`|
+|Iteration|One-per-release;leaves-inherit-Iteration/waves;active-statuses-require-it;`Backlog`-may-omit;root-tracks-current-`Must`;completed-releases-retain-theirs|
+|Closure|Each-release-has-publishable-`main`-PR-and-closes-on-publication;root-closes-after-all-`Must`/integration;other-tiers-stay-linked/nonblocking|
+|Topology|Feature-leaf-PR-targets-release-branch-and-squashes;numbered-release-PR-targets-`main`-and-closes-release;umbrella-normally-planning-only/administrative-close-after-`Must`/core-verification;distinct-diff-uses-own-Development-linked-branch/PR-targeting-`main`,starts-after-all-`Must`-release-PRs/core-integration,and-may-close-root|
 
 ## Project Status
 
-| Status | Rule |
-| --- | --- |
-| `Backlog` | New, incomplete, reprioritized, or pre-start blocked work. |
-| `Ready` | Accepted and unblocked, with required planning metadata assigned. |
-| `In progress` | Authorized work started; assignee and a Development-linked branch or PR exist. Draft PRs remain here. |
-| `In review` | A non-draft PR appears in Development and Project `Linked pull requests`, with verification evidence. |
-| `Done` | Completion gates passed, approved work merged or exception completed, and Issue closed. |
+|Status|Rule|
+|---|---|
+|`Backlog`|New/incomplete/reprioritized/pre-start blocked|
+|`Ready`|Accepted, unblocked, metadata complete|
+|`In progress`|Authorized work; assignee plus Development branch/PR; drafts stay|
+|`In review`|Non-draft Development/Project-linked PR plus evidence|
+|`Done`|Gates passed, approved merge/exception, Issue closed|
 
-Requested implementation changes return an item to `In progress`.
-
-Blocked is an overlay, not a status. Add the native dependency, apply
-`blocked`, and record the cause, unblock condition, owner, and next action.
-Pre-start blocked work stays `Backlog`; interrupted active work stays
-`In progress` unless reprioritized. Blocked work never becomes `Done`.
+Implementation returns work to `In progress`. Blockage is an overlay: native dependency,
+`blocked` label, cause/unblock/owner/next action. Pre-start remains `Backlog`; interruption
+remains `In progress` unless reprioritized; blocked never becomes `Done`.
 
 ## Branches, Commits, and Pull Requests
 
-Assign one accountable owner per branch and worktree, plus one integration
-owner for a parent branch. Only one write-capable owner is active at a time.
-Before its first tracked write, bind that owner to the exact identity and dirty
-state required by [AGENTS.md](AGENTS.md#role-mode-and-control-gate). Preserve
-unrelated changes; a mismatch never authorizes reset, checkout, cleaning, or
-reversion.
+One accountable owner per branch/worktree and one parent integrator; one active writer.
+Bind writers to [AGENTS identity](AGENTS.md#role-mode-and-control-gate); mismatches never
+authorize destructive cleanup.
 
-Use `issue-<number>-<short-slug>` for nontrivial work. A standalone branch
-identifies its leaf Issue. For a parent initiative, its branch is the
-integration base for child Issue branches. Child PRs target the parent branch
-and use **Squash and merge**; the final parent PR targets `main` and uses a
-merge commit. Follow [AGENT_TASK_RUNBOOK.md](AGENT_TASK_RUNBOOK.md) for the
-branch and worktree procedure.
+Use `issue-<number>-<slug>`. Link every branch/PR through its owning Issue's Development
+field; names, URLs, comments, or `Refs` are insufficient. Ordinary child-to-parent squashes
+apply only to feature leaves, never release PRs; follow Requirement Topology above. Verify Development and
+Project `Linked pull requests`; retain a branch/PR link through `In progress`, merged PR for
+`Done`.
 
-Every Issue with implementation activity must have native GitHub Development
-traceability. Create its task branch from the Issue's Development section (or
-the equivalent `createLinkedBranch` API) before tracked edits. Link a parent
-integration branch to the parent Issue and each child branch to its child
-Issue. A matching branch name, URL, comment, or `Refs #N` text alone is not a
-link.
-
-Once a PR exists, verify that it appears in the Issue's Development section
-and the Project's built-in `Linked pull requests` field. If it does not, link
-the PR through Development before moving the item to `In review`. Keep at
-least one linked branch or PR throughout `In progress`; after branch cleanup,
-the merged PR is the durable link for `Done`.
-
-Follow [COMMIT_POLICY.md](COMMIT_POLICY.md). An Issue may span multiple commits,
-but each commit must remain coherent, functional, tested, and reviewable.
-
-Open a draft pull request while work or evidence is incomplete. Before marking
-it ready:
-
-- Complete scope and acceptance criteria.
-- Run and report relevant checks.
-- Update required documentation.
-- Review the final diff and intended base.
-
-Use `Refs #N` for partial work and for child PRs targeting a parent branch.
-Close a child manually after its squash merge and integration checks. Use
-`Closes #N` only in a PR to `main` when that merge completes the named Issue;
-never target a parent for one child's work. Merge requires explicit
-authorization.
-
-Issue closure is the completion trigger; automation may then set `Done`. Do not
-use Project `Done` to close unfinished work. Verify Issue, PR, and Project state
-after automation.
+Follow commit policy: coherent, functional, tested, reviewable commits. Draft PRs hold
+incomplete work/evidence. Ready requires scope/criteria, checks, docs, diff/base review.
+Use `Refs #N` for partial/child work; close child manually after squash/integration. Use
+`Closes #N` only for completing `main` PRs. Merge needs authorization. Issue closure triggers
+`Done`; verify Issue/PR/Project afterward.
 
 ### Worktree Disposition and Cleanup
 
-At task initialization, record exactly one disposition defined by
-[AGENTS.md](AGENTS.md#worktree-disposition). `remove_after_integration` requires
-existing cleanup authorization; otherwise retain with a reason or record
-`authorization_required`. Update it only for a recorded authority or lifecycle
-state change.
-
-Completion must inventory the final exact worktree/branch/HEAD and porcelain
-state, Issue/PR state, commit/PR recoverability, cleanup authorization decision,
-and actual retained/removed outcome, reason, and next owner. Removal requires
-clean status, completed integration verification, and recoverability, and must
-be non-forced and verified absent afterward. Branch deletion is a separate
-authorized action. Retain the parent worktree until the parent branch is
-integrated into `main`.
+Record one [AGENTS disposition](AGENTS.md#worktree-disposition). Completion inventories
+worktree/branch/HEAD/porcelain, Issue/PR, recoverability, cleanup authority, outcome/reason/
+next owner. Non-forced removal requires authorization, clean status, integration, and
+recoverability; verify absence. Branch deletion is separate. Retain parent until `main`.
 
 ## Completion and Exceptions
 
-An Issue is complete only when its scope and acceptance criteria are satisfied,
-required checks pass, documentation is current, the diff is reviewed, required
-review is complete, approved work is merged or an approved no-PR exception is
-complete, and the Issue is closed with the Project item at `Done`.
-
-Close duplicate, invalid, superseded, cancelled, or rejected work as
-`Not planned`. Explain the reason and link a replacement when applicable. When
-reopening an Issue, clear `Done`, return it to `Backlog`, and replan it
-explicitly.
+Complete means scope/criteria/checks/docs/diff/review pass, approved work merges or approved
+exception completes, Issue closes, Project is `Done`. Close duplicate/invalid/superseded/
+cancelled/rejected as `Not planned` with reason/replacement. Reopening clears `Done`, returns
+`Backlog`, and replans.
 
 ## Agent Handoff
 
-Follow the runbook handoff contract. Report the planning-gate state and
-evidence, Issue and Project mutations, and preserved unrelated worktree changes.
+Follow [AGENTS handoff](AGENTS.md#handoff-and-result-contracts); report gate evidence,
+Issue/Project mutations, and preserved unrelated changes.

@@ -332,6 +332,9 @@ Run the complete standard-library suite with:
 python -m unittest discover -s tests -v
 ```
 
-Contributors must follow [GITHUB_WORKFLOW.md](GITHUB_WORKFLOW.md),
-[AGENT_TASK_RUNBOOK.md](AGENT_TASK_RUNBOOK.md), and
-[COMMIT_POLICY.md](COMMIT_POLICY.md).
+<a id="contribution-guidelines"></a>
+
+Contributors must follow [AGENTS.md](AGENTS.md),
+[GITHUB_WORKFLOW.md](GITHUB_WORKFLOW.md), and
+[COMMIT_POLICY.md](COMMIT_POLICY.md). For tracked work, load
+[`$github-task-lifecycle`](.agents/skills/github-task-lifecycle/SKILL.md).
