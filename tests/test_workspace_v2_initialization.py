@@ -598,6 +598,62 @@ class WorkspaceV2InitializationTests(WorkspaceV2GitTestCase):
             (ConsensusEvent("request-event", 1, request),),
         ))
 
+    def test_canonical_interactive_runtime_files_survive_reopen(self) -> None:
+        root = self.initialize_workspace_fixture("interactive-runtime").root
+        session_id = "Session_1"
+        conversation_id = "c_" + "a" * 32
+        files = {
+            "agent_states/orchestrator_state/cli_context.json": b"{}\n",
+            f"agent_states/orchestrator_state/conversation_defaults/{session_id}.json": b"{}\n",
+            "agent_states/orchestrator_state/provider_sessions/.access-claims.lock": b"",
+            f"agent_states/orchestrator_state/provider_sessions/{session_id}.json": b"{}\n",
+            "config/.conversation_storage.lock": b"",
+            f"discussion_logs/{session_id}/interactive/conversations/{conversation_id}/metadata.json": b"{}\n",
+            f"discussion_logs/{session_id}/interactive/conversations/{conversation_id}/transcript.jsonl": b"",
+            f"discussion_logs/{session_id}/interactive/conversations/{conversation_id}/collaboration-history.jsonl": b"",
+            f"discussion_logs/{session_id}/interactive/conversations/{conversation_id}/.collaboration-history.lock": b"",
+        }
+        for relative, content in files.items():
+            target = root / relative
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_bytes(content)
+
+        reopened = Workspace(root)
+
+        self.assertEqual(reopened.root, root)
+        for relative, content in files.items():
+            self.assertEqual((root / relative).read_bytes(), content)
+
+    def test_malformed_unknown_and_unsafe_interactive_paths_fail_closed(self) -> None:
+        conversation_id = "c_" + "a" * 32
+        cases = {
+            "invalid-session": (
+                f"discussion_logs/bad session/interactive/conversations/{conversation_id}/metadata.json"
+            ),
+            "invalid-conversation": (
+                "discussion_logs/session/interactive/conversations/bad id/metadata.json"
+            ),
+            "unknown-leaf": (
+                f"discussion_logs/session/interactive/conversations/{conversation_id}/unknown.json"
+            ),
+            "nested-leaf": (
+                f"discussion_logs/session/interactive/conversations/{conversation_id}/nested/metadata.json"
+            ),
+            "unknown-runtime": "agent_states/orchestrator_state/provider_sessions/session.txt",
+        }
+        for name, relative in cases.items():
+            with self.subTest(name=name):
+                root = self.initialize_workspace_fixture(name).root
+                target = root / relative
+                target.parent.mkdir(parents=True, exist_ok=True)
+                target.write_bytes(b"unexpected\n")
+                before = _namespace_snapshot(root)
+
+                with self.assertRaises(WorkspaceFormatError):
+                    Workspace(root)
+
+                self.assertEqual(_namespace_snapshot(root), before)
+
 
 class WorkspaceV2RejectionTests(WorkspaceV2GitTestCase):
     """Prove legacy, ambiguous, unsafe, and unexpected states fail closed."""

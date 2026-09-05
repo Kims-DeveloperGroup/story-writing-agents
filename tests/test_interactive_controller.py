@@ -15,6 +15,7 @@ import unittest
 from collections.abc import Callable
 from dataclasses import FrozenInstanceError, fields, replace
 from pathlib import Path
+from types import SimpleNamespace
 from typing import get_type_hints
 from unittest import mock
 
@@ -63,7 +64,12 @@ from story_writing_agents.conversation_storage.selection import (
     ConversationStorageSelectionReport,
 )
 from story_writing_agents.conversations import (
+    ArtifactApplicationDecisionKind,
+    ArtifactApplicationDecisionResult,
+    CollaborationConfirmationDecision,
     CollaborationEventBatch,
+    CollaborationNextAction,
+    CollaborationStepState,
     CONVERSATION_EVENT_SCHEMA_VERSION,
     CONVERSATION_METADATA_SCHEMA_VERSION,
     ConversationCatalog,
@@ -71,6 +77,11 @@ from story_writing_agents.conversations import (
     ConversationEventKind,
     ConversationMetadata,
     ConversationStatus,
+    LeadDecisionResult,
+    LeadOutcomeKind,
+    LeadTurnResult,
+    StoryCommitDecision,
+    StoryCommitDecisionResult,
 )
 from story_writing_agents.errors import (
     BackendProtocolError,
@@ -98,6 +109,7 @@ from story_writing_agents.interactive_controller import (
     _conversation_policy as conversation_policy_module,
 )
 from story_writing_agents.interactive_controller import _core as controller_core_module
+from story_writing_agents.interactive_controller import _lead_policy as lead_policy_module
 from story_writing_agents.interactive_controller import (
     _runtime_policy as runtime_policy_module,
 )
@@ -106,6 +118,8 @@ from story_writing_agents.interactive_controller import (
 )
 from story_writing_agents import interactive_settings as settings_module
 from story_writing_agents.interactive_terminal import (
+    ControlOutcome,
+    ControlOutcomeKind,
     INTERACTIVE_ERROR_SPECS,
     InteractiveErrorCode,
     InteractiveTerminal,
@@ -142,11 +156,12 @@ from story_writing_agents.session_recovery.transition_assessment import (
     SessionTransitionOperation,
     SessionTransitionScope,
 )
+from story_writing_agents.orchestrator import RuntimeSession
 from story_writing_agents.workspace import (
     Workspace,
 )
 
-from tests.collaboration_contract_fixture import contract_batches
+from tests.collaboration_contract_fixture import STEP_ID, contract_batches, make_proposal
 from tests.helpers import pristine_initialized_workspace
 
 
@@ -1913,7 +1928,7 @@ class ControllerStartupTests(ControllerTestCase):
                 self.assertFalse(workspace.path(_CONTEXT_PATH).exists())
                 self.assertFalse(workspace.path(_access_relative("target")).exists())
 
-    def test_removed_execution_inputs_have_exact_guidance_and_zero_calls(
+    def test_removed_execution_commands_have_exact_guidance_and_zero_calls(
         self,
     ) -> None:
         workspace = self.make_workspace()
@@ -1924,8 +1939,6 @@ class ControllerStartupTests(ControllerTestCase):
         )
         save_default_session(workspace, "managed")
         removed_inputs = (
-            "ordinary prompt",
-            "@plot critique",
             "/run draft",
             "/draft-file source.md",
             "/say advise",
@@ -1982,6 +1995,71 @@ class ControllerStartupTests(ControllerTestCase):
             "_reference_text",
         ):
             self.assertFalse(hasattr(controller, removed_attribute))
+
+    def test_lead_input_requires_attachment_and_conversation_then_routes_exactly(
+        self,
+    ) -> None:
+        controller = InteractiveController.__new__(InteractiveController)
+        errors: list[InteractiveErrorCode] = []
+
+        def capture_error(_self: object, error: object) -> None:
+            errors.append(error.code)  # type: ignore[attr-defined]
+
+        action = InteractiveAction(ActionKind.LEAD_INPUT, text=" literal request ")
+        with mock.patch.object(InteractiveController, "_write_error", capture_error):
+            controller._attached_session_id = None
+            controller._focused_conversation = None
+            self.assertFalse(
+                controller._dispatch_session_lobby_action_unlogged(
+                    action,
+                    " literal request ",
+                )
+            )
+            self.assertEqual(errors, [InteractiveErrorCode.SESSION_NOT_ATTACHED])
+
+            errors.clear()
+            controller._attached_session_id = "managed"
+            self.assertFalse(
+                controller._dispatch_session_lobby_action_unlogged(
+                    action,
+                    " literal request ",
+                )
+            )
+            self.assertEqual(errors, [InteractiveErrorCode.CONVERSATION_REQUIRED])
+
+        conversation = mock.Mock(conversation_id=_UNIQUE_C)
+        runtime_session = object()
+        controller._focused_conversation = conversation
+        controller._runner = object()  # adapter construction is intercepted below
+        controller._advisory_progress = object()
+        controller._picker_input = object()
+        controller._prompt_input = object()
+        controller._semantic_output = object()
+        controller._runtime = mock.Mock()
+        controller._runtime.session.return_value = runtime_session
+        adapter = mock.Mock()
+        adapter.submit.return_value = False
+        with mock.patch.object(
+            controller_core_module,
+            "InteractiveLeadAdapter",
+            return_value=adapter,
+        ) as adapter_type:
+            self.assertFalse(
+                controller._dispatch_session_lobby_action_unlogged(
+                    action,
+                    " literal request ",
+                )
+            )
+        controller._runtime.session.assert_called_once_with("managed")
+        adapter_type.assert_called_once_with(
+            runtime_session,
+            controller._runner,
+            controller._advisory_progress,
+            controller._picker_input,
+            controller._prompt_input,
+            controller._semantic_output,
+        )
+        adapter.submit.assert_called_once_with(_UNIQUE_C, " literal request ")
 
 
 class ControllerConversationStartupTests(ControllerTestCase):
@@ -12356,6 +12434,345 @@ class ControllerContentionTests(ControllerTestCase):
         self.assertIn("Session: lobby\n", nested["records"])
         self.assertIn("Session: shared (opened)\n", "".join(outer_callbacks.records))
         self.assertFalse(workspace.path(_access_relative("shared")).exists())
+
+
+class InteractiveLeadAdapterTests(unittest.TestCase):
+    """Verify the terminal adapter emits only exact runtime decisions."""
+
+    class _Progress:
+        async def run(self, operation: object) -> object:
+            return await operation  # type: ignore[misc]
+
+    class _Picker:
+        def __init__(self, *outcomes: ControlOutcome) -> None:
+            self.outcomes = list(outcomes)
+
+        def read_picker(self, *_args: object, **_kwargs: object) -> ControlOutcome:
+            return self.outcomes.pop(0)
+
+    class _Prompt:
+        def __init__(self, *outcomes: ControlOutcome) -> None:
+            self.outcomes = list(outcomes)
+
+        def read_prompt(self, *_args: object, **_kwargs: object) -> ControlOutcome:
+            return self.outcomes.pop(0)
+
+    class _Output:
+        def __init__(self) -> None:
+            self.components: list[object] = []
+
+        def write_component(self, component: object) -> None:
+            self.components.append(component)
+
+    @staticmethod
+    def _commit(text: str) -> ControlOutcome:
+        return ControlOutcome(ControlOutcomeKind.COMMIT, text=text)
+
+    @staticmethod
+    def _raw(value_type: type[object], **values: object) -> object:
+        value = object.__new__(value_type)
+        for name, item in values.items():
+            object.__setattr__(value, name, item)
+        return value
+
+    @staticmethod
+    def _terminal_turn(
+        state: CollaborationStepState,
+        *,
+        evidence: object | None = None,
+    ) -> LeadTurnResult:
+        return LeadTurnResult(
+            "session",
+            _UNIQUE_C,
+            "turn",
+            STEP_ID,
+            LeadOutcomeKind.RECOMMENDATION,
+            "The lead completed the requested decision.",
+            None,
+            state,
+            None,
+            CollaborationNextAction.CONTINUE_WITH_LEAD,
+            evidence=evidence,  # type: ignore[arg-type]
+        )
+
+    def test_literal_lead_turn_and_consultation_decisions_are_exact(self) -> None:
+        session = RuntimeSession.__new__(RuntimeSession)
+        proposal = make_proposal()
+        proposed = LeadTurnResult(
+            "session",
+            _UNIQUE_C,
+            "turn",
+            STEP_ID,
+            LeadOutcomeKind.PROPOSAL,
+            "Specialist consultation is proposed.",
+            proposal,
+            CollaborationStepState.AWAITING_CONFIRMATION,
+            "confirmation",
+            CollaborationNextAction.SUBMIT_CONFIRMATION,
+            evidence=proposal.basis.evidence,
+        )
+        calls: list[tuple[str, object]] = []
+        current: list[LeadTurnResult] = [proposed]
+
+        async def lead_turn(
+            _session: RuntimeSession,
+            conversation_id: str,
+            text: str,
+        ) -> LeadTurnResult:
+            calls.append(("lead", (conversation_id, text)))
+            return current[0]
+
+        async def decide(
+            _session: RuntimeSession,
+            decision: object,
+        ) -> LeadDecisionResult:
+            calls.append(("decision", decision))
+            kind = decision.kind  # type: ignore[attr-defined]
+            state = {
+                CollaborationConfirmationDecision.CONFIRM: CollaborationStepState.COMPLETED,
+                CollaborationConfirmationDecision.REJECT: CollaborationStepState.REJECTED,
+                CollaborationConfirmationDecision.REVISE: CollaborationStepState.SUPERSEDED,
+            }[kind]
+            return LeadDecisionResult(
+                "session",
+                _UNIQUE_C,
+                STEP_ID,
+                kind,
+                proposal,
+                self._terminal_turn(
+                    state,
+                    evidence=(
+                        proposal.basis.evidence
+                        if state is CollaborationStepState.SUPERSEDED
+                        else None
+                    ),
+                ),
+            )
+
+        runner = asyncio.Runner()
+        self.addCleanup(runner.close)
+        with (
+            mock.patch.object(RuntimeSession, "lead_turn", lead_turn),
+            mock.patch.object(RuntimeSession, "decide_lead_step", decide),
+        ):
+            for kind, revision in (
+                (CollaborationConfirmationDecision.CONFIRM, None),
+                (CollaborationConfirmationDecision.REJECT, None),
+                (CollaborationConfirmationDecision.REVISE, "Narrow the review."),
+            ):
+                with self.subTest(kind=kind):
+                    calls.clear()
+                    prompts = (
+                        (self._commit(revision),) if revision is not None else ()
+                    )
+                    adapter = lead_policy_module.InteractiveLeadAdapter(
+                        session,
+                        runner,
+                        self._Progress(),  # type: ignore[arg-type]
+                        self._Picker(self._commit(kind.value)),  # type: ignore[arg-type]
+                        self._Prompt(*prompts),  # type: ignore[arg-type]
+                        self._Output(),  # type: ignore[arg-type]
+                    )
+                    self.assertFalse(adapter.submit(_UNIQUE_C, " literal input "))
+                    self.assertEqual(calls[0], ("lead", (_UNIQUE_C, " literal input ")))
+                    decision = next(value for label, value in calls if label == "decision")
+                    self.assertIs(decision.kind, kind)  # type: ignore[attr-defined]
+                    self.assertEqual(
+                        decision.revision_request,  # type: ignore[attr-defined]
+                        revision,
+                    )
+
+            calls.clear()
+            adapter = lead_policy_module.InteractiveLeadAdapter(
+                session,
+                runner,
+                self._Progress(),  # type: ignore[arg-type]
+                self._Picker(ControlOutcome(ControlOutcomeKind.CANCEL)),  # type: ignore[arg-type]
+                self._Prompt(),  # type: ignore[arg-type]
+                self._Output(),  # type: ignore[arg-type]
+            )
+            self.assertFalse(adapter.submit(_UNIQUE_C, "cancel proposal"))
+            self.assertFalse(any(label == "decision" for label, _value in calls))
+
+    def test_artifact_and_commit_controls_are_distinct_and_correlated(self) -> None:
+        digest = "sha256:" + "a" * 64
+        candidate_id = "b" * 64
+        reviewed = SimpleNamespace(
+            proposal_id="proposal",
+            proposal_revision=1,
+            proposal_digest=digest,
+        )
+        application = SimpleNamespace(
+            candidate_id="candidate",
+            candidate_revision=1,
+            candidate_digest=digest,
+            application_id="application",
+        )
+        request = SimpleNamespace(
+            confirmation_request_id="application-confirmation",
+            reviewed_proposal=reviewed,
+            application_request=application,
+            application_request_digest=digest,
+        )
+        turn = self._raw(
+            LeadTurnResult,
+            session_id="session",
+            conversation_id=_UNIQUE_C,
+            turn_id="turn",
+            step_id=STEP_ID,
+            kind=LeadOutcomeKind.RECOMMENDATION,
+            message="Review the artifact decision.",
+            proposal=None,
+            state=CollaborationStepState.COMPLETED,
+            confirmation_request_id=None,
+            next_action=CollaborationNextAction.SUBMIT_APPLICATION_DECISION,
+            evidence=None,
+            artifact_proposal=None,
+            artifact_application_request=request,
+        )
+        commit_request = SimpleNamespace(
+            confirmation_request_id="commit-confirmation",
+            application_result_event_id="application-event",
+            candidate=SimpleNamespace(candidate_id=candidate_id),
+            request_digest=digest,
+        )
+        session = RuntimeSession.__new__(RuntimeSession)
+        runner = asyncio.Runner()
+        self.addCleanup(runner.close)
+        calls: list[tuple[str, object]] = []
+
+        async def lead_turn(*_args: object) -> LeadTurnResult:
+            return turn  # type: ignore[return-value]
+
+        async def application_decision(
+            _session: RuntimeSession,
+            decision: object,
+        ) -> ArtifactApplicationDecisionResult:
+            calls.append(("application", decision))
+            commit_tail = (
+                commit_request
+                if decision.kind is ArtifactApplicationDecisionKind.APPLY  # type: ignore[attr-defined]
+                else None
+            )
+            return self._raw(
+                ArtifactApplicationDecisionResult,
+                commit_request=commit_tail,
+            )  # type: ignore[return-value]
+
+        async def commit_decision(
+            _session: RuntimeSession,
+            decision: object,
+        ) -> StoryCommitDecisionResult:
+            calls.append(("commit", decision))
+            return self._raw(StoryCommitDecisionResult)  # type: ignore[return-value]
+
+        with (
+            mock.patch.object(RuntimeSession, "lead_turn", lead_turn),
+            mock.patch.object(RuntimeSession, "decide_artifact_application", application_decision),
+            mock.patch.object(RuntimeSession, "decide_story_commit", commit_decision),
+            mock.patch.object(
+                lead_policy_module,
+                "project_lead_turn_result",
+                return_value=SimpleNamespace(),
+            ),
+            mock.patch.object(
+                lead_policy_module,
+                "project_artifact_application_decision_result",
+                return_value=SimpleNamespace(),
+            ),
+            mock.patch.object(
+                lead_policy_module,
+                "project_story_commit_decision_result",
+                return_value=SimpleNamespace(),
+            ),
+        ):
+            for kind, revision in (
+                (ArtifactApplicationDecisionKind.REJECT, None),
+                (ArtifactApplicationDecisionKind.REVISE, "Revise the artifact."),
+            ):
+                with self.subTest(application=kind):
+                    calls.clear()
+                    prompts = (self._commit(revision),) if revision else ()
+                    lead_policy_module.InteractiveLeadAdapter(
+                        session,
+                        runner,
+                        self._Progress(),  # type: ignore[arg-type]
+                        self._Picker(self._commit(kind.value)),  # type: ignore[arg-type]
+                        self._Prompt(*prompts),  # type: ignore[arg-type]
+                        self._Output(),  # type: ignore[arg-type]
+                    ).submit(_UNIQUE_C, "artifact decision")
+                    sent = calls[0][1]
+                    self.assertIs(sent.kind, kind)  # type: ignore[attr-defined]
+                    self.assertEqual(sent.revision_request, revision)  # type: ignore[attr-defined]
+                    self.assertEqual(len(calls), 1)
+
+            calls.clear()
+            lead_policy_module.InteractiveLeadAdapter(
+                session,
+                runner,
+                self._Progress(),  # type: ignore[arg-type]
+                self._Picker(ControlOutcome(ControlOutcomeKind.CANCEL)),  # type: ignore[arg-type]
+                self._Prompt(),  # type: ignore[arg-type]
+                self._Output(),  # type: ignore[arg-type]
+            ).submit(_UNIQUE_C, "cancel artifact")
+            self.assertEqual(calls, [])
+
+            for kind, revision in (
+                (StoryCommitDecision.COMMIT, None),
+                (StoryCommitDecision.REJECT, None),
+                (StoryCommitDecision.REVISE, "Revise the commit."),
+            ):
+                with self.subTest(commit=kind):
+                    calls.clear()
+                    prompts = (self._commit(revision),) if revision else ()
+                    lead_policy_module.InteractiveLeadAdapter(
+                        session,
+                        runner,
+                        self._Progress(),  # type: ignore[arg-type]
+                        self._Picker(
+                            self._commit(ArtifactApplicationDecisionKind.APPLY.value),
+                            self._commit(kind.value),
+                        ),  # type: ignore[arg-type]
+                        self._Prompt(*prompts),  # type: ignore[arg-type]
+                        self._Output(),  # type: ignore[arg-type]
+                    ).submit(_UNIQUE_C, "commit decision")
+                    application_sent, commit_sent = (item[1] for item in calls)
+                    self.assertIs(
+                        application_sent.kind,  # type: ignore[attr-defined]
+                        ArtifactApplicationDecisionKind.APPLY,
+                    )
+                    self.assertIs(commit_sent.kind, kind)  # type: ignore[attr-defined]
+                    self.assertEqual(
+                        commit_sent.revision_request,  # type: ignore[attr-defined]
+                        revision,
+                    )
+                    self.assertEqual(
+                        commit_sent.confirmation_request_id,  # type: ignore[attr-defined]
+                        "commit-confirmation",
+                    )
+                    self.assertEqual(
+                        commit_sent.application_result_event_id,  # type: ignore[attr-defined]
+                        "application-event",
+                    )
+                    self.assertEqual(commit_sent.candidate_id, candidate_id)  # type: ignore[attr-defined]
+                    self.assertRegex(
+                        commit_sent.confirmation_id,  # type: ignore[attr-defined]
+                        r"^c_[0-9a-f]{32}$",
+                    )
+
+            calls.clear()
+            lead_policy_module.InteractiveLeadAdapter(
+                session,
+                runner,
+                self._Progress(),  # type: ignore[arg-type]
+                self._Picker(
+                    self._commit(ArtifactApplicationDecisionKind.APPLY.value),
+                    ControlOutcome(ControlOutcomeKind.CANCEL),
+                ),  # type: ignore[arg-type]
+                self._Prompt(),  # type: ignore[arg-type]
+                self._Output(),  # type: ignore[arg-type]
+            ).submit(_UNIQUE_C, "cancel commit")
+            self.assertEqual(tuple(label for label, _value in calls), ("application",))
 
 
 if __name__ == "__main__":
