@@ -111,12 +111,13 @@ shell has no one-turn RAG arming command. See
 
 `reference_read` remains a generic low-level hook. If supplied by a direct
 integrator, every addressed invocation must complete the ordered authorized
-reference read before its answer is accepted. The current shell cannot create
-such a request.
+reference read before its answer is accepted. Focused shell Lead references use
+their own mandatory-reference operation rather than this generic retrieval hook.
 
 Retrieval progress values remain synchronous, content-free observation
-contracts. A caller can render or store them, but the current shell emits none
-because no retrieval operation is entered.
+contracts. A caller can render or store them. The shell's Lead-reference
+progress belongs to the separate mandatory-reference path, not this optional
+retrieval operation.
 
 ## User impact
 

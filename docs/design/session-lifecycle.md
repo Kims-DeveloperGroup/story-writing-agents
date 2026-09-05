@@ -192,10 +192,11 @@ events.
 
 ## Artifact viewer relationship
 
-Artifact source pickers and the independent text viewer remain generic terminal
-components, not durable lifecycle states. The current controller exposes no
-provider-text input span, so main-input `$`/`$$` does not enter those components
-and creates no reference operation.
+Artifact source pickers and the independent text viewer remain transient
+terminal components, not durable lifecycle states. In focused provider-bound
+Lead input, `$` enters canonical selection and `$$` continues through the
+independent range viewer. Only the submitted identity indicator creates the
+later runtime reference operation.
 
 ## Live-composer operation boundary
 
