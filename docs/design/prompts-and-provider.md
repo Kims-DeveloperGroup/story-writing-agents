@@ -17,17 +17,19 @@ history**—state behind a provider thread ID.
 ## Exact provider-context accounting
 
 This section records the immutable historical #381 accounting baseline. Later
-children implemented selection, omission, compact wire v5, a content-free
-ledger, and live progress without changing the encoder or baseline workload.
-Current behavior is described in [Agent-context design](agent-context.md).
+children implemented selection, omission, a typed compact action wire, a
+content-free ledger, and live progress without changing the encoder or baseline
+workload. Current wire-v7 behavior is described in
+[Agent-context design](agent-context.md#typed-provider-wire-v7).
 
 ### Model-input boundary and canonical encoding
 
 For each physical provider call, the provider-neutral model-input boundary is
 the exact bytes of three inputs:
 
-1. the staged `AGENTS.md` binding instruction, measured from the same snapshot
-   that is written for the provider;
+1. the staged binding instruction, measured from the same snapshot written for
+   the provider (`AGENTS.md` for Codex, or the selected custom-agent definition
+   for Antigravity);
 2. the canonical output schema; and
 3. the canonical inner turn-prompt JSON.
 
@@ -155,7 +157,7 @@ described next.
 The preceding byte table is the immutable historical #381 baseline. The
 built-in runtime now constructs definitions with `provider_managed_context=True`
 and no mutable `context_document_files`. Role prompt, persona, language,
-provider restrictions, and wire-v5 protocol remain stable binding material.
+provider restrictions, and typed wire-v7 protocol remain stable binding material.
 Current core documents are P2 authoritative sources selected by the context
 planner; manuscripts and other additive sources are SEARCH-first.
 
@@ -187,7 +189,7 @@ identity, route, input, and current storage authorities into the
 provider-neutral context service. It does not consume the optional
 conversation-RAG collaborator. The service captures current material, builds a
 content-free manifest, and plans bootstrap/delta. If selected material is
-insufficient, wire-v5 SEARCH/READ actions can add exact authorized evidence
+insufficient, typed wire-v7 SEARCH/READ actions can add exact authorized evidence
 from route-permitted sources. Focused Lead input and confirmed collaboration in
 the current shell enter this same provider-context flow.
 
@@ -200,7 +202,7 @@ Provider output never supplies confirmation, runtime IDs/budgets, write/Git
 authority, or a call to another agent.
 
 `lead_front_channel` receives the current command, identity, content-free input
-aliases, a strict six-field semantic answer contract, and four canonical-core
+aliases, a strict seven-field semantic answer contract, and four canonical-core
 status rows. Inventory alone supplies no story body. The lead must classify the
 turn as `story_specific` or `workflow_meta`; runtime performs no NLP relabeling.
 For story-specific results the provider selects the minimum ordered current
@@ -222,6 +224,15 @@ conversation observations. Optional `rag_context` is independent semantic RAG
 input. Contextual continuation frames carry only the newly authorized action
 observation; they do not resend the initial payload.
 
+The action response itself is typed rather than prompt-decoded shorthand. Its
+closed root has required `correlation` and `action`; the latter is a closed
+SEARCH, READ, or ANSWER variant selected from the per-call schema. ANSWER puts
+the complete semantic object directly in `action.result` and supporting
+successful READ handles in `action.used_handles`. Runtime validates the exact
+correlation, issued handles, evidence IDs, Lead evidence matrix, input aliases,
+artifact authority, and later confirmation boundaries. Provider schema
+acceptance is therefore necessary but never sufficient for a valid Lead turn.
+
 <a id="story-session-continuity-envelope"></a>
 
 ## Story-session capture and compact wire
@@ -232,13 +243,13 @@ bounded complete conversation pairs, invoking-agent owner outcomes, and current
 core identities. It is not the current built-in provider payload.
 
 The contextual service translates authoritative capture into
-`agent-context-wire-v5`: compact required input/candidate and selected P2
+`agent-context-wire-v7`: compact required input/candidate and selected P2
 material, content-free catalog/record changes, and bounded observations. P3
 history and invoking-agent state are SEARCH-first. A fresh provider thread
 bootstraps current role-relevant sources; later compatible calls use revisions,
 record changes, tombstones, and an exact candidate pointer or beneficial
 lossless single-splice. See
-[Agent-context design](agent-context.md#compact-provider-wire-v5).
+[Agent-context design](agent-context.md#typed-provider-wire-v7).
 
 <a id="explicit-reference-provider-flow"></a>
 
@@ -316,20 +327,45 @@ and [privacy boundary](../operations/privacy-and-provider.md#agent-exchange-priv
 
 The backend launches a constrained Codex subprocess from isolated staging.
 Verified stable context reaches its temporary top-level `AGENTS.md`; request
-JSON reaches standard input. Replies pass schema, correlation, and phase checks.
+JSON reaches standard input. The exact per-call schema is passed by
+`--output-schema <schema-file>` and the structured last message becomes the
+provider-neutral result. OpenAI Structured Outputs requires a supported root
+object schema, required fields, closed objects, and explicitly typed array
+items; Story generates those constraints for every nested action/result node.
+See the official
+[Structured Outputs guide](https://developers.openai.com/api/docs/guides/structured-outputs).
+Replies still pass Story's correlation, handle, evidence, semantic, and phase
+checks.
 The exact sandbox, approval, tool, configuration, and instruction controls live
 in [Privacy and provider exposure](../operations/privacy-and-provider.md).
 
 The Antigravity adapter binds the same verified definition and request models
-to an isolated provider-state root. It launches `agy` without a shell, sends
-story payloads through standard input using stream JSON, and requests streamed
-JSON output. Runtime-owned JSON schema, provider-state path, optional
+to an isolated session/agent/fingerprint provider root. It installs the bound
+definition as `.agents/agents/<agent-id>/agent.md`, selects that custom main
+agent with `--agent`, and launches `agy` without a shell from the nested
+adapter-owned workspace. A fresh thread uses `--new-project`; exact resume uses
+`--conversation <id>`, whose associated project Antigravity reopens. Story
+does not register the canonical story workspace root or pass `--project`.
+Story payloads enter standard input using stream JSON and output returns as a
+stream. The same canonical per-call schema is passed inline with
+`--json-schema`. A successful terminal event must identify the selected agent,
+exact cwd, `request-review` mode, and a nonempty tool catalog containing
+`finish`; it may contain only safe non-operational steps. The terminal event
+must contain a root-object `structured_output` and a `json_schema` whose
+canonical bytes exactly echo the requested schema before Story creates
+`ProviderResult`. See Antigravity's
+official [headless CLI guide](https://antigravity.google/docs/cli/headless/)
+and Google's [structured output guide](https://ai.google.dev/gemini-api/docs/structured-output).
+Runtime-owned JSON schema, provider-state path, optional
 model/effort, and provider conversation ID remain process arguments. Slash
-commands are disabled, plan mode is selected, and sandbox controls are applied. Exact
-setup, precedence, preflight, and lifecycle contracts are in the
+commands are disabled, plan mode is selected, sandbox controls are applied,
+and no bypass is requested. The custom definition's `tools: [finish]` is
+declarative containment: CLI 1.1.27 still advertised 57 tools, so Story does
+not claim provider-level capability removal. Exact setup, precedence,
+preflight, and lifecycle contracts are in the
 [Antigravity guide](../guides/antigravity.md).
 
-Runtime-built contextual debate calls use compact wire v5 for task/input,
+Runtime-built contextual debate calls use typed wire v7 for task/input,
 candidate pointer/splice/full fallback, selected sources, and record changes.
 They do not repeat stable role prompts, persona, language directives, or
 unchanged core-document text. `story_session_context` is an internal capture

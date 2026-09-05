@@ -34,16 +34,10 @@ from story_writing_agents.writing_artifacts import (
 
 
 SearchSelection = tuple[tuple[str, ...], str] | tuple[str, tuple[str, ...], str]
-_SOURCE_KIND_CODES = {
-    "writing_artifact": "w",
-    "conversation": "c",
-    "active_debate": "d",
-    "own_agent_state": "o",
-}
 
 
 def _framed_observation(value: object) -> dict[str, Any]:
-    """Normalize one authoritative compact wire-v5 observation."""
+    """Normalize one authoritative compact wire-v7 observation."""
 
     def source_facts(raw: object) -> dict[str, object]:
         if (
@@ -388,18 +382,23 @@ class _ContextAdapterHarness:
         correlation: str,
         selection: SearchSelection,
     ) -> str:
+        artifact_path_prefix = None
         if len(selection) == 2:
             source_kinds, text = selection
-            data: list[object] = [
-                [text, [_SOURCE_KIND_CODES[item] for item in source_kinds]]
-            ]
         else:
             artifact_path_prefix, source_kinds, text = selection
-            data = [
-                artifact_path_prefix,
-                [text, [_SOURCE_KIND_CODES[item] for item in source_kinds]],
-            ]
-        return cls._json({"a": "s", "c": correlation, "d": data, "u": []})
+        return cls._json(
+            {
+                "correlation": correlation,
+                "action": {
+                    "kind": "search",
+                    "path_prefix": artifact_path_prefix,
+                    "queries": [
+                        {"text": text, "source_kinds": list(source_kinds)}
+                    ],
+                },
+            }
+        )
 
     def _debate_identity(
         self,
@@ -487,7 +486,14 @@ class _ContextAdapterHarness:
             self.mutate_before_answer = None
             mutation(current)
         result = self._domain_answer(current, used_handles)
-        action = {"a": "a", "c": correlation, "d": [result], "u": list(used_handles)}
+        action = {
+            "correlation": correlation,
+            "action": {
+                "kind": "answer",
+                "result": result,
+                "used_handles": list(used_handles),
+            },
+        }
         self.answers.append(action)
         return self._json(action)
 
@@ -580,19 +586,18 @@ class _ContextAdapterHarness:
             if self.correlation_mismatch_selector(current):
                 response = self._json(
                     {
-                        "a": "r",
-                        "c": "PRIVATE critique prose\x1b]unsafe\x07",
-                        "d": [],
-                        "u": [],
+                        "correlation": "PRIVATE critique prose\x1b]unsafe\x07",
+                        "action": {"kind": "read", "handles": []},
                     }
                 )
             elif self.invalid_read_selector(current):
                 response = self._json(
                     {
-                        "a": "r",
-                        "c": correlation,
-                        "d": ["conflict", "PRIVATE/critique text"],
-                        "u": [],
+                        "correlation": correlation,
+                        "action": {
+                            "kind": "read",
+                            "handles": ["conflict", "PRIVATE/critique text"],
+                        },
                     }
                 )
             elif search is None:
@@ -619,10 +624,8 @@ class _ContextAdapterHarness:
                 else:
                     response = self._json(
                         {
-                            "a": "r",
-                            "c": correlation,
-                            "d": list(handles),
-                            "u": [],
+                            "correlation": correlation,
+                            "action": {"kind": "read", "handles": list(handles)},
                         }
                     )
             elif "evidence" in frame:

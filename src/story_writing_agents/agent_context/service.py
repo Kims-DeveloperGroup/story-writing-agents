@@ -8,6 +8,7 @@ import hashlib
 import hmac
 import inspect
 import json
+import math
 import secrets
 import threading
 from collections.abc import Callable, Mapping
@@ -133,7 +134,7 @@ __all__ = [
     "record_context_provider_failure",
 ]
 
-_CONTEXT_WIRE_VERSION = "agent-context-wire-v5"
+_CONTEXT_WIRE_VERSION = "agent-context-wire-v7"
 _ACTION_WIRE_CODES = {
     "search": "s",
     "read": "r",
@@ -145,7 +146,6 @@ _SOURCE_KIND_WIRE_CODES = {
     ContextSourceKind.ACTIVE_DEBATE: "d",
     ContextSourceKind.OWN_AGENT_STATE: "o",
 }
-_SOURCE_KIND_FROM_WIRE = {value: key for key, value in _SOURCE_KIND_WIRE_CODES.items()}
 _SEARCH_SOURCE_KIND_ORDER = tuple(_SOURCE_KIND_WIRE_CODES)
 _SEMANTIC_CHANNEL_WIRE_CODES = {
     ContextSemanticChannel.CURRENT_INPUT: "i",
@@ -216,12 +216,26 @@ class ContextInvocationKind(StrEnum):
 
 @dataclass(frozen=True, slots=True)
 class ContextJsonObjectResultContract:
-    """Require one strict JSON-object answer under a stable contract identity."""
+    """Carry one immutable owner-supplied JSON-object result schema."""
 
     contract_id: str
+    schema: Mapping[str, object] = field(repr=False, compare=False)
+    _schema_bytes: bytes = field(init=False, repr=False)
 
     def __post_init__(self) -> None:
         _safe_identity(self.contract_id)
+        encoded = _validated_result_schema_bytes(self.schema)
+        decoded = json.loads(encoded)
+        assert type(decoded) is dict
+        object.__setattr__(self, "schema", MappingProxyType(decoded))
+        object.__setattr__(self, "_schema_bytes", encoded)
+
+    def schema_value(self) -> dict[str, object]:
+        """Return a detached exact schema for one physical provider call."""
+
+        decoded = json.loads(self._schema_bytes)
+        assert type(decoded) is dict
+        return decoded
 
 
 class ContextExecutionEventKind(StrEnum):
@@ -725,15 +739,15 @@ _EXECUTION_ERROR_DETAIL_MESSAGES = {
         ContextExecutionErrorCode.MALFORMED_ACTION,
         _ContextExecutionErrorDetail.READ_SOURCE_HANDLES_REQUIRED,
     ): (
-        "contextual provider read action is invalid: `d` must contain source "
-        "handles returned by the preceding context search"
+        "contextual provider read action is invalid: `handles` must contain "
+        "source handles returned by the preceding context search"
     ),
     (
         ContextExecutionErrorCode.MALFORMED_ACTION,
         _ContextExecutionErrorDetail.RESPONSE_CORRELATION_MISMATCH,
     ): (
-        "contextual provider response is invalid: `c` does not match the "
-        "current request correlation token"
+        "contextual provider response is invalid: `correlation` does not match "
+        "the current request correlation token"
     ),
 }
 
@@ -786,6 +800,207 @@ def _execution_error_has_detail(
     except KeyError:
         return False
     return str(failure) == expected
+
+
+_PROVIDER_SCHEMA_TYPES = frozenset(
+    {"array", "boolean", "integer", "null", "number", "object", "string"}
+)
+_PROVIDER_SCHEMA_KEYS = frozenset(
+    {
+        "additionalProperties",
+        "anyOf",
+        "description",
+        "enum",
+        "items",
+        "maxItems",
+        "minItems",
+        "properties",
+        "required",
+        "type",
+    }
+)
+
+
+def _schema_type_matches(value: object, schema_type: str) -> bool:
+    if schema_type == "null":
+        return value is None
+    if schema_type == "boolean":
+        return type(value) is bool
+    if schema_type == "integer":
+        return type(value) is int
+    if schema_type == "number":
+        return type(value) is int or (type(value) is float and math.isfinite(value))
+    if schema_type == "string":
+        return type(value) is str
+    if schema_type == "array":
+        return type(value) is list
+    if schema_type == "object":
+        return type(value) is dict
+    return False
+
+
+def _schema_types(schema: dict[str, object]) -> tuple[str, ...]:
+    raw = schema.get("type")
+    if type(raw) is str:
+        values = (raw,)
+    elif type(raw) is list and all(type(item) is str for item in raw):
+        values = tuple(raw)
+    else:
+        raise _execution_error(ContextExecutionErrorCode.INVALID_VALUE)
+    if (
+        not values
+        or len(set(values)) != len(values)
+        or any(value not in _PROVIDER_SCHEMA_TYPES for value in values)
+        or (
+            len(values) > 1
+            and (len(values) != 2 or "null" not in values)
+        )
+    ):
+        raise _execution_error(ContextExecutionErrorCode.INVALID_VALUE)
+    return values
+
+
+def _validate_provider_schema_node(schema: object) -> None:
+    """Validate the closed OpenAI/Gemini schema subset used by this wire."""
+
+    if type(schema) is not dict or not schema or not set(schema).issubset(
+        _PROVIDER_SCHEMA_KEYS
+    ):
+        raise _execution_error(ContextExecutionErrorCode.INVALID_VALUE)
+    description = schema.get("description")
+    if description is not None and (type(description) is not str or not description):
+        raise _execution_error(ContextExecutionErrorCode.INVALID_VALUE)
+    if "anyOf" in schema:
+        if not set(schema).issubset({"anyOf", "description"}):
+            raise _execution_error(ContextExecutionErrorCode.INVALID_VALUE)
+        variants = schema["anyOf"]
+        if type(variants) is not list or len(variants) < 2:
+            raise _execution_error(ContextExecutionErrorCode.INVALID_VALUE)
+        for variant in variants:
+            _validate_provider_schema_node(variant)
+        return
+    schema_types = _schema_types(schema)
+    concrete_types = tuple(item for item in schema_types if item != "null")
+    if len(concrete_types) > 1:
+        raise _execution_error(ContextExecutionErrorCode.INVALID_VALUE)
+    concrete_type = concrete_types[0] if concrete_types else "null"
+    raw_enum = schema.get("enum")
+    if raw_enum is not None:
+        if type(raw_enum) is not list or not raw_enum:
+            raise _execution_error(ContextExecutionErrorCode.INVALID_VALUE)
+        for value in raw_enum:
+            if not any(_schema_type_matches(value, item) for item in schema_types):
+                raise _execution_error(ContextExecutionErrorCode.INVALID_VALUE)
+    structural_keys = set(schema) - {"description", "enum", "type"}
+    if concrete_type == "object":
+        if structural_keys != {"additionalProperties", "properties", "required"}:
+            raise _execution_error(ContextExecutionErrorCode.INVALID_VALUE)
+        properties = schema["properties"]
+        required = schema["required"]
+        if (
+            type(properties) is not dict
+            or not properties
+            or any(type(key) is not str or not key for key in properties)
+            or type(required) is not list
+            or any(type(key) is not str for key in required)
+            or len(required) != len(properties)
+            or set(required) != set(properties)
+            or schema["additionalProperties"] is not False
+        ):
+            raise _execution_error(ContextExecutionErrorCode.INVALID_VALUE)
+        for child in properties.values():
+            _validate_provider_schema_node(child)
+        return
+    if concrete_type == "array":
+        if not structural_keys.issubset({"items", "maxItems", "minItems"}) or (
+            "items" not in schema
+        ):
+            raise _execution_error(ContextExecutionErrorCode.INVALID_VALUE)
+        minimum = schema.get("minItems", 0)
+        maximum = schema.get("maxItems")
+        if (
+            type(minimum) is not int
+            or minimum < 0
+            or (maximum is not None and (type(maximum) is not int or maximum < minimum))
+        ):
+            raise _execution_error(ContextExecutionErrorCode.INVALID_VALUE)
+        _validate_provider_schema_node(schema["items"])
+        return
+    if structural_keys:
+        raise _execution_error(ContextExecutionErrorCode.INVALID_VALUE)
+
+
+def _schema_accepts_only_objects(schema: dict[str, object]) -> bool:
+    variants = schema.get("anyOf")
+    if type(variants) is list:
+        return bool(variants) and all(
+            type(variant) is dict and _schema_accepts_only_objects(variant)
+            for variant in variants
+        )
+    return schema.get("type") == "object"
+
+
+def _validated_result_schema_bytes(schema: object) -> bytes:
+    if type(schema) is not dict:
+        raise _execution_error(ContextExecutionErrorCode.INVALID_VALUE)
+    try:
+        encoded = json.dumps(
+            schema,
+            allow_nan=False,
+            ensure_ascii=False,
+            separators=(",", ":"),
+            sort_keys=True,
+        ).encode("utf-8", errors="strict")
+        decoded = json.loads(encoded)
+    except (TypeError, ValueError, UnicodeError, json.JSONDecodeError):
+        raise _execution_error(ContextExecutionErrorCode.INVALID_VALUE) from None
+    _validate_provider_schema_node(decoded)
+    if type(decoded) is not dict or not _schema_accepts_only_objects(decoded):
+        raise _execution_error(ContextExecutionErrorCode.INVALID_VALUE)
+    return encoded
+
+
+def _value_matches_provider_schema(value: object, schema: dict[str, object]) -> bool:
+    variants = schema.get("anyOf")
+    if type(variants) is list:
+        return any(
+            type(variant) is dict and _value_matches_provider_schema(value, variant)
+            for variant in variants
+        )
+    try:
+        schema_types = _schema_types(schema)
+    except ContextExecutionError:
+        return False
+    if not any(_schema_type_matches(value, item) for item in schema_types):
+        return False
+    raw_enum = schema.get("enum")
+    if type(raw_enum) is list and not any(
+        type(value) is type(candidate) and value == candidate for candidate in raw_enum
+    ):
+        return False
+    if value is None:
+        return True
+    if type(value) is dict:
+        properties = schema.get("properties")
+        if type(properties) is not dict or set(value) != set(properties):
+            return False
+        return all(
+            type(child) is dict and _value_matches_provider_schema(value[key], child)
+            for key, child in properties.items()
+        )
+    if type(value) is list:
+        items = schema.get("items")
+        minimum = schema.get("minItems", 0)
+        maximum = schema.get("maxItems")
+        if (
+            type(items) is not dict
+            or type(minimum) is not int
+            or len(value) < minimum
+            or (type(maximum) is int and len(value) > maximum)
+        ):
+            return False
+        return all(_value_matches_provider_schema(item, items) for item in value)
+    return True
 
 
 def _validate_sync_callback(value: object, *, optional: bool = True) -> None:
@@ -975,6 +1190,7 @@ class ContextInvocationRequest:
     operation_id: str
     result_correlation_id: str
     materials: tuple[ContextMaterial, ...]
+    result_contract: ContextJsonObjectResultContract
     source_classifications: tuple[ContextSourceClassification, ...] = ()
     reference_operation_id: str | None = None
     mandatory_references: tuple[MandatoryReferenceReservation, ...] = ()
@@ -983,7 +1199,6 @@ class ContextInvocationRequest:
         _SEARCH_SOURCE_KIND_ORDER
     )
     invocation_kind: ContextInvocationKind | None = None
-    result_contract: ContextJsonObjectResultContract | None = None
     physical_call_limit: int | None = None
     include_core_statuses: bool = False
 
@@ -1049,12 +1264,11 @@ class ContextInvocationRequest:
             )
         ):
             raise _execution_error(ContextExecutionErrorCode.INVALID_VALUE)
-        if (self.invocation_kind is None) is not (self.result_contract is None):
+        if self.invocation_kind is not None and type(
+            self.invocation_kind
+        ) is not ContextInvocationKind:
             raise _execution_error(ContextExecutionErrorCode.INVALID_VALUE)
-        if self.invocation_kind is not None and (
-            type(self.invocation_kind) is not ContextInvocationKind
-            or type(self.result_contract) is not ContextJsonObjectResultContract
-        ):
+        if type(self.result_contract) is not ContextJsonObjectResultContract:
             raise _execution_error(ContextExecutionErrorCode.INVALID_VALUE)
         if self.physical_call_limit is not None and (
             type(self.physical_call_limit) is not int
@@ -1075,6 +1289,7 @@ class ContextProviderFailureFacts:
     taint_existing_thread: bool = False
     submitted_accountings: tuple[ProviderCallAccounting, ...] = ()
     submission_uncertain: bool = False
+    response_rejection_code: ContextProviderTerminalCode | None = None
 
     def __post_init__(self) -> None:
         if self.accounting is not None and type(self.accounting) is not (
@@ -1091,6 +1306,13 @@ class ContextProviderFailureFacts:
             type(item) is not ProviderCallAccounting
             or item.state is not ProviderCallState.SUBMITTED
             for item in self.submitted_accountings
+        ):
+            raise _execution_error(ContextExecutionErrorCode.INVALID_VALUE)
+        if self.response_rejection_code is not None and (
+            type(self.response_rejection_code) is not ContextProviderTerminalCode
+            or self.response_rejection_code
+            not in _CONTEXT_PROVIDER_RESPONSE_REJECTION_CODES
+            or not self.submitted_accountings
         ):
             raise _execution_error(ContextExecutionErrorCode.INVALID_VALUE)
 
@@ -1136,6 +1358,17 @@ class ContextProviderTerminalCode(StrEnum):
     ANSWER_VALIDATION_FAILED = "answer_validation_failed"
     REFERENCE_RUNTIME_FAILED = "reference_runtime_failed"
     CONTEXT_RUNTIME_FAILED = "context_runtime_failed"
+
+
+_CONTEXT_PROVIDER_RESPONSE_REJECTION_CODES = frozenset(
+    {
+        ContextProviderTerminalCode.MALFORMED_STRUCTURED_RESPONSE,
+        ContextProviderTerminalCode.RESPONSE_CORRELATION_MISMATCH,
+        ContextProviderTerminalCode.RESPONSE_SEMANTIC_REJECTED,
+        ContextProviderTerminalCode.ACTION_EXHAUSTED,
+        ContextProviderTerminalCode.ANSWER_VALIDATION_FAILED,
+    }
+)
 
 
 def _context_provider_decode_terminal_code(
@@ -2594,51 +2827,15 @@ def _correlation_token_matches(
     return hmac.compare_digest(candidate, expected)
 
 
-def _answer_text_for_contract(value: object, contract: object) -> str:
-    """Validate one advertised result shape and restore internal answer text."""
+def _answer_text_for_contract(
+    value: object,
+    contract: ContextJsonObjectResultContract,
+) -> str:
+    """Validate one owner-supplied result schema and canonicalize its object."""
 
-    if type(contract) is ContextJsonObjectResultContract:
-        if type(value) is not dict:
-            raise ValueError
-        return _canonical_bytes(value).decode("utf-8", errors="strict")
-    if contract == "text":
-        if type(value) is not str or not value:
-            raise ValueError
-        return value
-    if contract == ["retrieval", "text", "citations"]:
-        if (
-            type(value) is not list
-            or len(value) != 2
-            or type(value[0]) is not str
-            or not value[0]
-            or type(value[1]) is not list
-        ):
-            raise ValueError
-    elif contract == ["audit", "approve-or-conflict"]:
-        if value != "a" and not (
-            type(value) is list
-            and len(value) == 2
-            and value[0] == "c"
-            and type(value[1]) is str
-            and bool(value[1])
-        ):
-            raise ValueError
-    elif contract == ["finalize", "path-and-replacement-list"]:
-        if type(value) is not list:
-            raise ValueError
-        paths: set[str] = set()
-        for item in value:
-            if (
-                type(item) is not list
-                or len(item) != 2
-                or type(item[0]) is not str
-                or not item[0]
-                or type(item[1]) is not str
-                or item[0] in paths
-            ):
-                raise ValueError
-            paths.add(item[0])
-    else:
+    if type(contract) is not ContextJsonObjectResultContract or not (
+        _value_matches_provider_schema(value, contract.schema_value())
+    ):
         raise ValueError
     return _canonical_bytes(value).decode("utf-8", errors="strict")
 
@@ -2648,13 +2845,13 @@ def _decode_context_action(
     *,
     correlation: ContextActionCorrelation,
     allowed_actions: tuple[str, ...],
-    result_contract: object,
+    result_contract: ContextJsonObjectResultContract,
     allowed_search_source_kinds: tuple[ContextSourceKind, ...] = (
         _SEARCH_SOURCE_KIND_ORDER
     ),
     resolve_handle: Callable[[object], ContextSourceHandle] = ContextSourceHandle,
 ) -> ContextSearchAction | ContextReadAction | ContextAnswerAction:
-    """Strictly decode compact wire v5 and restore the full internal action."""
+    """Strictly decode typed wire v7 and restore the full internal action."""
 
     try:
         value = json.loads(
@@ -2662,60 +2859,59 @@ def _decode_context_action(
             object_pairs_hook=_unique_json_object,
             parse_constant=lambda _value: (_ for _ in ()).throw(ValueError()),
         )
-        raw = _exact_object(value, frozenset({"a", "c", "d", "u"}))
-        if not _correlation_token_matches(raw["c"], correlation):
+        raw = _exact_object(value, frozenset({"action", "correlation"}))
+        if not _correlation_token_matches(raw["correlation"], correlation):
             raise _execution_error(
                 ContextExecutionErrorCode.MALFORMED_ACTION,
                 detail=(_ContextExecutionErrorDetail.RESPONSE_CORRELATION_MISMATCH),
             )
-        action_kind = {
-            "s": "search",
-            "r": "read",
-            "a": "answer",
-        }.get(raw["a"] if type(raw["a"]) is str else None)
-        if action_kind is None:
+        action = raw["action"]
+        if type(action) is not dict or type(action.get("kind")) is not str:
             raise ValueError
-        data = raw["d"]
-        used_handles = raw["u"]
-        if type(data) is not list or type(used_handles) is not list:
-            raise ValueError
-        if action_kind not in allowed_actions:
-            if action_kind == "read" and not used_handles:
-                raise _execution_error(
-                    ContextExecutionErrorCode.MALFORMED_ACTION,
-                    detail=(_ContextExecutionErrorDetail.READ_SOURCE_HANDLES_REQUIRED),
-                )
+        action_kind = action["kind"]
+        if action_kind not in {"answer", "read", "search"}:
             raise ValueError
         if action_kind == "search":
-            if used_handles or not data:
-                raise ValueError
-            artifact_path_prefix: str | None = None
-            query_values = data
-            if type(data[0]) is str:
-                artifact_path_prefix = data[0]
-                query_values = data[1:]
-            if not query_values:
+            search = _exact_object(
+                action,
+                frozenset({"kind", "path_prefix", "queries"}),
+            )
+            path_prefix = search["path_prefix"]
+            query_values = search["queries"]
+            if (
+                action_kind not in allowed_actions
+                or (path_prefix is not None and type(path_prefix) is not str)
+                or type(query_values) is not list
+                or not query_values
+            ):
                 raise ValueError
             queries: list[ContextSearchQuery] = []
             for query in query_values:
-                if type(query) is not list or len(query) != 2:
-                    raise ValueError
-                kinds = query[1]
-                if type(kinds) is not list:
-                    raise ValueError
-                source_kinds = tuple(
-                    _SOURCE_KIND_FROM_WIRE.get(item, item) for item in kinds
+                query_object = _exact_object(
+                    query,
+                    frozenset({"source_kinds", "text"}),
                 )
-                decoded_kinds = tuple(ContextSourceKind(item) for item in source_kinds)
-                if any(
-                    kind not in allowed_search_source_kinds for kind in decoded_kinds
+                kinds = query_object["source_kinds"]
+                if type(query_object["text"]) is not str or type(kinds) is not list:
+                    raise ValueError
+                decoded_kinds = tuple(ContextSourceKind(item) for item in kinds)
+                if (
+                    not decoded_kinds
+                    or len(set(decoded_kinds)) != len(decoded_kinds)
+                    or any(
+                        kind not in allowed_search_source_kinds
+                        for kind in decoded_kinds
+                    )
                 ):
                     raise ValueError
+                canonical_kinds = tuple(
+                    kind for kind in _SEARCH_SOURCE_KIND_ORDER if kind in decoded_kinds
+                )
                 queries.append(
                     ContextSearchQuery(
-                        query[0],
-                        decoded_kinds,
-                        artifact_path_prefix,
+                        query_object["text"],
+                        canonical_kinds,
+                        cast(str | None, path_prefix),
                     )
                 )
             return ContextSearchAction(
@@ -2723,10 +2919,17 @@ def _decode_context_action(
                 tuple(queries),
             )
         if action_kind == "read":
-            if used_handles:
+            read = _exact_object(action, frozenset({"handles", "kind"}))
+            handles_value = read["handles"]
+            if type(handles_value) is not list or not handles_value:
+                raise _execution_error(
+                    ContextExecutionErrorCode.MALFORMED_ACTION,
+                    detail=(_ContextExecutionErrorDetail.READ_SOURCE_HANDLES_REQUIRED),
+                )
+            if action_kind not in allowed_actions:
                 raise ValueError
             try:
-                handles = tuple(resolve_handle(item) for item in data)
+                handles = tuple(resolve_handle(item) for item in handles_value)
             except ContextActionError as exc:
                 if exc.code in {
                     ContextActionErrorCode.HANDLE_INVALID,
@@ -2740,11 +2943,16 @@ def _decode_context_action(
                     ) from None
                 raise
             return ContextReadAction(correlation, handles)
-        if len(data) != 1:
+        answer = _exact_object(
+            action,
+            frozenset({"kind", "result", "used_handles"}),
+        )
+        used_handles = answer["used_handles"]
+        if action_kind not in allowed_actions or type(used_handles) is not list:
             raise ValueError
         return ContextAnswerAction(
             correlation,
-            _answer_text_for_contract(data[0], result_contract),
+            _answer_text_for_contract(answer["result"], result_contract),
             tuple(resolve_handle(item) for item in used_handles),
         )
     except ContextExecutionError:
@@ -2760,20 +2968,127 @@ def _decode_context_action(
         raise _execution_error(ContextExecutionErrorCode.MALFORMED_ACTION) from None
 
 
-def _context_action_schema() -> dict[str, object]:
-    """Return the byte-identical portable schema for every substantive call."""
-
-    return {
+def _closed_provider_object_schema(
+    properties: dict[str, object],
+    *,
+    description: str | None = None,
+) -> dict[str, object]:
+    schema: dict[str, object] = {
         "additionalProperties": False,
-        "properties": {
-            "a": {"enum": ["a", "r", "s"]},
-            "c": {"type": "string"},
-            "d": {"items": {}, "type": "array"},
-            "u": {"items": {"type": "string"}, "type": "array"},
-        },
-        "required": ["a", "c", "d", "u"],
+        "properties": properties,
+        "required": list(properties),
         "type": "object",
     }
+    if description is not None:
+        schema["description"] = description
+    return schema
+
+
+def _context_action_schema(
+    *,
+    correlation: ContextActionCorrelation,
+    allowed_actions: tuple[str, ...],
+    result_contract: ContextJsonObjectResultContract,
+    allowed_search_source_kinds: tuple[ContextSourceKind, ...],
+    action_limits: list[int],
+    max_used_handles: int,
+) -> dict[str, object]:
+    """Build one closed typed action envelope for the exact physical call."""
+
+    variants: list[dict[str, object]] = []
+    if "search" in allowed_actions:
+        query_limit = min(action_limits[3], action_limits[4])
+        query_schema = _closed_provider_object_schema(
+            {
+                "text": {"type": "string"},
+                "source_kinds": {
+                    "description": (
+                        "Choose distinct allowed source kinds; provider order is "
+                        "not significant and the runtime canonicalizes it."
+                    ),
+                    "items": {
+                        "enum": [kind.value for kind in allowed_search_source_kinds],
+                        "type": "string",
+                    },
+                    "maxItems": len(allowed_search_source_kinds),
+                    "minItems": 1,
+                    "type": "array",
+                },
+            }
+        )
+        variants.append(
+            _closed_provider_object_schema(
+                {
+                    "kind": {"enum": ["search"], "type": "string"},
+                    "path_prefix": {"type": ["string", "null"]},
+                    "queries": {
+                        "items": query_schema,
+                        "maxItems": query_limit,
+                        "minItems": 1,
+                        "type": "array",
+                    },
+                },
+                description=(
+                    "SEARCH: find source locators; path_prefix is null unless "
+                    "restricting writing-artifact paths."
+                ),
+            )
+        )
+    if "read" in allowed_actions:
+        handle_limit = min(action_limits[5], action_limits[6])
+        variants.append(
+            _closed_provider_object_schema(
+                {
+                    "kind": {"enum": ["read"], "type": "string"},
+                    "handles": {
+                        "items": {"type": "string"},
+                        "maxItems": handle_limit,
+                        "minItems": 1,
+                        "type": "array",
+                    },
+                },
+                description="READ: retrieve one or more SEARCH result handles.",
+            )
+        )
+    if "answer" in allowed_actions:
+        variants.append(
+            _closed_provider_object_schema(
+                {
+                    "kind": {"enum": ["answer"], "type": "string"},
+                    "result": result_contract.schema_value(),
+                    "used_handles": {
+                        "items": {"type": "string"},
+                        "maxItems": max_used_handles,
+                        "type": "array",
+                    },
+                },
+                description=(
+                    "ANSWER: return the exact result and only supporting handles "
+                    "emitted by successful READ actions."
+                ),
+            )
+        )
+    if not variants:
+        raise _execution_error(ContextExecutionErrorCode.INVALID_VALUE)
+    action_schema: dict[str, object] = (
+        variants[0] if len(variants) == 1 else {"anyOf": variants}
+    )
+    schema = _closed_provider_object_schema(
+        {
+            "correlation": {
+                "description": "Echo the exact correlation token from this call.",
+                "enum": [_correlation_token(correlation)],
+                "type": "string",
+            },
+            "action": action_schema,
+        },
+        description=(
+            "Return exactly one schema-selected context action with its exact "
+            "correlation token."
+        ),
+    )
+    _validate_provider_schema_node(schema)
+    return schema
 
 
 def _source_number(source_alias: str) -> int:
@@ -3101,16 +3416,15 @@ def _conversation_counts(material: ContextMaterial) -> tuple[int, int]:
 
 def _invocation_phase_contract(
     request: ContextInvocationRequest,
-) -> tuple[str, object]:
-    """Derive the compact established phase and result shape from route identity."""
+) -> tuple[str, ContextJsonObjectResultContract]:
+    """Pair the route-derived phase with its owner-supplied result contract."""
 
     if request.invocation_kind is not None:
-        assert request.result_contract is not None
         return request.invocation_kind.value, request.result_contract
     if request.subject_kind is ContextSubjectKind.CONVERSATION:
         if request.allowed_search_source_kinds == (ContextSourceKind.CONVERSATION,):
-            return "retrieval", ["retrieval", "text", "citations"]
-        return "conversation", "text"
+            return "retrieval", request.result_contract
+        return "conversation", request.result_contract
     phases = (
         "propose_revision",
         "synthesize",
@@ -3128,28 +3442,17 @@ def _invocation_phase_contract(
     )
     if phase is None:
         raise _execution_error(ContextExecutionErrorCode.INVALID_VALUE)
-    contract: object
-    if phase == "audit":
-        contract = ["audit", "approve-or-conflict"]
-    elif phase == "finalize":
-        contract = ["finalize", "path-and-replacement-list"]
-    else:
-        contract = "text"
-    return phase, contract
+    return phase, request.result_contract
 
 
 def _action_query(
-    phase_contract: tuple[str, object],
+    phase_contract: tuple[str, ContextJsonObjectResultContract],
     session: ContextInvocationSession,
     allowed_actions: tuple[str, ...],
 ) -> list[object]:
     """Build the authoritative phase, action, kind, limit, and result tuple."""
 
     phase, contract = phase_contract
-    if type(contract) is ContextJsonObjectResultContract:
-        wire_contract: object = [phase, contract.contract_id]
-    else:
-        wire_contract = list(contract) if type(contract) is list else contract
     return [
         phase,
         "".join(_ACTION_WIRE_CODES[action] for action in allowed_actions),
@@ -3162,7 +3465,7 @@ def _action_query(
             else ""
         ),
         session.action_limits(),
-        wire_contract,
+        [phase, contract.contract_id],
     ]
 
 
@@ -3173,7 +3476,7 @@ def _initial_payload(
     session: ContextInvocationSession,
     materials: tuple[ContextMaterial, ...],
     *,
-    phase_contract: tuple[str, object],
+    phase_contract: tuple[str, ContextJsonObjectResultContract],
     action_index: int,
     allowed_actions: tuple[str, ...],
     reference_context: tuple[Mapping[str, object], ...],
@@ -3412,7 +3715,7 @@ def _continuation_payload(
     binding: ContextInvocationBinding,
     session: ContextInvocationSession,
     *,
-    phase_contract: tuple[str, object],
+    phase_contract: tuple[str, ContextJsonObjectResultContract],
     action_index: int,
     allowed_actions: tuple[str, ...],
     observation: str,
@@ -3890,6 +4193,7 @@ class AgentContextService:
         retired_thread_id: str | None = None
         checkpoint_committed = False
         call_finalizer: ContextProviderCallFinalizer | None = None
+        response_rejection_code: ContextProviderTerminalCode | None = None
 
         def execution_event(
             kind: ContextExecutionEventKind,
@@ -3907,6 +4211,16 @@ class AgentContextService:
                 round_number=round_number,
                 **facts,
             )
+
+        def reject_response(
+            finalizer: ContextProviderCallFinalizer,
+            code: ContextProviderTerminalCode,
+        ) -> None:
+            """Finalize and retain one deterministic raw-response rejection."""
+
+            nonlocal response_rejection_code
+            _reject_provider_call_without_replacing(finalizer, code)
+            response_rejection_code = code
 
         try:
             stage = "source"
@@ -4205,7 +4519,18 @@ class AgentContextService:
                 )
                 call_id = f"{attempt_id}_call_{len(calls) + 1}"
                 correlation = _action_correlation(binding, action_index)
-                schema = _context_action_schema()
+                schema = _context_action_schema(
+                    correlation=correlation,
+                    allowed_actions=allowed_actions,
+                    result_contract=phase_contract[1],
+                    allowed_search_source_kinds=(
+                        request.allowed_search_source_kinds
+                    ),
+                    action_limits=action_session.action_limits(),
+                    max_used_handles=(
+                        self._action_policy.max_cumulative_handles
+                    ),
+                )
                 if observation is None:
                     payload, component_paths, reference_paths = _initial_payload(
                         binding,
@@ -4320,7 +4645,7 @@ class AgentContextService:
                     finalizer = call_finalizer
                     call_finalizer = None
                     if finalizer is not None:
-                        _reject_provider_call_without_replacing(
+                        reject_response(
                             finalizer,
                             ContextProviderTerminalCode.RESPONSE_CORRELATION_MISMATCH,
                         )
@@ -4342,7 +4667,7 @@ class AgentContextService:
                     finalizer = call_finalizer
                     call_finalizer = None
                     if finalizer is not None:
-                        _reject_provider_call_without_replacing(
+                        reject_response(
                             finalizer,
                             ContextProviderTerminalCode.RESPONSE_CORRELATION_MISMATCH,
                         )
@@ -4364,7 +4689,7 @@ class AgentContextService:
                     finalizer = call_finalizer
                     call_finalizer = None
                     if finalizer is not None:
-                        _reject_provider_call_without_replacing(
+                        reject_response(
                             finalizer,
                             ContextProviderTerminalCode.RESPONSE_CORRELATION_MISMATCH,
                         )
@@ -4418,7 +4743,7 @@ class AgentContextService:
                             finalizer = call_finalizer
                             call_finalizer = None
                             if finalizer is not None:
-                                _reject_provider_call_without_replacing(
+                                reject_response(
                                     finalizer,
                                     _context_provider_decode_terminal_code(
                                         decode_failure
@@ -4433,7 +4758,7 @@ class AgentContextService:
                             finalizer = call_finalizer
                             call_finalizer = None
                             if finalizer is not None:
-                                _reject_provider_call_without_replacing(
+                                reject_response(
                                     finalizer,
                                     ContextProviderTerminalCode.ACTION_EXHAUSTED,
                                 )
@@ -4443,7 +4768,7 @@ class AgentContextService:
                     finalizer = call_finalizer
                     call_finalizer = None
                     if finalizer is not None:
-                        _reject_provider_call_without_replacing(
+                        reject_response(
                             finalizer,
                             _context_provider_decode_terminal_code(decode_failure),
                         )
@@ -4619,17 +4944,17 @@ class AgentContextService:
                         if stage == "exhausted"
                         else _context_provider_decode_terminal_code(failure)
                     )
-                    _reject_provider_call_without_replacing(finalizer, code)
+                    reject_response(finalizer, code)
                 elif stage in {"action", "answer"} and isinstance(
                     failure,
                     ContextActionError,
                 ):
-                    _reject_provider_call_without_replacing(
+                    reject_response(
                         finalizer,
                         ContextProviderTerminalCode.RESPONSE_SEMANTIC_REJECTED,
                     )
                 elif stage == "answer_validation":
-                    _reject_provider_call_without_replacing(
+                    reject_response(
                         finalizer,
                         ContextProviderTerminalCode.ANSWER_VALIDATION_FAILED,
                     )
@@ -4750,6 +5075,7 @@ class AgentContextService:
                             and existing_facts.accounting is None
                         )
                     ),
+                    response_rejection_code=response_rejection_code,
                 ),
             )
             raise

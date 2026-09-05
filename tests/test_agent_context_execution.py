@@ -101,6 +101,35 @@ _PRIVATE_ANSWER = "PRIVATE_ACCEPTED_ANSWER_한🙂"
 _DEFINITION_DIGEST = "sha256:" + hashlib.sha256(b"definition").hexdigest()
 
 
+def _closed_schema(properties: dict[str, object]) -> dict[str, object]:
+    return {
+        "additionalProperties": False,
+        "properties": properties,
+        "required": list(properties),
+        "type": "object",
+    }
+
+
+_TEXT_RESULT_CONTRACT = ContextJsonObjectResultContract(
+    "text-v1",
+    _closed_schema({"content": {"type": "string"}}),
+)
+_LEAD_RESULT_CONTRACT = ContextJsonObjectResultContract(
+    "outcome-v1",
+    _closed_schema(
+        {
+            "kind": {"enum": ["answer"], "type": "string"},
+            "message": {"type": "string"},
+            "proposal": {"type": "null"},
+        }
+    ),
+)
+
+
+def _expected_text_answer(content: str = _PRIVATE_ANSWER) -> str:
+    return canonical_provider_json({"content": content}).decode("utf-8")
+
+
 def _digest(body: bytes) -> str:
     return f"sha256:{hashlib.sha256(body).hexdigest()}"
 
@@ -169,10 +198,12 @@ def _answer(
 ) -> str:
     return json.dumps(
         {
-            "a": "a",
-            "c": _correlation(call),
-            "d": [content],
-            "u": list(used_handles),
+            "correlation": _correlation(call),
+            "action": {
+                "kind": "answer",
+                "result": {"content": content},
+                "used_handles": list(used_handles),
+            },
         },
         ensure_ascii=False,
         separators=(",", ":"),
@@ -185,10 +216,14 @@ def _search(
 ) -> str:
     return json.dumps(
         {
-            "a": "s",
-            "c": _correlation(call),
-            "d": [["needle", ["w"]]],
-            "u": [],
+            "correlation": _correlation(call),
+            "action": {
+                "kind": "search",
+                "path_prefix": None,
+                "queries": [
+                    {"text": "needle", "source_kinds": ["writing_artifact"]}
+                ],
+            },
         },
         separators=(",", ":"),
     )
@@ -204,10 +239,8 @@ def _read_search_hit(
     provider.used_handles = (handle,)
     return json.dumps(
         {
-            "a": "r",
-            "c": _correlation(call),
-            "d": [handle],
-            "u": [],
+            "correlation": _correlation(call),
+            "action": {"kind": "read", "handles": [handle]},
         },
         separators=(",", ":"),
     )
@@ -229,16 +262,16 @@ def _lead_answer(
 ) -> str:
     return json.dumps(
         {
-            "a": "a",
-            "c": _correlation(call),
-            "d": [
-                {
+            "correlation": _correlation(call),
+            "action": {
+                "kind": "answer",
+                "result": {
                     "kind": "answer",
                     "message": "Visible lead answer.",
                     "proposal": None,
-                }
-            ],
-            "u": [],
+                },
+                "used_handles": [],
+            },
         },
         separators=(",", ":"),
     )
@@ -252,16 +285,16 @@ def _lead_answer_with_read(
     assert isinstance(framed, list) and framed[0] == "r"
     return json.dumps(
         {
-            "a": "a",
-            "c": _correlation(call),
-            "d": [
-                {
+            "correlation": _correlation(call),
+            "action": {
+                "kind": "answer",
+                "result": {
                     "kind": "answer",
                     "message": "Visible grounded lead answer.",
                     "proposal": None,
-                }
-            ],
-            "u": list(provider.used_handles),
+                },
+                "used_handles": list(provider.used_handles),
+            },
         },
         separators=(",", ":"),
     )
@@ -474,6 +507,7 @@ class ContextExecutionTestCase(unittest.IsolatedAsyncioTestCase):
             "operation_id": "operation",
             "result_correlation_id": "result",
             "materials": _materials(),
+            "result_contract": _TEXT_RESULT_CONTRACT,
         }
         values.update(overrides)
         return ContextInvocationRequest(**values)  # type: ignore[arg-type]
@@ -618,7 +652,7 @@ class ContextExecutionValueTests(ContextExecutionTestCase):
             self.assertIsNone(failure.__cause__)
 
     def test_lead_contract_pair_and_physical_call_limit_are_strict(self) -> None:
-        contract = ContextJsonObjectResultContract("outcome-v1")
+        contract = _LEAD_RESULT_CONTRACT
         request = self.request(
             invocation_kind=ContextInvocationKind.LEAD,
             result_contract=contract,
@@ -628,8 +662,8 @@ class ContextExecutionValueTests(ContextExecutionTestCase):
         self.assertEqual(request.result_contract, contract)
         self.assertEqual(request.physical_call_limit, 3)
         invalid = (
-            {"invocation_kind": ContextInvocationKind.LEAD},
-            {"result_contract": contract},
+            {"result_contract": None},
+            {"result_contract": object()},
             {"physical_call_limit": 0},
             {"physical_call_limit": 6},
             {"physical_call_limit": True},
@@ -758,7 +792,7 @@ class ContextExecutionValueTests(ContextExecutionTestCase):
         )
         self.assertEqual(
             baseline,
-            "sha256:b021416cd09fefe611ab2704a73a08a802d7349e55c4967a43d93c5d18a89a31",
+            "sha256:d8cfd92e6949dbb817dfb7253cff1865642493d46078fa1e042a64ef81740a18",
         )
 
         variants = {
@@ -817,7 +851,7 @@ class ContextExecutionLifecycleTests(ContextExecutionTestCase):
         self.publish()
         request = self.request(
             invocation_kind=ContextInvocationKind.LEAD,
-            result_contract=ContextJsonObjectResultContract("outcome-v1"),
+            result_contract=_LEAD_RESULT_CONTRACT,
             physical_call_limit=3,
         )
         provider = _ScriptedProvider(
@@ -866,7 +900,7 @@ class ContextExecutionLifecycleTests(ContextExecutionTestCase):
         )
         request = self.request(
             invocation_kind=ContextInvocationKind.LEAD,
-            result_contract=ContextJsonObjectResultContract("outcome-v1"),
+            result_contract=_LEAD_RESULT_CONTRACT,
             physical_call_limit=2,
             reference_operation_id="reference-operation",
             mandatory_references=(reference,),
@@ -902,7 +936,7 @@ class ContextExecutionLifecycleTests(ContextExecutionTestCase):
 
         provider.before_call = assert_reserved
         result = await self.invoke(provider, request)
-        self.assertEqual(result.answer, _PRIVATE_ANSWER)
+        self.assertEqual(result.answer, _expected_text_answer())
         self.assertEqual(len(provider.calls), 1)
         self.assertEqual(hook_calls, 1)
         self.assertEqual(provider.finalizers[0].calls, [("accepted", None)])
@@ -934,7 +968,7 @@ class ContextExecutionLifecycleTests(ContextExecutionTestCase):
         request = self.request()
         provider = _ScriptedProvider((_search, _read_search_hit, _answer_with_read))
         result = await self.invoke(provider, request)
-        self.assertEqual(result.answer, _PRIVATE_ANSWER)
+        self.assertEqual(result.answer, _expected_text_answer())
         self.assertEqual(len(provider.calls), 3)
         self.assertEqual(
             tuple(sorted(call.payload) for call in provider.calls),
@@ -952,27 +986,44 @@ class ContextExecutionLifecycleTests(ContextExecutionTestCase):
                     "sa",
                     "wcdo",
                     [4, 2, 2, 4, 8, 8, 16, 200],
-                    "text",
+                    ["conversation", "text-v1"],
                 ],
                 [
                     "conversation",
                     "sra",
                     "wcdo",
                     [3, 1, 2, 4, 7, 8, 16, 200],
-                    "text",
+                    ["conversation", "text-v1"],
                 ],
                 [
                     "conversation",
                     "sa",
                     "wcdo",
                     [2, 1, 1, 4, 7, 8, 15, 200],
-                    "text",
+                    ["conversation", "text-v1"],
                 ],
             ),
         )
         schemas = tuple(canonical_provider_json(call.schema) for call in provider.calls)
-        self.assertEqual(len(set(schemas)), 1)
-        self.assertEqual(len(schemas[0]), 218)
+        self.assertEqual(len(set(schemas)), 3)
+        for call in provider.calls:
+            outer = call.schema
+            self.assertIs(outer["additionalProperties"], False)
+            self.assertEqual(
+                outer["properties"]["correlation"]["enum"],
+                [_correlation(call)],
+            )
+            action = outer["properties"]["action"]
+            variants = action.get("anyOf", [action])
+            answer = next(
+                variant
+                for variant in variants
+                if variant["properties"]["kind"].get("enum") == ["answer"]
+            )
+            self.assertEqual(
+                answer["properties"]["used_handles"]["maxItems"],
+                CONTEXT_ACTION_POLICY.max_cumulative_handles,
+            )
         self.assertTrue(all(len(_correlation(call)) == 43 for call in provider.calls))
         self.assertEqual(len({_correlation(call) for call in provider.calls}), 3)
         self.assertEqual(
@@ -1125,7 +1176,7 @@ class ContextExecutionLifecycleTests(ContextExecutionTestCase):
         self.assertNotIn("p", provider.calls[3].payload)
         self.assertEqual(
             tuple(result.answer for result in (first, second, third, fourth)),
-            (_PRIVATE_ANSWER,) * 4,
+            (_expected_text_answer(),) * 4,
         )
 
     async def test_scope_provider_definition_and_policy_dimensions_bootstrap(
@@ -1396,17 +1447,19 @@ class ContextExecutionFailureTests(ContextExecutionTestCase):
         ) -> str:
             return json.dumps(
                 {
-                    "a": "r",
-                    "c": _correlation(call),
-                    "d": list(private_values),
-                    "u": [],
+                    "correlation": _correlation(call),
+                    "action": {
+                        "kind": "read",
+                        "handles": list(private_values),
+                    },
                 },
                 ensure_ascii=False,
                 separators=(",", ":"),
             )
 
+        self.publish()
         request = self.request(session_id="session-invalid-read")
-        provider = _ScriptedProvider((invalid_read,))
+        provider = _ScriptedProvider((_search, invalid_read))
         events: list[ContextExecutionEvent] = []
 
         with self.assertRaises(ContextExecutionError) as caught:
@@ -1416,7 +1469,7 @@ class ContextExecutionFailureTests(ContextExecutionTestCase):
         self.assertIs(failure.code, ContextExecutionErrorCode.MALFORMED_ACTION)
         self.assertEqual(
             str(failure),
-            "contextual provider read action is invalid: `d` must contain "
+            "contextual provider read action is invalid: `handles` must contain "
             "source handles returned by the preceding context search",
         )
         rendered = "\n".join(
@@ -1430,13 +1483,16 @@ class ContextExecutionFailureTests(ContextExecutionTestCase):
         for private in private_values:
             self.assertNotIn(private, rendered)
         self.assertEqual(
-            provider.finalizers[0].calls,
-            [
-                (
-                    "rejected",
-                    ContextProviderTerminalCode.MALFORMED_STRUCTURED_RESPONSE,
-                )
-            ],
+            tuple(finalizer.calls for finalizer in provider.finalizers),
+            (
+                [("accepted", None)],
+                [
+                    (
+                        "rejected",
+                        ContextProviderTerminalCode.MALFORMED_STRUCTURED_RESPONSE,
+                    )
+                ],
+            ),
         )
         self.assertEqual(len(provider.tainted), 1)
         self.assertEqual(provider.threads, {})
@@ -1466,10 +1522,8 @@ class ContextExecutionFailureTests(ContextExecutionTestCase):
         ) -> str:
             return json.dumps(
                 {
-                    "a": "r",
-                    "c": private_correlation,
-                    "d": [],
-                    "u": [],
+                    "correlation": private_correlation,
+                    "action": {"kind": "read", "handles": []},
                 },
                 ensure_ascii=False,
                 separators=(",", ":"),
@@ -1484,7 +1538,7 @@ class ContextExecutionFailureTests(ContextExecutionTestCase):
             ),
         )
         expected = (
-            "contextual provider response is invalid: `c` does not match the "
+            "contextual provider response is invalid: `correlation` does not match the "
             "current request correlation token"
         )
         for label, responses in cases:

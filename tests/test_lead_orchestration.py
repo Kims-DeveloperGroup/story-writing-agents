@@ -12,6 +12,7 @@ from collections.abc import Mapping
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, replace
 from typing import Awaitable, Callable
+from unittest import mock
 
 from story_writing_agents import RuntimeSession, StoryRuntime, Workspace
 from story_writing_agents import orchestrator as orchestrator_module
@@ -41,6 +42,7 @@ from story_writing_agents.conversations import (
     CollaborationEventKind,
     CollaborationInputKind,
     CollaborationInvocationKind,
+    CollaborationLeadJudgmentPayload,
     CollaborationLeadOutcomeFailureCode,
     CollaborationLeadOutcomeFailurePayload,
     CollaborationMessagePayload,
@@ -132,6 +134,11 @@ class _LeadContextProvider:
         self._reference_prepared = False
         self._reference_terminal = False
         self.used_handles: tuple[str, ...] = ()
+        self._threads = (
+            backend.context_threads
+            if backend.context_threads is not None
+            else self._threads
+        )
 
     @asynccontextmanager
     async def invocation(self, scope: object, policy_fingerprint: str):
@@ -180,6 +187,7 @@ class _LeadContextProvider:
         request: ContextReferencePreludeRequest,
     ) -> ContextReferencePreludeResult:
         self._require_active(request.scope, request.policy_fingerprint)
+        self.backend.reference_calls.append(request)
         if self.reference_read is None or self._reference_prepared:
             raise AssertionError("reference prelude did not receive exact authority")
         reference_request = self.reference_read.request
@@ -254,7 +262,9 @@ class _LeadContextProvider:
                     raise
         if isinstance(response, BaseException):
             raise response
-        thread_id = request.expected_thread_id or "thread-lead"
+        thread_id = request.expected_thread_id or (
+            f"thread-lead-{len(self.backend.finalizers) + 1}"
+        )
         self._threads[(request.scope, request.policy_fingerprint)] = thread_id
         finalizer = _Finalizer()
         self.backend.finalizers.append(finalizer)
@@ -295,7 +305,9 @@ class _LeadContextProvider:
         self._reference_terminal = True
 
     def taint_context_thread(self, scope: object, policy_fingerprint: str) -> None:
-        self._threads.pop((scope, policy_fingerprint), None)
+        thread_id = self._threads.pop((scope, policy_fingerprint), None)
+        if thread_id is not None:
+            self.backend.tainted_thread_ids.append(thread_id)
 
 
 class _LeadBoundAgent:
@@ -328,7 +340,12 @@ class _LeadBackend:
 
     backend_overrides: dict[str, str] = {}
 
-    def __init__(self, *, bind_failure: BaseException | None = None) -> None:
+    def __init__(
+        self,
+        *,
+        bind_failure: BaseException | None = None,
+        persist_context_threads: bool = False,
+    ) -> None:
         self.bind_failure = bind_failure
         self.scripts: list[tuple[_Response | _SubmittedFailure, ...]] = []
         self.scripts_by_agent: dict[
@@ -336,11 +353,16 @@ class _LeadBackend:
         ] = {}
         self.calls: list[ContextProviderCallRequest] = []
         self.call_records: list[tuple[str, ContextProviderCallRequest]] = []
+        self.reference_calls: list[ContextReferencePreludeRequest] = []
         self.reference_contexts: list[tuple[dict[str, object], ...]] = []
         self.reference_records: list[tuple[str, tuple[dict[str, object], ...]]] = []
         self.finalizers: list[_Finalizer] = []
         self.providers: list[_LeadContextProvider] = []
         self.definitions: list[object] = []
+        self.context_threads: dict[tuple[object, str], str] | None = (
+            {} if persist_context_threads else None
+        )
+        self.tainted_thread_ids: list[str] = []
 
     def enqueue(self, *responses: _Response | _SubmittedFailure) -> None:
         self.scripts.append(tuple(responses))
@@ -379,10 +401,12 @@ def _provider_envelope(
 ) -> str:
     return json.dumps(
         {
-            "a": "a",
-            "c": call.payload["c"],
-            "d": [value],
-            "u": list(used_handles),
+            "correlation": call.payload["c"],
+            "action": {
+                "kind": "answer",
+                "result": value,
+                "used_handles": list(used_handles),
+            },
         },
         ensure_ascii=False,
         separators=(",", ":"),
@@ -519,10 +543,17 @@ def _search_history(
 ) -> str:
     return json.dumps(
         {
-            "a": "s",
-            "c": call.payload["c"],
-            "d": [["visible lead response", ["c"]]],
-            "u": [],
+            "correlation": call.payload["c"],
+            "action": {
+                "kind": "search",
+                "path_prefix": None,
+                "queries": [
+                    {
+                        "text": "visible lead response",
+                        "source_kinds": ["conversation"],
+                    }
+                ],
+            },
         },
         separators=(",", ":"),
     )
@@ -538,10 +569,8 @@ def _read_history_hit(
     provider.used_handles = (handle,)
     return json.dumps(
         {
-            "a": "r",
-            "c": call.payload["c"],
-            "d": [handle],
-            "u": [],
+            "correlation": call.payload["c"],
+            "action": {"kind": "read", "handles": [handle]},
         },
         separators=(",", ":"),
     )
@@ -755,10 +784,12 @@ class LeadOutcomeAndProposalTests(LeadOrchestrationTestCase):
         def duplicate(call: ContextProviderCallRequest, _provider: object) -> str:
             correlation = call.payload["c"]
             return (
-                '{"a":"a","c":'
+                '{"correlation":'
                 + json.dumps(correlation)
-                + ',"d":[{"kind":"answer","kind":"question",'
-                '"message":"Visible.","proposal":null}],"u":[]}'
+                + ',"action":{"kind":"answer","result":'
+                + '{"kind":"answer","kind":"question",'
+                '"message":"Visible.","proposal":null}'
+                + ',"used_handles":[]}}'
             )
 
         invalid_values: tuple[object, ...] = (
@@ -790,31 +821,18 @@ class LeadOutcomeAndProposalTests(LeadOrchestrationTestCase):
             with self.subTest(index=index):
                 conversation_id = self.conversation(f"Invalid {index}")
                 self.backend.enqueue(script)
-                if index < 3:
-                    result = await self.runtime.lead_turn(
-                        self.session_id,
-                        conversation_id,
-                        "Reject a noncanonical outcome.",
-                    )
-                    self.assertIs(
-                        result.next_action,
-                        CollaborationNextAction.RETRY_LEAD_TURN,
-                    )
-                    self.assertIs(result.kind, LeadOutcomeKind.RECOMMENDATION)
-                else:
-                    result = await self.runtime.lead_turn(
-                        self.session_id,
-                        conversation_id,
-                        "Reject a noncanonical outcome.",
-                    )
-                    self.assertIs(
-                        result.state,
-                        CollaborationStepState.OUTCOME_UNKNOWN,
-                    )
-                    self.assertIs(
-                        result.next_action,
-                        CollaborationNextAction.INSPECT_AND_RESOLVE_OUTCOME,
-                    )
+                self.backend.enqueue(script)
+                result = await self.runtime.lead_turn(
+                    self.session_id,
+                    conversation_id,
+                    "Reject a noncanonical outcome.",
+                )
+                self.assertIsNone(result.state)
+                self.assertIs(
+                    result.next_action,
+                    CollaborationNextAction.RETRY_LEAD_TURN,
+                )
+                self.assertIs(result.kind, LeadOutcomeKind.RECOMMENDATION)
                 history = self.history(conversation_id)
                 self.assertFalse(
                     any(
@@ -822,17 +840,16 @@ class LeadOutcomeAndProposalTests(LeadOrchestrationTestCase):
                         for event in history
                     )
                 )
-                if index < 3:
-                    failures = tuple(
-                        event.payload
-                        for event in history
-                        if type(event.payload) is CollaborationLeadOutcomeFailurePayload
-                    )
-                    self.assertEqual(len(failures), 1)
-                    self.assertIs(
-                        failures[0].code,
-                        CollaborationLeadOutcomeFailureCode.EVIDENCE_VALIDATION_REJECTED,
-                    )
+                failures = tuple(
+                    event.payload
+                    for event in history
+                    if type(event.payload) is CollaborationLeadOutcomeFailurePayload
+                )
+                self.assertEqual(len(failures), 1)
+                self.assertIs(
+                    failures[0].code,
+                    CollaborationLeadOutcomeFailureCode.PROVIDER_RESULT_REJECTED,
+                )
                 self.assertFalse(
                     any(
                         type(event.payload) is CollaborationMessagePayload
@@ -1009,6 +1026,7 @@ class LeadOutcomeAndProposalTests(LeadOrchestrationTestCase):
         for label, text, assignments in cases:
             with self.subTest(label=label):
                 conversation_id = self.conversation(label)
+                self.backend.enqueue(_proposal_outcome(assignments))
                 self.backend.enqueue(_proposal_outcome(assignments))
                 result = await self.runtime.lead_turn(
                     self.session_id,
@@ -1232,6 +1250,556 @@ class LeadDecisionAuthorityTests(LeadOrchestrationTestCase):
 
 
 class LeadRecoveryAndAccountingTests(LeadOrchestrationTestCase):
+    async def test_rejected_returned_result_closes_and_next_turn_uses_one_fresh_call(
+        self,
+    ) -> None:
+        rejected_body = "REJECTED_BODY_MUST_NOT_PERSIST_OR_BE_RESENT"
+
+        def complete_value(message: str) -> dict[str, object]:
+            return {
+                "kind": "answer",
+                "message": message,
+                "scope": "workflow_meta",
+                "evidence_status": "not_applicable",
+                "evidence_ids": [],
+                "artifact_intent": None,
+                "proposal": None,
+            }
+
+        def malformed(call: ContextProviderCallRequest, _provider: object) -> str:
+            return json.dumps(
+                {
+                    "correlation": call.payload["c"],
+                    "action": {
+                        "kind": "answer",
+                        "result": [complete_value(rejected_body)],
+                        "used_handles": [],
+                    },
+                },
+                separators=(",", ":"),
+            )
+
+        def correlation_mismatch(
+            call: ContextProviderCallRequest,
+            _provider: object,
+        ) -> str:
+            response = json.loads(
+                _provider_envelope(call, complete_value(rejected_body))
+            )
+            response["correlation"] = "wrong_correlation"
+            return json.dumps(response, separators=(",", ":"))
+
+        def semantic_rejection(
+            call: ContextProviderCallRequest,
+            _provider: object,
+        ) -> str:
+            observation = call.payload["o"]
+            handle = observation[3][0][5]  # type: ignore[index]
+            return _provider_envelope(
+                call,
+                complete_value(rejected_body),
+                used_handles=(handle,),
+            )
+
+        def search_current_user(
+            call: ContextProviderCallRequest,
+            _provider: object,
+        ) -> str:
+            return json.dumps(
+                {
+                    "correlation": call.payload["c"],
+                    "action": {
+                        "kind": "search",
+                        "path_prefix": None,
+                        "queries": [
+                            {
+                                "text": "One ordinary user message",
+                                "source_kinds": ["conversation"],
+                            }
+                        ],
+                    },
+                },
+                separators=(",", ":"),
+            )
+
+        def incomplete(call: ContextProviderCallRequest, _provider: object) -> str:
+            return _provider_envelope(
+                call,
+                {
+                    "kind": "answer",
+                    "message": rejected_body,
+                    "scope": "workflow_meta",
+                    "evidence_status": "not_applicable",
+                    "artifact_intent": None,
+                },
+            )
+
+        cases = (
+            (
+                "malformed",
+                (malformed,),
+                ContextProviderTerminalCode.MALFORMED_STRUCTURED_RESPONSE,
+            ),
+            (
+                "correlation",
+                (correlation_mismatch,),
+                ContextProviderTerminalCode.RESPONSE_CORRELATION_MISMATCH,
+            ),
+            (
+                "semantic",
+                (search_current_user, semantic_rejection),
+                ContextProviderTerminalCode.RESPONSE_SEMANTIC_REJECTED,
+            ),
+            (
+                "malformed_result",
+                (incomplete,),
+                ContextProviderTerminalCode.MALFORMED_STRUCTURED_RESPONSE,
+            ),
+        )
+        for label, initial_script, rejection_code in cases:
+            with self.subTest(label=label):
+                backend = _LeadBackend(persist_context_threads=True)
+                runtime = StoryRuntime(self.workspace, backend)  # type: ignore[arg-type]
+                conversation_id = self.conversation(f"Same-turn correction {label}")
+                backend.enqueue(*initial_script)
+                correction_records: list[tuple[str, str, str]] = []
+
+                def corrected(
+                    call: ContextProviderCallRequest,
+                    _provider: object,
+                ) -> str:
+                    material = _workflow_material(call.payload)
+                    correction = material["response_correction"]
+                    correction_records.append(
+                        (
+                            correction["rejection_code"],  # type: ignore[index]
+                            correction["instruction"],  # type: ignore[index]
+                            call.payload["q"][1],  # type: ignore[index]
+                        )
+                    )
+                    return _provider_envelope(
+                        call,
+                        complete_value(f"Corrected {label} answer."),
+                    )
+
+                backend.enqueue(corrected)
+                result = await runtime.lead_turn(
+                    self.session_id,
+                    conversation_id,
+                    "One ordinary user message.",
+                )
+
+                history = self.history(conversation_id)
+                call_events = tuple(
+                    event.payload
+                    for event in history
+                    if type(event.payload) is CollaborationProviderCallPayload
+                )
+                submitted = tuple(
+                    event
+                    for event in call_events
+                    if event.state is CollaborationProviderCallState.SUBMITTED
+                )
+                self.assertEqual(
+                    correction_records,
+                    [(rejection_code.value, mock.ANY, "a")],
+                    (
+                        result,
+                        tuple(item.calls for item in backend.finalizers),
+                        tuple(call.payload["q"] for call in backend.calls),
+                    ),
+                )
+                self.assertIs(result.kind, LeadOutcomeKind.ANSWER)
+                self.assertEqual(result.message, f"Corrected {label} answer.")
+                self.assertIs(
+                    result.next_action,
+                    CollaborationNextAction.CONTINUE_WITH_LEAD,
+                )
+                self.assertEqual(len(backend.calls), len(initial_script) + 1)
+                self.assertEqual(len(backend.providers), 2)
+                self.assertIn("Return ANSWER now", correction_records[0][1])
+                self.assertIsNone(backend.calls[-1].expected_thread_id)
+                self.assertEqual(
+                    backend.finalizers[-2].calls,
+                    [("rejected", rejection_code)],
+                )
+                self.assertEqual(backend.finalizers[-1].calls, [("accepted", None)])
+                self.assertEqual(backend.tainted_thread_ids, ["thread-lead-1"])
+                self.assertEqual(
+                    tuple(event.ordinal for event in submitted),
+                    tuple(range(1, len(submitted) + 1)),
+                )
+                self.assertEqual(len({event.invocation_id for event in submitted}), 1)
+                self.assertEqual(
+                    tuple(
+                        event.payload.content
+                        for event in history
+                        if type(event.payload) is CollaborationMessagePayload
+                        and event.sender.kind.value == "user"
+                    ),
+                    ("One ordinary user message.",),
+                )
+                self.assertEqual(
+                    tuple(
+                        event.payload.message
+                        for event in history
+                        if type(event.payload) is CollaborationLeadJudgmentPayload
+                    ),
+                    (f"Corrected {label} answer.",),
+                )
+                self.assertFalse(
+                    any(
+                        type(event.payload) is CollaborationLeadOutcomeFailurePayload
+                        for event in history
+                    )
+                )
+                self.assertNotIn(rejected_body, repr(history))
+                self.assertNotIn(
+                    rejected_body,
+                    json.dumps(dict(backend.calls[-1].payload), ensure_ascii=False),
+                )
+
+        backend = _LeadBackend()
+        runtime = StoryRuntime(self.workspace, backend)  # type: ignore[arg-type]
+        conversation_id = self.conversation("No correction needed")
+        backend.enqueue(_visible_outcome("answer", "First response accepted."))
+        result = await runtime.lead_turn(
+            self.session_id,
+            conversation_id,
+            "Accept the first valid answer.",
+        )
+        self.assertEqual(result.message, "First response accepted.")
+        self.assertEqual(len(backend.calls), 1)
+        self.assertEqual(backend.finalizers[0].calls, [("accepted", None)])
+
+    async def test_pre_submission_correction_failure_closes_first_rejected_call(
+        self,
+    ) -> None:
+        backend = _LeadBackend(persist_context_threads=True)
+        runtime = StoryRuntime(self.workspace, backend)  # type: ignore[arg-type]
+        conversation_id = self.conversation("Pre-submission correction failure")
+        rejected_body = "PRE_SUBMISSION_REJECTED_BODY"
+
+        def malformed(call: ContextProviderCallRequest, _provider: object) -> str:
+            return json.dumps(
+                {
+                    "correlation": call.payload["c"],
+                    "action": {
+                        "kind": "answer",
+                        "result": [{"message": rejected_body}],
+                        "used_handles": [],
+                    },
+                },
+                separators=(",", ":"),
+            )
+
+        backend.enqueue(malformed)
+        backend.enqueue(RuntimeError("corrective call failed before submission"))
+        result = await runtime.lead_turn(
+            self.session_id,
+            conversation_id,
+            "Close the rejected result without replay.",
+        )
+
+        history = self.history(conversation_id)
+        prepared = tuple(
+            event.payload
+            for event in history
+            if type(event.payload) is CollaborationProviderCallPayload
+            and event.payload.state is CollaborationProviderCallState.PREPARED
+        )
+        submitted = tuple(
+            event.payload
+            for event in history
+            if type(event.payload) is CollaborationProviderCallPayload
+            and event.payload.state is CollaborationProviderCallState.SUBMITTED
+        )
+        failures = tuple(
+            event.payload
+            for event in history
+            if type(event.payload) is CollaborationLeadOutcomeFailurePayload
+        )
+        self.assertIsNone(result.state)
+        self.assertIs(result.next_action, CollaborationNextAction.RETRY_LEAD_TURN)
+        self.assertEqual(len(backend.calls), 2)
+        self.assertEqual(len(backend.providers), 2)
+        self.assertEqual(tuple(event.ordinal for event in prepared), (1, 2))
+        self.assertEqual(tuple(event.ordinal for event in submitted), (1,))
+        self.assertEqual(prepared[0].call_id, submitted[0].call_id)
+        self.assertNotEqual(prepared[1].call_id, submitted[0].call_id)
+        self.assertEqual(len(failures), 1)
+        self.assertIs(
+            failures[0].code,
+            CollaborationLeadOutcomeFailureCode.PROVIDER_RESULT_REJECTED,
+        )
+        self.assertEqual(failures[0].invocation_id, submitted[0].invocation_id)
+        self.assertEqual(failures[0].call_id, submitted[0].call_id)
+        self.assertEqual(
+            project_collaboration_history(history).physical_calls_spent,
+            1,
+        )
+        self.assertEqual(
+            tuple(finalizer.calls for finalizer in backend.finalizers),
+            (
+                [
+                    (
+                        "rejected",
+                        ContextProviderTerminalCode.MALFORMED_STRUCTURED_RESPONSE,
+                    )
+                ],
+            ),
+        )
+        self.assertEqual(backend.tainted_thread_ids, ["thread-lead-1"])
+        self.assertNotIn(rejected_body, repr(history))
+
+        backend.enqueue(_visible_outcome("answer", "Fresh turn accepted."))
+        fresh_result = await runtime.lead_turn(
+            self.session_id,
+            conversation_id,
+            "Proceed with one fresh turn.",
+        )
+        fresh_history = self.history(conversation_id)
+        self.assertIs(fresh_result.kind, LeadOutcomeKind.ANSWER)
+        self.assertEqual(fresh_result.message, "Fresh turn accepted.")
+        self.assertEqual(len(backend.calls), 3)
+        self.assertIsNone(backend.calls[-1].expected_thread_id)
+        self.assertEqual(backend.finalizers[-1].calls, [("accepted", None)])
+        self.assertEqual(backend.tainted_thread_ids, ["thread-lead-1"])
+        self.assertEqual(
+            tuple(
+                event.payload.content
+                for event in fresh_history
+                if type(event.payload) is CollaborationMessagePayload
+                and event.sender.kind.value == "user"
+            ),
+            (
+                "Close the rejected result without replay.",
+                "Proceed with one fresh turn.",
+            ),
+        )
+        self.assertNotIn(rejected_body, repr(fresh_history))
+        self.assertNotIn(
+            rejected_body,
+            json.dumps(dict(backend.calls[-1].payload), ensure_ascii=False),
+        )
+
+    async def test_second_returned_rejection_closes_against_last_call(self) -> None:
+        backend = _LeadBackend(persist_context_threads=True)
+        runtime = StoryRuntime(self.workspace, backend)  # type: ignore[arg-type]
+        conversation_id = self.conversation("Second rejection closes")
+
+        def malformed(message: str):
+            def respond(call: ContextProviderCallRequest, _provider: object) -> str:
+                return json.dumps(
+                    {
+                        "correlation": call.payload["c"],
+                        "action": {
+                            "kind": "answer",
+                            "result": [{"message": message}],
+                            "used_handles": [],
+                        },
+                    },
+                    separators=(",", ":"),
+                )
+
+            return respond
+
+        backend.enqueue(malformed("FIRST_REJECTED_BODY"))
+        backend.enqueue(malformed("SECOND_REJECTED_BODY"))
+        result = await runtime.lead_turn(
+            self.session_id,
+            conversation_id,
+            "One message with two rejected results.",
+        )
+
+        history = self.history(conversation_id)
+        submitted = tuple(
+            event.payload
+            for event in history
+            if type(event.payload) is CollaborationProviderCallPayload
+            and event.payload.state is CollaborationProviderCallState.SUBMITTED
+        )
+        failures = tuple(
+            event.payload
+            for event in history
+            if type(event.payload) is CollaborationLeadOutcomeFailurePayload
+        )
+        self.assertIs(result.next_action, CollaborationNextAction.RETRY_LEAD_TURN)
+        self.assertEqual(len(backend.calls), 2)
+        self.assertEqual(len(backend.providers), 2)
+        self.assertEqual(tuple(event.ordinal for event in submitted), (1, 2))
+        self.assertEqual(len({event.invocation_id for event in submitted}), 1)
+        self.assertEqual(len(failures), 1)
+        self.assertIs(
+            failures[0].code,
+            CollaborationLeadOutcomeFailureCode.PROVIDER_RESULT_REJECTED,
+        )
+        self.assertEqual(failures[0].invocation_id, submitted[-1].invocation_id)
+        self.assertEqual(failures[0].call_id, submitted[-1].call_id)
+        self.assertEqual(
+            tuple(finalizer.calls for finalizer in backend.finalizers),
+            (
+                [
+                    (
+                        "rejected",
+                        ContextProviderTerminalCode.MALFORMED_STRUCTURED_RESPONSE,
+                    )
+                ],
+                [
+                    (
+                        "rejected",
+                        ContextProviderTerminalCode.MALFORMED_STRUCTURED_RESPONSE,
+                    )
+                ],
+            ),
+        )
+        self.assertEqual(
+            backend.tainted_thread_ids,
+            ["thread-lead-1", "thread-lead-2"],
+        )
+        self.assertNotIn("FIRST_REJECTED_BODY", repr(history))
+        self.assertNotIn("SECOND_REJECTED_BODY", repr(history))
+
+    async def test_reference_response_correction_renews_authority(self) -> None:
+        backend = _LeadBackend(persist_context_threads=True)
+        runtime = StoryRuntime(self.workspace, backend)  # type: ignore[arg-type]
+        conversation_id = self.conversation("Referenced correction")
+
+        def incomplete(call: ContextProviderCallRequest, _provider: object) -> str:
+            return _provider_envelope(
+                call,
+                {
+                    "kind": "answer",
+                    "message": "Incomplete referenced result.",
+                    "scope": "workflow_meta",
+                    "evidence_status": "not_applicable",
+                    "artifact_intent": None,
+                },
+            )
+
+        backend.enqueue(incomplete)
+        backend.enqueue(_visible_outcome("answer", "Corrected referenced answer."))
+        result = await runtime.lead_turn(
+            self.session_id,
+            conversation_id,
+            "Review ${core_documents/global_outline.md} before answering.",
+        )
+
+        history = self.history(conversation_id)
+        submitted = tuple(
+            event.payload
+            for event in history
+            if type(event.payload) is CollaborationProviderCallPayload
+            and event.payload.state is CollaborationProviderCallState.SUBMITTED
+        )
+        self.assertEqual(result.message, "Corrected referenced answer.")
+        self.assertEqual(len(backend.providers), 2)
+        self.assertEqual(len(backend.calls), 2)
+        self.assertEqual(len(backend.reference_contexts), 2)
+        self.assertEqual(backend.reference_contexts[0], backend.reference_contexts[1])
+        first_request = backend.providers[0].reference_read.request
+        second_request = backend.providers[1].reference_read.request
+        self.assertEqual(
+            first_request.correlation.operation_id,
+            second_request.correlation.operation_id,
+        )
+        self.assertNotEqual(
+            first_request.correlation.invocation_id,
+            second_request.correlation.invocation_id,
+        )
+        self.assertEqual(
+            (
+                first_request.correlation.invocation_ordinal,
+                second_request.correlation.invocation_ordinal,
+            ),
+            (1, 2),
+        )
+        self.assertEqual(first_request.references, second_request.references)
+        self.assertEqual(
+            backend.providers[0].reference_operation_id,
+            backend.providers[1].reference_operation_id,
+        )
+        self.assertEqual(tuple(event.ordinal for event in submitted), (1, 2, 3, 4))
+        self.assertEqual(len({event.invocation_id for event in submitted}), 1)
+        self.assertEqual(len(backend.reference_calls), 2)
+        self.assertIsNone(backend.reference_calls[1].expected_thread_id)
+        self.assertEqual(backend.calls[1].expected_thread_id, "thread-reference")
+        self.assertEqual(
+            backend.finalizers[0].calls,
+            [
+                (
+                    "rejected",
+                    ContextProviderTerminalCode.MALFORMED_STRUCTURED_RESPONSE,
+                )
+            ],
+        )
+        self.assertEqual(backend.finalizers[1].calls, [("accepted", None)])
+        self.assertFalse(
+            any(
+                type(event.payload) is CollaborationLeadOutcomeFailurePayload
+                for event in history
+            )
+        )
+
+    async def test_response_correction_requires_capacity(self) -> None:
+        def malformed(call: ContextProviderCallRequest, _provider: object) -> str:
+            return json.dumps(
+                {
+                    "correlation": call.payload["c"],
+                    "action": {
+                        "kind": "answer",
+                        "result": [],
+                        "used_handles": [],
+                    },
+                },
+                separators=(",", ":"),
+            )
+
+        cases = (
+            (
+                "correctable_without_capacity",
+                malformed,
+                ContextProviderTerminalCode.MALFORMED_STRUCTURED_RESPONSE,
+            ),
+            (
+                "action_exhausted",
+                _search_history,
+                ContextProviderTerminalCode.ACTION_EXHAUSTED,
+            ),
+        )
+        for label, response, expected_code in cases:
+            with self.subTest(label=label):
+                backend = _LeadBackend()
+                runtime = StoryRuntime(self.workspace, backend)  # type: ignore[arg-type]
+                conversation_id = self.conversation(label)
+                backend.enqueue(response)
+                with mock.patch.object(
+                    orchestrator_module,
+                    "COLLABORATION_PHYSICAL_CALL_LIMIT",
+                    1,
+                ):
+                    result = await runtime.lead_turn(
+                        self.session_id,
+                        conversation_id,
+                        "Do not exceed the remaining capacity.",
+                    )
+                self.assertIs(
+                    result.next_action,
+                    CollaborationNextAction.RETRY_LEAD_TURN,
+                )
+                self.assertEqual(len(backend.calls), 1)
+                self.assertEqual(len(backend.providers), 1)
+                self.assertEqual(
+                    backend.finalizers[0].calls,
+                    [("rejected", expected_code)],
+                )
+                failures = tuple(
+                    event.payload
+                    for event in self.history(conversation_id)
+                    if type(event.payload) is CollaborationLeadOutcomeFailurePayload
+                )
+                self.assertEqual(len(failures), 1)
+
     async def test_restart_after_completed_execution_accepts_a_new_lead_turn(
         self,
     ) -> None:
@@ -1296,70 +1864,166 @@ class LeadRecoveryAndAccountingTests(LeadOrchestrationTestCase):
             0,
         )
 
-        submitted_id = self.conversation("Submitted")
-        self.backend.enqueue(_SubmittedFailure(RuntimeError("submitted failure")))
-        submitted_result = await self.runtime.lead_turn(
-            self.session_id,
-            submitted_id,
-            "Leave SUBMITTED durable.",
+        submitted_cases = (
+            ("missing", _SubmittedFailure(EOFError("missing response"))),
+            ("cancelled", _SubmittedFailure(asyncio.CancelledError())),
+            (
+                "timed_out",
+                _SubmittedFailure(TimeoutError("provider timed out"), timed_out=True),
+            ),
+            ("crashed", _SubmittedFailure(ConnectionError("provider crashed"))),
+            (
+                "submission_uncertain",
+                _SubmittedFailure(
+                    RuntimeError("submission uncertain"),
+                    submission_uncertain=True,
+                ),
+            ),
         )
-        submitted_calls = len(self.backend.calls)
-        submitted_events = self.history(submitted_id)
-        self.assertIs(submitted_result.state, CollaborationStepState.OUTCOME_UNKNOWN)
-        self.assertIs(
-            submitted_result.next_action,
-            CollaborationNextAction.INSPECT_AND_RESOLVE_OUTCOME,
-        )
-        for fragment in (
-            "submitted",
-            "no reliable result",
-            "Do not retry or replay",
-            "state is preserved",
-            "another conversation",
-        ):
-            self.assertIn(fragment, submitted_result.message)
+        for label, submitted_failure in submitted_cases:
+            with self.subTest(initial_submitted=label):
+                backend = _LeadBackend()
+                runtime = StoryRuntime(self.workspace, backend)  # type: ignore[arg-type]
+                submitted_id = self.conversation(f"Initial submitted {label}")
+                original = f"Leave initial {label} SUBMITTED durable."
+                backend.enqueue(submitted_failure)
+                submitted_result = await runtime.lead_turn(
+                    self.session_id,
+                    submitted_id,
+                    original,
+                )
+                submitted_events = self.history(submitted_id)
+                self.assertIs(
+                    submitted_result.state,
+                    CollaborationStepState.OUTCOME_UNKNOWN,
+                )
+                self.assertIs(
+                    submitted_result.next_action,
+                    CollaborationNextAction.INSPECT_AND_RESOLVE_OUTCOME,
+                )
+                for fragment in (
+                    "submitted",
+                    "no reliable result",
+                    "Do not retry or replay",
+                    "state is preserved",
+                    "another conversation",
+                ):
+                    self.assertIn(fragment, submitted_result.message)
+                restart_backend = _LeadBackend()
+                restarted = StoryRuntime(
+                    self.workspace,
+                    restart_backend,  # type: ignore[arg-type]
+                )
+                submitted_recovery = await restarted.lead_turn(
+                    self.session_id,
+                    submitted_id,
+                    f"Do not replay initial {label}.",
+                )
+                self.assertEqual(
+                    (
+                        submitted_recovery.state,
+                        submitted_recovery.next_action,
+                        submitted_recovery.message,
+                        submitted_recovery.step_id,
+                        submitted_recovery.turn_id,
+                    ),
+                    (
+                        submitted_result.state,
+                        submitted_result.next_action,
+                        submitted_result.message,
+                        submitted_result.step_id,
+                        submitted_result.turn_id,
+                    ),
+                )
+                self.assertEqual(len(backend.calls), 1)
+                self.assertEqual(restart_backend.calls, [])
+                self.assertEqual(self.history(submitted_id), submitted_events)
+                self.assertEqual(
+                    sum(
+                        event.kind is CollaborationEventKind.MESSAGE
+                        and isinstance(event.payload, CollaborationMessagePayload)
+                        and event.payload.content == original
+                        for event in submitted_events
+                    ),
+                    1,
+                )
+                self.assertEqual(
+                    project_collaboration_history(
+                        submitted_events
+                    ).physical_calls_spent,
+                    1,
+                )
 
-        restart_backend = _LeadBackend()
-        restarted = StoryRuntime(self.workspace, restart_backend)  # type: ignore[arg-type]
-        submitted_recovery = await restarted.lead_turn(
-            self.session_id,
-            submitted_id,
-            "Do not replay SUBMITTED.",
-        )
-        self.assertEqual(
-            (
-                submitted_recovery.state,
-                submitted_recovery.next_action,
-                submitted_recovery.message,
-                submitted_recovery.step_id,
-                submitted_recovery.turn_id,
-            ),
-            (
-                submitted_result.state,
-                submitted_result.next_action,
-                submitted_result.message,
-                submitted_result.step_id,
-                submitted_result.turn_id,
-            ),
-        )
-        self.assertEqual(len(self.backend.calls), submitted_calls)
-        self.assertEqual(restart_backend.calls, [])
-        self.assertEqual(self.history(submitted_id), submitted_events)
-        self.assertEqual(
-            sum(
-                event.kind is CollaborationEventKind.MESSAGE
-                and isinstance(event.payload, CollaborationMessagePayload)
-                and event.payload.content == "Leave SUBMITTED durable."
-                for event in submitted_events
-            ),
-            1,
-        )
-        self.assertEqual(
-            project_collaboration_history(
-                submitted_events
-            ).physical_calls_spent,
-            1,
-        )
+        def malformed(call: ContextProviderCallRequest, _provider: object) -> str:
+            return json.dumps(
+                {
+                    "correlation": call.payload["c"],
+                    "action": {
+                        "kind": "answer",
+                        "result": [],
+                        "used_handles": [],
+                    },
+                },
+                separators=(",", ":"),
+            )
+
+        for label, submitted_failure in submitted_cases:
+            with self.subTest(corrective_submitted=label):
+                backend = _LeadBackend(persist_context_threads=True)
+                runtime = StoryRuntime(self.workspace, backend)  # type: ignore[arg-type]
+                submitted_id = self.conversation(f"Corrective submitted {label}")
+                original = f"Correct once before corrective {label}."
+                backend.enqueue(malformed)
+                backend.enqueue(submitted_failure)
+                submitted_result = await runtime.lead_turn(
+                    self.session_id,
+                    submitted_id,
+                    original,
+                )
+                submitted_events = self.history(submitted_id)
+                self.assertIs(
+                    submitted_result.state,
+                    CollaborationStepState.OUTCOME_UNKNOWN,
+                )
+                self.assertIs(
+                    submitted_result.next_action,
+                    CollaborationNextAction.INSPECT_AND_RESOLVE_OUTCOME,
+                )
+                self.assertEqual(len(backend.calls), 2)
+                self.assertEqual(len(backend.providers), 2)
+                self.assertEqual(
+                    backend.finalizers[0].calls,
+                    [
+                        (
+                            "rejected",
+                            ContextProviderTerminalCode.MALFORMED_STRUCTURED_RESPONSE,
+                        )
+                    ],
+                )
+                self.assertEqual(backend.tainted_thread_ids, ["thread-lead-1"])
+                self.assertFalse(
+                    any(
+                        type(event.payload) is CollaborationLeadOutcomeFailurePayload
+                        for event in submitted_events
+                    )
+                )
+                restart_backend = _LeadBackend()
+                restarted = StoryRuntime(
+                    self.workspace,
+                    restart_backend,  # type: ignore[arg-type]
+                )
+                recovered = await restarted.lead_turn(
+                    self.session_id,
+                    submitted_id,
+                    f"Do not replay corrective {label}.",
+                )
+                self.assertIs(recovered.state, CollaborationStepState.OUTCOME_UNKNOWN)
+                self.assertIs(
+                    recovered.next_action,
+                    CollaborationNextAction.INSPECT_AND_RESOLVE_OUTCOME,
+                )
+                self.assertEqual(restart_backend.calls, [])
+                self.assertEqual(self.history(submitted_id), submitted_events)
 
     async def test_unresolved_running_becomes_outcome_unknown_without_provider(
         self,

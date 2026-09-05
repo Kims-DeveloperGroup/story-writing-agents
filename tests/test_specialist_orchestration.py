@@ -904,13 +904,21 @@ class SpecialistAccountingAcceptanceTests(LeadOrchestrationTestCase):
         def search_current_proposal(call, _provider):
             return json.dumps(
                 {
-                    "a": "s",
-                    "c": call.payload["c"],
-                    "d": [
-                        ["own plot state needle", ["o"]],
-                        ["sibling reply secret", ["o"]],
-                    ],
-                    "u": [],
+                    "correlation": call.payload["c"],
+                    "action": {
+                        "kind": "search",
+                        "path_prefix": None,
+                        "queries": [
+                            {
+                                "text": "own plot state needle",
+                                "source_kinds": ["own_agent_state"],
+                            },
+                            {
+                                "text": "sibling reply secret",
+                                "source_kinds": ["own_agent_state"],
+                            },
+                        ],
+                    },
                 },
                 separators=(",", ":"),
             )

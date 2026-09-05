@@ -581,6 +581,91 @@ class CollaborationConfirmationAndRecoveryTests(unittest.TestCase):
         self.assertEqual(projection.current_turn_id, submitted[-1].turn_id)
         self.assertEqual(projection.current_step_id, submitted[-1].step_id)
 
+    def test_rejected_submitted_lead_projects_retry_and_readable_closure(
+        self,
+    ) -> None:
+        message = make_draft(
+            "rejected_user_message",
+            CollaborationEventKind.MESSAGE,
+            USER,
+            LEAD,
+            CollaborationMessagePayload("Reject the returned provider result."),
+        )
+        calls = provider_call_drafts(
+            invocation_id="rejected_invocation",
+            call_id="rejected_call",
+            role="lead_orchestrator",
+            recipient=LEAD,
+            invocation_kind=CollaborationInvocationKind.LEAD,
+        )
+        prepared = store_batch(
+            (),
+            make_batch((), "rejected_prepared_batch", message, calls[0]),
+        )
+        submitted = store_batch(
+            prepared,
+            make_batch(prepared, "rejected_submitted_batch", calls[1]),
+        )
+        closed = store_batch(
+            submitted,
+            make_batch(
+                submitted,
+                "rejected_closed_batch",
+                make_draft(
+                    "rejected_closure",
+                    CollaborationEventKind.LEAD_OUTCOME_FAILURE,
+                    RUNTIME,
+                    USER,
+                    CollaborationLeadOutcomeFailurePayload(
+                        CollaborationLeadOutcomeFailureCode.PROVIDER_RESULT_REJECTED,
+                        "rejected_invocation",
+                        "rejected_call",
+                    ),
+                ),
+            ),
+        )
+
+        projection = project_collaboration_history(closed)
+        self.assertIsNone(projection.current_state)
+        self.assertIsNone(projection.current_proposal)
+        self.assertIs(
+            projection.next_safe_action,
+            CollaborationNextAction.RETRY_LEAD_TURN,
+        )
+        self.assertEqual(projection.physical_calls_spent, 1)
+        readable = project_collaboration_readable_history(closed)
+        closure_record = readable[-1]
+        self.assertIs(
+            closure_record.kind,
+            CollaborationEventKind.LEAD_OUTCOME_FAILURE,
+        )
+        self.assertEqual(
+            tuple((field.key, field.text) for field in closure_record.fields),
+            (
+                (
+                    CollaborationReadableFieldKey.LEAD_OUTCOME_FAILURE,
+                    "provider_result_rejected",
+                ),
+            ),
+        )
+
+        wrong_call = make_batch(
+            submitted,
+            "wrong_rejected_closed_batch",
+            make_draft(
+                "wrong_rejected_closure",
+                CollaborationEventKind.LEAD_OUTCOME_FAILURE,
+                RUNTIME,
+                USER,
+                CollaborationLeadOutcomeFailurePayload(
+                    CollaborationLeadOutcomeFailureCode.PROVIDER_RESULT_REJECTED,
+                    "rejected_invocation",
+                    "other_call",
+                ),
+            ),
+        )
+        _assert_invalid(self, submitted, wrong_call)
+
     def test_confirmation_is_exact_tail_single_use_and_free_text_has_no_authority(
         self,
     ) -> None:
