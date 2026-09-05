@@ -71,6 +71,44 @@ class GitSessionResourceFailureTests(unittest.TestCase):
         self.assertNotIn(private_row.decode(), str(error))
         self.assertNotIn(private_row.decode(), repr(error))
 
+    def test_allowed_configuration_status_is_exact_unstaged_subset_only(self) -> None:
+        system = "config/system_defaults.json"
+        agents = "config/agent_configs.json"
+        accepts = (
+            (b"", (system, agents)),
+            (f" M {system}\0".encode(), (system,)),
+            (f" M {agents}\0".encode(), (agents,)),
+            (f" M {system}\0 M {agents}\0".encode(), (system, agents)),
+        )
+        for content, allowed in accepts:
+            with self.subTest(accepts=content):
+                self.assertTrue(
+                    resources_module._status_matches_allowed_worktree_changes(
+                        content,
+                        allowed,
+                    )
+                )
+
+        rejects = (
+            (f"M  {system}\0".encode(), (system,)),
+            (f"MM {system}\0".encode(), (system,)),
+            (f"R  {system}\0config/old.json\0".encode(), (system,)),
+            (f"?? {system}.new\0".encode(), (system,)),
+            (f" M {system}\0 M {system}\0".encode(), (system,)),
+            (b" M \xff\0", (system,)),
+            (b" M other.txt\0", (system,)),
+            (f" M {system}\0".encode(), (agents,)),
+            (f" M {system}\0".encode(), (system, "other.txt")),
+        )
+        for content, allowed in rejects:
+            with self.subTest(rejects=content, allowed=allowed):
+                self.assertFalse(
+                    resources_module._status_matches_allowed_worktree_changes(
+                        content,
+                        allowed,
+                    )
+                )
+
 
 class GitSessionResourceGitTestCase(DisposableGitTestCase):
     """Build isolated schema-v2 repositories in both supported object formats."""

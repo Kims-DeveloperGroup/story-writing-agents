@@ -53,6 +53,11 @@ from .session_contracts import (
 )
 
 
+_WORKSPACE_MUTABLE_CONFIGURATION_PATHS = frozenset(
+    {"config/system_defaults.json", "config/agent_configs.json"}
+)
+
+
 _OBJECT_ID = re.compile(r"(?:[0-9a-f]{40}|[0-9a-f]{64})")
 _MAX_REFS = 65_536
 _MAX_WORKTREES = 65_536
@@ -64,6 +69,8 @@ def inspect_git_session_resources(
     root: str | os.PathLike[str],
     manifest: GitBaselineManifest,
     session_id: str,
+    *,
+    allowed_worktree_changes: tuple[str, ...] = (),
 ) -> GitSessionResourceInspection:
     """Inspect one requested triple without creating or repairing it."""
 
@@ -71,7 +78,11 @@ def inspect_git_session_resources(
     try:
         main_root, expected_manifest, identity = _request(root, manifest, session_id)
         with _repository_lock(main_root, create=False) as repository:
-            return repository.inspect(expected_manifest, identity)
+            return repository.inspect(
+                expected_manifest,
+                identity,
+                allowed_worktree_changes=allowed_worktree_changes,
+            )
     except GitSessionResourceError as exc:
         failure = _clear_resource_error(exc)
     raise failure
@@ -80,6 +91,8 @@ def inspect_git_session_resources(
 def list_git_session_resources(
     root: str | os.PathLike[str],
     manifest: GitBaselineManifest,
+    *,
+    allowed_worktree_changes: tuple[str, ...] = (),
 ) -> GitSessionResourceInventory:
     """Return the exhaustive correlated inventory without mutation."""
 
@@ -87,7 +100,10 @@ def list_git_session_resources(
     try:
         main_root, expected_manifest = _root_and_manifest(root, manifest)
         with _repository_lock(main_root, create=False) as repository:
-            return repository.list(expected_manifest)
+            return repository.list(
+                expected_manifest,
+                allowed_worktree_changes=allowed_worktree_changes,
+            )
     except GitSessionResourceError as exc:
         failure = _clear_resource_error(exc)
     raise failure
@@ -97,6 +113,8 @@ def provision_git_session_resources(
     root: str | os.PathLike[str],
     manifest: GitBaselineManifest,
     session_id: str,
+    *,
+    allowed_worktree_changes: tuple[str, ...] = (),
 ) -> GitSessionResourceInspection:
     """Create or resume only one exact ordered session-resource prefix."""
 
@@ -112,7 +130,11 @@ def provision_git_session_resources(
                 GitSessionRecoveryAction.NONE,
             )
         with _repository_lock(main_root, create=True) as repository:
-            return repository.provision(expected_manifest, identity)
+            return repository.provision(
+                expected_manifest,
+                identity,
+                allowed_worktree_changes=allowed_worktree_changes,
+            )
     except GitSessionResourceError as exc:
         failure = _clear_resource_error(exc)
     raise failure
@@ -122,12 +144,19 @@ def require_ready_git_session_resources(
     root: str | os.PathLike[str],
     manifest: GitBaselineManifest,
     session_id: str,
+    *,
+    allowed_worktree_changes: tuple[str, ...] = (),
 ) -> GitSessionResourceInspection:
     """Require one exact ready triple without provisioning it."""
 
     failure: GitSessionResourceError | None = None
     try:
-        result = inspect_git_session_resources(root, manifest, session_id)
+        result = inspect_git_session_resources(
+            root,
+            manifest,
+            session_id,
+            allowed_worktree_changes=allowed_worktree_changes,
+        )
         if result.state is not GitSessionResourceState.READY:
             raise _resource_error(
                 GitSessionFailureCode.RECOVERY_REQUIRED,
@@ -145,6 +174,8 @@ def inspect_locked_git_session_resources(
     lease: GitRepositoryLease,
     manifest: GitBaselineManifest,
     session_id: str,
+    *,
+    allowed_worktree_changes: tuple[str, ...] = (),
 ) -> GitSessionResourceInspection:
     """Inspect one session through an already-held shared repository lease."""
 
@@ -155,7 +186,11 @@ def inspect_locked_git_session_resources(
             manifest,
             session_id,
         )
-        return repository.inspect(expected_manifest, identity)
+        return repository.inspect(
+            expected_manifest,
+            identity,
+            allowed_worktree_changes=allowed_worktree_changes,
+        )
     except GitSessionResourceError as exc:
         failure = _clear_resource_error(exc)
     raise failure
@@ -165,12 +200,19 @@ def require_ready_locked_git_session_resources(
     lease: GitRepositoryLease,
     manifest: GitBaselineManifest,
     session_id: str,
+    *,
+    allowed_worktree_changes: tuple[str, ...] = (),
 ) -> GitSessionResourceInspection:
     """Require one ready session through an already-held repository lease."""
 
     failure: GitSessionResourceError | None = None
     try:
-        result = inspect_locked_git_session_resources(lease, manifest, session_id)
+        result = inspect_locked_git_session_resources(
+            lease,
+            manifest,
+            session_id,
+            allowed_worktree_changes=allowed_worktree_changes,
+        )
         if result.state is not GitSessionResourceState.READY:
             raise _resource_error(
                 GitSessionFailureCode.RECOVERY_REQUIRED,
@@ -204,13 +246,26 @@ class _Repository:
         self,
         manifest: GitBaselineManifest,
         identity: GitSessionIdentity,
+        *,
+        allowed_worktree_changes: tuple[str, ...] = (),
     ) -> GitSessionResourceInspection:
-        baseline = self._verify_main(manifest)
+        baseline = self._verify_main(
+            manifest,
+            allowed_worktree_changes=allowed_worktree_changes,
+        )
         facts = self._facts()
         return self._classify(identity, baseline, facts)
 
-    def list(self, manifest: GitBaselineManifest) -> GitSessionResourceInventory:
-        baseline = self._verify_main(manifest)
+    def list(
+        self,
+        manifest: GitBaselineManifest,
+        *,
+        allowed_worktree_changes: tuple[str, ...] = (),
+    ) -> GitSessionResourceInventory:
+        baseline = self._verify_main(
+            manifest,
+            allowed_worktree_changes=allowed_worktree_changes,
+        )
         facts = self._facts()
         session_ids = self._inventory_session_ids(facts)
         sessions = tuple(
@@ -226,8 +281,13 @@ class _Repository:
         self,
         manifest: GitBaselineManifest,
         identity: GitSessionIdentity,
+        *,
+        allowed_worktree_changes: tuple[str, ...] = (),
     ) -> GitSessionResourceInspection:
-        baseline = self._verify_main(manifest)
+        baseline = self._verify_main(
+            manifest,
+            allowed_worktree_changes=allowed_worktree_changes,
+        )
         before = self._facts()
         self._require_other_sessions_exact(identity, baseline, before)
         current = self._classify(identity, baseline, before)
@@ -309,7 +369,10 @@ class _Repository:
             ):
                 return completed
             self._remove_journal(identity)
-            final_baseline = self._verify_main(manifest)
+            final_baseline = self._verify_main(
+                manifest,
+                allowed_worktree_changes=allowed_worktree_changes,
+            )
             if final_baseline != baseline:
                 return _recovery(identity, baseline)
             return self._classify(identity, baseline, self._facts())
@@ -379,7 +442,12 @@ class _Repository:
         finally:
             os.close(descriptor)
 
-    def _verify_main(self, manifest: GitBaselineManifest) -> str:
+    def _verify_main(
+        self,
+        manifest: GitBaselineManifest,
+        *,
+        allowed_worktree_changes: tuple[str, ...] = (),
+    ) -> str:
         baseline = _object_id(
             self._required(
                 ("rev-parse", "--verify", f"refs/heads/{GIT_BASELINE_BRANCH}"),
@@ -426,7 +494,10 @@ class _Repository:
         status = self._required(
             ("status", "--porcelain=v1", "-z", "--untracked-files=all"), read_only=True
         )
-        if status.stdout:
+        if not _status_matches_allowed_worktree_changes(
+            status.stdout,
+            allowed_worktree_changes,
+        ):
             raise _resource_error(
                 GitSessionFailureCode.RECOVERY_REQUIRED,
                 GitSessionOperationKind.INSPECT,
@@ -1681,6 +1752,35 @@ def _clear_resource_error(error: GitSessionResourceError) -> GitSessionResourceE
     error.__context__ = None
     error.__suppress_context__ = True
     return error
+
+
+def _status_matches_allowed_worktree_changes(
+    content: bytes,
+    allowed_paths: tuple[str, ...],
+) -> bool:
+    """Accept only unstaged modifications of exact caller-validated paths."""
+
+    if type(allowed_paths) is not tuple or any(
+        not isinstance(path, str) or not path for path in allowed_paths
+    ):
+        return False
+    allowed = set(allowed_paths)
+    if not allowed <= _WORKSPACE_MUTABLE_CONFIGURATION_PATHS:
+        return False
+    observed: set[str] = set()
+    for record in content.split(b"\x00"):
+        if not record:
+            continue
+        if not record.startswith(b" M "):
+            return False
+        try:
+            path = record[3:].decode("utf-8", errors="strict")
+        except UnicodeDecodeError:
+            return False
+        if path not in allowed or path in observed:
+            return False
+        observed.add(path)
+    return True
 
 
 __all__ = [

@@ -160,6 +160,7 @@ class StoryCommitService:
     """Prepare decisions and own the exact confirmed story-commit lifecycle."""
 
     __slots__ = (
+        "_allowed_worktree_changes",
         "_bindings",
         "_confirmation_ids",
         "_manifest",
@@ -174,6 +175,8 @@ class StoryCommitService:
         root: str | os.PathLike[str],
         manifest: GitBaselineManifest,
         session_id: str,
+        *,
+        allowed_worktree_changes: tuple[str, ...] = (),
     ) -> None:
         try:
             path = Path(root)
@@ -189,6 +192,7 @@ class StoryCommitService:
         ):
             raise _error(StoryCommitFailureCode.INVALID_REQUEST)
         self._session_id = session_id
+        self._allowed_worktree_changes = allowed_worktree_changes
         self._owner = object()
         self._bindings: dict[str, StoryCommitCandidateBinding] = {}
         self._confirmation_ids: set[str] = set()
@@ -214,6 +218,7 @@ class StoryCommitService:
             evidence,
             proposed_message,
             impact_boundary,
+            allowed_worktree_changes=self._allowed_worktree_changes,
         )
         self._bindings[binding.candidate.candidate_id] = binding
         self._root = binding.main_root
@@ -233,7 +238,10 @@ class StoryCommitService:
         self._reserve_confirmation(decision.confirmation_id)
         binding = self._binding(value)
         self._require_not_revised(value)
-        revalidation = revalidate_story_commit_candidate(binding)
+        revalidation = revalidate_story_commit_candidate(
+            binding,
+            allowed_worktree_changes=self._allowed_worktree_changes,
+        )
         return StoryCommitAuthority(
             _AUTHORITY_SENTINEL,
             owner=self._owner,
@@ -300,10 +308,12 @@ class StoryCommitService:
                 self._manifest,
                 self._session_id,
                 create=True,
+                allowed_worktree_changes=self._allowed_worktree_changes,
             ) as history:
                 revalidation = revalidate_story_commit_candidate(
                     binding,
                     history=history,
+                    allowed_worktree_changes=self._allowed_worktree_changes,
                 )
                 if revalidation != authorized_revalidation:
                     raise _error(StoryCommitFailureCode.CANDIDATE_DRIFT)
@@ -362,6 +372,7 @@ class StoryCommitService:
             self._manifest,
             self._session_id,
             operation.candidate_id,
+            allowed_worktree_changes=self._allowed_worktree_changes,
         )
         return _operation_result(candidate, operation)
 
@@ -376,11 +387,13 @@ class StoryCommitService:
                 self._manifest,
                 self._session_id,
                 operation.candidate_id,
+                allowed_worktree_changes=self._allowed_worktree_changes,
             )
             with open_git_session_history(
                 self._root,
                 self._manifest,
                 self._session_id,
+                allowed_worktree_changes=self._allowed_worktree_changes,
             ) as history:
                 operation = history.read_commit_operation(operation_id)
                 if operation.state in {
@@ -530,6 +543,7 @@ class StoryCommitService:
                 self._root,
                 self._manifest,
                 self._session_id,
+                allowed_worktree_changes=self._allowed_worktree_changes,
                 create=True,
             ) as history:
                 durable = history.read_candidate(candidate.candidate_id)
@@ -696,6 +710,7 @@ class StoryCommitService:
                 self._root,
                 self._manifest,
                 self._session_id,
+                allowed_worktree_changes=self._allowed_worktree_changes,
             ) as history:
                 return history.read_commit_operation(operation_id)
         except GitSessionHistoryError as exc:
@@ -722,6 +737,7 @@ class StoryCommitService:
                 self._root,
                 self._manifest,
                 self._session_id,
+                allowed_worktree_changes=self._allowed_worktree_changes,
                 create=True,
             ) as history:
                 current = history.read_commit_operation(operation.operation_id)

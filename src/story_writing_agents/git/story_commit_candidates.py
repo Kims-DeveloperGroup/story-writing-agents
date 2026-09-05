@@ -157,6 +157,8 @@ def prepare_story_commit_candidate(
     evidence: StoryCommitApplicationEvidence,
     proposed_message: str,
     impact_boundary: tuple[str, ...],
+    *,
+    allowed_worktree_changes: tuple[str, ...] = (),
 ) -> StoryCommitCandidateBinding:
     """Prepare and publish one candidate without mutating Git state."""
 
@@ -168,12 +170,14 @@ def prepare_story_commit_candidate(
             main_root,
             expected_manifest,
             application.session_id,
+            allowed_worktree_changes=allowed_worktree_changes,
         )
         with open_git_session_history(
             main_root,
             expected_manifest,
             application.session_id,
             create=True,
+            allowed_worktree_changes=allowed_worktree_changes,
         ) as history:
             candidate, identity, invariants = _capture(
                 ready.identity.worktree_root,
@@ -213,6 +217,8 @@ def load_story_commit_candidate(
     manifest: GitBaselineManifest,
     session_id: str,
     candidate_id: str,
+    *,
+    allowed_worktree_changes: tuple[str, ...] = (),
 ) -> StoryCommitCandidate:
     """Load one immutable content-free candidate from session history."""
 
@@ -221,6 +227,7 @@ def load_story_commit_candidate(
             _root(root),
             _reconstruct_manifest(manifest),
             session_id,
+            allowed_worktree_changes=allowed_worktree_changes,
         ) as history:
             return _candidate_from_record(history.read_candidate(candidate_id))
     except StoryCommitError:
@@ -241,6 +248,7 @@ def revalidate_story_commit_candidate(
     binding: StoryCommitCandidateBinding,
     *,
     history: GitSessionHistory | None = None,
+    allowed_worktree_changes: tuple[str, ...] = (),
 ) -> StoryCommitRevalidation:
     """Recheck every candidate and repository fact immediately before staging."""
 
@@ -251,6 +259,7 @@ def revalidate_story_commit_candidate(
                 value.main_root,
                 value.manifest,
                 value.candidate.session_id,
+                allowed_worktree_changes=allowed_worktree_changes,
             )
             if (
                 ready.identity.main_root != value.main_root
@@ -265,6 +274,7 @@ def revalidate_story_commit_candidate(
                 value.main_root,
                 value.manifest,
                 value.candidate.session_id,
+                allowed_worktree_changes=allowed_worktree_changes,
             ) as opened:
                 return _revalidate_under_history(value, value.internal_ref, opened)
         if type(history) is not GitSessionHistory:

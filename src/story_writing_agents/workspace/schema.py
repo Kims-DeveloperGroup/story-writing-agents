@@ -21,6 +21,7 @@ from ..agents import (
 from ..errors import (
     SessionIdError,
     WorkspaceFormatError,
+    WorkspaceSecurityError,
     WorkspaceVersionUnsupportedError,
 )
 from ..git.session_contracts import (
@@ -34,6 +35,7 @@ WORKSPACE_SCHEMA_VERSION = 2
 WORKSPACE_MARKER_PATH = "config/workspace.json"
 WORKSPACE_INITIALIZATION_JOURNAL_PATH = ".story-writing-agents-initialize-v2.json"
 _SAFE_IDENTIFIER = re.compile(r"[A-Za-z0-9][A-Za-z0-9_-]{0,63}")
+_SAFE_TEMPLATE_NAME = re.compile(r"[A-Za-z0-9][A-Za-z0-9_.-]{0,63}")
 _DIGEST = re.compile(r"[0-9a-f]{64}")
 
 CANONICAL_CORE_DOCUMENT_PATHS = (
@@ -64,6 +66,16 @@ WORKSPACE_DIRECTORIES: tuple[str, ...] = (
     "discussion_logs",
     "manuscript",
 )
+
+
+def validate_workspace_template_name(value: str) -> str:
+    """Return one safe persona-template identity without filesystem access."""
+
+    if not isinstance(value, str) or _SAFE_TEMPLATE_NAME.fullmatch(value) is None:
+        raise WorkspaceSecurityError(
+            "persona template name contains unsafe characters"
+        )
+    return value
 
 DEFAULT_SYSTEM_CONFIG = MappingProxyType(
     {

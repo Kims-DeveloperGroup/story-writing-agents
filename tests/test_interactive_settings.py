@@ -59,7 +59,7 @@ from story_writing_agents.interactive_settings import (
 )
 from story_writing_agents.workspace import Workspace
 
-from tests.helpers import initialized_workspace
+from tests.helpers import initialized_workspace, pristine_initialized_workspace
 
 
 _SYSTEM_PATH = "config/system_defaults.json"
@@ -564,6 +564,113 @@ class SettingsLoadingAndUpdateTests(SettingsTestCase):
             update_conversation_rag_provider(state, "remote")
         with self.assertRaises(ConfigurationError):
             update_conversation_rag_automatic(local, 1)  # type: ignore[arg-type]
+
+    def test_valid_persisted_settings_survive_fresh_workspace_restart(self) -> None:
+        for changed in ("system", "agents", "both"):
+            with self.subTest(changed=changed):
+                workspace = pristine_initialized_workspace(self)
+                system = workspace.read_json(_SYSTEM_PATH)
+                agents = workspace.read_json(_AGENT_PATH)
+                if changed in {"system", "both"}:
+                    system.update(language="EN", default_backend="codex")
+                    workspace.write_json(_SYSTEM_PATH, system)
+                if changed in {"agents", "both"}:
+                    agents[PLOT_ARCHITECT]["backend"] = "antigravity"
+                    workspace.write_json(_AGENT_PATH, agents)
+
+                restarted = Workspace(workspace.root)
+                loaded = load_settings_state(restarted).pending
+
+                self.assertEqual(
+                    loaded.system_defaults.language,
+                    "EN" if changed in {"system", "both"} else "KO",
+                )
+                self.assertEqual(
+                    loaded.system_defaults.default_backend,
+                    "codex" if changed in {"system", "both"} else None,
+                )
+                self.assertEqual(
+                    loaded.agent_configs[PLOT_ARCHITECT].backend,
+                    "antigravity" if changed in {"agents", "both"} else None,
+                )
+
+    def test_invalid_persisted_schema_persona_and_backend_fail_without_mutation(
+        self,
+    ) -> None:
+        cases = (
+            ("schema", lambda system, _agents: system.update(unexpected=True)),
+            ("persona", lambda system, _agents: system.update(persona="missing")),
+            (
+                "system-backend",
+                lambda system, _agents: system.update(default_backend="unknown"),
+            ),
+            (
+                "agent-backend",
+                lambda _system, agents: agents[PLOT_ARCHITECT].update(
+                    backend="unknown"
+                ),
+            ),
+        )
+        for name, mutate in cases:
+            with self.subTest(name=name):
+                workspace = pristine_initialized_workspace(self)
+                system = workspace.read_json(_SYSTEM_PATH)
+                agents = workspace.read_json(_AGENT_PATH)
+                mutate(system, agents)
+                workspace.write_json(_SYSTEM_PATH, system)
+                workspace.write_json(_AGENT_PATH, agents)
+                before = _files(workspace.root)
+
+                with self.assertRaises(WorkspaceFormatError):
+                    Workspace(workspace.root)
+
+                self.assertEqual(_files(workspace.root), before)
+
+    def test_provider_route_generations_restart_and_malformed_state_are_exact(
+        self,
+    ) -> None:
+        workspace = pristine_initialized_workspace(self)
+        routes = {
+            "schema_version": 1,
+            "agents": {
+                agent_id: {"provider": "codex", "generation": index}
+                for index, agent_id in enumerate(ROSTER)
+            },
+        }
+        workspace.write_json(_ROUTE_PATH, routes)
+        restarted = Workspace(workspace.root)
+
+        _content, decoded = read_provider_route_generations(
+            restarted,
+            ConfigManager(restarted).load_configuration_snapshot(),
+        )
+
+        self.assertEqual(
+            tuple((entry.provider, entry.generation) for entry in decoded.values()),
+            tuple(("codex", index) for index, _agent_id in enumerate(ROSTER)),
+        )
+
+        for name, malformed in (
+            ("version", {**routes, "schema_version": 2}),
+            ("roster", {**routes, "agents": {}}),
+            (
+                "entry",
+                {
+                    **routes,
+                    "agents": {
+                        **routes["agents"],
+                        ROSTER[0]: {"provider": "unknown", "generation": -1},
+                    },
+                },
+            ),
+        ):
+            with self.subTest(name=name):
+                invalid = pristine_initialized_workspace(self)
+                invalid.write_json(_ROUTE_PATH, malformed)
+                before = _files(invalid.root)
+                with self.assertRaises(WorkspaceFormatError):
+                    Workspace(invalid.root)
+                self.assertEqual(_files(invalid.root), before)
 
     def test_conversation_rag_save_uses_the_existing_exact_cas_contract(self) -> None:
         state = update_conversation_rag_automatic(

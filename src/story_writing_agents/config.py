@@ -8,11 +8,13 @@ import unicodedata
 from dataclasses import dataclass
 from enum import StrEnum
 from types import MappingProxyType
-from typing import Any, Mapping
+from typing import TYPE_CHECKING, Any, Callable, Mapping
 
 from .agents import AGENT_SPECS, ROSTER
 from .errors import ConfigurationError, WorkspaceFormatError
-from .workspace import Workspace
+
+if TYPE_CHECKING:
+    from .workspace import Workspace
 
 
 _LANGUAGE = re.compile(r"[A-Za-z][A-Za-z0-9-]{0,15}")
@@ -23,6 +25,10 @@ KNOWN_CONVERSATION_STORAGE_BACKENDS: tuple[str, ...] = ("filesystem", "sqlite")
 KNOWN_CONVERSATION_RAG_PROVIDERS: tuple[str, ...] = ("local",)
 _SYSTEM_DEFAULTS_PATH = "config/system_defaults.json"
 _AGENT_CONFIGS_PATH = "config/agent_configs.json"
+_PROVIDER_ROUTE_GENERATIONS_PATH = (
+    "agent_states/orchestrator_state/provider_route_generations.json"
+)
+_PROVIDER_ROUTE_GENERATIONS_SCHEMA_VERSION = 1
 
 
 @dataclass(frozen=True, slots=True)
@@ -581,6 +587,10 @@ class ConfigManager:
     def _decode_json(value: bytes, relative: str) -> Any:
         try:
             return json.loads(value.decode("utf-8", errors="strict"))
+        except UnicodeDecodeError:
+            raise WorkspaceFormatError(
+                f"file is not valid UTF-8: {relative}"
+            ) from None
         except json.JSONDecodeError as exc:
             raise WorkspaceFormatError(
                 f"file is not valid JSON: {relative}: {exc.msg}"
@@ -718,3 +728,75 @@ class ConfigManager:
         if not self.workspace.persona_exists(name):
             raise ConfigurationError(f"persona template does not exist: {name}")
         return name
+
+
+class _ConfigurationValidationWorkspace:
+    """Adapt pure persona checks to the existing complete validator."""
+
+    def __init__(
+        self,
+        validate_name: Callable[[str], str],
+        exists: Callable[[str], bool],
+    ) -> None:
+        self.validate_template_name = validate_name
+        self.persona_exists = exists
+
+
+def validate_persisted_configuration_bytes(
+    system_content: bytes,
+    agent_content: bytes,
+    *,
+    validate_persona_name: Callable[[str], str],
+    persona_exists: Callable[[str], bool],
+) -> ConfigurationSnapshot:
+    """Validate descriptor-captured mutable configuration without filesystem I/O."""
+
+    if type(system_content) is not bytes or type(agent_content) is not bytes:
+        raise TypeError("persisted configuration content must be bytes")
+    if not callable(validate_persona_name) or not callable(persona_exists):
+        raise TypeError("persona validation collaborators must be callable")
+    manager = ConfigManager(
+        _ConfigurationValidationWorkspace(validate_persona_name, persona_exists)
+    )
+    return manager.validate_configuration(
+        manager._decode_json(system_content, _SYSTEM_DEFAULTS_PATH),
+        manager._decode_json(agent_content, _AGENT_CONFIGS_PATH),
+    )
+
+
+def decode_provider_route_generations(
+    content: bytes,
+) -> Mapping[str, tuple[str, int]]:
+    """Decode the canonical roster-complete provider-route generation state."""
+
+    if type(content) is not bytes:
+        raise TypeError("provider route generation content must be bytes")
+    value = ConfigManager._decode_json(content, _PROVIDER_ROUTE_GENERATIONS_PATH)
+    if not isinstance(value, dict) or set(value) != {"schema_version", "agents"}:
+        raise WorkspaceFormatError("provider route generations have an invalid schema")
+    if value["schema_version"] != _PROVIDER_ROUTE_GENERATIONS_SCHEMA_VERSION:
+        raise WorkspaceFormatError(
+            "provider route generations have an unsupported schema version"
+        )
+    agents = value["agents"]
+    if not isinstance(agents, dict) or set(agents) != set(ROSTER):
+        raise WorkspaceFormatError(
+            "provider route generations must contain the complete roster"
+        )
+    routes: dict[str, tuple[str, int]] = {}
+    try:
+        for agent_id in ROSTER:
+            raw = agents[agent_id]
+            if not isinstance(raw, dict) or set(raw) != {"provider", "generation"}:
+                raise ValueError
+            provider = ConfigManager.validate_backend(raw["provider"])
+            generation = raw["generation"]
+            if type(generation) is not int or generation < 0:
+                raise ValueError
+            assert provider is not None
+            routes[agent_id] = (provider, generation)
+    except (ConfigurationError, TypeError, ValueError) as exc:
+        raise WorkspaceFormatError(
+            "provider route generations contain an invalid entry"
+        ) from exc
+    return MappingProxyType(routes)
