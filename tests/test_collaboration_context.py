@@ -539,6 +539,48 @@ class CollaborationBudgetAndOutcomeTests(unittest.TestCase):
 
 
 class CollaborationConfirmationAndRecoveryTests(unittest.TestCase):
+    def test_unmatched_submitted_lead_projects_outcome_unknown_but_prepared_does_not(
+        self,
+    ) -> None:
+        message = make_draft(
+            "submitted_user_message",
+            CollaborationEventKind.MESSAGE,
+            USER,
+            LEAD,
+            CollaborationMessagePayload("Request sent to the Lead."),
+        )
+        calls = provider_call_drafts(
+            invocation_id="lead_invocation",
+            call_id="lead_call",
+            role="lead_orchestrator",
+            recipient=LEAD,
+            invocation_kind=CollaborationInvocationKind.LEAD,
+        )
+        prepared = store_batch(
+            (),
+            make_batch((), "prepared_lead_batch", message, calls[0]),
+        )
+        prepared_projection = project_collaboration_history(prepared)
+        self.assertIsNone(prepared_projection.current_state)
+        self.assertIsNot(
+            prepared_projection.next_safe_action,
+            CollaborationNextAction.INSPECT_AND_RESOLVE_OUTCOME,
+        )
+
+        submitted = store_batch(
+            prepared,
+            make_batch(prepared, "submitted_lead_batch", calls[1]),
+        )
+        projection = project_collaboration_history(submitted)
+        self.assertIs(projection.current_state, CollaborationStepState.OUTCOME_UNKNOWN)
+        self.assertIs(
+            projection.next_safe_action,
+            CollaborationNextAction.INSPECT_AND_RESOLVE_OUTCOME,
+        )
+        self.assertIsNone(projection.current_proposal)
+        self.assertEqual(projection.current_turn_id, submitted[-1].turn_id)
+        self.assertEqual(projection.current_step_id, submitted[-1].step_id)
+
     def test_confirmation_is_exact_tail_single_use_and_free_text_has_no_authority(
         self,
     ) -> None:

@@ -10,6 +10,7 @@ from typing import NoReturn
 from ..conversations import (
     CollaborationConfirmationDecision,
     CollaborationHistoryProjection,
+    CollaborationNextAction,
     CollaborationStepState,
 )
 from ..git import (
@@ -538,6 +539,16 @@ def _recovery_failure(
         )
 
     proposal = history.current_proposal
+    if is_unmatched_submitted_lead_projection(history):
+        if any(
+            value is not None
+            for value in (reviewed, application, candidate, commit, checkpoint)
+        ):
+            return (
+                SessionRecoveryFailureCode.MISSING_PREDECESSOR,
+                SessionRecoveryOwner.COLLABORATION_HISTORY,
+            )
+        return None
     if proposal is None or history.current_state is None or history.last_sequence < 1:
         return (
             SessionRecoveryFailureCode.MISSING_PREDECESSOR,
@@ -728,6 +739,36 @@ def _recovery_failure(
             SessionRecoveryOwner.STORY_COMMIT,
         )
     return None
+
+
+def is_unmatched_submitted_lead_projection(
+    history: CollaborationHistoryProjection,
+) -> bool:
+    """Recognize only the closed proposal-free submitted-Lead projection."""
+
+    return bool(
+        history.session_id is not None
+        and history.conversation_id is not None
+        and history.last_sequence >= 1
+        and history.current_turn_id is not None
+        and history.current_step_id is not None
+        and history.current_proposal is None
+        and history.current_state is CollaborationStepState.OUTCOME_UNKNOWN
+        and history.next_safe_action
+        is CollaborationNextAction.INSPECT_AND_RESOLVE_OUTCOME
+        and history.confirmation_request_id is None
+        and history.confirmation_decision is None
+        and history.execution_attempt_id is None
+        and history.execution_result_event_id is None
+        and history.execution_result is None
+        and history.current_artifact_candidate is None
+        and history.current_artifact_state is None
+        and history.current_reviewed_artifact_proposal is None
+        and history.current_artifact_application_request is None
+        and history.current_artifact_application_result is None
+        and history.current_story_commit_request is None
+        and history.current_story_commit_result is None
+    )
 
 
 def _missing_predecessor_owner(

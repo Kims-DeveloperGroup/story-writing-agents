@@ -29,6 +29,9 @@ from story_writing_agents.conversation_storage.filesystem import (
 )
 from story_writing_agents.conversations import (
     CollaborationEventBatch,
+    CollaborationEventKind,
+    CollaborationProviderCallPayload,
+    CollaborationProviderCallState,
     ConversationMetadata,
     ConversationStatus,
 )
@@ -441,8 +444,31 @@ if control.get("mode") == "nonzero":
     sys.stderr.write(control.get("diagnostic", "simulated provider failure") + "\n")
     raise SystemExit(7)
 
+if (
+    control.get("mode") == "reference_then_submitted_failure"
+    and payload.get("operation") != "writing_artifact_reference_read"
+):
+    sys.stderr.write("PRIVATE submitted provider diagnostic must stay hidden\n")
+    raise SystemExit(7)
+
 output_path = Path(argv[argv.index("--output-last-message") + 1])
-if control.get("mode") == "malformed":
+if (
+    control.get("mode") == "reference_then_submitted_failure"
+    and payload.get("operation") == "writing_artifact_reference_read"
+):
+    output_path.write_text(
+        json.dumps(
+            {
+                "action": {
+                    "kind": "read_writing_artifacts",
+                    "correlation": payload["correlation"],
+                    "references": payload["references"],
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+elif control.get("mode") == "malformed":
     output_path.write_text(
         control.get("response", "not-json"),
         encoding="utf-8",
@@ -4599,6 +4625,94 @@ raise SystemExit(cli.main([]))
         reopened.send_line("Continue from the confirmed review.")
         reopened.wait_for_text("Continued after confirmed review.", after=continuation_mark)
         reopened.wait_for_text("story[alpha]> ", after=continuation_mark)
+        reopened.send_line("/quit")
+        self.assertEqual(reopened.wait_for_exit(), 0, reopened.normalized_text)
+
+    def test_submitted_lead_failure_after_reference_is_stable_and_nonreplaying_on_pty(
+        self,
+    ) -> None:
+        """Keep a submitted referenced Lead call outcome-unknown across restart."""
+
+        defaults_path = self.workspace.path("config/system_defaults.json")
+        defaults = json.loads(defaults_path.read_text(encoding="utf-8"))
+        defaults["default_backend"] = "codex"
+        defaults_path.write_text(
+            json.dumps(defaults, ensure_ascii=False, indent=2, sort_keys=True) + "\n",
+            encoding="utf-8",
+        )
+        self._set_provider_control(mode="reference_then_submitted_failure")
+        process = self._spawn_cli((), terminal_columns=120)
+        process.wait_for_text("story[lobby]> ")
+        process.send_line("/session create alpha")
+        process.wait_for_text("story[alpha]> ")
+        conversation = self._create_conversation(process, subject="Submitted reference")
+
+        mark = process.output_mark()
+        process.send_line(
+            "Review ${core_documents/global_outline.md} before answering."
+        )
+        rendered = process.wait_for_text("State: outcome_unknown", after=mark)
+        process.wait_for_text("story[alpha]> ", after=mark)
+        compact_rendered = " ".join(rendered.split())
+        self.assertIn("no reliable result", compact_rendered)
+        self.assertIn("Do not retry or replay", compact_rendered)
+        self.assertIn("inspect and recover", compact_rendered)
+        self.assertNotIn("Interactive error", rendered)
+        self.assertNotIn("internal_error", rendered)
+        self.assertNotIn("PRIVATE submitted provider diagnostic", rendered)
+        calls = [
+            record
+            for record in self._provider_records()
+            if record.get("event") == "started"
+        ]
+        self.assertEqual(len(calls), 2)
+        self.assertEqual(calls[0]["payload"]["operation"], "writing_artifact_reference_read")
+        self.assertEqual(calls[1]["operation"], "agent_context_v5")
+
+        store = FilesystemCollaborationEventStore(
+            self.workspace,
+            catalog=FilesystemConversationCatalog(self.workspace),
+        )
+        events = store.read("alpha", conversation.conversation_id)
+        call_states = tuple(
+            event.payload.state
+            for event in events
+            if event.kind is CollaborationEventKind.PROVIDER_CALL_ACCOUNTING
+            and isinstance(event.payload, CollaborationProviderCallPayload)
+        )
+        self.assertEqual(
+            call_states,
+            (
+                CollaborationProviderCallState.PREPARED,
+                CollaborationProviderCallState.SUBMITTED,
+                CollaborationProviderCallState.PREPARED,
+                CollaborationProviderCallState.SUBMITTED,
+            ),
+        )
+        process.send_line("/quit")
+        self.assertEqual(process.wait_for_exit(), 0, process.normalized_text)
+
+        reopened = self._spawn_cli(
+            ("chat", "alpha", "--workspace", str(self.workspace.root)),
+            terminal_columns=120,
+        )
+        reopened.wait_for_text("story[alpha]> ")
+        before = len(self._provider_records())
+        replay_mark = reopened.output_mark()
+        reopened.send_line("Do not replay the submitted call.")
+        replay = reopened.wait_for_text("State: outcome_unknown", after=replay_mark)
+        reopened.wait_for_text("story[alpha]> ", after=replay_mark)
+        self.assertIn("Do not retry or replay", replay)
+        self.assertEqual(len(self._provider_records()), before)
+        self.assertEqual(
+            store.read("alpha", conversation.conversation_id),
+            events,
+        )
+        create_mark = reopened.output_mark()
+        reopened.send_line("/conversation new Distinct recovery work")
+        reopened.wait_for_text("Subject: Distinct recovery work", after=create_mark)
+        reopened.wait_for_text("story[alpha]> ", after=create_mark)
+        self.assertEqual(len(self._provider_records()), before)
         reopened.send_line("/quit")
         self.assertEqual(reopened.wait_for_exit(), 0, reopened.normalized_text)
 

@@ -533,6 +533,46 @@ class SessionRecoveryReconcilerContractTests(unittest.TestCase):
 
 
 class SessionRecoveryLifecycleTests(unittest.TestCase):
+    def test_unmatched_submitted_lead_is_inspectable_only_without_downstream_facts(
+        self,
+    ) -> None:
+        submitted = replace(
+            _empty_history(),
+            session_id=_SESSION,
+            conversation_id=_CONVERSATION,
+            last_sequence=3,
+            current_turn_id="turn-1",
+            current_step_id="step-1",
+            current_state=CollaborationStepState.OUTCOME_UNKNOWN,
+            next_safe_action=CollaborationNextAction.INSPECT_AND_RESOLVE_OUTCOME,
+        )
+        observed = _observe(histories=(submitted, submitted))
+        self.assertIs(observed.result.state, SessionRecoveryState.OUTCOME_UNKNOWN)
+        self.assertIs(
+            observed.result.next_action,
+            SessionRecoveryNextAction.INSPECT_OWNER_OUTCOME,
+        )
+        self.assertIs(observed.result.owner, SessionRecoveryOwner.COLLABORATION_HISTORY)
+        self.assertIs(
+            observed.result.failure_code,
+            SessionRecoveryFailureCode.OWNER_OUTCOME_UNKNOWN,
+        )
+
+        reviewed, _application = _artifact_facts()
+        malformed = _observe(
+            histories=(submitted, submitted),
+            reviewed=reviewed,
+        )
+        self.assertIs(malformed.result.state, SessionRecoveryState.RECOVERY_REQUIRED)
+        self.assertIs(
+            malformed.result.owner,
+            SessionRecoveryOwner.COLLABORATION_HISTORY,
+        )
+        self.assertIs(
+            malformed.result.failure_code,
+            SessionRecoveryFailureCode.MISSING_PREDECESSOR,
+        )
+
     def test_focused_canonical_empty_history_is_ready_after_stable_owner_checks(self) -> None:
         empty = _empty_history()
         observed = _observe(histories=(empty, empty))

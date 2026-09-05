@@ -176,13 +176,21 @@ class SessionTransitionAssessment:
                 == _active_operations(self.recovery_result.state)
             )
         elif self.state is SessionTransitionAssessmentState.OUTCOME_UNKNOWN:
+            expected_operations = (
+                _ENTER_ONLY
+                if self.scope is SessionTransitionScope.ACTIVE
+                and self.owner is SessionRecoveryOwner.COLLABORATION_HISTORY
+                and self.failure_code
+                is SessionRecoveryFailureCode.OWNER_OUTCOME_UNKNOWN
+                else ()
+            )
             valid = (
                 self.next_action
                 is SessionTransitionNextAction.INSPECT_OWNER_OUTCOME
                 and self.owner is not None
                 and self.failure_code
                 is SessionRecoveryFailureCode.OWNER_OUTCOME_UNKNOWN
-                and not self.allowed_operations
+                and self.allowed_operations == expected_operations
                 and (
                     self.scope is SessionTransitionScope.IDLE
                     and self.conversation_id is None
@@ -416,7 +424,13 @@ def _active_assessment(recovery: SessionRecoveryResult) -> SessionTransitionAsse
         action = SessionTransitionNextAction.INSPECT_OWNER_OUTCOME
         owner = recovery.owner
         failure = recovery.failure_code
-        operations: tuple[SessionTransitionOperation, ...] = ()
+        operations: tuple[SessionTransitionOperation, ...] = (
+            _ENTER_ONLY
+            if recovery.owner is SessionRecoveryOwner.COLLABORATION_HISTORY
+            and recovery.failure_code
+            is SessionRecoveryFailureCode.OWNER_OUTCOME_UNKNOWN
+            else ()
+        )
     elif recovery.state is SessionRecoveryState.RECOVERY_REQUIRED:
         state = SessionTransitionAssessmentState.RECOVERY_REQUIRED
         action = SessionTransitionNextAction.OPERATOR_RECOVERY

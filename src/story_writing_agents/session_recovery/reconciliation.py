@@ -58,6 +58,7 @@ from .contracts import (
     SessionRecoveryResult,
     SessionRecoveryState,
     SessionReviewedProposalEvidence,
+    is_unmatched_submitted_lead_projection,
     reconcile_session_recovery,
 )
 
@@ -150,12 +151,24 @@ class SessionRecoveryReconciler:
                 SessionRecoveryOwner.COLLABORATION_HISTORY,
                 SessionRecoveryFailureCode.MISSING_PREDECESSOR,
             )
-        if not empty_history and (
+        unmatched_submitted_lead = is_unmatched_submitted_lead_projection(history_a)
+        if not empty_history and not unmatched_submitted_lead and (
             history_a.session_id is None
             or history_a.conversation_id is None
             or history_a.current_proposal is None
             or history_a.current_state is None
             or tail < 1
+        ):
+            return _blocked(
+                session_id,
+                conversation,
+                tail,
+                SessionRecoveryState.RECOVERY_REQUIRED,
+                SessionRecoveryOwner.COLLABORATION_HISTORY,
+                SessionRecoveryFailureCode.MISSING_PREDECESSOR,
+            )
+        if unmatched_submitted_lead and (
+            reviewed is not None or application is not None
         ):
             return _blocked(
                 session_id,

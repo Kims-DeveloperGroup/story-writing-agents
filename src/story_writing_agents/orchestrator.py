@@ -4845,15 +4845,22 @@ class StoryRuntime:
                 step_id=projection.current_step_id,
                 turn_id=projection.current_turn_id,
             )
-        dangling_call_state = self._unmatched_lead_call_state(events)
-        if dangling_call_state is CollaborationProviderCallState.SUBMITTED:
+        if (
+            projection.current_proposal is None
+            and projection.current_state is CollaborationStepState.OUTCOME_UNKNOWN
+            and projection.next_safe_action
+            is CollaborationNextAction.INSPECT_AND_RESOLVE_OUTCOME
+        ):
             return self._submitted_lead_outcome_unknown_result(
                 session_id,
                 conversation_id,
                 step_id=projection.current_step_id,
                 turn_id=projection.current_turn_id,
             )
-        if dangling_call_state is CollaborationProviderCallState.PREPARED:
+        if (
+            self._unmatched_lead_call_state(events)
+            is CollaborationProviderCallState.PREPARED
+        ):
             return self._blocking_lead_result(
                 session_id,
                 conversation_id,
@@ -5351,15 +5358,18 @@ class StoryRuntime:
             )
         except BaseException as failure:
             reference_failure = reference_operation.failure(failure)
-            events, _projection, history_failure = self._read_lead_history(
+            _events, projection, history_failure = self._read_lead_history(
                 session_id,
                 conversation_id,
             )
             if (
                 history_failure is None
-                and events is not None
-                and self._unmatched_lead_call_state(events)
-                is CollaborationProviderCallState.SUBMITTED
+                and projection is not None
+                and projection.current_proposal is None
+                and projection.current_state
+                is CollaborationStepState.OUTCOME_UNKNOWN
+                and projection.next_safe_action
+                is CollaborationNextAction.INSPECT_AND_RESOLVE_OUTCOME
             ):
                 return self._submitted_lead_outcome_unknown_result(
                     session_id,
