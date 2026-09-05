@@ -109,6 +109,46 @@ writing-artifact source adapter has an immutable allowed-path set, so inventory,
 SEARCH, and READ cannot borrow sibling-only evidence. Synthesis is a separate
 lead invocation with the direct story-artifact inputs and all typed replies.
 
+## Typed context action contract
+
+Every built-in contextual physical call supplies one generated wire-v7 JSON
+Schema. The schema's root is a closed required object with exactly
+`correlation` and `action`. `correlation` is restricted to the exact current
+input token. `action` is one or more of these closed variants, narrowed to the
+actions and bounds valid for that physical call:
+
+```json
+{"correlation":"<exact-token>","action":{"kind":"search","path_prefix":"manuscript/part-01/","queries":[{"text":"opening causality","source_kinds":["writing_artifact"]}]}}
+```
+
+```json
+{"correlation":"<exact-token>","action":{"kind":"read","handles":["<issued-handle>"]}}
+```
+
+```json
+{"correlation":"<exact-token>","action":{"kind":"answer","result":{"scope":"workflow_meta","evidence_status":"not_applicable","evidence_ids":[],"kind":"answer","message":"Hello. What would you like to work on?","artifact_intent":null,"proposal":null},"used_handles":[]}}
+```
+
+SEARCH has required `kind`, nullable `path_prefix`, and nonempty typed
+`queries`; every query has required `text` and a nonempty, duplicate-free
+`source_kinds` collection drawn from the request's allowed kinds. Provider
+array order is not semantic: runtime canonicalizes it to internal source-kind
+order before authorization. Empty, duplicate, unknown, and request-disallowed
+values are rejected, and a non-null `path_prefix` is valid only for the
+canonical collection containing `writing_artifact` alone. The documented
+common provider-schema subset types and enums members; it does not claim JSON
+Schema enforces uniqueness or canonical order.
+READ has required `kind` and nonempty typed `handles`. ANSWER has required
+`kind`, the exact invocation-specific object in `result`, and typed
+`used_handles`. The Lead front-channel result in the example is complete: it
+always has exactly `scope`, `evidence_status`, `evidence_ids`, `kind`,
+`message`, `artifact_intent`, and `proposal`, including explicit nulls.
+
+No action or result object is encoded as JSON text. Runtime still checks the closed schema, exact
+correlation, issued handles, result-domain contract, and current source
+authority after a provider returns the object. See
+[Agent-context design](../design/agent-context.md#typed-provider-wire-v7).
+
 ## Lead judgment and evidence contracts
 
 Import the public values from `story_writing_agents.conversations`:
@@ -283,10 +323,10 @@ bound prompt.
 
 `story_session_context` is a trailing package-internal capture and direct-call
 compatibility value. It must match the request's session and agent. The current
-built-in runtime translates authoritative capture into compact contextual wire
-v5; it does not send this object as the provider envelope. Direct noncontextual
+built-in runtime translates authoritative capture into typed contextual wire
+v7; it does not send this object as the provider envelope. Direct noncontextual
 callers may still use the established request field. The context types are not
-package-root exports; see [Agent-context design](../design/agent-context.md#compact-provider-wire-v5).
+package-root exports; see [Agent-context design](../design/agent-context.md#typed-provider-wire-v7).
 
 ```python
 DebateMessage(sender: str, phase: str, round: int, revision: str,
@@ -325,7 +365,7 @@ their two trailing context fields default to `None`, and their reply adds
 ordered validated sources without changing the one-step pair.
 When present, story-session capture must match the request session, agent, and
 any focused conversation identity. Current built-in execution converts it to
-contextual wire v5; omitting it retains direct-request compatibility. An
+typed contextual wire v7; omitting it retains direct-request compatibility. An
 omitted `rag_context` means there was no attempted RAG envelope.
 See [Conversation transcripts](conversation-transcripts.md) for windows and
 [Bounded retrieval](conversation-retrieval.md) for actions and persistence.

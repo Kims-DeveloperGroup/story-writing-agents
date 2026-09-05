@@ -60,11 +60,32 @@ server-side default. Provider reply prose and self-identification are never
 execution evidence.
 
 Runtime-built provider-managed definitions use the agent-context service and
-compact wire v5. Package-internal `story_session_context` remains capture and
+typed wire v7. Package-internal `story_session_context` remains capture and
 direct-request compatibility input; it is not the current built-in provider
 envelope. A content-free explicit-reference prelude remains separate, and
 context continuations carry only the new authorized observation. See
-[Agent-context design](../design/agent-context.md#compact-provider-wire-v5).
+[Agent-context design](../design/agent-context.md#typed-provider-wire-v7).
+
+Both adapters receive the same provider-neutral `ProviderInvocation`, including
+byte-identical canonical schema and payload semantics. Codex receives the
+schema through `--output-schema <schema-file>`. Antigravity receives the same
+schema through `--json-schema <canonical-json>` and must return a root-object
+`structured_output` plus an exact `json_schema` echo. Those transport checks do
+not replace the shared runtime's validation of wire-v7 correlation, issued
+handles, evidence IDs, Lead outcome matrix, input aliases, artifact authority,
+or confirmation.
+
+For Antigravity, runtime installs the selected definition at
+`.agents/agents/<agent-id>/agent.md` beneath the isolated
+session/agent/fingerprint working directory and always supplies `--agent`.
+Fresh history uses `--new-project`; compatible history resumes the exact
+`--conversation` ID and its associated project. Runtime never passes
+`--project` or makes the canonical story root the Antigravity project. Native
+`init` must report the selected agent, exact isolated cwd, `request-review`,
+and a nonempty tool list containing `finish`; only safe non-operational steps
+are accepted. The custom definition's `tools: [finish]` is declarative rather
+than capability proof: CLI 1.1.27 still advertised 57 tools. See the
+[sanitized command and stream](../guides/antigravity.md#sanitized-provider-call-and-native-stream).
 
 <a id="referenced-invocation-boundary"></a>
 
@@ -167,7 +188,9 @@ workspace schema are specified in
 [Agent configuration](configuration/agent-configuration.md#system-defaults).
 
 Antigravity uses `--model MODEL` and `--effort LEVEL` only when their effective
-values are non-null. Provider conversation resume adds `--conversation ID`.
+values are non-null. Every invocation selects the custom agent; a fresh
+provider conversation adds `--new-project`, while exact resume adds
+`--conversation ID`.
 Those model/effort process arguments do not change definition fingerprints,
 lifecycle identity, or request payload fields.
 
@@ -267,25 +290,26 @@ The terminal vocabulary is closed:
 | `post_response_runtime_failure` | `thread_persistence_failed`, `reference_runtime_failed`, `context_runtime_failed` |
 
 Two contextual-action rejections have narrower user guidance. Valid JSON with
-the exact contextual action shape but a `c` value that does not equal the
+the exact contextual action shape but a `correlation` value that does not equal the
 current request correlation token produces this exact runtime exception:
 
 ```text
-BackendProtocolError: contextual provider response is invalid: `c` does not match the current request correlation token
+BackendProtocolError: contextual provider response is invalid: `correlation` does not match the current request correlation token
 ```
 
 The misplaced value may be provider answer/prose. Story validates correlation
 before interpreting the action kind or data, so this error wins even when the
 same object presents a misleading READ action or data. Neither the received
-`c`, the expected token, nor provider prose placed in `c` enters the exception
-or conversation history.
+`correlation`, the expected token, nor provider prose placed in `correlation`
+enters the exception or conversation history.
 
 When a structurally recognizable READ wire action instead arrives before any
-context search, or its `d` array contains invalid or foreign values instead of
-source handles returned by the immediately preceding search, Story raises:
+context search, or its `handles` array contains invalid or foreign values
+instead of source handles returned by the immediately preceding search, Story
+raises:
 
 ```text
-BackendProtocolError: contextual provider read action is invalid: `d` must contain source handles returned by the preceding context search
+BackendProtocolError: contextual provider read action is invalid: `handles` must contain source handles returned by the preceding context search
 ```
 
 The provider does not raise either `BackendProtocolError`; Story translates its
@@ -296,7 +320,7 @@ malformed`. Correlation mismatch rejects with
 `rejected`/`response_correlation_mismatch`; the READ case rejects with
 `rejected`/`malformed_structured_response`. Both leave the context ledger
 `MALFORMED`, taint the contextual attempt, clear its provider thread state, and
-do not advance its ready checkpoint. Untrusted `d` values likewise do not enter
+do not advance its ready checkpoint. Untrusted `handles` values likewise do not enter
 the exception or conversation history. When its best-effort exchange records
 are available, use bare `/exchanges` to inspect the authorized immutable
 request, exact valid raw `ProviderResult` projection, and terminal outcome.

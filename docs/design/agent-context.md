@@ -2,8 +2,9 @@
 
 This document is the maintainer model for the bounded agent-context component.
 `StoryRuntime.lead_turn()` and confirmed consultation execution invoke it for
-the current Python lead workflow. The installed shell does not. References
-below distinguish that integration from direct low-level component use.
+the current Python lead workflow. Ordinary focused input in the installed
+shell enters that same Lead path. References below distinguish that integration
+from direct low-level component use.
 See [Agent-context progress](../guides/agent-context-progress.md).
 
 <a id="package-boundary-and-owners"></a>
@@ -21,7 +22,7 @@ cycle:
 | `agent_context.ledger` | Internal v2 READY/incomplete/tainted/stale state, locks, atomic publication, restart/corruption handling, and content-free metrics. |
 | `agent_context.actions` | SEARCH/READ/ANSWER values, policies, correlations, opaque handles, evidence authorization, and provider observations. |
 | `agent_context.sources` | Bounded current capture of canonical artifacts, focused conversation, active debate, and invoking-agent state; lexical search/read and drift checks. |
-| `agent_context.service` | Provider-neutral wire-v5 call loop, reference prelude, lifecycle authority, source/action orchestration, checkpoint commit, usage aggregation, and optional progress observer. |
+| `agent_context.service` | Provider-neutral typed wire-v7 call loop, reference prelude, lifecycle authority, source/action orchestration, checkpoint commit, usage aggregation, and optional progress observer. |
 
 The retained execution entry points are backend/provider component interfaces,
 plus the runtime's lead-turn and confirmed-consultation composition.
@@ -35,14 +36,30 @@ direct-module-only imports from `agent_context.service`; the root and
 ## End-to-end invocation flow
 
 ```text
-runtime operation
-  -> PREPARE: validate observer, scope, request, references, authorities
-  -> PLAN: inventory/material -> manifest -> ledger compatibility -> projection
-  -> INVOKE/ACTION: reference prelude; compact provider call; bounded SEARCH/READ loop
-  -> VERIFY: authorize ANSWER; recapture sources; validate domain and references
-  -> COMMIT: atomically publish READY checkpoint, then report checkpoint_advanced
-     or FAIL: fixed failure facts, taint when required, checkpoint_not_advanced
+focused user input + zero or more ${path} / ${path}#Lx-Ly references
+  -> shell/Python Lead API records the turn and validates reference indicators
+  -> PREPARE: validate observer, scope, request, references, and source authorities
+  -> PLAN: inventory current sources -> manifest -> bootstrap/delta projection
+  -> optional reference prelude reads every explicit reference exactly
+  -> runtime builds one per-call typed-v7 schema plus compact input payload
+  -> selected adapter invokes Codex or Antigravity
+  -> provider returns exactly one typed SEARCH, READ, or ANSWER action
+     SEARCH -> runtime searches only authorized sources and returns fresh handles
+     READ   -> runtime recaptures issued handles and returns bounded current text
+     ANSWER -> runtime authorizes used handles, recaptures sources, and validates
+               the invocation-specific semantic result
+  -> COMMIT: atomically publish READY checkpoint and close accepted provider call
+  -> Lead orchestration persists the typed judgment/proposal or fixed rejection
+  -> interactive presenter renders Lead outcome/message/next action
+     or FAIL: fixed facts, taint when required, checkpoint_not_advanced;
+              uncertain submitted work is preserved without replay
 ```
+
+SEARCH and READ are action requests inside repeated calls to the same provider
+adapter; they are not separate provider APIs. Each continuation contains only
+the new runtime observation plus compact control data. The next physical call
+gets a fresh schema whose correlation enum, allowed action variants, source
+kinds, result schema, and array bounds match that exact point in the loop.
 
 For confirmed collaboration, the runtime first commits `running` and all
 ordered assignment dispatches outside the context component. It then creates
@@ -183,6 +200,15 @@ handles. READ recaptures requested sources, verifies revision/boundary/digest,
 and returns requested order. Handles are invocation-bound, single-lifecycle
 authorities and cannot be guessed, reused, or transferred.
 
+Each SEARCH query's `source_kinds` is a nonempty, duplicate-free collection
+drawn from the kinds allowed for that request. Provider array order has no
+semantic meaning: runtime canonicalizes the collection to its internal source-
+kind order before search authorization. The common provider-schema subset
+types and enums members but does not claim to enforce set uniqueness or
+canonical order. Runtime rejects empty, duplicate, unknown, and request-
+disallowed values. A non-null `path_prefix` is valid only when the canonical
+collection is exactly `writing_artifact`.
+
 ### Invocation-local lead evidence
 
 A lead-front-channel request opts into a content-free status inventory of the
@@ -209,10 +235,12 @@ evidence, then applies the domain's closed status/kind matrix. The context
 component does not interpret story semantics. Search queries and source bodies
 are absent from durable collaboration evidence.
 
+<!-- Historical audit-link alias only; the visible normative contract is v7. -->
 <a id="compact-provider-wire-v5"></a>
-## Compact provider wire v5
+<a id="typed-provider-wire-v7"></a>
+## Typed provider wire v7
 
-Contextual bindings define `agent-context-wire-v5`. The initial compact
+Contextual bindings define `agent-context-wire-v7`. The initial compact
 payload uses `c` (correlation), `q` (phase/result contract), and `i` (required
 current input), with applicable compact candidate `n`, selected documents
 `docs`, projection `p`, and tombstone/record `t` data. Mandatory reference
@@ -220,20 +248,42 @@ bodies appear only after the separate prelude as
 `untrusted_writing_artifact_context`. Continuations contain only correlation,
 contract, and the new observation (`c`, `q`, `o`).
 
-Provider results are exact objects `{a,c,d,u}`: action `a` is `s`, `r`, or `a`;
-`c` is full correlation; `d` contains the shared optional artifact prefix plus
-queries, handles, or answer content; and terminal `u` names used READ handles.
+Provider results are exact closed objects with required `correlation` and
+`action` fields. `correlation` must echo the current input `c` token. `action`
+is one schema-selected closed variant:
+
+```json
+{"correlation":"<exact-token>","action":{"kind":"search","path_prefix":null,"queries":[{"text":"opening reveal","source_kinds":["writing_artifact"]}]}}
+```
+
+```json
+{"correlation":"<exact-token>","action":{"kind":"read","handles":["<issued-handle>"]}}
+```
+
+```json
+{"correlation":"<exact-token>","action":{"kind":"answer","result":{"kind":"answer","message":"Visible result.","proposal":null},"used_handles":["<issued-handle>"]}}
+```
+
+The third example uses a shortened generic result object; the live ANSWER
+schema embeds the complete invocation-specific result schema at
+`action.result`. There is no JSON-in-string layer and no compatibility decoder
+for an older action envelope. `used_handles` contains only successful READ
+handles supporting that answer and is empty when no READ supports it.
 SEARCH/READ observations retain the full authoritative identity, revision,
 boundary, digest, size, provenance, handle, and untrusted content required for
-provider reasoning, even though wire keys are compact.
+provider reasoning, even though the input payload remains compact.
 
 For a lead initial call, `core_statuses` is an additional top-level list beside
-`c`, `q`, and `i`. The final lead answer body contains exact `scope`,
-`evidence_status`, `evidence_ids`, `kind`, `message`, and `proposal` fields.
-Those semantic fields are decoded by orchestration only after context ANSWER
-authorization. Invalid, invented, reordered, stale, or matrix-incompatible
-evidence causes a typed no-replay lead failure rather than a successful
-judgment.
+`c`, `q`, and `i`. The final `action.result` contains all seven Lead fields:
+`scope`, `evidence_status`, `evidence_ids`, `kind`, `message`,
+`artifact_intent`, and `proposal`. Those semantic fields are decoded by
+orchestration only after context ANSWER authorization. Invalid, invented,
+reordered, stale, or matrix-incompatible evidence rejects that physical
+response, which is never replayed. With fresh authority and remaining budget,
+runtime may request one bounded same-turn correction. A final deterministic
+rejection closes with `retry_lead_turn`, which starts a fresh user turn and
+provider call. An uncertain submitted outcome instead remains
+`outcome_unknown` with `inspect_and_resolve_outcome` and is never replayed.
 
 The built-in runtime uses provider-managed context and empty mutable-core
 bindings. Package-internal `story_session_context` remains an internal capture
@@ -337,8 +387,9 @@ protection.
 
 There is no semantic RAG, new dependency, free-form durable memory, provider
 opaque correctness source, arbitrary filesystem discovery, or cross-agent
-state sharing. Exact references and the existing publication contracts remain
-compatible. "Atomic" publication means one recoverable catalog-last artifact
+state sharing. Wire v7 has no migration or legacy decoder. Exact references
+and the existing publication contracts remain compatible. "Atomic"
+publication means one recoverable catalog-last artifact
 transaction; it does not mean an unrestricted multi-manuscript batch API.
 Terminal-deadlock resume/extension remains outside this initiative until issue
 #140 is integrated.

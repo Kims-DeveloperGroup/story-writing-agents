@@ -1,17 +1,75 @@
 # Use Antigravity agents
 
 > **Availability:** the Antigravity adapter and persistent provider-session
-> components remain implemented. The current shell uses `agy` for native
-> authentication, model discovery, and configuration, but has no public story
-> turn or debate. Python `StoryRuntime.lead_turn()` can invoke the configured
-> lead route. Codex remains the final configured route fallback.
+> components are available to ordinary Lead turns in `story chat` and to
+> Python `StoryRuntime.lead_turn()`. The shell also uses `agy` for native
+> authentication, model discovery, and configuration. Codex remains the final
+> configured route fallback.
 > Settings Model/Effort editors also use bounded `agy models` discovery for a
 > pending Antigravity route without persisting the catalog.
+> Focused deterministic tests verify this contract; live Antigravity acceptance
+> remains environment- and provider-dependent and is not claimed as evidence here.
 
 Key terms: **backend name**—the configuration value `antigravity`;
 **executable**—the resolved Antigravity command, `agy` by default; **provider
 conversation**—Antigravity's private history identified by a runtime-managed
 ID; **taint**—a marker that prevents continuing uncertain provider history.
+
+## Start one focused Lead conversation
+
+Configure `lead_orchestrator` for Antigravity in global `/settings` under
+Agents, then confirm **Apply Changes**. Create or attach a ready story session,
+focus a conversation, and enter ordinary non-command text:
+
+```text
+$ story chat --workspace /workspace
+story> /session create novel
+story[novel]> /conversation new Opening consistency
+story[novel]> Hello. What can you help me do?
+[Lead]
+  Outcome: answer
+  Lead: I can discuss the story, inspect referenced canonical artifacts, and
+        propose specialist review or a reviewed change for your confirmation.
+  Next action: continue_with_lead
+story[novel]> Does this reveal conflict with ${core_documents/global_outline.md}?
+[Lead]
+  Outcome: critique
+  Lead: The cited outline places the reveal later; revise the opening or the
+        governing outline before changing the manuscript.
+  Next action: continue_with_lead
+```
+
+Exact Lead prose varies. The runtime owns the typed outcome, evidence receipts,
+state, and next action. If the Lead proposes specialist work or an artifact
+review, nothing starts until the shell presents the exact proposal and the user
+confirms it. A later write/Apply and a later Git commit each require their own
+separate confirmation; the provider never writes or commits directly. See the
+complete [Lead workflow](lead-agent.md#the-normal-workflow).
+
+Interpret a failed turn by its displayed next action:
+
+| Visible result | User action |
+| --- | --- |
+| A normal answer, question, critique, recommendation, or confirmation request | Continue with the Lead or decide the exact displayed proposal. |
+| `provider_result_rejected` / `retry_lead_turn` | Start a fresh user turn after correcting the request or provider behavior. Runtime never reuses or replays the rejected physical response. |
+| `outcome_unknown` / `inspect_and_resolve_outcome` | Inspect the preserved outcome. Do not submit the same call again: external work may have occurred. |
+| `provider_invocation_failed` with no valid provider result | Check authentication, selected route/model/effort, executable, schema support, and provider-native diagnostics. This code alone cannot establish whether replay is safe. |
+
+## User impact
+
+Users can now converse with the Lead through Antigravity in interactive mode,
+attach canonical artifact references, receive evidence-grounded feedback, and
+confirm selectively orchestrated specialist review. Compatible turns resume
+the exact Antigravity conversation while runtime correctness continues to come
+from current authoritative artifacts and validated evidence, not hidden
+provider history.
+
+Users still cannot treat Antigravity's advertised tool list as a runtime
+capability grant, ask the provider to bypass confirmation, or assume that a
+failed submitted call is safe to replay. Story content and provider-native
+state remain plaintext exposure surfaces. Failures are shown as fixed runtime
+categories and next actions; raw provider stderr, response bodies, story text,
+and credentials are not copied into durable user-facing history.
 
 ## Install and authenticate `agy`
 
@@ -188,21 +246,43 @@ arguments for sign-in: `agy models` and bare `agy` by default.
 Before provider work, preflight resolves each executable required by the
 effective provider routes. For an Antigravity route it also runs a bounded,
 provider-free `agy --help` capability probe in isolated state and requires the
-public headless flags used by the adapter. A successful probe does not validate
-authentication, network access, model access, account quota, response quality,
-or a provider turn.
+public help tokens `--agent`, `--conversation`, `--disable-slash-commands`,
+`--effort`, `--input-format`, `--json-schema`, `--mode`, `--model`,
+`--new-project`, `--output-format`, `--print-timeout`, and `--sandbox`. The
+adapter also passes the inherited hidden option `--gemini_dir=<state-dir>`, but
+does not require that compatibility spelling to appear in public help. A
+successful probe does not validate authentication, network access, model
+access, account quota, response quality, or a provider turn.
 
 For each turn, the runtime launches `agy` directly without shell evaluation. It:
 
-- copies one verified bound `AGENTS.md` into an isolated provider working
-  directory;
+- installs one verified custom main-agent definition at
+  `.agents/agents/<agent-id>/agent.md` in an isolated provider working
+  directory and selects it explicitly with `--agent <agent-id>`;
+- adds `--new-project` for a fresh provider thread, or resumes only the exact
+  retained ID with `--conversation <id>`; it never registers the canonical
+  story workspace root as an Antigravity project;
 - sends the confidential story request as one newline-delimited stream-JSON
   event on standard input and requests stream-JSON output;
 - enables the CLI sandbox, selects plan mode, and disables slash commands;
 - does not pass an approval-bypass or unrestricted-execution option; and
-- drains stdout and stderr, validates the event stream and correlation fields,
-  and reports fixed provider error categories instead of rendering provider
-  response or stderr content.
+- drains stdout and stderr, requires the selected agent, exact runtime working
+  directory, `request-review` permission mode, accepted step metadata,
+  root-object structured output, and an exact schema echo, then applies the
+  shared runtime correlation and semantic checks.
+
+The custom definition declares `tools: [finish]`, `mainAgent: true`,
+`subagent: false`, and `commandExecutionPolicy: off`. Those declarations,
+sandboxing, plan mode, and request-review are layered containment signals—not
+proof that the vendor removed capabilities. Antigravity CLI 1.1.27 still
+advertised its main agent's full 57-tool catalog in the native `init` event
+when the definition declared only `finish`; content-free probes did not prove
+provider-level tool removal. Story therefore accepts only the non-operational
+`user_input`, `checkpoint`, `agent_response`, and `finish` step types. A tool,
+subagent, or unknown operational step invalidates the returned stream rather
+than granting it authority.
+The definition location and selection mechanism follow Antigravity's official
+[custom-agent documentation](https://antigravity.google/docs/cli/commands/agents/).
 
 Antigravity and Codex use the same rejected-response capture boundary. Only
 after either adapter returns a completed response can structured JSON, Unicode,
@@ -221,6 +301,117 @@ Story prompts, drafts, retrieval observations, provider replies, and credentials
 are not inserted into argv; credentials may instead be available through the
 inherited environment or provider keyring.
 
+### Sanitized provider call and native stream
+
+For a session named `novel`, the process working directory has this exact
+adapter-owned structure (the root and fingerprint are sanitized):
+
+```text
+/workspace/agent_states/orchestrator_state/provider_sessions/.antigravity/
+  sessions/novel/lead_orchestrator/<definition-sha256>/workspace
+```
+
+The provider-state directory is its sibling `provider`. A fresh Lead call is
+equivalent to this shell-free argument vector; wrapping is only for
+readability:
+
+```text
+cwd=/workspace/agent_states/orchestrator_state/provider_sessions/.antigravity/sessions/novel/lead_orchestrator/<definition-sha256>/workspace
+agy --gemini_dir=<runtime-root>/provider \
+  --input-format stream-json --output-format stream-json \
+  --json-schema '<exact generated wire-v7 schema>' \
+  --agent lead_orchestrator --sandbox --mode plan \
+  --disable-slash-commands --print-timeout 300s --new-project
+```
+
+On a compatible later call, the adapter keeps `--agent lead_orchestrator` and
+replaces `--new-project` with `--conversation agy-c-1`. Antigravity reopens the
+project associated with that exact conversation. Story never supplies
+`--project` and never lets Antigravity infer the outer story Git root as its
+project. This matches the provider's documented
+[project and conversation behavior](https://antigravity.google/docs/cli/projects/).
+
+The confidential wire-v7 payload is nested as text in the native input event,
+not in argv. The inner JSON uses compact runtime field names, while the
+response schema still requires the descriptive typed outer result:
+
+```json
+{"event":"user","message":{"content":"{\"c\":\"<correlation-1>\",\"q\":[\"lead\",\"sa\",\"wcdo\",[4,2,2,4,8,8,16,200],[\"lead\",\"outcome-v1\"]],\"i\":{\"workflow\":\"lead_front_channel\",\"command\":\"Explain how confirmation works.\"}}"}}
+```
+
+A successful native stream has one `init`, only accepted safe steps, and one
+terminal `result`. This shortened sanitized sample preserves the fields Story
+validates. The tool-list marker represents the other provider-advertised names;
+it is not accepted as an actual tool name. In a real result, `json_schema` is
+the complete JSON object passed on argv, and canonical bytes must match exactly:
+
+```json
+{"event":"init","conversation_id":"agy-c-1","init":{"agent":"lead_orchestrator","cwd":"/workspace/agent_states/orchestrator_state/provider_sessions/.antigravity/sessions/novel/lead_orchestrator/<definition-sha256>/workspace","permission_mode":"request-review","tools":["finish","ListDir","<55 additional CLI-advertised tools>"]}}
+{"event":"step_update","step_update":{"conversation_id":"agy-c-1","state":"DONE","step_index":0,"step_type":"user_input","text_delta":""}}
+{"event":"step_update","step_update":{"conversation_id":"agy-c-1","state":"DONE","step_index":1,"step_type":"checkpoint"}}
+{"event":"step_update","step_update":{"conversation_id":"agy-c-1","state":"ACTIVE","step_index":2,"step_type":"agent_response","text_delta":""}}
+{"event":"step_update","step_update":{"conversation_id":"agy-c-1","state":"DONE","step_index":3,"step_type":"finish"}}
+{"event":"result","result":{"conversation_id":"agy-c-1","status":"SUCCESS","structured_output":{"correlation":"<correlation-1>","action":{"kind":"answer","result":{"scope":"workflow_meta","evidence_status":"not_applicable","evidence_ids":[],"kind":"answer","message":"I will show the exact proposal before any specialist work starts.","artifact_intent":null,"proposal":null},"used_handles":[]}},"json_schema":{"<documentation-placeholder>":"the exact generated wire-v7 schema object"}}}
+```
+
+The placeholder makes this excerpt deliberately non-executable. A missing,
+string-valued, or different schema echo is rejected before Story constructs a
+`ProviderResult`. The complete closed SEARCH, READ, and seven-field Lead ANSWER
+branches are shown in [What providers receive](lead-agent.md#what-providers-receive).
+
+### Shared structured-output contract
+
+Codex and Antigravity receive byte-identical provider-neutral schema and
+payload semantics. Typed wire v7 has a closed required root object with
+`correlation` and one closed `action`: SEARCH, READ, or ANSWER. ANSWER embeds
+the invocation-specific result object directly; there is no JSON-in-string
+result layer.
+
+OpenAI Structured Outputs requires an object root, every declared field in
+`required`, `additionalProperties: false` on closed objects, explicitly typed
+array items, and a union with `null` for nullable values. See the official
+[OpenAI Structured Outputs guide](https://developers.openai.com/api/docs/guides/structured-outputs).
+The common schema also stays within the subset documented for
+[Gemini structured output](https://ai.google.dev/gemini-api/docs/structured-output).
+Antigravity transport success additionally requires the root-object
+`structured_output` and exact `json_schema` echo described by its official
+[headless CLI guide](https://antigravity.google/docs/cli/headless/).
+
+Transport validation does not replace Story's checks of correlation,
+runtime-issued handles and evidence IDs, the Lead outcome matrix, input
+aliases, artifact authority, or user confirmation. Applications do not call
+separate Codex or Antigravity SEARCH/READ/ANSWER APIs: Story may make bounded
+continuation calls using the same provider invocation boundary.
+
+### Why the earlier Lead call did not proceed
+
+The previous adapter allowed Antigravity's default-agent/default-project
+resolution while using an outer story Git root as its working directory.
+Antigravity selected its general main agent, attempted `ListDir`, received a
+request-review soft denial, and emitted no valid terminal structured result.
+Story consequently had no valid `ProviderResult`: the exchange recorded
+`provider_invocation_failed`, and an unmatched durable submitted call could be
+projected as `outcome_unknown` during recovery.
+
+| Before | Current implementation |
+| --- | --- |
+| Provider default agent and project could be selected from the outer story Git root. | Runtime selects its bound custom Lead agent in an isolated nested workspace and creates or resumes only that provider project. |
+| An attempted `ListDir` could end in request-review denial without a valid terminal result. | Operational tool/subagent steps are rejected, while accepted safe steps must end in object `structured_output` plus an exact schema echo. |
+| The user saw a coarse invocation failure and recovery could find a submitted unknown outcome. | Deterministic returned rejections close with `retry_lead_turn`; only a genuinely unresolved submitted call stays `outcome_unknown` and non-replayable. |
+
+That failure is different from a deterministic returned-result rejection. An
+invalid request/output schema, authentication or launch error, transport
+failure, nonzero exit, or missing terminal result also fails before a valid
+`ProviderResult` exists. By contrast, `malformed_structured_response` and
+`answer_validation_failed` are returned-result rejection classes. Durable Lead
+history closes such a call as `provider_result_rejected` and offers
+`retry_lead_turn`; one bounded same-turn correction may be attempted when fresh
+authority and budget remain, but normal success must not depend on correction.
+Only a submitted call without an authoritative accepted or deterministic
+rejected closure becomes `outcome_unknown`; follow
+`inspect_and_resolve_outcome` and never replay it. See the
+[recovery table](troubleshooting.md#distinguish-lead-provider-failure-from-result-rejection).
+
 ## Sessions, provider conversations, and retention
 
 Story session lifecycle is provider-neutral: create or reopen makes durable
@@ -238,13 +429,13 @@ symbolic link or non-directory in those components. It does not recursively
 change the backend-owned containing directory, capability-probe scratch path,
 or files created by `agy`; provider-native retention is unchanged.
 
-Adapter-owned staged and workspace `AGENTS.md` rules leaves are verified as
+Adapter-owned staged and workspace custom-agent definition leaves are verified as
 regular and singly linked when present. Canonical bytes are installed through
 an exclusively created same-directory temporary with requested `0600` mode and
 atomic replacement. A detected symbolic link, non-regular entry, or multiply
 linked leaf is preserved and rejected before provider launch.
 
-These directory-mode and rules-leaf protections do not descriptor-anchor
+These directory-mode and definition-leaf protections do not descriptor-anchor
 parent-directory traversal and are not application access control or race-proof
 containment. Unsupported platforms, including Windows, and ordinary
 mode-setting failures retain platform behavior. Keep the complete workspace
@@ -279,7 +470,7 @@ A fresh Antigravity or Codex thread is not a new story session. The retained
 context engine starts a new epoch by bootstrapping current role-relevant
 authoritative sources; compatible later calls can use exact deltas.
 Provider-private hidden history is optional acceleration and never correctness
-authority. Python lead turns enter this path; the public shell does not.
+authority. Python and interactive Lead turns enter this path.
 See [Story sessions](story-sessions.md) and
 [Agent-context design](../design/agent-context.md).
 
@@ -303,7 +494,7 @@ PYTHONPATH=src python -W error -m unittest \
 They cover retained adapter/provider component contracts, mixed providers,
 session/thread partitioning, resume, taint/restart, timeout and cancellation
 cleanup, fixed diagnostics, and confidentiality boundaries. Passing these
-component tests does not expose a public story command.
+component tests does not perform a live provider call.
 
 Local vendor checks are optional and still do not make a provider turn:
 

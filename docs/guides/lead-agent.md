@@ -183,6 +183,19 @@ LeadTurnResult:
 Provider work: lead only; no story reference/SEARCH/READ; no specialist
 ```
 
+The same front channel is available as ordinary input in the interactive
+shell. Exact prose is provider-generated, while the typed outcome and next
+action are runtime-owned:
+
+```text
+story[novel]> Does the opening conflict with ${core_documents/global_outline.md}?
+[Lead]
+  Outcome: critique
+  Lead: The referenced outline places the reveal after the opening, so the
+        current ordering needs revision.
+  Next action: continue_with_lead
+```
+
 For a story-specific provider judgment, `result.evidence` identifies its
 declared `scope`, `status`, and ordered content-free receipts. A workflow/meta
 judgment also has an evidence value, but it is exactly
@@ -311,7 +324,7 @@ question. Runtime then accepts only these combinations:
 Every other combination fails closed. Evidence IDs are invocation-local and
 must be unique and in runtime order: attached references, four core statuses,
 then completed SEARCH/READ actions. Only a READ named in the final ANSWER's
-`u` field may support content and become a proposal input. Core-status and
+`action.used_handles` field may support content and become a proposal input. Core-status and
 zero-hit SEARCH receipts are evidence only, never assignment inputs.
 
 An exact explicit reference has stronger failure semantics than an exploratory
@@ -327,6 +340,22 @@ conversation from provider intent and runtime enforcement. “Candidate” means
 exact proposed bytes and paths. “Reviewed proposal” means every disclosed
 specialist assessed that same candidate and the lead selected `propose`; it
 never means the files changed.
+
+### 0. Greeting and orientation
+
+```text
+User input
+Hello. Can you help me continue this story?
+
+Lead output
+Hello. Tell me what you want to develop or reference the relevant files.
+Outcome: answer
+Next action: continue_with_lead
+```
+
+This is a `workflow_meta` ANSWER with `not_applicable`, no evidence IDs, no
+specialist, no artifact intent, and no confirmation. Runtime may inventory
+content-free core status facts, but the greeting does not load story bodies.
 
 ### 1. Incomplete or conflicting core evidence
 
@@ -571,6 +600,26 @@ The retry is a new turn and a new provider call. If the failure event itself
 cannot be appended, runtime returns `recovery_required` and normal
 collaboration must stop for history repair.
 
+Do not treat every provider-related failure as the same recovery case:
+
+| Observable fact | What it means | Safe next action |
+| --- | --- | --- |
+| An exchange has a request and `provider_failure` / `provider_invocation_failed`, but no valid `ProviderResult`. | The adapter did not return Story's provider-result contract. Configuration, output-schema rejection, authentication, transport, or another provider-side failure may be responsible. The fixed code does not prove whether the provider performed external work. | Diagnose the provider/configuration boundary. Do not infer that replay is safe from this diagnostic alone. |
+| A completed result is rejected and the durable Lead failure is `provider_result_rejected`. | Story received a result but deterministically rejected its structured action, correlation, semantics, action budget, or validated answer. The rejected call is closed. | Follow `retry_lead_turn`. This creates a fresh call; the tainted provider thread is not reused. |
+| Collaboration state is `outcome_unknown`. | Submission is durable, but no authoritative accepted or rejected result closes it. | Follow `inspect_and_resolve_outcome`; never replay the submitted call. |
+
+For example, the former Codex failure was caused by a response schema whose
+array `items` node had no explicit supported type. Codex rejected that schema
+before returning a valid `ProviderResult`, so the exchange could show only
+`provider_invocation_failed`. Typed wire v7 uses a closed
+`{correlation, action}` root and embeds every action/result object directly.
+Conversely, an Antigravity
+result that places `user_input` in `action.used_handles` without a successful
+READ, or omits required nullable Lead fields, is a
+returned-result rejection and becomes `provider_result_rejected`, not
+`outcome_unknown`. These examples contain no provider-native diagnostic or
+story content; durable user history also keeps only the fixed classifications.
+
 Artifact candidates add two separate staleness checks. Before review starts,
 Confirm revalidates the candidate's evidence and complete base state; drift
 returns artifact state `stale`, makes zero reviewer calls, and changes no file.
@@ -623,6 +672,75 @@ The samples below are sanitized from the orchestration acceptance fixtures;
 generated correlations, IDs, handles, digests, and compact planning counters
 vary.
 
+Codex and Antigravity receive byte-identical provider-neutral wire-v7 schema
+and payload semantics; only their native transport differs. The closed outer
+response has required `correlation` and `action` fields. The exact correlation
+token, allowed actions, source kinds, result object, and array limits are
+generated for each physical call. This sanitized structural sample shows all
+three action variants:
+
+```json
+{
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "correlation": {"type": "string", "enum": ["<exact-token>"]},
+    "action": {
+      "anyOf": [
+        {"type":"object","additionalProperties":false,"properties":{"kind":{"type":"string","enum":["search"]},"path_prefix":{"type":["string","null"]},"queries":{"type":"array","minItems":1,"items":{"type":"object","additionalProperties":false,"properties":{"text":{"type":"string"},"source_kinds":{"type":"array","minItems":1,"items":{"type":"string","enum":["writing_artifact","conversation","active_debate","own_agent_state"]}}},"required":["text","source_kinds"]}}},"required":["kind","path_prefix","queries"]},
+        {"type":"object","additionalProperties":false,"properties":{"kind":{"type":"string","enum":["read"]},"handles":{"type":"array","minItems":1,"items":{"type":"string"}}},"required":["kind","handles"]},
+        {"type":"object","additionalProperties":false,"properties":{"kind":{"type":"string","enum":["answer"]},"result":{"type":"object","additionalProperties":false,"properties":{"scope":{"type":"string","enum":["workflow_meta"]},"evidence_status":{"type":"string","enum":["not_applicable"]},"evidence_ids":{"type":"array","maxItems":0,"items":{"type":"string"}},"kind":{"type":"string","enum":["answer","question","critique","recommendation"]},"message":{"type":"string"},"artifact_intent":{"type":"null"},"proposal":{"type":"null"}},"required":["scope","evidence_status","evidence_ids","kind","message","artifact_intent","proposal"]},"used_handles":{"type":"array","items":{"type":"string"}}},"required":["kind","result","used_handles"]}
+      ]
+    }
+  },
+  "required": ["correlation", "action"]
+}
+```
+
+The shown ANSWER branch is the complete workflow-meta result variant; live
+schemas also include the exact story-specific and proposal variants allowed by
+that call. SEARCH
+finds locators, READ accepts only issued SEARCH handles, and ANSWER embeds its
+semantic result object directly plus only supporting successful READ handles.
+There is no JSON-in-string layer, migration, or legacy decoder.
+
+A sanitized provider-call summary (with the schema block referenced rather
+than duplicated) has the same semantics for either provider:
+
+```json
+{
+  "call_kind": "collaboration_initial",
+  "prior_thread_id": null,
+  "schema": "<exact per-call schema shown above>",
+  "payload": {
+    "c": "<correlation-1>",
+    "q": ["lead", "sa", "wcdo", [4, 2, 2, 4, 8, 8, 16, 200], ["lead", "outcome-v1"]],
+    "i": {"workflow": "lead_front_channel", "command": "Does the planned reveal conflict with the current opening?"}
+  }
+}
+```
+
+Codex receives that schema by `--output-schema <schema-file>`. Antigravity
+receives the same canonical schema by `--json-schema <canonical-json>` and must
+return a root-object `structured_output` plus an exact `json_schema` echo; its
+custom-agent, isolated-project, and native-stream boundary is documented in
+the [Antigravity guide](antigravity.md#sanitized-provider-call-and-native-stream).
+Applications do not call separate provider search/read endpoints.
+
+For example, either provider can return this provider-neutral SEARCH output:
+
+```json
+{"correlation":"<correlation-1>","action":{"kind":"search","path_prefix":null,"queries":[{"text":"planned reveal opening","source_kinds":["writing_artifact"]}]}}
+```
+
+The samples keep `source_kinds` in canonical order for readability, but a
+provider's array order is not semantic. Runtime requires a nonempty,
+duplicate-free subset of the kinds allowed for that request and canonicalizes
+it before authorizing SEARCH. Empty, duplicate, unknown, or request-disallowed
+kinds are rejected. A non-null `path_prefix` is allowed only with
+`source_kinds=["writing_artifact"]`. The provider schema types and enums each
+member; runtime—not JSON Schema—owns uniqueness and ordering validation.
+
 ### Lead turn: initial input, SEARCH, READ, and ANSWER
 
 For this user input:
@@ -668,7 +786,7 @@ The sample abbreviates the remaining two status rows. A provider that needs
 the manuscript can request a bounded lexical SEARCH:
 
 ```json
-{"a":"s","c":"<correlation-1>","d":[["planned reveal opening",["w"]]],"u":[]}
+{"correlation":"<correlation-1>","action":{"kind":"search","path_prefix":null,"queries":[{"text":"planned reveal opening","source_kinds":["writing_artifact"]}]}}
 ```
 
 Runtime returns a compact continuation observation. A hit includes source,
@@ -676,27 +794,30 @@ revision, boundary, provenance, snippet, and an opaque invocation-local
 handle; it is not yet content evidence. The provider asks to READ that handle:
 
 ```json
-{"a":"r","c":"<correlation-2>","d":["<handle>"],"u":[]}
+{"correlation":"<correlation-2>","action":{"kind":"read","handles":["<handle>"]}}
 ```
 
 The READ continuation contains the selected untrusted text and a new evidence
-ID such as `read_2_1`. The provider's final ANSWER must name the handle in `u`
+ID such as `read_2_1`. The provider's final ANSWER must name the handle in
+`action.used_handles`
 and cite the evidence ID in its strict semantic result:
 
 ```json
 {
-  "a": "a",
-  "c": "<correlation-3>",
-  "d": [{
-    "scope": "story_specific",
-    "evidence_status": "conflicting",
-    "evidence_ids": ["read_2_1", "read_2_2"],
-    "kind": "critique",
-    "message": "The opening reveals the secret before the outline's turning point.",
-    "proposal": null,
-    "artifact_intent": null
-  }],
-  "u": ["<handle-1>", "<handle-2>"]
+  "correlation": "<correlation-3>",
+  "action": {
+    "kind": "answer",
+    "result": {
+      "scope": "story_specific",
+      "evidence_status": "conflicting",
+      "evidence_ids": ["read_2_1", "read_2_2"],
+      "kind": "critique",
+      "message": "The opening reveals the secret before the outline's turning point.",
+      "artifact_intent": null,
+      "proposal": null
+    },
+    "used_handles": ["<handle-1>", "<handle-2>"]
+  }
 }
 ```
 
@@ -709,7 +830,7 @@ A complete, non-truncated zero-hit SEARCH instead includes a content-free
 `search_<action>` receipt in the observation. That receipt can support
 `missing` only when the searched scope includes canonical writing artifacts.
 A conversation-only zero hit, a truncated search, a hit that was never READ,
-or a READ omitted from final `u` cannot ground the claim.
+or a READ omitted from final `action.used_handles` cannot ground the claim.
 
 For a story-file change, the lead ANSWER uses the same envelope but chooses
 `kind=proposal`, sets the ordinary `proposal` to `null`, and returns one strict
@@ -718,25 +839,20 @@ resolved to `reference_1` by runtime:
 
 ```json
 {
-  "a": "a",
-  "c": "<correlation-3>",
-  "d": [{
-    "scope": "story_specific",
-    "evidence_status": "verified",
-    "evidence_ids": ["reference_1", "reference_2"],
-    "kind": "proposal",
-    "message": "I prepared an exact manuscript patch candidate for review.",
-    "proposal": null,
-    "artifact_intent": {
-      "operations": [{
-        "kind": "patch",
-        "evidence_id": "reference_1",
-        "replacement_text": "<proposed replacement>"
-      }],
-      "additional_review_domains": ["plot_structure", "character_world"]
-    }
-  }],
-  "u": []
+  "correlation": "<correlation-3>",
+  "action": {
+    "kind": "answer",
+    "result": {
+      "scope": "story_specific",
+      "evidence_status": "verified",
+      "evidence_ids": ["reference_1", "reference_2"],
+      "kind": "proposal",
+      "message": "I prepared an exact manuscript patch candidate for review.",
+      "artifact_intent": {"operations":[{"kind":"patch","evidence_id":"reference_1","replacement_text":"<proposed replacement>"}],"additional_review_domains":["plot_structure","character_world"]},
+      "proposal": null
+    },
+    "used_handles": []
+  }
 }
 ```
 
@@ -745,9 +861,13 @@ digest, Apply flag, or Git flag. Runtime resolves `reference_1` to its current
 canonical path/range, captures the complete artifact state, builds an exact
 change set, validates projected relationships, derives mandatory review
 domains, unions the explicitly requested additional domains in canonical
-order, and computes the candidate digest. Invalid or authority-bearing intent
-is closed as `artifact_intent_rejected` and returns `retry_lead_turn` without a
-candidate.
+order, and computes the candidate digest. An unknown or authority-bearing
+provider field violates the closed wire-v7 result schema, so the response is
+rejected before candidate construction; if bounded correction does not produce
+a valid response, it closes as `provider_result_rejected` with no artifact-
+review failure event. A schema-valid intent that cannot satisfy runtime
+artifact semantics instead closes as `artifact_intent_rejected`. Both outcomes
+create no candidate and permit only `retry_lead_turn` as a fresh Lead turn.
 
 ### Specialist assignment: initial input
 
@@ -824,7 +944,7 @@ input IDs, assessment, and visible message.
 The provider can request bounded lexical search:
 
 ```json
-{"a":"s","c":"<correlation-1>","d":[["opening causality",["w","c"]]],"u":[]}
+{"correlation":"<correlation-1>","action":{"kind":"search","path_prefix":null,"queries":[{"text":"opening causality","source_kinds":["writing_artifact","conversation"]}]}}
 ```
 
 Runtime searches only this invocation's authorized sources and returns an
@@ -832,7 +952,7 @@ opaque handle in the continuation observation. The provider requests that
 handle:
 
 ```json
-{"a":"r","c":"<correlation-2>","d":["<handle>"],"u":[]}
+{"correlation":"<correlation-2>","action":{"kind":"read","handles":["<handle>"]}}
 ```
 
 After runtime recaptures and validates the source, the provider answers and
@@ -840,15 +960,12 @@ names every READ handle it used:
 
 ```json
 {
-  "a": "a",
-  "c": "<correlation-3>",
-  "d": [{
-    "assessment": "concern",
-    "assignment_id": "<assignment-id>",
-    "input_ids": ["user_input", "reference_1", "reference_3"],
-    "message": "The opening advances the reveal before its outline cause."
-  }],
-  "u": ["<handle>"]
+  "correlation": "<correlation-3>",
+  "action": {
+    "kind": "answer",
+    "result": {"assessment":"concern","assignment_id":"<assignment-id>","input_ids":["user_input","reference_1","reference_3"],"message":"The opening advances the reveal before its outline cause."},
+    "used_handles": ["<handle>"]
+  }
 }
 ```
 
@@ -893,18 +1010,12 @@ The terminal provider answer is exact JSON:
 
 ```json
 {
-  "a": "a",
-  "c": "<synthesis-correlation>",
-  "d": [{
-    "scope": "story_specific",
-    "evidence_status": "conflicting",
-    "evidence_ids": ["reference_1", "read_2_1"],
-    "message": "Motivation is plausible, but the reveal still conflicts with the outline timing.",
-    "reply_event_ids": ["<reply-event-1>", "<reply-event-2>"],
-    "unresolved_input_ids": ["user_input", "reference_1", "read_2_1"],
-    "next_intent": null
-  }],
-  "u": []
+  "correlation": "<synthesis-correlation>",
+  "action": {
+    "kind": "answer",
+    "result": {"scope":"story_specific","evidence_status":"conflicting","evidence_ids":["reference_1","read_2_1"],"message":"Motivation is plausible, but the reveal still conflicts with the outline timing.","next_intent":null,"reply_event_ids":["<reply-event-1>","<reply-event-2>"],"unresolved_input_ids":["user_input","reference_1","read_2_1"]},
+    "used_handles": []
+  }
 }
 ```
 
@@ -921,22 +1032,12 @@ For artifact review, the synthesis input additionally includes the same exact
 
 ```json
 {
-  "a": "a",
-  "c": "<synthesis-correlation>",
-  "d": [{
-    "scope": "story_specific",
-    "evidence_status": "verified",
-    "evidence_ids": ["reference_1", "reference_2"],
-    "message": "The candidate is coherent after preserving the stated concern.",
-    "reply_event_ids": ["<reply-event-1>", "<reply-event-2>"],
-    "unresolved_input_ids": ["user_input", "reference_1", "reference_2", "artifact_candidate"],
-    "next_intent": null,
-    "decision": "propose",
-    "rationale": "Every disclosed review is attributed and the candidate remains exact.",
-    "user_impact": "No artifact changed; the user may inspect the reviewed proposal.",
-    "limitations": "This result grants no Apply, write, commit, or Git authority."
-  }],
-  "u": []
+  "correlation": "<synthesis-correlation>",
+  "action": {
+    "kind": "answer",
+    "result": {"scope":"story_specific","evidence_status":"verified","evidence_ids":["reference_1","reference_2"],"message":"The candidate is coherent after preserving the stated concern.","next_intent":null,"reply_event_ids":["<reply-event-1>","<reply-event-2>"],"unresolved_input_ids":["user_input","reference_1","reference_2","artifact_candidate"],"decision":"propose","rationale":"Every disclosed review is attributed and the candidate remains exact.","user_impact":"No artifact changed; the user may inspect the reviewed proposal.","limitations":"This result grants no Apply, write, commit, or Git authority."},
+    "used_handles": []
+  }
 }
 ```
 

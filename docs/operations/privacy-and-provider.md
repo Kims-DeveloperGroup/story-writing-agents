@@ -596,13 +596,21 @@ for the user-visible lifecycle and limits.
 
 ## Provider disclosure
 
-A built-in substantive call uses compact agent-context wire v5. Stable binding
-material contains role/persona/language/behavior/protocol, not mutable core
-bytes. Initial contextual input can expose the current command, complete
-logical candidate or exact pointer/splice operation, selected role-relevant P2
-source bodies, focused record changes, content-free catalog facts, and
-applicable mandatory-reference bodies. Continuations expose only the newly
-authorized SEARCH/READ observation.
+A built-in substantive call uses typed agent-context wire v7. Codex and
+Antigravity receive the same closed response schema and payload semantics: the
+required root fields are `correlation` and `action`, and `action` is one closed
+SEARCH, READ, or ANSWER object. ANSWER embeds its invocation-specific result
+object directly and names only successful supporting READ handles in
+`used_handles`, or `[]` when none was used. There is no JSON-in-string layer,
+compatibility decoder, or migration. Typed structure does not redact or reduce
+the sensitivity of action data.
+
+Stable binding material contains role/persona/language/behavior/protocol, not
+mutable core bytes. Initial contextual input can expose the current command,
+complete logical candidate or exact pointer/splice operation, selected
+role-relevant P2 source bodies, focused record changes, content-free catalog
+facts, and applicable mandatory-reference bodies. Continuations expose only
+the newly authorized SEARCH/READ observation.
 
 The lead initial payload also exposes four content-free canonical-core status
 rows and the strict scope/status/evidence answer contract. Status inventory
@@ -821,6 +829,17 @@ request plus a fixed `provider_failure` outcome when both appends succeed. It
 would contain no response and would not import native tool/reasoning or NDJSON
 streams.
 
+These exchange codes are diagnostic boundaries, not durable story-history
+prose. `provider_invocation_failed` is intentionally coarse and does not expose
+whether output-schema rejection, authentication, configuration, transport, or
+another provider-side condition caused the missing result. When a completed
+Lead result falls into one of the five deterministic rejection classes,
+collaboration history instead stores the content-free
+`provider_result_rejected` closure and exposes `retry_lead_turn`; it does not
+copy the raw result. A genuinely unmatched submitted call remains
+`outcome_unknown` with `inspect_and_resolve_outcome`, because neither
+diagnostic classification authorizes replay.
+
 This store is independent of `debug_logs/runtime.jsonl` and
 `debug_logs/provider_error_responses/`. It never imports, validates, counts,
 prunes, or repairs either sibling. The runtime log remains content-safe. The
@@ -849,8 +868,10 @@ failure.
 This content-bearing channel is deliberately separate from
 `debug_logs/runtime.jsonl`. The runtime log remains the content-safe source for
 the sanitized exception type and frame metadata. The terminal and runtime log
-do not render or contain the rejected body, and the user-facing category
-remains the sanitized `provider_protocol_error`. No artifact path is printed.
+do not render or contain the rejected body. Direct backend callers retain the
+sanitized `provider_protocol_error` category; eligible Lead orchestration
+projects only the fixed `provider_result_rejected` closure and
+`retry_lead_turn`. No artifact path is printed.
 
 Each complete schema-v1 JSON record contains its UTC timestamp, provider,
 canonical agent and session, exactly one `debate_id` or `conversation_id`, the
@@ -951,8 +972,12 @@ still apply, and the vendor may retain remote conversations.
 
 Antigravity also runs without shell evaluation. The backend sends confidential
 story request JSON through standard input and requests streamed JSON output. It
-disables slash commands, selects plan mode, applies sandbox controls, and does
-not request an approval bypass. The process argument list still contains
+stages a selected custom main agent beneath the isolated provider workspace,
+uses `--new-project` for a fresh conversation or the exact retained
+`--conversation` ID for resume, disables slash commands, selects plan mode,
+applies sandbox controls, and does not request an approval bypass. It never
+registers the canonical story root as the provider project. The process
+argument list still contains
 runtime-owned output schema, the isolated provider-state path, optional
 model/effort, and an optional provider conversation ID. The child process
 inherits the runtime environment. Do not place credentials in model names,
@@ -978,7 +1003,7 @@ Antigravity state root and adapter-owned definition and session directory
 chains, and it rejects a detected link or non-directory in those components
 before a provider launch. It does not recursively change the backend-owned
 containing directory or provider-created files. Adapter-owned staged and
-workspace `AGENTS.md` rules leaves are verified as regular and singly linked
+workspace custom-agent definition leaves are verified as regular and singly linked
 when present, then installed through an exclusively created same-directory
 temporary with requested `0600` mode and atomic replacement. Detected symbolic
 links, non-regular entries, and multiply linked leaves are preserved and
@@ -988,6 +1013,16 @@ retain platform behavior; parent-directory traversal is not descriptor-anchored,
 so these protections are neither application access control nor race-proof
 containment. Protect the complete workspace and provider-state paths with
 OS-level controls; the runtime provides neither encryption nor secure erase.
+
+The custom definition declares only `finish`, but Antigravity CLI 1.1.27 still
+advertised a 57-tool main-agent catalog. Treat that declaration as one layer of
+containment, not proof of provider capability removal. Story validates the
+selected agent, exact isolated cwd, `request-review` permission, and safe step
+metadata; an operational tool, subagent, or unknown step invalidates the
+stream. It also requires root-object `structured_output` and an exact
+`json_schema` echo before shared correlation, evidence, artifact-authority,
+and confirmation checks. See the exact command and sanitized stream in the
+[Antigravity guide](../guides/antigravity.md#sanitized-provider-call-and-native-stream).
 
 Use interactive `/auth` or the startup picker to enter native sign-in. Never put
 credentials in story content, configuration, filenames, prompts, replies,
