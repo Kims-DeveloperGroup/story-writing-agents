@@ -7,6 +7,7 @@ from enum import StrEnum
 
 from ..conversations import (
     ArtifactApplicationDecisionPayload,
+    ArtifactApplicationDecisionResult,
     ArtifactApplicationRequestPayload,
     ArtifactApplicationResultPayload,
     ArtifactProposalStatePayload,
@@ -31,7 +32,9 @@ from ..conversations import (
     CollaborationStepState,
     CollaborationStepStatePayload,
     CollaborationTerminalOutcomePayload,
+    LeadTurnResult,
     StoryCommitDecisionPayload,
+    StoryCommitDecisionResult,
     StoryCommitRequestPayload,
     StoryCommitResultPayload,
 )
@@ -128,6 +131,83 @@ def project_collaboration_event(
         f"Collaboration · {event.kind.value.replace('_', ' ')}",
         tuple(items),
         state=_event_state(event.payload),
+    )
+
+
+def project_lead_turn_result(result: LeadTurnResult) -> Panel:
+    """Project one runtime-validated visible lead result without side effects."""
+
+    if type(result) is not LeadTurnResult:
+        raise TypeError("result must be a LeadTurnResult")
+    items: list[Section | Field | Notice | Message | Record | ListView] = [
+        Field("Outcome", result.kind.value),
+        _message("Lead", result.message),
+    ]
+    if result.proposal is not None:
+        items.extend(_proposal_items(result.proposal))
+    if result.evidence is not None:
+        items.extend(_evidence_items(result.evidence))
+    items.append(Field("Next action", result.next_action.value))
+    if result.state is not None:
+        items.extend(
+            (
+                Field("State", result.state.value),
+                Notice(
+                    _STATE_GUIDANCE[result.state],
+                    label="next action",
+                    role=(
+                        SemanticRole.ERROR
+                        if result.state
+                        in {
+                            CollaborationStepState.OUTCOME_UNKNOWN,
+                            CollaborationStepState.RECOVERY_REQUIRED,
+                        }
+                        else SemanticRole.INFO
+                    ),
+                ),
+            )
+        )
+    if result.artifact_proposal is not None:
+        items.append(
+            Field("Artifact proposal", result.artifact_proposal.state.value)
+        )
+    if result.artifact_application_request is not None:
+        items.extend(
+            _payload_items(result.artifact_application_request, {}, {}, {})
+        )
+    return Panel("Lead", tuple(items), state=_event_state(result))
+
+
+def project_artifact_application_decision_result(
+    result: ArtifactApplicationDecisionResult,
+) -> Panel:
+    """Project one exact artifact decision result and optional commit request."""
+
+    if type(result) is not ArtifactApplicationDecisionResult:
+        raise TypeError("result must be an ArtifactApplicationDecisionResult")
+    items: list[Section | Field | Notice | Message | Record | ListView] = [
+        _message("Lead", result.message),
+        *_payload_items(result.outcome, {}, {}, {}),
+    ]
+    if result.commit_request is not None:
+        items.extend(_payload_items(result.commit_request, {}, {}, {}))
+    return Panel("Artifact application", tuple(items), state=_event_state(result.outcome))
+
+
+def project_story_commit_decision_result(
+    result: StoryCommitDecisionResult,
+) -> Panel:
+    """Project one exact local commit decision result without repository I/O."""
+
+    if type(result) is not StoryCommitDecisionResult:
+        raise TypeError("result must be a StoryCommitDecisionResult")
+    return Panel(
+        "Local story commit",
+        (
+            _message("Lead", result.message),
+            *_payload_items(result.outcome, {}, {}, {}),
+        ),
+        state=_event_state(result.outcome),
     )
 
 
@@ -646,6 +726,9 @@ def _yes_no(value: bool) -> str:
 
 __all__ = (
     "collaboration_view_context",
+    "project_artifact_application_decision_result",
     "project_collaboration_event",
+    "project_lead_turn_result",
+    "project_story_commit_decision_result",
     "validate_collaboration_event_order",
 )

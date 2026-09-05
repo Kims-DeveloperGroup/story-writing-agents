@@ -83,22 +83,22 @@ and ordered authorization evidence. A Python lead call must:
 5. revalidate receipt before accepting the answer.
 
 Another agent's read, provider history, a checkpoint, or an optional search
-cannot satisfy that obligation. In the current shell, the surrounding story
-instruction is rejected before parsing or reading references.
+cannot satisfy that obligation. Interactive Lead input uses this same
+reference enforcement before accepting the substantive answer.
 
 ## What users observe
 
-An ordinary shell story line still receives:
+An ordinary focused shell line calls the Lead and can show content-free
+context progress:
 
 ```text
-Direct story execution is unavailable in this integration stage. Session, conversation, history, search, and inspection remain available.
+[context] bootstrap: 2 selected / 1,024 bytes; 1 searchable
+[context] answer accepted
 ```
 
-That shell path makes no provider call. A Python application can call
-`lead_turn(..., context_event_sink=callback)` and receive content-free lifecycle
-events while the lead searches/reads authorized context. It may append
-conversation/proposal records, but never writes an artifact or runs a
-specialist. See [Lead agent](lead-agent.md).
+The interactive controller and Python applications both call the Lead runtime
+path. Context progress grants no specialist, artifact, or Git authority. See
+[Lead agent](lead-agent.md).
 
 ## Python observability
 

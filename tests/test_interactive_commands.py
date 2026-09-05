@@ -53,6 +53,7 @@ REMOVED_COMMANDS = (
 
 EXPECTED_ACTION_KINDS = (
     "ignored",
+    "lead_input",
     "list_agents",
     "search",
     "transcript",
@@ -269,19 +270,27 @@ class InteractiveParserRetirementTests(unittest.TestCase):
             ),
         )
 
-    def test_ordinary_mentions_and_every_removed_command_are_exactly_unavailable(
+    def test_ordinary_input_is_literal_lead_input_and_removed_commands_stay_unknown(
         self,
     ) -> None:
-        cases = (
+        lead_inputs = (
             "Draft this scene.",
             "@lead critique this",
             "@plot revise pacing",
             "@character check continuity",
             "@execution draft prose",
+        )
+        for line in lead_inputs:
+            with self.subTest(line=line):
+                self.assertEqual(
+                    parse_interactive_line(line),
+                    InteractiveAction(ActionKind.LEAD_INPUT, text=line),
+                )
+        removed_inputs = (
             *(f"{command} payload" for command in REMOVED_COMMANDS),
             *(f"/help {command[1:]}" for command in REMOVED_COMMANDS),
         )
-        for line in cases:
+        for line in removed_inputs:
             with self.subTest(line=line):
                 self.assert_unavailable(line)
 
@@ -516,9 +525,7 @@ class RetainedParserContractTests(unittest.TestCase):
             )
         self.assertEqual(
             parse_interactive_line(" /quit"),
-            InteractiveAction(
-                ActionKind.PARSE_ERROR, error=DIRECT_EXECUTION_UNAVAILABLE
-            ),
+            InteractiveAction(ActionKind.LEAD_INPUT, text=" /quit"),
         )
 
     def test_module_and_facade_import_cleanly_outside_the_repository(self) -> None:

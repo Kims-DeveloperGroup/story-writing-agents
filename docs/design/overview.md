@@ -1,8 +1,8 @@
 # System design overview
 
-The current integration separates the Python lead conversation/confirmed-
-consultation layer from the shell's management/inspection layer and future
-artifact/Git execution layers. Public schema-v1 direct-run consumers are absent; generic provider,
+The current integration connects the shell to the same lead conversation and
+confirmed-collaboration APIs used by Python callers. Public schema-v1
+direct-run consumers are absent; generic provider,
 prompt, context, lifecycle, artifact, and terminal components remain behind
 explicit module boundaries.
 
@@ -27,10 +27,7 @@ flowchart LR
     M --> CS[Selected conversation services]
     I --> CS
     S --> CFG[Configuration and provider profiles]
-    U -. ordinary or routed story text .-> X[Fixed unavailable guidance]
-    X -. no call .-> P[Provider components]
-    X -. no append .-> CS
-    X -. no read/write .-> A[Writing artifacts]
+    CLI --> LT[RuntimeSession.lead_turn]
     APP --> LT[StoryRuntime.lead_turn]
     LT --> CTX[Bounded context and provider]
     CTX --> L[Lead answer, question, critique, recommendation, or proposal]
@@ -44,16 +41,14 @@ flowchart LR
     M --> GR[Internal session Git-resource seam]
 ```
 
-The controller reads ordinary main input with the terminal's plain management
-scope. The parser returns a typed rejection for ordinary/routed/removed
-execution forms. The controller does not bind an agent, append an event, run
-RAG/reference handling, report provider progress, or publish an artifact.
-
-A Python application can instead call `lead_turn()`. The lead is the sole
+The parser returns ordinary non-slash text unchanged as `lead_input`. After
+attachment and active conversation focus, the controller calls
+`RuntimeSession.lead_turn()` and presents typed progress and results. Removed
+slash execution forms remain unavailable. The lead is the sole
 user-facing agent, may search/read bounded authorized context, and either
 answers directly or discloses one proposal. `decide_lead_step()` records an
-exact structured decision. Confirmation executes only the disclosed read-only
-consultation; it does not modify an artifact or operate Git.
+exact structured decision. Confirmation executes only the disclosed step.
+Artifact Apply and local Commit use distinct exact decisions.
 
 ## Workspace initialization and readiness
 
@@ -154,7 +149,7 @@ proves a clean real index, exact symbolic session branch/tip, complete canonical
 artifact state, expected tree, effective identity/source, unchanged internal
 ref, and unchanged main root. Apart from immutable candidate history, it does
 not stage, write a Git object, create a commit, update a ref, or modify a
-working file. The content-free projection is suitable for the future lead UI;
+working file. The content-free projection is suitable for the interactive Lead UI;
 it carries no story bytes or authority.
 
 Only a fresh exact structured Commit decision can mint a service/process/thread-
@@ -262,17 +257,18 @@ provenance, journaled catalog-last publication, and recovery. Generic
 `Workspace` writes cannot manufacture artifact provenance.
 
 The four supported core paths and every eligible lowercase-`.md` descendant of
-`manuscript/` remain reference sources. The terminal retains generic picker and
-independent text-viewer components, but the current parser/controller exposes
-no provider-text span. `$`/`$$` therefore do not activate from main input.
+`manuscript/` remain reference sources. In focused Lead input, `$` opens the
+canonical picker and `$$` opens that picker before the independent range viewer.
+They insert identity-only whole/ranged indicators; runtime performs the
+authorized read after submission.
 
 ## Interactive ownership
 
 | Owner | Responsibility |
 | --- | --- |
-| `interactive_commands` | Pure retained grammar, fixed agent metadata, removal guidance, and command completion. |
-| `interactive_controller._core` | Stateful lifecycle/settings/catalog/read dispatch, validation, cleanup, and semantic output. |
-| Controller policy leaves | Pure lifecycle, conversation, exchange, and inspection interpretation. |
+| `interactive_commands` | Pure management grammar, literal Lead-input action, fixed agent metadata, removed-command guidance, and completion. |
+| `interactive_controller._core` | Stateful lifecycle/settings/catalog/read and Lead-input dispatch, validation, cleanup, and semantic output. |
+| Controller policy leaves | Lifecycle, conversation, exchange, inspection, and structured Lead-decision interpretation. |
 | `interactive_settings` | Immutable current/pending settings, exact conflict checks, prepared writes, and rollback. |
 | `interactive_terminal` | Public semantic terminal facade and internal capable/fallback input, pickers, prompts, viewers, and rendering. |
 | `agent_exchanges` plus external viewer | Bounded request/result/outcome storage and immutable read-only inspection. |
@@ -286,13 +282,13 @@ provider call.
 ## Lead/specialist target
 
 The fixed roster remains Lead Orchestrator, Plot Architect, Character
-Custodian, and Execution Specialist. The lead is the Python workflow's sole
+Custodian, and Execution Specialist. The lead is the workflow's sole
 user-facing channel. It critiques, recommends the next action, watches
 artifact/workflow constraints, and routes a proposed assignment by subject.
 Specialists are selectively lead-routed collaborators. After exact
 confirmation, one to three run concurrently with isolated evidence; only an
-all-success set reaches typed lead synthesis. None of this is a CLI dispatch
-claim.
+all-success set reaches typed lead synthesis. The shell reaches specialists
+only through this confirmed lead route; no specialist command is exposed.
 
 The integrated lead layer owns proposal, confirmation, and reconfirmation
 behavior. Specialist execution owns result, finalization, and outcome-unknown

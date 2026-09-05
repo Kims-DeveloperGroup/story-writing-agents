@@ -13,6 +13,7 @@ from uuid import uuid4
 
 from ..errors import (
     ConfigurationError,
+    SessionIdError,
     WorkspaceFormatError,
     WorkspaceSecurityError,
     WorkspaceVersionUnsupportedError,
@@ -440,6 +441,8 @@ def _verify_ready(
         path: content
         for path, content in snapshot.items()
         if not _is_consensus_runtime_file(path)
+        and not _is_conversation_runtime_file(path)
+        and not _is_interactive_runtime_file(path)
     }
     if scaffold_snapshot != allowed_files:
         raise WorkspaceFormatError("workspace scaffold requires recovery")
@@ -595,7 +598,11 @@ def _snapshot_relative_files(descriptor: int) -> dict[str, bytes]:
                     and len(name) == 2
                     and all(character in "0123456789abcdef" for character in name)
                 )
-                if relative not in allowed_directories and not candidate_shard:
+                if (
+                    relative not in allowed_directories
+                    and not candidate_shard
+                    and not _is_conversation_runtime_directory(relative)
+                ):
                     raise WorkspaceFormatError(
                         "workspace contains an undeclared directory"
                     )
@@ -640,6 +647,74 @@ def _is_consensus_runtime_file(path: str) -> bool:
         and parts[1].endswith(".utf8")
         and all(character in "0123456789abcdef" for character in parts[1][:-5])
     )
+
+
+def _is_conversation_runtime_directory(path: str) -> bool:
+    """Recognize only canonical filesystem-conversation directory shapes."""
+
+    parts = path.split("/")
+    if not parts or parts[0] != "discussion_logs":
+        return False
+    if len(parts) == 2:
+        return _is_workspace_identifier(parts[1])
+    if len(parts) == 3:
+        return _is_workspace_identifier(parts[1]) and parts[2] == "interactive"
+    if len(parts) == 4:
+        return (
+            _is_workspace_identifier(parts[1])
+            and parts[2:] == ["interactive", "conversations"]
+        )
+    return (
+        len(parts) == 5
+        and _is_workspace_identifier(parts[1])
+        and parts[2:4] == ["interactive", "conversations"]
+        and _is_workspace_identifier(parts[4])
+    )
+
+
+def _is_conversation_runtime_file(path: str) -> bool:
+    """Recognize only canonical filesystem-conversation runtime leaves."""
+
+    parts = path.split("/")
+    return (
+        len(parts) == 6
+        and _is_conversation_runtime_directory("/".join(parts[:-1]))
+        and parts[-1]
+        in {
+            "metadata.json",
+            "transcript.jsonl",
+            "collaboration-history.jsonl",
+            ".collaboration-history.lock",
+        }
+    )
+
+
+def _is_interactive_runtime_file(path: str) -> bool:
+    """Recognize only established controller/session runtime-owned leaves."""
+
+    if path in {
+        "agent_states/orchestrator_state/cli_context.json",
+        "agent_states/orchestrator_state/provider_sessions/.access-claims.lock",
+        "config/.conversation_storage.lock",
+    }:
+        return True
+    parts = path.split("/")
+    if (
+        len(parts) != 4
+        or parts[:2] != ["agent_states", "orchestrator_state"]
+        or parts[2] not in {"conversation_defaults", "provider_sessions"}
+        or not parts[3].endswith(".json")
+    ):
+        return False
+    return _is_workspace_identifier(parts[3][:-5])
+
+
+def _is_workspace_identifier(value: str) -> bool:
+    try:
+        validate_workspace_identifier(value)
+    except SessionIdError:
+        return False
+    return True
 
 
 def _workspace_marker_present(descriptor: int) -> bool:

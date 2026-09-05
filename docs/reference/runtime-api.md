@@ -10,8 +10,9 @@ exposes a stepwise, separately confirmed consensus workflow through Python.
 Neither workflow applies or mutates an artifact, grants Apply authority, or
 performs Git work.
 
-The installed shell does not call the lead methods. Ordinary shell input still
-receives the direct-execution-unavailable guidance.
+The installed shell calls the session-bound lead methods for ordinary focused
+input and constructs exact decisions through structured controls. It does not
+expose raw specialist dispatch or a `run` command.
 
 ## Construction
 
@@ -646,9 +647,9 @@ artifact-application, commit, push, merge, or one-turn bypass method. Consensus
 is available only through the separately confirmed Python methods above; it
 has no installed shell command.
 
-Confirmation of a consultation cannot authorize one of those later effects. A
-future artifact or Git action—including a commit—must be a separately
-disclosed and separately confirmed step.
+Confirmation of a consultation cannot authorize one of those later effects.
+The current interactive artifact Apply and local Git Commit paths each require
+their own separately disclosed, structured confirmation.
 
 <a id="runtime-diagnostic-side-effect"></a>
 

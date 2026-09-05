@@ -127,15 +127,17 @@ For `session_not_attached`, create/resume in the shell. For
 `/help [COMMAND]` shows retained syntax; `/status` shows scope. Session-scoped
 management/reads need an attachment, and `/history` also needs focus.
 
-Ordinary text, leading agent routes, and removed execution commands return:
+Ordinary non-slash text is Lead input after session attachment and conversation
+focus. The removed slash execution commands return:
 
 ```text
 Direct story execution is unavailable in this integration stage. Session, conversation, history, search, and inspection remain available.
 ```
 
-This is intentional, not a missing-focus or provider-authentication problem.
-The attempt performs no provider, transcript, RAG, reference, progress, or
-artifact work.
+`/run` instead reports an unknown command. If ordinary input reports
+`session_not_attached` or `conversation_required`, satisfy that prerequisite;
+if provider authentication fails, use `/auth`. Free-form text cannot confirm a
+pending proposal.
 
 ## Search returns no conversation events
 

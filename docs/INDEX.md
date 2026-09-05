@@ -2,15 +2,16 @@
 
 The runtime has one active schema-v2 collaboration-history path. Management,
 structured history/search/transcript reads, provider-free smoke, and the Python
-lead/confirmed-specialist consultation API are available. The interactive
-shell is not connected yet, and lead-triggered artifact/Git mutation remains
-unavailable.
+and interactive lead/confirmed-specialist collaboration APIs are available.
+Interactive artifact Apply and local Commit are available only through their
+own exact structured confirmations.
 The strict Git-backed workspace boundary also provides exact session Git
 resources and durable content-free commit/checkpoint operation evidence as
 package-internal infrastructure. An internal service can create an exact
 confirmed local story commit, and a separate internal service can checkpoint
 only allowlisted session runtime state. They are not user commands or lead
-actions; public shell story execution is not available. Start with the page
+actions. Ordinary focused shell input is the Lead front channel; there is no
+`story run`, `/run`, or raw specialist command. Start with the page
 that matches your task.
 
 ## Start here
@@ -36,8 +37,7 @@ that matches your task.
 | Understand commit/checkpoint evidence and interruption states | [Durable session-history infrastructure](guides/workspaces.md#durable-session-history-infrastructure) |
 | Recover an interrupted internal story commit or checkpoint | [Session-history recovery](operations/recovery-and-limitations.md#session-history-recovery) |
 | Manage sessions and conversations | [Story sessions](guides/story-sessions.md) |
-| Understand why shell story instructions are unavailable | [Collaboration transition](guides/consensus-runs.md) |
-| Converse with the Python lead, review story-file candidates, consult specialists, and decide proposals | [Collaborate with the Lead Agent](guides/lead-agent-collaboration.md) |
+| Converse with the interactive Lead, attach references, consult specialists, and separately decide review, Apply, and Commit | [Collaborate with the Lead Agent](guides/lead-agent-collaboration.md) |
 | Run disposable smoke or read-only workspace verification | [Provider-free smoke](guides/smoke-test.md) |
 | Apply session directives | [Directives](guides/directives.md) |
 | Inspect and recover local state | [Inspection and recovery](guides/inspection-and-recovery.md) |

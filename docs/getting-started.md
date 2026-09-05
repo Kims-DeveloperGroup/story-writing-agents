@@ -1,8 +1,9 @@
 # Getting started
 
-This revision prepares and inspects writing workspaces and exposes a Python
-lead conversation and confirmed specialist-consultation API. It does not send
-shell input to the lead or modify story artifacts.
+The installed interactive shell is the normal front channel for the Lead
+Orchestrator. After attaching a session and focusing a conversation, ordinary
+input reaches the lead; exact structured decisions gate specialist review,
+artifact Apply, and local Commit as separate operations.
 
 ## 1. Install
 
@@ -20,9 +21,9 @@ story --help
 the read-only exchange viewer. Optional local RAG requires the reviewed `rag`
 extra before enablement.
 
-The shell still checks configured Codex and Antigravity authentication before
-constructing its controller. This prepares provider configuration; accepted
-management and inspection commands do not send story content to a provider.
+The shell checks configured Codex and Antigravity authentication before
+constructing its controller. Ordinary focused lead turns and confirmed work
+may call a provider; management and inspection commands remain provider-free.
 
 ## 2. Run the provider-free check
 
@@ -134,30 +135,68 @@ You can also use `/conversation resume [ID]`, `/conversation subject SUBJECT`,
 `/inspect [DEBATE|last]`, `/exchanges`, and `/status`. `/help` shows the exact
 installed registry.
 
-## 5. Understand the execution boundary
+## 5. Talk to the Lead
 
-Submitting an ordinary story instruction or a retired execution command does
-not call an agent:
+With the session attached and conversation focused, type an ordinary non-slash
+line. It is passed unchanged to `RuntimeSession.lead_turn()` and always
+addresses the Lead Orchestrator:
 
 ```text
-story[first_novel]> Please critique the outline.
-Direct story execution is unavailable in this integration stage. Session, conversation, history, search, and inspection remain available.
+story[first_novel]> What does Reject do?
+[Lead]
+  Outcome: answer
+  Lead: Reject records the decision and starts no proposed work.
+  Next action: continue_with_lead
 ```
 
-The same guidance applies to routed text and every removed direct-execution
-form. Rejection occurs before provider binding, transcript append, RAG,
-artifact-reference work, progress, or artifact mutation.
+Provider wording varies. The semantic `Outcome`, `Lead`, and `Next action`
+fields are stable. Attach canonical evidence with `${path}` or a range such as
+`${manuscript/part-01/opening.md}#L20-L32`; multiple indicators may appear in
+one line. They are path/range instructions the addressed agents must read, not
+file content embedded into the command.
 
-There is no noninteractive story-execution command and no public runtime method
-for a debate or raw/unconfirmed specialist dispatch. Do not build automation
-around an earlier direct path. The selected filesystem or SQLite bundle uses
-the sole schema-v2 collaboration event store for provider-free inspection and
-Python lead/consultation writes. #454 owns whole-workspace rejection of
-unsupported history.
-Strict workspace-v2 readiness rejects unsupported whole-workspace state before
-these services activate.
+If no session is attached or no active conversation is focused, the shell
+reports that prerequisite and makes no lead call. Slash-prefixed management
+commands retain their own grammar. There is no `story run`, `/run`, raw
+specialist dispatch, or agent-selector syntax for ordinary input.
 
-## 6. Use the Python lead API
+## 6. Decide a proposed step
+
+The Lead may instead display an exact proposal with purpose, assignments,
+evidence, user impact, limits, identity, and a confirmation request:
+
+```text
+story[first_novel]> Is the reveal too early? ${core_documents/part_outlines.md}
+[Lead]
+  Outcome: proposal
+  Lead: A Plot specialist should check the reveal timing.
+  Next action: submit_confirmation
+  State: awaiting_confirmation
+Lead proposal decision
+  Confirm — Authorize only the exact disclosed proposal.
+  Reject  — Reject the proposal without running it.
+  Revise  — Record a revision request without confirming it.
+```
+
+Confirm runs only the disclosed specialist work and returns the Lead's typed
+synthesis. Reject runs nothing. Revise asks for nonempty revision text and
+supersedes the old proposal. Cancelling the picker grants no authority.
+Free-form `Yes` is a new lead turn and supersedes a pending proposal; it never
+confirms it.
+
+Artifact review confirmation still does not write files. A reviewed proposal
+gets a separate Apply/Reject/Revise picker. Apply writes only the exact
+revalidated changes and does not stage or commit. A successful Apply can then
+offer a separate Commit/Reject/Revise picker for one local commit; no remote
+push or merge is authorized.
+
+Progress is shown while provider work runs. Interruption preserves knowable
+results; `outcome_unknown` must not be replayed, and `recovery_required` must be
+repaired before normal collaboration. Reopened canonical interactive runtime
+files remain valid. See [Collaborate with the Lead](guides/lead-agent-collaboration.md)
+for every state and recovery action.
+
+## 7. Use the Python lead API
 
 With an active conversation and a configured ready backend, an application can
 address the lead without choosing an agent:
@@ -182,7 +221,7 @@ turn. It cannot authorize an artifact change or Git commit. See the
 [lead-agent guide](guides/lead-agent.md) for complete examples and the
 [runtime API](reference/runtime-api.md) for exact signatures.
 
-## 7. Continue
+## 8. Continue
 
 - [Story sessions and conversations](guides/story-sessions.md)
 - [Lead agent and collaboration status](guides/lead-agent.md)

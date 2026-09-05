@@ -101,9 +101,10 @@ RAG-only apply writes configuration without provider authentication, storage
 activation, optional-package probing, network, or agent work. It affects a
 future shell construction, not the current shell.
 
-The shell has no eligible provider-bound story input. Automatic therefore has
-no interactive turn to act on. `lead_turn()` does not consume it either; the
-field is preserved configuration for later explicit integration.
+Ordinary focused Lead input is provider-bound, but it does not consume the
+Automatic RAG setting. The shell has no direct RAG arming command, and
+`lead_turn()` does not activate this optional retrieval path; the field remains
+preserved configuration for explicit low-level integration.
 
 ## Direct service composition
 

@@ -2,8 +2,9 @@
 
 > **Availability:** these rules protect current management-shell live editing,
 > semantic output, package-supported terminal records, and retained generic
-> composition/ranged-viewer components. Main input has no provider-bound span,
-> so `$`/`$$` does not invoke the private artifact picker/viewer. Bare
+> composition/ranged-viewer components. Ordinary focused input is provider-bound
+> Lead input; `$` opens canonical-artifact selection and `$$` continues through
+> the independent range viewer. Bare
 > `/exchanges` separately hosts the pinned independent JSONL
 > renderer through an unlisted generic borrowed-host seam while Story remains
 > sole terminal owner. #274 also adds an unlisted mode-gated accepted-input projection
@@ -594,11 +595,9 @@ so its frame remains active and no history entry exists yet. See the exact
 tokens.
 
 The historical schema-v1 accepted-input seam emitted persistent semantic
-records only after cleanup. Issue #478 removes every public advisory/routing/
-composition consumer of that seam. Current ordinary or routed input instead
-renders the fixed unavailable error after cleanup and starts no coroutine,
-progress stream, or transcript append. The generic semantic record components
-remain available for the later structured workflow.
+records only after cleanup. The current controller instead maps ordinary input
+to one literal Lead turn and renders its typed progress/result through the
+structured workflow. Removed slash execution forms never start that path.
 
 Retained local read records identify normalized search/filtered-list scope and
 resolved transcript handle/start/count without reprinting a raw submitted

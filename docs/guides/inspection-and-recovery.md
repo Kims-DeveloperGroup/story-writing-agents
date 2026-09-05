@@ -32,7 +32,7 @@ With a session attached:
 | `/status` | Current defaults, attachment/focus, durable/access state, storage, and provider readiness. |
 | `/inspect` | Persisted debate summaries for the attached session. |
 | `/inspect ID` | Safe facts for one exact debate. |
-| `/inspect last` | This process's most recent accepted debate start, if any. In the current management-only shell, none is normal. |
+| `/inspect last` | This process's most recent accepted legacy debate start, if any. Lead collaboration uses conversation history instead. |
 | `/history [COUNT]` | Focused schema-v2 collaboration records, durable state, user meaning, and next-safe-action meaning. |
 | `/transcript ID ...` | Bounded structured page without changing focus. |
 | `/exchanges` | Read-only viewer over an immutable stored exchange snapshot. |

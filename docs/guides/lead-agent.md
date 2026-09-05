@@ -1,7 +1,7 @@
 # Lead agent: story workflows and reviewed artifact proposals
 
-The Lead Orchestrator is the normal user-facing story agent in the Python
-runtime. Users discuss story work with the lead; they do not need to choose an
+The Lead Orchestrator is the normal user-facing story agent in both the
+interactive shell and Python runtime. Users discuss story work with the lead; they do not need to choose an
 agent for every turn. The lead can answer directly, ask a focused question,
 critique or recommend, or propose a bounded consultation with one to three
 specialists. For a requested story-file change, the lead can also describe a
@@ -25,14 +25,15 @@ This distinction also governs story changes. The lead is the semantic trigger
 and front channel: it can recommend an edit and request construction and review
 of an exact candidate. Runtime code captures current files, constructs and
 records the candidate, calls confirmed reviewers, and creates an immutable
-reviewed proposal. This implementation remains story-artifact-read-only:
-neither the lead nor
-the runtime path described here applies the proposal, stages files, or creates
-a commit. A later Apply or Commit operation requires its own exact user
-confirmation, and runtime code—not the lead provider—must execute it.
+reviewed proposal. The interactive workflow then presents a separate exact
+Apply/Reject/Revise decision. Only Apply lets runtime write the revalidated
+artifact change. A successful Apply may present a separate local
+Commit/Reject/Revise decision. Runtime—not the lead provider—executes both
+effects; neither authorizes remote push or merge.
 
-The installed `story` shell has not connected this workflow. Applications use
-the async Python methods described below.
+In the installed `story` shell, attach a session, focus a conversation, and
+type ordinary non-slash text. It is passed literally to the session-bound Lead
+API. The async Python methods below expose the same authority model.
 
 ## Lead responsibilities and limits
 

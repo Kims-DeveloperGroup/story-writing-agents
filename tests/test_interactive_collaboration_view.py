@@ -211,7 +211,7 @@ class ArtifactAndGitCollaborationViewTests(unittest.IsolatedAsyncioTestCase):
                     ArtifactApplicationDecisionKind.APPLY,
                 )
             )
-            await case.runtime.decide_story_commit(
+            committed = await case.runtime.decide_story_commit(
                 _commit_decision(applied, StoryCommitDecision.COMMIT)
             )
             conversation_id = reviewed.conversation_id
@@ -237,6 +237,29 @@ class ArtifactAndGitCollaborationViewTests(unittest.IsolatedAsyncioTestCase):
             self.assertIn("paired remote push", rendered)
             self.assertNotIn("Use restrained close-third narration.", rendered)
             self.assertNotIn("provider_private", rendered)
+
+            lead_rendered = render_component(
+                _collaboration_view.project_lead_turn_result(reviewed),
+                _capability(CapabilityProfile.LINE, width=120),
+            ).text
+            application_rendered = render_component(
+                _collaboration_view.project_artifact_application_decision_result(
+                    applied
+                ),
+                _capability(CapabilityProfile.LINE, width=120),
+            ).text
+            commit_rendered = render_component(
+                _collaboration_view.project_story_commit_decision_result(committed),
+                _capability(CapabilityProfile.LINE, width=120),
+            ).text
+            self.assertIn("Outcome:", lead_rendered)
+            self.assertIn("  Lead\n", lead_rendered)
+            self.assertIn("Next action:", lead_rendered)
+            self.assertIn("State:", lead_rendered)
+            self.assertIn("Artifact application", application_rendered)
+            self.assertIn("Artifact state: applied", application_rendered)
+            self.assertIn("Local story commit", commit_rendered)
+            self.assertIn("Artifact state: committed", commit_rendered)
         finally:
             common_git = subprocess.run(
                 ("git", "rev-parse", "--path-format=absolute", "--git-common-dir"),

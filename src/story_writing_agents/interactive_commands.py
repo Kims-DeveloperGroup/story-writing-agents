@@ -20,6 +20,7 @@ class ActionKind(StrEnum):
     """Actions recognized by the interactive command parser."""
 
     IGNORED = "ignored"
+    LEAD_INPUT = "lead_input"
     LIST_AGENTS = "list_agents"
     SEARCH = "search"
     TRANSCRIPT = "transcript"
@@ -251,6 +252,7 @@ _NO_FIELDS = frozenset()
 _CANONICAL_AGENTS = frozenset(route.agent_id for route in AGENT_ROUTES)
 _ACTION_FIELD_RULES: dict[ActionKind, tuple[frozenset[str], frozenset[str]]] = {
     ActionKind.IGNORED: (_NO_FIELDS, _NO_FIELDS),
+    ActionKind.LEAD_INPUT: (frozenset({"text"}), frozenset({"text"})),
     ActionKind.LIST_AGENTS: (_NO_FIELDS, _NO_FIELDS),
     ActionKind.SEARCH: (frozenset({"text"}), frozenset({"text"})),
     ActionKind.TRANSCRIPT: (
@@ -687,7 +689,7 @@ def parse_interactive_line(line: str) -> InteractiveAction:
         return InteractiveAction(ActionKind.IGNORED)
     if normalized[0] == "/":
         return _parse_slash_command(normalized)
-    return _parse_error(_DIRECT_EXECUTION_UNAVAILABLE)
+    return InteractiveAction(ActionKind.LEAD_INPUT, text=normalized)
 
 
 def _parse_slash_command(line: str) -> InteractiveAction:

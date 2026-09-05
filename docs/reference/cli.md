@@ -343,8 +343,9 @@ Antigravity authentication, resolves effective agent provider profiles, then
 constructs one controller. Provider authentication can run native sign-in and
 may open the provider's browser flow.
 
-This startup configuration gate does not make direct story input callable.
-Accepted interactive operations are management and inspection operations.
+After attachment and conversation focus, ordinary non-slash input calls the
+Lead workflow. Startup authentication/configuration does not itself authorize
+specialist, artifact, or Git effects.
 
 ## Interactive command registry
 
@@ -360,16 +361,20 @@ Accepted interactive operations are management and inspection operations.
 require attachment; history requires an active focus. Directives and debate
 inspection are session-scoped but do not require conversation focus.
 
-Ordinary text, leading agent routes, and every retired direct-execution command
-produce this exact guidance sentence:
+Ordinary non-slash text is literal Lead input. It requires an attached session
+and focused active conversation; no agent selector is accepted. The retired
+slash commands `/agent`, `/cancel`, `/compose`, `/draft-file`, `/rag`, `/say`,
+`/send`, and `/to` still produce this guidance sentence:
 
 ```text
 Direct story execution is unavailable in this integration stage. Session, conversation, history, search, and inspection remain available.
 ```
 
-Rejection occurs before provider, transcript, RAG, artifact-reference,
-progress, or artifact effects. Removed commands are absent from help and static
-completion. See the [parser reference](interactive-command-parser.md).
+`/run` is an ordinary unknown command, and there is no `story run` subcommand.
+Removed commands are absent from help and static completion. See the
+[parser reference](interactive-command-parser.md). Lead proposals use exact
+Confirm/Reject/Revise controls; artifact Apply and local Commit have separate
+controls and authority.
 
 <a id="runtime-debug-logs"></a>
 
