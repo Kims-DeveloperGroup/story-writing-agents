@@ -302,7 +302,8 @@ an independent runtime failure is primary, terminal-observer failure is
 suppressed. No observer preserves calls, results, schemas, and persistence.
 
 A Python application can validate each correlated event stream and render
-compact content-free lines. The current management-only shell emits none. The
+compact content-free lines. Interactive Lead turns emit these through the
+advisory progress presenter. The
 component has no lifecycle replay or durable observer store.
 
 <a id="provider-usage-cache-and-limits"></a>

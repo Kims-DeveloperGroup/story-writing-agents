@@ -6,7 +6,8 @@
 > Those execution examples and acceptance rows are not current runnable
 > instructions. Issue #478 retains the generic terminal models, renderer,
 > driver, settings/management pickers, independent text-viewer component, and
-> `/exchanges` host, but main input has no provider-text span. Use the
+> `/exchanges` host. Issue #584 connects ordinary focused input and the retained
+> reference composer to the Lead workflow. Use the
 > [current terminal reference](../reference/interactive-terminal.md) and
 > [parser reference](../reference/interactive-command-parser.md) for callable
 > behavior.

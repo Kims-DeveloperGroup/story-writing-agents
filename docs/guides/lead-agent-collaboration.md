@@ -61,8 +61,8 @@ and digest shown to you.
 
 ### Compose the next request while confirmed work runs
 
-The terminal package now has a live-composer boundary for a later controller
-integration. On a capable terminal, it can keep one ordinary editor open while
+The interactive controller uses the live-composer boundary. On a capable
+terminal, it can keep one ordinary editor open while
 already-confirmed runtime work continues. Progress redraws preserve the exact
 buffer and cursor, and the same terminal driver remains the only writer to the
 terminal. Typed text is literal: for example, submitting `/status` through
@@ -78,7 +78,7 @@ not on what the progress animation appears to show:
 | `postcommit` | Does not cancel or roll back the operation; it waits for finalization. | Success returns `next_turn` with the literal text. Failure or cancellation during finalization returns `recovery_required`. |
 | Operation completes before input is accepted | Closes the live span with the operation result. | `operation_completed` preserves the current unfinished buffer and cursor for the caller's next normal read. |
 
-For example, a later controller can present this interaction:
+The interactive controller presents this interaction:
 
 ```text
 Lead: Your confirmed continuity review is running.
@@ -99,13 +99,9 @@ operation and returns the same text as `next_turn`; it never rolls the completed
 effect back. Ctrl-C returns `interrupted`, EOF returns `eof`, and Enter returns
 submission, so those inputs cannot be confused with one another.
 
-This leaf does **not** make ordinary shell story input available. The current
-controller still rejects story instructions before a provider call, and it
-does not yet route confirmed lead work through the live composer. Later
-controller and presentation work must map these closed outcomes into lead
-replanning and semantic output. Terminal completion is only presentation
-evidence: durable runtime state remains the authority for whether work
-committed, needs recovery, or may start another lead turn.
+Ordinary focused shell input now uses this lead path. Terminal completion is
+only presentation evidence: durable runtime state remains the authority for
+whether work committed, needs recovery, or may start another lead turn.
 
 ## References and context
 
@@ -124,13 +120,13 @@ Use a ranged indicator when only specific lines are relevant:
 ${manuscript/part-01/opening.md}#L20-L32
 ```
 
-In a capable text-input component, `$` opens the canonical writing-artifact
-picker and `$${file_name}` opens the independent text viewer for a selected
-file. The viewer remains a separate component while you move through lines;
-selecting a range and closing it returns to the composing prompt. Multiple
-references can be attached to one lead request. The durable reference records
-the path and optional from/to lines; runtime reads current bytes and gives the
-authorized agent only the required content.
+In focused Lead input, `$` opens the canonical-artifact picker. `$$` opens that
+same picker and then the independent text viewer, where Shift+Up/Down selects a
+range. Closing the viewer restores the composer and inserts the selected
+`${path}#Lstart-Lend`. Multiple references can be attached to one Lead request.
+The durable reference records path and optional from/to lines;
+runtime reads current bytes and gives the authorized agent only the required
+content.
 
 ### Two layers of context
 
@@ -266,37 +262,41 @@ proposal before asking the lead for a new outcome. It does not start work.
 ## Scenario 1: direct answer
 
 ```text
-You: What does Reject do?
-
-Lead: Reject records the decision and starts no specialist, artifact, or Git
-      work. You can continue with the lead.
-
-Runtime: calls only the lead; scope=workflow_meta, evidence_status=
-         not_applicable, no proposal and no confirmation request.
+story[novel]> What does Reject do?
+[Lead]
+  Outcome: answer
+  Lead: Reject records the decision and starts no specialist, artifact, or Git work.
+  Next action: continue_with_lead
 ```
 
-No specialist is selected when the lead can answer the workflow question.
+Provider wording varies. The stable result is a direct typed answer with no
+proposal or decision picker; no specialist is selected.
 
 ## Scenario 2: one specialist consultation
 
 ```text
-You: Is this scene too early in the part outline?
-    ${core_documents/part_outlines.md}
+story[novel]> Is this scene too early? ${core_documents/part_outlines.md}
+[Lead]
+  Outcome: proposal
+  Lead: A Plot specialist should check the scene timing.
+  Next action: submit_confirmation
+  State: awaiting_confirmation
+Lead proposal decision
+  Confirm — Authorize only the exact disclosed proposal.
+  Reject  — Reject the proposal without running it.
+  Revise  — Record a revision request without confirming it.
 
-Lead: I need a Plot review of the scene's timing. Purpose: compare the scene
-      with the current part outline. Confirm review?
-
-You: structured kind=confirm for the displayed proposal
-
-Runtime: re-reads the referenced outline, calls plot_architect with only its
-         assignment, stores the typed reply, then calls the lead to synthesize.
-
-Lead: The scene is one beat early because the required trigger is scheduled
-      later. Next action: revise the scene or ask for a candidate.
+User selects: Confirm
+[Lead]
+  Outcome: recommendation
+  Lead: The Plot review places the reveal one beat after the required trigger.
+  Next action: continue_with_lead
+  State: completed
 ```
 
-The specialist does not contact you directly. The lead remains the front
-channel and explains the actionable result.
+Runtime re-reads the mandatory reference, calls only `plot_architect`, stores
+its typed reply, and asks the lead to synthesize. Provider wording varies. The
+specialist never becomes the front channel.
 
 ## Scenario 3: cross-domain disagreement and a second round
 
@@ -600,6 +600,31 @@ When collaborating with the lead:
    confirmed.
 7. Follow the displayed state-specific next action after interruption or
    failure.
+
+## Issue #583 integration evidence
+
+This table distinguishes implemented behavior from the focused evidence
+currently present at the #586 base. A documentation statement does not replace
+a missing end-to-end check.
+
+| #583 criterion | Current evidence | Status at this base |
+| --- | --- | --- |
+| Literal focused input reaches `RuntimeSession.lead_turn()` without a selector | `ActionKind.LEAD_INPUT`; controller dispatch; `test_ordinary_input_is_literal_lead_input_and_removed_commands_stay_unknown`; `test_lead_input_requires_attachment_and_conversation_then_routes_exactly` | Supported |
+| Typed direct outcomes, proposals, evidence, impact, next action, and state render | `project_lead_turn_result`; collaboration-view focused tests | Supported for typed projection |
+| Multiple whole/ranged references remain mandatory | `test_focused_lead_references_survive_quit_reopen_and_continue`; live `$`/`$$` driver and reference-activation tests; runtime forced-read tests | Supported |
+| Confirm/Reject/Revise is structured; free text never confirms | `InteractiveLeadAdapter`; `test_literal_lead_turn_and_consultation_decisions_are_exact` | Supported |
+| Specialist synthesis, artifact review, separate Apply, separate local Commit | Adapter's three distinct decision paths; `test_artifact_and_commit_controls_are_distinct_and_correlated` | Supported at controller/API seam |
+| Progress, interruption, and restart-safe recovery | `test_failure_interruption_and_recovery_turns_never_replay_authority` plus existing progress contracts | Supported |
+| Management commands remain provider-free | Parser/controller retain their command dispatch; removed-command zero-call test | Supported for focused parser/controller cases |
+| Valid filesystem conversation state survives workspace reopen | `test_canonical_interactive_runtime_files_survive_reopen`; malformed paths fail closed | Supported |
+| Fresh workspace completes a Lead turn, quits, reopens, and continues | `test_focused_lead_references_survive_quit_reopen_and_continue` preserves focused canonical state and executes both turns | Supported with deterministic provider fixtures |
+| Installed terminal layer covers direct response, proposal decisions, references, provider failure, restart, and real-PTY ranged selection/restoration | #585 controller tests, #590 lifecycle tests, live reference-driver tests, and real-PTY Shift-range viewer tests | Supported with bounded deterministic fixtures |
+| Module graph/index exact | Integrated `PYTHON_MODULE_INDEX.md` from #584 | Root/modularity evidence owns final certification |
+
+These repository tests exercise the installed terminal/controller boundaries
+with deterministic provider fixtures. They do not prove external provider
+authentication or service availability; those environment facts are not a
+product-behavior acceptance blocker.
 
 For the exact Python signatures and contract fields, see the
 [runtime API](../reference/runtime-api.md), [agent contracts](../reference/agent-contracts.md),

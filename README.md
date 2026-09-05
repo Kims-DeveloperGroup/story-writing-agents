@@ -4,7 +4,7 @@ A Python 3.11+ runtime for building a lead-led, multi-agent novel-writing
 workflow. The Python API supports ordinary conversation with the Lead
 Orchestrator, strict lead outcomes, runtime-built specialist proposals, exact
 Confirm/Reject/Revise decisions, confirmed specialist execution, and typed lead
-synthesis. The interactive lead UI remains a later integration step.
+synthesis through both Python and the installed interactive shell.
 
 ## Current integration stage
 
@@ -14,14 +14,14 @@ inspection and the Python lead front channel.
 
 | You can do now | You cannot do in this stage |
 | --- | --- |
-| Initialize and verify one strict Git-backed schema-v2 writing workspace. | Send an ordinary shell line to an agent. |
-| Create, resume, list, and pause story sessions. | Route a line to an agent or select a sticky target. |
-| Create, list, focus, rename, archive, search, and read conversations. | Start a debate or publish a manuscript from the installed CLI. |
-| Apply directives and edit workspace settings. | Open `$`/`$$` artifact pickers from shell input. |
+| Initialize and verify one strict Git-backed schema-v2 writing workspace. | Address a specialist directly from ordinary input. |
+| Create, resume, list, and pause story sessions. | Send story input before attaching a session and focusing a conversation. |
+| Create, list, focus, rename, archive, search, and read conversations. | Start or advance a debate/consensus run from the installed CLI. |
+| Apply directives, edit workspace settings, and attach multiple whole-file or ranged references to lead input. | Treat a file indicator as embedded content or optional reading. |
 | Inspect session, debate, history, transcript, status, and recorded exchanges. | Start a debate through the runtime facade. |
-| Call the Python lead API with ordered artifact references; confirm a one-to-three-specialist consultation; receive typed replies and lead synthesis. | Treat consultation confirmation as artifact, consensus, or Git execution. |
-| Ask the lead to form an exact create/patch/replace/rename/delete candidate; confirm its disclosed specialist review; inspect an immutable reviewed proposal. | Apply that candidate, grant write authority, stage files, or commit through this stage. |
-| Propose one provider-free direct specialist advisory and confirm its execution. | Apply a core-document/manuscript change or create a Git commit. |
+| Address the Lead by ordinary focused shell input or Python; confirm a one-to-three-specialist consultation; receive typed replies and synthesis. | Treat conversation text such as `Yes` as confirmation. |
+| Ask the lead to form an exact create/patch/replace/rename/delete candidate; confirm its disclosed specialist review; inspect an immutable reviewed proposal. | Treat proposal or review confirmation as write or Git authority. |
+| Separately confirm Apply for an exact reviewed artifact candidate, then separately confirm Commit for one exact local session-branch commit. | Push, merge, or otherwise publish the local Git commit remotely. |
 | Use the Python API to submit a prompt or complete draft, inspect and separately confirm every consensus phase, interrupt active work, inspect durable state after restart, and continue an exact deadlock in place or as a linked workflow without copying its candidate. | Start or advance consensus from the installed shell, treat finalization as artifact publication, or reuse confirmation authority after restart. |
 | Use schema-v2 collaboration contracts, stores, archive/transfer, readable projection, search, and paging APIs. | Bypass the runtime with a removed direct-run method. |
 | Run a disposable management/storage smoke or verify an existing workspace without changing it. | Use smoke as evidence of provider behavior or story quality. |
@@ -37,8 +37,8 @@ session-branch commit after a fresh structured Commit decision. A separate
 package-internal checkpoint service can commit exact owner-supplied runtime
 state deltas to only the session internal ref through an isolated index. None
 of these internal commit or checkpoint services is a user command. Installed
-session lifecycle paths provision and verify correlated Git resources, but
-artifact application and commit confirmation remain separate later integration
+session lifecycle paths provision and verify correlated Git resources.
+Artifact application and local commit are separately confirmed interactive
 boundaries. No CLI or lead path invokes checkpoints merely because a provider
 session is `ready`.
 
@@ -54,20 +54,12 @@ confirmation, sends every reviewer the same immutable candidate. A successful
 lead `propose` synthesis records a reviewed proposal whose Apply/write/Git
 flags are all false.
 
-When ordinary text, routed text, or a retired execution command is submitted in
-the shell, Story reports:
-
-```text
-Direct story execution is unavailable in this integration stage. Session, conversation, history, search, and inspection remain available.
-```
-
-The rejection happens before provider binding, transcript append, RAG,
-artifact-reference reads, progress reporting, or artifact publication. #466
-delivered the pure schema-v2 values; #474-#479 added readable projections,
-storage, archive/transfer, and the sole active storage/inspection service.
-#452 added lead proposal/confirmation writes through that same service; #453
-adds specialist execution, typed synthesis, results, and restart-safe local
-finalization. #454 owns whole-workspace rejection of unsupported history.
+After a session is attached and an active conversation is focused, every
+ordinary non-slash line is sent literally to the Lead Orchestrator. The lead
+can answer directly or disclose a specialist or artifact-review proposal.
+Only the terminal's structured decision controls authorize that exact step.
+Slash-prefixed management commands remain provider-free; removed execution
+commands remain unavailable.
 
 See [Collaborate with the Lead Agent](docs/guides/lead-agent-collaboration.md)
 for responsibilities, authority limits, concrete story workflows,
@@ -92,10 +84,10 @@ installation includes the isolated read-only JSONL viewer used by
 `/exchanges`. Optional local conversation RAG requires the reviewed `rag`
 extra before it can be enabled; installation alone never enables it.
 
-The interactive shell still performs its configured native provider
-authentication gate and exposes `/auth` and provider settings. This prepares
-configuration for the forthcoming collaboration cutover. No currently
-accepted shell content invokes a story provider.
+The interactive shell performs its configured native provider authentication
+gate and exposes `/auth` and provider settings. Ordinary focused lead input and
+confirmed collaboration can invoke the configured provider; management and
+inspection commands retain their documented provider-free behavior.
 
 ## Quick start
 
@@ -136,8 +128,9 @@ session worktree:
 /session create novel
 /conversation new Opening structure
 /status
-/conversation list
 /history
+Does this opening conflict with ${core_documents/global_outline.md}?
+/conversation list
 /search opening
 /quit
 ```
@@ -147,15 +140,20 @@ state `empty`, its user meaning, and `none` as the next safe action. `/search`
 does not match the conversation subject: it searches readable event fields
 only, while the subject is display metadata on a hit.
 
-An attempted story instruction is rejected without side effects:
+Ordinary focused input addresses the Lead without an agent selector:
 
 ```text
-story[novel]> Please review the opening.
-Direct story execution is unavailable in this integration stage. Session, conversation, history, search, and inspection remain available.
+story[novel]> Does this opening conflict with ${core_documents/global_outline.md}?
+[Lead]
+  Outcome: answer
+  Lead: The referenced outline supports the current opening order.
+  Next action: continue_with_lead
 ```
 
-The semantic renderer adds an error heading and may add decoration depending on
-terminal capabilities; the sentence and behavior are stable.
+Exact wording comes from the configured provider; the typed fields and
+authority boundaries are stable. If the lead proposes specialist work, the
+shell opens a Confirm/Reject/Revise picker. Free-form `Yes` is a new lead turn,
+not confirmation.
 
 ## Provider-free smoke
 
@@ -279,17 +277,17 @@ The canonical reference-source paths are the four exact core-document paths and
 eligible lowercase-`.md` files below `manuscript/`. Python `lead_turn()` accepts
 ordered `${path}` and `${path}#Lx-Ly` content-free indicators. Runtime performs
 a separate mandatory read before the substantive lead call and retains only
-the indicator/range/revision facts in the proposal. The shell still has no
-provider-text span, so `$` and `$$` do not open a picker there. See
+the indicator/range/revision facts in the proposal. In focused Lead input, `$`
+opens the canonical-artifact picker and `$$` opens the same picker followed by
+the independent range viewer. Both insert durable identity-only indicators. See
 [artifact references](docs/guides/artifact-references.md).
 
 ## Important limits
 
-- Python lead conversation, proposal decisions, confirmed specialist
-  execution, typed synthesis, and separately confirmed stepwise consensus are
-  active. Consensus finalization is read-only; artifact modification and Git
-  operations require their own later confirmations. The shell has no story or
-  consensus execution command.
+- Interactive and Python lead conversation, proposal decisions, confirmed
+  specialist execution, typed synthesis, and separately confirmed stepwise
+  consensus are active. Consensus has no shell command. Artifact Apply and
+  local Commit use their own interactive confirmations.
 - Confirming a consultation starts only the disclosed read-only provider work.
   It never confirms an artifact change or Git commit.
 - Initialization accepts only an absent/empty root or one exact resumable

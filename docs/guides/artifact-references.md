@@ -54,22 +54,24 @@ digest.
 
 ## Shell behavior
 
-Issue #478 removed the provider-bound shell input span. Therefore:
-
-- `$` does not open an artifact picker in the current main prompt;
-- `$$` does not open the ranged-source picker/viewer workflow;
-- typing a completed indicator does not trigger a read;
-- ordinary or routed input is rejected before reference parsing; and
-- no `reference_operation_id` is created by the installed CLI.
+Ordinary focused input is Lead input. `$` opens the canonical-artifact picker;
+`$$` opens the same picker and then the independent range viewer. Either control
+inserts an identity-only indicator, and multiple whole/ranged indicators may be
+included in one line.
+Submitting a completed indicator starts the runtime reference operation.
 
 For example:
 
 ```text
 story[novel]> Review ${core_documents/global_outline.md}.
-Direct story execution is unavailable in this integration stage. Session, conversation, history, search, and inspection remain available.
+[Lead]
+  Outcome: critique
+  Next action: continue_with_lead
 ```
 
-The file is not opened and its bytes are not sent anywhere.
+The indicator remains path/range metadata. Runtime authorizes and performs the
+mandatory read for each addressed agent; it does not embed the whole file in
+the command record.
 
 ## Enforcement boundary
 

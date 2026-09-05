@@ -162,8 +162,9 @@
 
 - **Runtime.** The management/configuration/inspection and lead-orchestration
   facade. Its Python surface includes confirmed lead consultations and
-  separately confirmed consensus phases; its installed shell still has no
-  story-execution command. See [Runtime API](reference/runtime-api.md).
+  separately confirmed consensus phases. Its installed shell accepts focused
+  Lead input and separate consultation, Apply, and Commit decisions, but has no
+  debate/consensus or direct-run command. See [Runtime API](reference/runtime-api.md).
 
 - **Story session.** Durable related work/history spanning debates and
   conversations. See [Story sessions](guides/story-sessions.md).

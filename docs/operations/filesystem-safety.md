@@ -5,9 +5,9 @@
 > serialized transcript replacement, atomic per-file default/metadata
 > replacement, guarded interactive settings persistence, and content-free
 > explicit-reference authorization evidence and inline runtime/provider
-> enforcement are implemented. Interactive `$`/`$$` discovery and viewer
-> attachment use the catalog-independent reference-source boundary
-> and add no artifact
+> enforcement are implemented. `$`/`$$` discovery and viewer attachment in
+> focused Lead input use the catalog-independent reference-source boundary;
+> they add no artifact
 > write path. Bounded fail-open debug logging uses a separate identity-bound
 > storage path. Bounded agent-exchange storage uses another independent
 > descriptor-safe subtree and guard. Privileged filesystem conversation archive transfer is
