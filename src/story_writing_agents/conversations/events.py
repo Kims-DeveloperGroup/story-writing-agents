@@ -712,6 +712,7 @@ class CollaborationLeadOutcomeFailureCode(StrEnum):
 
     EVIDENCE_VALIDATION_REJECTED = "evidence_validation_rejected"
     ARTIFACT_INTENT_REJECTED = "artifact_intent_rejected"
+    PROVIDER_RESULT_REJECTED = "provider_result_rejected"
 
 
 class LeadProposalRelation(StrEnum):

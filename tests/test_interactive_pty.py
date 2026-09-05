@@ -30,6 +30,8 @@ from story_writing_agents.conversation_storage.filesystem import (
 from story_writing_agents.conversations import (
     CollaborationEventBatch,
     CollaborationEventKind,
+    CollaborationLeadJudgmentPayload,
+    CollaborationMessagePayload,
     CollaborationProviderCallPayload,
     CollaborationProviderCallState,
     ConversationMetadata,
@@ -233,7 +235,7 @@ def compact_agent_id(arguments):
 
 
 def compact_context_current(value, agent_id):
-    """Extract authoritative current material from compact wire v5."""
+    """Extract authoritative current material from the contextual request."""
 
     query = value.get("q")
     correlation = value.get("c")
@@ -271,7 +273,7 @@ def compact_context_current(value, agent_id):
 
 
 def compact_observation_handles(value):
-    """Return the wire-v5 observation kind and its authorized handle aliases."""
+    """Return the current observation kind and its authorized handle aliases."""
 
     observation = value.get("o")
     if not isinstance(observation, list) or not observation:
@@ -398,10 +400,12 @@ def compact_answer(value, used_handles=(), *, after_retrieval=False):
     else:
         result = "deterministic candidate"
     return {
-        "a": "a",
-        "c": value["c"],
-        "d": [result],
-        "u": list(used_handles),
+        "correlation": value["c"],
+        "action": {
+            "kind": "answer",
+            "result": result if isinstance(result, dict) else {"value": result},
+            "used_handles": list(used_handles),
+        },
     }
 
 
@@ -425,7 +429,7 @@ append_record(
         "pid": os.getpid(),
         "argv": argv,
         "operation": (
-            "agent_context_v5"
+            "agent_context_v7"
             if isinstance(query, list)
             else payload.get("operation")
         ),
@@ -477,10 +481,11 @@ elif control.get("mode") == "invalid_read":
     output_path.write_text(
         json.dumps(
             {
-                "a": "r",
-                "c": payload["c"],
-                "d": ["conflict", "PRIVATE/critique text"],
-                "u": [],
+                "correlation": payload["c"],
+                "action": {
+                    "kind": "read",
+                    "handles": ["conflict", "PRIVATE/critique text"],
+                },
             },
             ensure_ascii=False,
             separators=(",", ":"),
@@ -491,10 +496,8 @@ elif control.get("mode") == "correlation_mismatch":
     output_path.write_text(
         json.dumps(
             {
-                "a": "r",
-                "c": "PRIVATE critique prose\u001b]unsafe\u0007",
-                "d": [],
-                "u": [],
+                "correlation": "PRIVATE critique prose\u001b]unsafe\u0007",
+                "action": {"kind": "read", "handles": []},
             },
             ensure_ascii=False,
             separators=(",", ":"),
@@ -502,11 +505,15 @@ elif control.get("mode") == "correlation_mismatch":
         encoding="utf-8",
     )
 elif isinstance(query, list):
-    if control.get("mode") in {"lead_consultation", "lead_answer"}:
-        answer = (
-            lead_consultation_answer(payload, agent_id)
-            if control.get("mode") == "lead_consultation"
-            else {
+    if control.get("mode") in {
+        "lead_consultation",
+        "lead_answer",
+        "lead_incomplete_then_correct",
+    }:
+        if control.get("mode") == "lead_consultation":
+            answer = lead_consultation_answer(payload, agent_id)
+        elif control.get("mode") == "lead_answer":
+            answer = {
                 "kind": "answer",
                 "message": "Continued after confirmed review.",
                 "scope": "workflow_meta",
@@ -515,12 +522,31 @@ elif isinstance(query, list):
                 "artifact_intent": None,
                 "proposal": None,
             }
-        )
+        elif nested_mapping_with(payload, "response_correction") is None:
+            answer = {
+                "kind": "answer",
+                "message": "INCOMPLETE_PROVIDER_BODY_MUST_NOT_RENDER",
+                "scope": "workflow_meta",
+                "evidence_status": "not_applicable",
+                "artifact_intent": None,
+            }
+        else:
+            answer = {
+                "kind": "answer",
+                "message": "Corrected complete Lead answer.",
+                "scope": "workflow_meta",
+                "evidence_status": "not_applicable",
+                "evidence_ids": [],
+                "artifact_intent": None,
+                "proposal": None,
+            }
         response = {
-            "a": "a",
-            "c": payload["c"],
-            "d": [answer],
-            "u": [],
+            "correlation": payload["c"],
+            "action": {
+                "kind": "answer",
+                "result": answer,
+                "used_handles": [],
+            },
         }
     elif (
         len(query) != 5
@@ -536,10 +562,17 @@ elif isinstance(query, list):
         and "s" in query[1]
     ):
         response = {
-            "a": "s",
-            "c": payload["c"],
-            "d": [[current["command"].removeprefix("retrieve "), ["c"]]],
-            "u": [],
+            "correlation": payload["c"],
+            "action": {
+                "kind": "search",
+                "path_prefix": None,
+                "queries": [
+                    {
+                        "text": current["command"].removeprefix("retrieve "),
+                        "source_kinds": ["conversation"],
+                    }
+                ],
+            },
         }
     elif (
         observation_kind == "search"
@@ -547,10 +580,8 @@ elif isinstance(query, list):
         and "r" in query[1]
     ):
         response = {
-            "a": "r",
-            "c": payload["c"],
-            "d": list(observation_handles),
-            "u": [],
+            "correlation": payload["c"],
+            "action": {"kind": "read", "handles": list(observation_handles)},
         }
     else:
         if "a" not in query[1]:
@@ -4572,6 +4603,97 @@ raise SystemExit(cli.main([]))
             b"",
         )
 
+    def test_incomplete_lead_answer_is_corrected_before_rendering(self) -> None:
+        """Correct one incomplete Lead result before the interactive reply renders."""
+
+        defaults_path = self.workspace.path("config/system_defaults.json")
+        defaults = json.loads(defaults_path.read_text(encoding="utf-8"))
+        defaults["default_backend"] = "codex"
+        defaults_path.write_text(
+            json.dumps(defaults, ensure_ascii=False, indent=2, sort_keys=True) + "\n",
+            encoding="utf-8",
+        )
+        self._set_provider_control(mode="lead_incomplete_then_correct")
+        process = self._spawn_cli((), terminal_columns=120)
+        process.wait_for_text("story[lobby]> ")
+        process.send_line("/session create alpha")
+        process.wait_for_text("story[alpha]> ")
+        conversation = self._create_conversation(process, subject="Corrected Lead")
+
+        mark = process.output_mark()
+        user_message = "Give one ordinary focused answer."
+        process.send_line(user_message)
+        rendered = process.wait_for_text(
+            "Corrected complete Lead answer.",
+            after=mark,
+        )
+        process.wait_for_text("story[alpha]> ", after=mark)
+        for forbidden in (
+            "INCOMPLETE_PROVIDER_BODY_MUST_NOT_RENDER",
+            "Interactive error",
+            "retry_lead_turn",
+            "outcome_unknown",
+        ):
+            self.assertNotIn(forbidden, rendered)
+
+        provider_calls = [
+            record
+            for record in self._provider_records()
+            if record.get("event") == "started"
+            and record.get("operation") == "agent_context_v7"
+            and record.get("context_current", {}).get("identity", {}).get("agent_id")
+            == "lead_orchestrator"
+        ]
+        self.assertEqual(len(provider_calls), 2)
+        self.assertNotIn("response_correction", json.dumps(provider_calls[0]["payload"]))
+        self.assertIn("response_correction", json.dumps(provider_calls[1]["payload"]))
+        self.assertNotIn("resume", provider_calls[1]["argv"])
+
+        store = FilesystemCollaborationEventStore(
+            self.workspace,
+            catalog=FilesystemConversationCatalog(self.workspace),
+        )
+        events = store.read("alpha", conversation.conversation_id)
+        user_messages = tuple(
+            event.payload.content
+            for event in events
+            if isinstance(event.payload, CollaborationMessagePayload)
+            and event.sender.kind.value == "user"
+        )
+        judgments = tuple(
+            event.payload.message
+            for event in events
+            if isinstance(event.payload, CollaborationLeadJudgmentPayload)
+        )
+        call_events = tuple(
+            event.payload
+            for event in events
+            if isinstance(event.payload, CollaborationProviderCallPayload)
+        )
+        submitted = tuple(
+            event
+            for event in call_events
+            if event.state is CollaborationProviderCallState.SUBMITTED
+        )
+        self.assertEqual(user_messages, (user_message,))
+        self.assertEqual(judgments, ("Corrected complete Lead answer.",))
+        self.assertEqual(
+            tuple(event.state for event in call_events),
+            (
+                CollaborationProviderCallState.PREPARED,
+                CollaborationProviderCallState.SUBMITTED,
+            )
+            * 2,
+        )
+        self.assertEqual(tuple(event.ordinal for event in submitted), (1, 2))
+        self.assertEqual(len({event.invocation_id for event in submitted}), 1)
+        self.assertFalse(
+            any(event.kind is CollaborationEventKind.LEAD_OUTCOME_FAILURE for event in events)
+        )
+
+        process.send_line("/quit")
+        self.assertEqual(process.wait_for_exit(), 0, process.normalized_text)
+
     def test_lead_consultation_confirmation_reopens_and_continues_on_pty(self) -> None:
         """Exercise one real-shell Lead proposal and confirmed specialist round."""
 
@@ -4667,7 +4789,7 @@ raise SystemExit(cli.main([]))
         ]
         self.assertEqual(len(calls), 2)
         self.assertEqual(calls[0]["payload"]["operation"], "writing_artifact_reference_read")
-        self.assertEqual(calls[1]["operation"], "agent_context_v5")
+        self.assertEqual(calls[1]["operation"], "agent_context_v7")
 
         store = FilesystemCollaborationEventStore(
             self.workspace,

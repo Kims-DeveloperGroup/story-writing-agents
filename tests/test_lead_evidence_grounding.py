@@ -7,6 +7,7 @@ import unittest
 from dataclasses import replace
 
 from story_writing_agents import StoryRuntime
+from story_writing_agents.agent_context.service import ContextProviderTerminalCode
 from story_writing_agents.agents import LEAD_ORCHESTRATOR, PLOT_ARCHITECT
 from story_writing_agents.conversations import (
     CollaborationAppendError,
@@ -291,12 +292,25 @@ class DurableLeadEvidenceMatrixTests(unittest.TestCase):
 
 def _search(query: str, kinds: list[str]):
     def respond(call, _provider):
+        source_kinds = {
+            "w": "writing_artifact",
+            "c": "conversation",
+            "d": "active_debate",
+            "o": "own_agent_state",
+        }
         return json.dumps(
             {
-                "a": "s",
-                "c": call.payload["c"],
-                "d": [[query, kinds]],
-                "u": [],
+                "correlation": call.payload["c"],
+                "action": {
+                    "kind": "search",
+                    "path_prefix": None,
+                    "queries": [
+                        {
+                            "text": query,
+                            "source_kinds": [source_kinds[kind] for kind in kinds],
+                        }
+                    ],
+                },
             },
             separators=(",", ":"),
         )
@@ -369,6 +383,20 @@ class RuntimeLeadEvidenceGroundingTests(LeadOrchestrationTestCase):
     async def test_writing_and_mixed_zero_hits_are_valid_but_conversation_only_is_not(
         self,
     ) -> None:
+        def invalid_correction(call, _provider):
+            return _provider_envelope(
+                call,
+                {
+                    "kind": "recommendation",
+                    "message": "Conversation-only absence remains insufficient.",
+                    "scope": "story_specific",
+                    "evidence_status": "missing",
+                    "evidence_ids": ["invented"],
+                    "artifact_intent": None,
+                    "proposal": None,
+                },
+            )
+
         cases = ((["w"], True), (["w", "c"], True), (["c"], False))
         for index, (kinds, accepted) in enumerate(cases):
             with self.subTest(kinds=kinds):
@@ -377,6 +405,8 @@ class RuntimeLeadEvidenceGroundingTests(LeadOrchestrationTestCase):
                     _search("phrase absent from every source", kinds),
                     _missing_outcome(),
                 )
+                if not accepted:
+                    self.backend.enqueue(invalid_correction)
                 result = await self.runtime.lead_turn(
                     self.session_id,
                     conversation_id,
@@ -606,6 +636,7 @@ class RuntimeLeadEvidenceGroundingTests(LeadOrchestrationTestCase):
             with self.subTest(ids=ids):
                 conversation_id = self.conversation(f"Invalid evidence IDs {index}")
                 self.backend.enqueue(invalid(ids))
+                self.backend.enqueue(invalid(ids))
                 result = await self.runtime.lead_turn(
                     self.session_id,
                     conversation_id,
@@ -634,10 +665,8 @@ class RuntimeLeadEvidenceGroundingTests(LeadOrchestrationTestCase):
             provider.used_handles = (handle,)
             return json.dumps(
                 {
-                    "a": "r",
-                    "c": call.payload["c"],
-                    "d": [handle],
-                    "u": [],
+                    "correlation": call.payload["c"],
+                    "action": {"kind": "read", "handles": [handle]},
                 },
                 separators=(",", ":"),
             )
@@ -675,6 +704,7 @@ class RuntimeLeadEvidenceGroundingTests(LeadOrchestrationTestCase):
         self.assertEqual(len(prior_evidence_ids), 1)
 
         self.backend.enqueue(invalid(prior_evidence_ids))
+        self.backend.enqueue(invalid(prior_evidence_ids))
         stale = await self.runtime.lead_turn(
             self.session_id,
             conversation_id,
@@ -692,6 +722,20 @@ class RuntimeLeadEvidenceGroundingTests(LeadOrchestrationTestCase):
     async def test_hits_without_read_unused_read_and_truncated_search_fail_closed(
         self,
     ) -> None:
+        def invalid_correction(call, _provider):
+            return _provider_envelope(
+                call,
+                {
+                    "kind": "answer",
+                    "message": "Correction still claims unread evidence.",
+                    "scope": "story_specific",
+                    "evidence_status": "verified",
+                    "evidence_ids": ["invented"],
+                    "artifact_intent": None,
+                    "proposal": None,
+                },
+            )
+
         def answer_with_unread_id(call, _provider):
             observation = call.payload["o"]
             self.assertEqual(observation[0], "s")
@@ -714,10 +758,8 @@ class RuntimeLeadEvidenceGroundingTests(LeadOrchestrationTestCase):
             provider.used_handles = (handle,)
             return json.dumps(
                 {
-                    "a": "r",
-                    "c": call.payload["c"],
-                    "d": [handle],
-                    "u": [],
+                    "correlation": call.payload["c"],
+                    "action": {"kind": "read", "handles": [handle]},
                 },
                 separators=(",", ":"),
             )
@@ -746,6 +788,7 @@ class RuntimeLeadEvidenceGroundingTests(LeadOrchestrationTestCase):
         for index, scripts in enumerate(cases):
             conversation_id = self.conversation(f"Unread evidence {index}")
             self.backend.enqueue(*scripts)
+            self.backend.enqueue(invalid_correction)
             result = await self.runtime.lead_turn(
                 self.session_id,
                 conversation_id,
@@ -768,6 +811,7 @@ class RuntimeLeadEvidenceGroundingTests(LeadOrchestrationTestCase):
             _search("Shared grounding phrase", ["w"]),
             truncated_answer,
         )
+        self.backend.enqueue(invalid_correction)
         result = await self.runtime.lead_turn(
             self.session_id,
             conversation_id,
@@ -778,9 +822,55 @@ class RuntimeLeadEvidenceGroundingTests(LeadOrchestrationTestCase):
     async def test_validation_failure_closes_once_and_restart_uses_fresh_turn(
         self,
     ) -> None:
-        conversation_id = self.conversation("Retry after validation failure")
+        incomplete_id = self.conversation("Correct incomplete live shape")
+
+        def incomplete(call, _provider):
+            return _provider_envelope(
+                call,
+                {
+                    "kind": "answer",
+                    "message": "Incomplete live Antigravity answer.",
+                    "scope": "workflow_meta",
+                    "evidence_status": "not_applicable",
+                    "artifact_intent": None,
+                },
+            )
+
+        self.backend.enqueue(incomplete)
         self.backend.enqueue(
-            lambda call, _provider: _provider_envelope(
+            _visible_outcome("answer", "Corrected complete direct answer.")
+        )
+        corrected = await self.runtime.lead_turn(
+            self.session_id,
+            incomplete_id,
+            "Correct an incomplete direct answer in this turn.",
+        )
+        self.assertIs(corrected.kind, LeadOutcomeKind.ANSWER)
+        self.assertEqual(corrected.message, "Corrected complete direct answer.")
+        self.assertEqual(len(self.backend.calls), 2)
+        self.assertEqual(
+            tuple(finalizer.calls for finalizer in self.backend.finalizers),
+            (
+                [
+                    (
+                        "rejected",
+                        ContextProviderTerminalCode.MALFORMED_STRUCTURED_RESPONSE,
+                    )
+                ],
+                [("accepted", None)],
+            ),
+        )
+        self.assertFalse(
+            any(
+                event.kind is CollaborationEventKind.LEAD_OUTCOME_FAILURE
+                for event in self.history(incomplete_id)
+            )
+        )
+
+        conversation_id = self.conversation("Retry after exhausted correction")
+
+        def invented(call, _provider):
+            return _provider_envelope(
                 call,
                 {
                     "kind": "answer",
@@ -792,13 +882,17 @@ class RuntimeLeadEvidenceGroundingTests(LeadOrchestrationTestCase):
                     "proposal": None,
                 },
             )
-        )
+
+        self.backend.enqueue(invented)
+        self.backend.enqueue(invented)
+        calls_before = len(self.backend.calls)
         failed = await self.runtime.lead_turn(
             self.session_id,
             conversation_id,
             "Reject invented evidence.",
         )
         self.assertIs(failed.next_action, CollaborationNextAction.RETRY_LEAD_TURN)
+        self.assertEqual(len(self.backend.calls) - calls_before, 2)
         first_history = self.history(conversation_id)
         self.assertEqual(
             sum(

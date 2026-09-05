@@ -242,6 +242,48 @@ to refresh inventory. Do not invoke or retry provider work merely to populate
 diagnostics. See the complete [viewer workflow, privacy boundary, and error
 table](agent-exchanges.md).
 
+## Distinguish Lead provider failure from result rejection
+
+Choose recovery from the boundary Story actually recorded, not from provider
+prose or an assumed cause:
+
+| Recorded fact | What Story knows | What to do |
+| --- | --- | --- |
+| Agent exchange ends with `provider_failure` / `provider_invocation_failed` and has no response record. | No exact valid `ProviderResult` crossed the adapter boundary. The fixed code covers such causes as provider rejection of a request/output schema, authentication, configuration, transport, and nonzero provider exit; it does not expose the underlying diagnostic or prove whether external work occurred. | Check `/auth`, the selected backend/model/effort, executable and timeout, then inspect the correlated content-safe runtime record and provider-native diagnostics under their own policy. Do not infer that replay is safe from this code alone. |
+| Agent exchange has a completed response and a deterministic `rejected` outcome; Lead history closes it as `provider_result_rejected`. | The provider returned a result, but Story rejected one of five closed classes: malformed structured response, correlation mismatch, semantic rejection, action exhaustion, or answer-validation failure. | Follow `retry_lead_turn`. Runtime starts a fresh call and does not reuse the tainted provider thread or replay the rejected result. |
+| Lead history projects `outcome_unknown` and `inspect_and_resolve_outcome`. | Submission is durable, but neither an accepted result nor a deterministic rejected-result closure is authoritative. | Inspect and resolve the preserved outcome. Never replay the submitted call merely to make the conversation advance. |
+
+One fixed Codex defect produced the first row when the compact output schema
+contained an array `items` node without an explicit supported type. Codex
+rejected the output schema before returning a valid provider result. Current
+typed wire v7 instead uses a closed required `{correlation, action}` root and
+closed SEARCH/READ/ANSWER variants with explicitly typed arrays and nested
+objects, consistent with
+[Codex Structured Outputs requirements](https://developers.openai.com/api/docs/guides/structured-outputs).
+If a captured current request lacks the typed-v7 root or has an untyped
+`items` node, verify that the running `story` installation is the updated
+checkout before retrying after repair. Do not add a compatibility decoder.
+
+An Antigravity response can reach the second row instead. For example,
+`action.used_handles` must be `[]` when no successful READ action emitted a
+handle, and the Lead's ANSWER object must include required nullable fields
+explicitly. Returning `used_handles=["user_input"]` without a READ or omitting
+those fields is a deterministic returned-result rejection, not proof of an
+unknown outcome. Durable Lead
+history records only the fixed classification; it does not copy raw provider
+diagnostics or rejected story text.
+
+Runtime may make one bounded same-turn correction call for a deterministic
+returned-result rejection when fresh authority and call budget are available.
+That is a safety behavior, not acceptance of the rejected response: the first
+physical call remains rejected and its tainted thread is not reused. A normal
+Codex or Antigravity Lead turn must validate without
+`provider_invocation_failed`, `malformed_structured_response`, or
+`answer_validation_failed`; correction success does not waive that criterion.
+For the prior Antigravity default-agent/outer-project failure and the corrected
+custom-agent invocation, see
+[Why the earlier Lead call did not proceed](antigravity.md#why-the-earlier-lead-call-did-not-proceed).
+
 ## Inspect a rejected provider response
 
 For a sanitized `provider_protocol_error`, start with

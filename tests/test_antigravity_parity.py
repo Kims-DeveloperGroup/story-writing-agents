@@ -120,8 +120,9 @@ import threading
 
 argv = sys.argv[1:]
 if "--help" in argv:
-    print("--conversation --disable-slash-commands --input-format --json-schema "
-          "--mode --output-format --print-timeout --project --sandbox")
+    print("--agent --conversation --disable-slash-commands --effort "
+          "--input-format --json-schema --mode --model --new-project "
+          "--output-format --print-timeout --sandbox")
     raise SystemExit(0)
 
 mode = os.environ.get("STORY_FAKE_AGY_MODE", "ok")
@@ -213,6 +214,19 @@ if set(user_event["message"]) != {"content"}:
 payload = json.loads(user_event["message"]["content"])
 schema = json.loads(option("--json-schema"))
 provider_state = Path(next(value.split("=", 1)[1] for value in argv if value.startswith("--gemini_dir=")))
+selected_agent = option("--agent")
+working_directory = Path.cwd().resolve()
+agent_definition = (
+    working_directory / ".agents" / "agents" / str(selected_agent) / "agent.md"
+)
+is_new_project = "--new-project" in argv
+if (
+    selected_agent is None
+    or not agent_definition.is_file()
+    or "--project" in argv
+    or (option("--conversation") is None) == (not is_new_project)
+):
+    raise SystemExit(87)
 
 def compact_context_current(value):
     query = value.get("q")
@@ -253,7 +267,14 @@ def compact_contextual_answer(value):
         result = "conversation answer"
     else:
         result = "reply-" + phase
-    return {"a": "a", "c": value["c"], "d": [result], "u": []}
+    return {
+        "correlation": value["c"],
+        "action": {
+            "kind": "answer",
+            "result": result if isinstance(result, dict) else {"value": result},
+            "used_handles": [],
+        },
+    }
 
 current = compact_context_current(payload)
 correlation = payload.get("correlation", {})
@@ -311,8 +332,12 @@ elif mode == "ignore_term":
 
 record = {
     "argv": argv,
-    "cwd": str(Path.cwd()),
+    "cwd": str(working_directory),
     "provider_state": str(provider_state),
+    "selected_agent": selected_agent,
+    "new_project": is_new_project,
+    "agent_definition": str(agent_definition),
+    "agent_definition_exists": agent_definition.is_file(),
     "stdin_event_count": len(lines),
     "payload_keys": list(payload),
     "session_id": logical_session_id or payload.get("session_id"),
@@ -468,10 +493,39 @@ if mode == "truncated":
     emit({"event": "init", "conversation_id": stream_id, "init": {}})
     raise SystemExit(0)
 
-init = {"event": "init", "conversation_id": stream_id, "init": {}}
+init_fields = {
+    "agent": selected_agent,
+    "cwd": str(working_directory),
+    "permission_mode": "request-review",
+    "tools": ["finish", "list_dir"],
+}
+if mode == "missing_agent":
+    init_fields.pop("agent")
+elif mode == "wrong_agent":
+    init_fields["agent"] = "CONFIDENTIAL_WRONG_AGENT"
+elif mode == "missing_cwd":
+    init_fields.pop("cwd")
+elif mode == "wrong_cwd":
+    init_fields["cwd"] = str(working_directory.parent)
+elif mode == "missing_permission":
+    init_fields.pop("permission_mode")
+elif mode == "wrong_permission":
+    init_fields["permission_mode"] = "dangerously-skip-permissions"
+elif mode == "missing_tools":
+    init_fields.pop("tools")
+elif mode == "empty_tools":
+    init_fields["tools"] = []
+elif mode == "duplicate_tools":
+    init_fields["tools"] = ["finish", "finish"]
+elif mode == "nonstring_tools":
+    init_fields["tools"] = ["finish", 1]
+elif mode == "missing_finish":
+    init_fields["tools"] = ["list_dir"]
+init = {"event": "init", "conversation_id": stream_id, "init": init_fields}
 terminal = {
     "conversation_id": stream_id,
     "status": "FAILED_CONFIDENTIAL_STATUS" if mode == "non_success" else "SUCCESS",
+    "json_schema": schema,
 }
 if mode == "missing_id":
     init.pop("conversation_id")
@@ -482,12 +536,88 @@ elif mode == "text_fallback":
     terminal["response"] = json.dumps(output, ensure_ascii=False, separators=(",", ":"))
 else:
     terminal["structured_output"] = output
+if mode == "missing_schema_echo":
+    terminal.pop("json_schema")
+elif mode == "mismatched_schema_echo":
+    terminal["json_schema"] = {"type": "object"}
 
 emit(init)
 if mode == "unexpected":
     emit({"event": "CONFIDENTIAL_UNEXPECTED_EVENT"})
+elif mode == "unsafe_id":
+    pass
+elif mode in {
+    "wrong_step_conversation",
+    "native_tool",
+    "tool_name",
+    "tool_info",
+    "subagent_info",
+    "unknown_step",
+    "bad_step_scalar",
+    "bad_step_usage",
+}:
+    step = {
+        "conversation_id": stream_id,
+        "state": "DONE",
+        "step_index": 0,
+        "step_type": "finish",
+    }
+    if mode == "wrong_step_conversation":
+        step["conversation_id"] = "different-conversation"
+    elif mode == "native_tool":
+        step["step_type"] = "tool"
+    elif mode == "tool_name":
+        step["tool_name"] = "list_dir"
+    elif mode == "tool_info":
+        step["tool_info"] = {"name": "list_dir"}
+    elif mode == "subagent_info":
+        step["subagent_info"] = {"name": "unsafe"}
+    elif mode == "unknown_step":
+        step["step_type"] = "browser"
+    elif mode == "bad_step_scalar":
+        step["duration_seconds"] = True
+    else:
+        step["usage"] = {"input_tokens": -1}
+    emit({"event": "step_update", "step_update": step})
 else:
-    emit({"event": "step_update", "step_update": {}})
+    for step in (
+        {
+            "conversation_id": stream_id,
+            "state": "DONE",
+            "step_index": 0,
+            "step_type": "user_input",
+            "text_delta": "",
+        },
+        {
+            "conversation_id": stream_id,
+            "duration_seconds": 0.0,
+            "state": "DONE",
+            "step_index": 1,
+            "step_type": "checkpoint",
+            "usage": {
+                "cache_read_tokens": 0,
+                "input_tokens": 1,
+                "output_tokens": 1,
+                "thinking_tokens": 0,
+                "total_tokens": 2,
+            },
+        },
+        {
+            "conversation_id": stream_id,
+            "state": "ACTIVE",
+            "step_index": 2,
+            "step_type": "agent_response",
+            "text_delta": "",
+        },
+        {
+            "conversation_id": stream_id,
+            "duration_seconds": 0,
+            "state": "DONE",
+            "step_index": 3,
+            "step_type": "finish",
+        },
+    ):
+        emit({"event": "step_update", "step_update": step})
 emit({"event": "result", "result": terminal})
 """
 )
@@ -1022,11 +1152,20 @@ class AntigravityParityTests(unittest.IsolatedAsyncioTestCase):
             "i": "Visible lead request.",
         }
         invocations = []
-        response = (
-            '{"a":"a","c":"'
-            + "L" * 43
-            + '","d":[{"kind":"answer","message":"Visible.",'
-            '"proposal":null}],"u":[]}'
+        response = json.dumps(
+            {
+                "correlation": "L" * 43,
+                "action": {
+                    "kind": "answer",
+                    "result": {
+                        "kind": "answer",
+                        "message": "Visible.",
+                        "proposal": None,
+                    },
+                    "used_handles": [],
+                },
+            },
+            separators=(",", ":"),
         )
 
         async def invoke(_binding, invocation):
@@ -1506,9 +1645,27 @@ class AntigravityParityTests(unittest.IsolatedAsyncioTestCase):
             self.assertIn("stream-json", argv)
             self.assertIn("--output-format", argv)
             self.assertIn("--json-schema", argv)
+            self.assertEqual(argv.count("--agent"), 1)
+            self.assertEqual(
+                argv[argv.index("--agent") + 1],
+                item["agent_id"],
+            )
             self.assertIn("--sandbox", argv)
             self.assertIn("--disable-slash-commands", argv)
+            self.assertNotIn("--project", argv)
             self.assertTrue(any(value.startswith("--gemini_dir=") for value in argv))
+            if item["resumed_id"] is None:
+                self.assertEqual(argv.count("--new-project"), 1)
+                self.assertNotIn("--conversation", argv)
+                self.assertIs(item["new_project"], True)
+            else:
+                self.assertNotIn("--new-project", argv)
+                self.assertEqual(argv.count("--conversation"), 1)
+                self.assertEqual(
+                    argv[argv.index("--conversation") + 1],
+                    item["resumed_id"],
+                )
+                self.assertIs(item["new_project"], False)
             for secret in (
                 "PRIVATE_STORY_TASK",
                 "PRIVATE_STORY_PAYLOAD",
@@ -1525,6 +1682,19 @@ class AntigravityParityTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(cwd.parent, provider_state.parent)
             self.assertTrue(cwd.is_relative_to(self.workspace.root))
             self.assertTrue(provider_state.is_relative_to(self.workspace.root))
+            expected_agent_definition = (
+                cwd
+                / ".agents"
+                / "agents"
+                / str(item["agent_id"])
+                / "agent.md"
+            )
+            self.assertEqual(
+                Path(item["agent_definition"]),
+                expected_agent_definition,
+            )
+            self.assertIs(item["agent_definition_exists"], True)
+            self.assertTrue(expected_agent_definition.is_file())
 
     async def test_only_provider_known_same_state_conversations_can_resume(
         self,
@@ -2321,6 +2491,33 @@ class AntigravityParityTests(unittest.IsolatedAsyncioTestCase):
                 "unexpected",
                 "Antigravity CLI returned a malformed event stream",
             ),
+            *(
+                (mode, "Antigravity CLI returned a malformed event stream")
+                for mode in (
+                    "missing_agent",
+                    "wrong_agent",
+                    "missing_cwd",
+                    "wrong_cwd",
+                    "missing_permission",
+                    "wrong_permission",
+                    "missing_tools",
+                    "empty_tools",
+                    "duplicate_tools",
+                    "nonstring_tools",
+                    "missing_finish",
+                    "native_tool",
+                    "tool_name",
+                    "tool_info",
+                    "subagent_info",
+                    "unknown_step",
+                    "bad_step_scalar",
+                    "bad_step_usage",
+                )
+            ),
+            (
+                "wrong_step_conversation",
+                "Antigravity CLI returned an invalid conversation ID",
+            ),
             (
                 "missing_id",
                 "Antigravity CLI returned an invalid conversation ID",
@@ -2335,6 +2532,18 @@ class AntigravityParityTests(unittest.IsolatedAsyncioTestCase):
             ),
             (
                 "bad_output",
+                "Antigravity CLI returned malformed structured output",
+            ),
+            (
+                "text_fallback",
+                "Antigravity CLI returned malformed structured output",
+            ),
+            (
+                "missing_schema_echo",
+                "Antigravity CLI returned malformed structured output",
+            ),
+            (
+                "mismatched_schema_echo",
                 "Antigravity CLI returned malformed structured output",
             ),
             (

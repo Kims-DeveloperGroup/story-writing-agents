@@ -12,7 +12,13 @@ from unittest import mock
 import story_writing_agents
 from story_writing_agents import agent_context as agent_context_package
 from story_writing_agents.agent_context import service as service_module
-from story_writing_agents.agent_context.accounting import canonical_provider_json
+from story_writing_agents.agent_context.accounting import (
+    ProviderCallAccounting,
+    ProviderCallKind,
+    ProviderCallState,
+    account_provider_payload,
+    canonical_provider_json,
+)
 from story_writing_agents.agent_context.actions import (
     CONTEXT_ACTION_POLICY,
     ContextActionCorrelation,
@@ -78,6 +84,56 @@ def _digest(body: bytes) -> str:
 
 def _artifact_id(path: str) -> str:
     return "writing_artifact:sha256:" + hashlib.sha256(path.encode()).hexdigest()
+
+
+def _closed_result_schema(properties: dict[str, object]) -> dict[str, object]:
+    return {
+        "additionalProperties": False,
+        "properties": properties,
+        "required": list(properties),
+        "type": "object",
+    }
+
+
+def _answer_wire(
+    correlation: str,
+    result: object,
+    *,
+    used_handles: tuple[str, ...] = (),
+) -> dict[str, object]:
+    return {
+        "correlation": correlation,
+        "action": {
+            "kind": "answer",
+            "result": result,
+            "used_handles": list(used_handles),
+        },
+    }
+
+
+def _search_wire(
+    correlation: str,
+    queries: list[tuple[str, list[str]]],
+    *,
+    path_prefix: str | None = None,
+) -> dict[str, object]:
+    return {
+        "correlation": correlation,
+        "action": {
+            "kind": "search",
+            "path_prefix": path_prefix,
+            "queries": [
+                {"text": text, "source_kinds": kinds} for text, kinds in queries
+            ],
+        },
+    }
+
+
+def _read_wire(correlation: str, handles: list[object]) -> dict[str, object]:
+    return {
+        "correlation": correlation,
+        "action": {"kind": "read", "handles": handles},
+    }
 
 
 def _snapshot(
@@ -366,7 +422,10 @@ class ServiceSurfaceAndBindingTests(unittest.TestCase):
                 "specialist_advisory",
             ),
         )
-        result_contract = ContextJsonObjectResultContract("outcome-v1")
+        result_contract = ContextJsonObjectResultContract(
+            "outcome-v1",
+            _closed_result_schema({"message": {"type": "string"}}),
+        )
         self.assertEqual(result_contract.contract_id, "outcome-v1")
         self.assertFalse(hasattr(result_contract, "__dict__"))
         with self.assertRaises((FrozenInstanceError, TypeError)):
@@ -444,6 +503,94 @@ class ServiceSurfaceAndBindingTests(unittest.TestCase):
             with self.assertRaises(ContextActionError):
                 case()
 
+    def test_response_rejection_facts_require_one_of_five_codes_and_submitted_calls(
+        self,
+    ) -> None:
+        encoded, payload = account_provider_payload(
+            {"type": "object"},
+            {"request": "content-free"},
+            call_kind=ProviderCallKind.COLLABORATION_INITIAL,
+        )
+        submitted = ProviderCallAccounting(
+            payload,
+            state=ProviderCallState.SUBMITTED,
+            actual_transport_utf8_bytes=len(encoded),
+        )
+        prepared = ProviderCallAccounting(payload)
+        rejection_codes = (
+            service_module.ContextProviderTerminalCode.MALFORMED_STRUCTURED_RESPONSE,
+            service_module.ContextProviderTerminalCode.RESPONSE_CORRELATION_MISMATCH,
+            service_module.ContextProviderTerminalCode.RESPONSE_SEMANTIC_REJECTED,
+            service_module.ContextProviderTerminalCode.ACTION_EXHAUSTED,
+            service_module.ContextProviderTerminalCode.ANSWER_VALIDATION_FAILED,
+        )
+        self.assertEqual(
+            tuple(
+                field.name
+                for field in fields(service_module.ContextProviderFailureFacts)
+            ),
+            (
+                "accounting",
+                "timed_out",
+                "taint_existing_thread",
+                "submitted_accountings",
+                "submission_uncertain",
+                "response_rejection_code",
+            ),
+        )
+        for code in rejection_codes:
+            with self.subTest(code=code):
+                facts = service_module.ContextProviderFailureFacts(
+                    submitted_accountings=(submitted,),
+                    response_rejection_code=code,
+                )
+                failure = RuntimeError("private provider response")
+                service_module.record_context_provider_failure(failure, facts)
+                self.assertIs(
+                    service_module.context_provider_failure_facts(
+                        failure
+                    ).response_rejection_code,
+                    code,
+                )
+
+        invalid = (
+            lambda: service_module.ContextProviderFailureFacts(
+                submitted_accountings=(submitted,),
+                response_rejection_code=(
+                    service_module.ContextProviderTerminalCode.REFERENCE_RUNTIME_FAILED
+                ),
+            ),
+            lambda: service_module.ContextProviderFailureFacts(
+                submitted_accountings=(submitted,),
+                response_rejection_code=(
+                    service_module.ContextProviderTerminalCode.CONTEXT_RUNTIME_FAILED
+                ),
+            ),
+            lambda: service_module.ContextProviderFailureFacts(
+                response_rejection_code=(
+                    service_module.ContextProviderTerminalCode.MALFORMED_STRUCTURED_RESPONSE
+                ),
+            ),
+            lambda: service_module.ContextProviderFailureFacts(
+                submitted_accountings=(prepared,),
+                response_rejection_code=(
+                    service_module.ContextProviderTerminalCode.MALFORMED_STRUCTURED_RESPONSE
+                ),
+            ),
+            lambda: service_module.ContextProviderFailureFacts(
+                submitted_accountings=(submitted,),
+                response_rejection_code="malformed_structured_response",  # type: ignore[arg-type]
+            ),
+        )
+        for case in invalid:
+            with self.subTest(case=case):
+                with self.assertRaises(service_module.ContextExecutionError) as caught:
+                    case()
+                self.assertIs(
+                    caught.exception.code,
+                    service_module.ContextExecutionErrorCode.INVALID_VALUE,
+                )
+
     def test_entropy_failure_and_registry_scope_mismatch_are_content_free(self) -> None:
         manifest, snapshots = _manifest_fixture()
         binding = _binding(manifest)
@@ -464,12 +611,23 @@ class ServiceSurfaceAndBindingTests(unittest.TestCase):
 
 
 class CompactWireDecoderTests(unittest.TestCase):
-    """Verify the complete strict wire-v5 response contract in isolation."""
+    """Verify the complete strict typed wire-v7 response contract in isolation."""
 
     def setUp(self) -> None:
         manifest, _snapshots = _manifest_fixture()
         self.correlation = _correlation(_binding(manifest), 1)
         self.token = service_module._correlation_token(self.correlation)
+        self.result_schema = _closed_result_schema(
+            {
+                "kind": {"enum": ["answer"], "type": "string"},
+                "message": {"type": "string"},
+                "proposal": {"type": "null"},
+            }
+        )
+        self.result_contract = ContextJsonObjectResultContract(
+            "outcome-v1",
+            self.result_schema,
+        )
 
     @staticmethod
     def _resolve_handle(value: object) -> ContextSourceHandle:
@@ -483,7 +641,7 @@ class CompactWireDecoderTests(unittest.TestCase):
         action: object,
         *,
         allowed: tuple[str, ...] = ("search", "read", "answer"),
-        contract: object = "text",
+        contract: ContextJsonObjectResultContract | None = None,
         source_kinds: tuple[ContextSourceKind, ...] = (
             service_module._SEARCH_SOURCE_KIND_ORDER
         ),
@@ -498,7 +656,7 @@ class CompactWireDecoderTests(unittest.TestCase):
             response,
             correlation=self.correlation,
             allowed_actions=allowed,
-            result_contract=contract,
+            result_contract=contract or self.result_contract,
             allowed_search_source_kinds=source_kinds,
             resolve_handle=self._resolve_handle,
         )
@@ -508,7 +666,7 @@ class CompactWireDecoderTests(unittest.TestCase):
         action: object,
         *,
         allowed: tuple[str, ...] = ("search", "read", "answer"),
-        contract: object = "text",
+        contract: ContextJsonObjectResultContract | None = None,
         source_kinds: tuple[ContextSourceKind, ...] = (
             service_module._SEARCH_SOURCE_KIND_ORDER
         ),
@@ -527,22 +685,64 @@ class CompactWireDecoderTests(unittest.TestCase):
         self.assertIsNone(caught.exception.__cause__)
 
     def test_schema_and_full_correlation_token_are_exact(self) -> None:
-        schema = service_module._context_action_schema()
+        limits = [4, 2, 2, 4, 8, 8, 16, 200]
+        schema = service_module._context_action_schema(
+            correlation=self.correlation,
+            allowed_actions=("search", "read", "answer"),
+            result_contract=self.result_contract,
+            allowed_search_source_kinds=service_module._SEARCH_SOURCE_KIND_ORDER,
+            action_limits=limits,
+            max_used_handles=CONTEXT_ACTION_POLICY.max_cumulative_handles,
+        )
+        self.assertIs(schema["additionalProperties"], False)
+        self.assertEqual(schema["required"], ["correlation", "action"])
+        self.assertEqual(set(schema["properties"]), {"correlation", "action"})
         self.assertEqual(
-            schema,
+            schema["properties"]["correlation"],
             {
-                "additionalProperties": False,
-                "properties": {
-                    "a": {"enum": ["a", "r", "s"]},
-                    "c": {"type": "string"},
-                    "d": {"items": {}, "type": "array"},
-                    "u": {"items": {"type": "string"}, "type": "array"},
-                },
-                "required": ["a", "c", "d", "u"],
-                "type": "object",
+                "description": "Echo the exact correlation token from this call.",
+                "enum": [self.token],
+                "type": "string",
             },
         )
-        self.assertEqual(len(canonical_provider_json(schema)), 218)
+        action_variants = schema["properties"]["action"]["anyOf"]
+        self.assertEqual(
+            tuple(variant["properties"]["kind"]["enum"][0] for variant in action_variants),
+            ("search", "read", "answer"),
+        )
+        for variant in action_variants:
+            self.assertIs(variant["additionalProperties"], False)
+            self.assertEqual(
+                set(variant["required"]),
+                set(variant["properties"]),
+            )
+        search, read, answer = action_variants
+        self.assertEqual(search["properties"]["queries"]["maxItems"], 4)
+        query_schema = search["properties"]["queries"]["items"]
+        source_kinds_schema = query_schema["properties"]["source_kinds"]
+        self.assertEqual(
+            source_kinds_schema["description"],
+            "Choose distinct allowed source kinds; provider order is not "
+            "significant and the runtime canonicalizes it.",
+        )
+        self.assertEqual(
+            set(source_kinds_schema),
+            {"description", "items", "maxItems", "minItems", "type"},
+        )
+        self.assertNotIn("uniqueItems", source_kinds_schema)
+        self.assertNotIn("prefixItems", source_kinds_schema)
+        self.assertIsInstance(source_kinds_schema["items"], dict)
+        self.assertEqual(
+            source_kinds_schema["items"]["enum"],
+            [kind.value for kind in service_module._SEARCH_SOURCE_KIND_ORDER],
+        )
+        self.assertEqual(read["properties"]["handles"]["maxItems"], 8)
+        self.assertEqual(answer["properties"]["result"], self.result_schema)
+        self.assertEqual(
+            answer["properties"]["used_handles"]["maxItems"],
+            CONTEXT_ACTION_POLICY.max_cumulative_handles,
+        )
+        canonical_provider_json(schema)
         self.assertRegex(self.token, r"\A[A-Za-z0-9_-]{43}\Z")
         variants = (
             replace(
@@ -565,7 +765,10 @@ class CompactWireDecoderTests(unittest.TestCase):
         ) as checked:
             self.assertIsInstance(
                 self.decode(
-                    {"a": "a", "c": self.token, "d": ["answer"], "u": []},
+                    _answer_wire(
+                        self.token,
+                        {"kind": "answer", "message": "answer", "proposal": None},
+                    ),
                     allowed=("answer",),
                 ),
                 ContextAnswerAction,
@@ -574,12 +777,20 @@ class CompactWireDecoderTests(unittest.TestCase):
 
     def test_valid_search_read_and_natural_result_shapes_decode_exactly(self) -> None:
         search = self.decode(
-            {
-                "a": "s",
-                "c": self.token,
-                "d": [["Needle", ["w", "c", "d", "o"]]],
-                "u": [],
-            },
+            _search_wire(
+                self.token,
+                [
+                    (
+                        "Needle",
+                        [
+                            "writing_artifact",
+                            "conversation",
+                            "active_debate",
+                            "own_agent_state",
+                        ],
+                    )
+                ],
+            ),
             allowed=("search", "answer"),
         )
         self.assertIsInstance(search, ContextSearchAction)
@@ -591,63 +802,17 @@ class CompactWireDecoderTests(unittest.TestCase):
         )
 
         read = self.decode(
-            {"a": "r", "c": self.token, "d": ["h1", "h2"], "u": []},
+            _read_wire(self.token, ["h1", "h2"]),
             allowed=("read", "answer"),
         )
         self.assertIsInstance(read, ContextReadAction)
         assert isinstance(read, ContextReadAction)
         answer_handle = read.handles[0]
 
-        cases = (
-            ("text", "visible text", "visible text"),
-            (
-                ["retrieval", "text", "citations"],
-                ["visible retrieval", [1, 2]],
-                '["visible retrieval",[1,2]]',
-            ),
-            (["audit", "approve-or-conflict"], "a", '"a"'),
-            (
-                ["audit", "approve-or-conflict"],
-                ["c", "reason"],
-                '["c","reason"]',
-            ),
-            (
-                ["finalize", "path-and-replacement-list"],
-                [["global_outline.md", "replacement"], ["rules.md", ""]],
-                '[["global_outline.md","replacement"],["rules.md",""]]',
-            ),
-            (["finalize", "path-and-replacement-list"], [], "[]"),
-        )
-        for contract, result, expected in cases:
-            with self.subTest(contract=contract, result=result):
-                decoded = self.decode(
-                    {
-                        "a": "a",
-                        "c": self.token,
-                        "d": [result],
-                        "u": ["h1"] if contract == "text" else [],
-                    },
-                    allowed=("answer",),
-                    contract=contract,
-                )
-                self.assertIsInstance(decoded, ContextAnswerAction)
-                assert isinstance(decoded, ContextAnswerAction)
-                self.assertEqual(decoded.answer, expected)
-                self.assertEqual(
-                    decoded.used_handles,
-                    (answer_handle,) if contract == "text" else (),
-                )
-
-        object_contract = ContextJsonObjectResultContract("outcome-v1")
+        result = {"proposal": None, "message": "Visible.", "kind": "answer"}
         structured = self.decode(
-            {
-                "a": "a",
-                "c": self.token,
-                "d": [{"proposal": None, "message": "Visible.", "kind": "answer"}],
-                "u": [],
-            },
+            _answer_wire(self.token, result, used_handles=("h1",)),
             allowed=("answer",),
-            contract=object_contract,
         )
         self.assertIsInstance(structured, ContextAnswerAction)
         assert isinstance(structured, ContextAnswerAction)
@@ -655,25 +820,26 @@ class CompactWireDecoderTests(unittest.TestCase):
             structured.answer,
             '{"kind":"answer","message":"Visible.","proposal":null}',
         )
+        self.assertEqual(structured.used_handles, (answer_handle,))
         for invalid in ([], "text", 1, None, True):
             with self.subTest(json_object_invalid=invalid):
                 self.assert_malformed(
-                    {"a": "a", "c": self.token, "d": [invalid], "u": []},
+                    _answer_wire(self.token, invalid),
                     allowed=("answer",),
-                    contract=object_contract,
                 )
 
     def test_search_wire_supports_shared_artifact_prefix_and_kind_matrix(self) -> None:
         unprefixed = self.decode(
-            {
-                "a": "s",
-                "c": self.token,
-                "d": [
-                    ["First", ["w"]],
-                    ["Second", ["c", "d", "o"]],
+            _search_wire(
+                self.token,
+                [
+                    ("First", ["writing_artifact"]),
+                    (
+                        "Second",
+                        ["conversation", "active_debate", "own_agent_state"],
+                    ),
                 ],
-                "u": [],
-            },
+            ),
             allowed=("search",),
         )
         self.assertIsInstance(unprefixed, ContextSearchAction)
@@ -703,12 +869,14 @@ class CompactWireDecoderTests(unittest.TestCase):
 
         prefix = "manuscript/part-01/"
         prefixed = self.decode(
-            {
-                "a": "s",
-                "c": self.token,
-                "d": [prefix, ["Alpha", ["w"]], ["Beta", ["w"]]],
-                "u": [],
-            },
+            _search_wire(
+                self.token,
+                [
+                    ("Alpha", ["writing_artifact"]),
+                    ("Beta", ["writing_artifact"]),
+                ],
+                path_prefix=prefix,
+            ),
             allowed=("search",),
         )
         self.assertIsInstance(prefixed, ContextSearchAction)
@@ -722,19 +890,27 @@ class CompactWireDecoderTests(unittest.TestCase):
             ("alpha", "beta"),
         )
 
-        for code, kind in zip(
-            ("w", "c", "d", "o"),
-            service_module._SEARCH_SOURCE_KIND_ORDER,
-            strict=True,
+        canonical_pair = (
+            ContextSourceKind.WRITING_ARTIFACT,
+            ContextSourceKind.CONVERSATION,
+        )
+        for provider_order in (
+            ["writing_artifact", "conversation"],
+            ["conversation", "writing_artifact"],
         ):
-            with self.subTest(code=code):
+            with self.subTest(provider_order=provider_order):
+                pair = self.decode(
+                    _search_wire(self.token, [("pair", provider_order)]),
+                    allowed=("search",),
+                    source_kinds=canonical_pair,
+                )
+                assert isinstance(pair, ContextSearchAction)
+                self.assertEqual(pair.queries[0].source_kinds, canonical_pair)
+
+        for kind in service_module._SEARCH_SOURCE_KIND_ORDER:
+            with self.subTest(kind=kind):
                 action = self.decode(
-                    {
-                        "a": "s",
-                        "c": self.token,
-                        "d": [["needle", [code]]],
-                        "u": [],
-                    },
+                    _search_wire(self.token, [("needle", [kind.value])]),
                     allowed=("search",),
                     source_kinds=(kind,),
                 )
@@ -816,20 +992,36 @@ class CompactWireDecoderTests(unittest.TestCase):
     def test_malformed_exact_shape_types_routes_duplicates_and_limits_reject(
         self,
     ) -> None:
-        base = {"a": "a", "c": self.token, "d": ["answer"], "u": []}
+        valid_result = {
+            "kind": "answer",
+            "message": "Visible.",
+            "proposal": None,
+        }
+        base = _answer_wire(self.token, valid_result)
+        answer_action = base["action"]
+        assert isinstance(answer_action, dict)
         malformed = (
             {},
             {**base, "extra": 1},
-            {key: value for key, value in base.items() if key != "u"},
-            {**base, "a": "unknown"},
-            {**base, "c": "A" * 43},
-            {**base, "c": True},
-            {**base, "d": True},
-            {**base, "u": True},
-            {**base, "d": []},
-            {**base, "d": ["one", "two"]},
-            {**base, "u": ["h1", "h1"]},
-            '{"a":"a","a":"a","c":"%s","d":["answer"],"u":[]}' % self.token,
+            {key: value for key, value in base.items() if key != "action"},
+            {key: value for key, value in base.items() if key != "correlation"},
+            {**base, "correlation": "A" * 43},
+            {**base, "correlation": True},
+            {**base, "action": True},
+            {**base, "action": {**answer_action, "kind": "unknown"}},
+            {**base, "action": {**answer_action, "used_handles": True}},
+            {**base, "action": {**answer_action, "extra": 1}},
+            {
+                "correlation": self.token,
+                "action": {"kind": "answer", "used_handles": []},
+            },
+            _answer_wire(self.token, valid_result, used_handles=("h1", "h1")),
+            '{"correlation":"%s","correlation":"%s","action":%s}'
+            % (
+                self.token,
+                self.token,
+                json.dumps(answer_action, separators=(",", ":")),
+            ),
         )
         for value in malformed:
             with self.subTest(value=value):
@@ -837,74 +1029,121 @@ class CompactWireDecoderTests(unittest.TestCase):
 
         self.assert_malformed(base, allowed=("search",))
         self.assert_malformed(
-            {"a": "s", "c": self.token, "d": [["x", ["c"]]], "u": []},
+            _search_wire(self.token, [("x", ["conversation"])]),
             source_kinds=(ContextSourceKind.WRITING_ARTIFACT,),
         )
         self.assert_malformed(
-            {
-                "a": "s",
-                "c": self.token,
-                "d": [["x", ["w"]], ["x", ["w"]]],
-                "u": [],
-            }
+            _search_wire(
+                self.token,
+                [
+                    ("x", ["writing_artifact"]),
+                    ("x", ["writing_artifact"]),
+                ],
+            )
         )
-        for data in (
-            [],
-            ["manuscript/"],
-            [["x", ["w"], "manuscript/"]],
-            ["manuscript/", ["x", ["w"], "legacy"]],
-            [["x", ["w"]], "manuscript/"],
-            ["manuscript/", ["x", ["w"]], ["x", ["w"]]],
-            ["manuscript/part-01/chapter.md", ["x", ["w"]]],
-            ["manuscript/", ["x", ["c"]]],
-        ):
-            with self.subTest(search_data=data):
-                self.assert_malformed({"a": "s", "c": self.token, "d": data, "u": []})
-        self.assert_malformed(
+        for action in (
+            {"kind": "search", "path_prefix": None, "queries": []},
+            {"kind": "search", "path_prefix": None, "queries": True},
             {
-                "a": "s",
-                "c": self.token,
-                "d": ["manuscript/", ["x", ["w"]]],
-                "u": [],
+                "kind": "search",
+                "path_prefix": None,
+                "queries": [{"text": "x"}],
             },
+            {
+                "kind": "search",
+                "path_prefix": None,
+                "queries": [{"text": "x", "source_kinds": []}],
+            },
+            {
+                "kind": "search",
+                "path_prefix": None,
+                "queries": [
+                    {
+                        "text": "x",
+                        "source_kinds": ["conversation", "conversation"],
+                    }
+                ],
+            },
+            {
+                "kind": "search",
+                "path_prefix": None,
+                "queries": [{"text": "x", "source_kinds": ["unknown"]}],
+            },
+            {
+                "kind": "search",
+                "path_prefix": None,
+                "queries": [
+                    {
+                        "text": "x",
+                        "source_kinds": ["writing_artifact"],
+                        "extra": True,
+                    }
+                ],
+            },
+            {
+                "kind": "search",
+                "path_prefix": "manuscript/part-01/chapter.md",
+                "queries": [
+                    {"text": "x", "source_kinds": ["writing_artifact"]}
+                ],
+            },
+            {
+                "kind": "search",
+                "path_prefix": "manuscript/",
+                "queries": [{"text": "x", "source_kinds": ["conversation"]}],
+            },
+            {
+                "kind": "search",
+                "path_prefix": "manuscript/",
+                "queries": [
+                    {
+                        "text": "x",
+                        "source_kinds": ["conversation", "writing_artifact"],
+                    }
+                ],
+            },
+        ):
+            with self.subTest(search_action=action):
+                self.assert_malformed(
+                    {"correlation": self.token, "action": action}
+                )
+        self.assert_malformed(
+            _search_wire(self.token, [("x", ["writing_artifact"])]),
             source_kinds=(ContextSourceKind.CONVERSATION,),
         )
-        self.assert_malformed({"a": "r", "c": self.token, "d": ["h1", "h1"], "u": []})
-        self.assert_malformed({"a": "r", "c": self.token, "d": ["h1"], "u": ["h1"]})
+        self.assert_malformed(_read_wire(self.token, ["h1", "h1"]))
+        read_with_extra = _read_wire(self.token, ["h1"])
+        read_action = read_with_extra["action"]
+        assert isinstance(read_action, dict)
+        read_action["used_handles"] = ["h1"]
+        self.assert_malformed(read_with_extra)
         self.assert_malformed(
-            {
-                "a": "s",
-                "c": self.token,
-                "d": [
-                    [f"q{index}", ["w"]]
-                    for index in range(CONTEXT_ACTION_POLICY.max_queries_per_search + 1)
+            _search_wire(
+                self.token,
+                [
+                    (f"q{index}", ["writing_artifact"])
+                    for index in range(
+                        CONTEXT_ACTION_POLICY.max_queries_per_search + 1
+                    )
                 ],
-                "u": [],
-            }
+            )
         )
         self.assert_malformed(
-            {
-                "a": "r",
-                "c": self.token,
-                "d": [
+            _read_wire(
+                self.token,
+                [
                     f"h{index}"
-                    for index in range(CONTEXT_ACTION_POLICY.max_handles_per_read + 1)
+                    for index in range(
+                        CONTEXT_ACTION_POLICY.max_handles_per_read + 1
+                    )
                 ],
-                "u": [],
-            }
+            )
         )
 
     def test_invalid_read_values_report_only_fixed_source_handle_guidance(self) -> None:
         private_values = ("conflict", "PRIVATE/critique text")
         with self.assertRaises(service_module.ContextExecutionError) as caught:
-            self.decode(
-                {
-                    "a": "r",
-                    "c": self.token,
-                    "d": list(private_values),
-                    "u": [],
-                }
-            )
+            self.decode(_read_wire(self.token, list(private_values)))
 
         failure = caught.exception
         self.assertIs(
@@ -913,7 +1152,7 @@ class CompactWireDecoderTests(unittest.TestCase):
         )
         self.assertEqual(
             str(failure),
-            "contextual provider read action is invalid: `d` must contain "
+            "contextual provider read action is invalid: `handles` must contain "
             "source handles returned by the preceding context search",
         )
         self.assertIsNone(failure.__cause__)
@@ -933,14 +1172,7 @@ class CompactWireDecoderTests(unittest.TestCase):
     ) -> None:
         actual_correlation = "PRIVATE critique prose\x1b]unsafe\x07"
         with self.assertRaises(service_module.ContextExecutionError) as caught:
-            self.decode(
-                {
-                    "a": "r",
-                    "c": actual_correlation,
-                    "d": [],
-                    "u": [],
-                }
-            )
+            self.decode(_read_wire(actual_correlation, []))
 
         failure = caught.exception
         self.assertIs(
@@ -949,7 +1181,7 @@ class CompactWireDecoderTests(unittest.TestCase):
         )
         self.assertEqual(
             str(failure),
-            "contextual provider response is invalid: `c` does not match the "
+            "contextual provider response is invalid: `correlation` does not match the "
             "current request correlation token",
         )
         self.assertIsNone(failure.__cause__)
@@ -973,8 +1205,18 @@ class CompactWireDecoderTests(unittest.TestCase):
     def test_unrelated_malformed_actions_keep_generic_diagnostic(self) -> None:
         cases = (
             "{",
-            {"a": "a", "c": self.token, "d": [], "u": []},
-            {"a": "r", "c": self.token, "d": ["h1"], "u": ["h1"]},
+            {
+                "correlation": self.token,
+                "action": {"kind": "answer", "used_handles": []},
+            },
+            {
+                "correlation": self.token,
+                "action": {
+                    "kind": "read",
+                    "handles": ["h1"],
+                    "used_handles": ["h1"],
+                },
+            },
         )
         for value in cases:
             with (
@@ -993,29 +1235,25 @@ class CompactWireDecoderTests(unittest.TestCase):
             self.assertIsNone(caught.exception.__cause__)
 
     def test_double_encoded_or_invalid_structured_results_reject(self) -> None:
+        valid = {
+            "kind": "answer",
+            "message": "Visible.",
+            "proposal": None,
+        }
         cases = (
-            (
-                ["retrieval", "text", "citations"],
-                json.dumps(["reply", [1]]),
-            ),
-            (["audit", "approve-or-conflict"], json.dumps("a")),
-            (
-                ["finalize", "path-and-replacement-list"],
-                json.dumps([["path", "replacement"]]),
-            ),
-            (["audit", "approve-or-conflict"], ["c", ""]),
-            (
-                ["finalize", "path-and-replacement-list"],
-                [["path", "one"], ["path", "two"]],
-            ),
-            ("text", ""),
+            json.dumps(valid, separators=(",", ":")),
+            {"kind": "answer", "message": "Visible."},
+            {**valid, "extra": True},
+            {**valid, "kind": "unknown"},
+            [],
+            "text",
+            None,
         )
-        for contract, result in cases:
-            with self.subTest(contract=contract, result=result):
+        for result in cases:
+            with self.subTest(result=result):
                 self.assert_malformed(
-                    {"a": "a", "c": self.token, "d": [result], "u": []},
+                    _answer_wire(self.token, result),
                     allowed=("answer",),
-                    contract=contract,
                 )
 
 

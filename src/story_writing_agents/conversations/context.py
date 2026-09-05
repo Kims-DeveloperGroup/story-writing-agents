@@ -2779,6 +2779,12 @@ def _project_validated_collaboration_history(
     current_proposal = proposals.get(current_step_id)
     state = states.get(current_step_id)
     current_turn_id = events[-1].turn_id
+    current_lead_outcome_failed = any(
+        event.step_id == current_step_id
+        and event.turn_id == current_turn_id
+        and type(event.payload) is CollaborationLeadOutcomeFailurePayload
+        for event in events
+    )
     unmatched_submitted_lead = any(
         call_event.step_id == current_step_id
         and call_event.turn_id == current_turn_id
@@ -2825,6 +2831,8 @@ def _project_validated_collaboration_history(
             if commit_request is not None and commit_result is None
             else CollaborationNextAction.INSPECT_AND_RESOLVE_OUTCOME
             if unmatched_submitted_lead
+            else CollaborationNextAction.RETRY_LEAD_TURN
+            if current_lead_outcome_failed
             else _next_action(state, projection_result)
         ),
         rounds_spent=running_attempts.get(current_step_id, 0),

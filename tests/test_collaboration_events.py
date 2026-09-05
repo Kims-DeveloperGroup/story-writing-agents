@@ -332,6 +332,7 @@ class CollaborationValueContractTests(unittest.TestCase):
             CollaborationLeadOutcomeFailureCode: (
                 "evidence_validation_rejected",
                 "artifact_intent_rejected",
+                "provider_result_rejected",
             ),
             ArtifactProposalState: (
                 "awaiting_consultation_confirmation",
@@ -967,6 +968,34 @@ class CollaborationValueContractTests(unittest.TestCase):
 
 
 class CollaborationWireContractTests(unittest.TestCase):
+    def test_provider_result_rejected_failure_payload_round_trips_exactly(
+        self,
+    ) -> None:
+        draft = make_draft(
+            "provider_result_rejected",
+            CollaborationEventKind.LEAD_OUTCOME_FAILURE,
+            RUNTIME,
+            USER,
+            CollaborationLeadOutcomeFailurePayload(
+                CollaborationLeadOutcomeFailureCode.PROVIDER_RESULT_REJECTED,
+                "invocation_rejected",
+                "call_rejected",
+            ),
+        )
+        wire = encode_collaboration_event_draft(draft)
+        self.assertEqual(decode_collaboration_event_draft(wire), draft)
+        self.assertEqual(encode_collaboration_event_draft(draft), wire)
+        payload = json.loads(wire)["payload"]
+        self.assertEqual(
+            payload,
+            {
+                "call_id": "call_rejected",
+                "code": "provider_result_rejected",
+                "invocation_id": "invocation_rejected",
+                "payload_type": "lead_outcome_failure",
+            },
+        )
+
     def test_all_wire_values_have_stable_golden_hashes_and_round_trip(self) -> None:
         history, proposal = awaiting_history()
         batch = batch_from_history(history, "batch_proposal")

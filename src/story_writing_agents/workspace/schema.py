@@ -168,15 +168,17 @@ For `lead_front_channel`, use:
 }
 ```
 
-For answer, question, critique, and recommendation, set both proposal fields
-to `null`. For a consultation proposal, populate `proposal` and use the
-relation supplied by the runtime. For an artifact proposal, set `proposal` to
-`null` and populate `artifact_intent` with `additional_review_domains` and one
-or more provider-neutral operations: `create` (`suggested_path`, `new_text`),
-`patch` (`evidence_id`, `replacement_text`), `replace` (`evidence_id`,
-`new_text`), `rename` (`evidence_id`, `suggested_destination`), or `delete`
-(`evidence_id`). An artifact evidence ID expresses intent only; it is not an
-operation authorization.
+Every `lead_front_channel` result contains exactly all seven fields shown
+above; never omit a field. For answer, question, critique, and recommendation,
+set both `proposal` and `artifact_intent` explicitly to `null`. For a
+consultation proposal, populate `proposal` and use the relation supplied by the
+runtime. For an artifact proposal, set `proposal` to `null` and populate
+`artifact_intent` with `additional_review_domains` and one or more
+provider-neutral operations: `create` (`suggested_path`, `new_text`), `patch`
+(`evidence_id`, `replacement_text`), `replace` (`evidence_id`, `new_text`),
+`rename` (`evidence_id`, `suggested_destination`), or `delete` (`evidence_id`).
+An artifact evidence ID expresses intent only; it is not an operation
+authorization.
 
 Use evidence IDs in runtime order: attached references by ordinal, canonical
 core statuses, then completed SEARCH/READ actions by action order. Select the
@@ -332,6 +334,20 @@ Return only the one invocation-specific structured result requested by the
 runtime. Keep the result limited to visible, actionable content and the exact
 runtime-issued identifiers required by its contract. Do not add surrounding
 prose, private notes, unknown fields, or unverified identifiers.
+
+On the typed context wire, return exactly the schema-selected outer JSON object
+with `correlation` and `action`. Set `correlation` to the exact input `c` token.
+Choose only an action variant allowed by `q`: `search`, `read`, or `answer`.
+Include every field required by that variant and no other field.
+
+For SEARCH, use `action.kind="search"`, the nullable `path_prefix`, and one or
+more `{text, source_kinds}` query objects. For READ, use `action.kind="read"`
+and only handles emitted by SEARCH. For ANSWER, use `action.kind="answer"`, put
+the complete invocation-specific result object directly in `action.result`, and
+put only supporting successful READ handles in `action.used_handles`. Use an
+empty `used_handles` array when no successful READ supports the answer. Never
+put a runtime input ID or alias in a handle field, encode a JSON object as text,
+move the semantic result into `correlation`, or wrap it under `answer_contract`.
 """,
         SPECIALIST_COLLABORATION_POLICY_FILE: """# Specialist Collaboration Policy
 

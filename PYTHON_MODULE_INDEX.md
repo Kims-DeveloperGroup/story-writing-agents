@@ -756,8 +756,23 @@ every intermediate arrow. The current runtime graph is acyclic.
   plans against the scoped ledger checkpoint, reserves INCOMPLETE before any
   physical provider call, and drives the finite SEARCH/READ/ANSWER loop through
   the service-owned `ContextProvider` inversion. Every substantive call uses
-  one provider-neutral compact wire-v5 schema and a full-correlation-derived
-  URL-safe token in the fixed four-field response envelope. Initial payloads
+  one provider-neutral compact wire-v7 schema and a full-correlation-derived
+  URL-safe token in a closed typed `{correlation, action}` response object. The
+  schema is rebuilt for each physical call from its exact allowed actions,
+  searchable source kinds, remaining limits, correlation-token enum, and the
+  phase owner's required result-object schema. SEARCH, READ, and ANSWER are
+  nested closed typed variants; no JSON-valued field is encoded as text.
+  `ContextJsonObjectResultContract` validates and snapshots only the documented
+  common OpenAI/Gemini schema subset, requires a typed closed object result (or
+  object-only nested `anyOf` variants), and the decoder rechecks that schema,
+  exact correlation in constant time, action authority, handles, and all
+  established runtime semantics. Every request supplies this explicit owner
+  contract; conversation, retrieval, and debate routes retain their phase
+  classification but receive no inferred legacy text/tuple contract or
+  compatibility decoder. Per-call handle schemas use the configured action
+  policy: READ is bounded by remaining capacity, while ANSWER may cite up to
+  the policy's total cumulative-handle bound.
+  Initial payloads
   carry compact current input plus only applicable candidate, named P2 document,
   record-patch, tombstone, mandatory-reference, and explicitly requested
   content-free canonical-core-status sections; continuations carry only the
@@ -773,8 +788,8 @@ every intermediate arrow. The current runtime graph is acyclic.
   kind, remaining-limit, and result-shape contract, and the strict decoder and
   session enforce that same tuple and canonicalize accepted structured results
   into the existing internal answer string before domain validation. An
-  optional provider-neutral invocation kind and strict JSON-object result
-  contract extend that same tuple for lead, specialist-assignment,
+  optional provider-neutral invocation kind and explicit typed JSON-object
+  result contract extend that same tuple for lead, specialist-assignment,
   lead-synthesis, and specialist-advisory execution without importing a story
   domain, while an optional positive physical-call limit bounds the whole
   invocation including its mandatory-reference prelude and restricts the final
@@ -808,7 +823,11 @@ every intermediate arrow. The current runtime graph is acyclic.
   commit. The two failure-fact helpers attach and recover only validated
   content-free physical call facts without replacing the original exception;
   they additionally expose the exact ordered cumulative SUBMITTED accountings
-  and whether an unaccounted submission may be uncertain.
+  and whether an unaccounted submission may be uncertain. A failure exposes a
+  response-rejection code only after the service receives a typed raw result
+  and finalizes that response through one of the five closed semantic rejection
+  codes; cancellation, missing or uncertain response, and post-response runtime
+  failure do not set it.
   Each substantive raw result carries one required, synchronous, repr-hidden,
   comparison-excluded `ContextProviderCallFinalizer`; the service invokes it
   exactly once after semantic acceptance or rejection, cancellation, or a
@@ -1335,14 +1354,25 @@ every intermediate arrow. The current runtime graph is acyclic.
   persona, language, each canonical core-document path, and provider
   constraints. A definition's internal `provider_managed_context` marker instead
   selects the compact contextual rules: the same role/persona/language facts
-  plus the symmetric wire-v5 grammar for untrusted evidence, action-scoped
-  prefix search, the per-call `q` contract, retained-state candidate
-  reconstruction, alias-keyed patch upsert, and typed tombstone removal, with
+  plus the symmetric wire-v7 grammar for untrusted evidence, the exact typed
+  `{correlation, action}` envelope, schema-selected SEARCH/READ/ANSWER variant,
+  exact correlation echo, direct typed ANSWER result placement, and successful-
+  READ-only handle rules, together with action-scoped prefix search, the
+  per-call `q` contract, retained-state candidate reconstruction, alias-keyed
+  patch upsert, and typed tombstone removal, with
   no bound core-document bytes. `agent_context.service` and
   `agent_context.actions` retain the inner protocol semantics; Codex and
-  Antigravity stage equivalent contextual instructions while their direct
-  definitions remain byte-exact. Antigravity retains those rules beneath
-  `agent_states/orchestrator_state/provider_sessions/.antigravity/definitions/<agent>/<fingerprint>/AGENTS.md`.
+  Antigravity stage byte-identical contextual constraint bytes and component
+  accounting while their direct-definition framing remains unchanged.
+  Antigravity wraps those canonical definition bytes exactly once in the static,
+  deterministic custom-main-agent YAML framing required by the provider
+  (`name`, declarative `tools: [finish]`, `mainAgent: true`, `subagent: false`,
+  and `commandExecutionPolicy: off`) and retains the resulting `agent.md`
+  beneath
+  `agent_states/orchestrator_state/provider_sessions/.antigravity/definitions/<agent>/<fingerprint>/`.
+  Every application-supplied wrapper and body byte remains covered exactly once
+  by the binding components; the provider's advertised main-agent tools are not
+  claimed to be removed by this declarative frontmatter.
   Before definition writes or provider launch, the adapter sequentially
   prepares its owned `state_root`, definitions chain, sessions/runtime chain,
   and provider/workspace directories. On supported systems it best-effort
@@ -1352,10 +1382,11 @@ every intermediate arrow. The current runtime graph is acyclic.
   Provider-native retention remains unchanged, and this hardening does not
   claim application access control or descriptor-anchored, race-proof
   containment.
-  Binding and per-turn workspace staging install canonical rules bytes through
+  Binding and per-turn workspace staging install the canonical custom-agent
+  bytes through
   an exclusively created same-directory temporary requested as `0600`, verify
   that temporary's regular singly linked identity, and atomically replace the
-  target. Existing staged or retained-workspace `AGENTS.md` targets are
+  target. Existing staged or retained-workspace `agent.md` targets are
   accepted only when missing or regular and singly linked; detected symbolic
   links, non-regular entries, and multiply linked files are preserved and
   rejected. Invocation also reads the staged source through a descriptor
@@ -1372,15 +1403,31 @@ every intermediate arrow. The current runtime graph is acyclic.
   prepared from submitted failures without replacing established diagnostics,
   and only recognized nonnegative terminal usage counters become exact usage;
   missing or malformed counters remain unavailable. After serialization, it
-  retains provider-native state and isolated cwd beneath
+  retains provider-native state and an isolated provider-project cwd beneath
   `agent_states/orchestrator_state/provider_sessions/.antigravity/sessions/<session>/<agent>/<fingerprint>/provider`
-  and sibling `workspace`, copies only the bound rules into that workspace,
+  and sibling `workspace`, installs only the bound custom agent at
+  `workspace/.agents/agents/<agent>/agent.md`,
   sends the story request as one NDJSON stdin event, and delegates bounded
-  `agy` subprocess ownership to `provider_process`. Provider preflight runs a
+  `agy` subprocess ownership to `provider_process`. Every call explicitly
+  selects that custom main agent. A fresh call uses `--new-project`; an exact
+  conversation resume uses only `--conversation`, reusing the isolated project
+  associated with that provider conversation. No default project or blanket
+  permission is selected. Provider preflight runs a
   bounded, provider-free `agy --help` capability check with an isolated
   `--gemini_dir`. Its fixed `state_root/capability-probe` scratch directory is
   best-effort removed after every capability check and is not retained
-  provider-native state. `close()` intentionally retains definitions, session
+  provider-native state. The returned init must identify the selected agent,
+  the canonical application-owned runtime cwd, and `request-review`. The
+  adapter accepts only content-bearing/nonoperational `user_input`,
+  `agent_response`, `checkpoint`, and `finish` steps and rejects native tool,
+  tool-name, subagent, or unknown operational step payloads. This output
+  rejection is layered containment, not proof that the CLI's advertised tools
+  were removed. A successful schema-constrained terminal result must
+  contain one root-object `structured_output` and an exact canonical echo of
+  the submitted `json_schema`; absence, mismatch, or malformed content fails
+  closed without falling back to free response text. No existing provider
+  project, conversation, or workspace is migrated. `close()` intentionally
+  retains definitions, session
   workspaces, and provider-native conversation state for later backend
   instances. Importing performs no I/O.
 - **Primary verification/documentation:** `tests/test_antigravity_adapter.py`
@@ -1408,12 +1455,17 @@ every intermediate arrow. The current runtime graph is acyclic.
   constraints without changing their established bytes. A definition's
   internal `provider_managed_context` marker instead selects the compact
   contextual binding shared semantically with Antigravity: role, persona,
-  language, and the symmetric wire-v5 grammar for untrusted evidence,
-  action-scoped prefix search, the authoritative per-call `q` contract,
+  language, and the symmetric wire-v7 grammar for untrusted evidence, the exact
+  typed `{correlation, action}` envelope, schema-selected SEARCH/READ/ANSWER
+  variant, exact correlation echo, direct typed ANSWER result placement, and
+  successful-READ-only handle rules, together with action-scoped prefix search,
+  the authoritative per-call `q` contract,
   retained-state candidate reconstruction, alias-keyed patch upsert, and typed
   tombstone removal, with no bound core-document bytes.
   `agent_context.service` and `agent_context.actions` retain the inner protocol
-  semantics, and direct-definition bytes remain unchanged.
+  semantics; provider-managed constraint bytes and their component accounting
+  are byte-identical to Antigravity, and direct-definition framing remains
+  unchanged.
   Partitions are retained only with their corresponding ephemeral staging
   directory.
   Invocation uses shared canonical schema and payload bytes, distinguishes
@@ -3998,7 +4050,9 @@ every intermediate arrow. The current runtime graph is acyclic.
 - **Responsibility note:** Projection is the sole classifier for an exact
   unmatched PREPARED-to-SUBMITTED Lead invocation: it exposes proposal-free
   `OUTCOME_UNKNOWN` with `INSPECT_AND_RESOLVE_OUTCOME`; PREPARED-only history
-  remains distinct and malformed accounting remains rejected.
+  remains distinct and malformed accounting remains rejected. An exact
+  correlated Lead outcome-failure closure marks that invocation complete and
+  exposes `RETRY_LEAD_TURN` instead of synthesizing outcome unknown.
 - **Responsibility:** Define pure collaboration interaction and history-
   projection contracts.
 - **Supported surface:** Exactly 28 owning-module names in `__all__`: the five
@@ -4036,7 +4090,7 @@ every intermediate arrow. The current runtime graph is acyclic.
   structured confirmation decision and the visible persisted outcome of an
   ordinary or decision turn without exposing runtime capability authority.
   Provider-produced direct and consultation results require their exact durable
-  `CollaborationLeadEvidence`; a fixed content-free validation-failure result
+  `CollaborationLeadEvidence`; a fixed content-free submitted-result failure
   carries no successful evidence and exposes only `RETRY_LEAD_TURN`.
   Each decision result pairs its decided proposal with the authoritative
   resulting `LeadTurnResult`. Exact artifact-application decision results pair
@@ -4105,7 +4159,8 @@ every intermediate arrow. The current runtime graph is acyclic.
   proposal, specialist assessment and exact reply, typed lead synthesis,
   closed semantic scope/evidence-status/acquisition values, content-free
   evidence receipts and ordered lead evidence, typed lead judgments and
-  submitted-outcome failure closure, provider-call lifecycle, outcomes,
+  submitted-outcome failure closure including the stable provider-result-
+  rejected classification, provider-call lifecycle, outcomes,
   payloads, events, batches,
   receipts, failures, and errors; `CollaborationPayload`; two canonical digest
   functions; and eight strict proposal/event/draft/batch encode/decode
@@ -5908,6 +5963,16 @@ every intermediate arrow. The current runtime graph is acyclic.
   runtime-issued evidence IDs; exact structured decisions confirm, reject, or
   revise the authoritative proposal tail. Confirm consumes its private
   capability and returns only after the authoritative execution turn. The
+  runtime supplies the generic context service with exact closed typed result
+  schemas for Lead front-channel, specialist assignment/advisory, Lead
+  synthesis, and artifact-review synthesis calls. The Lead schema requires all
+  seven result fields and uses disjoint direct, consultation-proposal, and
+  artifact-intent variants. Its direct story branches exactly constrain the
+  status/kind combinations accepted by the durable evidence matrix, and
+  consultation assignments may select only the bounded runtime-supplied input
+  aliases; runtime validation stays authoritative for visible text, exact
+  evidence and input ordering/coverage/uniqueness, routing,
+  artifact authority, and complete business semantics.
   runtime alone maps transient attached-reference, canonical-core-status,
   complete writing-artifact zero-hit SEARCH, and final-ANSWER-used READ facts
   into durable content-free collaboration receipts. It enforces the closed
@@ -5953,12 +6018,25 @@ every intermediate arrow. The current runtime graph is acyclic.
   replay. Durable unmatched `SUBMITTED` Lead calls return the same typed
   outcome-unknown inspection guidance immediately and after restart, while
   merely `PREPARED` calls retain recovery-required handling. A submitted lead
-  answer rejected by evidence validation is closed by
-  one typed content-free failure event and returns retry authority without a
-  successful judgment or replay. A unique non-null artifact-intent declaration
-  is classified as an artifact-intent failure even when its untrusted body fails
-  strict decoding, while malformed ordinary results remain generic; neither
-  path retains the rejected body. A direct revised turn exposes the old exact
+  answer rejected by evidence validation is closed by one typed content-free
+  failure event and returns retry authority without a successful judgment or
+  replay. For one malformed, correlation-mismatched, semantically rejected, or
+  answer-validation-rejected returned response, the private Lead boundary may
+  use exact remaining lineage capacity for at most one same-turn, answer-only
+  correction. It rebinds a fresh identity-compatible provider/reference seam
+  onto the same durable invocation and contiguous call ordinals, passes only
+  the original authoritative inputs plus the content-free rejection code and
+  complete answer-contract instruction, and never retains rejected response
+  content. Mandatory references receive a fresh prelude within that correction.
+  A successful correction emits only the ordinary judgment closure for all
+  same-invocation submitted calls. If correction is unavailable or rejected,
+  the exact failure closure uses the last submitted call and the stable
+  provider-result-rejected code when applicable. Missing, cancelled, crashed,
+  timed-out, or submission-uncertain responses remain on the non-replay
+  outcome-unknown path and are never corrected internally.
+  A unique non-null artifact-intent declaration is classified as an
+  artifact-intent failure even when its untrusted body fails strict decoding;
+  no path retains the rejected body. A direct revised turn exposes the old exact
   candidate as superseded unless it returns a distinct current replacement
   candidate. Inability to append that closure returns the
   established blocking recovery result. Explicit missing references and invalid
@@ -6493,8 +6571,12 @@ every intermediate arrow. The current runtime graph is acyclic.
   directory set (including the runtime-internal consensus material and
   workflow directories), and 22 sorted initializer entries. It embeds and re-exports
   the session branch/ref/sibling-worktree values owned by
-  `git.session_contracts` so marker bytes remain unchanged. Current
-  configuration/persona/role-prompt bytes remain unchanged.
+  `git.session_contracts` so marker bytes remain unchanged. Canonical common
+  and role-prompt scaffolds are byte-identical to the current
+  bundled config defaults, including the typed `{correlation, action}` envelope
+  and complete
+  Lead-result guidance; these defaults affect only newly initialized workspaces
+  and define no migration for existing workspaces.
   Marker and journal decoders reject noncanonical UTF-8 JSON, duplicates,
   missing/extra fields, and malformed values; numeric non-v2 versions receive
   the fixed no-migration guidance. Encoders deeply reconstruct frozen values so

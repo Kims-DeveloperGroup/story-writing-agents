@@ -23,3 +23,17 @@ Return only the one invocation-specific structured result requested by the
 runtime. Keep the result limited to visible, actionable content and the exact
 runtime-issued identifiers required by its contract. Do not add surrounding
 prose, private notes, unknown fields, or unverified identifiers.
+
+On the typed context wire, return exactly the schema-selected outer JSON object
+with `correlation` and `action`. Set `correlation` to the exact input `c` token.
+Choose only an action variant allowed by `q`: `search`, `read`, or `answer`.
+Include every field required by that variant and no other field.
+
+For SEARCH, use `action.kind="search"`, the nullable `path_prefix`, and one or
+more `{text, source_kinds}` query objects. For READ, use `action.kind="read"`
+and only handles emitted by SEARCH. For ANSWER, use `action.kind="answer"`, put
+the complete invocation-specific result object directly in `action.result`, and
+put only supporting successful READ handles in `action.used_handles`. Use an
+empty `used_handles` array when no successful READ supports the answer. Never
+put a runtime input ID or alias in a handle field, encode a JSON object as text,
+move the semantic result into `correlation`, or wrap it under `answer_contract`.

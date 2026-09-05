@@ -943,10 +943,17 @@ class ArtifactProposalOrchestrationTests(LeadOrchestrationTestCase):
         def search_prior_answer(call, _provider):
             return json.dumps(
                 {
-                    "a": "s",
-                    "c": call.payload["c"],
-                    "d": [["prior visible answer", ["c"]]],
-                    "u": [],
+                    "correlation": call.payload["c"],
+                    "action": {
+                        "kind": "search",
+                        "path_prefix": None,
+                        "queries": [
+                            {
+                                "text": "prior visible answer",
+                                "source_kinds": ["conversation"],
+                            }
+                        ],
+                    },
                 },
                 separators=(",", ":"),
             )
@@ -989,20 +996,20 @@ class ArtifactProposalOrchestrationTests(LeadOrchestrationTestCase):
         self,
     ) -> None:
         conversation_id = self.conversation("Reject provider authority")
-        self.backend.enqueue(
-            _artifact_outcome(
-                operations=[
-                    {
-                        "apply_authority_granted": True,
-                        "kind": "create",
-                        "new_text": "Must not survive.\n",
-                        "suggested_path": _RULES,
-                    }
-                ],
-                evidence_status="missing",
-                evidence_ids=lambda call, _material: [_status_id(call, _RULES)],
-            )
+        invalid = _artifact_outcome(
+            operations=[
+                {
+                    "apply_authority_granted": True,
+                    "kind": "create",
+                    "new_text": "Must not survive.\n",
+                    "suggested_path": _RULES,
+                }
+            ],
+            evidence_status="missing",
+            evidence_ids=lambda call, _material: [_status_id(call, _RULES)],
         )
+        self.backend.enqueue(invalid)
+        self.backend.enqueue(invalid)
         result = await self.runtime.lead_turn(
             self.session_id,
             conversation_id,
@@ -1020,16 +1027,13 @@ class ArtifactProposalOrchestrationTests(LeadOrchestrationTestCase):
         )
         self.assertEqual(
             lead_failure[-1].code,
-            CollaborationLeadOutcomeFailureCode.ARTIFACT_INTENT_REJECTED,
+            CollaborationLeadOutcomeFailureCode.PROVIDER_RESULT_REJECTED,
         )
         artifact_failure = self.artifact_events(
             conversation_id,
             ArtifactReviewFailurePayload,
         )
-        self.assertEqual(
-            artifact_failure[-1].code,
-            ArtifactReviewFailureCode.INTENT_REJECTED,
-        )
+        self.assertEqual(artifact_failure, ())
 
 
 if __name__ == "__main__":

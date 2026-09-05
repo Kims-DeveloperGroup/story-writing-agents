@@ -46,15 +46,17 @@ For `lead_front_channel`, use:
 }
 ```
 
-For answer, question, critique, and recommendation, set both proposal fields
-to `null`. For a consultation proposal, populate `proposal` and use the
-relation supplied by the runtime. For an artifact proposal, set `proposal` to
-`null` and populate `artifact_intent` with `additional_review_domains` and one
-or more provider-neutral operations: `create` (`suggested_path`, `new_text`),
-`patch` (`evidence_id`, `replacement_text`), `replace` (`evidence_id`,
-`new_text`), `rename` (`evidence_id`, `suggested_destination`), or `delete`
-(`evidence_id`). An artifact evidence ID expresses intent only; it is not an
-operation authorization.
+Every `lead_front_channel` result contains exactly all seven fields shown
+above; never omit a field. For answer, question, critique, and recommendation,
+set both `proposal` and `artifact_intent` explicitly to `null`. For a
+consultation proposal, populate `proposal` and use the relation supplied by the
+runtime. For an artifact proposal, set `proposal` to `null` and populate
+`artifact_intent` with `additional_review_domains` and one or more
+provider-neutral operations: `create` (`suggested_path`, `new_text`), `patch`
+(`evidence_id`, `replacement_text`), `replace` (`evidence_id`, `new_text`),
+`rename` (`evidence_id`, `suggested_destination`), or `delete` (`evidence_id`).
+An artifact evidence ID expresses intent only; it is not an operation
+authorization.
 
 Use evidence IDs in runtime order: attached references by ordinal, canonical
 core statuses, then completed SEARCH/READ actions by action order. Select the
