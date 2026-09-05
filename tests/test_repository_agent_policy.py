@@ -784,7 +784,7 @@ class RepositoryAgentPolicyTests(unittest.TestCase):
             "|Initial plan|Classify-all-known-leaves;create-only-nonempty-numbered-`MUST-01`/`RECOMMENDED-01`/`OPTIONAL-01`-release-Issues;use-`-02+`-for-capacity|",
             "|Release integrity|Dependency-closed/testable/user-usable/complete-features-or-functions;never-scaffolding/half-API/dormant-config;ship-supporting-tests/docs/migrations|",
             "|Order|Later-may-depend-on-earlier;never-reverse|",
-            "|Capacity|`XS=1,S=2,M=3,L=5,XL=8`;record-release-capacity|",
+            "|Capacity|Every-implementation-leaf-needs-Size;`XS=1,S=2,M=3,L=5,XL=8`;release-load=sum-of-unfinished-leaf-points;record-capacity;planned-load-must-not-exceed-it|",
         )
         self.assertTerms(
             self.lifecycle_source,
@@ -792,14 +792,22 @@ class RepositoryAgentPolicyTests(unittest.TestCase):
             "Use one-Iteration-per-Requirement-release; leaves-inherit; root-tracks-current-`Must`; completed-releases-retain-theirs",
             "Create fields/native relations; re-read complete graph/metadata and unblocked `Ready` leaf",
             "|Requirement|Set-organization-Issue-Requirement-`Must`/`Recommended`/`Optional`;record-basis;existing-only-at-new-phase/Iteration;unset-blocks-`Ready`;necessary-dependencies-`Must`;never-agent-downgrade|",
-            "|Release-plan|Classify-all-known-leaves;create-only-nonempty-numbered-tier-releases;record-Size-points/capacity;one-Iteration/publishable-main-PR;verify-completeness/usability/dependency-order/publication/root/follow-ups|",
+            "|Release-plan|Classify-all-known-leaves;require-each-implementation-leaf-Size;load=sum(unfinished-leaf-points)<=recorded-capacity;create-only-nonempty-numbered-tier-releases;one-Iteration/publishable-main-PR;verify-completeness/usability/dependencies/publication/root/follow-ups|",
         )
         self.assertNotIn("Use one tree-wide logical Iteration", self.lifecycle_source)
         self.assertNotIn("|Priority|Organization-Issue-field", self.lifecycle_source)
+        self.assertNotIn(
+            "|Capacity|`XS=1,S=2,M=3,L=5,XL=8`;record-release-capacity|",
+            requirement,
+        )
 
     def test_github_branch_status_integration_and_cleanup_are_exact(self) -> None:
+        issues = markdown_section(self.workflow_source, "## Issues")
         status = markdown_section(self.workflow_source, "## Project Status")
         requirement = markdown_section(self.workflow_source, "## Requirement Releases")
+        branches = markdown_section(
+            self.workflow_source, "## Branches, Commits, and Pull Requests"
+        )
         self.assertTerms(
             status,
             "|`Backlog`|New/incomplete/reprioritized/pre-start blocked|",
@@ -812,26 +820,47 @@ class RepositoryAgentPolicyTests(unittest.TestCase):
         )
         self.assertTerms(
             requirement,
-            "|Resize|Preserve-all-`Must`,then-`Recommended`;defer-`Optional`-then-excess-`Recommended`-to-`Backlog`;clear-Iteration/wave;record-reason/reconsideration|",
+            "|Resize|Preserve-all-`Must`;select-`Recommended`-by-accepted-user-order;defer-`Optional`-first,then-`Recommended`-that-do-not-fit,to-`Backlog`;clear-Iteration/wave;record-reason/reconsideration|",
             "|Disposition|`Not planned`-only-explicit-rejection;active-pause-needs-approved-partial-state/PR-branch-disposition/recoverability|",
-            "|Oversize|Split-`Must`-into-complete-releases;indivisible-over-cap-needs-capacity-exception|",
+            "|Oversize|Split-oversized-work-into-complete-slices/releases;indivisible-over-cap-needs-capacity-exception;preserve-all-`Must`|",
             "|Iteration|One-per-release;leaves-inherit-Iteration/waves;active-statuses-require-it;`Backlog`-may-omit;root-tracks-current-`Must`;completed-releases-retain-theirs|",
             "|Closure|Each-release-has-publishable-`main`-PR-and-closes-on-publication;root-closes-after-all-`Must`/integration;other-tiers-stay-linked/nonblocking|",
+            "|Topology|Feature-leaf-PR-targets-release-branch-and-squashes;numbered-release-PR-targets-`main`-and-closes-release;umbrella-normally-planning-only/administrative-close-after-`Must`/core-verification;distinct-diff-uses-own-Development-linked-branch/PR-targeting-`main`,starts-after-all-`Must`-release-PRs/core-integration,and-may-close-root|",
+        )
+        self.assertTerms(
+            issues,
+            "Root closes after all `Must` releases/core integration",
+            "linked `Recommended`/`Optional` follow-ups are excluded from required children and never block closure",
+            "Child PR never closes its parent",
+        )
+        self.assertTerms(
+            branches,
+            "Link every branch/PR through its owning Issue's Development field",
+            "Ordinary child-to-parent squashes apply only to feature leaves, never release PRs; follow Requirement Topology above",
+            "Use `Refs #N` for partial/child work",
+            "Use `Closes #N` only for completing `main` PRs",
         )
         self.assertTerms(
             self.lifecycle_source,
-            "|Resize|Preserve-`Must`-then-`Recommended`;defer-`Optional`-then-excess-`Recommended`-to-`Backlog`;clear-Iteration/wave;record-reason/reconsideration;pause-only-with-approval/partial-state/branch-PR-disposition/recoverability;split-oversize-or-record-exception|",
-            "|Bases/order|Parent/standalone=approved-main;child=current-parent;dependencies-wait|",
-            "|Parent-PR|After-first-child:create-authorized-draft|",
-            "|Final-parent|After-all-children:sync-approved-main;run-final-evidence;Refs-to-Closes;set-`In review`;merge|",
+            "|Resize|Preserve-all-`Must`;select-`Recommended`-by-accepted-user-order;defer-`Optional`-first,then-nonfitting-`Recommended`-to-`Backlog`;clear-Iteration/wave;record-reason/reconsideration;pause-only-with-approval/partial-state/branch-PR-disposition/recoverability;split-complete-slices-or-record-indivisible-exception|",
+            "|Bases/order|Release/standalone=approved-main;feature-leaf=current-release;dependencies-wait;ordinary-child-parent-excludes-release-PRs|",
+            "|Release-PR|After-first-feature-leaf:create-authorized-draft-targeting-`main`;after-all-leaves:sync-main/run-final-evidence/Refs-to-Closes/set-`In review`/merge/close-release|",
+            "|Umbrella|Normally-planning-only/administrative-close-after-`Must`/core-verification;distinct-diff=own-Development-linked-branch/PR-target-`main`,start-after-all-`Must`-release-PRs/core-integration,may-close-root;other-tiers-linked/nonblocking|",
             "|Sync|Fresh-fetch;reconfirm-head/base-before-sync/merge|",
             "|Failure|Block-siblings;use-authorized-revert-PR/follow-up-child|",
             "|Transition|Re-read-draft/Development/Project-status/closure/linked-PRs|",
-            "Parent accepts only authorized child squashes at current tip and approved-main sync",
+            "Release accepts only authorized leaf squashes at current tip and approved-main sync",
             "fast-forward clean parent `--ff-only`",
             "Never auto-merge/ close/clean or force-remove",
-            "Retain parent until main integration",
+            "Retain release until main integration",
         )
+        self.assertNotIn("Child PRs target parent and squash", branches)
+        self.assertNotIn(
+            "umbrella-root-planning-only/no-integration-branch-unless-own-distinct-diff",
+            requirement,
+        )
+        self.assertNotIn("|Parent-PR|", self.lifecycle_source)
+        self.assertNotIn("|Final-parent|", self.lifecycle_source)
 
 
 if __name__ == "__main__":

@@ -21,12 +21,12 @@ complete graph/metadata and unblocked `Ready` leaf.
 |Rule|Procedure|
 |---|---|
 |Requirement|Set-organization-Issue-Requirement-`Must`/`Recommended`/`Optional`;record-basis;existing-only-at-new-phase/Iteration;unset-blocks-`Ready`;necessary-dependencies-`Must`;never-agent-downgrade|
-|Release-plan|Classify-all-known-leaves;create-only-nonempty-numbered-tier-releases;record-Size-points/capacity;one-Iteration/publishable-main-PR;verify-completeness/usability/dependency-order/publication/root/follow-ups|
-|Resize|Preserve-`Must`-then-`Recommended`;defer-`Optional`-then-excess-`Recommended`-to-`Backlog`;clear-Iteration/wave;record-reason/reconsideration;pause-only-with-approval/partial-state/branch-PR-disposition/recoverability;split-oversize-or-record-exception|
-|Bases/order|Parent/standalone=approved-main;child=current-parent;dependencies-wait|
+|Release-plan|Classify-all-known-leaves;require-each-implementation-leaf-Size;load=sum(unfinished-leaf-points)<=recorded-capacity;create-only-nonempty-numbered-tier-releases;one-Iteration/publishable-main-PR;verify-completeness/usability/dependencies/publication/root/follow-ups|
+|Resize|Preserve-all-`Must`;select-`Recommended`-by-accepted-user-order;defer-`Optional`-first,then-nonfitting-`Recommended`-to-`Backlog`;clear-Iteration/wave;record-reason/reconsideration;pause-only-with-approval/partial-state/branch-PR-disposition/recoverability;split-complete-slices-or-record-indivisible-exception|
+|Bases/order|Release/standalone=approved-main;feature-leaf=current-release;dependencies-wait;ordinary-child-parent-excludes-release-PRs|
 |Local-branch|Omit-`--track`/`-b`|
-|Parent-PR|After-first-child:create-authorized-draft|
-|Final-parent|After-all-children:sync-approved-main;run-final-evidence;Refs-to-Closes;set-`In review`;merge|
+|Release-PR|After-first-feature-leaf:create-authorized-draft-targeting-`main`;after-all-leaves:sync-main/run-final-evidence/Refs-to-Closes/set-`In review`/merge/close-release|
+|Umbrella|Normally-planning-only/administrative-close-after-`Must`/core-verification;distinct-diff=own-Development-linked-branch/PR-target-`main`,start-after-all-`Must`-release-PRs/core-integration,may-close-root;other-tiers-linked/nonblocking|
 |Sync|Fresh-fetch;reconfirm-head/base-before-sync/merge|
 |Failure|Block-siblings;use-authorized-revert-PR/follow-up-child|
 |Transition|Re-read-draft/Development/Project-status/closure/linked-PRs|
@@ -67,16 +67,16 @@ gh api graphql -f query='query($o:String!,$r:String!,$n:Int!){repository(owner:$
 gh project item-list "$project_number" --owner "$organization" --limit 100 --format json --jq '.items[]|select(.content.number=='"$issue"')|.["linked pull requests"]'
 ```
 
-Parent accepts only authorized child squashes at current tip and approved-main sync; fixes
-use children. Sync parent into child; run affected checks. Follow commit policy; squash
+Release accepts only authorized leaf squashes at current tip and approved-main sync; fixes
+use leaves. Sync release into leaf; run affected checks. Follow commit policy; squash
 coherently identifies Issue/PR. Record SHAs; fast-forward clean parent `--ff-only`; inspect/verify.
-Final parent merge verifies SHA/closure/`Done`/milestone.
+Final release merge verifies SHA/closure/`Done`/milestone.
 
 ```bash
 gh pr create --draft --base "$base" --head "$branch" --body "Refs #$issue"
 gh pr ready "$pr"
 gh pr merge "$child_pr" --squash
-gh pr merge "$parent_pr" --merge
+gh pr merge "$release_pr" --merge
 gh issue close "$issue" --repo "$repository"
 git worktree remove "$worktree"
 git worktree list --porcelain
@@ -85,4 +85,4 @@ test ! -e "$worktree"
 
 Reopen failed closure to `Backlog` and replan. Never auto-merge/
 close/clean or force-remove. Cleanup needs authorization and clean/integrated/recoverable
-state; branch deletion is separate. Retain parent until main integration.
+state; branch deletion is separate. Retain release until main integration.

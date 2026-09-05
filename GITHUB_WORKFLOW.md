@@ -42,8 +42,9 @@ Parents represent initiatives; leaves are independently complete.
 Root records objective, non-goals, integration criteria, children/order, risks, evidence,
 base. Leaf records root/parent/Project, objective/context, in/out scope, testable completion,
 verification/docs/components/dependencies/constraints/risks. Use native sub-Issues and
-`blocked by`; never start unfinished prerequisites or expand scope without approval. Parent
-closes only after required children/integration; child PR never closes parent.
+`blocked by`; never start unfinished prerequisites or expand scope without approval. Root
+closes after all `Must` releases/core integration; linked `Recommended`/`Optional` follow-ups are excluded
+from required children and never block closure. Child PR never closes its parent.
 
 ## Planning Metadata
 
@@ -69,12 +70,13 @@ without a user/maintainer decision.
 |Initial plan|Classify-all-known-leaves;create-only-nonempty-numbered-`MUST-01`/`RECOMMENDED-01`/`OPTIONAL-01`-release-Issues;use-`-02+`-for-capacity|
 |Release integrity|Dependency-closed/testable/user-usable/complete-features-or-functions;never-scaffolding/half-API/dormant-config;ship-supporting-tests/docs/migrations|
 |Order|Later-may-depend-on-earlier;never-reverse|
-|Capacity|`XS=1,S=2,M=3,L=5,XL=8`;record-release-capacity|
-|Resize|Preserve-all-`Must`,then-`Recommended`;defer-`Optional`-then-excess-`Recommended`-to-`Backlog`;clear-Iteration/wave;record-reason/reconsideration|
+|Capacity|Every-implementation-leaf-needs-Size;`XS=1,S=2,M=3,L=5,XL=8`;release-load=sum-of-unfinished-leaf-points;record-capacity;planned-load-must-not-exceed-it|
+|Resize|Preserve-all-`Must`;select-`Recommended`-by-accepted-user-order;defer-`Optional`-first,then-`Recommended`-that-do-not-fit,to-`Backlog`;clear-Iteration/wave;record-reason/reconsideration|
 |Disposition|`Not planned`-only-explicit-rejection;active-pause-needs-approved-partial-state/PR-branch-disposition/recoverability|
-|Oversize|Split-`Must`-into-complete-releases;indivisible-over-cap-needs-capacity-exception|
+|Oversize|Split-oversized-work-into-complete-slices/releases;indivisible-over-cap-needs-capacity-exception;preserve-all-`Must`|
 |Iteration|One-per-release;leaves-inherit-Iteration/waves;active-statuses-require-it;`Backlog`-may-omit;root-tracks-current-`Must`;completed-releases-retain-theirs|
 |Closure|Each-release-has-publishable-`main`-PR-and-closes-on-publication;root-closes-after-all-`Must`/integration;other-tiers-stay-linked/nonblocking|
+|Topology|Feature-leaf-PR-targets-release-branch-and-squashes;numbered-release-PR-targets-`main`-and-closes-release;umbrella-normally-planning-only/administrative-close-after-`Must`/core-verification;distinct-diff-uses-own-Development-linked-branch/PR-targeting-`main`,starts-after-all-`Must`-release-PRs/core-integration,and-may-close-root|
 
 ## Project Status
 
@@ -96,9 +98,9 @@ One accountable owner per branch/worktree and one parent integrator; one active 
 Bind writers to [AGENTS identity](AGENTS.md#role-mode-and-control-gate); mismatches never
 authorize destructive cleanup.
 
-Use `issue-<number>-<slug>`. Development links are mandatory: parent branch to parent Issue,
-child branch to child Issue. Names, URLs, comments, or `Refs` are insufficient. Child PRs
-target parent and squash; parent PR targets `main` and merge-commits. Verify Development and
+Use `issue-<number>-<slug>`. Link every branch/PR through its owning Issue's Development
+field; names, URLs, comments, or `Refs` are insufficient. Ordinary child-to-parent squashes
+apply only to feature leaves, never release PRs; follow Requirement Topology above. Verify Development and
 Project `Linked pull requests`; retain a branch/PR link through `In progress`, merged PR for
 `Done`.
 
