@@ -1,0 +1,429 @@
+"""Focused interactive adapter for the authoritative lead runtime APIs."""
+
+from __future__ import annotations
+
+import asyncio
+import uuid
+from collections.abc import Awaitable
+
+from ..conversations import (
+    ArtifactApplicationDecision,
+    ArtifactApplicationDecisionKind,
+    ArtifactApplicationDecisionResult,
+    CollaborationConfirmationDecision,
+    CollaborationStepState,
+    LeadDecisionResult,
+    LeadStepDecision,
+    LeadTurnResult,
+    StoryCommitDecision,
+    StoryCommitDecisionRequest,
+    StoryCommitDecisionResult,
+)
+from ..interactive_terminal import (
+    Choice,
+    ControlOutcomeKind,
+    InteractiveAdvisoryProgress,
+    InteractivePickerInput,
+    InteractivePromptInput,
+    InteractiveSemanticOutput,
+    Notice,
+    Prompt,
+    SemanticRole,
+    ViewState,
+)
+from ..interactive_terminal._collaboration_view import (
+    project_artifact_application_decision_result,
+    project_lead_turn_result,
+    project_story_commit_decision_result,
+)
+from ..orchestrator import RuntimeSession
+
+
+_DECISION_CHOICES = tuple(
+    Choice(
+        decision.value,
+        decision.value.title(),
+        description={
+            CollaborationConfirmationDecision.CONFIRM: (
+                "Authorize only the exact disclosed proposal."
+            ),
+            CollaborationConfirmationDecision.REJECT: (
+                "Reject the proposal without running it."
+            ),
+            CollaborationConfirmationDecision.REVISE: (
+                "Record a revision request without confirming the proposal."
+            ),
+        }[decision],
+    )
+    for decision in CollaborationConfirmationDecision
+)
+_APPLICATION_CHOICES = tuple(
+    Choice(
+        decision.value,
+        decision.value.title(),
+        description={
+            ArtifactApplicationDecisionKind.APPLY: (
+                "Apply only the exact reviewed artifact changes; do not commit."
+            ),
+            ArtifactApplicationDecisionKind.REJECT: (
+                "Reject the application and leave artifacts unchanged."
+            ),
+            ArtifactApplicationDecisionKind.REVISE: (
+                "Request a revision without applying artifacts."
+            ),
+        }[decision],
+    )
+    for decision in ArtifactApplicationDecisionKind
+)
+_COMMIT_CHOICES = tuple(
+    Choice(
+        decision.value,
+        decision.value.title(),
+        description={
+            StoryCommitDecision.COMMIT: (
+                "Stage and commit only the exact prepared local candidate."
+            ),
+            StoryCommitDecision.REJECT: (
+                "Reject the commit while preserving applied artifact files."
+            ),
+            StoryCommitDecision.REVISE: (
+                "Supersede this commit request without committing."
+            ),
+        }[decision],
+    )
+    for decision in StoryCommitDecision
+)
+
+
+class InteractiveLeadAdapter:
+    """Coordinate terminal controls around one session-bound lead facade."""
+
+    __slots__ = (
+        "_progress",
+        "_picker",
+        "_prompt",
+        "_runner",
+        "_semantic_output",
+        "_session",
+    )
+
+    def __init__(
+        self,
+        session: RuntimeSession,
+        runner: asyncio.Runner,
+        progress: InteractiveAdvisoryProgress,
+        picker: InteractivePickerInput,
+        prompt: InteractivePromptInput,
+        semantic_output: InteractiveSemanticOutput,
+    ) -> None:
+        if not isinstance(session, RuntimeSession):
+            raise TypeError("session must be a RuntimeSession")
+        if not isinstance(runner, asyncio.Runner):
+            raise TypeError("runner must be an asyncio.Runner")
+        self._session = session
+        self._runner = runner
+        self._progress = progress
+        self._picker = picker
+        self._prompt = prompt
+        self._semantic_output = semantic_output
+
+    def submit(self, conversation_id: str, text: str) -> bool:
+        """Run one literal lead turn; return true only for call-local EOF."""
+
+        turn = self._run_turn(self._session.lead_turn(conversation_id, text))
+        return self._present_and_decide(turn)
+
+    def _present_and_decide(self, turn: LeadTurnResult) -> bool:
+        """Render typed turns and consume only explicit structured controls."""
+
+        while True:
+            self._semantic_output.write_component(project_lead_turn_result(turn))
+            if turn.state in {
+                CollaborationStepState.OUTCOME_UNKNOWN,
+                CollaborationStepState.RECOVERY_REQUIRED,
+            }:
+                return False
+            if turn.artifact_application_request is not None:
+                return self._decide_artifact_application(turn)
+            if turn.proposal is None or turn.confirmation_request_id is None:
+                return False
+            outcome = self._picker.read_picker(
+                Prompt(
+                    "Lead proposal decision",
+                    instruction=(
+                        "Choose the exact Confirm, Reject, or Revise control. "
+                        "Ordinary text never confirms work."
+                    ),
+                ),
+                _DECISION_CHOICES,
+                highlighted_id=CollaborationConfirmationDecision.REVISE.value,
+            )
+            if outcome.kind is ControlOutcomeKind.EOF:
+                return True
+            if outcome.kind in {
+                ControlOutcomeKind.CANCEL,
+                ControlOutcomeKind.INTERRUPT,
+            }:
+                self._semantic_output.write_component(
+                    Notice(
+                        "The proposal remains unconfirmed.",
+                        label="lead proposal",
+                        role=SemanticRole.WARNING,
+                        state=ViewState.CANCELLED,
+                    )
+                )
+                return False
+            if outcome.kind is not ControlOutcomeKind.COMMIT or outcome.text is None:
+                raise RuntimeError("lead decision picker returned an invalid outcome")
+            kind = CollaborationConfirmationDecision(outcome.text)
+            revision_request = None
+            if kind is CollaborationConfirmationDecision.REVISE:
+                revision = self._prompt.read_prompt(
+                    Prompt(
+                        "Revision request",
+                        instruction="Describe what the lead should revise.",
+                    )
+                )
+                if revision.kind is ControlOutcomeKind.EOF:
+                    return True
+                if revision.kind in {
+                    ControlOutcomeKind.CANCEL,
+                    ControlOutcomeKind.INTERRUPT,
+                }:
+                    self._semantic_output.write_component(
+                        Notice(
+                            "No revision decision was recorded.",
+                            label="lead proposal",
+                            role=SemanticRole.WARNING,
+                            state=ViewState.CANCELLED,
+                        )
+                    )
+                    return False
+                if revision.kind is not ControlOutcomeKind.COMMIT or not revision.text:
+                    self._semantic_output.write_component(
+                        Notice(
+                            "A revision request must not be empty.",
+                            label="lead proposal",
+                            role=SemanticRole.ERROR,
+                            state=ViewState.ERROR,
+                        )
+                    )
+                    return False
+                revision_request = revision.text
+            proposal = turn.proposal
+            decision = LeadStepDecision(
+                confirmation_request_id=turn.confirmation_request_id,
+                session_id=turn.session_id,
+                conversation_id=turn.conversation_id,
+                step_id=turn.step_id,
+                proposal_id=proposal.proposal_id,
+                proposal_revision=proposal.proposal_revision,
+                proposal_digest=proposal.proposal_digest,
+                kind=kind,
+                revision_request=revision_request,
+            )
+            result = self._run_decision(
+                self._session.decide_lead_step(decision)
+            )
+            turn = result.turn
+
+    def _decide_artifact_application(self, turn: LeadTurnResult) -> bool:
+        """Apply one separately selected exact artifact decision."""
+
+        request = turn.artifact_application_request
+        assert request is not None
+        outcome = self._picker.read_picker(
+            Prompt(
+                "Reviewed artifact decision",
+                instruction=(
+                    "Choose Apply, Reject, or Revise. Consultation confirmation "
+                    "did not authorize this artifact write."
+                ),
+            ),
+            _APPLICATION_CHOICES,
+            highlighted_id=ArtifactApplicationDecisionKind.REVISE.value,
+        )
+        if outcome.kind is ControlOutcomeKind.EOF:
+            return True
+        if outcome.kind in {
+            ControlOutcomeKind.CANCEL,
+            ControlOutcomeKind.INTERRUPT,
+        }:
+            self._write_unconfirmed("The artifact application remains unconfirmed.")
+            return False
+        if outcome.kind is not ControlOutcomeKind.COMMIT or outcome.text is None:
+            raise RuntimeError("artifact decision picker returned an invalid outcome")
+        kind = ArtifactApplicationDecisionKind(outcome.text)
+        revision_request, stopped = self._revision_request(
+            kind is ArtifactApplicationDecisionKind.REVISE,
+            name="Artifact revision request",
+        )
+        if stopped is not None:
+            return stopped
+        reviewed = request.reviewed_proposal
+        application = request.application_request
+        decision = ArtifactApplicationDecision(
+            session_id=turn.session_id,
+            conversation_id=turn.conversation_id,
+            step_id=turn.step_id,
+            confirmation_request_id=request.confirmation_request_id,
+            reviewed_proposal_id=reviewed.proposal_id,
+            reviewed_proposal_revision=reviewed.proposal_revision,
+            reviewed_proposal_digest=reviewed.proposal_digest,
+            candidate_id=application.candidate_id,
+            candidate_revision=application.candidate_revision,
+            candidate_digest=application.candidate_digest,
+            application_id=application.application_id,
+            application_request_digest=request.application_request_digest,
+            kind=kind,
+            revision_request=revision_request,
+        )
+        result = self._run_application_decision(
+            self._session.decide_artifact_application(decision)
+        )
+        self._semantic_output.write_component(
+            project_artifact_application_decision_result(result)
+        )
+        if result.commit_request is None:
+            return False
+        return self._decide_story_commit(turn, result)
+
+    def _decide_story_commit(
+        self,
+        turn: LeadTurnResult,
+        application_result: ArtifactApplicationDecisionResult,
+    ) -> bool:
+        """Apply one separately selected exact local commit decision."""
+
+        request = application_result.commit_request
+        assert request is not None
+        outcome = self._picker.read_picker(
+            Prompt(
+                "Local commit decision",
+                instruction=(
+                    "Choose Commit, Reject, or Revise. Applying artifacts did "
+                    "not authorize staging or commit."
+                ),
+            ),
+            _COMMIT_CHOICES,
+            highlighted_id=StoryCommitDecision.REVISE.value,
+        )
+        if outcome.kind is ControlOutcomeKind.EOF:
+            return True
+        if outcome.kind in {
+            ControlOutcomeKind.CANCEL,
+            ControlOutcomeKind.INTERRUPT,
+        }:
+            self._write_unconfirmed("The local commit remains unconfirmed.")
+            return False
+        if outcome.kind is not ControlOutcomeKind.COMMIT or outcome.text is None:
+            raise RuntimeError("commit decision picker returned an invalid outcome")
+        kind = StoryCommitDecision(outcome.text)
+        revision_request, stopped = self._revision_request(
+            kind is StoryCommitDecision.REVISE,
+            name="Commit revision request",
+        )
+        if stopped is not None:
+            return stopped
+        decision = StoryCommitDecisionRequest(
+            session_id=turn.session_id,
+            conversation_id=turn.conversation_id,
+            step_id=turn.step_id,
+            confirmation_request_id=request.confirmation_request_id,
+            application_result_event_id=request.application_result_event_id,
+            candidate_id=request.candidate.candidate_id,
+            request_digest=request.request_digest,
+            confirmation_id=f"c_{uuid.uuid4().hex}",
+            kind=kind,
+            revision_request=revision_request,
+        )
+        result = self._run_commit_decision(
+            self._session.decide_story_commit(decision)
+        )
+        self._semantic_output.write_component(
+            project_story_commit_decision_result(result)
+        )
+        return False
+
+    def _revision_request(
+        self,
+        required: bool,
+        *,
+        name: str,
+    ) -> tuple[str | None, bool | None]:
+        """Read nonempty revision text; return an optional loop-stop signal."""
+
+        if not required:
+            return None, None
+        revision = self._prompt.read_prompt(
+            Prompt(name, instruction="Describe what should be revised.")
+        )
+        if revision.kind is ControlOutcomeKind.EOF:
+            return None, True
+        if revision.kind in {
+            ControlOutcomeKind.CANCEL,
+            ControlOutcomeKind.INTERRUPT,
+        }:
+            self._write_unconfirmed("No revision decision was recorded.")
+            return None, False
+        if revision.kind is not ControlOutcomeKind.COMMIT or not revision.text:
+            self._semantic_output.write_component(
+                Notice(
+                    "A revision request must not be empty.",
+                    label="decision",
+                    role=SemanticRole.ERROR,
+                    state=ViewState.ERROR,
+                )
+            )
+            return None, False
+        return revision.text, None
+
+    def _write_unconfirmed(self, text: str) -> None:
+        self._semantic_output.write_component(
+            Notice(
+                text,
+                label="decision",
+                role=SemanticRole.WARNING,
+                state=ViewState.CANCELLED,
+            )
+        )
+
+    def _run_turn(self, operation: Awaitable[LeadTurnResult]) -> LeadTurnResult:
+        """Complete one lead turn and progress cleanup before returning."""
+
+        result = self._runner.run(self._progress.run(operation))
+        if type(result) is not LeadTurnResult:
+            raise TypeError("lead turn returned an invalid result")
+        return result
+
+    def _run_decision(
+        self,
+        operation: Awaitable[LeadDecisionResult],
+    ) -> LeadDecisionResult:
+        """Complete one decision and progress cleanup before returning."""
+
+        result = self._runner.run(self._progress.run(operation))
+        if type(result) is not LeadDecisionResult:
+            raise TypeError("lead decision returned an invalid result")
+        return result
+
+    def _run_application_decision(
+        self,
+        operation: Awaitable[ArtifactApplicationDecisionResult],
+    ) -> ArtifactApplicationDecisionResult:
+        result = self._runner.run(self._progress.run(operation))
+        if type(result) is not ArtifactApplicationDecisionResult:
+            raise TypeError("artifact application returned an invalid result")
+        return result
+
+    def _run_commit_decision(
+        self,
+        operation: Awaitable[StoryCommitDecisionResult],
+    ) -> StoryCommitDecisionResult:
+        result = self._runner.run(self._progress.run(operation))
+        if type(result) is not StoryCommitDecisionResult:
+            raise TypeError("story commit returned an invalid result")
+        return result
+
+
+__all__: tuple[str, ...] = ()

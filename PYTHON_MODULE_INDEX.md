@@ -16,9 +16,9 @@ Source root: `src/`
 
 Package root: `src/story_writing_agents/`
 
-Importable production units indexed: 132.
+Importable production units indexed: 133.
 
-Direct internal dependency edges indexed: 514.
+Direct internal dependency edges indexed: 519.
 
 Directed internal dependency cycles indexed: 0.
 
@@ -79,6 +79,7 @@ interactive_controller._core -> interactive_controller._session_policy
                              -> interactive_controller._conversation_policy
                              -> interactive_controller._exchange_policy
                              -> interactive_controller._exchange_viewer
+                             -> interactive_controller._lead_policy
                              -> interactive_controller._runtime_policy
                              -> agent_exchanges/agents/backend/cli_context/debug_log
                              -> conversation_search
@@ -95,6 +96,8 @@ interactive_controller._exchange_policy -> agent_exchanges/agents/models
 interactive_controller._exchange_viewer -> agent_exchanges
                                         -> interactive_terminal._external_view
                                         -> jsonl-viewer (required exact-pinned base package, lazy import)
+interactive_controller._lead_policy -> conversations/interactive_terminal
+                                    -> interactive_terminal._collaboration_view/orchestrator
 interactive_controller._runtime_policy -> errors/interactive_terminal/models/workspace
 
 smoke -> agents/conversation_search/conversation_storage.contracts
@@ -4276,17 +4279,19 @@ every intermediate arrow. The current runtime graph is acyclic.
 ### `story_writing_agents.interactive_commands`
 
 - **Source:** `src/story_writing_agents/interactive_commands.py`
-- **Responsibility:** Own the deterministic management and inspection command
-  language plus read-only agent roster metadata.
+- **Responsibility:** Classify literal lead input and own the deterministic
+  management and inspection command language.
 - **Supported surface:** Package-supported `ActionKind`,
   `InteractiveAction`, `CommandSpec`, `COMMANDS`, and
   `parse_interactive_line`; module-supported `AgentRouteSpec` and
   `AGENT_ROUTES`; package-internal completion metadata. Direct message,
   routed/sticky target, composition, send/cancel, run/draft-file, and one-shot
   RAG actions and payload fields are absent. `/run` follows ordinary unknown-
-  command handling and has no help or completion metadata. Ordinary text,
-  `@agent`, and other retired execution commands produce the integration-stage
-  unavailable guidance. Agent-route aliases remain display/persona metadata
+  command handling and has no help or completion metadata. Nonblank non-slash
+  input becomes one `LEAD_INPUT` action retaining its exact text. Slash-prefixed
+  management commands remain commands, while retired execution commands retain
+  the integration-stage unavailable guidance. Agent-route aliases remain
+  display/persona metadata
   for existing terminal and override consumers and are not parsed or completed
   as direct invocation grammar.
 - **Direct internal dependencies:** `agents`.
@@ -4320,13 +4325,12 @@ every intermediate arrow. The current runtime graph is acyclic.
 - **Supported surface:** Package-internal `InteractiveController`. It retains
   authentication, settings, overrides, session binding/lifecycle, conversation
   catalog/focus, search, history, transcript, exchanges, status, explicit
-  persisted debate/context/reference inspection, help, and quit. It has no
-  provider-turn, consensus, draft, one-shot RAG, sticky-target, artifact
-  reference-activation, debate-progress, execution-result, or cancellation
-  execution path. The controller uses the non-reference `InteractiveMainInput.read_main`
-  seam, supplies an attached session without an agent target, supplies no
-  artifact collaborators, and presents deterministic direct-execution
-  unavailability. It consumes the session policy's exact transition values and
+  persisted debate/context/reference inspection, focused lead input, help, and
+  quit. It has no consensus, draft, one-shot RAG, sticky-target, direct
+  specialist route, or duplicated artifact/Git execution path. The controller
+  delegates ordinary input to its private lead adapter and passes exact input
+  text to the session-bound runtime. It consumes the session policy's exact
+  transition values and
   fixed content-safe denial projection without adding a direct assessor-module
   dependency.
 - **Direct internal dependencies:** `agent_exchanges`, `agents`, `backend`,
@@ -4336,6 +4340,7 @@ every intermediate arrow. The current runtime graph is acyclic.
   `interactive_commands`, `interactive_controller._conversation_policy`,
   `interactive_controller._exchange_policy`,
   `interactive_controller._exchange_viewer`,
+  `interactive_controller._lead_policy`,
   `interactive_controller._runtime_policy`,
   `interactive_controller._session_policy`, `interactive_settings`,
   `interactive_terminal`, `orchestrator`,
@@ -4349,8 +4354,8 @@ every intermediate arrow. The current runtime graph is acyclic.
   collaboration state and next-safe action with explicit empty, confirmation,
   reconfirmation, running, terminal, unknown-outcome, and recovery meanings.
   Each path validates the complete authoritative result before partial
-  rendering. Retained provider calls are limited to explicit authentication/
-  settings/provider-catalog management; history inspection performs no bind,
+  rendering. Focused lead input may call providers only through the runtime
+  API and terminal progress lifecycle; history inspection performs no bind,
   provider call, append, RAG mutation, reference read, artifact operation,
   progress emission, debate, or manuscript write.
   Session creation provisions resources before lifecycle creation. Destination
@@ -4369,6 +4374,33 @@ every intermediate arrow. The current runtime graph is acyclic.
   `tests/test_interactive_pty.py`, with shared controller scaffolding in
   `tests/interactive_controller_fixture.py`; `docs/guides/lead-agent.md`,
   `docs/reference/interactive-terminal.md`, and `docs/design/overview.md`.
+
+### `story_writing_agents.interactive_controller._lead_policy`
+
+- **Source:** `src/story_writing_agents/interactive_controller/_lead_policy.py`
+- **Responsibility:** Adapt one focused interactive lead exchange to exact
+  session-bound runtime calls and terminal controls.
+- **Supported surface:** Package-internal `InteractiveLeadAdapter`. It submits
+  literal ordinary input through `RuntimeSession.lead_turn`, renders typed
+  turns, and constructs `LeadStepDecision` only after an exact Confirm, Reject,
+  or Revise picker selection. Revise alone collects nonempty revision text;
+  cancellation leaves the proposal unconfirmed. A reviewed application request
+  receives a separate exact Apply/Reject/Revise gate, and a successful Apply
+  receives a separate exact Commit/Reject/Revise gate with one freshly minted
+  user confirmation ID. Consultation confirmation never implies either later
+  authority. Recovery-required and outcome-unknown results are rendered without
+  replay or decision controls.
+- **Direct internal dependencies:** `conversations`, `interactive_terminal`,
+  `interactive_terminal._collaboration_view`, and `orchestrator`.
+- **State, resources, and side effects:** Borrows one runtime session, controller
+  runner, terminal progress lifecycle, picker, prompt, and semantic writer. It
+  owns no provider, store, artifact, Git, or filesystem resource. It can request
+  artifact application and local commit only through the runtime's exact typed
+  decisions. Provider and decision coroutines finish together with progress
+  cleanup before rendering.
+- **Primary verification/documentation:** `tests/test_interactive_controller.py`,
+  `tests/test_interactive_pty.py`, `docs/guides/lead-agent.md`, and
+  `docs/reference/interactive-terminal.md`.
 
 ### `story_writing_agents.interactive_controller._exchange_policy`
 
@@ -5214,7 +5246,11 @@ every intermediate arrow. The current runtime graph is acyclic.
   complete semantic terminal views.
 - **Supported surface:** Package-internal `project_collaboration_event` maps the
   closed schema-v2 collaboration payload family to one `Panel` per durable
-  event. Proposals retain complete assignments, content-free source indicators,
+  event, while `project_lead_turn_result` maps one runtime-validated visible
+  lead result, next action, evidence, optional proposal, and application request
+  to a bounded panel. Dedicated application- and commit-decision result helpers
+  project their typed outcomes and boundaries. Proposals retain
+  complete assignments, content-free source indicators,
   user impact, side effects, exact proposal identity, and bounded cost.
   Artifact and local-commit requests show affected paths, bounded byte/hunk
   facts, choices, prohibited effects, and the separate Apply/Commit/paired-push
@@ -6316,7 +6352,12 @@ every intermediate arrow. The current runtime graph is acyclic.
   content-free `ConfigurationError` message; all other Git failures become
   content-free topology or recovery errors with cleared exception graphs.
   Ready-main validation composes the exact clean baseline with an exhaustive
-  correlated session inventory. Exact linked-session roots validate their
+  correlated session inventory. It recognizes only identifier-bounded canonical
+  filesystem-conversation directories and the four owned metadata/transcript/
+  collaboration-history/lock leaves as dynamic state. It also recognizes the
+  exact CLI context and storage/access lock leaves plus identifier-bounded
+  conversation-default and provider-session JSON records; malformed, unknown,
+  and unsafe descendants remain invalid. Exact linked-session roots validate their
   schema-derived sibling path, Git indirection, registration, branch, and
   immutable baseline/seed anchors without interpreting later history.
   Discovery returns the nearest typed main/session boundary and never skips a
