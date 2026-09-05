@@ -522,6 +522,46 @@ class WorkspaceV2InitializationTests(WorkspaceV2GitTestCase):
                     self.run_git(root, "rev-list", "--count", "HEAD").stdout, b"1\n"
                 )
 
+    def test_configuration_git_shapes_other_than_unstaged_modify_fail_closed(
+        self,
+    ) -> None:
+        path = "config/system_defaults.json"
+        for case in ("staged", "renamed", "untracked"):
+            with self.subTest(case=case):
+                root = self.initialize_workspace_fixture(f"config-{case}").root
+                defaults = json.loads((root / path).read_text(encoding="utf-8"))
+                defaults["default_backend"] = "codex"
+                (root / path).write_text(
+                    json.dumps(defaults, indent=2, sort_keys=True) + "\n",
+                    encoding="utf-8",
+                )
+                if case == "staged":
+                    self.run_git(root, "add", "--", path)
+                elif case == "renamed":
+                    self.run_git(root, "mv", "--", path, "config/renamed.json")
+                else:
+                    (root / "config/untracked.json").write_bytes(b"{}\n")
+                before = _namespace_snapshot(root)
+
+                with self.assertRaises(WorkspaceFormatError):
+                    Workspace(root)
+
+                self.assertEqual(_namespace_snapshot(root), before)
+
+    def test_invalid_utf8_mutable_configuration_fails_with_typed_readiness_error(
+        self,
+    ) -> None:
+        root = self.initialize_workspace_fixture("config-invalid-utf8").root
+        target = root / "config/system_defaults.json"
+        target.write_bytes(b"\xff\xfeprivate-invalid-configuration")
+        before = _namespace_snapshot(root)
+
+        with self.assertRaises(WorkspaceFormatError) as caught:
+            Workspace(root)
+
+        self.assertEqual(_namespace_snapshot(root), before)
+        self.assertNotIn("private-invalid-configuration", str(caught.exception))
+
     def test_initializer_creates_no_session_branch_ref_or_worktree(self) -> None:
         root = self.initialize_workspace_fixture("no-sessions").root
         self.assertEqual(
@@ -623,6 +663,63 @@ class WorkspaceV2InitializationTests(WorkspaceV2GitTestCase):
         self.assertEqual(reopened.root, root)
         for relative, content in files.items():
             self.assertEqual((root / relative).read_bytes(), content)
+
+    def test_exact_registered_runtime_owner_paths_survive_reopen(self) -> None:
+        root = self.initialize_workspace_fixture("registered-runtime-paths").root
+        digest = "a" * 64
+        application = "application_1"
+        invocation = "invocation_1"
+        session = "Session_1"
+        files = {
+            "debug_logs/.runtime.lock": b"",
+            "debug_logs/runtime.jsonl": b"runtime bytes\n",
+            "debug_logs/agent_exchanges/.agent_exchanges.lock": b"",
+            "debug_logs/agent_exchanges/.state.json": b"{}\n",
+            f"debug_logs/agent_exchanges/{session}/lead_orchestrator.jsonl": b"exchange\n",
+            f"agent_states/orchestrator_state/context_ledger/v2/{digest}.json": b"{}\n",
+            f"agent_states/orchestrator_state/context_ledger/v2/{digest}.lock": b"",
+            f"agent_states/orchestrator_state/provider_sessions/.contextual/v1/{session}/{digest}.json": b"{}\n",
+            "agent_states/orchestrator_state/writing_artifacts/catalog.json": b"{}\n",
+            f"agent_states/orchestrator_state/writing_artifacts/applications/{application}.json": b"{}\n",
+            f"agent_states/orchestrator_state/writing_artifacts/input_snapshots/{application}/manifest.json": b"{}\n",
+            f"agent_states/orchestrator_state/writing_artifacts/input_snapshots/{application}/operation_events/00000001.json": b"{}\n",
+            f"agent_states/orchestrator_state/writing_artifacts/input_snapshots/{application}/invocations/{invocation}/manifest.json": b"{}\n",
+            f"agent_states/orchestrator_state/writing_artifacts/input_snapshots/{application}/invocations/{invocation}/events/00000001.json": b"{}\n",
+        }
+        for relative, content in files.items():
+            target = root / relative
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_bytes(content)
+
+        reopened = Workspace(root)
+
+        self.assertEqual(reopened.root, root)
+        for relative, content in files.items():
+            self.assertEqual((root / relative).read_bytes(), content)
+
+    def test_unknown_registered_runtime_owner_shapes_fail_closed(self) -> None:
+        digest = "a" * 64
+        cases = {
+            "debug-unknown": "debug_logs/unknown.jsonl",
+            "exchange-agent": "debug_logs/agent_exchanges/session/unknown_agent.jsonl",
+            "exchange-nested": "debug_logs/agent_exchanges/session/nested/lead_orchestrator.jsonl",
+            "ledger-digest": "agent_states/orchestrator_state/context_ledger/v2/not-a-digest.json",
+            "contextual-leaf": f"agent_states/orchestrator_state/provider_sessions/.contextual/v1/session/{digest}.txt",
+            "artifact-unknown": "agent_states/orchestrator_state/writing_artifacts/unknown.json",
+            "artifact-event-zero": "agent_states/orchestrator_state/writing_artifacts/input_snapshots/application/invocations/invocation/events/00000000.json",
+        }
+        for name, relative in cases.items():
+            with self.subTest(name=name):
+                root = self.initialize_workspace_fixture(name).root
+                target = root / relative
+                target.parent.mkdir(parents=True, exist_ok=True)
+                target.write_bytes(b"unexpected\n")
+                before = _namespace_snapshot(root)
+
+                with self.assertRaises(WorkspaceFormatError):
+                    Workspace(root)
+
+                self.assertEqual(_namespace_snapshot(root), before)
 
     def test_malformed_unknown_and_unsafe_interactive_paths_fail_closed(self) -> None:
         conversation_id = "c_" + "a" * 32

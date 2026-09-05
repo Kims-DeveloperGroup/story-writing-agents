@@ -220,6 +220,31 @@ class SmokeExplicitWorkspaceTests(unittest.TestCase):
         self.assertNotIn("private smoke bytes", str(caught.exception))
         self.assertEqual(tree_snapshot(self.workspace.root), before)
 
+    def test_valid_dirty_configuration_survives_smoke_and_fresh_cli_restart(
+        self,
+    ) -> None:
+        defaults = self.workspace.read_json("config/system_defaults.json")
+        defaults["default_backend"] = "codex"
+        self.workspace.write_json("config/system_defaults.json", defaults)
+        root = self.workspace.root
+        before = tree_snapshot(root)
+
+        report, exit_code = run_smoke(Workspace(root))
+
+        self.assertEqual(exit_code, 0)
+        self.assertEqual(report["checks"], EXPLICIT_CHECKS)
+        self.assertEqual(tree_snapshot(root), before)
+
+        stdout = io.StringIO()
+        with contextlib.redirect_stdout(stdout):
+            cli_exit = cli_module.main(["smoke", "--workspace", str(root)])
+        cli_report = json.loads(stdout.getvalue())
+
+        self.assertEqual(cli_exit, 0)
+        self.assertEqual(cli_report["checks"], EXPLICIT_CHECKS)
+        self.assertEqual(cli_report["workspace"]["path"], str(root))
+        self.assertEqual(tree_snapshot(root), before)
+
 
 if __name__ == "__main__":
     unittest.main()

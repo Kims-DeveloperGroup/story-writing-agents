@@ -247,11 +247,10 @@ def compact_context_current(value, agent_id):
     material = value["i"]
     if isinstance(material, str):
         command = material
-    elif (
-        isinstance(material, dict)
-        and isinstance(material.get("input"), str)
-    ):
-        command = material["input"]
+    elif isinstance(material, dict):
+        command = material.get("input", material.get("command", ""))
+        if not isinstance(command, str):
+            raise SystemExit(83)
     else:
         raise SystemExit(83)
     return {
@@ -299,6 +298,73 @@ def compact_observation_handles(value):
             and isinstance(item[4], str)
         )
     raise SystemExit(84)
+
+
+def nested_mapping_with(value, key):
+    """Return the first recursively nested mapping containing ``key``."""
+
+    if isinstance(value, dict):
+        if key in value:
+            return value
+        for nested in value.values():
+            found = nested_mapping_with(nested, key)
+            if found is not None:
+                return found
+    elif isinstance(value, list):
+        for nested in value:
+            found = nested_mapping_with(nested, key)
+            if found is not None:
+                return found
+    return None
+
+
+def lead_consultation_answer(value, _agent_id):
+    """Return one deterministic proposal, specialist reply, or synthesis."""
+
+    material = nested_mapping_with(value, "answer_contract")
+    if material is not None and "assignment_id" in material["answer_contract"]:
+        contract = material["answer_contract"]
+        return {
+            "assessment": "supports",
+            "assignment_id": contract["assignment_id"],
+            "input_ids": contract["input_ids"],
+            "message": "The outline evidence supports the request.",
+        }
+    if material is not None and "reply_event_ids" in material["answer_contract"]:
+        contract = material["answer_contract"]
+        return {
+            "evidence_ids": contract["evidence_ids"],
+            "evidence_status": contract["evidence_status"],
+            "message": "The specialist confirms the proposed direction.",
+            "next_intent": None,
+            "reply_event_ids": contract["reply_event_ids"],
+            "scope": contract["scope"],
+            "unresolved_input_ids": [],
+        }
+    statuses = nested_mapping_with(value, "core_statuses")
+    status_rows = statuses["core_statuses"] if statuses is not None else []
+    evidence_ids = [status_rows[0]["evidence_id"]] if status_rows else []
+    return {
+        "kind": "proposal",
+        "message": "Specialist review would resolve the open question.",
+        "scope": "story_specific",
+        "evidence_status": (
+            statuses["core_statuses"][0]["status"]
+            if statuses is not None
+            else "not_applicable"
+        ),
+        "evidence_ids": evidence_ids,
+        "artifact_intent": None,
+        "proposal": {
+            "relation": "new_step",
+            "purpose": "Check outline consistency before answering.",
+            "assignments": [{
+                "agent_id": "plot_architect",
+                "instruction": "Check the user request against the outline.",
+                "input_ids": ["user_input"],
+            }],
+        },
+    }
 
 
 def compact_answer(value, used_handles=(), *, after_retrieval=False):
@@ -410,14 +476,34 @@ elif control.get("mode") == "correlation_mismatch":
         encoding="utf-8",
     )
 elif isinstance(query, list):
-    if (
+    if control.get("mode") in {"lead_consultation", "lead_answer"}:
+        answer = (
+            lead_consultation_answer(payload, agent_id)
+            if control.get("mode") == "lead_consultation"
+            else {
+                "kind": "answer",
+                "message": "Continued after confirmed review.",
+                "scope": "workflow_meta",
+                "evidence_status": "not_applicable",
+                "evidence_ids": [],
+                "artifact_intent": None,
+                "proposal": None,
+            }
+        )
+        response = {
+            "a": "a",
+            "c": payload["c"],
+            "d": [answer],
+            "u": [],
+        }
+    elif (
         len(query) != 5
         or not isinstance(payload.get("c"), str)
         or len(payload["c"]) != 43
         or not isinstance(query[1], str)
     ):
         raise SystemExit(85)
-    if (
+    elif (
         current is not None
         and current["workflow"] == "conversation_retrieval"
         and current["command"].startswith("retrieve ")
@@ -4422,6 +4508,7 @@ raise SystemExit(cli.main([]))
             ).stdout,
             b"",
         )
+
         self.assertIsNone(
             self.workspace.read_json("config/system_defaults.json")[
                 "default_backend"
@@ -4458,6 +4545,62 @@ raise SystemExit(cli.main([]))
             ).stdout,
             b"",
         )
+
+    def test_lead_consultation_confirmation_reopens_and_continues_on_pty(self) -> None:
+        """Exercise one real-shell Lead proposal and confirmed specialist round."""
+
+        defaults_path = self.workspace.path("config/system_defaults.json")
+        defaults = json.loads(defaults_path.read_text(encoding="utf-8"))
+        defaults["default_backend"] = "codex"
+        defaults_path.write_text(
+            json.dumps(defaults, ensure_ascii=False, indent=2, sort_keys=True) + "\n",
+            encoding="utf-8",
+        )
+        self._set_provider_control(mode="lead_consultation")
+        process = self._spawn_cli(())
+        process.wait_for_text("story[lobby]> ")
+        process.send_line("/session create alpha")
+        process.wait_for_text("story[alpha]> ")
+        conversation = self._create_conversation(process)
+
+        mark = process.output_mark()
+        process.send_line("Check whether the opening follows the outline.")
+        proposal = process.wait_for_text("Lead proposal decision", after=mark)
+        self.assertIn("Specialist review would resolve the open question.", proposal)
+        self.assertIn("plot_architect", proposal)
+        process.send_line("1")
+        synthesis = process.wait_for_text(
+            "The specialist confirms the proposed direction.",
+            after=mark,
+        )
+        self.assertIn("State: completed", synthesis)
+        provider_agents = {
+            record["context_current"]["identity"]["agent_id"]
+            for record in self._provider_records()
+            if record.get("event") == "started"
+            and record.get("context_current") is not None
+        }
+        self.assertIn("plot_architect", provider_agents)
+        self.assertIn("lead_orchestrator", provider_agents)
+        process.wait_for_text("story[alpha]> ", after=mark)
+        process.send_line("/quit")
+        self.assertEqual(process.wait_for_exit(), 0, process.normalized_text)
+
+        self._set_provider_control(mode="lead_answer")
+        reopened = self._spawn_cli(
+            ("chat", "alpha", "--workspace", str(self.workspace.root))
+        )
+        reopened.wait_for_text("story[alpha]> ")
+        self.assertEqual(
+            load_default_conversation(self.workspace, "alpha"),
+            conversation.conversation_id,
+        )
+        continuation_mark = reopened.output_mark()
+        reopened.send_line("Continue from the confirmed review.")
+        reopened.wait_for_text("Continued after confirmed review.", after=continuation_mark)
+        reopened.wait_for_text("story[alpha]> ", after=continuation_mark)
+        reopened.send_line("/quit")
+        self.assertEqual(reopened.wait_for_exit(), 0, reopened.normalized_text)
 
     def test_capable_main_editor_previews_edits_clears_and_restores(self) -> None:
         """Exercise live suggestions and exact PTY cleanup without side effects."""
