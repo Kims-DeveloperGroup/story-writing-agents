@@ -15,12 +15,7 @@ from pathlib import Path
 from typing import Iterator
 from unittest import TestCase
 
-from story_writing_agents import (
-    ConversationEventAppend,
-    ConversationEventKind,
-    Workspace,
-)
-from story_writing_agents.agents import PLOT_ARCHITECT
+from story_writing_agents import Workspace
 from story_writing_agents.conversation_storage import (
     ConversationStorageCapability,
     ConversationStorageServices,
@@ -31,6 +26,10 @@ from story_writing_agents.conversation_storage.sqlite import (
     compose_sqlite_conversation_storage,
     provision_sqlite_conversation_storage,
 )
+from story_writing_agents.conversations import CollaborationEventBatch
+
+from tests.collaboration_contract_fixture import contract_batches
+from tests.helpers import initialize_test_workspace
 
 
 @dataclass(frozen=True, slots=True)
@@ -47,7 +46,7 @@ def initialized_workspace(test_case: TestCase) -> Workspace:
 
     temporary = tempfile.TemporaryDirectory(prefix="sqlite-storage-test-")
     test_case.addCleanup(temporary.cleanup)
-    return Workspace(temporary.name).initialize()
+    return initialize_test_workspace(temporary.name)
 
 
 def database_path(workspace: Workspace) -> Path:
@@ -118,31 +117,10 @@ def raw_connection(workspace: Workspace) -> Iterator[sqlite3.Connection]:
         connection.close()
 
 
-def make_append(
-    *,
-    session_id: str,
-    conversation_id: str,
-    turn_id: str,
-    kind: ConversationEventKind = ConversationEventKind.USER_MESSAGE,
-    content: str = "visible content",
-) -> ConversationEventAppend:
-    """Build one exact valid append request for SQLite tests and workers."""
+def proposal_batch(conversation_id: str) -> CollaborationEventBatch:
+    """Return the canonical first v2 batch for one conversation."""
 
-    if kind is ConversationEventKind.USER_MESSAGE:
-        sender, recipient = "user", PLOT_ARCHITECT
-    elif kind is ConversationEventKind.AGENT_REPLY:
-        sender, recipient = PLOT_ARCHITECT, "user"
-    else:
-        sender, recipient = "runtime", "user"
-    return ConversationEventAppend(
-        session_id=session_id,
-        conversation_id=conversation_id,
-        turn_id=turn_id,
-        sender=sender,
-        recipient=recipient,
-        kind=kind,
-        content=content,
-    )
+    return contract_batches(conversation_id)["proposal"]
 
 
 def _worker_append(arguments: argparse.Namespace) -> None:
@@ -150,24 +128,12 @@ def _worker_append(arguments: argparse.Namespace) -> None:
     print("ready", flush=True)
     if sys.stdin.read(1) != "x":
         raise RuntimeError("append worker did not receive its start token")
-    user = services.event_store.append(
-        make_append(
-            session_id=arguments.session,
-            conversation_id=arguments.conversation,
-            turn_id=arguments.turn,
-            content=f"question-{arguments.turn}",
-        )
+    batch = proposal_batch(arguments.conversation)
+    receipt = services.event_store.append_batch(batch)
+    print(
+        json.dumps([receipt.first_sequence, receipt.last_sequence]),
+        flush=True,
     )
-    reply = services.event_store.append(
-        make_append(
-            session_id=arguments.session,
-            conversation_id=arguments.conversation,
-            turn_id=arguments.turn,
-            kind=ConversationEventKind.AGENT_REPLY,
-            content=f"reply-{arguments.turn}",
-        )
-    )
-    print(json.dumps([user.sequence, reply.sequence]), flush=True)
 
 
 def _worker_provision(arguments: argparse.Namespace) -> None:

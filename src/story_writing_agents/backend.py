@@ -41,7 +41,7 @@ if os.name == "nt":
 else:
     _msvcrt = None
 
-from .agents import CORE_DOCUMENTS, ROSTER
+from .agents import ROSTER
 from .agent_context import (
     ContextComponentKind,
     JsonPath,
@@ -72,12 +72,14 @@ from .agent_exchanges.capture import (
 from .antigravity_adapter import AntigravityAdapter
 from .config import ConfigurationSnapshot, ConfigManager
 from .codex_adapter import CodexAdapter
+from .conversations import CollaborationEventStore
 from .conversation_retrieval import (
     CONVERSATION_RETRIEVAL_POLICY,
     ConversationRetrievalAction,
     ConversationRetrievalActionHandler,
     ConversationRetrievalActionKind,
     ConversationRetrievalAnswerAction,
+    ConversationRetrievalHistoryRecord,
     ConversationRetrievalObservation,
     ConversationRetrievalReadAction,
     ConversationRetrievalReadObservation,
@@ -87,7 +89,6 @@ from .conversation_retrieval import (
     ConversationRetrievalSearchItem,
     ConversationRetrievalSearchObservation,
     ConversationRetrievalSource,
-    ConversationRetrievalTranscriptEvent,
     serialize_conversation_retrieval_observation,
 )
 from .debug_log import (
@@ -112,9 +113,12 @@ from .errors import (
     WorkspaceSecurityError,
     WorkspaceVersionUnsupportedError,
 )
+from .git.session_contracts import GitSessionResourceInspection
 from .models import (
     AgentDefinition,
     AgentReply,
+    AgentReplyKind,
+    AgentReplyNextPhase,
     AgentRequest,
     ConversationReply,
     ConversationRequest,
@@ -149,6 +153,15 @@ from .session_lifecycle import (
     SessionLifecycleState,
     provider_work_is_ready,
 )
+from .session_recovery import (
+    SessionArtifactApplicationEvidence,
+    SessionReviewedProposalEvidence,
+)
+from .session_recovery.transition_assessment import (
+    SessionTransitionAssessment,
+    SessionTransitionAssessor,
+    SessionTransitionOperation,
+)
 from .writing_artifacts.read_actions import (
     ArtifactLineRange,
     ArtifactReference,
@@ -162,6 +175,10 @@ from .writing_artifacts.read_actions import (
     ReferenceReadResult,
 )
 from .workspace import Workspace
+from .workspace.initialization import (
+    provision_session_resources as _provision_session_resources,
+    require_ready_session_resources as _require_ready_session_resources,
+)
 
 
 _SESSION_SCHEMA_VERSION = 2
@@ -181,8 +198,8 @@ _SAFE_CONTEXT_DIGEST = re.compile(r"sha256:[0-9a-f]{64}")
 _CONVERSATION_RETRIEVAL_RULES = (
     "Return exactly one structured retrieval action with the supplied "
     "session_id, conversation_id, turn_id, and action_index.",
-    "Use search_conversations before read_transcript; after the first "
-    "read_transcript, use only read_transcript or answer; answer may be the "
+    "Use search_conversations before read_history; after the first "
+    "read_history, use only read_history or answer; answer may be the "
     "first action.",
     "Use only citation_id values supplied in observations from this turn; do "
     "not invent or alter citations.",
@@ -348,8 +365,7 @@ class _BoundContextProvider:
                 "terminate",
             )
             if type(request) is not ReferenceReadRequest or any(
-                not callable(getattr(reference_read, name, None))
-                for name in methods
+                not callable(getattr(reference_read, name, None)) for name in methods
             ):
                 raise TypeError(
                     "reference_read must provide a synchronous ReferenceReadInvocation"
@@ -392,9 +408,7 @@ class _BoundContextProvider:
             or type(policy_fingerprint) is not str
             or self._active_scope is not None
         ):
-            raise ContextExecutionError(
-                ContextExecutionErrorCode.PROVIDER_CONTRACT
-            )
+            raise ContextExecutionError(ContextExecutionErrorCode.PROVIDER_CONTRACT)
         with self._bound_agent._reference_call_use(self._reference_read):
             try:
                 lock = self._bound_agent.backend._context_thread_lock(
@@ -430,9 +444,7 @@ class _BoundContextProvider:
             scope != self._active_scope
             or policy_fingerprint != self._active_policy_fingerprint
         ):
-            raise ContextExecutionError(
-                ContextExecutionErrorCode.PROVIDER_CONTRACT
-            )
+            raise ContextExecutionError(ContextExecutionErrorCode.PROVIDER_CONTRACT)
 
     def inspect_context_thread(
         self,
@@ -468,11 +480,14 @@ class _BoundContextProvider:
                 request,
             )
         except BaseException as failure:
-            if getattr(
-                failure,
-                _CONTEXT_REFERENCE_TERMINATED_ATTRIBUTE,
-                False,
-            ) is True:
+            if (
+                getattr(
+                    failure,
+                    _CONTEXT_REFERENCE_TERMINATED_ATTRIBUTE,
+                    False,
+                )
+                is True
+            ):
                 self._reference_terminal = True
             raise
         self._reference_prepared = True
@@ -525,9 +540,7 @@ class _BoundContextProvider:
                         f"reference read {name}() returned a value"
                     )
         except BaseException:
-            self._terminate_reference(
-                ReferenceAuthorizationErrorCode.WORKFLOW_FAILURE
-            )
+            self._terminate_reference(ReferenceAuthorizationErrorCode.WORKFLOW_FAILURE)
             raise
         self._reference_terminal = True
 
@@ -1290,7 +1303,10 @@ class AgentBackend:
         self.workspace = (
             workspace if isinstance(workspace, Workspace) else Workspace(workspace)
         )
-        self._debug_log = WorkspaceDebugLog(self.workspace)
+        self._debug_log = WorkspaceDebugLog(
+            self.workspace,
+            defer_until_session=True,
+        )
         self._agent_exchange_capture = WorkspaceAgentExchangeCapture(self.workspace)
         self._context_accounting_sink: (
             Callable[[ProviderCallAccounting], object] | None
@@ -1326,6 +1342,7 @@ class AgentBackend:
             self.workspace,
             configuration,
             provider_overrides=self.backend_overrides,
+            persist_missing=False,
         )
         startup_switched_agents = frozenset(
             agent_id
@@ -1569,6 +1586,31 @@ class AgentBackend:
             raise ConfigurationError(f"unknown agent: {agent_id}")
         with self._generation_lock:
             return self._active_adapter_generation.profiles[agent_id]
+
+    def execution_profile_fingerprint(self, agent_id: str) -> str:
+        """Return provider/model/effort and source facts without prompt content."""
+
+        return self._execution_profile_fingerprint(self.execution_profile(agent_id))
+
+    @staticmethod
+    def _execution_profile_fingerprint(profile: AgentExecutionProfile) -> str:
+        if type(profile) is not AgentExecutionProfile:
+            raise TypeError("execution profile is invalid")
+        body = json.dumps(
+            {
+                "effort": profile.effort,
+                "effort_source": profile.effort_source.value,
+                "model": profile.model,
+                "model_source": profile.model_source.value,
+                "provider": profile.provider,
+                "provider_source": profile.provider_source.value,
+            },
+            allow_nan=False,
+            ensure_ascii=False,
+            separators=(",", ":"),
+            sort_keys=True,
+        ).encode("utf-8", errors="strict")
+        return "sha256:" + hashlib.sha256(body).hexdigest()
 
     def execution_profiles(self) -> tuple[AgentExecutionProfile, ...]:
         """Return the active roster in canonical order."""
@@ -2291,6 +2333,55 @@ class AgentBackend:
             outcome=DebugOutcome.COMPLETED,
         )
         return result
+
+    def provision_session_resources(
+        self,
+        session_id: str,
+    ) -> GitSessionResourceInspection:
+        """Provision and verify one exact Git triple without provider work."""
+
+        self._ensure_open()
+        session = self.workspace.validate_identifier(session_id)
+        provisioned = _provision_session_resources(self.workspace.root, session)
+        verified = _require_ready_session_resources(self.workspace.root, session)
+        if verified != provisioned:
+            raise BackendProtocolError(
+                "session resources changed during provisioning"
+            )
+        return provisioned
+
+    def assess_session_transition(
+        self,
+        *,
+        lifecycle_state: SessionLifecycleState,
+        requested_operation: SessionTransitionOperation,
+        conversation_id: str | None = None,
+        collaboration_store: CollaborationEventStore | None = None,
+        reviewed_proposal: SessionReviewedProposalEvidence | None = None,
+        artifact_application: SessionArtifactApplicationEvidence | None = None,
+    ) -> SessionTransitionAssessment:
+        """Delegate once to transition assessment and return its exact result."""
+
+        self._ensure_open()
+        if type(requested_operation) is not SessionTransitionOperation:
+            raise BackendProtocolError(
+                "session transition operation is invalid"
+            )
+        assessment = SessionTransitionAssessor(self.workspace.root).inspect(
+            lifecycle_state=lifecycle_state,
+            conversation_id=conversation_id,
+            collaboration_store=collaboration_store,
+            reviewed_proposal=reviewed_proposal,
+            artifact_application=artifact_application,
+        )
+        if (
+            type(assessment) is not SessionTransitionAssessment
+            or assessment.session_id != lifecycle_state.session_id
+        ):
+            raise BackendProtocolError(
+                "session transition assessment is invalid"
+            )
+        return assessment
 
     def validate_provider_configuration(self, session_id: str) -> bool:
         """Validate every provider route without lifecycle or provider mutation.
@@ -3348,11 +3439,14 @@ class AgentBackend:
         self._ensure_open()
         schema = self._conversation_output_schema()
         payload = self._conversation_request_payload(request)
-        decode = lambda response_text: self._decode_conversation_reply(
-            request,
-            response_text,
-            provider_name=_provider_name,
-        )
+
+        def decode(response_text: str) -> ConversationReply:
+            return self._decode_conversation_reply(
+                request,
+                response_text,
+                provider_name=_provider_name,
+            )
+
         if reference_read is None:
             return await self._invoke_provider_structured(
                 bound_agent,
@@ -3483,9 +3577,7 @@ class AgentBackend:
                     after_read=after_read,
                 )
                 if observation_frame is None:
-                    call_kind = (
-                        ProviderCallKind.CONVERSATION_RETRIEVAL_INITIAL
-                    )
+                    call_kind = ProviderCallKind.CONVERSATION_RETRIEVAL_INITIAL
                     payload = self._conversation_retrieval_initial_payload(
                         request,
                         allowed_actions=allowed_actions,
@@ -3496,9 +3588,7 @@ class AgentBackend:
                         )
                         reference_context = None
                 else:
-                    call_kind = (
-                        ProviderCallKind.CONVERSATION_RETRIEVAL_CONTINUATION
-                    )
+                    call_kind = ProviderCallKind.CONVERSATION_RETRIEVAL_CONTINUATION
                     payload = self._conversation_retrieval_continuation_payload(
                         request,
                         action_index=action_index,
@@ -3638,7 +3728,7 @@ class AgentBackend:
     ) -> ConversationRetrievalSource:
         """Deep-copy one exact handler source without I/O or authorization.
 
-        The retrieval contracts revalidate subject and citation shape. A
+        The retrieval contracts revalidate the exact event-field citation. A
         subclass, tampered value, or malformed nested citation raises and is
         converted by the owning handler-result boundary to
         ``BackendProtocolError``.
@@ -3646,10 +3736,7 @@ class AgentBackend:
 
         if type(source) is not ConversationRetrievalSource:
             raise TypeError("conversation retrieval handler source is invalid")
-        return ConversationRetrievalSource(
-            subject=source.subject,
-            citation=source.citation,
-        )
+        return ConversationRetrievalSource(citation=source.citation)
 
     @classmethod
     def _canonical_conversation_retrieval_observation(
@@ -3658,7 +3745,7 @@ class AgentBackend:
     ) -> ConversationRetrievalObservation:
         """Deep-copy one exact handler observation without owning semantics.
 
-        Search items, transcript events, sources, citations, correlation, IDs,
+        Search items, history records, sources, citations, correlation, IDs,
         and limits are reconstructed through public retrieval contracts. No
         provider, storage, or runtime state changes; invalid shapes raise for
         conversion to ``BackendProtocolError`` by the caller.
@@ -3679,7 +3766,6 @@ class AgentBackend:
                         source=cls._canonical_conversation_retrieval_source(
                             item.source
                         ),
-                        match_kind=item.match_kind,
                         snippet=item.snippet,
                     )
                 )
@@ -3693,21 +3779,18 @@ class AgentBackend:
             )
         if type(observation) is not ConversationRetrievalReadObservation:
             raise TypeError("conversation retrieval handler observation is invalid")
-        if type(observation.events) is not tuple:
-            raise TypeError("conversation retrieval handler events are invalid")
-        events: list[ConversationRetrievalTranscriptEvent] = []
-        for event in observation.events:
-            if type(event) is not ConversationRetrievalTranscriptEvent:
+        if type(observation.records) is not tuple:
+            raise TypeError("conversation retrieval handler records are invalid")
+        records: list[ConversationRetrievalHistoryRecord] = []
+        for item in observation.records:
+            if type(item) is not ConversationRetrievalHistoryRecord:
                 raise TypeError(
-                    "conversation retrieval handler transcript event is invalid"
+                    "conversation retrieval handler history record is invalid"
                 )
-            events.append(
-                ConversationRetrievalTranscriptEvent(
-                    citation_id=event.citation_id,
-                    citation=event.citation,
-                    sender=event.sender,
-                    recipient=event.recipient,
-                    content=event.content,
+            records.append(
+                ConversationRetrievalHistoryRecord(
+                    record=item.record,
+                    field_citation_ids=tuple(item.field_citation_ids),
                 )
             )
         return ConversationRetrievalReadObservation(
@@ -3717,7 +3800,7 @@ class AgentBackend:
             action_index=observation.action_index,
             source_citation_id=observation.source_citation_id,
             source=cls._canonical_conversation_retrieval_source(observation.source),
-            events=tuple(events),
+            records=tuple(records),
             truncated=observation.truncated,
         )
 
@@ -3794,9 +3877,7 @@ class AgentBackend:
             call_kind is ProviderCallKind.WRITING_ARTIFACT_REFERENCE_READ
             and "references" in payload
         ):
-            paths[("references",)] = (
-                ContextComponentKind.MANDATORY_REFERENCE_DESCRIPTOR
-            )
+            paths[("references",)] = ContextComponentKind.MANDATORY_REFERENCE_DESCRIPTOR
 
         reference_root = "untrusted_writing_artifact_context"
         reference_context = payload.get(reference_root)
@@ -4121,9 +4202,7 @@ class AgentBackend:
             call_kind=call_kind,
             component_paths=component_paths,
             mandatory_reference_paths=mandatory_reference_paths,
-            binding_components=(
-                bound_agent._provider_binding.binding_components
-            ),
+            binding_components=(bound_agent._provider_binding.binding_components),
         )
         provider_diagnostic: str | None = None
         provider_cause: BaseException | None = None
@@ -4350,9 +4429,7 @@ class AgentBackend:
             or type(call_kind) is not ProviderCallKind
             or call_kind is ProviderCallKind.UNCLASSIFIED
         ):
-            raise ContextExecutionError(
-                ContextExecutionErrorCode.PROVIDER_CONTRACT
-            )
+            raise ContextExecutionError(ContextExecutionErrorCode.PROVIDER_CONTRACT)
         session = self.workspace.validate_identifier(scope.session_id)
         self._assert_provider_work_ready(session)
         stored_thread_id = self._load_context_thread(
@@ -4362,9 +4439,7 @@ class AgentBackend:
             policy_fingerprint,
         )
         if stored_thread_id != expected_thread_id:
-            raise ContextExecutionError(
-                ContextExecutionErrorCode.CONTINUATION_MISMATCH
-            )
+            raise ContextExecutionError(ContextExecutionErrorCode.CONTINUATION_MISMATCH)
 
         generation = bound_agent._adapter_generation
         adapter = (
@@ -4383,9 +4458,7 @@ class AgentBackend:
             binding_components=bound_agent._provider_binding.binding_components,
         )
         if invocation.call_accounting is None or invocation.payload_json is None:
-            raise ContextExecutionError(
-                ContextExecutionErrorCode.PROVIDER_CONTRACT
-            )
+            raise ContextExecutionError(ContextExecutionErrorCode.PROVIDER_CONTRACT)
 
         definition_fingerprint = f"sha256:{bound_agent.definition.fingerprint}"
         exchange = self._begin_context_agent_exchange(
@@ -4500,9 +4573,7 @@ class AgentBackend:
         )
         self._observe_context_accounting(accounting)
         if type(result) is not ProviderResult or type(result.response_text) is not str:
-            failure = ContextExecutionError(
-                ContextExecutionErrorCode.PROVIDER_CONTRACT
-            )
+            failure = ContextExecutionError(ContextExecutionErrorCode.PROVIDER_CONTRACT)
             record_context_provider_failure(
                 failure,
                 ContextProviderFailureFacts(
@@ -4526,9 +4597,7 @@ class AgentBackend:
             type(result.thread_id) is not str
             or _SAFE_THREAD_ID.fullmatch(result.thread_id) is None
         ):
-            failure = ContextExecutionError(
-                ContextExecutionErrorCode.PROVIDER_CONTRACT
-            )
+            failure = ContextExecutionError(ContextExecutionErrorCode.PROVIDER_CONTRACT)
             record_context_provider_failure(
                 failure,
                 ContextProviderFailureFacts(
@@ -4691,7 +4760,7 @@ class AgentBackend:
                     reference_result.close()
                 raise BackendProtocolError(
                     "reference read handler returned an invalid result"
-            )
+                )
             with reference_result:
                 context = tuple(
                     dict(item)
@@ -4779,9 +4848,7 @@ class AgentBackend:
 
         self._ensure_open()
         if type(scope) is not ContextScope:
-            raise ContextExecutionError(
-                ContextExecutionErrorCode.PROVIDER_CONTRACT
-            )
+            raise ContextExecutionError(ContextExecutionErrorCode.PROVIDER_CONTRACT)
         session = self.workspace.validate_identifier(scope.session_id)
         key = (
             scope.workspace_id,
@@ -4930,19 +4997,47 @@ class AgentBackend:
     @staticmethod
     def _conversation_retrieval_context_projection(
         request: ConversationRetrievalRequest,
-    ) -> list[dict[str, str]]:
-        """Return the exact existing event projection without other metadata."""
+    ) -> dict[str, Any]:
+        """Return content-free bootstrap plus selected closed readable fields."""
 
-        return [
-            {
-                "turn_id": event.turn_id,
-                "sender": event.sender,
-                "recipient": event.recipient,
-                "kind": event.kind.value,
-                "content": event.content,
-            }
-            for event in request.context.events
-        ]
+        context = request.context
+        bootstrap = context.bootstrap
+        return {
+            "bootstrap": {
+                "schema_version": bootstrap.schema_version,
+                "session_id": bootstrap.session_id,
+                "conversation_id": bootstrap.conversation_id,
+                "total_records": bootstrap.total_records,
+                "last_sequence": bootstrap.last_sequence,
+                "tail_batch_digest": bootstrap.tail_batch_digest,
+            },
+            "records": [
+                {
+                    "event_id": record.event_id,
+                    "turn_id": record.turn_id,
+                    "step_id": record.step_id,
+                    "sequence": record.sequence,
+                    "batch_digest": record.batch_digest,
+                    "direction": record.direction.value,
+                    "kind": record.kind.value,
+                    "fields": [
+                        {
+                            "key": field.key.value,
+                            "text": field.text,
+                            "assignment_ordinal": field.assignment_ordinal,
+                            "input_ordinal": field.input_ordinal,
+                        }
+                        for field in record.fields
+                    ],
+                }
+                for record in context.records
+            ],
+            "requested_records": context.requested_records,
+            "retained_records": context.retained_records,
+            "omitted_records": context.omitted_records,
+            "retained_utf8_bytes": context.retained_utf8_bytes,
+            "truncated": context.truncated,
+        }
 
     @staticmethod
     def _conversation_retrieval_control(
@@ -5041,13 +5136,13 @@ class AgentBackend:
             return (ConversationRetrievalActionKind.ANSWER,)
         if after_read:
             return (
-                ConversationRetrievalActionKind.READ_TRANSCRIPT,
+                ConversationRetrievalActionKind.READ_HISTORY,
                 ConversationRetrievalActionKind.ANSWER,
             )
         if has_observation:
             return (
                 ConversationRetrievalActionKind.SEARCH_CONVERSATIONS,
-                ConversationRetrievalActionKind.READ_TRANSCRIPT,
+                ConversationRetrievalActionKind.READ_HISTORY,
                 ConversationRetrievalActionKind.ANSWER,
             )
         return (
@@ -5091,7 +5186,7 @@ class AgentBackend:
                     {"query": {"type": "string"}},
                 ),
                 action_schema(
-                    ConversationRetrievalActionKind.READ_TRANSCRIPT,
+                    ConversationRetrievalActionKind.READ_HISTORY,
                     {
                         "citation_id": {"type": "string"},
                         "start_sequence": {"type": "integer", "minimum": 1},
@@ -5200,7 +5295,7 @@ class AgentBackend:
         }
         action_fields = {
             ConversationRetrievalActionKind.SEARCH_CONVERSATIONS: {"query"},
-            ConversationRetrievalActionKind.READ_TRANSCRIPT: {
+            ConversationRetrievalActionKind.READ_HISTORY: {
                 "citation_id",
                 "start_sequence",
                 "end_sequence",
@@ -5257,7 +5352,7 @@ class AgentBackend:
                     **common,
                     query=required_text("query"),
                 )
-            if kind is ConversationRetrievalActionKind.READ_TRANSCRIPT:
+            if kind is ConversationRetrievalActionKind.READ_HISTORY:
                 start_sequence = positive_integer("start_sequence")
                 raw_end_sequence = value["end_sequence"]
                 end_sequence = (
@@ -5407,37 +5502,53 @@ class AgentBackend:
     def _output_schema(phase: Phase) -> dict[str, Any]:
         if phase is Phase.AUDIT:
             properties: dict[str, Any] = {
+                "kind": {"type": "string", "enum": ["audit"]},
                 "revision_id": {"type": "string"},
                 "verdict": {"type": "string", "enum": ["approve", "conflict"]},
                 "content": {"type": "string"},
             }
-            required = ["revision_id", "verdict", "content"]
+            required = ["kind", "revision_id", "verdict", "content"]
+        elif phase is Phase.SYNTHESIZE:
+            properties = {
+                "kind": {
+                    "type": "string",
+                    "enum": ["synthesis", "deadlock"],
+                },
+                "revision_id": {"type": "string"},
+                "content": {"type": "string"},
+                "next_phase": {
+                    "type": ["string", "null"],
+                    "enum": ["repair", "finalization", None],
+                },
+                "deadlocked": {"type": "boolean"},
+            }
+            required = [
+                "kind",
+                "revision_id",
+                "content",
+                "next_phase",
+                "deadlocked",
+            ]
         elif phase is Phase.FINALIZE:
             properties = {
+                "kind": {"type": "string", "enum": ["finalization"]},
                 "revision_id": {"type": "string"},
-                "core_updates": {
-                    "type": "array",
-                    "items": {
-                        "type": "object",
-                        "properties": {
-                            "filename": {
-                                "type": "string",
-                                "enum": list(CORE_DOCUMENTS),
-                            },
-                            "content": {"type": "string"},
-                        },
-                        "required": ["filename", "content"],
-                        "additionalProperties": False,
-                    },
-                },
+                "reviewed_proposal_id": {"type": "string"},
+                "reviewed_proposal_digest": {"type": "string"},
             }
-            required = ["revision_id", "core_updates"]
+            required = [
+                "kind",
+                "revision_id",
+                "reviewed_proposal_id",
+                "reviewed_proposal_digest",
+            ]
         else:
             properties = {
+                "kind": {"type": "string", "enum": ["candidate"]},
                 "revision_id": {"type": "string"},
                 "content": {"type": "string"},
             }
-            required = ["revision_id", "content"]
+            required = ["kind", "revision_id", "content"]
         return {
             "type": "object",
             "properties": properties,
@@ -5469,13 +5580,25 @@ class AgentBackend:
     ) -> AgentReply:
         """Decode one phase reply without echoing provider values in errors."""
 
-        value = json.loads(text)
+        def reject_duplicate_fields(
+            pairs: list[tuple[str, Any]],
+        ) -> dict[str, Any]:
+            result: dict[str, Any] = {}
+            for key, item in pairs:
+                if key in result:
+                    raise BackendProtocolError(
+                        f"{provider_name} agent response duplicates a field"
+                    )
+                result[key] = item
+            return result
+
+        value = json.loads(text, object_pairs_hook=reject_duplicate_fields)
         if not isinstance(value, dict):
             raise BackendProtocolError(
                 f"{provider_name} final response must be a JSON object"
             )
         if phase is Phase.AUDIT:
-            if set(value) != {"revision_id", "verdict", "content"}:
+            if set(value) != {"kind", "revision_id", "verdict", "content"} or value.get("kind") != AgentReplyKind.AUDIT.value:
                 raise BackendProtocolError(
                     f"{provider_name} audit response has an invalid schema"
                 )
@@ -5494,12 +5617,18 @@ class AgentBackend:
                 raise BackendProtocolError(f"{provider_name} audit verdict is invalid")
             verdict = Verdict(verdict_value)
             return AgentReply(
+                kind=AgentReplyKind.AUDIT,
                 revision_id=revision_id,
                 content=content,
                 verdict=verdict,
             )
         if phase is Phase.FINALIZE:
-            if set(value) != {"revision_id", "core_updates"}:
+            if set(value) != {
+                "kind",
+                "revision_id",
+                "reviewed_proposal_id",
+                "reviewed_proposal_digest",
+            } or value.get("kind") != AgentReplyKind.FINALIZATION.value:
                 raise BackendProtocolError(
                     f"{provider_name} finalization response has an invalid schema"
                 )
@@ -5508,40 +5637,67 @@ class AgentBackend:
                 "revision_id",
                 provider_name=provider_name,
             )
-            raw_updates = value.get("core_updates")
-            if not isinstance(raw_updates, list):
+            return AgentReply.finalization(
+                revision_id,
+                _required_text(
+                    value,
+                    "reviewed_proposal_id",
+                    provider_name=provider_name,
+                ),
+                _required_text(
+                    value,
+                    "reviewed_proposal_digest",
+                    provider_name=provider_name,
+                ),
+            )
+        if phase is Phase.SYNTHESIZE:
+            expected_fields = {
+                "kind",
+                "revision_id",
+                "content",
+                "next_phase",
+                "deadlocked",
+            }
+            if set(value) != expected_fields:
                 raise BackendProtocolError(
-                    f"{provider_name} core_updates must be an array"
+                    f"{provider_name} synthesis response has an invalid schema"
                 )
-            updates: dict[str, str] = {}
-            for raw in raw_updates:
-                if not isinstance(raw, dict) or set(raw) != {
-                    "filename",
-                    "content",
-                }:
+            revision_id = _required_text(
+                value,
+                "revision_id",
+                provider_name=provider_name,
+            )
+            content = _required_text(
+                value,
+                "content",
+                provider_name=provider_name,
+            )
+            kind = value.get("kind")
+            next_phase = value.get("next_phase")
+            deadlocked = value.get("deadlocked")
+            if kind == AgentReplyKind.DEADLOCK.value:
+                if next_phase is not None or deadlocked is not True:
                     raise BackendProtocolError(
-                        f"{provider_name} core update has an invalid schema"
+                        f"{provider_name} deadlock response is ambiguous"
                     )
-                filename = _required_text(
-                    raw,
-                    "filename",
-                    provider_name=provider_name,
+                return AgentReply.deadlock(revision_id, content)
+            if (
+                kind != AgentReplyKind.SYNTHESIS.value
+                or deadlocked is not False
+                or next_phase not in {
+                    AgentReplyNextPhase.REPAIR.value,
+                    AgentReplyNextPhase.FINALIZATION.value,
+                }
+            ):
+                raise BackendProtocolError(
+                    f"{provider_name} synthesis response is ambiguous"
                 )
-                if filename not in CORE_DOCUMENTS:
-                    raise BackendProtocolError(
-                        f"{provider_name} core update filename is not allowed"
-                    )
-                if filename in updates:
-                    raise BackendProtocolError(
-                        f"{provider_name} returned a duplicate core update filename"
-                    )
-                updates[filename] = _text(
-                    raw,
-                    "content",
-                    provider_name=provider_name,
-                )
-            return AgentReply.finalization(revision_id, updates)
-        if set(value) != {"revision_id", "content"}:
+            return AgentReply.synthesis(
+                revision_id,
+                content,
+                AgentReplyNextPhase(next_phase),
+            )
+        if set(value) != {"kind", "revision_id", "content"} or value.get("kind") != AgentReplyKind.CANDIDATE.value:
             raise BackendProtocolError(
                 f"{provider_name} candidate response has an invalid schema"
             )
@@ -5551,7 +5707,7 @@ class AgentBackend:
                 "revision_id",
                 provider_name=provider_name,
             ),
-            _text(
+            _required_text(
                 value,
                 "content",
                 provider_name=provider_name,
@@ -6258,9 +6414,7 @@ class AgentBackend:
             or _SAFE_CONTEXT_DIGEST.fullmatch(definition_fingerprint) is None
             or _SAFE_CONTEXT_DIGEST.fullmatch(policy_fingerprint) is None
         ):
-            raise ContextExecutionError(
-                ContextExecutionErrorCode.PROVIDER_CONTRACT
-            )
+            raise ContextExecutionError(ContextExecutionErrorCode.PROVIDER_CONTRACT)
 
     def _load_context_thread(
         self,
@@ -6327,9 +6481,7 @@ class AgentBackend:
             or _SAFE_THREAD_ID.fullmatch(thread_id) is None
             or type(tainted) is not bool
         ):
-            raise ContextExecutionError(
-                ContextExecutionErrorCode.PROVIDER_CONTRACT
-            )
+            raise ContextExecutionError(ContextExecutionErrorCode.PROVIDER_CONTRACT)
         self._assert_owned_access(scope.session_id)
         key = self._context_thread_key_payload(
             scope,

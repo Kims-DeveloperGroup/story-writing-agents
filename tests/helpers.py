@@ -3,12 +3,15 @@
 from __future__ import annotations
 
 import asyncio
+import os
 import inspect
 import tempfile
+from contextlib import contextmanager
 from collections.abc import Awaitable, Callable
 from pathlib import Path
 from typing import TypeAlias
 from unittest import TestCase
+from unittest import mock
 
 from story_writing_agents import (
     AgentDefinition,
@@ -57,6 +60,29 @@ SUPPORTED_ARRAY_ITEMS_SCHEMA_VALIDATOR_SOURCE = r"""def schema_uses_supported_ar
 """
 
 
+_TEST_GIT_IDENTITY = {
+    "GIT_AUTHOR_NAME": "Story Test Author",
+    "GIT_AUTHOR_EMAIL": "story-author@example.invalid",
+    "GIT_COMMITTER_NAME": "Story Test Committer",
+    "GIT_COMMITTER_EMAIL": "story-committer@example.invalid",
+}
+
+
+@contextmanager
+def workspace_git_identity():
+    """Supply deterministic effective identity only during test initialization."""
+
+    with mock.patch.dict(os.environ, _TEST_GIT_IDENTITY, clear=False):
+        yield
+
+
+def initialize_test_workspace(root: str | os.PathLike[str]) -> Workspace:
+    """Create one exact v2 fixture without relying on developer Git config."""
+
+    with workspace_git_identity():
+        return Workspace(root).initialize()
+
+
 def initialized_workspace(test_case: TestCase) -> Workspace:
     """Create an initialized test workspace with explicit core inputs.
 
@@ -67,7 +93,7 @@ def initialized_workspace(test_case: TestCase) -> Workspace:
 
     temporary = tempfile.TemporaryDirectory()
     test_case.addCleanup(temporary.cleanup)
-    workspace = Workspace(temporary.name).initialize()
+    workspace = initialize_test_workspace(temporary.name)
     for filename in CORE_DOCUMENTS:
         # These are deliberately unprovenanced fixture inputs. Runtime code
         # cannot create canonical writing artifacts through generic Workspace
@@ -77,6 +103,14 @@ def initialized_workspace(test_case: TestCase) -> Workspace:
             encoding="utf-8",
         )
     return workspace
+
+
+def pristine_initialized_workspace(test_case: TestCase) -> Workspace:
+    """Create one exact clean v2 baseline suitable for session provisioning."""
+
+    temporary = tempfile.TemporaryDirectory()
+    test_case.addCleanup(temporary.cleanup)
+    return initialize_test_workspace(temporary.name)
 
 
 def core_snapshot(workspace: Workspace) -> dict[str, str]:
@@ -107,9 +141,7 @@ class _DelegatingBoundAgent:
                 "request was routed through the wrong bound agent: "
                 f"{request.agent_id} != {self.definition.agent_id}"
             )
-        self.backend.bound_invocations.append(
-            (self.definition, request)
-        )
+        self.backend.bound_invocations.append((self.definition, request))
         return await self.backend.invoke(request)
 
 
@@ -162,9 +194,7 @@ class BindingBackendMixin:
             session_id=session_id,
             durable_state=SessionDurableState.READY,
             access_state=(
-                SessionAccessState.HELD_HERE
-                if held
-                else SessionAccessState.CLAIMABLE
+                SessionAccessState.HELD_HERE if held else SessionAccessState.CLAIMABLE
             ),
             owner_hostname="test-runtime" if held else None,
             owner_pid=1 if held else None,
@@ -179,9 +209,7 @@ class ScriptedBackend(BindingBackendMixin):
     def __init__(self, handler: RequestHandler) -> None:
         self.handler = handler
         self.definitions: list[AgentDefinition] = []
-        self.bound_invocations: list[
-            tuple[AgentDefinition, AgentRequest]
-        ] = []
+        self.bound_invocations: list[tuple[AgentDefinition, AgentRequest]] = []
         self.requests: list[AgentRequest] = []
 
     async def invoke(self, request: AgentRequest) -> AgentReply:
@@ -219,9 +247,7 @@ class ReverseCompletionApprovalBackend(BindingBackendMixin):
 
     def __init__(self) -> None:
         self.definitions: list[AgentDefinition] = []
-        self.bound_invocations: list[
-            tuple[AgentDefinition, AgentRequest]
-        ] = []
+        self.bound_invocations: list[tuple[AgentDefinition, AgentRequest]] = []
         self.requests: list[AgentRequest] = []
         self.arrivals: list[str] = []
         self.completions: list[str] = []

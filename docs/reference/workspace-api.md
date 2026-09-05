@@ -1,7 +1,7 @@
 # Workspace API
 
 > **Availability:** workspace initialization, safe persistence primitives,
-> directives, inspection, and the filesystem conversation adapters are
+> directives, inspection, and the supported filesystem catalog facade are
 > implemented Python APIs.
 
 Key terms: **relative path**—a location beneath the workspace root; **atomic
@@ -12,8 +12,9 @@ ownership of a debate ID; **allowlist**—the fixed permitted core filenames.
 
 ```python
 Workspace(root: str | os.PathLike[str])
-Workspace.initialize(*, overwrite_prompts: bool = False) -> Workspace
-initialize_workspace(root: str | os.PathLike[str], *, overwrite_prompts: bool = False) -> Workspace
+Workspace.initialize() -> Workspace
+Workspace.require_ready() -> Workspace
+initialize_workspace(root: str | os.PathLike[str]) -> Workspace
 
 Workspace.validate_identifier(value: str, *, label: str = "session ID") -> str
 Workspace.validate_template_name(value: str) -> str
@@ -29,101 +30,109 @@ Workspace.load_session_overrides(session_id: str) -> dict[str, Any]
 Workspace.save_session_overrides(session_id: str, overrides: Mapping[str, Any]) -> pathlib.Path
 ```
 
-Initialization creates missing scaffold and normally preserves existing files.
-With `overwrite_prompts=True`, it replaces exactly the four canonical role
-prompts and preserves all other existing content. The option must be a boolean;
-invalid input raises `TypeError` before any I/O and does not consume a pending
-instance's one initialization attempt.
+There is no prompt-overwrite parameter, alias, or compatibility shim.
+Initialization accepts only an absent root, an existing empty safe directory,
+or one exact journal-backed interrupted-v2 root. `initialize_workspace(root)`
+is the convenience wrapper for `Workspace(root).initialize()`.
 
-Initialization creates the `core_documents/` directory but no core-document
-templates or manuscript.
+Construction performs a nonmutating classification. A ready root is fully
+verified at construction; a missing, empty, or exactly initializing root is
+captured as not ready. Unsupported, malformed, arbitrary nonempty, drifted, or
+unsafe state raises immediately. Construction retains no open descriptor and
+performs no Git or filesystem mutation.
 
-Construction resolves the workspace root once and may make a nonmutating
-filesystem identity probe; it retains no open descriptor. An existing canonical
-directory with meaningful positive device and inode values binds immediately. A
-specifically missing root remains pending for the first valid `initialize()`
-call. That call terminalizes the pending state before checking filesystem
-capabilities or mutating anything. It preflights the required safe
-descriptor-relative directory and atomic-file primitives, then walks the
-canonical root from an opened filesystem anchor. Each missing component is
-created relative to its opened parent and opened without following its name.
-The final root descriptor is identity-checked and retained for all topology and
-default writes.
+A ready root may be the pristine initialization root or one exact #504 session
+linked worktree. Session-root construction verifies its schema-derived path,
+session ID, common-Git indirection, registration, branch, and immutable
+baseline/seed anchors. It does not make arbitrary linked worktrees valid and
+does not interpret later #505 history. Nearest discovery preserves whether the
+result is the main or session root internally; the public `Workspace.root`
+remains the exact root that was discovered or supplied.
 
-Those writes walk only beneath the retained descriptor and install verified
-temporary regular files through held parent descriptors. Create-only entries
-leave existing non-symlink targets unchanged and do not replace a competing
-target; `overwrite_prompts=True` uses atomic replacement only for the four
-canonical role prompts. Each installed target must identify the staged file.
-After all writes, initialization rewalks the canonical root without following
-component names, matches it to the retained identity, and closes the retained
-descriptor. Only then does the instance record success. Replacing an ancestor
-or root after the initial comparison therefore cannot redirect the scaffold or
-establish a usable diagnostic identity at another location.
+`initialize()` owns one attempt on that object:
 
-The original `OSError`, `KeyboardInterrupt`, or `SystemExit` from the first valid
-attempt propagates unchanged, including failures during root creation, file
-installation, identity verification, child/default work, or final descriptor
-cleanup. Cleanup does not replace an active body failure. Safely created root
-components and intended partial data on the retained root are not rolled back.
-If any step before complete success fails, every later `initialize()` call
-rejects with the established identity-unavailable `OSError` before root
-creation, stat or bind, child creation, or default writes; it does not retry or
-repeat the original error. Repeated calls after success retain their established
-pathname-based preserve-existing and optional prompt-overwrite behavior.
-Constructing a new `Workspace` performs a new identity probe, so callers should
-inspect and repair a failed root path first.
+```text
+missing/empty
+  -> exact initialization journal
+  -> exact 22-file scaffold
+  -> one #448 main baseline
+  -> ready verification with journal
+  -> journal removal and directory synchronization
+  -> ready verification without journal
+  -> return self
+```
 
-This lifecycle changes no public signature, successful return value, or
-initialized file content.
+The scaffold includes strict `config/workspace.json`, current packaged
+configuration/persona/role-prompt bytes, ten empty `.gitkeep` files, and the
+four exact zero-byte core documents. It includes no story content. The Git
+baseline uses the effective author and committer, contains exactly the
+initializer manifest, has one parentless commit named
+`Initialize story workspace`, and leaves `main` clean.
 
-If safe creation primitives are unavailable, the first valid attempt raises
-`OSError` before mutation. This is a fail-closed capability requirement, not a
-promise that missing-root initialization works on every platform.
+Marker and journal decoding accepts only canonical UTF-8 JSON with a trailing
+newline and their closed fields. Duplicate, missing, extra, malformed, and
+noncanonical values fail; a numeric version other than `2` receives the fixed
+unsupported-workspace guidance.
 
-An existing directory whose construction-time probe is unavailable or
-nonmeaningful is the established exception to the initialization requirement:
-normal pathname-based initialization may still create its scaffold, while
-diagnostic storage remains unavailable for that instance. It also never
-silently rebinds.
+A ready `initialize()` call is validation-only. It does not rewrite, restage,
+or recommit. If an initialization attempt fails, the object becomes terminal;
+later calls on that same object raise `OSError` before another attempt. A fresh
+object or process may inspect and resume only an exact durable journal and
+matching partial scaffold. Unknown or divergent bytes are preserved and
+rejected rather than adopted, reset, or overwritten.
 
-Package-internal, non-root-exported helpers open and reverify that bound root for
-diagnostic storage. Replacing the root does not make an existing `Workspace`
-follow the replacement for logging; the diagnostic record is dropped without a
-fallback path. These helpers add no public signature, and this identity does not
-apply to normal `Workspace` methods. Those methods remain pathname-based and may
-read or write a real directory installed later at the same root path; callers
-cannot use one instance as an identity-pinned filesystem snapshot or a
-transaction across operations. Public path operations retain their established
-contract: they accept only safely contained workspace-relative paths with no
-absolute path, `..`, or symlink component.
-Text is strict UTF-8. JSON readers reject malformed structures where the
-consuming contract performs schema validation.
+`require_ready()` checks the readiness already authorized for that object. It
+does not perform a live filesystem rescan. Supported CLI entry points and
+explicit smoke construct a fresh object before activation, so they receive a
+strict current inspection. A long-lived direct Python caller must not treat a
+`Workspace` as a filesystem watcher, immutable snapshot, or transaction across
+operations.
+
+Exact expected failure categories include:
+
+| Condition | Public result |
+| --- | --- |
+| Effective Git author or committer is missing, invalid, or divergent | `ConfigurationError("effective Git identity is unavailable or invalid")`; a fresh process may resume the exact journal after identity is configured. |
+| Recognizable markerless workspace or non-v2 numeric marker/journal | `WorkspaceVersionUnsupportedError` with guidance that migration and compatibility are unsupported and a new workspace is required. |
+| Arbitrary nonempty root, malformed record, partial mismatch, dirty status, or baseline drift | `WorkspaceFormatError`; bytes are preserved and recovery is required. |
+| Parent repository, arbitrary or uncorrelated linked worktree, submodule, sparse/bare/mismatched repository, symlinked administration, or unsafe root | `WorkspaceSecurityError` or a content-free workspace topology error before unsafe mutation. An exact correlated #504 session worktree is the only supported linked-worktree form. |
+
+Initialization rejects parent/nested repositories and creates no session
+branch, sibling worktree, internal runtime ref, provider state, artifact
+publication, remote, or later commit. The marker records only the exact naming
+grammar. The separate package-internal #504 seam owns those resources for #455;
+initialization itself authorizes only its one fixed root commit.
+
+Public path operations accept only safely contained workspace-relative paths
+with no absolute path, `..`, or symlink component. They first require the
+object's captured ready state. Text is strict UTF-8. JSON readers reject
+malformed structures where the consuming contract performs schema validation.
+Package-internal root helpers recheck the bound identity for diagnostic and
+storage owners, but they are not public imports.
 
 `Workspace.read_text()` is a raw, safely contained UTF-8 read. It does not
 classify canonical paths or perform the artifact repository's descriptor-safe
 source capture. Although it can physically read a canonical file, callers must
 not treat that result as the immutable snapshot used for story-agent context.
-`Workspace.read_core_documents()` has been removed with no compatibility alias;
-trusted story context is selected internally through repository-backed runtime
-prompt construction. Generic raw reads remain appropriate for noncanonical
-inputs and internal workspace files.
+`Workspace.read_core_documents()` has been removed with no forwarding alias.
+Low-level contextual execution selects trusted story context through the
+artifact repository. Python lead turns start that read-only provider path;
+shell management does not. Generic raw reads remain appropriate for
+noncanonical inputs and internal workspace files.
 
 `write_text` and `write_json` atomically replace one file when overwrite is
 allowed, except that both reject the four canonical core-document paths, every
 canonical `manuscript/PART/PATH.md`, and case-folded or NFKC-normalized aliases
-of either reserved top-level namespace. This check occurs before parent or
+of either reserved top-level namespace. They also reject the lifecycle marker
+and journal. This check occurs before parent or
 target mutation. Canonical application writes must go through the artifact
 repository so bytes, authorship, commit history, and the current catalog cannot
-diverge. Generic writes remain available for other safely contained workspace
-files. An external filesystem edit can still create manual, pre-provenance, or
-hash-divergent canonical bytes. When the path and physical file are safe, those
-current bytes can be listed, viewed, explicitly referenced, and supplied as
-allowlisted core context; source use does not create or repair catalog,
-authorship, or commit records. Stop all workspace processes before making such
-an external edit. Orchestration
-restricts core updates to four names and delegates publication to the separate
-artifact repository.
+diverge. Generic writes remain low-level operations, but using them against the
+original initialization root makes a later fresh readiness check reject that
+root. Later legitimate mutable state belongs in the exact session/internal
+worktrees after #455 composition. External edits do not create or repair catalog, authorship, or
+commit records. Stop all workspace processes before any external inspection or
+recovery action.
 
 Cataloged manuscript paths are permanent create-only publication identities.
 Deleting one externally removes it from source discovery but does not free the
@@ -157,8 +166,9 @@ Workspace.inspect_debate(session_id: str, debate_id: str) -> dict[str, Any]
 Workspace.inspect_session(session_id: str) -> dict[str, Any]
 ```
 
-These methods are public but are low-level orchestration primitives; normal
-integrations should use `StoryRuntime`. Reservation uses exclusive creation, so
+These methods are public but are low-level orchestration primitives. Use
+`StoryRuntime` for current management and inspection, not to start the retained
+debate engine. Reservation uses exclusive creation, so
 one session/debate ID has one owner. The owner token coordinates transitions
 but is not authentication and is omitted by normal inspection.
 
@@ -170,9 +180,9 @@ absent context sidecar. It does not change `inspect_debate()` or
 [Persistence](../design/persistence.md#debate-context-sidecar).
 
 `Workspace` no longer exposes manuscript read/write or approved-artifact commit
-helpers. `StoryRuntime` owns the supported orchestration entry and uses the
-domain-specific, module-internal `WritingArtifactRepository` for provenance,
-create-only part manuscripts, catalog-last publication, and recovery. See
+helpers. The domain-specific, module-internal `WritingArtifactRepository` owns
+provenance, create-only part manuscripts, catalog-last publication, and
+recovery. `StoryRuntime` has no current public publication entry. See
 [Canonical writing artifacts](writing-artifacts.md).
 
 Constructing `Workspace`, `StoryRuntime`, or the artifact repository performs
@@ -181,6 +191,51 @@ primitives—including Darwin `renameatx_np(RENAME_EXCL)` or Linux
 `renameat2(RENAME_NOREPLACE)`—can continue to use non-artifact workspace and
 runtime APIs; the first source list/read, catalog read, or artifact commit raises
 `WorkspaceSecurityError`.
+
+## Internal session-resource composition
+
+`workspace.initialization` defines five package-internal typed operations for
+#455: inspect one session, list the exhaustive correlated inventory, provision
+or resume one exact triple, require one exact ready triple, and capture one
+complete session-history snapshot. They are absent
+from `story_writing_agents`, `story_writing_agents.workspace`, and
+`story_writing_agents.git`; direct application code must not treat them as a
+stable public API.
+
+Inspect, list, and require-ready are read-only. Provision alone may create or
+resume, and only from the exact main root. Results contain closed identities,
+states, recovery actions, and object IDs—never descriptors, raw Git output,
+argv/environment, story content, or a reusable Git capability. Provider or
+lead text and serialized values cannot invoke the mutation owner. See the
+[internal Git-resource contract](git-adapter.md#package-internal-session-git-resources).
+
+<a id="workspace-session-history-snapshot"></a>
+
+### Session-history snapshot composition
+
+The package-internal composition seam is exact and read-only:
+
+```python
+from story_writing_agents.workspace.initialization import inspect_session_history
+
+# Exact signature: (root: Path, session_id: str) -> GitSessionHistorySnapshot
+snapshot = inspect_session_history(root, session_id)
+```
+
+It derives the baseline manifest from the canonical initializer scaffold,
+accepts either the exact main workspace root or an exact session worktree root,
+resolves the main repository, and opens the requested session's history with
+`create=False`.
+Consequently an empty history returns an immutable empty snapshot without
+creating `.git/story-writing-agents/runtime/session-history/<session_id>`.
+Existing history is captured under its repository lease and must pass the
+snapshot's independent stability reinspection.
+
+The helper returns no live history handle and performs no write, replay,
+provider call, reconciliation, index/ref/branch/worktree change, or UI action.
+The helper and snapshot type are absent from the root, workspace, and Git
+facades. #527 may consume the snapshot later; #536 itself does not decide or
+enforce session recovery. See the [complete snapshot contract](git-adapter.md#package-internal-session-history-snapshot).
 
 ## Directive utility
 
@@ -200,11 +255,21 @@ raises `DirectiveError`. Exact forms and precedence are in
 ## Conversation adapters
 
 Key terms: **catalog**—conversation metadata and discovery; **event store**—the
-visible transcript and its bounded context view.
+authoritative schema-v2 collaboration events and bounded readable context.
 
-`FilesystemConversationCatalog(workspace)` and
-`FilesystemConversationEventStore(workspace, *, catalog=None)` are backed by
-`Workspace`. Their contracts live in [Conversation catalog](conversation-catalog.md)
-and [Conversation transcripts](conversation-transcripts.md). See
+`story_writing_agents.workspace` exports `Workspace`, `initialize_workspace`,
+and `FilesystemConversationCatalog`. It does not export a concrete event-store
+adapter. Advanced composition code imports the filesystem or SQLite
+`CollaborationEventStore` adapter directly from its defining module; the
+package root, workspace facade, and `conversation_storage` facade deliberately
+do not re-export those concrete adapters.
+
+The filesystem owner exclusively owns conversation metadata and schema-v2
+event paths, parsing, serialization, allocation cleanup, and locking.
+`workspace.core` continues to own generic secure workspace primitives plus
+debate/session persistence. Private conversation implementation globals are
+not available from the workspace facade. The contracts live in
+[Conversation catalog](conversation-catalog.md) and
+[Conversation transcripts](conversation-transcripts.md). See
 [Filesystem safety](../operations/filesystem-safety.md) for the security
 boundary and [Session storage](configuration/session-storage.md) for paths.

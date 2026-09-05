@@ -79,14 +79,16 @@ never authenticate. See
 ## Interactive mode requires a terminal
 
 `story` and `story chat` require TTY stdin/stdout. Failed `isatty()` emits
-`tty_required` and exits `2` before workspace access. Scripts use `story run`.
+`tty_required` and exits `2` before workspace access. Scripts must use the
+specific noninteractive management, inspection, storage, RAG, or smoke command
+they need; there is no noninteractive story-execution replacement in this
+stage.
 
 ## Slash suggestions do not appear
 
 The selectable palette appears only at main prompts on capable POSIX TTYs.
 Otherwise, commands still use plain line input with no palette or completion
-keys. Composition has its separate preview-only `/send`, `/cancel` panel;
-confirmation and subject input have none. At the main prompt, candidates filter
+keys. Confirmation and subject input have none. At the main prompt, candidates filter
 by exact case-sensitive prefixes: Up/Down moves the highlight, Tab completes
 the active token, and Escape restores/dismisses the current completion cycle.
 Tab or static completion-only Enter adds one trailing ASCII space only at the
@@ -111,8 +113,9 @@ adds no synthetic final control frame.
 ## No workspace, default session, or current focus
 
 Run from an initialized workspace or pass `--workspace PATH`. Use `story session
-create SESSION` to save a default, or pass `--session SESSION` to `run`,
-`directive`, or `inspect`. Successful create/reopen saves it; pause retains it.
+create SESSION` to save a default, or pass `--session SESSION` to `directive`,
+`inspect`, or a session-scoped RAG command. Successful create/reopen saves it;
+pause retains it.
 
 For `session_paused`, use `/session resume NAME` or `story session reopen NAME`.
 For `session_not_attached`, create/resume in the shell. For
@@ -121,24 +124,42 @@ For `session_not_attached`, create/resume in the shell. For
 
 ## A shell command is unavailable
 
-`/help [COMMAND]` shows syntax; `/status` shows scope. Management/reads need an
-attachment; advisory, `/history`, `/run`, and `/draft-file` also need focus.
+`/help [COMMAND]` shows retained syntax; `/status` shows scope. Session-scoped
+management/reads need an attachment, and `/history` also needs focus.
 
-The main prompt rejects standalone `/compose`, `/send`, and `/cancel`.
-`/run --output PART/PATH.md` without prompt text opens the composer, where
-`/send` submits and `/cancel` discards. Bare `/run` first asks for that required
-output path.
-Advisory input remains one line.
+Ordinary text, leading agent routes, and removed execution commands return:
 
-## An answer did not search conversation memory
+```text
+Direct story execution is unavailable in this integration stage. Session, conversation, history, search, and inspection remain available.
+```
 
-An agent may answer without retrieval. `/search QUERY` is provider-free. Use a
-hit's handle with `/transcript ID`; it can also read archives.
+This is intentional, not a missing-focus or provider-authentication problem.
+The attempt performs no provider, transcript, RAG, reference, progress, or
+artifact work.
+
+## Search returns no conversation events
+
+`/search QUERY` is provider-free and searches closed readable fields in
+schema-v2 events for active conversations. A subject is displayed beside a hit
+but is not indexed or matched; a newly created conversation therefore returns
+zero matches until it has readable events. Use a known handle with
+`/transcript ID`; transcript reads can include archives.
 
 ## Smoke exits with 1 or 2
 
-Code `1` includes `failed_check`; repeat with `story smoke --workspace
-./smoke-debug` to retain artifacts. Code `2` uses the normal error channel.
+Code `1` is a disposable-smoke invariant failure and includes `failed_check`.
+Code `2` uses the normal error channel for arguments, initialization, identity,
+discovery, or unexpected failure. `story smoke --workspace PATH` is read-only
+verification of an already clean v2 root; it does not initialize a debug root
+or retain smoke diagnostics. Capture stdout/stderr yourself and preserve the
+affected root unchanged.
+
+For `effective Git identity is unavailable or invalid`, configure a valid Git
+author and committer under normal host policy, then retry `story init PATH` in a
+fresh process. For an exact initialization journal, a fresh process validates
+and resumes it. For unsupported, arbitrary, dirty, drifted, or unsafe state,
+do not delete the journal, reset Git, or remove files to force success. Follow
+[workspace initialization recovery](../operations/recovery-and-limitations.md#workspace-initialization-recovery).
 
 ## Use the bounded runtime debug log
 
@@ -149,8 +170,8 @@ A caught noninteractive exception adds
 second stderr line after CLI workspace initialization or discovery succeeds.
 Handle acquisition, record submission, or root revalidation may still fail, so
 the hint can appear when the file does not exist. Initialization and discovery
-failures and implicit smoke remain hint-free. Smoke invariant exit `1` and run
-deadlock/failed-result exits `3`/`4` retain their JSON output without a hint.
+failures and implicit smoke remain hint-free. Smoke invariant exit `1` retains
+its JSON output without a hint.
 Resolve the fixed path beneath the workspace root; the CLI never prints an
 absolute diagnostic path.
 
@@ -267,32 +288,50 @@ without deleting prior provider-native data.
 retry. For `session_ownership_unknown`, preserve the claim and guard; inspect
 [access recovery](../operations/recovery-and-limitations.md#session-access-recovery).
 
-## Conversation storage selection or migration fails
+## Session Git resources require recovery
+
+Do not infer Git-resource readiness from current `story session` JSON. #455 has
+not yet connected those commands to the package-internal #504 lifecycle. A
+Git-resource result of `provisioning` permits only the same explicit Create to
+resume the exact journal prefix; `outcome_unknown` and `recovery_required`
+require operators to stop writers and preserve every branch, ref, worktree,
+administration entry, object, journal, and sibling-path byte. Reopen never
+creates or repairs resources. Follow the
+[session Git-resource recovery table](../operations/recovery-and-limitations.md#session-git-resource-recovery).
+
+## Conversation storage selection or transfer fails
 
 Keep desired storage in `config/system_defaults.json` distinct from the active
 backend recorded by `config/conversation_storage_state.json`. `/settings` and
 `story storage use` select desired storage for the next shell; they never
-migrate data, and startup fails closed instead of silently falling back.
+transfer data, and startup fails closed instead of silently falling back.
 
 Preserve both stores, the active marker, and both configuration files. Do not
 hand-edit them or delete one store to force agreement. For selection,
 installation, provisioning, parity, or startup failures, follow
 [selection and activation recovery](../operations/recovery-and-limitations.md#conversation-storage-selection-and-activation-recovery).
-For migrate or verify failures, also preserve the migration checkpoint and
+For transfer or verify failures, also preserve the transfer checkpoint and
 follow
-[migration recovery](../operations/recovery-and-limitations.md#conversation-storage-migration-recovery).
+[transfer recovery](../operations/recovery-and-limitations.md#conversation-storage-transfer-recovery).
 
 ## A prompt or draft file fails
 
-Run `story init WORKSPACE` to add missing role prompts without overwriting.
-Prompt and persona files must be readable, strict UTF-8, inside the workspace,
-and free of symlink components. Core documents are optional. Present safe
-current bytes enter the allowlisted prompt context even when manual or
-pre-provenance; this does not create publication authorship or repair catalog
-history. Finish concurrent edits before a new-ID retry.
+The role prompts and four zero-byte core documents are exact members of the v2
+initialization baseline. `story init` does not repair or overwrite a missing or
+changed prompt and has no prompt-overwrite option. A fresh readiness check
+preserves and rejects scaffold drift. Restore a trusted exact baseline or
+create a separate new workspace; later supported prompt/core changes belong in
+the exact session worktree after #455 composition rather than the original
+`main` root.
 
-`--draft-file` must exist and decode as strict UTF-8. Its relative path starts
-at the shell's current directory even when `--workspace` points elsewhere.
+Prompt and persona files must be readable strict UTF-8, inside the supported
+workspace, and free of symlink components. Present safe current bytes can enter
+later allowlisted context, but source use does not create publication authorship
+or repair catalog history. Finish concurrent edits before a new-ID retry.
+
+The retired noninteractive draft-file execution path is unavailable. Use
+canonical files only as direct repository inputs or future confirmed
+collaboration references.
 
 ## A directive is rejected
 
@@ -312,8 +351,8 @@ single-component output path, and same-ID resume are unsupported.
 A manual or tool edit does not delete the file, but its SHA-256 no longer
 matches repository provenance, so catalog listing omits it and exact artifact
 reads reject it. Make external edits only after every workspace process has
-stopped. Restore the exact recorded bytes or ask the agents to republish a core
-document through a new unanimous run. Changed manuscripts use a new part-scoped
+stopped. Restore the exact recorded bytes from trusted backup or use a future
+confirmed publication workflow. Changed manuscripts use a new part-scoped
 revision path. Internal transcripts, discussion logs, agent state,
 single-component manuscript files, symlinks, hard links, and nonregular files
 are never eligible.
@@ -332,8 +371,8 @@ For `deadlock`, read `action_required` and critiques, make a ruling, update core
 documents if needed, and start a new debate. `active` proves only reservation;
 `interrupted` records best-effort external cancellation. Neither can resume.
 
-A recoverable advisory Ctrl-C reports `[cancelled]` and keeps attachment; an
-entered turn must cancel and join, and its provider thread may restart. Fatal
+The retained low-level provider/debate components can record cancellation, but
+the current public shell never enters that path from ordinary input. Fatal
 `operation_interrupted` means proof or terminal I/O failed and exits `2` through
 cleanup. Cleanup still attempts Runner close, known-access release, backend
 close, and state clearing in order. An uncaught body process control wins;

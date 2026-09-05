@@ -5,7 +5,6 @@ from __future__ import annotations
 import hashlib
 import os
 import pickle
-import re
 import tempfile
 import threading
 import unittest
@@ -15,7 +14,6 @@ from pathlib import Path
 from unittest import mock
 
 import story_writing_agents
-from story_writing_agents import Workspace
 from story_writing_agents.agents import EXECUTION_SPECIALIST
 from story_writing_agents.writing_artifacts import (
     MAX_REFERENCE_TOTAL_BYTES,
@@ -38,10 +36,8 @@ from story_writing_agents.writing_artifacts import (
     ReferenceOperationState,
 )
 from story_writing_agents import writing_artifacts as artifact_facade
-from story_writing_agents.writing_artifacts import authorization as auth_module
 from story_writing_agents.writing_artifacts._storage import SecureWorkspaceStorage
 from story_writing_agents.writing_artifacts.authorization import (
-    ArtifactReferenceDelivery,
     ReadCapability,
     ReferenceAuthorization,
     build_authorized_references,
@@ -51,46 +47,31 @@ from story_writing_agents.writing_artifacts.repository import (
     WritingArtifactRepository,
 )
 
+from tests.helpers import initialize_test_workspace
+
 
 _CORE_PATH = "core_documents/global_outline.md"
 _MANUSCRIPT_PATH = "manuscript/part-01/seed.md"
 _STATE = Path("agent_states/orchestrator_state/writing_artifacts")
 _SNAPSHOTS = _STATE / "input_snapshots"
 _ERROR_MESSAGES = {
-    ReferenceAuthorizationErrorCode.INVALID_IDENTITY:
-        "reference authorization identity is invalid",
-    ReferenceAuthorizationErrorCode.NOT_FOUND:
-        "referenced artifact is unavailable",
-    ReferenceAuthorizationErrorCode.INELIGIBLE:
-        "referenced artifact is not eligible",
-    ReferenceAuthorizationErrorCode.DRIFT:
-        "referenced artifact changed during the operation",
-    ReferenceAuthorizationErrorCode.INVALID_UTF8:
-        "referenced artifact is not strict UTF-8",
-    ReferenceAuthorizationErrorCode.NUL_CONTENT:
-        "referenced artifact contains NUL",
-    ReferenceAuthorizationErrorCode.RANGE_OUT_OF_BOUNDS:
-        "reference range is outside the artifact",
-    ReferenceAuthorizationErrorCode.READ_LIMIT_EXCEEDED:
-        "one reference exceeds the read limit",
-    ReferenceAuthorizationErrorCode.TOTAL_LIMIT_EXCEEDED:
-        "reference batch exceeds the read limit",
-    ReferenceAuthorizationErrorCode.CAPABILITY_CONSUMED:
-        "reference read capability was already consumed",
-    ReferenceAuthorizationErrorCode.CORRELATION_MISMATCH:
-        "reference invocation correlation does not match",
-    ReferenceAuthorizationErrorCode.INVALID_TRANSITION:
-        "reference authorization transition is invalid",
-    ReferenceAuthorizationErrorCode.EVIDENCE_CORRUPT:
-        "reference authorization evidence is corrupt",
-    ReferenceAuthorizationErrorCode.CLOSED:
-        "reference authorization is closed",
-    ReferenceAuthorizationErrorCode.CANCELLED:
-        "reference operation was cancelled",
-    ReferenceAuthorizationErrorCode.PROVIDER_FAILURE:
-        "reference provider invocation failed",
-    ReferenceAuthorizationErrorCode.WORKFLOW_FAILURE:
-        "reference workflow failed",
+    ReferenceAuthorizationErrorCode.INVALID_IDENTITY: "reference authorization identity is invalid",
+    ReferenceAuthorizationErrorCode.NOT_FOUND: "referenced artifact is unavailable",
+    ReferenceAuthorizationErrorCode.INELIGIBLE: "referenced artifact is not eligible",
+    ReferenceAuthorizationErrorCode.DRIFT: "referenced artifact changed during the operation",
+    ReferenceAuthorizationErrorCode.INVALID_UTF8: "referenced artifact is not strict UTF-8",
+    ReferenceAuthorizationErrorCode.NUL_CONTENT: "referenced artifact contains NUL",
+    ReferenceAuthorizationErrorCode.RANGE_OUT_OF_BOUNDS: "reference range is outside the artifact",
+    ReferenceAuthorizationErrorCode.READ_LIMIT_EXCEEDED: "one reference exceeds the read limit",
+    ReferenceAuthorizationErrorCode.TOTAL_LIMIT_EXCEEDED: "reference batch exceeds the read limit",
+    ReferenceAuthorizationErrorCode.CAPABILITY_CONSUMED: "reference read capability was already consumed",
+    ReferenceAuthorizationErrorCode.CORRELATION_MISMATCH: "reference invocation correlation does not match",
+    ReferenceAuthorizationErrorCode.INVALID_TRANSITION: "reference authorization transition is invalid",
+    ReferenceAuthorizationErrorCode.EVIDENCE_CORRUPT: "reference authorization evidence is corrupt",
+    ReferenceAuthorizationErrorCode.CLOSED: "reference authorization is closed",
+    ReferenceAuthorizationErrorCode.CANCELLED: "reference operation was cancelled",
+    ReferenceAuthorizationErrorCode.PROVIDER_FAILURE: "reference provider invocation failed",
+    ReferenceAuthorizationErrorCode.WORKFLOW_FAILURE: "reference workflow failed",
 }
 
 
@@ -161,7 +142,7 @@ class ReferenceRepositoryTestCase(unittest.TestCase):
         temporary = tempfile.TemporaryDirectory()
         self.addCleanup(temporary.cleanup)
         self.root = Path(temporary.name)
-        Workspace(self.root).initialize()
+        initialize_test_workspace(self.root)
         self.repository = WritingArtifactRepository(self.root)
         self.manuscript_bytes = b"alpha\r\nbeta\ngamma\rfour\xe2\x80\xa8five"
         self.core_bytes = b"core-one\ncore-two\n"
@@ -181,9 +162,7 @@ class ReferenceRepositoryTestCase(unittest.TestCase):
         references: tuple[ArtifactReference, ...] | None = None,
     ) -> ReferenceAuthorization:
         selected = (
-            (ArtifactReference(_MANUSCRIPT_PATH),)
-            if references is None
-            else references
+            (ArtifactReference(_MANUSCRIPT_PATH),) if references is None else references
         )
         authorization = self.repository.capture_reference_authorization(
             operation_id=operation_id,
@@ -266,9 +245,11 @@ class ReferenceAuthorizationValueTests(unittest.TestCase):
         self.assertTrue(supported.issubset(artifact_facade.__all__))
         self.assertTrue(transient.isdisjoint(artifact_facade.__all__))
         self.assertNotIn("CanonicalArtifactFilesystem", artifact_facade.__all__)
-        self.assertEqual(len(artifact_facade.__all__), 31)
-        self.assertTrue((supported | transient).isdisjoint(story_writing_agents.__all__))
-        self.assertEqual(len(story_writing_agents.__all__), 120)
+        self.assertEqual(len(artifact_facade.__all__), 78)
+        self.assertTrue(
+            (supported | transient).isdisjoint(story_writing_agents.__all__)
+        )
+        self.assertEqual(len(story_writing_agents.__all__), 104)
 
     def test_correlation_requires_safe_ids_positive_ordinals_and_attempts(self) -> None:
         valid = _correlation(
@@ -302,11 +283,19 @@ class ReferenceAuthorizationValueTests(unittest.TestCase):
                         ReferenceInvocationCorrelation(**values)  # type: ignore[arg-type]
         for name, value, message in (
             ("invocation_ordinal", 0, "invocation_ordinal must be a positive integer"),
-            ("invocation_ordinal", True, "invocation_ordinal must be a positive integer"),
+            (
+                "invocation_ordinal",
+                True,
+                "invocation_ordinal must be a positive integer",
+            ),
             ("attempt", 0, "attempt must be a positive integer"),
             ("attempt", True, "attempt must be a positive integer"),
             ("round_number", -1, "round_number must be None or a nonnegative integer"),
-            ("round_number", True, "round_number must be None or a nonnegative integer"),
+            (
+                "round_number",
+                True,
+                "round_number must be None or a nonnegative integer",
+            ),
         ):
             with self.subTest(name=name, value=value):
                 values = {
@@ -402,7 +391,9 @@ class ReferenceAuthorizationValueTests(unittest.TestCase):
 
 
 class UniversalNewlineAndLimitTests(unittest.TestCase):
-    def test_universal_newlines_preserve_terminators_and_unicode_is_content(self) -> None:
+    def test_universal_newlines_preserve_terminators_and_unicode_is_content(
+        self,
+    ) -> None:
         source = b"one\r\ntwo\nthree\rfour\xe2\x80\xa8five"
         expected = (
             (ArtifactLineRange(1, 1), b"one\r\n"),
@@ -420,7 +411,9 @@ class UniversalNewlineAndLimitTests(unittest.TestCase):
                     (selected, 4),
                 )
 
-    def test_empty_trailing_terminator_final_fragment_and_bounds_are_exact(self) -> None:
+    def test_empty_trailing_terminator_final_fragment_and_bounds_are_exact(
+        self,
+    ) -> None:
         self.assertEqual(select_reference_bytes(b"", None), (b"", 0))
         with _expect_error(self, ReferenceAuthorizationErrorCode.RANGE_OUT_OF_BOUNDS):
             select_reference_bytes(b"", ArtifactLineRange(1, 1))
@@ -480,7 +473,9 @@ class UniversalNewlineAndLimitTests(unittest.TestCase):
             _reference_batch(*references[:2]),
             snapshots[:2],
         )
-        self.assertEqual(sum(item.selected_utf8_bytes for item in proofs), MAX_REFERENCE_TOTAL_BYTES)
+        self.assertEqual(
+            sum(item.selected_utf8_bytes for item in proofs), MAX_REFERENCE_TOTAL_BYTES
+        )
         self.assertEqual(len(captured), 2)
         with _expect_error(
             self,
@@ -536,7 +531,9 @@ class ReferenceCaptureAndEligibilityTests(ReferenceRepositoryTestCase):
         self.assertIsNotNone(self.repository.inspect_reference_operation("explicit"))
         authorization.close()
 
-    def test_same_path_multiple_ranges_read_source_once_and_keep_request_order(self) -> None:
+    def test_same_path_multiple_ranges_read_source_once_and_keep_request_order(
+        self,
+    ) -> None:
         references = (
             ArtifactReference(_MANUSCRIPT_PATH, ArtifactLineRange(3, 3)),
             ArtifactReference(_MANUSCRIPT_PATH, ArtifactLineRange(1, 1)),
@@ -568,7 +565,9 @@ class ReferenceCaptureAndEligibilityTests(ReferenceRepositoryTestCase):
         )
         authorization.close()
 
-    def test_manual_empty_missing_invalid_and_nul_sources_are_coded_exactly(self) -> None:
+    def test_manual_empty_missing_invalid_and_nul_sources_are_coded_exactly(
+        self,
+    ) -> None:
         manual_path = "manuscript/manual older 世界.md"
         manual_target = self.root / manual_path
         manual_target.parent.mkdir(parents=True, exist_ok=True)
@@ -579,9 +578,7 @@ class ReferenceCaptureAndEligibilityTests(ReferenceRepositoryTestCase):
         )
         assert manual is not None
         self.assertEqual(
-            manual.delivery_snapshot(
-                self.repository._reference_authorization_owner
-            )[1],
+            manual.delivery_snapshot(self.repository._reference_authorization_owner)[1],
             (b"manual",),
         )
         manual_history = self.repository.inspect_reference_operation("manual")
@@ -624,7 +621,11 @@ class ReferenceCaptureAndEligibilityTests(ReferenceRepositoryTestCase):
             )
 
         for label, content, code in (
-            ("invalid", b"safe\ninvalid\xff", ReferenceAuthorizationErrorCode.INVALID_UTF8),
+            (
+                "invalid",
+                b"safe\ninvalid\xff",
+                ReferenceAuthorizationErrorCode.INVALID_UTF8,
+            ),
             ("nul", b"safe\x00nul", ReferenceAuthorizationErrorCode.NUL_CONTENT),
         ):
             with self.subTest(label=label):
@@ -656,11 +657,13 @@ class ReferenceCaptureAndEligibilityTests(ReferenceRepositoryTestCase):
             target.unlink()
             os.mkfifo(target)
 
-        scenarios.extend((
-            ("symlink", symlink),
-            ("hardlink", hardlink),
-            ("fifo", fifo),
-        ))
+        scenarios.extend(
+            (
+                ("symlink", symlink),
+                ("hardlink", hardlink),
+                ("fifo", fifo),
+            )
+        )
         for label, mutate in scenarios:
             with self.subTest(label=label):
                 if target.exists() or target.is_symlink():
@@ -680,11 +683,15 @@ class ReferenceCaptureAndEligibilityTests(ReferenceRepositoryTestCase):
 
 
 class ReferenceInvocationLifecycleTests(ReferenceRepositoryTestCase):
-    def test_complete_lifecycle_records_exact_states_and_closes_authorization(self) -> None:
+    def test_complete_lifecycle_records_exact_states_and_closes_authorization(
+        self,
+    ) -> None:
         requested = (ArtifactReference(_MANUSCRIPT_PATH),)
         authorization = self.capture("complete", requested)
         capability = self.authorize(authorization, "invoke", 1)
-        self.assertEqual(self.accept_invocation(capability, requested), (self.manuscript_bytes,))
+        self.assertEqual(
+            self.accept_invocation(capability, requested), (self.manuscript_bytes,)
+        )
         self.repository.revalidate_reference_operation(
             authorization,
             checkpoint="before_finish",
@@ -723,7 +730,8 @@ class ReferenceInvocationLifecycleTests(ReferenceRepositoryTestCase):
             tuple(reversed(references)),
             references[:1],
             references + (references[-1],),
-            references + (ArtifactReference(_MANUSCRIPT_PATH, ArtifactLineRange(2, 2)),),
+            references
+            + (ArtifactReference(_MANUSCRIPT_PATH, ArtifactLineRange(2, 2)),),
         )
         authorization = self.capture("request_shapes", references)
         for ordinal, requested in enumerate(invalid_requests, start=1):
@@ -747,7 +755,9 @@ class ReferenceInvocationLifecycleTests(ReferenceRepositoryTestCase):
             outcome=ReferenceAuthorizationErrorCode.WORKFLOW_FAILURE,
         )
 
-    def test_cross_operation_repository_forged_and_closed_handles_fail_coded(self) -> None:
+    def test_cross_operation_repository_forged_and_closed_handles_fail_coded(
+        self,
+    ) -> None:
         requested = (ArtifactReference(_MANUSCRIPT_PATH),)
         authorization = self.capture("owners", requested)
         other_repository = WritingArtifactRepository(self.root)
@@ -819,7 +829,9 @@ class ReferenceInvocationLifecycleTests(ReferenceRepositoryTestCase):
         self.assertNotIn(first.capability_id, repr(history))
         self.assertNotIn(second.capability_id, repr(history))
 
-    def test_gap_duplicate_and_illegal_transitions_fail_without_acceptance(self) -> None:
+    def test_gap_duplicate_and_illegal_transitions_fail_without_acceptance(
+        self,
+    ) -> None:
         requested = (ArtifactReference(_MANUSCRIPT_PATH),)
         premature = self.capture("premature", requested)
         with _expect_error(self, ReferenceAuthorizationErrorCode.INVALID_TRANSITION):
@@ -946,7 +958,9 @@ class ReferenceDriftAndLifetimeTests(ReferenceRepositoryTestCase):
                 requested,
             )
 
-    def test_drift_at_invocation_acceptance_and_final_acceptance_fails_closed(self) -> None:
+    def test_drift_at_invocation_acceptance_and_final_acceptance_fails_closed(
+        self,
+    ) -> None:
         requested = (ArtifactReference(_MANUSCRIPT_PATH),)
         authorization = self.capture("accept_drift", requested)
         capability = self.authorize(authorization, "invoke", 1)
@@ -968,8 +982,10 @@ class ReferenceDriftAndLifetimeTests(ReferenceRepositoryTestCase):
             ReferenceOperationState.TERMINATED,
         )
 
-        second = self.root / "second-root"
-        Workspace(second).initialize()
+        second_temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(second_temporary.cleanup)
+        second = Path(second_temporary.name)
+        initialize_test_workspace(second)
         repository = WritingArtifactRepository(second)
         repository.commit_consensus(
             output_path="part-01/seed.md",
@@ -1038,15 +1054,10 @@ class ReferenceDriftAndLifetimeTests(ReferenceRepositoryTestCase):
                 authorization,
                 checkpoint="before_provider",
             )
-        growth_history = self.repository.inspect_reference_operation(
-            "oversize_growth"
-        )
+        growth_history = self.repository.inspect_reference_operation("oversize_growth")
         assert growth_history is not None
         self.assertEqual(
-            tuple(
-                event.operation_state
-                for event in growth_history.operation_events
-            ),
+            tuple(event.operation_state for event in growth_history.operation_events),
             (
                 ReferenceOperationState.REQUESTED,
                 ReferenceOperationState.CAPTURED,
@@ -1071,10 +1082,7 @@ class ReferenceDriftAndLifetimeTests(ReferenceRepositoryTestCase):
         )
         assert capture_history is not None
         self.assertEqual(
-            tuple(
-                event.operation_state
-                for event in capture_history.operation_events
-            ),
+            tuple(event.operation_state for event in capture_history.operation_events),
             (
                 ReferenceOperationState.REQUESTED,
                 ReferenceOperationState.TERMINATED,
@@ -1085,12 +1093,16 @@ class ReferenceDriftAndLifetimeTests(ReferenceRepositoryTestCase):
             ReferenceAuthorizationErrorCode.READ_LIMIT_EXCEEDED,
         )
 
-    def test_delivery_and_authorization_hide_serialize_close_and_race_atomically(self) -> None:
+    def test_delivery_and_authorization_hide_serialize_close_and_race_atomically(
+        self,
+    ) -> None:
         requested = (ArtifactReference(_MANUSCRIPT_PATH),)
         authorization = self.capture("lifetime", requested)
         capability = self.authorize(authorization, "invoke", 1)
         delivery = self.repository.deliver_authorized_references(capability, requested)
-        self.assertEqual(repr(authorization), "ReferenceAuthorization(<content hidden>)")
+        self.assertEqual(
+            repr(authorization), "ReferenceAuthorization(<content hidden>)"
+        )
         self.assertEqual(repr(capability), "ReadCapability(<content hidden>)")
         self.assertEqual(repr(delivery), "ArtifactReferenceDelivery(<content hidden>)")
         for value, message in (
@@ -1140,7 +1152,9 @@ class ReferenceDriftAndLifetimeTests(ReferenceRepositoryTestCase):
 
 
 class ReferenceConcurrencyTests(ReferenceRepositoryTestCase):
-    def test_duplicate_operation_and_invocation_serialize_without_deadlock(self) -> None:
+    def test_duplicate_operation_and_invocation_serialize_without_deadlock(
+        self,
+    ) -> None:
         batch = _reference_batch(ArtifactReference(_MANUSCRIPT_PATH))
         repositories = (
             WritingArtifactRepository(self.root),
@@ -1161,7 +1175,9 @@ class ReferenceConcurrencyTests(ReferenceRepositoryTestCase):
             except ReferenceAuthorizationError as exc:
                 results.append(exc.code)
 
-        threads = [threading.Thread(target=capture, args=(repo,)) for repo in repositories]
+        threads = [
+            threading.Thread(target=capture, args=(repo,)) for repo in repositories
+        ]
         for thread in threads:
             thread.start()
         for thread in threads:

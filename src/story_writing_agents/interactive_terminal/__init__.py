@@ -2,13 +2,14 @@
 
 from __future__ import annotations
 
-from ._core import (
+from ._core import (  # noqa: F401
     AdvisoryProgressError,
     format_agent_reply_content,
     InteractiveAdvisoryProgress,
     InteractiveCompositionInput,
     InteractiveDebateProgress,
     InteractiveMainInput,
+    InteractiveLiveComposer,
     InputPresentation,
     INTERACTIVE_ERROR_SPECS,
     AttachmentKind,
@@ -52,6 +53,12 @@ from ._core import (
     ReferenceInputFailureKind,
     ReferenceInputScope,
     SlashCommandSuggestion,
+    LiveComposerDeliveryKind,
+    LiveComposerInput,
+    LiveComposerInputKind,
+    LiveComposerJoinStatus,
+    LiveComposerResult,
+    LiveOperationBoundary,
     append_main_input_history,
     build_contextual_terminal,
     build_stream_terminal,

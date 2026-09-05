@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import copy
 import errno
 import json
 import os
@@ -10,7 +11,7 @@ import threading
 import time
 import weakref
 from contextlib import contextmanager
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Iterator
 
@@ -20,15 +21,15 @@ except ImportError:  # pragma: no cover - non-POSIX hosts fail closed on borrow.
     _fcntl = None
 
 from ..conversation_search import (
-    ConversationSearchQuery,
-    ConversationSearchResult,
-    ConversationSearchScope,
-    ReferenceConversationSearch,
+    CollaborationHistorySearchQuery,
+    CollaborationHistorySearchResult,
+    CollaborationHistorySearchScope,
+    ReferenceCollaborationHistorySearch,
 )
-from ..workspace import (
+from ..workspace.core import Workspace
+from .filesystem import (
+    FilesystemCollaborationEventStore,
     FilesystemConversationCatalog,
-    FilesystemConversationEventStore,
-    Workspace,
 )
 from .contracts import (
     CONVERSATION_STORAGE_ACTIVATION_SCHEMA_VERSION,
@@ -42,7 +43,7 @@ from .contracts import (
     ConversationStorageBackend,
     ConversationStorageComponentBinding,
     ConversationStorageCoordinationError,
-    ConversationStorageMigrationReadiness,
+    ConversationStorageTransferReadiness,
     ConversationStorageMutationLease,
     ConversationStorageProvenance,
     ConversationStorageServices,
@@ -50,36 +51,38 @@ from .contracts import (
 )
 
 
-CONVERSATION_STORAGE_ACTIVATION_STATE_PATH = (
-    "config/conversation_storage_state.json"
-)
-CONVERSATION_STORAGE_MUTATION_GUARD_PATH = (
-    "config/.conversation_storage.lock"
-)
+CONVERSATION_STORAGE_ACTIVATION_STATE_PATH = "config/conversation_storage_state.json"
+CONVERSATION_STORAGE_MUTATION_GUARD_PATH = "config/.conversation_storage.lock"
 
-_ACTIVATION_STATE_FIELDS = frozenset({
-    "schema_version",
-    "backend",
-    "generation",
-})
+_ACTIVATION_STATE_FIELDS = frozenset(
+    {
+        "schema_version",
+        "backend",
+        "generation",
+    }
+)
 _MUTATION_LOCK_RETRY_SECONDS = 0.05
 _FILESYSTEM_MUTATION_TIMEOUT_SECONDS = 30.0
 
 
 @dataclass(frozen=True, slots=True)
 class _WorkspaceTopology:
-    """One immutable canonical root used to materialize operation-local workspaces."""
+    """One immutable canonical root and already-authorized workspace lease."""
 
     root: Path
+    _workspace_lease: Workspace = field(repr=False, compare=False)
 
     @classmethod
     def capture(cls, workspace: Workspace) -> _WorkspaceTopology:
-        """Snapshot one absolute root without retaining the caller's workspace."""
+        """Capture one ready lease without later reopening its mutated root."""
 
+        workspace.require_ready()
         root = Path(os.fspath(workspace.root))
         if not root.is_absolute():
             root = Path(os.path.abspath(root))
-        return cls(root=root)
+        lease = copy.copy(workspace)
+        lease.root = root
+        return cls(root=root, _workspace_lease=lease)
 
     @property
     def workspace_key(self) -> str:
@@ -88,9 +91,11 @@ class _WorkspaceTopology:
         return os.fspath(self.root)
 
     def workspace(self) -> Workspace:
-        """Return a fresh workspace whose root derives only from this topology."""
+        """Return an isolated copy of the captured ready workspace lease."""
 
-        return Workspace(self.root)
+        workspace = copy.copy(self._workspace_lease)
+        workspace.root = self.root
+        return workspace
 
 
 class _PinnedFilesystemConversationCatalog(FilesystemConversationCatalog):
@@ -156,8 +161,8 @@ class _PinnedFilesystemConversationCatalog(FilesystemConversationCatalog):
             return super().unarchive(session_id, conversation_id)
 
 
-class _PinnedFilesystemConversationEventStore(FilesystemConversationEventStore):
-    """Concrete event store pinned to one topology and catalog collaborator."""
+class _PinnedFilesystemCollaborationEventStore(FilesystemCollaborationEventStore):
+    """Schema-v2 event store pinned to one topology and catalog collaborator."""
 
     __slots__ = ("_coordinator", "_pinned_catalog", "_topology")
 
@@ -194,14 +199,14 @@ class _PinnedFilesystemConversationEventStore(FilesystemConversationEventStore):
     def catalog(self, _catalog: object) -> None:
         """Ignore mutable catalog rebinding in favor of the pinned collaborator."""
 
-    def append(self, event: Any) -> Any:
+    def append_batch(self, batch: Any) -> Any:
         with self._coordinator.borrow(
             timeout_seconds=_FILESYSTEM_MUTATION_TIMEOUT_SECONDS
         ):
-            return super().append(event)
+            return super().append_batch(batch)
 
 
-class _PinnedReferenceConversationSearch(ReferenceConversationSearch):
+class _PinnedReferenceCollaborationHistorySearch(ReferenceCollaborationHistorySearch):
     """Concrete search that ignores mutable inherited collaborator bindings."""
 
     __slots__ = ("_pinned_catalog", "_pinned_event_store")
@@ -209,7 +214,7 @@ class _PinnedReferenceConversationSearch(ReferenceConversationSearch):
     def __init__(
         self,
         catalog: FilesystemConversationCatalog,
-        event_store: FilesystemConversationEventStore,
+        event_store: FilesystemCollaborationEventStore,
     ) -> None:
         self._pinned_catalog = catalog
         self._pinned_event_store = event_store
@@ -217,12 +222,12 @@ class _PinnedReferenceConversationSearch(ReferenceConversationSearch):
 
     def search(
         self,
-        scope: ConversationSearchScope,
-        query: ConversationSearchQuery,
-    ) -> ConversationSearchResult:
+        scope: CollaborationHistorySearchScope,
+        query: CollaborationHistorySearchQuery,
+    ) -> CollaborationHistorySearchResult:
         """Search through only the construction-pinned concrete collaborators."""
 
-        return ReferenceConversationSearch(
+        return ReferenceCollaborationHistorySearch(
             self._pinned_catalog,
             self._pinned_event_store,
         ).search(scope, query)
@@ -328,7 +333,7 @@ class WorkspaceConversationStorageMutationCoordinator:
     lock or extending its expiry. Every supported storage write must validate
     this lease before mutation. Acquire workspace leases in ascending
     ``workspace_key`` order and before catalog, event-store, archive, database,
-    parity, migration, or activation locks.
+    parity, transfer, or activation locks.
     """
 
     __slots__ = ("_state", "_topology", "_workspace_key")
@@ -527,7 +532,7 @@ class WorkspaceConversationStorageMutationCoordinator:
 def compose_filesystem_conversation_storage(
     workspace: Workspace | str | os.PathLike[str],
 ) -> ConversationStorageServices:
-    """Bind the unchanged filesystem catalog, event store, and search ports."""
+    """Bind the filesystem catalog and sole schema-v2 history/search ports."""
 
     resolved = workspace if isinstance(workspace, Workspace) else Workspace(workspace)
     topology = _WorkspaceTopology.capture(resolved)
@@ -543,13 +548,13 @@ def compose_filesystem_conversation_storage(
         resolved,
         coordinator,
     )
-    event_store = _PinnedFilesystemConversationEventStore(
+    event_store = _PinnedFilesystemCollaborationEventStore(
         topology,
         resolved,
         catalog=catalog,
         coordinator=coordinator,
     )
-    search = _PinnedReferenceConversationSearch(catalog, event_store)
+    search = _PinnedReferenceCollaborationHistorySearch(catalog, event_store)
     return ConversationStorageServices(
         catalog_binding=ConversationStorageComponentBinding(
             provenance=provenance,
@@ -633,11 +638,11 @@ def compare_and_set_conversation_storage_activation(
     *,
     lease: ConversationStorageMutationLease,
     expected_generation: int,
-    readiness: ConversationStorageMigrationReadiness,
+    readiness: ConversationStorageTransferReadiness,
 ) -> ConversationStorageActivationOutcome:
     """Activate under a supplied valid lease using expected-generation CAS.
 
-    The caller holds one outer lease across source inspection, migration,
+    The caller holds one outer lease across source inspection, transfer,
     parity, and this operation. Same-backend activation is an unwritten no-op.
     A backend change persists generation ``expected_generation + 1`` through
     contained atomic ``Workspace.write_json`` before returning its outcome.
@@ -649,8 +654,8 @@ def compare_and_set_conversation_storage_activation(
         raise TypeError("expected generation must be an integer")
     if expected_generation < 0:
         raise ValueError("expected generation must not be negative")
-    if type(readiness) is not ConversationStorageMigrationReadiness:
-        raise TypeError("readiness must be a ConversationStorageMigrationReadiness")
+    if type(readiness) is not ConversationStorageTransferReadiness:
+        raise TypeError("readiness must be a ConversationStorageTransferReadiness")
     topology = _WorkspaceTopology.capture(workspace)
     workspace_key = topology.workspace_key
     try:

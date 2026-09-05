@@ -5,7 +5,10 @@
 > part-scoped manuscripts, explicit-reference evidence, provider-native state,
 > bounded runtime debug logs, bounded agent-exchange JSONL, and bounded
 > rejected-provider-response artifacts persist as plaintext workspace files.
-> Runtime-managed documents and records are strict UTF-8.
+> Runtime-managed documents and records are strict UTF-8. These retained files
+> and low-level components do not imply a current public story-execution path.
+> Package-internal session Git resources are implemented for #455, but current
+> session commands do not provision them.
 
 Key terms: **default**—a persisted command or conversation fallback;
 **manifest**—durable provider state; **access claim**—temporary process ownership;
@@ -13,33 +16,41 @@ Key terms: **default**—a persisted command or conversation fallback;
 
 ## Canonical workspace tree
 
-`story init` creates missing scaffold directories. “Lazy” files appear on use.
+`story init` creates one exact pristine schema-v2 root and commits its 22
+initializer-owned files to `main`. “Lazy” paths below describe later runtime
+owners; #454 does not create them in the initialization baseline.
 
 ```text
 workspace/
+├── .git/                                                       [common Git storage; fixed main baseline plus lazy session seeds]
+│   └── story-writing-agents/runtime/session-provisioning/
+│       ├── .lock                                               [lazy persistent repository guard]
+│       └── <session_id>.json                                   [transient immutable provisioning journal]
+├── .story-writing-agents-initialize-v2.json                    [transient initialization journal; absent on success]
 ├── config/
+│   ├── workspace.json                                          [exact schema-v2 marker and topology policy]
 │   ├── {system_defaults.json,agent_configs.json,agents/,persona_templates/}
 │   ├── conversation_storage_state.json                        [lazy explicit active-backend state]
 │   └── .conversation_storage.lock                             [lazy conversation-storage mutation guard]
-├── core_documents/{global_outline.md,part_outlines.md,character_sheets.md,narrative_rules.md} [lazy agent publications]
+├── core_documents/{global_outline.md,part_outlines.md,character_sheets.md,narrative_rules.md} [initialized zero-byte identities]
 ├── agent_states/
 │   ├── orchestrator_state/
 │   │   ├── sessions/<session_id>.json                          [lazy overrides]
 │   │   ├── cli_context.json                                   [lazy default session]
 │   │   ├── conversation_defaults/<session_id>.json             [lazy default conversation]
 │   │   ├── provider_route_generations.json                     [lazy route freshness]
-│   │   ├── conversation_storage_migrations/
-│   │   │   ├── filesystem-to-sqlite.json                       [lazy retained migration checkpoint]
-│   │   │   └── sqlite-to-filesystem.json                       [lazy retained migration checkpoint]
+│   │   ├── conversation_storage_transfers/
+│   │   │   ├── filesystem-to-sqlite.json                       [lazy retained transfer checkpoint]
+│   │   │   └── sqlite-to-filesystem.json                       [lazy retained transfer checkpoint]
 │   │   ├── provider_sessions/.access-claims.lock               [lazy guard]
 │   │   ├── provider_sessions/.antigravity/                      [lazy retained provider state]
 │   │   ├── provider_sessions/<session_id>.json                 [lazy manifest]
 │   │   ├── provider_sessions/<session_id>.access.json          [temporary claim]
 │   │   ├── debates/<session_id>/<debate_id>.jsonl              [lazy history]
 │   │   └── writing_artifacts/
-│   │       ├── catalog.json                                    [lazy current provenance]
-│   │       ├── commits/<commit_id>.json                        [lazy immutable history]
-│   │       ├── transactions/<commit_id>.json                   [authoritative pending journal]
+│   │       ├── catalog.json                                    [lazy schema-2 current membership]
+│   │       ├── applications/<application_id>.json              [lazy schema-1 immutable content-free history]
+│   │       ├── transactions/<transaction_id>.json              [schema-1 content-bearing pending journal]
 │   │       ├── staging/.artifacts-*.tmp                        [retained staged bytes]
 │   │       ├── staging/.artifacts-*.held                       [retained prior bytes]
 │   │       ├── staging/.artifacts-*.retired                    [retained failed publication]
@@ -78,21 +89,89 @@ workspace/
 │   └── <session_id>/
 │       ├── <debate_id>.{state.json,jsonl,result.json}
 │       ├── <debate_id>.context.json                            [lazy debate context]
-│       └── interactive/conversations/<conversation_id>/{metadata.json,transcript.jsonl}
+│       └── interactive/conversations/<conversation_id>/
+│           ├── metadata.json
+│           ├── collaboration-history.jsonl                     [lazy canonical v2 history]
+│           ├── .collaboration-history.lock                     [lazy excluded safe lock]
+│           └── transcript.jsonl                                [unsupported sentinel; active v2 owner rejects it]
 └── manuscript/<part-id>/<safe-relative-markdown-path>           [lazy create-only output]
+
+<workspace-parent>/<workspace-name>.story-worktrees/
+└── <session_id>/                                               [lazy exact linked session worktree]
 ```
 
-Initialization adds `.gitkeep` to selected empty state and manuscript
-directories. Normal init preserves files; prompt overwrite replaces only the
-four role prompts. Initialization
-does not create any of the four core documents or a manuscript. Artifact state
-appears only when the artifact repository is accessed or a unanimous run
-publishes output; `recovery_blocked.json` appears only after recovery cannot be
-trusted. Staging residue is non-authoritative, never catalog-listed, retained
-after successful and failed publication, and may grow. Only exact JSON entries
-under `transactions/` are recovery journals. The three permanent lock names are
-hard links to one regular inode with link count three; partial or old two-link
-state is invalid and is not migrated or reconstructed. See
+Git logically owns `refs/heads/story/session/<session_id>` at the baseline and
+`refs/story-writing-agents/runtime/sessions/<session_id>` at the seed. Those
+refs may be loose or packed, so they are identities rather than guaranteed
+filesystem leaves in the tree above.
+
+The four core files are empty identities, not generated story content.
+Initialization also creates selected empty directories, but Git records only
+the exact regular-file manifest below. It creates no manuscript, session ID,
+session branch/worktree/internal ref, provider state, conversation, artifact
+catalog, runtime log, or later commit.
+
+### Exact initialization manifest
+
+The one parentless commit named `Initialize story workspace` contains every and
+only these paths, sorted by UTF-8 path bytes:
+
+```text
+agent_states/character_custodian_state/.gitkeep
+agent_states/execution_specialist_state/.gitkeep
+agent_states/orchestrator_state/.gitkeep
+agent_states/orchestrator_state/conversation_defaults/.gitkeep
+agent_states/orchestrator_state/sessions/.gitkeep
+agent_states/plot_architect_state/.gitkeep
+config/agent_configs.json
+config/agents/character_custodian/AGENTS.md
+config/agents/execution_specialist/AGENTS.md
+config/agents/lead_orchestrator/AGENTS.md
+config/agents/plot_architect/AGENTS.md
+config/persona_templates/alternative_templates/.gitkeep
+config/persona_templates/default_kim_eun_hee.md
+config/system_defaults.json
+config/workspace.json
+core_documents/character_sheets.md
+core_documents/global_outline.md
+core_documents/narrative_rules.md
+core_documents/part_outlines.md
+debug_logs/.gitkeep
+discussion_logs/.gitkeep
+manuscript/.gitkeep
+```
+
+The transient `.story-writing-agents-initialize-v2.json`, `.git`, empty
+directory entries, mutable logs/state, later artifacts, and arbitrary files are
+excluded. A clean ready reopen requires the marker/scaffold bytes, commit,
+index/tree, `refs/heads/main`, clean main status, and an exhaustive inventory in
+which every additional session branch/ref/worktree/journal fact is exactly
+correlated.
+
+`config/workspace.json` records this naming policy for one validated
+session ID `<id>`:
+
+```text
+branch:   story/session/<id>
+ref:      refs/story-writing-agents/runtime/sessions/<id>
+worktree: <workspace-parent>/<workspace-name>.story-worktrees/<id>
+```
+
+The initial session set is empty. `story init` still creates none of these
+resources. The package-internal #504 provision operation can materialize one
+exact correlated triple while keeping the pristine `main` root invariant;
+#455 owns command wiring. #508 provides internal content-free history evidence;
+#509 owns later story commits, #510 owns checkpoints, and #492 owns their
+confirmation UI. Session provisioning/history state is separate from both the
+root initialization journal and writing-artifact transaction journals.
+
+Artifact state appears only when its direct repository owner is accessed; no
+current public shell command publishes output. `recovery_blocked.json` appears
+only after artifact recovery cannot be trusted. Staging residue is
+non-authoritative, never catalog-listed, retained after successful and failed
+publication, and may grow. Only exact JSON entries under artifact
+`transactions/` are artifact-recovery journals; they are unrelated to the
+root initialization journal. See
 [Canonical writing artifacts](../writing-artifacts.md).
 
 <a id="optional-sqlite-conversation-storage"></a>
@@ -103,7 +182,7 @@ The fixed `discussion_logs/conversation_storage.sqlite3` file is the optional
 authoritative SQLite conversation store. Importing its direct module creates
 nothing and does not load `sqlite3`; the standard-library module is loaded and
 checked only when a probe, preflight, provisioning, composition, adapter,
-selection, startup, or migration operation requests it. `story init` creates
+selection, startup, or transfer operation requests it. `story init` creates
 neither this database nor an active-state marker.
 
 For a plain-language walkthrough before these normative storage details, see
@@ -152,12 +231,14 @@ coordinator guard; the guard is not a database, desired setting, or activation
 record. The filesystem conversation paths can coexist with the SQLite file,
 but only the active backend is authoritative for the shell. There is no
 automatic synchronization or shared authority. Explicit
-`story storage migrate` can copy the active canonical store into the other
+`story storage transfer` can copy the active canonical store into the other
 already-ready store, and `story storage verify` can compare them; neither
 command changes desired or active state.
 
-The main database is authoritative. It includes required normalized subject
-and transcript-search values plus a lexical generation. The fixed private
+The main schema-v2 database contains catalog metadata and canonical v2
+`collaboration_events`. Any row in the unsupported `conversation_events` table
+fails the owning boundary before mutation. The selected shell reads/searches
+the v2 authority. The fixed private
 `discussion_logs/.conversation_storage_fts5.sqlite3` companion is a derived,
 owner-only FTS5 hint resource. It can appear after provisioning or an effective
 SQLite mutation, but absence, staleness, an unavailable FTS5 capability, or an
@@ -184,20 +265,27 @@ active Python interpreter's functional SQLite capability, not a standalone
 MySQL adapter, SQLite-specific RAG coupling, or FTS-dependent result behavior.
 Optional RAG can consume the active complete adapter-neutral bundle while
 keeping its own derived generation separate. Explicit
-migration remains a separate provider-free command/direct API over two
+transfer remains a separate provider-free command/direct API over two
 already-ready stores; it never provisions or activates one. See the
 [exact selection workflow](../cli.md#conversation-storage-selection),
 [direct package API](../package-api.md#optional-sqlite-conversation-storage)
 and [recovery guidance](../../operations/recovery-and-limitations.md#sqlite-conversation-storage-recovery).
 
-<a id="conversation-migration-checkpoints"></a>
+Canonical archive wire schema is exactly `2`, while embedded catalog metadata
+and transfer reports/checkpoints each retain their own schema version `1`.
+These values describe different records. Archive schema 1, filesystem
+`transcript.jsonl`, and SQLite `conversation_events` rows are unsupported
+owning-boundary inputs: active storage and transfer reject them without
+rewriting either store.
 
-### Conversation migration checkpoints
+<a id="conversation-transfer-checkpoints"></a>
 
-Migration owns one retained checkpoint per direction:
+### Conversation transfer checkpoints
+
+Transfer owns one retained checkpoint per direction:
 
 ```text
-agent_states/orchestrator_state/conversation_storage_migrations/
+agent_states/orchestrator_state/conversation_storage_transfers/
 ├── filesystem-to-sqlite.json
 └── sqlite-to-filesystem.json
 ```
@@ -239,21 +327,21 @@ regular, singly linked stable file; duplicate/extra/missing fields, malformed or
 noncanonical values, another direction, an unsupported version, symlinks, hard
 links, replacements, and oversized state fail closed.
 
-For SQLite-to-filesystem migration, a checkpoint advances only after one
+For SQLite-to-filesystem transfer, a checkpoint advances only after one
 complete exact conversation is present and has been reread. On resume, fresh
 source/destination exports must prove every recorded identity still matches.
 Filesystem-to-SQLite uses one complete transaction and publishes its terminal
-checkpoint only after final parity. A successful migration retains the complete
-terminal checkpoint; a later safe migration with a changed source fingerprint
+checkpoint only after final parity. A successful transfer retains the complete
+terminal checkpoint; a later safe transfer with a changed source fingerprint
 replaces it only after an otherwise unblocked plan. Do not edit or delete it to
 force recovery.
 
 Dry-run reads and validates the applicable checkpoint when planning reaches
 that phase but never writes it. Verify neither reads nor writes a checkpoint.
 Both may create the empty `config/.conversation_storage.lock` while acquiring
-their outer coordinator lease. Migration never changes
+their outer coordinator lease. Transfer never changes
 `config/conversation_storage_state.json`, other settings, or backend activation.
-See [migration recovery](../../operations/recovery-and-limitations.md#conversation-storage-migration-recovery).
+See [transfer recovery](../../operations/recovery-and-limitations.md#conversation-storage-transfer-recovery).
 
 `input_snapshots/` is lazy, internal authorization evidence for nonempty
 explicit-reference operations. Its operation and invocation manifests and
@@ -656,9 +744,11 @@ or remove it while the workspace may be used.
 V1 manifests, `<session_id>.lease.json`, `.lease-claims.lock`, V1
 `cli_context.json` with `selected_session`, and files under
 `conversation_selections/` are detected and rejected with
-`WorkspaceVersionUnsupportedError`. They are not migrated, rewritten, or
-deleted. Preserve them and follow the
-[nondestructive recovery procedure](../../operations/recovery-and-limitations.md#unsupported-v1-session-data).
+`WorkspaceVersionUnsupportedError`. They are not converted, rewritten, or
+deleted. A root with recognizable pre-v2 workspace state is not accepted as a
+v2 workspace. Preserve it and create a separate new v2 workspace; there is no
+migration, compatibility, manual-reset, or fallback procedure. See
+[workspace initialization recovery](../../operations/recovery-and-limitations.md#workspace-initialization-recovery).
 
 Readers reject malformed data, invalid keys/types/IDs, and unsupported versions.
 Orphan claims fail closed. See [Persistence](../../design/persistence.md) and

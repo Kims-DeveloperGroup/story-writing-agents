@@ -1,4 +1,4 @@
-"""Provider-free command-line tests for explicit conversation migration."""
+"""Provider-free command-line tests for explicit backend transfer."""
 
 from __future__ import annotations
 
@@ -6,8 +6,6 @@ import contextlib
 import io
 import json
 import os
-import subprocess
-import sys
 import tempfile
 import unittest
 from pathlib import Path
@@ -19,12 +17,12 @@ from story_writing_agents.conversation_storage import ConversationStorageBackend
 
 from tests.conversation_storage_migration_fixture import (
     import_backend,
-    migration_workspace,
+    transfer_workspace,
     representative_archive,
 )
 
 
-class ConversationStorageMigrationCliTests(unittest.TestCase):
+class ConversationStorageTransferCliTests(unittest.TestCase):
     def test_storage_grammar_is_exact_and_invalid_syntax_precedes_io(self) -> None:
         parser = build_parser()
         self.assertEqual(
@@ -32,7 +30,7 @@ class ConversationStorageMigrationCliTests(unittest.TestCase):
                 parser.parse_args(
                     [
                         "storage",
-                        "migrate",
+                        "transfer",
                         "--from",
                         "filesystem",
                         "--to",
@@ -45,7 +43,7 @@ class ConversationStorageMigrationCliTests(unittest.TestCase):
             ),
             {
                 "command": "storage",
-                "storage_action": "migrate",
+                "storage_action": "transfer",
                 "source_backend": "filesystem",
                 "destination_backend": "sqlite",
                 "workspace": "/story",
@@ -75,10 +73,18 @@ class ConversationStorageMigrationCliTests(unittest.TestCase):
         )
         invalid = (
             ["storage"],
-            ["storage", "migrate", "--from", "filesystem"],
             [
                 "storage",
                 "migrate",
+                "--from",
+                "filesystem",
+                "--to",
+                "sqlite",
+            ],
+            ["storage", "transfer", "--from", "filesystem"],
+            [
+                "storage",
+                "transfer",
                 "--from",
                 "mysql",
                 "--to",
@@ -110,7 +116,7 @@ class ConversationStorageMigrationCliTests(unittest.TestCase):
             resolve.assert_not_called()
 
     def test_early_dispatch_is_compact_provider_free_and_debug_free(self) -> None:
-        workspace = migration_workspace(self)
+        workspace = transfer_workspace(self)
         import_backend(
             workspace,
             ConversationStorageBackend.FILESYSTEM,
@@ -152,18 +158,13 @@ class ConversationStorageMigrationCliTests(unittest.TestCase):
                 "InteractiveController",
                 side_effect=AssertionError("session controller created"),
             ) as controller,
-            mock.patch.object(
-                cli_module,
-                "read_draft_file",
-                side_effect=AssertionError("artifact input read"),
-            ) as artifact_input,
             contextlib.redirect_stdout(stdout),
             contextlib.redirect_stderr(stderr),
         ):
             exit_code = main(
                 [
                     "storage",
-                    "migrate",
+                    "transfer",
                     "--from",
                     "filesystem",
                     "--to",
@@ -180,7 +181,6 @@ class ConversationStorageMigrationCliTests(unittest.TestCase):
         runtime.assert_not_called()
         configuration.assert_not_called()
         controller.assert_not_called()
-        artifact_input.assert_not_called()
         self.assertEqual(stderr.getvalue(), "")
         self.assertEqual(stdout.getvalue().count("\n"), 1)
         raw = stdout.getvalue().removesuffix("\n")
@@ -198,34 +198,59 @@ class ConversationStorageMigrationCliTests(unittest.TestCase):
         )
         self.assertFalse(workspace.path("debug_logs/runtime.jsonl").exists())
 
-    def test_real_subprocess_exits_zero_one_two_and_resolves_current_workspace(
+    def test_authorized_workspace_exits_zero_one_two_and_rejects_fresh_reopen(
         self,
     ) -> None:
-        workspace = migration_workspace(self)
+        workspace = transfer_workspace(self)
         import_backend(
             workspace,
             ConversationStorageBackend.FILESYSTEM,
             representative_archive(),
         )
-        repository = Path(__file__).resolve().parents[1]
-        environment = os.environ.copy()
-        environment["PYTHONPATH"] = os.fspath(repository / "src")
-
-        def invoke(*arguments: str) -> tuple[subprocess.CompletedProcess[str], dict]:
-            completed = subprocess.run(
-                [sys.executable, "-m", "story_writing_agents", *arguments],
-                cwd=workspace.root,
-                env=environment,
-                capture_output=True,
-                text=True,
-                check=False,
-                timeout=15,
+        rejected_stdout = io.StringIO()
+        rejected_stderr = io.StringIO()
+        with (
+            contextlib.redirect_stdout(rejected_stdout),
+            contextlib.redirect_stderr(rejected_stderr),
+        ):
+            rejected = main(
+                [
+                    "storage",
+                    "verify",
+                    "--from",
+                    "filesystem",
+                    "--to",
+                    "sqlite",
+                    "--workspace",
+                    os.fspath(workspace.root),
+                ]
             )
-            self.assertEqual(completed.stderr, "")
-            self.assertEqual(completed.stdout.count("\n"), 1)
-            value = json.loads(completed.stdout)
+        self.assertEqual(rejected, 2)
+        self.assertEqual(rejected_stderr.getvalue(), "")
+        self.assertEqual(
+            json.loads(rejected_stdout.getvalue())["failure"],
+            "workspace_invalid",
+        )
+
+        def invoke(*arguments: str) -> tuple[int, dict]:
+            stdout = io.StringIO()
+            stderr = io.StringIO()
+            with (
+                mock.patch.object(
+                    cli_module,
+                    "resolve_workspace",
+                    return_value=workspace,
+                ) as resolve,
+                contextlib.redirect_stdout(stdout),
+                contextlib.redirect_stderr(stderr),
+            ):
+                exit_code = main(list(arguments))
+            resolve.assert_called_once_with(None)
+            self.assertEqual(stderr.getvalue(), "")
+            self.assertEqual(stdout.getvalue().count("\n"), 1)
+            value = json.loads(stdout.getvalue())
             self.assertEqual(
-                completed.stdout,
+                stdout.getvalue(),
                 json.dumps(
                     value,
                     ensure_ascii=False,
@@ -234,7 +259,7 @@ class ConversationStorageMigrationCliTests(unittest.TestCase):
                 )
                 + "\n",
             )
-            return completed, value
+            return exit_code, value
 
         mismatch, mismatch_value = invoke(
             "storage",
@@ -244,31 +269,31 @@ class ConversationStorageMigrationCliTests(unittest.TestCase):
             "--to",
             "sqlite",
         )
-        self.assertEqual(mismatch.returncode, 1)
+        self.assertEqual(mismatch, 1)
         self.assertEqual(mismatch_value["failure"], "parity_mismatch")
 
         dry_run, dry_value = invoke(
             "storage",
-            "migrate",
+            "transfer",
             "--from",
             "filesystem",
             "--to",
             "sqlite",
             "--dry-run",
         )
-        self.assertEqual(dry_run.returncode, 0)
+        self.assertEqual(dry_run, 0)
         self.assertEqual(dry_value["outcome"], "work_required")
 
-        migrated, migrated_value = invoke(
+        transferred, transferred_value = invoke(
             "storage",
-            "migrate",
+            "transfer",
             "--from",
             "filesystem",
             "--to",
             "sqlite",
         )
-        self.assertEqual(migrated.returncode, 0)
-        self.assertEqual(migrated_value["parity"], "verified")
+        self.assertEqual(transferred, 0)
+        self.assertEqual(transferred_value["parity"], "verified")
 
         verified, verified_value = invoke(
             "storage",
@@ -278,23 +303,23 @@ class ConversationStorageMigrationCliTests(unittest.TestCase):
             "--to",
             "sqlite",
         )
-        self.assertEqual(verified.returncode, 0)
+        self.assertEqual(verified, 0)
         self.assertEqual(verified_value["parity"], "verified")
 
         invalid, invalid_value = invoke(
             "storage",
-            "migrate",
+            "transfer",
             "--from",
             "filesystem",
             "--to",
             "filesystem",
         )
-        self.assertEqual(invalid.returncode, 2)
+        self.assertEqual(invalid, 2)
         self.assertEqual(invalid_value["failure"], "invalid_request")
         self.assertFalse(workspace.path("debug_logs/runtime.jsonl").exists())
 
     def test_missing_workspace_is_one_content_free_schema_v1_failure(self) -> None:
-        with tempfile.TemporaryDirectory(prefix="missing-migration-workspace-") as root:
+        with tempfile.TemporaryDirectory(prefix="missing-transfer-workspace-") as root:
             missing = Path(root) / "missing"
             stdout = io.StringIO()
             stderr = io.StringIO()

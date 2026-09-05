@@ -1,9 +1,10 @@
 # Agent-context design
 
-This document is the maintainer model for bounded agent-directed context. It
-describes the current implementation, not the historical #381 baseline or a
-future semantic-retrieval system. The user-facing scenarios are in
-[Bounded agent context](../guides/agent-context.md).
+This document is the maintainer model for the bounded agent-context component.
+`StoryRuntime.lead_turn()` and confirmed consultation execution invoke it for
+the current Python lead workflow. The installed shell does not. References
+below distinguish that integration from direct low-level component use.
+See [Agent-context progress](../guides/agent-context-progress.md).
 
 <a id="package-boundary-and-owners"></a>
 ## Package boundary and owners
@@ -22,10 +23,13 @@ cycle:
 | `agent_context.sources` | Bounded current capture of canonical artifacts, focused conversation, active debate, and invoking-agent state; lexical search/read and drift checks. |
 | `agent_context.service` | Provider-neutral wire-v5 call loop, reference prelude, lifecycle authority, source/action orchestration, checkpoint commit, usage aggregation, and optional progress observer. |
 
-Public application entry points remain on `StoryRuntime`, `RuntimeSession`, and
-the existing backend/provider interfaces. The progress observer types are
+The retained execution entry points are backend/provider component interfaces,
+plus the runtime's lead-turn and confirmed-consultation composition.
+`StoryRuntime.lead_turn()`, `propose_specialist_advisory()`, and their bound
+session forms accept optional context progress sinks.
+Progress observer types are
 direct-module-only imports from `agent_context.service`; the root and
-`agent_context` facades do not grow.
+`agent_context` facades do not export them.
 
 <a id="end-to-end-invocation-flow"></a>
 ## End-to-end invocation flow
@@ -39,6 +43,15 @@ runtime operation
   -> COMMIT: atomically publish READY checkpoint, then report checkpoint_advanced
      or FAIL: fixed failure facts, taint when required, checkpoint_not_advanced
 ```
+
+For confirmed collaboration, the runtime first commits `running` and all
+ordered assignment dispatches outside the context component. It then creates
+one context invocation per specialist with kind `specialist_assignment` or
+`specialist_advisory`. Normal assignments run concurrently. Only when all
+assignments return valid typed replies does a separate `lead_synthesis`
+invocation run. The runtime persists the result batch and performs terminal or
+round-two finalization locally; context checkpoints are not execution-result
+authority.
 
 PREPARE has no distinct public progress event. A normal PLAN starts with
 `bootstrap` or `delta`; a duplicate `omission` fact is callback-only in the
@@ -138,6 +151,23 @@ Canonical artifact inventory covers every eligible canonical directory
 descendant and excludes transcripts, discussion logs, agent states, ledgers,
 symlink escapes, and other internal files.
 
+Confirmed collaboration narrows the writing-artifact adapter again for each
+assignment. Runtime builds a fresh canonical reference operation from only that
+assignment's ordered artifact inputs and supplies an immutable allowed-path
+set. Inventory, SEARCH, and READ cannot expose a sibling assignment's
+artifact-only paths. Lead synthesis is a separate invocation over all direct
+story-artifact inputs and typed specialist replies; it does not inherit a
+specialist's read authority or receipt.
+
+`FocusedConversationSourceAdapter` reads canonical v2 events from the active
+store and applies `select_bounded_collaboration_context()`. Its default mode is
+a content-free bootstrap with no provider-readable record body. The lead
+runtime explicitly enables bounded searchable history across active
+same-session conversations: it still sends zero eager bodies, then SEARCH and
+READ add only authorized selected records under the 24-record/32,768-byte
+bound. Private payload fields and automatic full-history injection are
+excluded.
+
 The default action policy permits four nonterminal actions and five provider
 calls: at most two SEARCH, two READ, four queries per SEARCH/eight cumulative,
 eight handles per READ/16 cumulative, ten hits per query, 20 per SEARCH and
@@ -152,6 +182,32 @@ once for a shared prefix, ranks deterministically, and mints fresh opaque
 handles. READ recaptures requested sources, verifies revision/boundary/digest,
 and returns requested order. Handles are invocation-bound, single-lifecycle
 authorities and cannot be guessed, reused, or transferred.
+
+### Invocation-local lead evidence
+
+A lead-front-channel request opts into a content-free status inventory of the
+four canonical core paths. Each row is exactly `present`, `empty`, or `absent`
+and receives a deterministic `status_<ordinal>` evidence ID plus the current
+manifest and, when present, revision/digest/size facts. This inventory does not
+send a file body. With no explicit reference and no provider SEARCH/READ, a
+workflow/meta result therefore has no story receipt.
+
+SEARCH and READ add evidence through the same invocation lifecycle:
+
+- a complete, non-truncated zero-hit SEARCH receives `search_<action-index>`
+  plus query digest/count, authorized source kinds/IDs, optional artifact
+  prefix, and a deterministic authorized-source fingerprint;
+- a completed READ receives `read_<action-index>_<ordinal>` plus exact source,
+  boundary, revision, digest, and size facts; and
+- final ANSWER authorization includes only READ receipts whose handles the
+  provider names as used, while retaining all completed reads for lifecycle
+  validation.
+
+The evidence IDs and receipts are content-free and invocation-local. Runtime
+maps only a provider-selected canonical ordered subset into durable lead
+evidence, then applies the domain's closed status/kind matrix. The context
+component does not interpret story semantics. Search queries and source bodies
+are absent from durable collaboration evidence.
 
 <a id="compact-provider-wire-v5"></a>
 ## Compact provider wire v5
@@ -170,6 +226,14 @@ queries, handles, or answer content; and terminal `u` names used READ handles.
 SEARCH/READ observations retain the full authoritative identity, revision,
 boundary, digest, size, provenance, handle, and untrusted content required for
 provider reasoning, even though wire keys are compact.
+
+For a lead initial call, `core_statuses` is an additional top-level list beside
+`c`, `q`, and `i`. The final lead answer body contains exact `scope`,
+`evidence_status`, `evidence_ids`, `kind`, `message`, and `proposal` fields.
+Those semantic fields are decoded by orchestration only after context ANSWER
+authorization. Invalid, invented, reordered, stale, or matrix-incompatible
+evidence causes a typed no-replay lead failure rather than a successful
+judgment.
 
 The built-in runtime uses provider-managed context and empty mutable-core
 bindings. Package-internal `story_session_context` remains an internal capture
@@ -225,10 +289,9 @@ earlier agent or invocation read it.
 
 `ContextExecutionEvent`, `ContextExecutionEventKind`, and
 `ContextExecutionEventSink` are available only from
-`story_writing_agents.agent_context.service`. `StoryRuntime` and
-`RuntimeSession` accept the optional keyword-only `context_event_sink` on
-`converse`, `converse_with_retrieval`, `run_prompt`, and `run_draft`. The
-callback is synchronous, inline, and must return exactly `None`.
+`story_writing_agents.agent_context.service`. A low-level contextual executor
+and `lead_turn()` can accept the synchronous callback; it must return exactly
+`None`.
 
 Noncallable, declared async/async-generator, asynchronously callable, or
 noncontextual observers fail before contextual effects. A callback exception,
@@ -238,10 +301,9 @@ cannot be rolled back, though the outer operation reports observer failure. If
 an independent runtime failure is primary, terminal-observer failure is
 suppressed. No observer preserves calls, results, schemas, and persistence.
 
-The shell validates each correlated event stream and renders compact
-content-free lines. It preserves established retrieval SEARCH/READ wording and
-suppresses matching generic duplicates. It has no lifecycle replay or durable
-observer store.
+A Python application can validate each correlated event stream and render
+compact content-free lines. The current management-only shell emits none. The
+component has no lifecycle replay or durable observer store.
 
 <a id="provider-usage-cache-and-limits"></a>
 ## Provider usage, cache, and limits

@@ -10,7 +10,7 @@ from types import MappingProxyType
 from typing import Mapping
 
 
-CATALOG_SCHEMA_VERSION = 1
+CATALOG_SCHEMA_VERSION = 2
 MAX_ARTIFACT_PATH_BYTES = 1024
 CORE_ARTIFACT_PATHS: tuple[str, ...] = (
     "core_documents/global_outline.md",
@@ -22,7 +22,8 @@ _CORE_ARTIFACT_SET = frozenset(CORE_ARTIFACT_PATHS)
 _PART_ID = re.compile(r"[A-Za-z0-9][A-Za-z0-9_-]{0,63}")
 _PATH_COMPONENT = re.compile(r"[A-Za-z0-9][A-Za-z0-9_.-]{0,127}")
 _SHA256 = re.compile(r"[0-9a-f]{64}")
-_COMMIT_ID = re.compile(r"[0-9a-f]{32}")
+_IDENTIFIER = re.compile(r"[A-Za-z0-9][A-Za-z0-9_-]{0,127}")
+_TAGGED_SHA256 = re.compile(r"sha256:[0-9a-f]{64}")
 
 
 class ArtifactKind(StrEnum):
@@ -84,7 +85,7 @@ def canonical_artifact_kind(path: object) -> ArtifactKind | None:
 def manuscript_artifact_path(output_path: object) -> str:
     """Translate required ``PART/PATH.md`` output syntax to canonical identity."""
 
-    parts = validate_artifact_path_syntax(output_path)
+    validate_artifact_path_syntax(output_path)
     assert isinstance(output_path, str)
     artifact_path = f"manuscript/{output_path}"
     if canonical_artifact_kind(artifact_path) is not ArtifactKind.MANUSCRIPT:
@@ -94,17 +95,18 @@ def manuscript_artifact_path(output_path: object) -> str:
 
 @dataclass(frozen=True, slots=True)
 class ArtifactCatalogEntry:
-    """Repository-owned provenance for one current agent-authored artifact."""
+    """Repository-owned provenance for one current applied artifact."""
 
     path: str
     kind: ArtifactKind
     sha256: str
-    commit_id: str
-    committed_at: str
-    author_agent_id: str
-    session_id: str
-    debate_id: str
-    revision_id: str
+    application_id: str
+    application_sequence: int
+    candidate_id: str
+    candidate_revision: int
+    candidate_digest: str
+    change_set_digest: str
+    relationship_validation_digest: str
 
     def __post_init__(self) -> None:
         observed_kind = canonical_artifact_kind(self.path)
@@ -112,29 +114,31 @@ class ArtifactCatalogEntry:
             raise ValueError("catalog entry path and kind must be canonical")
         if _SHA256.fullmatch(self.sha256) is None:
             raise ValueError("catalog entry sha256 must be lowercase hexadecimal")
-        if _COMMIT_ID.fullmatch(self.commit_id) is None:
-            raise ValueError("catalog entry commit_id must be 32 hexadecimal digits")
-        for name in (
-            "committed_at",
-            "author_agent_id",
-            "session_id",
-            "debate_id",
-            "revision_id",
-        ):
-            value = getattr(self, name)
-            if type(value) is not str or not value:
-                raise ValueError(f"catalog entry {name} must be nonempty text")
+        for name in ("application_id", "candidate_id"):
+            if _IDENTIFIER.fullmatch(getattr(self, name)) is None:
+                raise ValueError(f"catalog entry {name} is invalid")
+        if type(self.application_sequence) is not int or self.application_sequence < 1:
+            raise ValueError("catalog entry application_sequence must be positive")
+        if type(self.candidate_revision) is not int or self.candidate_revision < 1:
+            raise ValueError("catalog entry candidate_revision must be positive")
+        if _TAGGED_SHA256.fullmatch(self.candidate_digest) is None:
+            raise ValueError("catalog entry candidate_digest is invalid")
+        if _SHA256.fullmatch(self.change_set_digest) is None:
+            raise ValueError("catalog entry change_set_digest is invalid")
+        if _TAGGED_SHA256.fullmatch(self.relationship_validation_digest) is None:
+            raise ValueError("catalog entry relationship_validation_digest is invalid")
 
-    def to_dict(self) -> dict[str, str]:
+    def to_dict(self) -> dict[str, object]:
         return {
-            "author_agent_id": self.author_agent_id,
-            "commit_id": self.commit_id,
-            "committed_at": self.committed_at,
-            "debate_id": self.debate_id,
+            "application_id": self.application_id,
+            "application_sequence": self.application_sequence,
+            "candidate_digest": self.candidate_digest,
+            "candidate_id": self.candidate_id,
+            "candidate_revision": self.candidate_revision,
+            "change_set_digest": self.change_set_digest,
             "kind": self.kind.value,
             "path": self.path,
-            "revision_id": self.revision_id,
-            "session_id": self.session_id,
+            "relationship_validation_digest": self.relationship_validation_digest,
             "sha256": self.sha256,
         }
 
@@ -143,14 +147,15 @@ class ArtifactCatalogEntry:
         if type(value) is not dict:
             raise ValueError("catalog entry must be an object")
         expected = {
-            "author_agent_id",
-            "commit_id",
-            "committed_at",
-            "debate_id",
+            "application_id",
+            "application_sequence",
+            "candidate_digest",
+            "candidate_id",
+            "candidate_revision",
+            "change_set_digest",
             "kind",
             "path",
-            "revision_id",
-            "session_id",
+            "relationship_validation_digest",
             "sha256",
         }
         if set(value) != expected:
@@ -163,12 +168,13 @@ class ArtifactCatalogEntry:
             path=value["path"],
             kind=kind,
             sha256=value["sha256"],
-            commit_id=value["commit_id"],
-            committed_at=value["committed_at"],
-            author_agent_id=value["author_agent_id"],
-            session_id=value["session_id"],
-            debate_id=value["debate_id"],
-            revision_id=value["revision_id"],
+            application_id=value["application_id"],
+            application_sequence=value["application_sequence"],
+            candidate_id=value["candidate_id"],
+            candidate_revision=value["candidate_revision"],
+            candidate_digest=value["candidate_digest"],
+            change_set_digest=value["change_set_digest"],
+            relationship_validation_digest=value["relationship_validation_digest"],
         )
 
 
@@ -197,9 +203,7 @@ class ArtifactCatalog:
 
     def to_dict(self) -> dict[str, object]:
         return {
-            "entries": [
-                self.entries[path].to_dict() for path in sorted(self.entries)
-            ],
+            "entries": [self.entries[path].to_dict() for path in sorted(self.entries)],
             "schema_version": self.schema_version,
         }
 

@@ -22,8 +22,6 @@ from story_writing_agents import (
     BackendProtocolError,
     CHARACTER_CUSTODIAN,
     ConversationContextWindow,
-    ConversationEventKind,
-    ConversationMemoryService,
     ConversationReply,
     ConversationRequest,
     ConversationRetrievalAction,
@@ -33,22 +31,17 @@ from story_writing_agents import (
     ConversationRetrievalRequest,
     ConversationRetrievalSearchAction,
     ConversationRetrievalSearchObservation,
-    ConversationRetrievalSemanticError,
-    ConversationSearchScope,
-    DebateStatus,
     EXECUTION_SPECIALIST,
-    FilesystemConversationCatalog,
-    FilesystemConversationEventStore,
+    LEAD_ORCHESTRATOR,
     PLOT_ARCHITECT,
     Phase,
-    ROSTER,
     SessionAccessState,
     SessionDurableState,
     SessionPausedError,
-    StoryRuntime,
     Verdict,
 )
 from story_writing_agents.config import ConfigManager
+from story_writing_agents.conversations import select_bounded_collaboration_context
 from story_writing_agents.agent_context import (
     ProviderCallKind,
     ProviderCallState,
@@ -411,20 +404,29 @@ elif "conversation_id" in payload:
     }
 elif payload["phase"] == "audit":
     output = {
+        "kind": "audit",
         "revision_id": payload["revision_id"],
         "verdict": "approve",
         "content": "",
     }
 elif payload["phase"] == "finalize":
     output = {
+        "kind": "finalization",
         "revision_id": payload["revision_id"],
-        "core_updates": [{
-            "filename": "global_outline.md",
-            "content": "bounded outline update",
-        }],
+        "reviewed_proposal_id": "reviewed-proposal",
+        "reviewed_proposal_digest": "sha256:" + "a" * 64,
+    }
+elif payload["phase"] == "synthesize":
+    output = {
+        "kind": "synthesis",
+        "revision_id": payload["revision_id"],
+        "content": "reply-" + payload["phase"],
+        "next_phase": "finalization",
+        "deadlocked": False,
     }
 else:
     output = {
+        "kind": "candidate",
         "revision_id": payload["revision_id"],
         "content": "reply-" + payload["phase"],
     }
@@ -676,6 +678,10 @@ def _empty_context() -> ConversationContextWindow:
     )
 
 
+def _empty_readable_context():  # type: ignore[no-untyped-def]
+    return select_bounded_collaboration_context(())
+
+
 class _RetrievalHandler:
     """Return one empty search observation, then the provider answer."""
 
@@ -745,7 +751,9 @@ class AntigravityParityTests(unittest.IsolatedAsyncioTestCase):
         os.environ.pop("STORY_FAKE_AGY_FAIL_ACTION", None)
         self.addCleanup(self.environment.stop)
 
-    def definition(self, agent_id: str = PLOT_ARCHITECT, *, backend: str = "antigravity"):
+    def definition(
+        self, agent_id: str = PLOT_ARCHITECT, *, backend: str = "antigravity"
+    ):
         return PromptAssembler(
             self.workspace,
             backend_overrides={agent_id: backend},
@@ -826,9 +834,7 @@ class AntigravityParityTests(unittest.IsolatedAsyncioTestCase):
             encoding="utf-8",
         )
         references = (
-            ArtifactReference(
-                "manuscript/part-01/antigravity-reference.md"
-            ),
+            ArtifactReference("manuscript/part-01/antigravity-reference.md"),
             ArtifactReference(
                 "manuscript/part-01/antigravity-range.md",
                 ArtifactLineRange(2, 2),
@@ -873,8 +879,7 @@ class AntigravityParityTests(unittest.IsolatedAsyncioTestCase):
 
     def manifest(self, session_id: str) -> dict[str, object]:
         return self.workspace.read_json(
-            "agent_states/orchestrator_state/provider_sessions/"
-            f"{session_id}.json"
+            f"agent_states/orchestrator_state/provider_sessions/{session_id}.json"
         )
 
     async def wait_for_invocations(self, count: int) -> None:
@@ -927,7 +932,7 @@ class AntigravityParityTests(unittest.IsolatedAsyncioTestCase):
                         scope,
                         policy,
                         "parity-call-1",
-                        ProviderCallKind.CONVERSATION_RETRIEVAL_INITIAL,
+                        ProviderCallKind.COLLABORATION_INITIAL,
                         schema,
                         payload,
                     )
@@ -937,7 +942,7 @@ class AntigravityParityTests(unittest.IsolatedAsyncioTestCase):
                         scope,
                         policy,
                         "parity-call-2",
-                        ProviderCallKind.CONVERSATION_RETRIEVAL_CONTINUATION,
+                        ProviderCallKind.COLLABORATION_CONTINUATION,
                         schema,
                         {
                             "c": "B" * 43,
@@ -959,11 +964,16 @@ class AntigravityParityTests(unittest.IsolatedAsyncioTestCase):
                 )
             other_scope = replace(scope, subject_id="other-conversation")
             async with provider.invocation(other_scope, policy):
-                self.assertIsNone(
-                    provider.inspect_context_thread(other_scope, policy)
-                )
+                self.assertIsNone(provider.inspect_context_thread(other_scope, policy))
 
         self.assertEqual(second.thread_id, first.thread_id)
+        self.assertEqual(
+            (first.accounting.payload.call_kind, second.accounting.payload.call_kind),
+            (
+                ProviderCallKind.COLLABORATION_INITIAL,
+                ProviderCallKind.COLLABORATION_CONTINUATION,
+            ),
+        )
         self.assertEqual(invocations[0].payload_json, canonical_provider_json(payload))
         self.assertIs(first.accounting.state, ProviderCallState.SUBMITTED)
         self.assertEqual(first.accounting.usage, ProviderUsage(input_tokens=1))
@@ -982,6 +992,78 @@ class AntigravityParityTests(unittest.IsolatedAsyncioTestCase):
                 restarted_provider.inspect_context_thread(scope, policy),
                 first.thread_id,
             )
+
+    async def test_lead_json_object_context_payload_uses_provider_neutral_wire(
+        self,
+    ) -> None:
+        session_id = "antigravity-lead-context"
+        backend = self.backend(backend_overrides={LEAD_ORCHESTRATOR: "antigravity"})
+        backend.create_session_with_access(session_id)
+        definition = self.definition(LEAD_ORCHESTRATOR)
+        provider = (await backend.bind(definition))._context_provider()
+        scope = ContextScope(
+            "workspace-context",
+            session_id,
+            ContextSubjectKind.CONVERSATION,
+            "lead-conversation",
+            LEAD_ORCHESTRATOR,
+        )
+        policy = "sha256:" + "5" * 64
+        schema = {"type": "object"}
+        payload = {
+            "c": "L" * 43,
+            "q": [
+                "lead",
+                "a",
+                "",
+                [0, 2, 2, 4, 8, 8, 16, 200],
+                ["lead", "outcome-v1"],
+            ],
+            "i": "Visible lead request.",
+        }
+        invocations = []
+        response = (
+            '{"a":"a","c":"'
+            + "L" * 43
+            + '","d":[{"kind":"answer","message":"Visible.",'
+            '"proposal":null}],"u":[]}'
+        )
+
+        async def invoke(_binding, invocation):
+            invocations.append(invocation)
+            assert invocation.payload_json is not None
+            return ProviderResult(
+                "antigravity-lead-thread",
+                response,
+                usage=ProviderUsage(input_tokens=1, output_tokens=1),
+                actual_transport_utf8_bytes=len(invocation.payload_json),
+            )
+
+        with mock.patch.object(backend._antigravity_adapter, "invoke", new=invoke):
+            async with provider.invocation(scope, policy):
+                result = await provider.invoke_context(
+                    ContextProviderCallRequest(
+                        scope,
+                        policy,
+                        "lead-parity-call",
+                        ProviderCallKind.COLLABORATION_INITIAL,
+                        schema,
+                        payload,
+                    )
+                )
+
+        self.assertEqual(len(invocations), 1)
+        self.assertEqual(invocations[0].payload_json, canonical_provider_json(payload))
+        self.assertEqual(result.response_text, response)
+        self.assertIs(result.accounting.state, ProviderCallState.SUBMITTED)
+        self.assertIs(
+            result.accounting.payload.call_kind,
+            ProviderCallKind.COLLABORATION_INITIAL,
+        )
+        self.assertEqual(
+            result.accounting.usage,
+            ProviderUsage(input_tokens=1, output_tokens=1),
+        )
 
     @staticmethod
     def _process_is_running(pid: int) -> bool:
@@ -1113,8 +1195,7 @@ class AntigravityParityTests(unittest.IsolatedAsyncioTestCase):
                     f"hard-kill cleanup: {pid}"
                 )
         self.fail(
-            "fake Antigravity process exceeded the 2-second cleanup handshake: "
-            f"{pid}"
+            f"fake Antigravity process exceeded the 2-second cleanup handshake: {pid}"
         )
 
     def test_invocation_reader_ignores_incomplete_trailing_utf8_record(self) -> None:
@@ -1148,9 +1229,7 @@ class AntigravityParityTests(unittest.IsolatedAsyncioTestCase):
             ) as is_running,
             mock.patch.object(time, "sleep") as sleep,
         ):
-            self.assertTrue(
-                self._wait_for_process_exit(123, timeout_seconds=1)
-            )
+            self.assertTrue(self._wait_for_process_exit(123, timeout_seconds=1))
         self.assertEqual(is_running.call_count, 3)
         self.assertEqual(sleep.call_count, 2)
 
@@ -1163,9 +1242,7 @@ class AntigravityParityTests(unittest.IsolatedAsyncioTestCase):
             mock.patch.object(time, "monotonic", side_effect=(0.0, 1.0)),
             mock.patch.object(time, "sleep") as sleep,
         ):
-            self.assertFalse(
-                self._wait_for_process_exit(123, timeout_seconds=0.5)
-            )
+            self.assertFalse(self._wait_for_process_exit(123, timeout_seconds=0.5))
         sleep.assert_not_called()
 
         with (
@@ -1241,9 +1318,9 @@ class AntigravityParityTests(unittest.IsolatedAsyncioTestCase):
             prelude["payload"],
             AgentBackend._reference_read_prelude_payload(invocation.request),
         )
-        reference_schema = prelude["schema"]["properties"]["action"][
-            "properties"
-        ]["references"]
+        reference_schema = prelude["schema"]["properties"]["action"]["properties"][
+            "references"
+        ]
         self.assertIs(type(reference_schema["items"]), dict)
         self.assertEqual(
             (reference_schema["minItems"], reference_schema["maxItems"]),
@@ -1287,10 +1364,7 @@ class AntigravityParityTests(unittest.IsolatedAsyncioTestCase):
             ),
         )
         self.assertEqual(
-            tuple(
-                event.invocation_state
-                for event in history.invocation_events[0]
-            ),
+            tuple(event.invocation_state for event in history.invocation_events[0]),
             (
                 ReferenceInvocationState.AUTHORIZED,
                 ReferenceInvocationState.DELIVERED,
@@ -1304,9 +1378,7 @@ class AntigravityParityTests(unittest.IsolatedAsyncioTestCase):
         )
         debug_path = self.workspace.path("debug_logs/runtime.jsonl")
         debug_projection = (
-            debug_path.read_text(encoding="utf-8")
-            if debug_path.exists()
-            else ""
+            debug_path.read_text(encoding="utf-8") if debug_path.exists() else ""
         )
         durable_projection = repr(history)
         provider_projection = json.dumps(calls, ensure_ascii=False)
@@ -1346,8 +1418,12 @@ class AntigravityParityTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(reply.revision_id, f"r-{phase.value}")
         self.assertIs(phase_replies[Phase.AUDIT].verdict, Verdict.APPROVE)
         self.assertEqual(
-            dict(phase_replies[Phase.FINALIZE].core_updates),
-            {"global_outline.md": "bounded outline update"},
+            phase_replies[Phase.FINALIZE].reviewed_proposal_id,
+            "reviewed-proposal",
+        )
+        self.assertEqual(
+            phase_replies[Phase.FINALIZE].reviewed_proposal_digest,
+            "sha256:" + "a" * 64,
         )
 
         conversation = ConversationRequest(
@@ -1374,7 +1450,7 @@ class AntigravityParityTests(unittest.IsolatedAsyncioTestCase):
             turn_id="turn-retrieval",
             agent_id=PLOT_ARCHITECT,
             content="PRIVATE_RETRIEVAL_REQUEST",
-            context=_empty_context(),
+            context=_empty_readable_context(),
         )
         handler = _RetrievalHandler()
         retrieval_reply = await bound.converse_with_retrieval(retrieval, handler)
@@ -1432,9 +1508,7 @@ class AntigravityParityTests(unittest.IsolatedAsyncioTestCase):
             self.assertIn("--json-schema", argv)
             self.assertIn("--sandbox", argv)
             self.assertIn("--disable-slash-commands", argv)
-            self.assertTrue(
-                any(value.startswith("--gemini_dir=") for value in argv)
-            )
+            self.assertTrue(any(value.startswith("--gemini_dir=") for value in argv))
             for secret in (
                 "PRIVATE_STORY_TASK",
                 "PRIVATE_STORY_PAYLOAD",
@@ -1515,223 +1589,11 @@ class AntigravityParityTests(unittest.IsolatedAsyncioTestCase):
                 self.assertEqual(rejected["resumed_id"], substituted_thread_id)
                 self.assertIs(rejected["resume_known"], False)
                 self.assertIs(
-                    self.manifest(session_id)["provider_threads"]
-                    ["antigravity:plot_architect"]["tainted"],
+                    self.manifest(session_id)["provider_threads"][
+                        "antigravity:plot_architect"
+                    ]["tainted"],
                     True,
                 )
-
-    async def test_story_runtime_runs_consensus_and_persists_conversation(self) -> None:
-        loop = asyncio.get_running_loop()
-        prior_slow_callback_duration = loop.slow_callback_duration
-        loop.slow_callback_duration = 1
-        self.addCleanup(
-            setattr,
-            loop,
-            "slow_callback_duration",
-            prior_slow_callback_duration,
-        )
-        session_id = "runtime-session"
-        backend = AgentBackend(
-            self.workspace,
-            executable=str(self.fake_directory / "unused-codex"),
-            antigravity_executable=str(self.executable),
-            backend_overrides={agent_id: "antigravity" for agent_id in ROSTER},
-        )
-        self.addCleanup(backend.close)
-        backend.create_session_with_access(session_id)
-        runtime = StoryRuntime(self.workspace, backend)
-
-        result = await runtime.run_prompt(
-            session_id,
-            "PRIVATE_RUNTIME_PROMPT",
-            debate_id="runtime-debate",
-            output_path="part-01/runtime-result.md",
-        )
-        self.assertIs(
-            result.status,
-            DebateStatus.CONSENSUS,
-            (result, self.provider_invocations()),
-        )
-        self.assertEqual(result.final_candidate, "reply-draft")
-        self.assertEqual(
-            runtime.artifacts.read_text("manuscript/part-01/runtime-result.md"),
-            "reply-draft",
-        )
-        debate_calls = self.provider_invocations()
-        self.assertEqual(
-            [call["phase"] for call in debate_calls],
-            ["draft", "audit", "audit", "audit", "finalize"],
-        )
-        self.assertTrue(all(call["session_id"] == session_id for call in debate_calls))
-
-        metadata = FilesystemConversationCatalog(self.workspace).create(
-            session_id,
-            "bounded runtime subject",
-        )
-        conversation = await runtime.converse(
-            session_id,
-            metadata.conversation_id,
-            PLOT_ARCHITECT,
-            "PRIVATE_RUNTIME_CONVERSATION",
-        )
-        self.assertEqual(conversation.content, "conversation answer")
-        persisted = runtime.conversation_event_store.read(
-            session_id,
-            metadata.conversation_id,
-        )
-        self.assertEqual(
-            [event.kind for event in persisted],
-            [ConversationEventKind.USER_MESSAGE, ConversationEventKind.AGENT_REPLY],
-        )
-        self.assertEqual(
-            persisted[-1].content,
-            "conversation answer",
-        )
-        manifest = self.manifest(session_id)
-        self.assertTrue(
-            all(key.startswith("antigravity:") for key in manifest["provider_threads"])
-        )
-        for call in self.provider_invocations():
-            argv_text = "\0".join(call["argv"])
-            self.assertNotIn("PRIVATE_RUNTIME_PROMPT", argv_text)
-            self.assertNotIn("PRIVATE_RUNTIME_CONVERSATION", argv_text)
-
-    async def test_story_runtime_retrieval_persists_success_and_safe_failures(
-        self,
-    ) -> None:
-        loop = asyncio.get_running_loop()
-        prior_slow_callback_duration = loop.slow_callback_duration
-        loop.slow_callback_duration = 1
-        self.addCleanup(
-            setattr,
-            loop,
-            "slow_callback_duration",
-            prior_slow_callback_duration,
-        )
-        backend = AgentBackend(
-            self.workspace,
-            executable=str(self.fake_directory / "unused-codex"),
-            antigravity_executable=str(self.executable),
-            backend_overrides={agent_id: "antigravity" for agent_id in ROSTER},
-        )
-        self.addCleanup(backend.close)
-        catalog = FilesystemConversationCatalog(self.workspace)
-        store = FilesystemConversationEventStore(
-            self.workspace,
-            catalog=catalog,
-        )
-        runtime = StoryRuntime(
-            self.workspace,
-            backend,
-            conversation_event_store=store,
-        )
-
-        success_session = "runtime-retrieval-success"
-        backend.create_session_with_access(success_session)
-        selected = catalog.create(success_session, "retrieval success")
-        memory = ConversationMemoryService(
-            ConversationSearchScope(success_session),
-            catalog,
-            store,
-        )
-        result = await runtime.converse_with_retrieval(
-            success_session,
-            selected.conversation_id,
-            PLOT_ARCHITECT,
-            "PRIVATE_RUNTIME_RETRIEVAL",
-            memory_service=memory,
-        )
-        self.assertEqual(result.content, "retrieval answer")
-        self.assertEqual(result.sources, ())
-        success_events = store.read(success_session, selected.conversation_id)
-        self.assertEqual(
-            tuple(event.kind for event in success_events),
-            (
-                ConversationEventKind.USER_MESSAGE,
-                ConversationEventKind.AGENT_REPLY,
-            ),
-        )
-        self.assertEqual(
-            tuple(event.turn_id for event in success_events),
-            (result.turn_id, result.turn_id),
-        )
-        self.assertEqual(
-            [call["retrieval_action_index"] for call in self.provider_invocations()[-2:]],
-            [1, 2],
-        )
-        success_state = backend.get_session_lifecycle(success_session)
-        self.assertEqual(
-            (success_state.durable_state, success_state.access_state),
-            (SessionDurableState.READY, SessionAccessState.HELD_HERE),
-        )
-
-        mismatch_modes = (
-            "retrieval_session_id",
-            "retrieval_conversation_id",
-            "retrieval_turn_id",
-            "retrieval_action_index",
-        )
-        for index, mode in enumerate(mismatch_modes):
-            with self.subTest(mode=mode):
-                session_id = f"runtime-retrieval-failure-{index}"
-                backend.create_session_with_access(session_id)
-                failed_conversation = catalog.create(session_id, mode)
-                failed_memory = ConversationMemoryService(
-                    ConversationSearchScope(session_id),
-                    catalog,
-                    store,
-                )
-                with (
-                    mock.patch.dict(
-                        os.environ,
-                        {"STORY_FAKE_AGY_MODE": mode},
-                    ),
-                    self.assertRaises(ConversationRetrievalSemanticError) as caught,
-                ):
-                    await runtime.converse_with_retrieval(
-                        session_id,
-                        failed_conversation.conversation_id,
-                        PLOT_ARCHITECT,
-                        "PRIVATE_RUNTIME_RETRIEVAL_FAILURE",
-                        memory_service=failed_memory,
-                    )
-
-                self.assertEqual(
-                    str(caught.exception),
-                    "conversation retrieval semantic validation failed",
-                )
-                failure_events = store.read(
-                    session_id,
-                    failed_conversation.conversation_id,
-                )
-                self.assertEqual(
-                    tuple(event.kind for event in failure_events),
-                    (
-                        ConversationEventKind.USER_MESSAGE,
-                        ConversationEventKind.RUNTIME_ERROR,
-                    ),
-                )
-                self.assertEqual(
-                    failure_events[-1].content,
-                    "ConversationRetrievalSemanticError: conversation retrieval "
-                    "semantic validation failed",
-                )
-                self.assertNotIn("other-identity", failure_events[-1].content)
-                failed_state = backend.get_session_lifecycle(session_id)
-                self.assertEqual(
-                    (failed_state.durable_state, failed_state.access_state),
-                    (SessionDurableState.READY, SessionAccessState.HELD_HERE),
-                )
-                self.assertIs(
-                    self.manifest(session_id)["provider_threads"]
-                    ["antigravity:plot_architect"]["tainted"],
-                    True,
-                )
-
-        for call in self.provider_invocations():
-            argv_text = "\0".join(call["argv"])
-            self.assertNotIn("PRIVATE_RUNTIME_RETRIEVAL", argv_text)
-            self.assertNotIn("PRIVATE_RUNTIME_RETRIEVAL_FAILURE", argv_text)
 
     async def test_v2_lifecycle_partitions_threads_and_retains_exact_resume(
         self,
@@ -1922,6 +1784,7 @@ class AntigravityParityTests(unittest.IsolatedAsyncioTestCase):
                 thread_id="agy-mixed-thread",
                 response_text=json.dumps(
                     {
+                        "kind": "candidate",
                         "revision_id": invocation.payload["revision_id"],
                         "content": "antigravity mixed reply",
                     }
@@ -1932,7 +1795,8 @@ class AntigravityParityTests(unittest.IsolatedAsyncioTestCase):
             return_value=ProviderResult(
                 thread_id="codex-mixed-thread",
                 response_text=(
-                    '{"revision_id":"r0","content":"codex mixed reply"}'
+                    '{"kind":"candidate","revision_id":"r0",'
+                    '"content":"codex mixed reply"}'
                 ),
             )
         )
@@ -2011,13 +1875,11 @@ class AntigravityParityTests(unittest.IsolatedAsyncioTestCase):
             },
         )
         self.assertEqual(
-            manifest["provider_threads"]["antigravity:plot_architect"]
-            ["thread_id"],
+            manifest["provider_threads"]["antigravity:plot_architect"]["thread_id"],
             "agy-mixed-thread",
         )
         self.assertEqual(
-            manifest["provider_threads"]["codex:character_custodian"]
-            ["thread_id"],
+            manifest["provider_threads"]["codex:character_custodian"]["thread_id"],
             "codex-mixed-thread",
         )
         self.assertNotEqual(
@@ -2039,7 +1901,8 @@ class AntigravityParityTests(unittest.IsolatedAsyncioTestCase):
         debate_session = "agy_capture_debate_session"
         debate_id = "agy_capture_debate"
         debate_body = (
-            '{"revision_id":"other-revision","content":"PRIVATE_AGY_REJECTED_한🙂"}'
+            '{"kind":"candidate","revision_id":"other-revision",'
+            '"content":"PRIVATE_AGY_REJECTED_한🙂"}'
         )
         backend.create_session_with_access(debate_session)
         invoke = mock.AsyncMock(
@@ -2047,7 +1910,8 @@ class AntigravityParityTests(unittest.IsolatedAsyncioTestCase):
                 ProviderResult(
                     thread_id="agy-capture-seeded-thread",
                     response_text=(
-                        '{"revision_id":"seed-revision","content":"seeded response"}'
+                        '{"kind":"candidate","revision_id":"seed-revision",'
+                        '"content":"seeded response"}'
                     ),
                 ),
                 ProviderResult(
@@ -2057,7 +1921,7 @@ class AntigravityParityTests(unittest.IsolatedAsyncioTestCase):
                 ProviderResult(
                     thread_id="agy-capture-recovered-thread",
                     response_text=(
-                        '{"revision_id":"recovery-revision",'
+                        '{"kind":"candidate","revision_id":"recovery-revision",'
                         '"content":"recovered response"}'
                     ),
                 ),
@@ -2203,9 +2067,9 @@ class AntigravityParityTests(unittest.IsolatedAsyncioTestCase):
             set(debate_record) - {"debate_id"},
             set(conversation_record) - {"conversation_id"},
         )
-        runtime_log = self.workspace.path("debug_logs/runtime.jsonl").read_text(
-            encoding="utf-8"
-        )
+        runtime_log_path = self.workspace.path("debug_logs/runtime.jsonl")
+        self.assertFalse(runtime_log_path.exists())
+        runtime_log = ""
         for private_value in (
             debate_body,
             conversation_body,
@@ -2400,7 +2264,7 @@ class AntigravityParityTests(unittest.IsolatedAsyncioTestCase):
                                 phase=phase,
                                 revision_id=f"identity-r{index}",
                             )
-                )
+                        )
 
                 self.assertEqual(str(caught.exception), diagnostic)
                 self.assertNotIn("other-", str(caught.exception))
@@ -2413,8 +2277,9 @@ class AntigravityParityTests(unittest.IsolatedAsyncioTestCase):
                 taint.assert_called_once_with(session_id, definition)
                 write_manifest.assert_called_once()
                 self.assertIs(
-                    self.manifest(session_id)["provider_threads"]
-                    ["antigravity:plot_architect"]["tainted"],
+                    self.manifest(session_id)["provider_threads"][
+                        "antigravity:plot_architect"
+                    ]["tainted"],
                     True,
                 )
                 await bound.invoke(
@@ -2628,8 +2493,7 @@ class AntigravityParityTests(unittest.IsolatedAsyncioTestCase):
             "Antigravity CLI executable was not found",
         )
         self.assertEqual(
-            self.manifest(session_id)["provider_threads"]
-            ["antigravity:plot_architect"],
+            self.manifest(session_id)["provider_threads"]["antigravity:plot_architect"],
             retained,
         )
 
@@ -2646,7 +2510,7 @@ class AntigravityParityTests(unittest.IsolatedAsyncioTestCase):
             turn_id="turn-failure",
             agent_id=PLOT_ARCHITECT,
             content="PRIVATE_RETRIEVAL_FAILURE_REQUEST",
-            context=_empty_context(),
+            context=_empty_readable_context(),
         )
         handler = _RetrievalHandler()
         with (
@@ -2686,15 +2550,14 @@ class AntigravityParityTests(unittest.IsolatedAsyncioTestCase):
         )
         self.assertIsNone(self.provider_invocations()[-1]["resumed_id"])
         self.assertIs(
-            self.manifest(session_id)["provider_threads"]
-            ["antigravity:plot_architect"]["tainted"],
+            self.manifest(session_id)["provider_threads"]["antigravity:plot_architect"][
+                "tainted"
+            ],
             False,
         )
 
     async def test_cancellation_and_timeout_terminate_without_orphans(self) -> None:
-        posix_termination_marker = (
-            os.name != "nt" and hasattr(signal, "SIGTERM")
-        )
+        posix_termination_marker = os.name != "nt" and hasattr(signal, "SIGTERM")
 
         for label in ("cancellation", "timeout"):
             with self.subTest(cleanup=label):
@@ -2774,8 +2637,7 @@ class AntigravityParityTests(unittest.IsolatedAsyncioTestCase):
                     termination = [
                         item
                         for item in self.invocations()
-                        if item.get("terminated") is True
-                        and item.get("pid") == pid
+                        if item.get("terminated") is True and item.get("pid") == pid
                     ]
                     self.assertEqual(len(termination), 1)
                 self.assert_fake_process_stopped(pid)
@@ -2794,16 +2656,14 @@ class AntigravityParityTests(unittest.IsolatedAsyncioTestCase):
                 )
                 self.assertIsNone(self.provider_invocations()[-1]["resumed_id"])
                 self.assertIs(
-                    self.manifest(session_id)["provider_threads"]
-                    ["antigravity:plot_architect"]["tainted"],
+                    self.manifest(session_id)["provider_threads"][
+                        "antigravity:plot_architect"
+                    ]["tainted"],
                     False,
                 )
 
     async def test_timeout_escalates_to_kill_when_terminate_is_ignored(self) -> None:
-        if (
-            os.name == "nt"
-            or not hasattr(signal, "SIGTERM")
-        ):
+        if os.name == "nt" or not hasattr(signal, "SIGTERM"):
             self.skipTest("POSIX signal process cleanup is unavailable")
 
         session_id = "cleanup-kill"
@@ -2871,8 +2731,9 @@ class AntigravityParityTests(unittest.IsolatedAsyncioTestCase):
             )
         )
         self.assertIs(
-            self.manifest(session_id)["provider_threads"]
-            ["antigravity:plot_architect"]["tainted"],
+            self.manifest(session_id)["provider_threads"]["antigravity:plot_architect"][
+                "tainted"
+            ],
             True,
         )
 

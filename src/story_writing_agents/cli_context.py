@@ -7,15 +7,13 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from .agents import AGENT_SPECS, ROSTER
 from .errors import (
     ConfigurationError,
     SessionIdError,
     WorkspaceFormatError,
-    WorkspaceSecurityError,
     WorkspaceVersionUnsupportedError,
 )
-from .workspace import Workspace
+from .workspace import Workspace, discover_workspace
 
 
 _CONTEXT_PATH = "agent_states/orchestrator_state/cli_context.json"
@@ -26,18 +24,6 @@ _CONVERSATION_DEFAULT_FIELDS = frozenset(
 )
 _UNSUPPORTED_V1_CONVERSATION_DEFAULT_DIRECTORY = (
     "agent_states/orchestrator_state/conversation_selections"
-)
-
-_FILE_SENTINELS = (
-    "config/system_defaults.json",
-    "config/agent_configs.json",
-    "config/persona_templates/default_kim_eun_hee.md",
-    *(AGENT_SPECS[agent_id].system_prompt_file for agent_id in ROSTER),
-)
-_DIRECTORY_SENTINELS = (
-    "agent_states/orchestrator_state",
-    "discussion_logs",
-    "manuscript",
 )
 
 
@@ -56,21 +42,12 @@ def resolve_workspace(
     """Resolve an explicit workspace or discover the nearest ancestor."""
 
     if explicit_path is not None:
-        workspace = Workspace(Path(explicit_path))
-        if not _is_initialized(workspace):
-            raise ConfigurationError(
-                f"workspace is not initialized: {workspace.root}; "
-                f"run 'story init {workspace.root}'"
-            )
-        return workspace
+        return Workspace(Path(explicit_path)).require_ready()
 
-    origin = (start or Path.cwd()).expanduser().resolve()
-    if not origin.is_dir():
-        origin = origin.parent
-    for candidate in (origin, *origin.parents):
-        workspace = Workspace(candidate)
-        if _is_initialized(workspace):
-            return workspace
+    origin = start or Path.cwd()
+    workspace = discover_workspace(origin)
+    if workspace is not None:
+        return workspace
     raise ConfigurationError(
         f"no initialized story workspace found from {origin}; "
         "run 'story init' or pass --workspace PATH"
@@ -102,9 +79,7 @@ def load_cli_context(workspace: Workspace) -> CliContext:
     if isinstance(schema_version, bool) or not isinstance(schema_version, int):
         raise WorkspaceFormatError("CLI context has an invalid schema version")
     if schema_version != _CONTEXT_SCHEMA_VERSION:
-        raise WorkspaceVersionUnsupportedError(
-            "unsupported CLI context schema version"
-        )
+        raise WorkspaceVersionUnsupportedError("unsupported CLI context schema version")
     default_session_id = value["default_session_id"]
     if not isinstance(default_session_id, str):
         raise WorkspaceFormatError(
@@ -241,9 +216,7 @@ def resolve_session(
     """Resolve one explicit option or default without changing that default."""
 
     resolved = (
-        option_session
-        if option_session is not None
-        else context.default_session_id
+        option_session if option_session is not None else context.default_session_id
     )
     if resolved is None:
         raise ConfigurationError(
@@ -317,22 +290,4 @@ def _reject_unsupported_conversation_artifacts(
 def _conversation_default_path(session_id: str) -> str:
     """Return the fixed V2 conversation-default path for a safe session ID."""
 
-    return (
-        "agent_states/orchestrator_state/conversation_defaults/"
-        f"{session_id}.json"
-    )
-
-
-def _is_initialized(workspace: Workspace) -> bool:
-    """Return whether the supplied workspace has every required sentinel."""
-
-    try:
-        return all(
-            workspace.path(relative).is_file()
-            for relative in _FILE_SENTINELS
-        ) and all(
-            workspace.path(relative).is_dir()
-            for relative in _DIRECTORY_SENTINELS
-        )
-    except (OSError, WorkspaceSecurityError):
-        return False
+    return f"agent_states/orchestrator_state/conversation_defaults/{session_id}.json"

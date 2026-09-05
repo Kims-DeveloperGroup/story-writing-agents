@@ -5,9 +5,8 @@ from __future__ import annotations
 import errno
 import hashlib
 import json
+import multiprocessing
 import os
-import subprocess
-import sys
 import threading
 import unittest
 from collections.abc import Callable
@@ -33,7 +32,6 @@ from story_writing_agents.workspace import Workspace
 from tests.helpers import initialized_workspace
 
 
-ROOT = Path(__file__).resolve().parents[1]
 _RECORD_KEYS = {
     "schema_version",
     "workspace_sequence",
@@ -99,6 +97,20 @@ def _decoded_snapshot(
 
 def _store_directory(workspace: Workspace) -> Path:
     return workspace.path("debug_logs/agent_exchanges")
+
+
+def _append_process_exchange(
+    workspace: Workspace,
+    agent_id: str,
+    exchange_id: str,
+    results: object,
+) -> None:
+    """Append through one transferred authorized workspace lease."""
+
+    receipt = WorkspaceAgentExchangeStore(workspace).append(
+        _input(agent_id=agent_id, exchange_id=exchange_id, content="child body")
+    )
+    results.put((receipt.workspace_sequence, receipt.sequence))  # type: ignore[attr-defined]
 
 
 def _active_path(
@@ -475,47 +487,35 @@ class AgentExchangeConcurrencyTests(unittest.TestCase):
             )
 
     def test_subprocesses_share_global_high_water_and_per_agent_order(self) -> None:
-        script = """
-import sys
-from story_writing_agents.agent_exchanges import (
-    AgentExchangeProvider, AgentExchangeRecordInput, AgentExchangeRequestType,
-    AgentExchangeScopeKind, WorkspaceAgentExchangeStore,
-)
-from story_writing_agents.workspace import Workspace
-receipt = WorkspaceAgentExchangeStore(Workspace(sys.argv[1])).append(
-    AgentExchangeRecordInput(
-        "session_1", AgentExchangeScopeKind.CONVERSATION, "conversation_1",
-        sys.argv[2], AgentExchangeProvider.CODEX, sys.argv[3],
-        AgentExchangeRequestType.REQUEST, "child body",
-    )
-)
-print(receipt.workspace_sequence, receipt.sequence)
-"""
-        environment = os.environ.copy()
-        environment["PYTHONPATH"] = str(ROOT / "src")
-        environment["PYTHONDONTWRITEBYTECODE"] = "1"
-
-        def child(index: int) -> subprocess.CompletedProcess[str]:
-            return subprocess.run(
-                [
-                    sys.executable,
-                    "-c",
-                    script,
-                    str(self.workspace.root),
+        context = multiprocessing.get_context("spawn")
+        results = context.Queue()
+        processes = [
+            context.Process(
+                target=_append_process_exchange,
+                args=(
+                    self.workspace,
                     ROSTER[index % 2],
                     f"process_{index}",
-                ],
-                env=environment,
-                capture_output=True,
-                text=True,
-                check=False,
+                    results,
+                ),
             )
-
-        with ThreadPoolExecutor(max_workers=4) as pool:
-            completed = list(pool.map(child, range(4)))
-        for result in completed:
-            self.assertEqual(result.returncode, 0, result.stderr)
-        pairs = [tuple(map(int, result.stdout.split())) for result in completed]
+            for index in range(4)
+        ]
+        try:
+            for process in processes:
+                process.start()
+            for process in processes:
+                process.join(timeout=10)
+                self.assertFalse(process.is_alive())
+                self.assertEqual(process.exitcode, 0)
+            pairs = [results.get(timeout=2) for _ in processes]
+        finally:
+            for process in processes:
+                if process.is_alive():
+                    process.terminate()
+                    process.join(timeout=5)
+            results.close()
+            results.join_thread()
         self.assertEqual(sorted(pair[0] for pair in pairs), [1, 2, 3, 4])
         for agent_id in ROSTER[:2]:
             records = _decoded_snapshot(

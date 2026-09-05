@@ -1,4 +1,4 @@
-"""Deterministic fixtures for canonical conversation archive tests."""
+"""Deterministic fixtures for canonical schema-v2 conversation archives."""
 
 from __future__ import annotations
 
@@ -7,82 +7,71 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from story_writing_agents import (
-    ConversationEventKind,
-    ConversationStatus,
-    Workspace,
+from story_writing_agents import ConversationStatus, Workspace
+from story_writing_agents.conversations import (
+    CONVERSATION_METADATA_SCHEMA_VERSION,
+    CollaborationEvent,
+    encode_collaboration_event,
 )
 from story_writing_agents.conversation_storage import (
+    CONVERSATION_ARCHIVE_SCHEMA_VERSION,
     ConversationArchive,
     ConversationArchiveConversation,
-    ConversationArchiveEvent,
     ConversationArchiveSession,
 )
+
+from tests.collaboration_contract_fixture import contract_batches, store_batch
+from tests.helpers import initialize_test_workspace
 
 
 CREATED_AT = "2026-01-01T00:00:00+00:00"
 SECOND_AT = "2026-01-01T00:00:01+00:00"
 UPDATED_AT = "2026-01-01T00:00:02+00:00"
 
+# Frozen legacy bytes exist only to prove that schema-v1 archives are rejected.
+LEGACY_SCHEMA_ONE_EMPTY_ARCHIVE = (
+    b'{"schema_version":1,"sessions":[],"digest":{"algorithm":"sha256",'
+    b'"value":"7712f58e5e3ce7e4aaf8d09f06c4a60771fee9d848148a84b25ed1589e3791c3"}}\n'
+)
 
-def archive_event(
-    *,
-    session_id: str = "session_a",
+
+def collaboration_history(
     conversation_id: str = "conversation_a",
-    turn_id: str = "turn_a",
-    sequence: int = 1,
-    timestamp: str = CREATED_AT,
-    sender: str = "user",
-    recipient: str = "lead_orchestrator",
-    kind: ConversationEventKind = ConversationEventKind.USER_MESSAGE,
-    content: str = "question",
-) -> ConversationArchiveEvent:
-    """Return one valid exact archive event with overridable fields."""
-
-    return ConversationArchiveEvent(
-        schema_version=1,
-        session_id=session_id,
-        conversation_id=conversation_id,
-        turn_id=turn_id,
-        sequence=sequence,
-        timestamp=timestamp,
-        sender=sender,
-        recipient=recipient,
-        kind=kind,
-        content=content,
-    )
-
-
-def archive_events(
     *,
-    session_id: str = "session_a",
-    conversation_id: str = "conversation_a",
-    outcome_kind: ConversationEventKind = ConversationEventKind.AGENT_REPLY,
-    user_content: str = "question",
-    outcome_content: str = "answer",
-) -> tuple[ConversationArchiveEvent, ConversationArchiveEvent]:
-    """Return one complete user/outcome turn."""
+    terminal: str = "completed",
+) -> tuple[CollaborationEvent, ...]:
+    """Return one deterministic history built from the shared atomic families."""
 
-    user = archive_event(
-        session_id=session_id,
-        conversation_id=conversation_id,
-        content=user_content,
+    if terminal not in {"completed", "unknown"}:
+        raise ValueError("terminal must be completed or unknown")
+    batches = contract_batches(conversation_id)
+    names = (
+        (
+            "proposal",
+            "confirmation",
+            "running",
+            "calls",
+            "result",
+            "completion",
+        )
+        if terminal == "completed"
+        else ("proposal", "confirmation", "running", "calls", "unknown")
     )
-    if outcome_kind is ConversationEventKind.AGENT_REPLY:
-        sender = "lead_orchestrator"
-    else:
-        sender = "runtime"
-    outcome = archive_event(
-        session_id=session_id,
-        conversation_id=conversation_id,
-        sequence=2,
-        timestamp=SECOND_AT,
-        sender=sender,
-        recipient="user",
-        kind=outcome_kind,
-        content=outcome_content,
+    history: tuple[CollaborationEvent, ...] = ()
+    for name in names:
+        history = store_batch(history, batches[name])
+    return history
+
+
+def event_images(archive: ConversationArchive) -> tuple[bytes, ...]:
+    """Return every canonical event image in archive order."""
+
+    return tuple(
+        encode_collaboration_event(event)
+        for session in archive.sessions
+        for conversation in session.conversations
+        for event in conversation.events
     )
-    return user, outcome
 
 
 def archive_conversation(
@@ -94,12 +83,12 @@ def archive_conversation(
     status: ConversationStatus = ConversationStatus.ACTIVE,
     created_at: str = CREATED_AT,
     updated_at: str = UPDATED_AT,
-    events: tuple[ConversationArchiveEvent, ...] | None = None,
+    events: tuple[CollaborationEvent, ...] | None = None,
 ) -> ConversationArchiveConversation:
-    """Return one valid exact conversation, empty unless events are supplied."""
+    """Return one metadata-schema-v1 record with optional v2 history."""
 
     return ConversationArchiveConversation(
-        schema_version=1,
+        schema_version=CONVERSATION_METADATA_SCHEMA_VERSION,
         session_id=session_id,
         conversation_id=conversation_id,
         subject=subject,
@@ -118,9 +107,9 @@ def one_conversation_archive(
     subject: str = "Subject",
     subject_revision: int = 1,
     status: ConversationStatus = ConversationStatus.ACTIVE,
-    events: tuple[ConversationArchiveEvent, ...] | None = None,
+    events: tuple[CollaborationEvent, ...] | None = None,
 ) -> ConversationArchive:
-    """Return one exact archive with one session and conversation."""
+    """Return one exact schema-v2 archive with one catalog record."""
 
     conversation = archive_conversation(
         session_id=session_id,
@@ -131,7 +120,7 @@ def one_conversation_archive(
         events=events,
     )
     return ConversationArchive(
-        schema_version=1,
+        schema_version=CONVERSATION_ARCHIVE_SCHEMA_VERSION,
         sessions=(
             ConversationArchiveSession(
                 session_id=session_id,
@@ -144,13 +133,13 @@ def one_conversation_archive(
 def archive_from_conversations(
     *conversations: ConversationArchiveConversation,
 ) -> ConversationArchive:
-    """Group supplied conversations into one canonical archive."""
+    """Group supplied catalog records into one canonical schema-v2 archive."""
 
     grouped: dict[str, list[ConversationArchiveConversation]] = {}
     for conversation in conversations:
         grouped.setdefault(conversation.session_id, []).append(conversation)
     return ConversationArchive(
-        schema_version=1,
+        schema_version=CONVERSATION_ARCHIVE_SCHEMA_VERSION,
         sessions=tuple(
             ConversationArchiveSession(
                 session_id=session_id,
@@ -162,28 +151,49 @@ def archive_from_conversations(
 
 
 def nonempty_archive() -> ConversationArchive:
-    """Return the stable Unicode/runtime-error golden archive."""
+    """Return the stable Unicode archive with a complete collaboration history."""
 
-    events = archive_events(
-        outcome_kind=ConversationEventKind.RUNTIME_ERROR,
-        user_content="질문\x00끝",
-        outcome_content="실패",
-    )
     return one_conversation_archive(
         subject="안녕 🌙",
         status=ConversationStatus.ARCHIVED,
-        events=events,
+        events=collaboration_history(),
     )
 
 
-def initialized_workspace(
-    test_case: unittest.TestCase,
-) -> Workspace:
+def representative_archive() -> ConversationArchive:
+    """Cover empty, completed, and outcome-unknown catalog histories."""
+
+    return archive_from_conversations(
+        archive_conversation(
+            session_id="session_b",
+            conversation_id="conversation_empty",
+            subject="Empty active history",
+            subject_revision=3,
+        ),
+        archive_conversation(
+            session_id="session_a",
+            conversation_id="conversation_completed",
+            subject="Unicode 대화 🌙",
+            subject_revision=4,
+            events=collaboration_history("conversation_completed"),
+        ),
+        archive_conversation(
+            session_id="session_a",
+            conversation_id="conversation_unknown",
+            subject="Archived outcome unknown",
+            subject_revision=2,
+            status=ConversationStatus.ARCHIVED,
+            events=collaboration_history("conversation_unknown", terminal="unknown"),
+        ),
+    )
+
+
+def initialized_workspace(test_case: unittest.TestCase) -> Workspace:
     """Return a temporary initialized workspace owned by one test case."""
 
     temporary = tempfile.TemporaryDirectory()
     test_case.addCleanup(temporary.cleanup)
-    return Workspace(temporary.name).initialize()
+    return initialize_test_workspace(temporary.name)
 
 
 def workspace_snapshot(root: Path) -> dict[str, bytes | None]:
@@ -210,8 +220,16 @@ def metadata_relative(session_id: str, conversation_id: str) -> Path:
     )
 
 
+def history_relative(session_id: str, conversation_id: str) -> Path:
+    """Return the canonical schema-v2 collaboration-history location."""
+
+    return metadata_relative(session_id, conversation_id).with_name(
+        "collaboration-history.jsonl"
+    )
+
+
 def transcript_relative(session_id: str, conversation_id: str) -> Path:
-    """Return the established filesystem transcript location."""
+    """Return the legacy schema-v1 transcript location used by rejection tests."""
 
     return metadata_relative(session_id, conversation_id).with_name("transcript.jsonl")
 

@@ -8,8 +8,7 @@ import re
 from dataclasses import asdict, dataclass, field
 from enum import StrEnum
 from pathlib import Path
-from types import MappingProxyType
-from typing import Any, Callable, Mapping
+from typing import Any, Callable
 
 from .agents import ROSTER, SPECIALIST_IDS
 from .conversations import (
@@ -22,6 +21,7 @@ from .errors import SessionIdError, WorkspaceFormatError
 _SAFE_IDENTIFIER = re.compile(r"[A-Za-z0-9][A-Za-z0-9_-]{0,63}")
 _SAFE_REFERENCE_OPERATION_ID = re.compile(r"[A-Za-z0-9][A-Za-z0-9_-]{0,127}")
 _SHA256 = re.compile(r"[0-9a-f]{64}")
+_TAGGED_SHA256 = re.compile(r"sha256:[0-9a-f]{64}")
 STORY_SESSION_CONTEXT_SCHEMA_VERSION = 1
 OWNER_OUTCOME_MAX_ENTRIES = 24
 OWNER_OUTCOME_MAX_UTF8_BYTES = 32_768
@@ -43,6 +43,23 @@ class Phase(StrEnum):
 class Verdict(StrEnum):
     APPROVE = "approve"
     CONFLICT = "conflict"
+
+
+class AgentReplyKind(StrEnum):
+    """Closed semantic kind of one validated provider reply."""
+
+    CANDIDATE = "candidate"
+    AUDIT = "audit"
+    SYNTHESIS = "synthesis"
+    DEADLOCK = "deadlock"
+    FINALIZATION = "finalization"
+
+
+class AgentReplyNextPhase(StrEnum):
+    """Closed phase selection permitted only for synthesis replies."""
+
+    REPAIR = "repair"
+    FINALIZATION = "finalization"
 
 
 class DebateStatus(StrEnum):
@@ -639,6 +656,9 @@ class AgentDefinition:
     language: str
     context_document_files: tuple[PromptFileReference, ...]
     provider_managed_context: bool = field(default=False, repr=False)
+    behavior_policy_components: tuple[PromptFileReference, ...] = field(
+        default=(), repr=False
+    )
 
     def __post_init__(self) -> None:
         if type(self.provider_managed_context) is not bool:
@@ -647,6 +667,20 @@ class AgentDefinition:
             raise ValueError(
                 "provider-managed context cannot bind context documents"
             )
+        components = self.behavior_policy_components
+        if type(components) is not tuple or any(
+            type(item) is not PromptFileReference for item in components
+        ):
+            raise TypeError("behavior policy components must be prompt snapshots")
+        if components:
+            paths = tuple(item.path for item in components)
+            if len(set(paths)) != len(paths):
+                raise ValueError("behavior policy component paths must be unique")
+            if self.system_prompt_file.path != components[-1].path:
+                raise ValueError("composed policy must retain the domain policy path")
+            expected = b"\n\n".join(item.content for item in components)
+            if self.system_prompt_file.content != expected:
+                raise ValueError("system prompt does not match policy components")
 
     def file_references(self) -> tuple[PromptFileReference, ...]:
         """Return prompt components in their binding order."""
@@ -839,25 +873,88 @@ class ConversationResult:
 class AgentReply:
     """Structured backend response.
 
-    ``content`` is a candidate, critique, or proposal according to ``phase``.
-    It must never contain hidden chain-of-thought. ``core_updates`` is accepted
-    only from the lead orchestrator during finalization.
+    ``content`` is a candidate, critique, or synthesis according to ``kind``.
+    Finalization identifies an already reviewed proposal and never carries
+    artifact writes or authority.
     """
 
+    kind: AgentReplyKind
     revision_id: str
     content: str = ""
     verdict: Verdict | None = None
-    core_updates: Mapping[str, str] = field(
-        default_factory=lambda: MappingProxyType({})
-    )
+    next_phase: AgentReplyNextPhase | None = None
+    deadlocked: bool = False
+    reviewed_proposal_id: str | None = None
+    reviewed_proposal_digest: str | None = None
 
+    def __post_init__(self) -> None:
+        if type(self.kind) is not AgentReplyKind:
+            raise TypeError("agent reply kind is invalid")
+        if type(self.deadlocked) is not bool:
+            raise TypeError("agent reply deadlock marker is invalid")
+        review_identity_absent = (
+            self.reviewed_proposal_id is None
+            and self.reviewed_proposal_digest is None
+        )
+        if self.kind is AgentReplyKind.CANDIDATE:
+            valid = (
+                bool(self.content)
+                and self.verdict is None
+                and self.next_phase is None
+                and not self.deadlocked
+                and review_identity_absent
+            )
+        elif self.kind is AgentReplyKind.AUDIT:
+            valid = (
+                type(self.verdict) is Verdict
+                and self.next_phase is None
+                and not self.deadlocked
+                and (self.verdict is Verdict.APPROVE or bool(self.content))
+                and review_identity_absent
+            )
+        elif self.kind is AgentReplyKind.SYNTHESIS:
+            valid = (
+                bool(self.content)
+                and self.verdict is None
+                and type(self.next_phase) is AgentReplyNextPhase
+                and not self.deadlocked
+                and review_identity_absent
+            )
+        elif self.kind is AgentReplyKind.DEADLOCK:
+            valid = (
+                bool(self.content)
+                and self.verdict is None
+                and self.next_phase is None
+                and self.deadlocked
+                and review_identity_absent
+            )
+        else:
+            valid = (
+                not self.content
+                and self.verdict is None
+                and self.next_phase is None
+                and not self.deadlocked
+                and type(self.reviewed_proposal_id) is str
+                and bool(self.reviewed_proposal_id)
+                and _TAGGED_SHA256.fullmatch(
+                    self.reviewed_proposal_digest or ""
+                )
+            )
+        if not valid:
+            raise ValueError("agent reply fields do not match its kind")
+        if self.kind is AgentReplyKind.FINALIZATION:
+            _validate_conversation_identifier(
+                self.reviewed_proposal_id,
+                label="reviewed proposal ID",
+            )
     @classmethod
     def candidate(cls, revision_id: str, content: str) -> AgentReply:
-        return cls(revision_id=revision_id, content=content)
+        return cls(AgentReplyKind.CANDIDATE, revision_id, content=content)
 
     @classmethod
     def approval(cls, revision_id: str, content: str = "") -> AgentReply:
         return cls(
+            kind=AgentReplyKind.AUDIT,
             revision_id=revision_id,
             content=content,
             verdict=Verdict.APPROVE,
@@ -866,6 +963,7 @@ class AgentReply:
     @classmethod
     def conflict(cls, revision_id: str, critique: str) -> AgentReply:
         return cls(
+            kind=AgentReplyKind.AUDIT,
             revision_id=revision_id,
             content=critique,
             verdict=Verdict.CONFLICT,
@@ -875,11 +973,37 @@ class AgentReply:
     def finalization(
         cls,
         revision_id: str,
-        core_updates: Mapping[str, str] | None = None,
+        reviewed_proposal_id: str,
+        reviewed_proposal_digest: str,
     ) -> AgentReply:
         return cls(
+            kind=AgentReplyKind.FINALIZATION,
             revision_id=revision_id,
-            core_updates=MappingProxyType(dict(core_updates or {})),
+            reviewed_proposal_id=reviewed_proposal_id,
+            reviewed_proposal_digest=reviewed_proposal_digest,
+        )
+
+    @classmethod
+    def synthesis(
+        cls,
+        revision_id: str,
+        content: str,
+        next_phase: AgentReplyNextPhase,
+    ) -> AgentReply:
+        return cls(
+            AgentReplyKind.SYNTHESIS,
+            revision_id,
+            content=content,
+            next_phase=next_phase,
+        )
+
+    @classmethod
+    def deadlock(cls, revision_id: str, content: str) -> AgentReply:
+        return cls(
+            AgentReplyKind.DEADLOCK,
+            revision_id,
+            content=content,
+            deadlocked=True,
         )
 
 

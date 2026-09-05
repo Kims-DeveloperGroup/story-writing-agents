@@ -10,14 +10,18 @@ from enum import StrEnum
 from pathlib import PurePosixPath
 
 from ..conversations import (
+    COLLABORATION_EVENT_SCHEMA_VERSION,
+    CollaborationEvent,
+    CollaborationEventStore,
+    CollaborationReadableContext,
+    CollaborationReadableField,
+    CollaborationReadableFieldKey,
+    CollaborationReadableRecord,
     ConversationCatalog,
-    ConversationContextWindow,
-    ConversationEvent,
-    ConversationEventKind,
-    ConversationEventStore,
     ConversationMetadata,
     ConversationStatus,
-    validate_conversation_context_window,
+    encode_collaboration_event,
+    select_bounded_collaboration_context,
 )
 from ..errors import (
     ConversationNotFoundError,
@@ -34,6 +38,7 @@ from ..writing_artifacts.filesystem_sources import (
     ArtifactSourceInventoryLimitError,
     ArtifactSourceNulError,
 )
+from ..writing_artifacts.catalog import CORE_ARTIFACT_PATHS
 from ..writing_artifacts.references import (
     ArtifactContentSnapshot,
     reference_source_kind,
@@ -45,6 +50,8 @@ from .actions import (
     ContextSearchQuery,
     ContextSourceBoundary,
     ContextSourceBoundaryKind,
+    ContextSourceStatusKind,
+    ContextSourceStatusReceipt,
 )
 from .manifest import (
     ContextAuthorityKind,
@@ -110,14 +117,10 @@ _SOURCE_ERROR_MESSAGES = {
     ContextSourceErrorCode.INVENTORY_LIMIT_EXCEEDED: (
         "context source inventory exceeds its limit"
     ),
-    ContextSourceErrorCode.SOURCE_LIMIT_EXCEEDED: (
-        "context source exceeds its limit"
-    ),
+    ContextSourceErrorCode.SOURCE_LIMIT_EXCEEDED: ("context source exceeds its limit"),
     ContextSourceErrorCode.SOURCE_MISSING: "context source is missing",
     ContextSourceErrorCode.SOURCE_UNSAFE: "context source is unsafe",
-    ContextSourceErrorCode.SOURCE_INVALID_UTF8: (
-        "context source is not valid UTF-8"
-    ),
+    ContextSourceErrorCode.SOURCE_INVALID_UTF8: ("context source is not valid UTF-8"),
     ContextSourceErrorCode.SOURCE_NUL: "context source contains NUL",
     ContextSourceErrorCode.SOURCE_DRIFT: "context source changed during use",
     ContextSourceErrorCode.SOURCE_UNAVAILABLE: "context source is unavailable",
@@ -231,8 +234,7 @@ def _contains_nul(value: object) -> bool:
         return any(_contains_nul(item) for item in value)
     if type(value) is dict:
         return any(
-            _contains_nul(key) or _contains_nul(item)
-            for key, item in value.items()
+            _contains_nul(key) or _contains_nul(item) for key, item in value.items()
         )
     return False
 
@@ -292,11 +294,7 @@ def _artifact_locator_is_lexically_safe(value: object) -> bool:
         encoded = value.encode("utf-8", errors="strict")
     except UnicodeEncodeError:
         return False
-    if (
-        len(value) >= 3
-        and value[0].isalpha()
-        and value[1:3] == ":/"
-    ) or any(
+    if (len(value) >= 3 and value[0].isalpha() and value[1:3] == ":/") or any(
         unicodedata.category(character) in {"Cc", "Cf", "Cs"}
         or character in {"\u2028", "\u2029"}
         for character in value
@@ -407,16 +405,14 @@ class ContextSourceDescriptor:
             eligible = (
                 self.scope.subject_kind.value == "debate"
                 and self.scope.subject_id == identity
-                and self.source_id
-                == _structured_source_id("active_debate", identity)
+                and self.source_id == _structured_source_id("active_debate", identity)
             )
             exact_identity = locator == f"debate/{identity}"
         else:
             identity = self.source_id.removeprefix("own_agent_state:")
             eligible = (
                 identity == self.scope.agent_id
-                and self.source_id
-                == _structured_source_id("own_agent_state", identity)
+                and self.source_id == _structured_source_id("own_agent_state", identity)
             )
             exact_identity = locator == f"agent-state/{identity}"
         if not eligible or not exact_identity:
@@ -506,9 +502,7 @@ class ContextSourceSnapshot:
                 or any(record.search_text != record.content for record in self.records)
                 or reconstructed != self.content
             ):
-                raise _source_error(
-                    ContextSourceErrorCode.ADAPTER_CONTRACT_VIOLATION
-                )
+                raise _source_error(ContextSourceErrorCode.ADAPTER_CONTRACT_VIOLATION)
             return
         parsed: object | None = None
         try:
@@ -520,123 +514,105 @@ class ContextSourceSnapshot:
         if self.descriptor.revision != self.descriptor.content_digest:
             raise _source_error(ContextSourceErrorCode.ADAPTER_CONTRACT_VIOLATION)
         if self.descriptor.source_kind is ContextSourceKind.CONVERSATION:
-            if type(parsed) is not dict or frozenset(parsed) not in {
-                frozenset({"metadata", "pairs"}),
-                frozenset({"pairs", "window"}),
-            }:
-                raise _source_error(
-                    ContextSourceErrorCode.ADAPTER_CONTRACT_VIOLATION
-                )
-            metadata = parsed.get("metadata")
-            pairs = parsed.get("pairs")
-            conversation_id: object
-            if metadata is not None:
-                if type(metadata) is not dict or set(metadata) != {
+            if type(parsed) is not dict or set(parsed) != {"bootstrap", "records"}:
+                raise _source_error(ContextSourceErrorCode.ADAPTER_CONTRACT_VIOLATION)
+            bootstrap = parsed.get("bootstrap")
+            values = parsed.get("records")
+            prefix = "conversation/"
+            locator = self.descriptor.provenance.locator
+            conversation_id = (
+                locator[len(prefix) :] if locator.startswith(prefix) else None
+            )
+            if (
+                type(bootstrap) is not dict
+                or set(bootstrap)
+                != {
                     "conversation_id",
-                    "created_at",
+                    "last_sequence",
+                    "omitted_records",
+                    "requested_records",
+                    "retained_records",
+                    "retained_utf8_bytes",
                     "schema_version",
                     "session_id",
-                    "status",
-                    "subject",
-                    "subject_revision",
-                    "updated_at",
-                }:
-                    raise _source_error(
-                        ContextSourceErrorCode.ADAPTER_CONTRACT_VIOLATION
-                    )
-                conversation_id = metadata.get("conversation_id")
-                valid_context_identity = (
-                    metadata.get("session_id") == self.descriptor.scope.session_id
-                    and metadata.get("status") == ConversationStatus.ACTIVE.value
-                )
-            else:
-                window = parsed.get("window")
-                prefix = "conversation/"
-                locator = self.descriptor.provenance.locator
-                conversation_id = (
-                    locator[len(prefix):] if locator.startswith(prefix) else None
-                )
-                valid_context_identity = bool(
-                    type(window) is dict
-                    and set(window)
-                    == {"omitted_turns", "total_complete_turns", "truncated"}
-                    and type(window.get("omitted_turns")) is int
-                    and window.get("omitted_turns", -1) >= 0
-                    and type(window.get("total_complete_turns")) is int
-                    and window.get("total_complete_turns", -1)
-                    >= window.get("omitted_turns", 0)
-                    and type(window.get("truncated")) is bool
-                    and window.get("truncated")
-                    is (window.get("omitted_turns", 0) > 0)
-                )
-            if (
-                not valid_context_identity
+                    "tail_batch_digest",
+                    "total_records",
+                    "truncated",
+                }
+                or bootstrap.get("schema_version") != COLLABORATION_EVENT_SCHEMA_VERSION
+                or bootstrap.get("session_id") != self.descriptor.scope.session_id
+                or bootstrap.get("conversation_id") != conversation_id
                 or type(conversation_id) is not str
                 or self.descriptor.source_id
                 != _structured_source_id("conversation", conversation_id)
                 or self.descriptor.provenance.locator
                 != f"conversation/{conversation_id}"
-                or type(pairs) is not list
-                or len(pairs) != len(self.records)
+                or type(values) is not list
+                or len(values) != len(self.records)
+                or bootstrap.get("retained_records") != len(values)
             ):
-                raise _source_error(
-                    ContextSourceErrorCode.ADAPTER_CONTRACT_VIOLATION
-                )
+                raise _source_error(ContextSourceErrorCode.ADAPTER_CONTRACT_VIOLATION)
             previous_end = 0
-            for pair, record in zip(pairs, self.records):
-                if type(pair) is not dict or set(pair) != {
-                    "agent_reply",
-                    "user_message",
-                }:
-                    raise _source_error(
-                        ContextSourceErrorCode.ADAPTER_CONTRACT_VIOLATION
-                    )
-                user = pair.get("user_message")
-                reply = pair.get("agent_reply")
-                event_keys = {
-                    "content",
-                    "conversation_id",
-                    "kind",
-                    "recipient",
-                    "schema_version",
-                    "sender",
-                    "sequence",
-                    "session_id",
-                    "timestamp",
-                    "turn_id",
-                }
+            record_keys = {
+                "batch_digest",
+                "batch_id",
+                "batch_ordinal",
+                "batch_size",
+                "conversation_id",
+                "direction",
+                "event_id",
+                "event_revision",
+                "fields",
+                "kind",
+                "recipient",
+                "schema_version",
+                "sender",
+                "sequence",
+                "session_id",
+                "step_id",
+                "timestamp",
+                "turn_id",
+            }
+            field_keys = {"assignment_ordinal", "input_ordinal", "key", "text"}
+            for value, record in zip(values, self.records, strict=True):
                 if (
-                    type(user) is not dict
-                    or type(reply) is not dict
-                    or set(user) != event_keys
-                    or set(reply) != event_keys
+                    type(value) is not dict
+                    or set(value) != record_keys
+                    or type(value.get("fields")) is not list
                 ):
                     raise _source_error(
                         ContextSourceErrorCode.ADAPTER_CONTRACT_VIOLATION
                     )
+                fields = value["fields"]
+                valid_fields = True
+                search_texts: list[str] = []
+                for item in fields:
+                    try:
+                        if type(item) is not dict or set(item) != field_keys:
+                            raise TypeError
+                        field = CollaborationReadableField(
+                            key=CollaborationReadableFieldKey(item["key"]),
+                            text=item["text"],
+                            assignment_ordinal=item["assignment_ordinal"],
+                            input_ordinal=item["input_ordinal"],
+                        )
+                    except (KeyError, TypeError, ValueError):
+                        valid_fields = False
+                        break
+                    search_texts.append(field.text)
                 boundary = record.boundary
                 if (
-                    user.get("session_id") != self.descriptor.scope.session_id
-                    or reply.get("session_id") != self.descriptor.scope.session_id
-                    or user.get("conversation_id") != conversation_id
-                    or reply.get("conversation_id") != conversation_id
-                    or user.get("kind") != ConversationEventKind.USER_MESSAGE.value
-                    or reply.get("kind") != ConversationEventKind.AGENT_REPLY.value
-                    or reply.get("sender") != user.get("recipient")
-                    or user.get("turn_id") != reply.get("turn_id")
-                    or boundary.kind
-                    is not ContextSourceBoundaryKind.CONVERSATION_TURNS
-                    or boundary.start != user.get("sequence")
-                    or boundary.end != reply.get("sequence")
-                    or boundary.first_id != user.get("turn_id")
-                    or boundary.last_id != reply.get("turn_id")
+                    not valid_fields
+                    or value.get("session_id") != self.descriptor.scope.session_id
+                    or value.get("conversation_id") != conversation_id
+                    or boundary.kind is not ContextSourceBoundaryKind.RECORDS
+                    or boundary.start != value.get("sequence")
+                    or boundary.end != value.get("sequence")
                     or boundary.start is None
                     or boundary.start <= previous_end
-                    or record.record_id != user.get("turn_id")
-                    or record.content
-                    != _canonical_json_bytes(pair).decode("utf-8")
-                    or record.search_text
-                    != f"{user.get('content')}\n{reply.get('content')}"
+                    or record.record_id != value.get("event_id")
+                    or record.content != _canonical_json_bytes(value).decode("utf-8")
+                    or record.search_text != "\n".join(search_texts)
                 ):
                     raise _source_error(
                         ContextSourceErrorCode.ADAPTER_CONTRACT_VIOLATION
@@ -646,14 +622,10 @@ class ContextSourceSnapshot:
             return
         if self.descriptor.source_kind is ContextSourceKind.ACTIVE_DEBATE:
             if type(parsed) is not dict or set(parsed) != {"messages", "state"}:
-                raise _source_error(
-                    ContextSourceErrorCode.ADAPTER_CONTRACT_VIOLATION
-                )
+                raise _source_error(ContextSourceErrorCode.ADAPTER_CONTRACT_VIOLATION)
             state = parsed.get("state")
             values = parsed.get("messages")
-            debate_id = (
-                self.descriptor.source_id.removeprefix("active_debate:")
-            )
+            debate_id = self.descriptor.source_id.removeprefix("active_debate:")
             if (
                 type(state) is not dict
                 or "owner_token" in state
@@ -665,13 +637,9 @@ class ContextSourceSnapshot:
                 != _structured_source_id("active_debate", debate_id)
                 or self.descriptor.provenance.locator != f"debate/{debate_id}"
             ):
-                raise _source_error(
-                    ContextSourceErrorCode.ADAPTER_CONTRACT_VIOLATION
-                )
+                raise _source_error(ContextSourceErrorCode.ADAPTER_CONTRACT_VIOLATION)
             if type(values) is not list or len(self.records) != len(values) + 1:
-                raise _source_error(
-                    ContextSourceErrorCode.ADAPTER_CONTRACT_VIOLATION
-                )
+                raise _source_error(ContextSourceErrorCode.ADAPTER_CONTRACT_VIOLATION)
             state_record = self.records[0]
             state_content = _canonical_json_bytes(state).decode("utf-8")
             if (
@@ -680,9 +648,7 @@ class ContextSourceSnapshot:
                 or state_record.content != state_content
                 or state_record.search_text != state_content
             ):
-                raise _source_error(
-                    ContextSourceErrorCode.ADAPTER_CONTRACT_VIOLATION
-                )
+                raise _source_error(ContextSourceErrorCode.ADAPTER_CONTRACT_VIOLATION)
             message_keys = {
                 "content",
                 "kind",
@@ -702,8 +668,7 @@ class ContextSourceSnapshot:
                     or record.record_id != f"message_{index}"
                     or record.boundary
                     != ContextSourceBoundary.records(index + 1, index + 1)
-                    or record.content
-                    != _canonical_json_bytes(value).decode("utf-8")
+                    or record.content != _canonical_json_bytes(value).decode("utf-8")
                     or record.search_text != value.get("content")
                 ):
                     raise _source_error(
@@ -745,9 +710,7 @@ class ContextSourceSnapshot:
                 or value.get("agent_id") != self.descriptor.scope.agent_id
                 or value.get("session_id") != self.descriptor.scope.session_id
             ):
-                raise _source_error(
-                    ContextSourceErrorCode.ADAPTER_CONTRACT_VIOLATION
-                )
+                raise _source_error(ContextSourceErrorCode.ADAPTER_CONTRACT_VIOLATION)
 
 
 @dataclass(frozen=True, slots=True)
@@ -771,9 +734,7 @@ class ContextSourceSearchMatch:
             ContextSourceKind.WRITING_ARTIFACT: (
                 ContextSourceBoundaryKind.ARTIFACT_LINES
             ),
-            ContextSourceKind.CONVERSATION: (
-                ContextSourceBoundaryKind.CONVERSATION_TURNS
-            ),
+            ContextSourceKind.CONVERSATION: (ContextSourceBoundaryKind.RECORDS),
             ContextSourceKind.ACTIVE_DEBATE: ContextSourceBoundaryKind.RECORDS,
             ContextSourceKind.OWN_AGENT_STATE: ContextSourceBoundaryKind.RECORDS,
         }[self.descriptor.source_kind]
@@ -787,8 +748,7 @@ class ContextSourceSearchMatch:
             raise _source_error(ContextSourceErrorCode.INVALID_VALUE)
         if (
             len(snippet) > CONTEXT_ACTION_POLICY.max_snippet_characters
-            or self.snippet_utf8_bytes
-            > CONTEXT_ACTION_POLICY.max_snippet_utf8_bytes
+            or self.snippet_utf8_bytes > CONTEXT_ACTION_POLICY.max_snippet_utf8_bytes
         ):
             raise _source_error(ContextSourceErrorCode.INVALID_VALUE)
 
@@ -843,13 +803,26 @@ class WritingArtifactSourceAdapter:
         self,
         repository: WritingArtifactRepository,
         scope: ContextScope,
+        allowed_paths: frozenset[str] | None = None,
     ) -> None:
         if not isinstance(repository, WritingArtifactRepository):
             raise _source_error(ContextSourceErrorCode.INVALID_VALUE)
         if type(scope) is not ContextScope:
             raise _source_error(ContextSourceErrorCode.INVALID_VALUE)
+        if allowed_paths is not None:
+            if type(allowed_paths) is not frozenset:
+                raise _source_error(ContextSourceErrorCode.INVALID_VALUE)
+            try:
+                validated_paths = frozenset(
+                    self._validate_locator(path) for path in allowed_paths
+                )
+            except ContextSourceError:
+                raise
+            if validated_paths != allowed_paths:
+                raise _source_error(ContextSourceErrorCode.INVALID_VALUE)
         self._repository = repository
         self.scope = scope
+        self._allowed_paths = allowed_paths
 
     def inventory(
         self,
@@ -874,14 +847,109 @@ class WritingArtifactSourceAdapter:
                     raise
                 inventory_bytes += descriptor.utf8_bytes
                 if inventory_bytes > policy.max_inventory_body_utf8_bytes:
-                    raise _source_error(
-                        ContextSourceErrorCode.INVENTORY_LIMIT_EXCEEDED
-                    )
+                    raise _source_error(ContextSourceErrorCode.INVENTORY_LIMIT_EXCEEDED)
                 descriptors.append(descriptor)
             if retry:
                 continue
             if paths == self._list_paths(policy):
                 return tuple(descriptors)
+        raise _source_error(ContextSourceErrorCode.SOURCE_DRIFT)
+
+    def canonical_core_statuses(
+        self,
+        manifest_digest: str,
+        policy: ContextSourcePolicy,
+    ) -> tuple[ContextSourceStatusReceipt, ...]:
+        """Capture the four canonical core statuses under one stable inventory."""
+
+        policy = _require_source_policy(policy)
+        _safe_digest(manifest_digest)
+        if self._allowed_paths is not None:
+            raise _source_error(ContextSourceErrorCode.AUTHORITY_MISMATCH)
+
+        def capture_once(
+            paths: tuple[str, ...],
+        ) -> tuple[ContextSourceStatusReceipt, ...]:
+            present_paths = frozenset(paths)
+            receipts: list[ContextSourceStatusReceipt] = []
+            for ordinal, locator in enumerate(CORE_ARTIFACT_PATHS, start=1):
+                if locator not in present_paths:
+                    self._require_absent_core(locator, policy)
+                    receipts.append(
+                        ContextSourceStatusReceipt(
+                            evidence_id=f"status_{ordinal}",
+                            source_id=writing_artifact_source_id(locator),
+                            locator=locator,
+                            status=ContextSourceStatusKind.ABSENT,
+                            ordinal=ordinal,
+                            manifest_digest=manifest_digest,
+                            revision=None,
+                            source_digest=None,
+                            source_utf8_bytes=0,
+                        )
+                    )
+                    continue
+                snapshot = self.capture(locator, policy)
+                descriptor = snapshot.descriptor
+                receipts.append(
+                    ContextSourceStatusReceipt(
+                        evidence_id=f"status_{ordinal}",
+                        source_id=descriptor.source_id,
+                        locator=locator,
+                        status=(
+                            ContextSourceStatusKind.EMPTY
+                            if descriptor.utf8_bytes == 0
+                            else ContextSourceStatusKind.PRESENT
+                        ),
+                        ordinal=ordinal,
+                        manifest_digest=manifest_digest,
+                        revision=descriptor.revision,
+                        source_digest=descriptor.content_digest,
+                        source_utf8_bytes=descriptor.utf8_bytes,
+                    )
+                )
+            return tuple(receipts)
+
+        for _attempt in range(2):
+            first_paths = self._list_paths(policy)
+            try:
+                first = capture_once(first_paths)
+                second_paths = self._list_paths(policy)
+                second = capture_once(second_paths)
+                final_paths = self._list_paths(policy)
+            except ContextSourceError as error:
+                if error.code in {
+                    ContextSourceErrorCode.SOURCE_DRIFT,
+                    ContextSourceErrorCode.SOURCE_MISSING,
+                }:
+                    continue
+                raise
+            if first_paths == second_paths == final_paths and first == second:
+                return second
+        raise _source_error(ContextSourceErrorCode.SOURCE_DRIFT)
+
+    def _require_absent_core(
+        self,
+        locator: str,
+        policy: ContextSourcePolicy,
+    ) -> None:
+        """Distinguish an exact absence from an unsafe or corrupt core entry."""
+
+        try:
+            self._repository.read_text(
+                locator,
+                max_bytes=policy.max_source_utf8_bytes,
+            )
+        except FileNotFoundError:
+            return
+        except ArtifactSourceInvalidUtf8Error:
+            raise _source_error(ContextSourceErrorCode.SOURCE_INVALID_UTF8) from None
+        except ArtifactSourceNulError:
+            raise _source_error(ContextSourceErrorCode.SOURCE_NUL) from None
+        except WorkspaceSecurityError:
+            raise _source_error(ContextSourceErrorCode.SOURCE_UNSAFE) from None
+        except WorkspaceFormatError:
+            raise _source_error(ContextSourceErrorCode.SOURCE_UNAVAILABLE) from None
         raise _source_error(ContextSourceErrorCode.SOURCE_DRIFT)
 
     def _list_paths(self, policy: ContextSourcePolicy) -> tuple[str, ...]:
@@ -895,7 +963,12 @@ class WritingArtifactSourceAdapter:
             pass
         if paths is None:
             raise _source_error(ContextSourceErrorCode.INVENTORY_LIMIT_EXCEEDED)
-        return paths
+        if self._allowed_paths is None:
+            return paths
+        missing = self._allowed_paths.difference(paths)
+        if missing:
+            raise _source_error(ContextSourceErrorCode.SOURCE_MISSING)
+        return tuple(path for path in paths if path in self._allowed_paths)
 
     @staticmethod
     def _validate_locator(locator: object) -> str:
@@ -997,6 +1070,8 @@ class WritingArtifactSourceAdapter:
     ) -> ContextSourceSnapshot:
         policy = _require_source_policy(policy)
         locator = self._validate_locator(locator)
+        if self._allowed_paths is not None and locator not in self._allowed_paths:
+            raise _source_error(ContextSourceErrorCode.AUTHORITY_MISMATCH)
         for _attempt in range(2):
             first = self._capture_once(locator, policy)
             second = self._capture_once(locator, policy)
@@ -1005,72 +1080,155 @@ class WritingArtifactSourceAdapter:
         raise _source_error(ContextSourceErrorCode.SOURCE_DRIFT)
 
 
+def _readable_record_value(record: CollaborationReadableRecord) -> dict[str, object]:
+    event = CollaborationEvent(
+        schema_version=record.schema_version,
+        event_id=record.event_id,
+        session_id=record.session_id,
+        conversation_id=record.conversation_id,
+        turn_id=record.turn_id,
+        step_id=record.step_id,
+        sequence=record.sequence,
+        timestamp=record.timestamp,
+        batch_id=record.batch_id,
+        batch_ordinal=record.batch_ordinal,
+        batch_size=record.batch_size,
+        batch_digest=record.batch_digest,
+        kind=record.kind,
+        sender=record.sender,
+        recipient=record.recipient,
+        payload=record.payload,
+    )
+    revision = _digest(
+        b"story-agent-context-collaboration-event-v2\0"
+        + encode_collaboration_event(event)
+        + b"\0"
+        + record.batch_digest.encode("ascii")
+    )
+    return {
+        "schema_version": record.schema_version,
+        "session_id": record.session_id,
+        "conversation_id": record.conversation_id,
+        "turn_id": record.turn_id,
+        "step_id": record.step_id,
+        "event_id": record.event_id,
+        "batch_id": record.batch_id,
+        "batch_ordinal": record.batch_ordinal,
+        "batch_size": record.batch_size,
+        "batch_digest": record.batch_digest,
+        "sequence": record.sequence,
+        "timestamp": record.timestamp,
+        "sender": {
+            "kind": record.sender.kind.value,
+            "agent_id": record.sender.agent_id,
+        },
+        "recipient": {
+            "kind": record.recipient.kind.value,
+            "agent_id": record.recipient.agent_id,
+        },
+        "direction": record.direction.value,
+        "kind": record.kind.value,
+        "event_revision": revision,
+        "fields": [
+            {
+                "key": field.key.value,
+                "text": field.text,
+                "assignment_ordinal": field.assignment_ordinal,
+                "input_ordinal": field.input_ordinal,
+            }
+            for field in record.fields
+        ],
+    }
+
+
+def _readable_context_bootstrap(
+    context: CollaborationReadableContext,
+    *,
+    session_id: str,
+    conversation_id: str,
+) -> dict[str, object]:
+    bootstrap = context.bootstrap
+    return {
+        "schema_version": bootstrap.schema_version,
+        "session_id": bootstrap.session_id or session_id,
+        "conversation_id": bootstrap.conversation_id or conversation_id,
+        "total_records": bootstrap.total_records,
+        "last_sequence": bootstrap.last_sequence,
+        "tail_batch_digest": bootstrap.tail_batch_digest,
+        "requested_records": context.requested_records,
+        "retained_records": context.retained_records,
+        "omitted_records": context.omitted_records,
+        "retained_utf8_bytes": context.retained_utf8_bytes,
+        "truncated": context.truncated,
+    }
+
+
 class FocusedConversationSourceAdapter:
-    """Capture focused or opt-in active same-session visible conversations."""
+    """Expose explicitly selected readable collaboration records for context."""
 
     source_kind = ContextSourceKind.CONVERSATION
 
     def __init__(
         self,
         catalog: ConversationCatalog,
-        event_store: ConversationEventStore,
+        event_store: CollaborationEventStore,
         scope: ContextScope,
         conversation_id: str | None,
         *,
-        excluded_turn_id: str | None = None,
         include_same_session_active: bool = False,
-        captured_context: ConversationContextWindow | None = None,
+        include_searchable_history: bool = False,
+        captured_context: CollaborationReadableContext | None = None,
     ) -> None:
         if type(scope) is not ContextScope:
             raise _source_error(ContextSourceErrorCode.INVALID_VALUE)
         if conversation_id is not None:
             _safe_identity(conversation_id)
-            if (
-                scope.subject_kind.value == "conversation"
-                and scope.subject_id != conversation_id
+            if scope.subject_kind.value == "conversation" and (
+                scope.subject_id != conversation_id
             ):
                 raise _source_error(ContextSourceErrorCode.SCOPE_MISMATCH)
-        if excluded_turn_id is not None:
-            _safe_identity(excluded_turn_id)
-        if type(include_same_session_active) is not bool:
+        if (
+            type(include_same_session_active) is not bool
+            or type(include_searchable_history) is not bool
+        ):
             raise _source_error(ContextSourceErrorCode.INVALID_VALUE)
         if include_same_session_active and conversation_id is None:
             raise _source_error(ContextSourceErrorCode.INVALID_VALUE)
         if captured_context is not None:
             if (
-                type(captured_context) is not ConversationContextWindow
+                type(captured_context) is not CollaborationReadableContext
                 or conversation_id is None
-                or excluded_turn_id is not None
                 or include_same_session_active
+                or include_searchable_history
             ):
                 raise _source_error(ContextSourceErrorCode.INVALID_VALUE)
-            try:
-                captured_context = validate_conversation_context_window(
-                    captured_context,
-                    session_id=scope.session_id,
-                    conversation_id=conversation_id,
-                )
-            except (TypeError, ValueError):
-                raise _source_error(ContextSourceErrorCode.INVALID_VALUE) from None
-        if not callable(getattr(catalog, "get", None)) or not callable(
-            getattr(event_store, "read", None)
+            bootstrap = captured_context.bootstrap
+            if (
+                bootstrap.session_id != scope.session_id
+                or bootstrap.conversation_id != conversation_id
+            ):
+                raise _source_error(ContextSourceErrorCode.INVALID_VALUE)
+        if not callable(getattr(catalog, "get", None)) or any(
+            not callable(getattr(event_store, name, None))
+            for name in ("read", "read_context")
         ):
             raise _source_error(ContextSourceErrorCode.INVALID_VALUE)
-        if include_same_session_active and not callable(
-            getattr(catalog, "list", None)
-        ):
+        if include_same_session_active and not callable(getattr(catalog, "list", None)):
             raise _source_error(ContextSourceErrorCode.INVALID_VALUE)
         self._catalog = catalog
         self._event_store = event_store
         self.scope = scope
         self._conversation_id = conversation_id
-        self._excluded_turn_id = excluded_turn_id
         self._include_same_session_active = include_same_session_active
+        self._include_searchable_history = include_searchable_history
         self._captured_context = captured_context
+        self._snapshot_conversation_ids: tuple[str, ...] | None = None
+        self._snapshots: dict[
+            tuple[str, ContextSourcePolicy], ContextSourceSnapshot
+        ] = {}
 
     def inventory(
-        self,
-        policy: ContextSourcePolicy,
+        self, policy: ContextSourcePolicy
     ) -> tuple[ContextSourceDescriptor, ...]:
         policy = _require_source_policy(policy)
         return tuple(
@@ -1083,48 +1241,50 @@ class FocusedConversationSourceAdapter:
         return f"conversation/{conversation_id}"
 
     def _active_conversation_ids(self) -> tuple[str, ...]:
+        if self._include_searchable_history and (
+            self._snapshot_conversation_ids is not None
+        ):
+            return self._snapshot_conversation_ids
         if self._captured_context is not None or not self._include_same_session_active:
-            return (() if self._conversation_id is None else (self._conversation_id,))
-        raw: tuple[ConversationMetadata, ...] | None = None
-        try:
-            raw = self._catalog.list(
-                self.scope.session_id,
-                include_archived=False,
+            identifiers = (
+                () if self._conversation_id is None else (self._conversation_id,)
             )
+            if self._include_searchable_history:
+                self._snapshot_conversation_ids = identifiers
+            return identifiers
+        try:
+            raw = self._catalog.list(self.scope.session_id, include_archived=False)
         except (StoryWritingAgentsError, OSError, TypeError, ValueError):
-            pass
+            raise _source_error(ContextSourceErrorCode.SOURCE_UNAVAILABLE) from None
         if type(raw) is not tuple:
             raise _source_error(ContextSourceErrorCode.SOURCE_UNAVAILABLE)
         identifiers: list[str] = []
         for metadata in raw:
             if type(metadata) is not ConversationMetadata:
-                raise _source_error(
-                    ContextSourceErrorCode.ADAPTER_CONTRACT_VIOLATION
-                )
+                raise _source_error(ContextSourceErrorCode.ADAPTER_CONTRACT_VIOLATION)
             if metadata.session_id != self.scope.session_id:
                 raise _source_error(ContextSourceErrorCode.SCOPE_MISMATCH)
             if metadata.status is not ConversationStatus.ACTIVE:
-                raise _source_error(
-                    ContextSourceErrorCode.ADAPTER_CONTRACT_VIOLATION
-                )
+                raise _source_error(ContextSourceErrorCode.ADAPTER_CONTRACT_VIOLATION)
             identifiers.append(metadata.conversation_id)
         if len(set(identifiers)) != len(identifiers):
             raise _source_error(ContextSourceErrorCode.ADAPTER_CONTRACT_VIOLATION)
         if self._conversation_id not in identifiers:
             raise _source_error(ContextSourceErrorCode.SOURCE_MISSING)
-        return tuple(identifiers)
+        captured = tuple(identifiers)
+        if self._include_searchable_history:
+            self._snapshot_conversation_ids = captured
+        return captured
 
     def _authorized_conversation_id(self, locator: str) -> str:
         prefix = "conversation/"
         if not locator.startswith(prefix):
             raise _source_error(ContextSourceErrorCode.AUTHORITY_MISMATCH)
-        conversation_id = locator[len(prefix):]
+        conversation_id = locator[len(prefix) :]
         try:
             _safe_identity(conversation_id)
         except ContextSourceError:
-            raise _source_error(
-                ContextSourceErrorCode.AUTHORITY_MISMATCH
-            ) from None
+            raise _source_error(ContextSourceErrorCode.AUTHORITY_MISMATCH) from None
         if conversation_id not in self._active_conversation_ids():
             raise _source_error(ContextSourceErrorCode.AUTHORITY_MISMATCH)
         return conversation_id
@@ -1136,215 +1296,58 @@ class FocusedConversationSourceAdapter:
     ) -> ContextSourceSnapshot:
         policy = _require_source_policy(policy)
         conversation_id = self._authorized_conversation_id(locator)
-        if self._captured_context is not None:
-            return self._capture_context_window(
-                conversation_id,
-                locator,
-                policy,
-            )
-        metadata: ConversationMetadata | None = None
-        events: tuple[ConversationEvent, ...] | None = None
-        owner_error: ContextSourceErrorCode | None = None
         try:
-            metadata = self._catalog.get(
-                self.scope.session_id,
-                conversation_id,
-            )
-            events = self._event_store.read(
-                self.scope.session_id,
-                conversation_id,
-            )
+            metadata = self._catalog.get(self.scope.session_id, conversation_id)
+            if self._captured_context is None:
+                events = self._event_store.read(self.scope.session_id, conversation_id)
+                context = select_bounded_collaboration_context(
+                    events,
+                    event_ids=(
+                        tuple(event.event_id for event in events)
+                        if self._include_searchable_history
+                        else ()
+                    ),
+                )
+            else:
+                context = self._captured_context
         except ConversationNotFoundError:
-            owner_error = ContextSourceErrorCode.SOURCE_MISSING
-        except (StoryWritingAgentsError, OSError):
-            owner_error = ContextSourceErrorCode.SOURCE_UNAVAILABLE
-        if owner_error is not None:
-            raise _source_error(owner_error)
-        if type(metadata) is not ConversationMetadata or type(events) is not tuple:
-            raise _source_error(ContextSourceErrorCode.ADAPTER_CONTRACT_VIOLATION)
+            raise _source_error(ContextSourceErrorCode.SOURCE_MISSING) from None
+        except (StoryWritingAgentsError, OSError, TypeError, ValueError):
+            raise _source_error(ContextSourceErrorCode.SOURCE_UNAVAILABLE) from None
         if (
-            metadata.session_id != self.scope.session_id
+            type(metadata) is not ConversationMetadata
+            or metadata.session_id != self.scope.session_id
             or metadata.conversation_id != conversation_id
         ):
             raise _source_error(ContextSourceErrorCode.SCOPE_MISMATCH)
         if metadata.status is not ConversationStatus.ACTIVE:
             raise _source_error(ContextSourceErrorCode.SOURCE_UNAVAILABLE)
-        users: dict[str, ConversationEvent] = {}
-        outcomes: dict[str, ConversationEvent] = {}
-        for sequence, event in enumerate(events, start=1):
-            if (
-                type(event) is not ConversationEvent
-                or event.session_id != self.scope.session_id
-                or event.conversation_id != conversation_id
-                or event.sequence != sequence
-            ):
-                raise _source_error(
-                    ContextSourceErrorCode.ADAPTER_CONTRACT_VIOLATION
-                )
-            if event.kind is ConversationEventKind.USER_MESSAGE:
-                if event.turn_id in users:
-                    raise _source_error(
-                        ContextSourceErrorCode.ADAPTER_CONTRACT_VIOLATION
-                    )
-                users[event.turn_id] = event
-            elif event.kind in {
-                ConversationEventKind.AGENT_REPLY,
-                ConversationEventKind.RUNTIME_ERROR,
-            }:
-                user = users.get(event.turn_id)
-                if (
-                    user is None
-                    or event.turn_id in outcomes
-                    or (
-                        event.kind is ConversationEventKind.AGENT_REPLY
-                        and event.sender != user.recipient
-                    )
-                ):
-                    raise _source_error(
-                        ContextSourceErrorCode.ADAPTER_CONTRACT_VIOLATION
-                    )
-                outcomes[event.turn_id] = event
-            else:
-                raise _source_error(
-                    ContextSourceErrorCode.ADAPTER_CONTRACT_VIOLATION
-                )
-        excluded_turn_id = (
-            self._excluded_turn_id
-            if conversation_id == self._conversation_id
-            else None
-        )
-        if excluded_turn_id is None and self._include_same_session_active:
-            pending = tuple(
-                user
-                for turn_id, user in users.items()
-                if turn_id not in outcomes
-            )
-            if len(pending) == 1 and pending[0].sequence == len(events):
-                excluded_turn_id = pending[0].turn_id
-        if excluded_turn_id is not None:
-            excluded_user = users.get(excluded_turn_id)
-            excluded_outcome = outcomes.get(excluded_turn_id)
-            if excluded_outcome is not None or (
-                excluded_user is not None
-                and excluded_user.sequence != len(events)
-            ):
-                raise _source_error(
-                    ContextSourceErrorCode.ADAPTER_CONTRACT_VIOLATION
-                )
-        for turn_id, user in users.items():
-            outcome = outcomes.get(turn_id)
-            if turn_id == excluded_turn_id:
-                continue
-            if outcome is None or outcome.sequence <= user.sequence:
-                raise _source_error(
-                    ContextSourceErrorCode.ADAPTER_CONTRACT_VIOLATION
-                )
-        records: list[ContextSourceRecord] = []
-        pairs: list[dict[str, object]] = []
-        for event in events:
-            if event.kind is not ConversationEventKind.USER_MESSAGE:
-                continue
-            outcome = outcomes.get(event.turn_id)
-            if event.turn_id == excluded_turn_id:
-                continue
-            assert outcome is not None
-            if outcome.kind is ConversationEventKind.RUNTIME_ERROR:
-                continue
-            pair = {
-                "agent_reply": outcome.to_dict(),
-                "user_message": event.to_dict(),
-            }
-            pairs.append(pair)
-            content_bytes = _canonical_json_bytes(pair)
-            content = content_bytes.decode("utf-8")
-            records.append(
-                _record(
-                    event.turn_id,
-                    ContextSourceBoundary.conversation_turns(
-                        event.sequence,
-                        outcome.sequence,
-                        event.turn_id,
-                        outcome.turn_id,
-                    ),
-                    content,
-                    f"{event.content}\n{outcome.content}",
-                )
-            )
-        if len(records) > policy.max_records_per_source:
+        bootstrap = context.bootstrap
+        if bootstrap.session_id not in (
+            None,
+            self.scope.session_id,
+        ) or bootstrap.conversation_id not in (None, conversation_id):
+            raise _source_error(ContextSourceErrorCode.SCOPE_MISMATCH)
+        if context.retained_records > policy.max_records_per_source:
             raise _source_error(ContextSourceErrorCode.SOURCE_LIMIT_EXCEEDED)
-        body = _canonical_json_bytes(
-            {"metadata": metadata.to_dict(), "pairs": pairs}
-        )
-        if len(body) > policy.max_source_utf8_bytes:
-            raise _source_error(ContextSourceErrorCode.SOURCE_LIMIT_EXCEEDED)
-        provenance = ContextProvenance(
-            ContextAuthorityKind.CONVERSATION_STORAGE,
-            locator,
-        )
-        descriptor = _descriptor(
-            scope=self.scope,
-            source_id=_structured_source_id("conversation", conversation_id),
-            source_kind=self.source_kind,
-            revision=_digest(body),
-            provenance=provenance,
-            content=body,
-            record_count=len(records),
-        )
-        return ContextSourceSnapshot(descriptor, tuple(records), body)
-
-    def _capture_context_window(
-        self,
-        conversation_id: str,
-        locator: str,
-        policy: ContextSourcePolicy,
-    ) -> ContextSourceSnapshot:
-        """Project one caller-captured immutable focused-context window."""
-
-        context = self._captured_context
-        if context is None or conversation_id != self._conversation_id:
-            raise _source_error(ContextSourceErrorCode.AUTHORITY_MISMATCH)
-        outcomes = {
-            event.turn_id: event
-            for event in context.events
-            if event.kind is not ConversationEventKind.USER_MESSAGE
-        }
-        records: list[ContextSourceRecord] = []
-        pairs: list[dict[str, object]] = []
-        for event in context.events:
-            if event.kind is not ConversationEventKind.USER_MESSAGE:
-                continue
-            outcome = outcomes[event.turn_id]
-            if outcome.kind is ConversationEventKind.RUNTIME_ERROR:
-                continue
-            pair = {
-                "agent_reply": outcome.to_dict(),
-                "user_message": event.to_dict(),
-            }
-            pairs.append(pair)
-            content = _canonical_json_bytes(pair).decode("utf-8")
-            records.append(
-                _record(
-                    event.turn_id,
-                    ContextSourceBoundary.conversation_turns(
-                        event.sequence,
-                        outcome.sequence,
-                        event.turn_id,
-                        outcome.turn_id,
-                    ),
-                    content,
-                    f"{event.content}\n{outcome.content}",
-                )
+        values = tuple(_readable_record_value(record) for record in context.records)
+        records = tuple(
+            _record(
+                record.event_id,
+                ContextSourceBoundary.records(record.sequence, record.sequence),
+                _canonical_json_bytes(value).decode("utf-8"),
+                "\n".join(field.text for field in record.fields),
             )
-        if len(records) > policy.max_records_per_source:
-            raise _source_error(ContextSourceErrorCode.SOURCE_LIMIT_EXCEEDED)
+            for record, value in zip(context.records, values, strict=True)
+        )
         body = _canonical_json_bytes(
             {
-                "pairs": pairs,
-                "window": {
-                    "omitted_turns": context.omitted_turns,
-                    "total_complete_turns": context.total_complete_turns,
-                    "truncated": context.truncated,
-                },
+                "bootstrap": _readable_context_bootstrap(
+                    context,
+                    session_id=self.scope.session_id,
+                    conversation_id=conversation_id,
+                ),
+                "records": values,
             }
         )
         if len(body) > policy.max_source_utf8_bytes:
@@ -1361,7 +1364,7 @@ class FocusedConversationSourceAdapter:
             content=body,
             record_count=len(records),
         )
-        return ContextSourceSnapshot(descriptor, tuple(records), body)
+        return ContextSourceSnapshot(descriptor, records, body)
 
     def capture(
         self,
@@ -1370,10 +1373,17 @@ class FocusedConversationSourceAdapter:
     ) -> ContextSourceSnapshot:
         policy = _require_source_policy(policy)
         self._authorized_conversation_id(locator)
+        cache_key = (locator, policy)
+        if self._include_searchable_history:
+            cached = self._snapshots.get(cache_key)
+            if cached is not None:
+                return cached
         for _attempt in range(2):
             first = self._capture_once(locator, policy)
             second = self._capture_once(locator, policy)
             if first == second:
+                if self._include_searchable_history:
+                    self._snapshots[cache_key] = second
                 return second
         raise _source_error(ContextSourceErrorCode.SOURCE_DRIFT)
 
@@ -1469,9 +1479,7 @@ class ActiveDebateSourceAdapter:
             except (TypeError, ValueError):
                 pass
             if message is None:
-                raise _source_error(
-                    ContextSourceErrorCode.ADAPTER_CONTRACT_VIOLATION
-                )
+                raise _source_error(ContextSourceErrorCode.ADAPTER_CONTRACT_VIOLATION)
             message_value = message.to_dict()
             message_values.append(message_value)
             content = _canonical_json_bytes(message_value).decode("utf-8")
@@ -1645,9 +1653,7 @@ def _snippet(
     if end < literal_end:
         end = literal_end
         start = max(0, end - policy.max_snippet_characters)
-    while len(normalized[start:end].encode("utf-8")) > (
-        policy.max_snippet_utf8_bytes
-    ):
+    while len(normalized[start:end].encode("utf-8")) > (policy.max_snippet_utf8_bytes):
         if start < occurrence:
             start += 1
         elif end > literal_end:
@@ -1690,8 +1696,7 @@ def _expanded_artifact_record(
             if len(content.encode("utf-8")) <= max_utf8_bytes:
                 selected_end = candidate_end
     content = "".join(
-        item.content
-        for item in snapshot.records[selected_start - 1 : selected_end]
+        item.content for item in snapshot.records[selected_start - 1 : selected_end]
     )
     return _record(
         f"lines_{selected_start}_{selected_end}",
@@ -1735,6 +1740,15 @@ class ContextSourceRegistry:
         self._adapters = adapters
         self._by_kind = {adapter.source_kind: adapter for adapter in adapters}
 
+    def canonical_core_statuses(
+        self,
+        manifest_digest: str,
+        policy: ContextSourcePolicy = CONTEXT_SOURCE_POLICY,
+    ) -> tuple[ContextSourceStatusReceipt, ...]:
+        """Return exact core statuses from the writing-artifact authority."""
+
+        return self._adapters[0].canonical_core_statuses(manifest_digest, policy)
+
     def inventory(
         self,
         policy: ContextSourcePolicy = CONTEXT_SOURCE_POLICY,
@@ -1745,9 +1759,7 @@ class ContextSourceRegistry:
         for adapter in self._adapters:
             descriptors.extend(adapter.inventory(policy))
             if len(descriptors) > policy.max_inventory_sources:
-                raise _source_error(
-                    ContextSourceErrorCode.INVENTORY_LIMIT_EXCEEDED
-                )
+                raise _source_error(ContextSourceErrorCode.INVENTORY_LIMIT_EXCEEDED)
         if sum(item.utf8_bytes for item in descriptors) > (
             policy.max_inventory_body_utf8_bytes
         ):
@@ -1877,8 +1889,7 @@ class ContextSourceRegistry:
                         )
                     if (
                         selected is None
-                        or selected.utf8_bytes
-                        > action_policy.max_excerpt_utf8_bytes
+                        or selected.utf8_bytes > action_policy.max_excerpt_utf8_bytes
                     ):
                         truncated = True
                         continue

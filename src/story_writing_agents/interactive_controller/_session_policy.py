@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from dataclasses import dataclass
+
 from ..errors import (
     BackendProtocolError,
     ConfigurationError,
@@ -22,6 +24,89 @@ from ..session_lifecycle import (
     SessionLifecycleState,
     provider_work_is_ready,
 )
+from ..session_recovery.transition_assessment import (
+    SessionTransitionAssessment,
+    SessionTransitionOperation,
+)
+
+
+@dataclass(frozen=True, slots=True, kw_only=True)
+class SessionTransitionPresentation:
+    """Fixed content-safe fields for one transition assessment."""
+
+    scope: str
+    state: str
+    next_action: str
+    owner: str
+    failure_code: str
+    allowed_operations: tuple[str, ...]
+
+
+def require_transition_assessment(
+    value: object,
+    *,
+    expected_session: str,
+    expected_conversation: str | None,
+    requested_operation: SessionTransitionOperation,
+) -> SessionTransitionAssessment:
+    """Validate exact assessment identity and requested operation."""
+
+    if type(requested_operation) is not SessionTransitionOperation:
+        raise BackendProtocolError("session transition operation is invalid")
+    if type(value) is not SessionTransitionAssessment:
+        raise BackendProtocolError("backend returned an invalid transition assessment")
+    try:
+        value.__post_init__()
+    except Exception as exc:
+        raise BackendProtocolError(
+            "backend returned malformed transition assessment facts"
+        ) from exc
+    if (
+        value.session_id != expected_session
+        or value.conversation_id != expected_conversation
+    ):
+        raise BackendProtocolError(
+            "backend returned a transition assessment for another scope"
+        )
+    return value
+
+
+def transition_operation_is_allowed(
+    assessment: SessionTransitionAssessment,
+    requested_operation: SessionTransitionOperation,
+) -> bool:
+    """Consume only the assessment's exact operation permission fact."""
+
+    value = require_transition_assessment(
+        assessment,
+        expected_session=assessment.session_id,
+        expected_conversation=assessment.conversation_id,
+        requested_operation=requested_operation,
+    )
+    return requested_operation in value.allowed_operations
+
+
+def project_transition_assessment(
+    assessment: SessionTransitionAssessment,
+) -> SessionTransitionPresentation:
+    """Project fixed content-safe assessment fields without nested evidence."""
+
+    value = require_transition_assessment(
+        assessment,
+        expected_session=assessment.session_id,
+        expected_conversation=assessment.conversation_id,
+        requested_operation=SessionTransitionOperation.ENTER_DESTINATION,
+    )
+    return SessionTransitionPresentation(
+        scope=value.scope.value,
+        state=value.state.value,
+        next_action=value.next_action.value,
+        owner=value.owner.value if value.owner is not None else "none",
+        failure_code=value.failure_code.value,
+        allowed_operations=tuple(
+            operation.value for operation in value.allowed_operations
+        ),
+    )
 
 
 RECOVERABLE_SESSION_ERROR_CODES = frozenset(
@@ -190,10 +275,16 @@ def classify_session_failure(failure: Exception) -> InteractiveError:
 
 __all__ = [
     "RECOVERABLE_SESSION_ERROR_CODES",
+    "SessionTransitionAssessment",
+    "SessionTransitionOperation",
+    "SessionTransitionPresentation",
     "classify_session_failure",
     "next_session_action",
+    "project_transition_assessment",
     "require_correlated_state",
     "require_lifecycle_state",
     "require_ready_access_state",
     "require_released_state",
+    "require_transition_assessment",
+    "transition_operation_is_allowed",
 ]

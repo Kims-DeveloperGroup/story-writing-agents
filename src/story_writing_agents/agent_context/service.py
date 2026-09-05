@@ -44,6 +44,8 @@ from .actions import (
     ContextSourceBoundaryKind,
     ContextSourceEvidence,
     ContextSourceHandle,
+    ContextSourceStatusReceipt,
+    ContextZeroHitSearchReceipt,
     serialize_context_action_observation,
 )
 from .manifest import (
@@ -110,10 +112,12 @@ __all__ = [
     "ContextExecutionEventKind",
     "ContextExecutionEventSink",
     "ContextInvocationBinding",
+    "ContextInvocationKind",
     "ContextInvocationRequest",
     "ContextInvocationResult",
     "ContextInvocationSession",
     "ContextInvocationState",
+    "ContextJsonObjectResultContract",
     "ContextProvider",
     "ContextProviderCallFinalizer",
     "ContextProviderCallRequest",
@@ -141,9 +145,7 @@ _SOURCE_KIND_WIRE_CODES = {
     ContextSourceKind.ACTIVE_DEBATE: "d",
     ContextSourceKind.OWN_AGENT_STATE: "o",
 }
-_SOURCE_KIND_FROM_WIRE = {
-    value: key for key, value in _SOURCE_KIND_WIRE_CODES.items()
-}
+_SOURCE_KIND_FROM_WIRE = {value: key for key, value in _SOURCE_KIND_WIRE_CODES.items()}
 _SEARCH_SOURCE_KIND_ORDER = tuple(_SOURCE_KIND_WIRE_CODES)
 _SEMANTIC_CHANNEL_WIRE_CODES = {
     ContextSemanticChannel.CURRENT_INPUT: "i",
@@ -191,6 +193,8 @@ _STRUCTURED_WIRE_SOURCE_KINDS = {
     ContextSourceKind.ACTIVE_DEBATE,
     ContextSourceKind.OWN_AGENT_STATE,
 }
+
+
 class ContextInvocationState(StrEnum):
     """Observable lifecycle of one call-local context action session."""
 
@@ -199,6 +203,25 @@ class ContextInvocationState(StrEnum):
     READING = "reading"
     ANSWER_AUTHORIZED = "answer_authorized"
     FAILED = "failed"
+
+
+class ContextInvocationKind(StrEnum):
+    """Optional provider-neutral semantic phase for a contextual invocation."""
+
+    LEAD = "lead"
+    SPECIALIST_ASSIGNMENT = "specialist_assignment"
+    LEAD_SYNTHESIS = "lead_synthesis"
+    SPECIALIST_ADVISORY = "specialist_advisory"
+
+
+@dataclass(frozen=True, slots=True)
+class ContextJsonObjectResultContract:
+    """Require one strict JSON-object answer under a stable contract identity."""
+
+    contract_id: str
+
+    def __post_init__(self) -> None:
+        _safe_identity(self.contract_id)
 
 
 class ContextExecutionEventKind(StrEnum):
@@ -240,15 +263,15 @@ class ContextExecutionEvent:
     mandatory_reference_count: int | None = None
     mandatory_reference_utf8_bytes: int | None = None
     provider_input_tokens: int | None = None
-    transcript_turn_count: int | None = None
-    transcript_event_count: int | None = None
+    history_record_count: int | None = None
     observation_utf8_bytes: int | None = None
     truncated: bool | None = None
 
     def __post_init__(self) -> None:
-        if type(self.kind) is not ContextExecutionEventKind or type(
-            self.scope
-        ) is not ContextScope:
+        if (
+            type(self.kind) is not ContextExecutionEventKind
+            or type(self.scope) is not ContextScope
+        ):
             raise _execution_error(ContextExecutionErrorCode.INVALID_VALUE)
         _safe_identity(self.operation_id)
         if self.scope.subject_kind is ContextSubjectKind.DEBATE:
@@ -274,8 +297,7 @@ class ContextExecutionEvent:
             self.mandatory_reference_count,
             self.mandatory_reference_utf8_bytes,
             self.provider_input_tokens,
-            self.transcript_turn_count,
-            self.transcript_event_count,
+            self.history_record_count,
             self.observation_utf8_bytes,
         ):
             if value is not None and (type(value) is not int or value < 0):
@@ -293,8 +315,7 @@ class ContextExecutionEvent:
         read_facts = (
             self.retrieved_source_count,
             self.retrieved_source_utf8_bytes,
-            self.transcript_turn_count,
-            self.transcript_event_count,
+            self.history_record_count,
             self.observation_utf8_bytes,
         )
         all_optional_facts = (
@@ -365,8 +386,7 @@ class ContextExecutionEvent:
                         self.retrieved_source_count,
                         self.retrieved_source_utf8_bytes,
                         self.provider_input_tokens,
-                        self.transcript_turn_count,
-                        self.transcript_event_count,
+                        self.history_record_count,
                     )
                 )
             ):
@@ -394,7 +414,12 @@ class ContextExecutionEvent:
         }:
             if self.action_index is not None or any(
                 value is not None
-                for value in (*plan_facts, self.search_hit_count, *read_facts, self.truncated)
+                for value in (
+                    *plan_facts,
+                    self.search_hit_count,
+                    *read_facts,
+                    self.truncated,
+                )
             ):
                 raise _execution_error(ContextExecutionErrorCode.INVALID_VALUE)
             return
@@ -474,6 +499,43 @@ def _manifest_fingerprint(manifest: ContextManifest) -> str:
     return f"sha256:{hashlib.sha256(body).hexdigest()}"
 
 
+def _authorized_source_fingerprint(
+    entries: tuple[ContextManifestEntry, ...],
+) -> str:
+    """Bind stable source identity and non-self-appending revision facts."""
+
+    body = _canonical_bytes(
+        [
+            "context-zero-hit-authorized-sources-v1",
+            [
+                [
+                    entry.source_id,
+                    entry.source_kind.value,
+                    (
+                        None
+                        if entry.source_kind is ContextSourceKind.CONVERSATION
+                        else entry.revision
+                    ),
+                    (
+                        None
+                        if entry.source_kind is ContextSourceKind.CONVERSATION
+                        else entry.content_digest
+                    ),
+                    entry.provenance.authority_kind.value,
+                    entry.provenance.locator,
+                    (
+                        None
+                        if entry.source_kind is ContextSourceKind.CONVERSATION
+                        else entry.utf8_bytes
+                    ),
+                ]
+                for entry in entries
+            ],
+        ]
+    )
+    return f"sha256:{hashlib.sha256(body).hexdigest()}"
+
+
 def _digest(body: bytes) -> str:
     return f"sha256:{hashlib.sha256(body).hexdigest()}"
 
@@ -504,6 +566,7 @@ def _execution_policy_fingerprint(
 
 def _evidence_value(receipt: ContextEvidenceReceipt) -> tuple[object, ...]:
     return (
+        receipt.evidence_id,
         receipt.handle.value,
         receipt.source_id,
         receipt.source_kind.value,
@@ -515,6 +578,36 @@ def _evidence_value(receipt: ContextEvidenceReceipt) -> tuple[object, ...]:
         _boundary_value(receipt.boundary),
         receipt.boundary_digest,
         receipt.boundary_utf8_bytes,
+        receipt.originating_search_action_index,
+        receipt.completing_read_action_index,
+    )
+
+
+def _status_value(receipt: ContextSourceStatusReceipt) -> tuple[object, ...]:
+    return (
+        receipt.evidence_id,
+        receipt.source_id,
+        receipt.locator,
+        receipt.status.value,
+        receipt.ordinal,
+        receipt.manifest_digest,
+        receipt.revision,
+        receipt.source_digest,
+        receipt.source_utf8_bytes,
+    )
+
+
+def _zero_hit_value(receipt: ContextZeroHitSearchReceipt) -> tuple[object, ...]:
+    return (
+        receipt.evidence_id,
+        receipt.correlation.action_index,
+        receipt.manifest_digest,
+        receipt.authorized_source_ids,
+        tuple(item.value for item in receipt.authorized_source_kinds),
+        receipt.authorized_source_fingerprint,
+        receipt.artifact_path_prefix,
+        receipt.query_digest,
+        receipt.query_count,
     )
 
 
@@ -535,7 +628,12 @@ def _completed_evidence_digest(
                 },
                 "boundary_digest": receipt.boundary_digest,
                 "boundary_utf8_bytes": receipt.boundary_utf8_bytes,
+                "completing_read_action_index": (receipt.completing_read_action_index),
+                "evidence_id": receipt.evidence_id,
                 "handle": receipt.handle.value,
+                "originating_search_action_index": (
+                    receipt.originating_search_action_index
+                ),
                 "provenance": {
                     "authority_kind": receipt.provenance.authority_kind.value,
                     "locator": receipt.provenance.locator,
@@ -548,9 +646,7 @@ def _completed_evidence_digest(
             }
         )
     return _digest(
-        _canonical_bytes(
-            {"evidence": values, "kind": "completed_context_reads_v1"}
-        )
+        _canonical_bytes({"evidence": values, "kind": "completed_context_reads_v1"})
     )
 
 
@@ -810,18 +906,20 @@ def _provider_input_token_total(
     return total
 
 
-def _conversation_read_counts(
+def _conversation_read_record_count(
     observation: ContextReadObservation,
-) -> tuple[int, int]:
-    """Count complete conversation pairs without retaining or emitting bodies."""
+) -> int:
+    """Count readable collaboration records without retaining their bodies."""
 
-    turns = 0
+    records = 0
     for evidence in observation.evidence:
         receipt = evidence.receipt
         if receipt.source_kind is not ContextSourceKind.CONVERSATION:
             continue
-        if receipt.boundary.kind is ContextSourceBoundaryKind.CONVERSATION_TURNS:
-            turns += 1
+        if receipt.boundary.kind is ContextSourceBoundaryKind.RECORDS:
+            assert receipt.boundary.start is not None
+            assert receipt.boundary.end is not None
+            records += receipt.boundary.end - receipt.boundary.start + 1
             continue
         if receipt.boundary.kind is not ContextSourceBoundaryKind.WHOLE:
             continue
@@ -829,9 +927,9 @@ def _conversation_read_counts(
             value = json.loads(evidence.content)
         except (json.JSONDecodeError, RecursionError, TypeError, UnicodeError):
             continue
-        if type(value) is dict and type(value.get("pairs")) is list:
-            turns += len(value["pairs"])
-    return turns, turns * 2
+        if type(value) is dict and type(value.get("records")) is list:
+            records += len(value["records"])
+    return records
 
 
 @dataclass(frozen=True, slots=True)
@@ -884,6 +982,10 @@ class ContextInvocationRequest:
     allowed_search_source_kinds: tuple[ContextSourceKind, ...] = (
         _SEARCH_SOURCE_KIND_ORDER
     )
+    invocation_kind: ContextInvocationKind | None = None
+    result_contract: ContextJsonObjectResultContract | None = None
+    physical_call_limit: int | None = None
+    include_core_statuses: bool = False
 
     def __post_init__(self) -> None:
         _safe_identity(self.session_id)
@@ -927,9 +1029,7 @@ class ContextInvocationRequest:
             for item in self.mandatory_references
         ):
             raise _execution_error(ContextExecutionErrorCode.INVALID_VALUE)
-        if bool(self.reference_operation_id) is not bool(
-            self.mandatory_references
-        ):
+        if bool(self.reference_operation_id) is not bool(self.mandatory_references):
             raise _execution_error(ContextExecutionErrorCode.INVALID_VALUE)
         if type(self.fresh) is not bool:
             raise _execution_error(ContextExecutionErrorCode.INVALID_VALUE)
@@ -949,6 +1049,21 @@ class ContextInvocationRequest:
             )
         ):
             raise _execution_error(ContextExecutionErrorCode.INVALID_VALUE)
+        if (self.invocation_kind is None) is not (self.result_contract is None):
+            raise _execution_error(ContextExecutionErrorCode.INVALID_VALUE)
+        if self.invocation_kind is not None and (
+            type(self.invocation_kind) is not ContextInvocationKind
+            or type(self.result_contract) is not ContextJsonObjectResultContract
+        ):
+            raise _execution_error(ContextExecutionErrorCode.INVALID_VALUE)
+        if self.physical_call_limit is not None and (
+            type(self.physical_call_limit) is not int
+            or self.physical_call_limit < 1
+            or self.physical_call_limit > CONTEXT_ACTION_POLICY.max_provider_calls
+        ):
+            raise _execution_error(ContextExecutionErrorCode.INVALID_VALUE)
+        if type(self.include_core_statuses) is not bool:
+            raise _execution_error(ContextExecutionErrorCode.INVALID_VALUE)
 
 
 @dataclass(frozen=True, slots=True)
@@ -958,15 +1073,25 @@ class ContextProviderFailureFacts:
     accounting: ProviderCallAccounting | None = None
     timed_out: bool = False
     taint_existing_thread: bool = False
+    submitted_accountings: tuple[ProviderCallAccounting, ...] = ()
+    submission_uncertain: bool = False
 
     def __post_init__(self) -> None:
         if self.accounting is not None and type(self.accounting) is not (
             ProviderCallAccounting
         ):
             raise _execution_error(ContextExecutionErrorCode.INVALID_VALUE)
-        if type(self.timed_out) is not bool or type(
-            self.taint_existing_thread
-        ) is not bool:
+        if (
+            type(self.timed_out) is not bool
+            or type(self.taint_existing_thread) is not bool
+            or type(self.submission_uncertain) is not bool
+        ):
+            raise _execution_error(ContextExecutionErrorCode.INVALID_VALUE)
+        if type(self.submitted_accountings) is not tuple or any(
+            type(item) is not ProviderCallAccounting
+            or item.state is not ProviderCallState.SUBMITTED
+            for item in self.submitted_accountings
+        ):
             raise _execution_error(ContextExecutionErrorCode.INVALID_VALUE)
 
 
@@ -1257,8 +1382,7 @@ class ContextInvocationResult:
             raise _execution_error(ContextExecutionErrorCode.INVALID_VALUE)
         _safe_identity(self.provider_thread_id)
         if type(self.provider_calls) is not tuple or any(
-            type(item) is not ContextLedgerProviderCall
-            for item in self.provider_calls
+            type(item) is not ContextLedgerProviderCall for item in self.provider_calls
         ):
             raise _execution_error(ContextExecutionErrorCode.INVALID_VALUE)
         if type(self.ledger_generation) is not int or self.ledger_generation < 1:
@@ -1320,8 +1444,10 @@ class ContextReadReceipt:
     def __post_init__(self) -> None:
         if type(self.correlation) is not ContextActionCorrelation:
             raise _action_error(ContextActionErrorCode.INVALID_VALUE)
-        if type(self.evidence) is not tuple or not self.evidence or any(
-            type(item) is not ContextEvidenceReceipt for item in self.evidence
+        if (
+            type(self.evidence) is not tuple
+            or not self.evidence
+            or any(type(item) is not ContextEvidenceReceipt for item in self.evidence)
         ):
             raise _action_error(ContextActionErrorCode.INVALID_VALUE)
         if len({item.handle.value for item in self.evidence}) != len(self.evidence):
@@ -1365,6 +1491,8 @@ class ContextInvocationSession:
         allowed_search_source_kinds: tuple[ContextSourceKind, ...] = (
             _SEARCH_SOURCE_KIND_ORDER
         ),
+        physical_call_limit: int | None = None,
+        core_statuses: tuple[ContextSourceStatusReceipt, ...] = (),
     ) -> None:
         if (
             type(binding) is not ContextInvocationBinding
@@ -1385,6 +1513,18 @@ class ContextInvocationSession:
                 for kind in _SEARCH_SOURCE_KIND_ORDER
                 if kind in allowed_search_source_kinds
             )
+            or (
+                physical_call_limit is not None
+                and (
+                    type(physical_call_limit) is not int
+                    or physical_call_limit < 1
+                    or physical_call_limit > action_policy.max_provider_calls
+                )
+            )
+            or type(core_statuses) is not tuple
+            or any(
+                type(item) is not ContextSourceStatusReceipt for item in core_statuses
+            )
         ):
             raise _action_error(ContextActionErrorCode.INVALID_VALUE)
         if source_aliases is not None:
@@ -1394,18 +1534,27 @@ class ContextInvocationSession:
                 for entry in binding.manifest.entries
                 if context_source_uses_catalog_alias(entry)
             }
-            if set(aliases) != readable_ids or any(
-                type(alias) is not str
-                or not alias.startswith("s")
-                or not alias[1:].isdigit()
-                or alias[1:].startswith("0")
-                for alias in aliases.values()
-            ) or len(set(aliases.values())) != len(aliases):
+            if (
+                set(aliases) != readable_ids
+                or any(
+                    type(alias) is not str
+                    or not alias.startswith("s")
+                    or not alias[1:].isdigit()
+                    or alias[1:].startswith("0")
+                    for alias in aliases.values()
+                )
+                or len(set(aliases.values())) != len(aliases)
+            ):
                 raise _action_error(ContextActionErrorCode.INVALID_VALUE)
             self._source_aliases: dict[str, str] | None = aliases
         else:
             self._source_aliases = None
         self._allowed_search_source_kinds = allowed_search_source_kinds
+        self._physical_call_limit = (
+            action_policy.max_provider_calls
+            if physical_call_limit is None
+            else physical_call_limit
+        )
         self.binding = binding
         self._sources = sources
         self._action_policy = action_policy
@@ -1419,6 +1568,11 @@ class ContextInvocationSession:
             raise _action_error(ContextActionErrorCode.INVALID_VALUE)
         self._secret: bytearray | None = bytearray(secret)
         self._manifest_fingerprint = _manifest_fingerprint(binding.manifest)
+        if any(
+            item.manifest_digest != self._manifest_fingerprint for item in core_statuses
+        ):
+            raise _action_error(ContextActionErrorCode.INVALID_VALUE)
+        self._core_statuses = core_statuses
         self._lock = threading.RLock()
         self._state = ContextInvocationState.OPEN
         self._next_action_index = 1
@@ -1437,6 +1591,7 @@ class ContextInvocationSession:
         self._full_handle_by_wire: dict[str, str] = {}
         self._safe_locator_by_full: dict[str, str] = {}
         self._completed_receipts: list[ContextReadReceipt] = []
+        self._zero_hit_receipts: list[ContextZeroHitSearchReceipt] = []
         self._pending_receipt: ContextReadReceipt | None = None
 
     @property
@@ -1530,9 +1685,7 @@ class ContextInvocationSession:
             + handle.value.encode("ascii", errors="strict"),
             hashlib.sha256,
         ).digest()[:12]
-        return "h" + base64.urlsafe_b64encode(digest).rstrip(b"=").decode(
-            "ascii"
-        )
+        return "h" + base64.urlsafe_b64encode(digest).rstrip(b"=").decode("ascii")
 
     def _preview_handle_aliases(
         self,
@@ -1555,8 +1708,7 @@ class ContextInvocationSession:
     ) -> dict[str, str]:
         locators = dict(self._safe_locator_by_full)
         locators.update(
-            (binding.handle.value, binding.safe_locator)
-            for binding in pending
+            (binding.handle.value, binding.safe_locator) for binding in pending
         )
         return locators
 
@@ -1599,6 +1751,12 @@ class ContextInvocationSession:
             raise _action_error(ContextActionErrorCode.HANDLE_INVALID)
         return alias
 
+    @property
+    def core_statuses(self) -> tuple[ContextSourceStatusReceipt, ...]:
+        """Return the invocation-bound content-free canonical core statuses."""
+
+        return self._core_statuses
+
     def wire_handle_alias(self, handle: ContextSourceHandle) -> str:
         """Return an already-emitted compact alias for one full handle."""
 
@@ -1629,12 +1787,11 @@ class ContextInvocationSession:
             type(correlation) is not ContextActionCorrelation
             or correlation.scope != self.binding.scope
             or correlation.operation_id != self.binding.operation_id
-            or correlation.result_correlation_id
-            != self.binding.result_correlation_id
+            or correlation.result_correlation_id != self.binding.result_correlation_id
             or correlation.action_index != self._next_action_index
         ):
             raise _action_error(ContextActionErrorCode.CORRELATION_MISMATCH)
-        if correlation.action_index > self._action_policy.max_provider_calls:
+        if correlation.action_index > self._physical_call_limit:
             raise _action_error(ContextActionErrorCode.ACTION_LIMIT_EXCEEDED)
 
     def _require_nonterminal_capacity(self) -> None:
@@ -1666,12 +1823,13 @@ class ContextInvocationSession:
         """Return the one authoritative action tuple for the next call."""
 
         with self._lock:
-            if after not in {None, "search", "read"} or type(
-                search_had_hits
-            ) is not bool:
+            if (
+                after not in {None, "search", "read"}
+                or type(search_had_hits) is not bool
+            ):
                 raise _action_error(ContextActionErrorCode.INVALID_VALUE)
             nonterminal_capacity = (
-                self._next_action_index < self._action_policy.max_provider_calls
+                self._next_action_index < self._physical_call_limit
                 and self._nonterminal_actions
                 < self._action_policy.max_nonterminal_actions
             )
@@ -1684,16 +1842,14 @@ class ContextInvocationSession:
             )
             can_read = bool(
                 self._read_actions < self._action_policy.max_read_actions
-                and self._read_handles
-                < self._action_policy.max_cumulative_handles
+                and self._read_handles < self._action_policy.max_cumulative_handles
                 and self._handles
             )
             actions: list[str] = []
             if can_search:
                 actions.append("search")
             if can_read and (
-                (after == "search" and search_had_hits)
-                or after == "read"
+                (after == "search" and search_had_hits) or after == "read"
             ):
                 actions.append("read")
             actions.append("answer")
@@ -1706,13 +1862,15 @@ class ContextInvocationSession:
             return [
                 max(
                     0,
-                    self._action_policy.max_nonterminal_actions
-                    - self._nonterminal_actions,
+                    min(
+                        self._action_policy.max_nonterminal_actions
+                        - self._nonterminal_actions,
+                        self._physical_call_limit - self._next_action_index,
+                    ),
                 ),
                 max(
                     0,
-                    self._action_policy.max_search_actions
-                    - self._search_actions,
+                    self._action_policy.max_search_actions - self._search_actions,
                 ),
                 max(
                     0,
@@ -1726,8 +1884,7 @@ class ContextInvocationSession:
                 self._action_policy.max_handles_per_read,
                 max(
                     0,
-                    self._action_policy.max_cumulative_handles
-                    - self._read_handles,
+                    self._action_policy.max_cumulative_handles - self._read_handles,
                 ),
                 self._action_policy.max_query_characters,
             ]
@@ -1837,9 +1994,7 @@ class ContextInvocationSession:
                     - self._scan_utf8_bytes
                 )
                 matches, truncated, scanned = self._sources.search(
-                    self._search_manifest(
-                        action.queries[0].artifact_path_prefix
-                    ),
+                    self._search_manifest(action.queries[0].artifact_path_prefix),
                     action.queries,
                     source_policy=self._source_policy,
                     action_policy=self._action_policy,
@@ -1896,10 +2051,62 @@ class ContextInvocationSession:
                     - self._observation_utf8_bytes
                 )
                 while True:
+                    search_manifest = self._search_manifest(
+                        action.queries[0].artifact_path_prefix
+                    )
+                    requested_kinds = tuple(
+                        kind
+                        for kind in _SEARCH_SOURCE_KIND_ORDER
+                        if any(kind in query.source_kinds for query in action.queries)
+                    )
+                    authorized_entries = tuple(
+                        entry
+                        for entry in search_manifest.entries
+                        if entry.searchable and entry.source_kind in requested_kinds
+                    )
+                    zero_hit_receipt = (
+                        ContextZeroHitSearchReceipt(
+                            evidence_id=(f"search_{action.correlation.action_index}"),
+                            correlation=action.correlation,
+                            manifest_digest=self._manifest_fingerprint,
+                            authorized_source_ids=tuple(
+                                entry.source_id for entry in authorized_entries
+                            ),
+                            authorized_source_kinds=requested_kinds,
+                            authorized_source_fingerprint=(
+                                _authorized_source_fingerprint(authorized_entries)
+                            ),
+                            artifact_path_prefix=(
+                                action.queries[0].artifact_path_prefix
+                            ),
+                            query_digest=_digest(
+                                _canonical_bytes(
+                                    [
+                                        "context-zero-hit-query-v1",
+                                        [
+                                            [
+                                                query.normalized_text,
+                                                [
+                                                    kind.value
+                                                    for kind in query.source_kinds
+                                                ],
+                                                query.artifact_path_prefix,
+                                            ]
+                                            for query in action.queries
+                                        ],
+                                    ]
+                                )
+                            ),
+                            query_count=len(action.queries),
+                        )
+                        if not hits and not truncated
+                        else None
+                    )
                     observation = ContextSearchObservation(
                         action.correlation,
                         tuple(hits),
                         truncated,
+                        zero_hit_receipt,
                     )
                     framed_bytes = len(
                         serialize_context_action_observation(
@@ -1913,9 +2120,9 @@ class ContextInvocationSession:
                             ),
                         ).encode("utf-8")
                         if self._source_aliases is not None
-                        else serialize_context_action_observation(
-                            observation
-                        ).encode("utf-8")
+                        else serialize_context_action_observation(observation).encode(
+                            "utf-8"
+                        )
                     )
                     if framed_bytes <= available:
                         break
@@ -1927,9 +2134,7 @@ class ContextInvocationSession:
                     pending_bindings.pop()
                     truncated = True
                 if self._state is not ContextInvocationState.SEARCHING:
-                    raise _action_error(
-                        ContextActionErrorCode.INVALID_TRANSITION
-                    )
+                    raise _action_error(ContextActionErrorCode.INVALID_TRANSITION)
                 for handle_binding in pending_bindings:
                     self._register_handle(handle_binding)
                     self._register_wire_handle(handle_binding.handle)
@@ -1939,6 +2144,8 @@ class ContextInvocationSession:
                 self._hits += len(hits)
                 self._scan_utf8_bytes += scanned
                 self._observation_utf8_bytes += framed_bytes
+                if observation.zero_hit_receipt is not None:
+                    self._zero_hit_receipts.append(observation.zero_hit_receipt)
                 self._next_action_index += 1
                 self._state = ContextInvocationState.OPEN
                 return observation
@@ -1973,21 +2180,15 @@ class ContextInvocationSession:
                 if record.boundary.start is not None
                 and boundary.start <= record.boundary.start <= boundary.end
             )
-            if (
-                len(selected) != boundary.end - boundary.start + 1
-                or tuple(record.boundary.start for record in selected)
-                != tuple(range(boundary.start, boundary.end + 1))
-            ):
+            if len(selected) != boundary.end - boundary.start + 1 or tuple(
+                record.boundary.start for record in selected
+            ) != tuple(range(boundary.start, boundary.end + 1)):
                 raise _action_error(ContextActionErrorCode.HANDLE_INVALID)
             if boundary.kind is ContextSourceBoundaryKind.ARTIFACT_LINES:
-                return b"".join(
-                    record.content.encode("utf-8") for record in selected
-                )
+                return b"".join(record.content.encode("utf-8") for record in selected)
             if len(selected) == 1:
                 return selected[0].content.encode("utf-8")
-            return _canonical_bytes(
-                [json.loads(record.content) for record in selected]
-            )
+            return _canonical_bytes([json.loads(record.content) for record in selected])
         matches = tuple(
             record for record in snapshot.records if record.boundary == boundary
         )
@@ -2022,9 +2223,7 @@ class ContextInvocationSession:
                 )
                 executed = True
                 self._state = ContextInvocationState.READING
-                requested_source_ids = {
-                    binding.entry.source_id for binding in bindings
-                }
+                requested_source_ids = {binding.entry.source_id for binding in bindings}
                 ordered_entries = tuple(
                     entry
                     for entry in self.binding.manifest.entries
@@ -2038,13 +2237,11 @@ class ContextInvocationSession:
                         self._source_policy,
                     )
                     if self._state is not ContextInvocationState.READING:
-                        raise _action_error(
-                            ContextActionErrorCode.INVALID_TRANSITION
-                        )
+                        raise _action_error(ContextActionErrorCode.INVALID_TRANSITION)
                 source_additions: dict[str, int] = {}
                 evidence: list[ContextSourceEvidence] = []
                 batch_bytes = 0
-                for handle_binding in bindings:
+                for evidence_ordinal, handle_binding in enumerate(bindings, start=1):
                     entry = handle_binding.entry
                     snapshot = snapshots[entry.source_id]
                     excerpt = self._boundary_content(
@@ -2053,9 +2250,9 @@ class ContextInvocationSession:
                     )
                     if len(excerpt) > self._action_policy.max_excerpt_utf8_bytes:
                         raise _action_error(ContextActionErrorCode.READ_LIMIT_EXCEEDED)
-                    source_additions[entry.source_id] = (
-                        source_additions.get(entry.source_id, 0) + len(excerpt)
-                    )
+                    source_additions[entry.source_id] = source_additions.get(
+                        entry.source_id, 0
+                    ) + len(excerpt)
                     prior_source_bytes = self._source_read_utf8_bytes.get(
                         entry.source_id,
                         0,
@@ -2070,6 +2267,9 @@ class ContextInvocationSession:
                     ):
                         raise _action_error(ContextActionErrorCode.READ_LIMIT_EXCEEDED)
                     receipt = ContextEvidenceReceipt(
+                        evidence_id=(
+                            f"read_{action.correlation.action_index}_{evidence_ordinal}"
+                        ),
                         handle=handle_binding.handle,
                         source_id=entry.source_id,
                         source_kind=entry.source_kind,
@@ -2082,6 +2282,10 @@ class ContextInvocationSession:
                             f"sha256:{hashlib.sha256(excerpt).hexdigest()}"
                         ),
                         boundary_utf8_bytes=len(excerpt),
+                        originating_search_action_index=(
+                            handle_binding.origin_action_index
+                        ),
+                        completing_read_action_index=(action.correlation.action_index),
                     )
                     evidence.append(
                         ContextSourceEvidence(
@@ -2100,9 +2304,7 @@ class ContextInvocationSession:
                     ):
                         raise _action_error(ContextActionErrorCode.HANDLE_INVALID)
                     if self._state is not ContextInvocationState.READING:
-                        raise _action_error(
-                            ContextActionErrorCode.INVALID_TRANSITION
-                        )
+                        raise _action_error(ContextActionErrorCode.INVALID_TRANSITION)
                 observation = ContextReadObservation(
                     action.correlation,
                     tuple(evidence),
@@ -2177,23 +2379,16 @@ class ContextInvocationSession:
                     for evidence in receipt.evidence
                 )
                 completed = {
-                    evidence.handle.value: evidence
-                    for evidence in completed_evidence
+                    evidence.handle.value: evidence for evidence in completed_evidence
                 }
                 if len(completed) != len(completed_evidence):
-                    raise _action_error(
-                        ContextActionErrorCode.ANSWER_NOT_AUTHORIZED
-                    )
+                    raise _action_error(ContextActionErrorCode.ANSWER_NOT_AUTHORIZED)
                 if any(handle.value not in completed for handle in action.used_handles):
-                    raise _action_error(
-                        ContextActionErrorCode.ANSWER_NOT_AUTHORIZED
-                    )
+                    raise _action_error(ContextActionErrorCode.ANSWER_NOT_AUTHORIZED)
                 if len(action.used_handles) > (
                     self._action_policy.max_cumulative_handles
                 ):
-                    raise _action_error(
-                        ContextActionErrorCode.ANSWER_NOT_AUTHORIZED
-                    )
+                    raise _action_error(ContextActionErrorCode.ANSWER_NOT_AUTHORIZED)
                 executed = True
                 self._state = ContextInvocationState.SEARCHING
                 completed_source_ids = {
@@ -2218,12 +2413,8 @@ class ContextInvocationSession:
                         self._source_policy,
                     )
                     if self._state is not ContextInvocationState.SEARCHING:
-                        raise _action_error(
-                            ContextActionErrorCode.INVALID_TRANSITION
-                        )
-                completed_read_digest = _completed_evidence_digest(
-                    completed_evidence
-                )
+                        raise _action_error(ContextActionErrorCode.INVALID_TRANSITION)
+                completed_read_digest = _completed_evidence_digest(completed_evidence)
                 answer_digest = _digest(action.answer.encode("utf-8"))
                 if self._secret is None:
                     raise _action_error(ContextActionErrorCode.INVALID_TRANSITION)
@@ -2239,6 +2430,8 @@ class ContextInvocationSession:
                         completed_read_digest,
                         [_evidence_value(item) for item in completed_evidence],
                         [handle.value for handle in action.used_handles],
+                        [_status_value(item) for item in self._core_statuses],
+                        [_zero_hit_value(item) for item in self._zero_hit_receipts],
                         self.binding.reference_operation_id,
                         [
                             _reference_value(reference)
@@ -2264,6 +2457,8 @@ class ContextInvocationSession:
                     used_evidence=tuple(
                         completed[handle.value] for handle in action.used_handles
                     ),
+                    core_statuses=self._core_statuses,
+                    zero_hit_searches=tuple(self._zero_hit_receipts),
                     reference_operation_id=self.binding.reference_operation_id,
                     mandatory_references=self.binding.mandatory_references,
                 )
@@ -2337,9 +2532,11 @@ def _correlation_token(correlation: ContextActionCorrelation) -> str:
             correlation.action_index,
         ]
     )
-    return base64.urlsafe_b64encode(hashlib.sha256(body).digest()).rstrip(
-        b"="
-    ).decode("ascii")
+    return (
+        base64.urlsafe_b64encode(hashlib.sha256(body).digest())
+        .rstrip(b"=")
+        .decode("ascii")
+    )
 
 
 def _projected_component_kind(entry: ContextManifestEntry) -> ContextComponentKind:
@@ -2400,6 +2597,10 @@ def _correlation_token_matches(
 def _answer_text_for_contract(value: object, contract: object) -> str:
     """Validate one advertised result shape and restore internal answer text."""
 
+    if type(contract) is ContextJsonObjectResultContract:
+        if type(value) is not dict:
+            raise ValueError
+        return _canonical_bytes(value).decode("utf-8", errors="strict")
     if contract == "text":
         if type(value) is not str or not value:
             raise ValueError
@@ -2465,9 +2666,7 @@ def _decode_context_action(
         if not _correlation_token_matches(raw["c"], correlation):
             raise _execution_error(
                 ContextExecutionErrorCode.MALFORMED_ACTION,
-                detail=(
-                    _ContextExecutionErrorDetail.RESPONSE_CORRELATION_MISMATCH
-                ),
+                detail=(_ContextExecutionErrorDetail.RESPONSE_CORRELATION_MISMATCH),
             )
         action_kind = {
             "s": "search",
@@ -2484,9 +2683,7 @@ def _decode_context_action(
             if action_kind == "read" and not used_handles:
                 raise _execution_error(
                     ContextExecutionErrorCode.MALFORMED_ACTION,
-                    detail=(
-                        _ContextExecutionErrorDetail.READ_SOURCE_HANDLES_REQUIRED
-                    ),
+                    detail=(_ContextExecutionErrorDetail.READ_SOURCE_HANDLES_REQUIRED),
                 )
             raise ValueError
         if action_kind == "search":
@@ -2509,12 +2706,9 @@ def _decode_context_action(
                 source_kinds = tuple(
                     _SOURCE_KIND_FROM_WIRE.get(item, item) for item in kinds
                 )
-                decoded_kinds = tuple(
-                    ContextSourceKind(item) for item in source_kinds
-                )
+                decoded_kinds = tuple(ContextSourceKind(item) for item in source_kinds)
                 if any(
-                    kind not in allowed_search_source_kinds
-                    for kind in decoded_kinds
+                    kind not in allowed_search_source_kinds for kind in decoded_kinds
                 ):
                     raise ValueError
                 queries.append(
@@ -2563,9 +2757,7 @@ def _decode_context_action(
         TypeError,
         ValueError,
     ):
-        raise _execution_error(
-            ContextExecutionErrorCode.MALFORMED_ACTION
-        ) from None
+        raise _execution_error(ContextExecutionErrorCode.MALFORMED_ACTION) from None
 
 
 def _context_action_schema() -> dict[str, object]:
@@ -2605,8 +2797,7 @@ def _wire_projected_content(
 
     content = body_utf8.decode("utf-8", errors="strict")
     if any(
-        entry.source_kind not in _STRUCTURED_WIRE_SOURCE_KINDS
-        for entry in unit_entries
+        entry.source_kind not in _STRUCTURED_WIRE_SOURCE_KINDS for entry in unit_entries
     ):
         return content
     try:
@@ -2702,13 +2893,8 @@ class _WireCandidateRecord:
         try:
             encoded = self.content.encode("utf-8", errors="strict")
         except UnicodeEncodeError:
-            raise _execution_error(
-                ContextExecutionErrorCode.INVALID_VALUE
-            ) from None
-        if (
-            _digest(encoded) != self.content_digest
-            or len(encoded) != self.utf8_bytes
-        ):
+            raise _execution_error(ContextExecutionErrorCode.INVALID_VALUE) from None
+        if _digest(encoded) != self.content_digest or len(encoded) != self.utf8_bytes:
             raise _execution_error(ContextExecutionErrorCode.INVALID_VALUE)
 
 
@@ -2762,18 +2948,12 @@ def _latest_debate_candidate_record(
         None,
     )
     material = next(
-        (
-            item
-            for item in materials
-            if item.entry.source_id == source.entry.source_id
-        ),
+        (item for item in materials if item.entry.source_id == source.entry.source_id),
         None,
     )
     if catalog is None or material is None:
         return None
-    material_by_id = {
-        record.cursor.record_id: record for record in material.records
-    }
+    material_by_id = {record.cursor.record_id: record for record in material.records}
     candidate: _WireCandidateRecord | None = None
     for accepted in source.records:
         record = material_by_id.get(accepted.cursor.record_id)
@@ -2924,10 +3104,11 @@ def _invocation_phase_contract(
 ) -> tuple[str, object]:
     """Derive the compact established phase and result shape from route identity."""
 
+    if request.invocation_kind is not None:
+        assert request.result_contract is not None
+        return request.invocation_kind.value, request.result_contract
     if request.subject_kind is ContextSubjectKind.CONVERSATION:
-        if request.allowed_search_source_kinds == (
-            ContextSourceKind.CONVERSATION,
-        ):
+        if request.allowed_search_source_kinds == (ContextSourceKind.CONVERSATION,):
             return "retrieval", ["retrieval", "text", "citations"]
         return "conversation", "text"
     phases = (
@@ -2965,7 +3146,10 @@ def _action_query(
     """Build the authoritative phase, action, kind, limit, and result tuple."""
 
     phase, contract = phase_contract
-    wire_contract = list(contract) if type(contract) is list else contract
+    if type(contract) is ContextJsonObjectResultContract:
+        wire_contract: object = [phase, contract.contract_id]
+    else:
+        wire_contract = list(contract) if type(contract) is list else contract
     return [
         phase,
         "".join(_ACTION_WIRE_CODES[action] for action in allowed_actions),
@@ -3015,9 +3199,7 @@ def _initial_payload(
         if any(context_source_uses_catalog_alias(entry) for entry in unit.entries):
             continue
         content = _wire_projected_content(unit.entries, unit.body_utf8)
-        channel = _SEMANTIC_CHANNEL_WIRE_CODES[
-            unit.entries[0].semantic_channel
-        ]
+        channel = _SEMANTIC_CHANNEL_WIRE_CODES[unit.entries[0].semantic_channel]
         if type(content) is str:
             remember_duplicate(content, channel)
         elif type(content) is dict and type(content.get("input")) is str:
@@ -3101,14 +3283,10 @@ def _initial_payload(
             )
             record_path_index = 4
         elif source.entry.source_kind is ContextSourceKind.ACTIVE_DEBATE:
-            projected_records.append(
-                ["d", _source_number(source_alias), record_values]
-            )
+            projected_records.append(["d", _source_number(source_alias), record_values])
             record_path_index = 2
         else:
-            projected_records.append(
-                ["o", _source_number(source_alias), record_values]
-            )
+            projected_records.append(["o", _source_number(source_alias), record_values])
             record_path_index = 2
         for record_index in range(len(records)):
             component_paths[("p", group_index, record_path_index, record_index)] = (
@@ -3124,8 +3302,7 @@ def _initial_payload(
         for entry in unit.entries:
             if (
                 entry.source_kind is not ContextSourceKind.WRITING_ARTIFACT
-                or entry.semantic_channel
-                is not ContextSemanticChannel.HARD_CONSTRAINT
+                or entry.semantic_channel is not ContextSemanticChannel.HARD_CONSTRAINT
             ):
                 continue
             catalog = catalog_by_id.get(entry.source_id)
@@ -3151,6 +3328,20 @@ def _initial_payload(
         "q": _action_query(phase_contract, session, allowed_actions),
         "i": current,
     }
+    if session.core_statuses:
+        payload["core_statuses"] = [
+            {
+                "evidence_id": item.evidence_id,
+                "locator": item.locator,
+                "manifest_digest": item.manifest_digest,
+                "revision": item.revision,
+                "source_digest": item.source_digest,
+                "source_id": item.source_id,
+                "status": item.status.value,
+                "utf8_bytes": item.source_utf8_bytes,
+            }
+            for item in session.core_statuses
+        ]
     if candidate is not None:
         payload["n"] = (
             _wire_candidate_value(
@@ -3167,41 +3358,38 @@ def _initial_payload(
     if projected_records:
         payload["p"] = projected_records
     tombstones = [
-            *[
-                ["s", _source_number(source.source_alias)]
-                for source in projection.removed_catalog_sources
-            ],
-            *[
-                [
-                    "d",
-                    _source_number(
-                        proposal_catalog_by_id[
-                            source.entry.source_id
-                        ].source_alias
-                    ),
-                ]
-                for source in projection.removed_checkpoint_sources
-                if source.entry.source_id in proposal_catalog_by_id
-                and source.entry.source_id
-                not in {
-                    removed.entry.source_id
-                    for removed in projection.removed_catalog_sources
-                }
-            ],
-            *[
-                [
-                    "r",
-                    _source_number(record.source_alias),
-                    record.record_alias,
-                ]
-                for record in projection.removed_checkpoint_records
-                if record.source_alias
-                not in {
-                    removed.source_alias
-                    for removed in projection.removed_catalog_sources
-                }
-            ],
-        ]
+        *[
+            ["s", _source_number(source.source_alias)]
+            for source in projection.removed_catalog_sources
+        ],
+        *[
+            [
+                "d",
+                _source_number(
+                    proposal_catalog_by_id[source.entry.source_id].source_alias
+                ),
+            ]
+            for source in projection.removed_checkpoint_sources
+            if source.entry.source_id in proposal_catalog_by_id
+            and source.entry.source_id
+            not in {
+                removed.entry.source_id
+                for removed in projection.removed_catalog_sources
+            }
+        ],
+        *[
+            [
+                "r",
+                _source_number(record.source_alias),
+                record.record_alias,
+            ]
+            for record in projection.removed_checkpoint_records
+            if record.source_alias
+            not in {
+                removed.source_alias for removed in projection.removed_catalog_sources
+            }
+        ],
+    ]
     if tombstones:
         payload["t"] = tombstones
     mandatory_paths: list[JsonPath] = []
@@ -3215,9 +3403,7 @@ def _initial_payload(
         for index, item in enumerate(reference_context):
             if "content" in item:
                 path = ("untrusted_writing_artifact_context", index, "content")
-                component_paths[path] = (
-                    ContextComponentKind.MANDATORY_REFERENCE_CONTENT
-                )
+                component_paths[path] = ContextComponentKind.MANDATORY_REFERENCE_CONTENT
                 mandatory_paths.append(path)
     return payload, component_paths, tuple(mandatory_paths)
 
@@ -3318,6 +3504,12 @@ class AgentContextService:
 
         return self._workspace_id
 
+    @property
+    def policy_fingerprint(self) -> str:
+        """Return the exact provider-neutral execution-policy fingerprint."""
+
+        return self._execution_policy_fingerprint
+
     def scope(
         self,
         session_id: str,
@@ -3404,9 +3596,7 @@ class AgentContextService:
                 )
                 for record in snapshot.records
             )
-            source_materials.append(
-                ContextMaterial(entry, snapshot.content, records)
-            )
+            source_materials.append(ContextMaterial(entry, snapshot.content, records))
         materials = (*request.materials, *source_materials)
         if len({item.entry.source_id for item in materials}) != len(materials):
             raise _execution_error(ContextExecutionErrorCode.INVALID_VALUE)
@@ -3472,9 +3662,7 @@ class AgentContextService:
             "taint_context_thread",
         ):
             if not callable(getattr(provider, name, None)):
-                raise _execution_error(
-                    ContextExecutionErrorCode.PROVIDER_CONTRACT
-                )
+                raise _execution_error(ContextExecutionErrorCode.PROVIDER_CONTRACT)
         assert isinstance(provider_id, str)
         assert isinstance(definition_fingerprint, str)
         return provider_id, definition_fingerprint
@@ -3614,6 +3802,16 @@ class AgentContextService:
 
         if type(request) is not ContextInvocationRequest:
             raise _execution_error(ContextExecutionErrorCode.INVALID_VALUE)
+        physical_call_limit = (
+            self._action_policy.max_provider_calls
+            if request.physical_call_limit is None
+            else request.physical_call_limit
+        )
+        if (
+            physical_call_limit > self._action_policy.max_provider_calls
+            or physical_call_limit <= int(bool(request.mandatory_references))
+        ):
+            raise _execution_error(ContextExecutionErrorCode.INVALID_VALUE)
         _validate_sync_callback(answer_validator)
         _validate_sync_callback(event_sink)
         if request.subject_kind is ContextSubjectKind.DEBATE:
@@ -3652,6 +3850,7 @@ class AgentContextService:
                     focused_conversation=focused_conversation,
                     active_debate=active_debate,
                     own_agent_state=own_agent_state,
+                    physical_call_limit=physical_call_limit,
                     answer_validator=answer_validator,
                     event_sink=event_sink,
                     phase=phase,
@@ -3670,8 +3869,8 @@ class AgentContextService:
         focused_conversation: FocusedConversationSourceAdapter,
         active_debate: ActiveDebateSourceAdapter,
         own_agent_state: OwnAgentStateSourceAdapter,
-        answer_validator: Callable[[str, ContextAnswerAuthorization], object]
-        | None,
+        physical_call_limit: int,
+        answer_validator: Callable[[str, ContextAnswerAuthorization], object] | None,
         event_sink: ContextExecutionEventSink | None,
         phase: str | None,
         round_number: int | None,
@@ -3718,6 +3917,15 @@ class AgentContextService:
                 focused_conversation,
                 active_debate,
                 own_agent_state,
+            )
+            manifest_digest = _manifest_fingerprint(manifest)
+            core_statuses = (
+                registry.canonical_core_statuses(
+                    manifest_digest,
+                    self._source_policy,
+                )
+                if request.include_core_statuses
+                else ()
             )
             stage = "preflight"
             active_thread_id = provider.inspect_context_thread(
@@ -3815,9 +4023,7 @@ class AgentContextService:
                     ),
                 ),
             )
-            omitted_count = (
-                projection.accounting.searchable.unprojected_source_count
-            )
+            omitted_count = projection.accounting.searchable.unprojected_source_count
             if omitted_count:
                 _emit_context_event(
                     event_sink,
@@ -3840,9 +4046,7 @@ class AgentContextService:
                 proposal_digest=proposal_digest,
                 delivery_mode=projection.mode,
                 bootstrap_reason=projection.bootstrap_reason,
-                proposed_delta_depth=(
-                    projection.checkpoint_proposal.delta_depth
-                ),
+                proposed_delta_depth=(projection.checkpoint_proposal.delta_depth),
                 mandatory_reference_count=len(request.mandatory_references),
                 planned_provider_thread_id=active_thread_id,
                 reference_operation_id=request.reference_operation_id,
@@ -3871,9 +4075,11 @@ class AgentContextService:
                     manifest,
                     projection,
                 ),
-                allowed_search_source_kinds=(
-                    request.allowed_search_source_kinds
+                allowed_search_source_kinds=(request.allowed_search_source_kinds),
+                physical_call_limit=(
+                    physical_call_limit - int(bool(request.mandatory_references))
                 ),
+                core_statuses=core_statuses,
             )
 
             current_thread_id = active_thread_id
@@ -3988,7 +4194,10 @@ class AgentContextService:
             previous_action: str | None = None
             previous_search_had_hits = False
             phase_contract = _invocation_phase_contract(request)
-            for _round in range(self._action_policy.max_provider_calls):
+            substantive_call_limit = physical_call_limit - int(
+                bool(request.mandatory_references)
+            )
+            for _round in range(substantive_call_limit):
                 action_index = action_session.next_action_index
                 allowed_actions = action_session.allowed_actions(
                     after=previous_action,
@@ -4012,7 +4221,11 @@ class AgentContextService:
                     call_kind = (
                         ProviderCallKind.DEBATE
                         if scope.subject_kind is ContextSubjectKind.DEBATE
-                        else ProviderCallKind.CONVERSATION_RETRIEVAL_INITIAL
+                        else (
+                            ProviderCallKind.COLLABORATION_INITIAL
+                            if request.invocation_kind is not None
+                            else ProviderCallKind.CONVERSATION_RETRIEVAL_INITIAL
+                        )
                     )
                     reference_context = ()
                 else:
@@ -4028,7 +4241,11 @@ class AgentContextService:
                     call_kind = (
                         ProviderCallKind.DEBATE
                         if scope.subject_kind is ContextSubjectKind.DEBATE
-                        else ProviderCallKind.CONVERSATION_RETRIEVAL_CONTINUATION
+                        else (
+                            ProviderCallKind.COLLABORATION_CONTINUATION
+                            if request.invocation_kind is not None
+                            else ProviderCallKind.CONVERSATION_RETRIEVAL_CONTINUATION
+                        )
                     )
                 call_request = ContextProviderCallRequest(
                     scope=scope,
@@ -4184,8 +4401,7 @@ class AgentContextService:
                     if (
                         decode_failure.code
                         is ContextExecutionErrorCode.MALFORMED_ACTION
-                        and action_index
-                        == self._action_policy.max_provider_calls
+                        and action_index == substantive_call_limit
                     ):
                         try:
                             exhausted_action = _decode_context_action(
@@ -4196,9 +4412,7 @@ class AgentContextService:
                                 allowed_search_source_kinds=(
                                     request.allowed_search_source_kinds
                                 ),
-                                resolve_handle=(
-                                    action_session.resolve_wire_handle
-                                ),
+                                resolve_handle=(action_session.resolve_wire_handle),
                             )
                         except ContextExecutionError:
                             finalizer = call_finalizer
@@ -4231,9 +4445,7 @@ class AgentContextService:
                     if finalizer is not None:
                         _reject_provider_call_without_replacing(
                             finalizer,
-                            _context_provider_decode_terminal_code(
-                                decode_failure
-                            ),
+                            _context_provider_decode_terminal_code(decode_failure),
                         )
                     raise
                 terminal_provider_succeeded = False
@@ -4284,14 +4496,10 @@ class AgentContextService:
                     )
                     stage = "action"
                     read_observation, pending_read = action_session.read(action)
-                    observation = action_session.serialize_observation(
-                        read_observation
-                    )
+                    observation = action_session.serialize_observation(read_observation)
                     previous_action = "read"
                     previous_search_had_hits = False
-                    turn_count, event_count = _conversation_read_counts(
-                        read_observation
-                    )
+                    record_count = _conversation_read_record_count(read_observation)
                     stage = "action_observer"
                     _emit_context_event(
                         event_sink,
@@ -4303,8 +4511,7 @@ class AgentContextService:
                                 evidence.receipt.boundary_utf8_bytes
                                 for evidence in read_observation.evidence
                             ),
-                            transcript_turn_count=turn_count,
-                            transcript_event_count=event_count,
+                            history_record_count=record_count,
                             observation_utf8_bytes=len(
                                 observation.encode("utf-8", errors="strict")
                             ),
@@ -4321,6 +4528,14 @@ class AgentContextService:
                 stage = "answer"
                 authorization = action_session.authorize_answer(action)
                 stage = "source_revalidation"
+                if request.include_core_statuses and (
+                    registry.canonical_core_statuses(
+                        manifest_digest,
+                        self._source_policy,
+                    )
+                    != core_statuses
+                ):
+                    raise ContextSourceError(ContextSourceErrorCode.SOURCE_DRIFT)
                 revalidated_manifest = self._manifest_from_descriptors(
                     request,
                     scope,
@@ -4359,9 +4574,7 @@ class AgentContextService:
                         completed_reference_operation_id=(
                             request.reference_operation_id
                         ),
-                        output_action_authorization_id=(
-                            authorization.authorization_id
-                        ),
+                        output_action_authorization_id=(authorization.authorization_id),
                     ),
                 )
                 terminal_provider_succeeded = False
@@ -4442,8 +4655,7 @@ class AgentContextService:
                 )
             failure_code = getattr(getattr(failure, "code", None), "value", "")
             if isinstance(failure_code, str) and (
-                "budget_exceeded" in failure_code
-                or "limit_exceeded" in failure_code
+                "budget_exceeded" in failure_code or "limit_exceeded" in failure_code
             ):
                 _emit_context_event_without_replacing(
                     event_sink,
@@ -4512,6 +4724,31 @@ class AgentContextService:
                     ContextExecutionEventKind.CHECKPOINT_NOT_ADVANCED,
                     provider_input_tokens=_provider_input_token_total(
                         submitted_accountings
+                    ),
+                ),
+            )
+            existing_facts = context_provider_failure_facts(failure)
+            cumulative = list(submitted_accountings)
+            if (
+                existing_facts.accounting is not None
+                and existing_facts.accounting.state is ProviderCallState.SUBMITTED
+                and existing_facts.accounting not in cumulative
+            ):
+                cumulative.append(existing_facts.accounting)
+            record_context_provider_failure(
+                failure,
+                ContextProviderFailureFacts(
+                    accounting=existing_facts.accounting,
+                    timed_out=existing_facts.timed_out,
+                    taint_existing_thread=existing_facts.taint_existing_thread,
+                    submitted_accountings=tuple(cumulative),
+                    submission_uncertain=(
+                        existing_facts.submission_uncertain
+                        or (
+                            stage == "provider"
+                            and provider_failure
+                            and existing_facts.accounting is None
+                        )
                     ),
                 ),
             )

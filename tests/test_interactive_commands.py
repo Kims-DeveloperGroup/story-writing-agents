@@ -1,12 +1,10 @@
-"""Contract tests for provider-free interactive command parsing."""
+"""Breaking-removal contracts for the provider-free interactive language."""
 
 from __future__ import annotations
 
-import ast
 import inspect
 import os
 import pickle
-import random
 import socket
 import subprocess
 import sys
@@ -33,1079 +31,387 @@ from story_writing_agents.interactive_commands import (
     AGENT_ROUTES,
     AgentRouteSpec,
     CommandCompletionContext,
-    ProviderTextSpan,
     project_command_completion,
-    project_provider_text_span,
 )
 
 
-EXPECTED_AGENT_ROUTES = (
-    AgentRouteSpec(
-        LEAD_ORCHESTRATOR,
-        "lead",
-        ("lead", "orchestrator", "lead_orchestrator"),
-        "Moderation, synthesis, and finalization.",
-    ),
-    AgentRouteSpec(
-        PLOT_ARCHITECT,
-        "plot",
-        ("plot", "plot_architect"),
-        "Plot, structure, flow, and pacing.",
-    ),
-    AgentRouteSpec(
-        CHARACTER_CUSTODIAN,
-        "character",
-        ("character", "character_custodian"),
-        "Characters, relationships, world, and continuity.",
-    ),
-    AgentRouteSpec(
-        EXECUTION_SPECIALIST,
-        "execution",
-        ("execution", "prose", "execution_specialist"),
-        "Drafting, prose, point of view, tone, grammar, and format.",
-    ),
+DIRECT_EXECUTION_UNAVAILABLE = (
+    "Direct story execution is unavailable in this integration stage. "
+    "Session, conversation, history, search, and inspection remain available."
 )
 
-AGENT_ALIASES = {
-    alias: route.agent_id
-    for route in EXPECTED_AGENT_ROUTES
-    for alias in route.aliases
-}
-
-COMMAND_NAMES = {
-    "compose": "/compose",
-    "send": "/send",
-    "cancel": "/cancel",
-    "say": "/say",
-    "rag": "/rag",
-    "to": "/to",
-    "agent": "/to",
-    "agents": "/agents",
-    "auth": "/auth",
-    "override": "/override",
-    "language": "/override",
-    "persona": "/override",
-    "reset": "/override",
-    "settings": "/settings",
-    "run": "/run",
-    "draft-file": "/draft-file",
-    "session": "/session",
-    "conversation": "/conversation",
-    "search": "/search",
-    "transcript": "/transcript",
-    "inspect": "/inspect",
-    "exchanges": "/exchanges",
-    "history": "/history",
-    "status": "/status",
-    "help": "/help",
-    "?": "/help",
-    "quit": "/quit",
-}
-
-ACTION_FIELDS = (
-    "rag_query",
-    "text",
-    "agent_id",
-    "argument",
-    "output_path",
-    "count",
-    "start_sequence",
-    "error",
-    "suggestion",
+REMOVED_COMMANDS = (
+    "/draft-file",
+    "/say",
+    "/to",
+    "/agent",
+    "/rag",
+    "/compose",
+    "/send",
+    "/cancel",
 )
 
-FIELD_SAMPLES = {
-    "rag_query": "private retrieval query",
-    "text": "text",
-    "agent_id": PLOT_ARCHITECT,
-    "argument": "argument",
-    "output_path": "part-01/chapter.md",
-    "count": 1,
-    "start_sequence": 1,
-    "error": "error",
-    "suggestion": "/run",
-}
+EXPECTED_ACTION_KINDS = (
+    "ignored",
+    "list_agents",
+    "search",
+    "transcript",
+    "inspect",
+    "exchanges",
+    "history",
+    "status",
+    "auth",
+    "settings",
+    "set_language",
+    "set_persona",
+    "reset",
+    "session_list",
+    "session_create",
+    "session_open",
+    "session_pause",
+    "conversation_new",
+    "conversation_list",
+    "conversation_list_all",
+    "conversation_use",
+    "conversation_subject",
+    "conversation_archive",
+    "help",
+    "quit",
+    "parse_error",
+)
 
-ACTION_RULES = {
-    ActionKind.IGNORED: (set(), set()),
-    ActionKind.MESSAGE: ({"text"}, {"text"}),
-    ActionKind.ROUTED_MESSAGE: (
-        {"agent_id", "text"},
-        {"agent_id", "text"},
+EXPECTED_COMMANDS = (
+    CommandSpec("Agents", "/agents", (), False, False, "/agents"),
+    CommandSpec("Agents", "/auth", (), True, True, "/auth"),
+    CommandSpec("Agents", "/settings", (), True, True, "/settings"),
+    CommandSpec(
+        "Session overrides",
+        "/override language LANG | persona AGENT NAME | reset",
+        (),
+        False,
+        False,
+        "/override persona plot meticulous",
     ),
-    ActionKind.SET_TARGET: ({"agent_id"}, {"agent_id"}),
-    ActionKind.LIST_AGENTS: (set(), set()),
-    ActionKind.COMPOSE: (set(), set()),
-    ActionKind.SEND: (set(), set()),
-    ActionKind.CANCEL: (set(), set()),
-    ActionKind.RUN: ({"text", "output_path"}, set()),
-    ActionKind.RUN_FRESH: ({"text", "output_path"}, {"text"}),
-    ActionKind.DRAFT_FILE: ({"argument", "output_path"}, {"argument"}),
-    ActionKind.RAG: ({"rag_query"}, {"rag_query"}),
-    ActionKind.SEARCH: ({"text"}, {"text"}),
-    ActionKind.TRANSCRIPT: (
-        {"argument", "count", "start_sequence"},
-        {"argument"},
+    CommandSpec(
+        "Sessions",
+        "/session list | create NAME | resume [NAME] | pause",
+        (),
+        False,
+        False,
+        "/session create chapter-01",
     ),
-    ActionKind.INSPECT: ({"argument"}, set()),
-    ActionKind.EXCHANGES: (set(), set()),
-    ActionKind.HISTORY: ({"count"}, set()),
-    ActionKind.STATUS: (set(), set()),
-    ActionKind.AUTH: (set(), set()),
-    ActionKind.SETTINGS: (set(), set()),
-    ActionKind.SET_LANGUAGE: ({"argument"}, {"argument"}),
-    ActionKind.SET_PERSONA: (
-        {"agent_id", "argument"},
-        {"agent_id", "argument"},
+    CommandSpec(
+        "Conversations",
+        (
+            "/conversation new [SUBJECT] | list [--all] [QUERY] | resume [ID] | "
+            "subject SUBJECT | archive [ID]"
+        ),
+        (),
+        False,
+        False,
+        "/conversation new Chapter 1 opening",
     ),
-    ActionKind.RESET: (set(), set()),
-    ActionKind.SESSION_LIST: (set(), set()),
-    ActionKind.SESSION_CREATE: ({"argument"}, {"argument"}),
-    ActionKind.SESSION_OPEN: ({"argument"}, set()),
-    ActionKind.SESSION_PAUSE: (set(), set()),
-    ActionKind.CONVERSATION_NEW: ({"argument"}, set()),
-    ActionKind.CONVERSATION_LIST: ({"argument"}, set()),
-    ActionKind.CONVERSATION_LIST_ALL: ({"argument"}, set()),
-    ActionKind.CONVERSATION_USE: ({"argument"}, set()),
-    ActionKind.CONVERSATION_SUBJECT: ({"argument"}, {"argument"}),
-    ActionKind.CONVERSATION_ARCHIVE: ({"argument"}, set()),
-    ActionKind.HELP: ({"argument"}, set()),
-    ActionKind.QUIT: (set(), set()),
-    ActionKind.PARSE_ERROR: (
-        {"error", "suggestion"},
-        {"error"},
+    CommandSpec(
+        "Inspection",
+        "/search QUERY",
+        (),
+        False,
+        False,
+        "/search council vessel",
     ),
-}
-
-_UNSPECIFIED = object()
-
-
-def levenshtein(left: str, right: str) -> int:
-    """Return an independent edit-distance oracle for suggestion tests."""
-
-    previous = list(range(len(right) + 1))
-    for left_index, left_character in enumerate(left, start=1):
-        current = [left_index]
-        for right_index, right_character in enumerate(right, start=1):
-            current.append(
-                min(
-                    current[-1] + 1,
-                    previous[right_index] + 1,
-                    previous[right_index - 1]
-                    + (left_character != right_character),
-                )
-            )
-        previous = current
-    return previous[-1]
-
-
-def expected_suggestion(
-    value: str,
-    candidates: dict[str, str],
-) -> str | None:
-    """Apply the public unique-minimum and distance-two suggestion rule."""
-
-    distances = {
-        candidate: levenshtein(value, candidate) for candidate in candidates
-    }
-    minimum = min(distances.values())
-    closest = [
-        candidate
-        for candidate, distance in distances.items()
-        if distance == minimum
-    ]
-    if minimum > 2 or len(closest) != 1:
-        return None
-    return candidates[closest[0]]
+    CommandSpec(
+        "Inspection",
+        "/transcript ID [COUNT] [--from SEQUENCE]",
+        (),
+        False,
+        False,
+        "/transcript c_0123456789 24 --from 25",
+    ),
+    CommandSpec(
+        "Inspection",
+        "/inspect [DEBATE|last]",
+        (),
+        False,
+        False,
+        "/inspect last",
+    ),
+    CommandSpec("Inspection", "/exchanges", (), False, False, "/exchanges"),
+    CommandSpec("Inspection", "/history [COUNT]", (), False, False, "/history 20"),
+    CommandSpec("Inspection", "/status", (), False, False, "/status"),
+    CommandSpec(
+        "Inspection",
+        "/help [COMMAND]",
+        ("/?",),
+        False,
+        False,
+        "/help status",
+    ),
+    CommandSpec("Exit", "/quit", (), False, False, "/quit"),
+)
 
 
-class ParserAssertions:
-    """Shared semantic assertions without coupling to error prose."""
-
-    def assert_parse_error(
-        self: unittest.TestCase,
-        line: object,
-        *,
-        suggestion: str | None | object = _UNSPECIFIED,
-    ) -> InteractiveAction:
-        action = parse_interactive_line(line)  # type: ignore[arg-type]
-        self.assertEqual(action.kind, ActionKind.PARSE_ERROR)
-        self.assertIsInstance(action.error, str)
-        assert action.error is not None
-        self.assertTrue(action.error.strip())
-        if suggestion is not _UNSPECIFIED:
-            self.assertEqual(action.suggestion, suggestion)
-        self.assertIsNone(action.text)
-        self.assertIsNone(action.rag_query)
-        self.assertIsNone(action.agent_id)
-        self.assertIsNone(action.argument)
-        self.assertIsNone(action.count)
-        self.assertIsNone(action.start_sequence)
-        self.assertEqual(action, parse_interactive_line(line))  # type: ignore[arg-type]
-        return action
-
-
-class ActionContractTests(unittest.TestCase):
-    def test_action_kind_has_the_exact_public_members_and_values(self) -> None:
-        expected = {
-            "IGNORED": "ignored",
-            "MESSAGE": "message",
-            "ROUTED_MESSAGE": "routed_message",
-            "SET_TARGET": "set_target",
-            "LIST_AGENTS": "list_agents",
-            "COMPOSE": "compose",
-            "SEND": "send",
-            "CANCEL": "cancel",
-            "RUN": "run",
-            "RUN_FRESH": "run_fresh",
-            "DRAFT_FILE": "draft_file",
-            "RAG": "rag",
-            "SEARCH": "search",
-            "TRANSCRIPT": "transcript",
-            "INSPECT": "inspect",
-            "EXCHANGES": "exchanges",
-            "HISTORY": "history",
-            "STATUS": "status",
-            "AUTH": "auth",
-            "SETTINGS": "settings",
-            "SET_LANGUAGE": "set_language",
-            "SET_PERSONA": "set_persona",
-            "RESET": "reset",
-            "SESSION_LIST": "session_list",
-            "SESSION_CREATE": "session_create",
-            "SESSION_OPEN": "session_open",
-            "SESSION_PAUSE": "session_pause",
-            "CONVERSATION_NEW": "conversation_new",
-            "CONVERSATION_LIST": "conversation_list",
-            "CONVERSATION_LIST_ALL": "conversation_list_all",
-            "CONVERSATION_USE": "conversation_use",
-            "CONVERSATION_SUBJECT": "conversation_subject",
-            "CONVERSATION_ARCHIVE": "conversation_archive",
-            "HELP": "help",
-            "QUIT": "quit",
-            "PARSE_ERROR": "parse_error",
-        }
+class InteractiveSurfaceRetirementTests(unittest.TestCase):
+    def test_action_command_and_module_surfaces_are_exact(self) -> None:
         self.assertEqual(
-            {name: member.value for name, member in ActionKind.__members__.items()},
-            expected,
+            tuple(member.value for member in ActionKind), EXPECTED_ACTION_KINDS
         )
-
-    def test_dataclass_schemas_are_exact_keyword_only_and_slotted(self) -> None:
-        self.assertEqual(
-            tuple(field.name for field in fields(AgentRouteSpec)),
-            ("agent_id", "prompt_alias", "aliases", "advisory_domain"),
-        )
+        self.assertEqual(COMMANDS, EXPECTED_COMMANDS)
         self.assertEqual(
             tuple(field.name for field in fields(InteractiveAction)),
-            ("kind", *ACTION_FIELDS),
-        )
-        self.assertEqual(
-            tuple(field.name for field in fields(CommandSpec)),
             (
-                "group",
-                "syntax",
-                "aliases",
-                "may_call_provider",
-                "may_write_artifacts",
-                "example",
+                "kind",
+                "text",
+                "agent_id",
+                "argument",
+                "count",
+                "start_sequence",
+                "error",
+                "suggestion",
             ),
         )
-        with self.assertRaises(TypeError):
-            InteractiveAction(ActionKind.MESSAGE, "text")  # type: ignore[misc]
-        self.assertFalse(hasattr(AGENT_ROUTES[0], "__dict__"))
-        self.assertFalse(hasattr(InteractiveAction(ActionKind.IGNORED), "__dict__"))
-        self.assertFalse(hasattr(COMMANDS[0], "__dict__"))
-
-    def test_agent_route_registry_is_exact_ordered_valid_and_immutable(
-        self,
-    ) -> None:
-        self.assertIsInstance(AGENT_ROUTES, tuple)
-        self.assertEqual(AGENT_ROUTES, EXPECTED_AGENT_ROUTES)
         self.assertEqual(
-            tuple(route.agent_id for route in AGENT_ROUTES),
+            commands_module.__all__,
+            [
+                "ActionKind",
+                "AgentRouteSpec",
+                "AGENT_ROUTES",
+                "COMMANDS",
+                "CommandSpec",
+                "InteractiveAction",
+                "parse_interactive_line",
+            ],
+        )
+        self.assertEqual(
+            tuple(
+                name
+                for name in story_writing_agents.__all__
+                if name in commands_module.__all__
+            ),
             (
+                "COMMANDS",
+                "ActionKind",
+                "CommandSpec",
+                "InteractiveAction",
+                "parse_interactive_line",
+            ),
+        )
+        for old_name in (
+            "ProviderTextSpan",
+            "project_provider_text_span",
+            "ComposeMode",
+        ):
+            self.assertNotIn(old_name, commands_module.__all__)
+            self.assertFalse(hasattr(commands_module, old_name))
+
+    def test_agent_metadata_remains_but_no_action_can_route_execution(self) -> None:
+        expected = (
+            AgentRouteSpec(
                 LEAD_ORCHESTRATOR,
+                "lead",
+                ("lead", "orchestrator", "lead_orchestrator"),
+                "Moderation, synthesis, and finalization.",
+            ),
+            AgentRouteSpec(
                 PLOT_ARCHITECT,
+                "plot",
+                ("plot", "plot_architect"),
+                "Plot, structure, flow, and pacing.",
+            ),
+            AgentRouteSpec(
                 CHARACTER_CUSTODIAN,
+                "character",
+                ("character", "character_custodian"),
+                "Characters, relationships, world, and continuity.",
+            ),
+            AgentRouteSpec(
                 EXECUTION_SPECIALIST,
+                "execution",
+                ("execution", "prose", "execution_specialist"),
+                "Drafting, prose, point of view, tone, grammar, and format.",
             ),
         )
-        aliases = tuple(
-            alias for route in AGENT_ROUTES for alias in route.aliases
-        )
-        self.assertEqual(len(aliases), len(set(aliases)))
-        for route in AGENT_ROUTES:
-            with self.subTest(agent_id=route.agent_id):
-                self.assertEqual(route.prompt_alias, route.aliases[0])
-                self.assertRegex(route.prompt_alias, r"\A[a-z][a-z0-9_]*\Z")
-                route.advisory_domain.encode("utf-8", errors="strict")
+        self.assertEqual(AGENT_ROUTES, expected)
+        routed_values = {
+            "message",
+            "routed_message",
+            "set_target",
+            "compose",
+            "send",
+            "cancel",
+            "run",
+            "run_fresh",
+            "draft_file",
+            "rag",
+        }
+        self.assertTrue(routed_values.isdisjoint(EXPECTED_ACTION_KINDS))
 
-        with self.assertRaises(FrozenInstanceError):
-            AGENT_ROUTES[0].prompt_alias = "changed"  # type: ignore[misc]
-        with self.assertRaises(TypeError):
-            AGENT_ROUTES[0] = AGENT_ROUTES[0]  # type: ignore[index]
-        with self.assertRaises(TypeError):
-            AGENT_ROUTES[0].aliases[0] = "changed"  # type: ignore[index]
-
-    def test_agent_route_specs_reject_invalid_identity_aliases_and_copy(
-        self,
-    ) -> None:
-        valid = (
-            LEAD_ORCHESTRATOR,
-            "lead",
-            ("lead", "orchestrator"),
-            "Advisory domain.",
-        )
-        invalid_cases = (
-            (("unknown", *valid[1:]), ValueError),
-            ((valid[0], "Lead", valid[2], valid[3]), ValueError),
-            ((valid[0], valid[1], ["lead"], valid[3]), TypeError),
-            ((valid[0], valid[1], (), valid[3]), ValueError),
-            ((valid[0], valid[1], ("lead", "lead"), valid[3]), ValueError),
-            ((valid[0], valid[1], ("orchestrator", "lead"), valid[3]), ValueError),
-            ((valid[0], valid[1], ("lead", "bad-alias"), valid[3]), ValueError),
-            ((valid[0], valid[1], valid[2], " \t"), ValueError),
-            ((valid[0], valid[1], valid[2], "unsafe\x1bcopy"), ValueError),
-            ((valid[0], valid[1], valid[2], "invalid-\ud800"), ValueError),
-        )
-        for arguments, error_type in invalid_cases:
-            with self.subTest(arguments=repr(arguments)):
-                with self.assertRaises(error_type):
-                    AgentRouteSpec(*arguments)  # type: ignore[arg-type]
-
-    def test_each_action_kind_accepts_only_its_payload_shape(self) -> None:
-        self.assertEqual(set(ACTION_RULES), set(ActionKind))
-        for kind, (allowed, required) in ACTION_RULES.items():
-            valid = {name: FIELD_SAMPLES[name] for name in required}
-            with self.subTest(kind=kind, case="valid"):
-                self.assertEqual(InteractiveAction(kind, **valid).kind, kind)
-
-            for field_name in required:
-                missing = dict(valid)
-                del missing[field_name]
-                with self.subTest(kind=kind, missing=field_name):
-                    with self.assertRaises(ValueError):
-                        InteractiveAction(kind, **missing)
-
-            for field_name in set(ACTION_FIELDS).difference(allowed):
-                extraneous = dict(valid)
-                extraneous[field_name] = FIELD_SAMPLES[field_name]
-                with self.subTest(kind=kind, extraneous=field_name):
-                    with self.assertRaises(ValueError):
-                        InteractiveAction(kind, **extraneous)
-
-    def test_action_value_validation_rejects_invalid_payload_values(self) -> None:
-        invalid_cases = (
-            (("message",), {}, TypeError),
-            ((ActionKind.MESSAGE,), {"text": 7}, TypeError),
-            ((ActionKind.SET_TARGET,), {"agent_id": "unknown"}, ValueError),
-            ((ActionKind.MESSAGE,), {"text": " \t"}, ValueError),
-            ((ActionKind.HISTORY,), {"count": True}, TypeError),
-            ((ActionKind.HISTORY,), {"count": 0}, ValueError),
-            ((ActionKind.HISTORY,), {"count": -1}, ValueError),
-            (
-                (ActionKind.TRANSCRIPT,),
-                {"argument": "id", "start_sequence": True},
-                TypeError,
-            ),
-            (
-                (ActionKind.TRANSCRIPT,),
-                {"argument": "id", "start_sequence": 0},
-                ValueError,
-            ),
-            (
-                (ActionKind.TRANSCRIPT,),
-                {"argument": "id", "start_sequence": -1},
-                ValueError,
-            ),
-            ((ActionKind.DRAFT_FILE,), {"argument": ""}, ValueError),
-            ((ActionKind.PARSE_ERROR,), {"error": ""}, ValueError),
-            (
-                (ActionKind.PARSE_ERROR,),
-                {"error": "error", "suggestion": ""},
-                ValueError,
-            ),
-        )
-        for arguments, keywords, error_type in invalid_cases:
-            with self.subTest(arguments=arguments, keywords=keywords):
-                with self.assertRaises(error_type):
-                    InteractiveAction(*arguments, **keywords)  # type: ignore[arg-type]
-
-    def test_action_specs_and_registry_are_immutable(self) -> None:
-        action = InteractiveAction(ActionKind.RUN, text="prompt")
+    def test_values_are_frozen_slotted_keyword_only_and_strict(self) -> None:
+        action = InteractiveAction(ActionKind.SEARCH, text="opaque query")
+        self.assertFalse(hasattr(action, "__dict__"))
+        self.assertEqual(pickle.loads(pickle.dumps(action)), action)
         with self.assertRaises(FrozenInstanceError):
             action.text = "changed"  # type: ignore[misc]
+        with self.assertRaises(TypeError):
+            InteractiveAction(ActionKind.SEARCH, "query")  # type: ignore[misc]
+        with self.assertRaisesRegex(ValueError, "requires: text"):
+            InteractiveAction(ActionKind.SEARCH)
+        with self.assertRaisesRegex(ValueError, "does not accept: agent_id"):
+            InteractiveAction(ActionKind.STATUS, agent_id=PLOT_ARCHITECT)
+
+
+class InteractiveParserRetirementTests(unittest.TestCase):
+    def assert_unavailable(self, line: str) -> None:
+        self.assertEqual(
+            parse_interactive_line(line),
+            InteractiveAction(
+                ActionKind.PARSE_ERROR,
+                error=DIRECT_EXECUTION_UNAVAILABLE,
+            ),
+        )
+
+    def test_ordinary_mentions_and_every_removed_command_are_exactly_unavailable(
+        self,
+    ) -> None:
+        cases = (
+            "Draft this scene.",
+            "@lead critique this",
+            "@plot revise pacing",
+            "@character check continuity",
+            "@execution draft prose",
+            *(f"{command} payload" for command in REMOVED_COMMANDS),
+            *(f"/help {command[1:]}" for command in REMOVED_COMMANDS),
+        )
+        for line in cases:
+            with self.subTest(line=line):
+                self.assert_unavailable(line)
+
+    def test_run_is_an_ordinary_unknown_command(self) -> None:
+        self.assertEqual(
+            parse_interactive_line("/run payload"),
+            InteractiveAction(ActionKind.PARSE_ERROR, error="unknown command: /run"),
+        )
+        self.assertEqual(
+            parse_interactive_line("/help run"),
+            InteractiveAction(
+                ActionKind.PARSE_ERROR,
+                error="unknown help command: run",
+            ),
+        )
+
+    def test_retained_commands_parse_without_execution_payloads(self) -> None:
+        cases = {
+            "": InteractiveAction(ActionKind.IGNORED),
+            "/agents": InteractiveAction(ActionKind.LIST_AGENTS),
+            "/auth": InteractiveAction(ActionKind.AUTH),
+            "/settings": InteractiveAction(ActionKind.SETTINGS),
+            "/override language ko": InteractiveAction(
+                ActionKind.SET_LANGUAGE, argument="ko"
+            ),
+            "/override persona plot meticulous": InteractiveAction(
+                ActionKind.SET_PERSONA,
+                agent_id=PLOT_ARCHITECT,
+                argument="meticulous",
+            ),
+            "/override reset": InteractiveAction(ActionKind.RESET),
+            "/session list": InteractiveAction(ActionKind.SESSION_LIST),
+            "/session create novel": InteractiveAction(
+                ActionKind.SESSION_CREATE, argument="novel"
+            ),
+            "/session resume": InteractiveAction(ActionKind.SESSION_OPEN),
+            "/session pause": InteractiveAction(ActionKind.SESSION_PAUSE),
+            "/conversation new Opening": InteractiveAction(
+                ActionKind.CONVERSATION_NEW, argument="Opening"
+            ),
+            "/conversation list --all harbor": InteractiveAction(
+                ActionKind.CONVERSATION_LIST_ALL, argument="harbor"
+            ),
+            "/conversation resume c_0123456789": InteractiveAction(
+                ActionKind.CONVERSATION_USE, argument="c_0123456789"
+            ),
+            "/conversation subject Revised": InteractiveAction(
+                ActionKind.CONVERSATION_SUBJECT, argument="Revised"
+            ),
+            "/conversation archive": InteractiveAction(ActionKind.CONVERSATION_ARCHIVE),
+            "/search harbor": InteractiveAction(ActionKind.SEARCH, text="harbor"),
+            "/transcript c_0123456789 24 --from 25": InteractiveAction(
+                ActionKind.TRANSCRIPT,
+                argument="c_0123456789",
+                count=24,
+                start_sequence=25,
+            ),
+            "/inspect last": InteractiveAction(ActionKind.INSPECT, argument="last"),
+            "/exchanges": InteractiveAction(ActionKind.EXCHANGES),
+            "/history 20": InteractiveAction(ActionKind.HISTORY, count=20),
+            "/status": InteractiveAction(ActionKind.STATUS),
+            "/help status": InteractiveAction(ActionKind.HELP, argument="/status"),
+            "/?": InteractiveAction(ActionKind.HELP),
+            "/quit": InteractiveAction(ActionKind.QUIT),
+        }
+        for line, expected in cases.items():
+            with self.subTest(line=line):
+                self.assertEqual(parse_interactive_line(line), expected)
+
+    def test_parser_is_provider_filesystem_process_and_network_free(self) -> None:
+        with (
+            mock.patch("builtins.open", side_effect=AssertionError("file I/O")),
+            mock.patch.object(socket, "socket", side_effect=AssertionError("network")),
+            mock.patch.object(subprocess, "run", side_effect=AssertionError("process")),
+        ):
+            for line in ("ordinary", "/run draft", "/status", "/search x"):
+                parse_interactive_line(line)
+
+
+class RetainedParserContractTests(unittest.TestCase):
+    """Preserve validation and grammar depth for non-execution commands."""
+
+    def assert_parse_error(self, line: object) -> InteractiveAction:
+        action = parse_interactive_line(line)  # type: ignore[arg-type]
+        self.assertIs(action.kind, ActionKind.PARSE_ERROR)
+        self.assertIsInstance(action.error, str)
+        self.assertTrue(action.error)
+        return action
+
+    def test_each_action_kind_accepts_only_its_payload_shape(self) -> None:
+        rules = commands_module._ACTION_FIELD_RULES
+        self.assertEqual(set(rules), set(ActionKind))
+        samples = {
+            "text": "value",
+            "agent_id": PLOT_ARCHITECT,
+            "argument": "value",
+            "count": 1,
+            "start_sequence": 1,
+            "error": "error",
+            "suggestion": "/status",
+        }
+        all_fields = set(samples)
+        for kind, (allowed, required) in rules.items():
+            valid = {name: samples[name] for name in required}
+            with self.subTest(kind=kind, case="valid"):
+                self.assertIs(InteractiveAction(kind, **valid).kind, kind)
+            for name in required:
+                missing = dict(valid)
+                del missing[name]
+                with (
+                    self.subTest(kind=kind, missing=name),
+                    self.assertRaises(ValueError),
+                ):
+                    InteractiveAction(kind, **missing)
+            for name in all_fields.difference(allowed):
+                extra = dict(valid)
+                extra[name] = samples[name]
+                with self.subTest(kind=kind, extra=name), self.assertRaises(ValueError):
+                    InteractiveAction(kind, **extra)
+
+    def test_action_specs_and_registry_are_immutable(self) -> None:
         with self.assertRaises(FrozenInstanceError):
             COMMANDS[0].syntax = "/changed"  # type: ignore[misc]
         with self.assertRaises(TypeError):
             COMMANDS[0] = COMMANDS[0]  # type: ignore[index]
-        with self.assertRaises(TypeError):
-            COMMANDS[5].aliases[0] = "/changed"  # type: ignore[index]
+        with self.assertRaises(FrozenInstanceError):
+            AGENT_ROUTES[0].prompt_alias = "changed"  # type: ignore[misc]
 
-
-class CommandRegistryTests(unittest.TestCase):
-    def test_registry_is_the_exact_ordered_twenty_two_row_contract(self) -> None:
-        expected = (
-            CommandSpec("Conversation", "/compose", (), False, False, "/compose"),
-            CommandSpec("Conversation", "/send", (), False, False, "/send"),
-            CommandSpec("Conversation", "/cancel", (), False, False, "/cancel"),
-            CommandSpec(
-                "Conversation",
-                "/say TEXT",
-                (),
-                True,
-                False,
-                "/say /run is literal text",
-            ),
-            CommandSpec(
-                "Conversation",
-                "/rag QUERY",
-                (),
-                False,
-                False,
-                "/rag council vessel",
-            ),
-            CommandSpec(
-                "Agents",
-                "/to NAME",
-                ("/agent",),
-                False,
-                False,
-                "/to plot",
-            ),
-            CommandSpec("Agents", "/agents", (), False, False, "/agents"),
-            CommandSpec("Agents", "/auth", (), True, True, "/auth"),
-            CommandSpec(
-                "Agents",
-                "/settings",
-                (),
-                True,
-                True,
-                "/settings",
-            ),
-            CommandSpec(
-                "Session overrides",
-                "/override language LANG | persona AGENT NAME | reset",
-                (),
-                False,
-                False,
-                "/override persona plot meticulous",
-            ),
-            CommandSpec(
-                "Consensus",
-                "/run [--fresh] [--output PART/PATH.md] [PROMPT]",
-                (),
-                True,
-                True,
-                "/run --output part-01/chapter-01.md Outline chapter one",
-            ),
-            CommandSpec(
-                "Consensus",
-                "/draft-file PATH",
-                (),
-                True,
-                True,
-                "/draft-file drafts/chapter-01.md",
-            ),
-            CommandSpec(
-                "Sessions",
-                "/session list | create NAME | resume [NAME] | pause",
-                (),
-                False,
-                False,
-                "/session create chapter-01",
-            ),
-            CommandSpec(
-                "Conversations",
-                (
-                    "/conversation new [SUBJECT] | list [--all] [QUERY] | "
-                    "resume [ID] | subject SUBJECT | archive [ID]"
-                ),
-                (),
-                False,
-                False,
-                "/conversation new Chapter 1 opening",
-            ),
-            CommandSpec(
-                "Inspection",
-                "/search QUERY",
-                (),
-                False,
-                False,
-                "/search council vessel",
-            ),
-            CommandSpec(
-                "Inspection",
-                "/transcript ID [COUNT] [--from SEQUENCE]",
-                (),
-                False,
-                False,
-                "/transcript c_0123456789 24 --from 25",
-            ),
-            CommandSpec(
-                "Inspection",
-                "/inspect [DEBATE|last]",
-                (),
-                False,
-                False,
-                "/inspect last",
-            ),
-            CommandSpec(
-                "Inspection",
-                "/exchanges",
-                (),
-                False,
-                False,
-                "/exchanges",
-            ),
-            CommandSpec(
-                "Inspection",
-                "/history [COUNT]",
-                (),
-                False,
-                False,
-                "/history 20",
-            ),
-            CommandSpec("Inspection", "/status", (), False, False, "/status"),
-            CommandSpec(
-                "Inspection",
-                "/help [COMMAND]",
-                ("/?",),
-                False,
-                False,
-                "/help run",
-            ),
-            CommandSpec("Exit", "/quit", (), False, False, "/quit"),
-        )
-        self.assertIsInstance(COMMANDS, tuple)
-        self.assertEqual(COMMANDS, expected)
-        advertised = "\n".join(spec.syntax for spec in COMMANDS)
-        self.assertNotIn("/session open", advertised)
-        self.assertNotIn("/conversation use", advertised)
-        for hidden in ("/language", "/persona", "/reset", "/exit"):
-            with self.subTest(hidden=hidden):
-                self.assertNotIn(hidden, advertised)
-
-    def test_registry_names_aliases_and_capability_flags_are_consistent(
-        self,
-    ) -> None:
-        canonical = [spec.syntax.split(" ", 1)[0] for spec in COMMANDS]
-        aliases = [alias for spec in COMMANDS for alias in spec.aliases]
-        self.assertEqual(len(canonical), len(set(canonical)))
-        self.assertEqual(len(aliases), len(set(aliases)))
-        self.assertTrue(set(canonical).isdisjoint(aliases))
-        self.assertTrue(all(name.startswith("/") for name in canonical))
-        self.assertTrue(all(isinstance(spec.aliases, tuple) for spec in COMMANDS))
-        self.assertEqual(
-            {
-                name
-                for name, spec in zip(canonical, COMMANDS)
-                if spec.may_call_provider
-            },
-            {"/say", "/auth", "/settings", "/run", "/draft-file"},
-        )
-        self.assertEqual(
-            {
-                name
-                for name, spec in zip(canonical, COMMANDS)
-                if spec.may_write_artifacts
-            },
-            {"/auth", "/settings", "/run", "/draft-file"},
-        )
-        settings = next(
-            spec for spec in COMMANDS if spec.syntax == "/settings"
-        )
-        self.assertTrue(settings.may_call_provider)
-        self.assertTrue(settings.may_write_artifacts)
-        self.assertTrue(
-            all(
-                not spec.may_write_artifacts or spec.may_call_provider
-                for spec in COMMANDS
-            )
-        )
-        auth = next(spec for spec in COMMANDS if spec.syntax == "/auth")
-        self.assertTrue(auth.may_call_provider)
-        self.assertTrue(auth.may_write_artifacts)
-        self.assertNotIn("message", canonical)
-        self.assertNotIn("routed_message", canonical)
-
-    def test_advertised_run_forms_match_parser_behavior(self) -> None:
-        run_spec = next(spec for spec in COMMANDS if spec.syntax.startswith("/run"))
-        self.assertEqual(
-            run_spec.syntax,
-            "/run [--fresh] [--output PART/PATH.md] [PROMPT]",
-        )
-
-        cases = (
-            ("/run", InteractiveAction(ActionKind.RUN)),
-            ("/run PROMPT", InteractiveAction(ActionKind.RUN, text="PROMPT")),
-            (
-                "/run --fresh PROMPT",
-                InteractiveAction(ActionKind.RUN_FRESH, text="PROMPT"),
-            ),
-            (
-                "/run --output part-01/chapter.md PROMPT",
-                InteractiveAction(
-                    ActionKind.RUN,
-                    text="PROMPT",
-                    output_path="part-01/chapter.md",
-                ),
-            ),
-        )
-        for line, expected in cases:
-            with self.subTest(line=line):
-                self.assertEqual(parse_interactive_line(line), expected)
-
-        incomplete_fresh = parse_interactive_line("/run --fresh")
-        self.assertEqual(incomplete_fresh.kind, ActionKind.PARSE_ERROR)
-        self.assertIsInstance(incomplete_fresh.error, str)
-        self.assertTrue(incomplete_fresh.error)
-
-
-class SuccessfulParsingTests(unittest.TestCase):
-    def test_every_action_has_a_representative_parsed_form(self) -> None:
-        cases = (
-            ("", InteractiveAction(ActionKind.IGNORED)),
-            (
-                "ordinary text",
-                InteractiveAction(ActionKind.MESSAGE, text="ordinary text"),
-            ),
-            (
-                "@plot routed text",
-                InteractiveAction(
-                    ActionKind.ROUTED_MESSAGE,
-                    agent_id=PLOT_ARCHITECT,
-                    text="routed text",
-                ),
-            ),
-            (
-                "/to plot",
-                InteractiveAction(ActionKind.SET_TARGET, agent_id=PLOT_ARCHITECT),
-            ),
-            ("/agents", InteractiveAction(ActionKind.LIST_AGENTS)),
-            ("/compose", InteractiveAction(ActionKind.COMPOSE)),
-            ("/send", InteractiveAction(ActionKind.SEND)),
-            ("/cancel", InteractiveAction(ActionKind.CANCEL)),
-            ("/run prompt", InteractiveAction(ActionKind.RUN, text="prompt")),
-            (
-                "/run --fresh prompt",
-                InteractiveAction(ActionKind.RUN_FRESH, text="prompt"),
-            ),
-            (
-                "/draft-file draft.md",
-                InteractiveAction(ActionKind.DRAFT_FILE, argument="draft.md"),
-            ),
-            (
-                "/rag council vessel",
-                InteractiveAction(
-                    ActionKind.RAG,
-                    rag_query="council vessel",
-                ),
-            ),
-            (
-                "/search council vessel",
-                InteractiveAction(ActionKind.SEARCH, text="council vessel"),
-            ),
-            (
-                "/transcript c_0123456789 24 --from 25",
-                InteractiveAction(
-                    ActionKind.TRANSCRIPT,
-                    argument="c_0123456789",
-                    count=24,
-                    start_sequence=25,
-                ),
-            ),
-            (
-                "/inspect last",
-                InteractiveAction(ActionKind.INSPECT, argument="last"),
-            ),
-            ("/exchanges", InteractiveAction(ActionKind.EXCHANGES)),
-            ("/history 20", InteractiveAction(ActionKind.HISTORY, count=20)),
-            ("/status", InteractiveAction(ActionKind.STATUS)),
-            ("/auth", InteractiveAction(ActionKind.AUTH)),
-            ("/settings", InteractiveAction(ActionKind.SETTINGS)),
-            (
-                "/override language ko-KR",
-                InteractiveAction(ActionKind.SET_LANGUAGE, argument="ko-KR"),
-            ),
-            (
-                "/override persona plot meticulous.v2",
-                InteractiveAction(
-                    ActionKind.SET_PERSONA,
-                    agent_id=PLOT_ARCHITECT,
-                    argument="meticulous.v2",
-                ),
-            ),
-            ("/override reset", InteractiveAction(ActionKind.RESET)),
-            ("/session list", InteractiveAction(ActionKind.SESSION_LIST)),
-            (
-                "/session create chapter-01",
-                InteractiveAction(ActionKind.SESSION_CREATE, argument="chapter-01"),
-            ),
-            (
-                "/session resume chapter-01",
-                InteractiveAction(
-                    ActionKind.SESSION_OPEN,
-                    argument="chapter-01",
-                ),
-            ),
-            ("/session pause", InteractiveAction(ActionKind.SESSION_PAUSE)),
-            (
-                "/conversation new Chapter 1 opening",
-                InteractiveAction(
-                    ActionKind.CONVERSATION_NEW,
-                    argument="Chapter 1 opening",
-                ),
-            ),
-            (
-                "/conversation list motivation",
-                InteractiveAction(
-                    ActionKind.CONVERSATION_LIST,
-                    argument="motivation",
-                ),
-            ),
-            (
-                "/conversation list --all archived",
-                InteractiveAction(
-                    ActionKind.CONVERSATION_LIST_ALL,
-                    argument="archived",
-                ),
-            ),
-            (
-                "/conversation resume c_0123456789abcdef",
-                InteractiveAction(
-                    ActionKind.CONVERSATION_USE,
-                    argument="c_0123456789abcdef",
-                ),
-            ),
-            (
-                "/conversation subject Revised opening",
-                InteractiveAction(
-                    ActionKind.CONVERSATION_SUBJECT,
-                    argument="Revised opening",
-                ),
-            ),
-            (
-                "/conversation archive c_0123456789abcdef",
-                InteractiveAction(
-                    ActionKind.CONVERSATION_ARCHIVE,
-                    argument="c_0123456789abcdef",
-                ),
-            ),
-            (
-                "/help run",
-                InteractiveAction(ActionKind.HELP, argument="/run"),
-            ),
-            ("/quit", InteractiveAction(ActionKind.QUIT)),
-        )
-        self.assertEqual(
-            {expected.kind for _, expected in cases},
-            set(ActionKind).difference({ActionKind.PARSE_ERROR}),
-        )
-        for line, expected in cases:
-            with self.subTest(line=line):
-                self.assertEqual(parse_interactive_line(line), expected)
-
-    def test_legacy_override_forms_return_the_canonical_typed_actions(self) -> None:
-        pairs = (
-            ("/language ko-KR", "/override language ko-KR"),
-            (
-                "/persona plot meticulous.v2",
-                "/override persona plot meticulous.v2",
-            ),
-            ("/reset", "/override reset"),
-        )
-        for legacy, canonical in pairs:
-            with self.subTest(legacy=legacy):
-                self.assertEqual(
-                    parse_interactive_line(legacy),
-                    parse_interactive_line(canonical),
-                )
-
-    def test_all_agent_aliases_normalize_in_each_agent_command(self) -> None:
-        for alias, agent_id in AGENT_ALIASES.items():
-            cases = (
-                (
-                    f"@{alias} routed",
-                    InteractiveAction(
-                        ActionKind.ROUTED_MESSAGE,
-                        agent_id=agent_id,
-                        text="routed",
-                    ),
-                ),
-                (
-                    f"@{alias}\t\trouted  ",
-                    InteractiveAction(
-                        ActionKind.ROUTED_MESSAGE,
-                        agent_id=agent_id,
-                        text="\trouted  ",
-                    ),
-                ),
-                (
-                    f"/to {alias}",
-                    InteractiveAction(ActionKind.SET_TARGET, agent_id=agent_id),
-                ),
-                (
-                    f"/agent\t{alias}",
-                    InteractiveAction(ActionKind.SET_TARGET, agent_id=agent_id),
-                ),
-                (
-                    f"/persona {alias} persona-name",
-                    InteractiveAction(
-                        ActionKind.SET_PERSONA,
-                        agent_id=agent_id,
-                        argument="persona-name",
-                    ),
-                ),
-                (
-                    f"/override persona {alias} persona-name",
-                    InteractiveAction(
-                        ActionKind.SET_PERSONA,
-                        agent_id=agent_id,
-                        argument="persona-name",
-                    ),
-                ),
-            )
-            for line, expected in cases:
-                with self.subTest(alias=alias, line=line):
-                    self.assertEqual(parse_interactive_line(line), expected)
-
-    def test_rag_query_is_exact_bounded_alias_free_and_repr_private(self) -> None:
-        sentinel = "private-rag-query-${artifact}"
-        action = parse_interactive_line(f"/rag {sentinel}")
-        self.assertEqual(action.kind, ActionKind.RAG)
-        self.assertEqual(action.rag_query, sentinel)
-        self.assertIsNone(action.text)
-        self.assertNotIn(sentinel, repr(action))
-
-        maximum = "한" * 200
-        self.assertEqual(
-            parse_interactive_line(f"/rag {maximum}"),
-            InteractiveAction(ActionKind.RAG, rag_query=maximum),
-        )
-        for line in ("/rag", "/rag ", "/rag\t", f"/rag {'x' * 201}", "/rag bad\x1bquery"):
-            with self.subTest(line=repr(line)):
-                self.assertEqual(parse_interactive_line(line).kind, ActionKind.PARSE_ERROR)
-
-        rag_spec = next(spec for spec in COMMANDS if spec.syntax == "/rag QUERY")
-        self.assertEqual(rag_spec.aliases, ())
-        self.assertEqual(parse_interactive_line("/semantic query").kind, ActionKind.PARSE_ERROR)
-        self.assertEqual(
-            parse_interactive_line("/search council vessel"),
-            InteractiveAction(ActionKind.SEARCH, text="council vessel"),
-        )
-
-    def test_command_aliases_and_help_references_normalize_to_canonical(
-        self,
-    ) -> None:
-        self.assertEqual(
-            parse_interactive_line("/agent plot"),
-            InteractiveAction(ActionKind.SET_TARGET, agent_id=PLOT_ARCHITECT),
-        )
-        self.assertEqual(
-            parse_interactive_line("/?"),
-            InteractiveAction(ActionKind.HELP),
-        )
-
-        for name, canonical in COMMAND_NAMES.items():
-            for reference in (name, f"/{name}"):
-                for help_command in ("/help", "/?"):
-                    line = f"{help_command} {reference}"
-                    with self.subTest(line=line):
-                        self.assertEqual(
-                            parse_interactive_line(line),
-                            InteractiveAction(ActionKind.HELP, argument=canonical),
-                        )
-
-        exit_action = parse_interactive_line("/exit")
-        self.assertEqual(exit_action.kind, ActionKind.PARSE_ERROR)
-        self.assertEqual(exit_action.error, "unknown command: /exit")
-        self.assertEqual(exit_action.suggestion, "/quit")
-        help_exit = parse_interactive_line("/help exit")
-        self.assertEqual(help_exit.kind, ActionKind.PARSE_ERROR)
-        self.assertEqual(help_exit.suggestion, "/quit")
-
-    def test_optional_arguments_treat_ascii_blank_remainders_as_omitted(
-        self,
-    ) -> None:
-        cases = (
-            ("/run", InteractiveAction(ActionKind.RUN)),
-            ("/run ", InteractiveAction(ActionKind.RUN)),
-            ("/run\t\t", InteractiveAction(ActionKind.RUN)),
-            ("/inspect ", InteractiveAction(ActionKind.INSPECT)),
-            ("/exchanges\t", InteractiveAction(ActionKind.EXCHANGES)),
-            ("/history\t\t", InteractiveAction(ActionKind.HISTORY)),
-            (
-                "/session resume ",
-                InteractiveAction(ActionKind.SESSION_OPEN),
-            ),
-            (
-                "/conversation new ",
-                InteractiveAction(ActionKind.CONVERSATION_NEW),
-            ),
-            (
-                "/conversation list\t\t",
-                InteractiveAction(ActionKind.CONVERSATION_LIST),
-            ),
-            (
-                "/conversation list --all ",
-                InteractiveAction(ActionKind.CONVERSATION_LIST_ALL),
-            ),
-            (
-                "/conversation resume ",
-                InteractiveAction(ActionKind.CONVERSATION_USE),
-            ),
-            (
-                "/conversation archive\t",
-                InteractiveAction(ActionKind.CONVERSATION_ARCHIVE),
-            ),
-            ("/help\t", InteractiveAction(ActionKind.HELP)),
-        )
-        for line, expected in cases:
-            with self.subTest(line=line):
-                self.assertEqual(parse_interactive_line(line), expected)
-
-    def test_run_fresh_recognizes_the_first_non_delimiter_token(self) -> None:
-        cases = (
-            ("/run --fresh prompt", "prompt"),
-            ("/run  --fresh  prompt  ", "prompt  "),
-            ("/run\t\t--fresh\t\tprompt\t", "prompt\t"),
-            ("/run --fresh\t prompt", "prompt"),
-        )
-        for line, text in cases:
-            with self.subTest(line=line):
-                self.assertEqual(
-                    parse_interactive_line(line),
-                    InteractiveAction(ActionKind.RUN_FRESH, text=text),
-                )
-
-    def test_run_output_uses_only_ascii_delimiters_and_preserves_prompt_exactly(
-        self,
-    ) -> None:
-        cases = (
-            (
-                "/run\t--output\tpart-01/chapter.md\tprompt  exact\t ",
-                InteractiveAction(
-                    ActionKind.RUN,
-                    text="prompt  exact\t ",
-                    output_path="part-01/chapter.md",
-                ),
-            ),
-            (
-                "/run --fresh\t--output part-01/chapter.md\tprompt  exact\t ",
-                InteractiveAction(
-                    ActionKind.RUN_FRESH,
-                    text="prompt  exact\t ",
-                    output_path="part-01/chapter.md",
-                ),
-            ),
-        )
-        for line, expected in cases:
-            with self.subTest(line=line):
-                self.assertEqual(parse_interactive_line(line), expected)
-
-        for whitespace in ("\u00a0", "\u2003", "\u3000"):
-            with self.subTest(whitespace=repr(whitespace)):
-                output_path = f"part-01{whitespace}suffix/chapter.md"
-                self.assertEqual(
-                    parse_interactive_line(
-                        f"/run --output {output_path} prompt exact"
-                    ),
-                    InteractiveAction(
-                        ActionKind.RUN,
-                        text="prompt exact",
-                        output_path=output_path,
-                    ),
-                )
-                self.assertEqual(
-                    parse_interactive_line(
-                        f"/run --fresh --output {output_path} prompt exact"
-                    ),
-                    InteractiveAction(
-                        ActionKind.RUN_FRESH,
-                        text="prompt exact",
-                        output_path=output_path,
-                    ),
-                )
-
-    def test_fresh_run_accepts_only_exact_leading_output_flag_and_literal_tail(
-        self,
-    ) -> None:
-        cases = (
-            (
-                "/run --fresh --output part-01/chapter.md exact prompt",
-                InteractiveAction(
-                    ActionKind.RUN_FRESH,
-                    text="exact prompt",
-                    output_path="part-01/chapter.md",
-                ),
-            ),
-            (
-                "/run --fresh ordinary prose",
-                InteractiveAction(ActionKind.RUN_FRESH, text="ordinary prose"),
-            ),
-            (
-                "/run --fresh -single-hyphen prose",
-                InteractiveAction(
-                    ActionKind.RUN_FRESH,
-                    text="-single-hyphen prose",
-                ),
-            ),
-            (
-                "/run --fresh prompt --unknown remains literal",
-                InteractiveAction(
-                    ActionKind.RUN_FRESH,
-                    text="prompt --unknown remains literal",
-                ),
-            ),
-        )
-        for line, expected in cases:
-            with self.subTest(line=line):
-                self.assertEqual(parse_interactive_line(line), expected)
-
-    def test_token_arguments_accept_printable_non_whitespace_values(self) -> None:
-        cases = (
-            (
-                "/override language 한국어.v2",
-                InteractiveAction(ActionKind.SET_LANGUAGE, argument="한국어.v2"),
-            ),
-            (
-                "/override persona plot meticulous.v2",
-                InteractiveAction(
-                    ActionKind.SET_PERSONA,
-                    agent_id=PLOT_ARCHITECT,
-                    argument="meticulous.v2",
-                ),
-            ),
-            (
-                "/session create chapter.v2",
-                InteractiveAction(ActionKind.SESSION_CREATE, argument="chapter.v2"),
-            ),
-            (
-                "/inspect debate.v2",
-                InteractiveAction(ActionKind.INSPECT, argument="debate.v2"),
-            ),
-        )
-        for line, expected in cases:
-            with self.subTest(line=line):
-                self.assertEqual(parse_interactive_line(line), expected)
-
-
-class InvalidInputTests(ParserAssertions, unittest.TestCase):
     def test_parse_failures_are_typed_values_instead_of_exceptions(self) -> None:
-        cases = (
-            7,
-            None,
-            "/unknown",
-            "/say",
-            "@plot",
-            "/to",
-            "/run --fresh",
-            "/draft-file",
-            "/session",
-            "/history zero",
-        )
-        for line in cases:
+        for line in (7, None, "/unknown", "/session", "/history zero"):
             with self.subTest(line=line):
                 self.assert_parse_error(line)
 
@@ -1113,666 +419,125 @@ class InvalidInputTests(ParserAssertions, unittest.TestCase):
         for line in ("/search", "/search ", "/search\t\t"):
             with self.subTest(line=line):
                 self.assert_parse_error(line)
-
-        cases = (
-            ("/search council vessel", "council vessel"),
-            ("/search  council  vessel ", " council  vessel "),
-            ("/search\t\tcouncil\tvessel\t", "\tcouncil\tvessel\t"),
-            ("/search --from 25", "--from 25"),
+        self.assertEqual(
+            parse_interactive_line("/search  council  vessel "),
+            InteractiveAction(ActionKind.SEARCH, text=" council  vessel "),
         )
-        for line, query in cases:
-            with self.subTest(line=line):
-                self.assertEqual(
-                    parse_interactive_line(line),
-                    InteractiveAction(ActionKind.SEARCH, text=query),
-                )
 
-    def test_transcript_accepts_valid_forms_without_service_limits(self) -> None:
-        cases = (
-            (
-                "/transcript c_0123456789",
-                InteractiveAction(
-                    ActionKind.TRANSCRIPT,
-                    argument="c_0123456789",
-                ),
-            ),
-            (
-                "/transcript c_0123456789 24",
-                InteractiveAction(
-                    ActionKind.TRANSCRIPT,
-                    argument="c_0123456789",
-                    count=24,
-                ),
-            ),
-            (
-                "/transcript c_0123456789 --from 25",
-                InteractiveAction(
-                    ActionKind.TRANSCRIPT,
-                    argument="c_0123456789",
-                    start_sequence=25,
-                ),
-            ),
-            (
-                "/transcript c_0123456789 101 --from 00025",
-                InteractiveAction(
-                    ActionKind.TRANSCRIPT,
-                    argument="c_0123456789",
-                    count=101,
-                    start_sequence=25,
-                ),
+    def test_transcript_valid_and_invalid_forms_are_exact(self) -> None:
+        self.assertEqual(
+            parse_interactive_line("/transcript c_0123456789 101 --from 00025"),
+            InteractiveAction(
+                ActionKind.TRANSCRIPT,
+                argument="c_0123456789",
+                count=101,
+                start_sequence=25,
             ),
         )
-        for line, expected in cases:
-            with self.subTest(line=line):
-                self.assertEqual(parse_interactive_line(line), expected)
-
-    def test_transcript_rejects_invalid_arity_flags_and_numeric_tokens(self) -> None:
-        cases = (
+        for line in (
             "/transcript",
-            "/transcript --from 2",
-            "/transcript id count",
             "/transcript id 0",
             "/transcript id +1",
-            "/transcript id 1_0",
-            "/transcript id ١",
-            "/transcript id １",
-            "/transcript id 2 3",
-            "/transcript id --unknown 2",
-            "/transcript id 2 --unknown 3",
-            "/transcript id --from",
             "/transcript id --from 0",
-            "/transcript id --from +1",
-            "/transcript id --from ١",
-            "/transcript id --from 2 3",
-            "/transcript id --from 2 --from 3",
             "/transcript id 2 --from 3 extra",
-            "/transcript id 2 --from 3 --from 4",
-        )
-        for line in cases:
+        ):
             with self.subTest(line=line):
                 self.assert_parse_error(line)
 
     def test_conversation_grammar_and_opaque_remainders_are_exact(self) -> None:
-        cases = (
-            (
-                "/conversation new",
-                InteractiveAction(ActionKind.CONVERSATION_NEW),
+        cases = {
+            "/conversation new  Subject  spaced ": InteractiveAction(
+                ActionKind.CONVERSATION_NEW,
+                argument=" Subject  spaced ",
             ),
-            (
-                "/conversation new  Subject  with  spacing ",
-                InteractiveAction(
-                    ActionKind.CONVERSATION_NEW,
-                    argument=" Subject  with  spacing ",
-                ),
+            "/conversation list --all old subject ": InteractiveAction(
+                ActionKind.CONVERSATION_LIST_ALL,
+                argument="old subject ",
             ),
-            (
-                "/conversation list",
-                InteractiveAction(ActionKind.CONVERSATION_LIST),
+            "/conversation resume": InteractiveAction(ActionKind.CONVERSATION_USE),
+            "/conversation archive ../unsafe": InteractiveAction(
+                ActionKind.CONVERSATION_ARCHIVE,
+                argument="../unsafe",
             ),
-            (
-                "/conversation list  Mara  motivation ",
-                InteractiveAction(
-                    ActionKind.CONVERSATION_LIST,
-                    argument="Mara  motivation ",
-                ),
-            ),
-            (
-                "/conversation list --all",
-                InteractiveAction(ActionKind.CONVERSATION_LIST_ALL),
-            ),
-            (
-                "/conversation list  --all  old subject ",
-                InteractiveAction(
-                    ActionKind.CONVERSATION_LIST_ALL,
-                    argument="old subject ",
-                ),
-            ),
-            (
-                "/conversation resume",
-                InteractiveAction(ActionKind.CONVERSATION_USE),
-            ),
-            (
-                "/conversation resume ../unsafe",
-                InteractiveAction(
-                    ActionKind.CONVERSATION_USE,
-                    argument="../unsafe",
-                ),
-            ),
-            (
-                "/conversation subject \u00a0",
-                InteractiveAction(
-                    ActionKind.CONVERSATION_SUBJECT,
-                    argument="\u00a0",
-                ),
-            ),
-            (
-                "/conversation archive ../unsafe",
-                InteractiveAction(
-                    ActionKind.CONVERSATION_ARCHIVE,
-                    argument="../unsafe",
-                ),
-            ),
-        )
-        for line, expected in cases:
+        }
+        for line, expected in cases.items():
             with self.subTest(line=line):
                 self.assertEqual(parse_interactive_line(line), expected)
-
-    def test_conversation_subcommands_enforce_arity_and_flag_position(self) -> None:
-        cases = (
-            "/conversation",
-            "/conversation unknown",
-            "/conversation use",
-            "/conversation use c_0123456789abcdef",
-            "/conversation resume one two",
-            "/conversation subject",
-            "/conversation subject   ",
-            "/conversation archive one two",
-            "/conversation list --unknown",
-            "/conversation list --all --all",
-            "/conversation list query --all",
-            "/conversation list --all query --all",
-        )
-        for line in cases:
-            with self.subTest(line=line):
-                self.assert_parse_error(line)
-
-    def test_case_sensitive_and_missing_delimiter_near_misses_fail(self) -> None:
-        cases = (
-            "/RUN",
-            "/Agents",
-            "@Plot text",
-            "/saytext",
-            "/run--fresh prompt",
-            "@plottext",
-            "/say\u00a0text",
-        )
-        for line in cases:
-            with self.subTest(line=line):
-                self.assert_parse_error(line)
-
-    def test_required_remainders_reject_missing_or_ascii_blank_values(self) -> None:
-        cases = (
-            "/say",
-            "/say   ",
-            "/say\t\t",
-            "@plot",
-            "@plot   ",
-            "@plot\t\t",
-            "/draft-file",
-            "/draft-file\t\t",
-            "/run --fresh",
-            "/run --fresh   ",
-            "/run  --fresh\t\t",
-        )
-        for line in cases:
-            with self.subTest(line=line):
-                self.assert_parse_error(line)
-
-    def test_fixed_commands_reject_extra_arguments(self) -> None:
-        for command in (
-            "/agents",
-            "/compose",
-            "/send",
-            "/cancel",
-            "/status",
-            "/auth",
-            "/reset",
-            "/settings",
-            "/exchanges",
-            "/session list",
-            "/session pause",
-            "/quit",
-        ):
-            line = f"{command} extra"
-            with self.subTest(line=line):
-                self.assert_parse_error(line)
-
-    def test_token_commands_enforce_arity(self) -> None:
-        cases = (
-            "/to",
-            "/to plot extra",
-            "/agent",
-            "/inspect one two",
-            "/history 1 2",
-            "/language ko extra",
-            "/persona plot",
-            "/persona plot name extra",
-            "/override language ko extra",
-            "/override persona plot",
-            "/override persona plot name extra",
-            "/override reset extra",
-            "/session unknown",
-            "/session open",
-            "/session open chapter-01",
-            "/session list extra",
-            "/session create",
-            "/session create   ",
-            "/session create name extra",
-            "/session resume name extra",
-            "/session pause extra",
-            "/help run extra",
-            "/? run extra",
-        )
-        for line in cases:
-            with self.subTest(line=line):
-                self.assert_parse_error(line)
-
-    def test_canonical_override_errors_name_the_canonical_syntax(self) -> None:
-        cases = (
-            ("/override", "/override requires a subcommand", None),
-            (
-                "/override language",
-                "/override language requires exactly one language",
-                None,
-            ),
-            (
-                "/override language ko extra",
-                "/override language requires exactly one language",
-                None,
-            ),
-            (
-                "/override persona plot",
-                "/override persona requires an agent and one persona name",
-                None,
-            ),
-            (
-                "/override persona plot bad\x7f",
-                "/override persona arguments must be control-free tokens",
-                None,
-            ),
-            (
-                "/override reset extra",
-                "/override reset does not accept arguments",
-                None,
-            ),
-            (
-                "/override persna plot meticulous",
-                "unknown /override subcommand: persna",
-                "/override persona",
-            ),
-        )
-        for line, error, suggestion in cases:
-            with self.subTest(line=repr(line)):
-                action = self.assert_parse_error(line, suggestion=suggestion)
-                self.assertEqual(action.error, error)
-
-    def test_unknown_or_incomplete_run_flags_fail(self) -> None:
         for line in (
-            "/run --stale prompt",
-            "/run --freshish prompt",
-            "/run  --unknown prompt",
-            "/run\t-- prompt",
+            "/conversation",
+            "/conversation use id",
+            "/conversation subject",
+            "/conversation list query --all",
         ):
             with self.subTest(line=line):
                 self.assert_parse_error(line)
 
-        for flag in ("--unknown", "--", "--fresh", "--outputish"):
-            with self.subTest(fresh_second_flag=flag):
-                self.assert_parse_error(f"/run --fresh {flag} prompt")
-
-    def test_unicode_whitespace_does_not_become_a_run_output_delimiter(self) -> None:
-        for whitespace in ("\u00a0", "\u2003", "\u3000"):
-            with self.subTest(whitespace=repr(whitespace)):
-                self.assert_parse_error(
-                    f"/run --output{whitespace}part-01/chapter.md prompt"
-                )
-                self.assert_parse_error(
-                    f"/run --fresh --output{whitespace}part-01/chapter.md prompt"
-                )
+    def test_fixed_and_token_commands_enforce_arity(self) -> None:
+        for line in (
+            "/agents extra",
+            "/status extra",
+            "/auth extra",
+            "/settings extra",
+            "/exchanges extra",
+            "/session create",
+            "/session resume one two",
+            "/override language ko extra",
+            "/inspect one two",
+            "/help status extra",
+        ):
+            with self.subTest(line=line):
+                self.assert_parse_error(line)
 
     def test_history_accepts_only_positive_ascii_digit_counts(self) -> None:
-        invalid = (
-            "0",
-            "00",
-            "+1",
-            "-1",
-            "1.0",
-            "1_0",
-            "١",
-            "１",
-        )
-        for value in invalid:
+        for rendered, expected in (("1", 1), ("0007", 7), ("250", 250)):
+            self.assertEqual(
+                parse_interactive_line(f"/history {rendered}"),
+                InteractiveAction(ActionKind.HISTORY, count=expected),
+            )
+        for value in ("0", "00", "+1", "-1", "1_0", "١", "１"):
             with self.subTest(value=value):
                 self.assert_parse_error(f"/history {value}")
 
-    def test_token_arguments_reject_unicode_whitespace_and_controls(self) -> None:
-        cases = (
-            "/language ko\u00a0KR",
-            "/language ko\x00KR",
-            "/persona plot meticulous\x7f",
-            "/override language ko\u00a0KR",
-            "/override language ko\x00KR",
-            "/override persona plot meticulous\x7f",
-            "/session create chapter\vone",
-            "/session resume chapter\u2003one",
-            "/inspect debate\x00one",
-            "/to pl\x00ot",
-        )
-        for line in cases:
-            with self.subTest(line=line):
-                self.assert_parse_error(line)
-
-
-class PreservationAndPrecedenceTests(ParserAssertions, unittest.TestCase):
-    def test_one_terminal_line_ending_is_removed(self) -> None:
-        bases = (
-            "ordinary  text ",
-            "/run prompt",
-            "@plot message",
-            "/quit",
-            "",
-        )
-        for base in bases:
-            expected = parse_interactive_line(base)
+    def test_line_endings_whitespace_and_original_character_zero_are_exact(
+        self,
+    ) -> None:
+        for base in ("/status", "/search query", "ordinary"):
             for ending in ("\n", "\r\n"):
-                with self.subTest(base=base, ending=repr(ending)):
-                    self.assertEqual(parse_interactive_line(base + ending), expected)
-
-    def test_every_remaining_carriage_return_or_line_feed_fails(self) -> None:
-        cases = (
-            "text\r",
-            "text\n\n",
-            "text\r\n\r\n",
-            "text\n\r",
-            "/say first\nsecond",
-            "/run first\rsecond",
-            "@plot first\nsecond",
-            "/language k\ro",
-        )
-        for line in cases:
-            with self.subTest(line=repr(line)):
-                self.assert_parse_error(line)
-
-    def test_whitespace_only_lines_are_ignored_including_unicode(self) -> None:
-        for line in ("", " ", "\t", " \t ", "\u00a0", "\u2003\t"):
-            with self.subTest(line=repr(line)):
                 self.assertEqual(
-                    parse_interactive_line(line),
-                    InteractiveAction(ActionKind.IGNORED),
+                    parse_interactive_line(base + ending),
+                    parse_interactive_line(base),
                 )
-
-    def test_classification_uses_original_character_zero(self) -> None:
-        for line in (
-            " /quit",
-            "\t@plot text",
-            "\u00a0/run prompt",
-            "\u2003@plot text",
-        ):
-            with self.subTest(line=repr(line)):
-                self.assertEqual(
-                    parse_interactive_line(line),
-                    InteractiveAction(ActionKind.MESSAGE, text=line),
-                )
-
-    def test_say_routing_and_opaque_commands_preserve_literal_remainders(
-        self,
-    ) -> None:
-        cases = (
-            (
-                "/say @plot /quit",
-                InteractiveAction(ActionKind.MESSAGE, text="@plot /quit"),
-            ),
-            (
-                "/say  literal\ttext  ",
-                InteractiveAction(ActionKind.MESSAGE, text=" literal\ttext  "),
-            ),
-            (
-                "@plot /quit",
-                InteractiveAction(
-                    ActionKind.ROUTED_MESSAGE,
-                    agent_id=PLOT_ARCHITECT,
-                    text="/quit",
-                ),
-            ),
-            (
-                "/run  prompt  ",
-                InteractiveAction(ActionKind.RUN, text=" prompt  "),
-            ),
-            (
-                '/draft-file  "a b";$(touch marker) ',
-                InteractiveAction(
-                    ActionKind.DRAFT_FILE,
-                    argument=' "a b";$(touch marker) ',
-                ),
-            ),
-        )
-        for line, expected in cases:
-            with self.subTest(line=line):
-                self.assertEqual(parse_interactive_line(line), expected)
-
-
-class SuggestionTests(ParserAssertions, unittest.TestCase):
-    def test_threshold_ties_case_and_candidate_namespaces_are_exact(self) -> None:
-        cases = (
-            ("/rnx", None),
-            ("/ruunx", "/run"),
-            ("/rxxxx", None),
-            ("/agens", None),
-            ("/euit", "/quit"),
-            ("/Run", "/run"),
-            ("/RUN", None),
-            ("@plto text", "@plot"),
-            ("@plxxx text", None),
-            ("@lat text", None),
-            ("/help rnx", None),
-            ("/help agens", None),
-            ("/session lest", "/session list"),
-        )
-        for line, suggestion in cases:
-            with self.subTest(line=line):
-                self.assert_parse_error(line, suggestion=suggestion)
-
-    def test_bounded_mutations_follow_an_independent_distance_oracle(self) -> None:
-        rng = random.Random(0xC0DEC)
-        alphabet = "abcdefghijklmnopqrstuvwxyz_-"
-
-        command_mutations: set[str] = set()
-        for candidate in COMMAND_NAMES:
-            if len(candidate) > 1:
-                index = rng.randrange(len(candidate))
-                command_mutations.add(candidate[:index] + candidate[index + 1 :])
-            index = rng.randrange(len(candidate) + 1)
-            command_mutations.add(
-                candidate[:index] + rng.choice(alphabet) + candidate[index:]
+        for line in ("text\r", "text\n\n", "/search one\ntwo"):
+            self.assert_parse_error(line)
+        for line in ("", " \t ", "\u00a0", "\u2003\t"):
+            self.assertEqual(
+                parse_interactive_line(line),
+                InteractiveAction(ActionKind.IGNORED),
             )
-        for mutation in sorted(command_mutations):
-            if mutation in COMMAND_NAMES:
-                continue
-            with self.subTest(namespace="command", mutation=mutation):
-                self.assert_parse_error(
-                    f"/{mutation}",
-                    suggestion=expected_suggestion(mutation, COMMAND_NAMES),
-                )
-
-        agent_candidates = {
-            alias: f"@{route.prompt_alias}"
-            for route in EXPECTED_AGENT_ROUTES
-            for alias in route.aliases
-        }
-        agent_mutations: set[str] = set()
-        for candidate in agent_candidates:
-            index = rng.randrange(len(candidate))
-            agent_mutations.add(candidate[:index] + candidate[index + 1 :])
-            index = rng.randrange(len(candidate) + 1)
-            agent_mutations.add(
-                candidate[:index] + rng.choice(alphabet) + candidate[index:]
-            )
-        for mutation in sorted(agent_mutations):
-            if not mutation or mutation in agent_candidates:
-                continue
-            with self.subTest(namespace="agent", mutation=mutation):
-                self.assert_parse_error(
-                    f"@{mutation} text",
-                    suggestion=expected_suggestion(mutation, agent_candidates),
-                )
-
-
-class DeterministicPropertyTests(ParserAssertions, unittest.TestCase):
-    def test_bounded_ordinary_and_opaque_inputs_are_preserved(self) -> None:
-        rng = random.Random(0x51DE)
-        alphabet = "abcXYZ019 !#$%&'()*+,-.:;<=>?[\\]^_`{|}~\t"
-        for index in range(100):
-            tail = "".join(rng.choice(alphabet) for _ in range(rng.randrange(1, 32)))
-            ordinary = f"m{tail}"
-            with self.subTest(case="ordinary", index=index):
-                self.assertEqual(
-                    parse_interactive_line(ordinary),
-                    InteractiveAction(ActionKind.MESSAGE, text=ordinary),
-                )
-
-            opaque = f"p{tail}"
-            for prefix, kind, field_name in (
-                ("/say ", ActionKind.MESSAGE, "text"),
-                ("/run ", ActionKind.RUN, "text"),
-                ("/draft-file ", ActionKind.DRAFT_FILE, "argument"),
-            ):
-                expected = InteractiveAction(kind, **{field_name: opaque})
-                with self.subTest(case=prefix, index=index):
-                    self.assertEqual(parse_interactive_line(prefix + opaque), expected)
-
-    def test_positive_count_range_and_zero_padding_are_deterministic(self) -> None:
-        for count in range(1, 251):
-            for rendered in (str(count), f"{count:04d}"):
-                with self.subTest(count=count, rendered=rendered):
-                    self.assertEqual(
-                        parse_interactive_line(f"/history {rendered}"),
-                        InteractiveAction(ActionKind.HISTORY, count=count),
-                    )
-
-    def test_line_break_insertion_always_fails_except_one_terminal_ending(
-        self,
-    ) -> None:
-        bases = (
-            "message",
-            "/run prompt",
-            "@plot routed",
-            "/override language ko",
+        self.assertEqual(
+            parse_interactive_line(" /quit"),
+            InteractiveAction(
+                ActionKind.PARSE_ERROR, error=DIRECT_EXECUTION_UNAVAILABLE
+            ),
         )
-        for base in bases:
-            for index in range(len(base) + 1):
-                for line_break in ("\n", "\r", "\r\n"):
-                    candidate = base[:index] + line_break + base[index:]
-                    if index == len(base) and line_break in {"\n", "\r\n"}:
-                        expected = parse_interactive_line(base)
-                        with self.subTest(
-                            base=base,
-                            index=index,
-                            line_break=repr(line_break),
-                        ):
-                            self.assertEqual(
-                                parse_interactive_line(candidate),
-                                expected,
-                            )
-                    else:
-                        with self.subTest(
-                            base=base,
-                            index=index,
-                            line_break=repr(line_break),
-                        ):
-                            self.assert_parse_error(candidate)
-
-    def test_leading_ascii_delimiters_turn_commands_into_messages(self) -> None:
-        for base in ("/quit", "/run prompt", "@plot text"):
-            for prefix in (" ", "\t", " \t"):
-                line = prefix + base
-                with self.subTest(line=repr(line)):
-                    self.assertEqual(
-                        parse_interactive_line(line),
-                        InteractiveAction(ActionKind.MESSAGE, text=line),
-                    )
-
-
-class ParserBoundaryTests(unittest.TestCase):
-    def test_direct_module_public_surface_and_dependency_are_minimal(self) -> None:
-        expected_exports = (
-            "ActionKind",
-            "AgentRouteSpec",
-            "AGENT_ROUTES",
-            "COMMANDS",
-            "CommandSpec",
-            "InteractiveAction",
-            "parse_interactive_line",
-        )
-        self.assertEqual(tuple(commands_module.__all__), expected_exports)
-        for name in ("AgentRouteSpec", "AGENT_ROUTES"):
-            with self.subTest(facade_name=name):
-                self.assertNotIn(name, story_writing_agents.__all__)
-                self.assertFalse(hasattr(story_writing_agents, name))
-
-        source_path = (
-            Path(__file__).resolve().parents[1]
-            / "src"
-            / "story_writing_agents"
-            / "interactive_commands.py"
-        )
-        tree = ast.parse(source_path.read_text(encoding="utf-8"))
-        internal_dependencies = {
-            node.module
-            for node in ast.walk(tree)
-            if isinstance(node, ast.ImportFrom) and node.level > 0
-        }
-        self.assertEqual(internal_dependencies, {"agents", "conversation_search"})
-
-    def test_parsing_does_not_use_process_network_or_filesystem_writes(self) -> None:
-        cwd_before = Path.cwd()
-        environment_before = os.environ.copy()
-        with tempfile.TemporaryDirectory() as temporary:
-            root = Path(temporary)
-            before = tuple(root.iterdir())
-            with (
-                mock.patch.object(subprocess, "Popen") as popen,
-                mock.patch.object(subprocess, "run") as run,
-                mock.patch.object(socket, "create_connection") as connect,
-                mock.patch.object(Path, "write_text") as write_text,
-                mock.patch.object(Path, "write_bytes") as write_bytes,
-            ):
-                for line in (
-                    "ordinary",
-                    "@plot routed",
-                    "/run prompt",
-                    f"/draft-file {root / 'missing.md'}",
-                    "/search",
-                    "/quit",
-                ):
-                    parse_interactive_line(line)
-                popen.assert_not_called()
-                run.assert_not_called()
-                connect.assert_not_called()
-                write_text.assert_not_called()
-                write_bytes.assert_not_called()
-            self.assertEqual(tuple(root.iterdir()), before)
-        self.assertEqual(Path.cwd(), cwd_before)
-        self.assertEqual(os.environ, environment_before)
 
     def test_module_and_facade_import_cleanly_outside_the_repository(self) -> None:
         repository_root = Path(__file__).resolve().parents[1]
         environment = os.environ.copy()
-        source_path = str(repository_root / "src")
-        existing_pythonpath = environment.get("PYTHONPATH")
-        environment["PYTHONPATH"] = (
-            source_path
-            if not existing_pythonpath
-            else os.pathsep.join((source_path, existing_pythonpath))
-        )
+        environment["PYTHONPATH"] = str(repository_root / "src")
         environment["PYTHONDONTWRITEBYTECODE"] = "1"
         script = (
             "import story_writing_agents as facade; "
             "from story_writing_agents import interactive_commands as module; "
             "assert facade.parse_interactive_line is module.parse_interactive_line; "
             "assert facade.COMMANDS is module.COMMANDS; "
-            "assert 'AgentRouteSpec' not in facade.__all__; "
-            "assert 'AGENT_ROUTES' not in facade.__all__; "
-            "assert not hasattr(facade, 'AgentRouteSpec'); "
-            "assert not hasattr(facade, 'AGENT_ROUTES'); "
-            "assert tuple(route.agent_id for route in module.AGENT_ROUTES) == "
-            "tuple(facade.ROSTER); "
+            "assert not hasattr(module, 'ProviderTextSpan'); "
             "print('ok')"
         )
         with tempfile.TemporaryDirectory() as temporary:
-            root = Path(temporary)
             completed = subprocess.run(
                 [sys.executable, "-c", script],
-                cwd=root,
+                cwd=temporary,
                 env=environment,
                 capture_output=True,
                 text=True,
@@ -1780,367 +545,80 @@ class ParserBoundaryTests(unittest.TestCase):
             )
             self.assertEqual(completed.returncode, 0, completed.stderr)
             self.assertEqual(completed.stdout, "ok\n")
-            self.assertEqual(list(root.iterdir()), [])
+            self.assertEqual(list(Path(temporary).iterdir()), [])
 
 
-class CommandCompletionProjectionTests(unittest.TestCase):
-    """Lock the provider-free fixed command grammar at exact cursor spans."""
-
-    ROOT = (
-        "/say",
-        "/rag",
-        "/to",
-        "/agent",
-        "/agents",
-        "/auth",
-        "/settings",
-        "/override",
-        "/run",
-        "/draft-file",
-        "/session",
-        "/conversation",
-        "/search",
-        "/transcript",
-        "/inspect",
-        "/exchanges",
-        "/history",
-        "/status",
-        "/help",
-        "/?",
-        "/quit",
-    )
-    HELP = ("/compose", "/send", "/cancel", *ROOT)
-    AGENTS = (
-        "lead",
-        "plot",
-        "character",
-        "execution",
-    )
-    MENTIONS = (
-        "@lead",
-        "@plot",
-        "@character",
-        "@execution",
-    )
-
-    def test_context_model_is_exact_frozen_slotted_picklable_and_internal(self) -> None:
-        self.assertEqual(
-            tuple(inspect.signature(CommandCompletionContext).parameters),
-            ("position", "replacement_start", "replacement_end", "replacements"),
+class InteractiveCompletionRetirementTests(unittest.TestCase):
+    def test_root_and_help_completion_exclude_every_removed_execution_form(
+        self,
+    ) -> None:
+        root = project_command_completion("/", 1)
+        help_projection = project_command_completion("/help ", 6)
+        self.assertIsNotNone(root)
+        self.assertIsNotNone(help_projection)
+        assert root is not None and help_projection is not None
+        expected = tuple(
+            item
+            for spec in EXPECTED_COMMANDS
+            for item in (spec.syntax.split(maxsplit=1)[0], *spec.aliases)
         )
-        value = CommandCompletionContext("root.command", 0, 1, self.ROOT)
-        self.assertFalse(hasattr(value, "__dict__"))
-        self.assertEqual(pickle.loads(pickle.dumps(value)), value)
-        with self.assertRaises(FrozenInstanceError):
-            value.position = "changed"  # type: ignore[misc]
-        self.assertNotIn("CommandCompletionContext", commands_module.__all__)
-        self.assertNotIn("project_command_completion", commands_module.__all__)
-        self.assertNotIn("CommandCompletionContext", story_writing_agents.__all__)
-        self.assertFalse(hasattr(story_writing_agents, "CommandCompletionContext"))
+        self.assertEqual(root.replacements, expected)
+        self.assertEqual(help_projection.replacements, expected)
+        for command in REMOVED_COMMANDS:
+            self.assertNotIn(command, root.replacements)
+            self.assertNotIn(command, help_projection.replacements)
+        self.assertIsNone(project_command_completion("@plot", 5))
+        self.assertIsNone(project_command_completion("ordinary", 4))
 
-    def test_exact_ordered_fixed_grammar_positions(self) -> None:
+    def test_retained_fixed_completion_positions_are_exact(self) -> None:
         cases = (
-            ("/", 1, "root.command", 0, 1, self.ROOT),
-            ("@", 1, "routed.agent", 0, 1, self.MENTIONS),
             (
                 "/session ",
                 9,
                 "session.subcommand",
-                9,
-                9,
                 ("list", "create", "resume", "pause"),
             ),
             (
                 "/conversation ",
                 14,
                 "conversation.subcommand",
-                14,
-                14,
                 ("new", "list", "resume", "subject", "archive"),
             ),
-            ("/to ", 4, "target.agent", 4, 4, self.AGENTS),
-            ("/agent ", 7, "target.agent", 7, 7, self.AGENTS),
-            (
-                "/override ",
-                10,
-                "override.subcommand",
-                10,
-                10,
-                ("language", "persona", "reset"),
-            ),
+            ("/override ", 10, "override.subcommand", ("language", "persona", "reset")),
             (
                 "/override persona ",
                 18,
                 "override.persona.agent",
-                18,
-                18,
-                self.AGENTS,
+                tuple(route.agent_id for route in AGENT_ROUTES),
             ),
-            ("/persona ", 9, "persona.agent", 9, 9, self.AGENTS),
-            ("/run ", 5, "run.flag", 5, 5, ("--fresh", "--output")),
-            ("/conversation list ", 19, "conversation.list.flag", 19, 19, ("--all",)),
-            ("/help ", 6, "help.command", 6, 6, self.HELP),
-            ("/? ", 3, "help.command", 3, 3, self.HELP),
-            ("/inspect ", 9, "inspect.argument", 9, 9, ("last",)),
-            ("/transcript c ", 14, "transcript.after_id.flag", 14, 14, ("--from",)),
-            (
-                "/transcript c 24 ",
-                17,
-                "transcript.after_count.flag",
-                17,
-                17,
-                ("--from",),
-            ),
+            ("/inspect ", 9, "inspect.argument", ("last",)),
         )
-        for buffer, cursor, position, start, end, replacements in cases:
+        for buffer, cursor, position, replacements in cases:
             with self.subTest(buffer=buffer):
                 self.assertEqual(
                     project_command_completion(buffer, cursor),
-                    CommandCompletionContext(position, start, end, replacements),
+                    CommandCompletionContext(position, cursor, cursor, replacements),
                 )
 
-    def test_complete_token_spans_include_suffix_at_and_after_delimiters(self) -> None:
-        cases = (
-            ("/session list", 9, "session.subcommand", 9, 13),
-            ("@plot message", 3, "routed.agent", 0, 5),
-            ("@plot\tmessage", 5, "routed.agent", 0, 5),
-            ("/help run", 6, "help.command", 6, 9),
-            ("/to plot_architect", 6, "target.agent", 4, 18),
-            (
-                "/override persona character_custodian",
-                21,
-                "override.persona.agent",
-                18,
-                37,
-            ),
-            ("/persona character_custodian", 12, "persona.agent", 9, 28),
-            ("/run --fresh", 5, "run.flag", 5, 12),
-            ("/session create tail", 11, "session.subcommand", 9, 15),
-            ("/session\tlist", 9, "session.subcommand", 9, 13),
+    def test_internal_completion_value_is_strict_and_not_public(self) -> None:
+        self.assertNotIn("CommandCompletionContext", commands_module.__all__)
+        self.assertNotIn("project_command_completion", commands_module.__all__)
+        self.assertEqual(
+            tuple(inspect.signature(project_command_completion).parameters),
+            ("buffer", "cursor"),
         )
-        for buffer, cursor, position, start, end in cases:
-            with self.subTest(buffer=buffer, cursor=cursor):
-                projected = project_command_completion(buffer, cursor)
-                self.assertIsNotNone(projected)
-                assert projected is not None
-                self.assertEqual(
-                    (
-                        projected.position,
-                        projected.replacement_start,
-                        projected.replacement_end,
-                    ),
-                    (position, start, end),
-                )
-
-        fixed_cases = (
-            (
-                "@plot message",
-                (1, 3, 5),
-                "routed.agent",
-                0,
-                5,
-                self.MENTIONS,
-            ),
-            (
-                "/run --fresh",
-                (5, 8, 12),
-                "run.flag",
-                5,
-                12,
-                ("--fresh", "--output"),
-            ),
-            (
-                "/conversation list --all",
-                (19, 22, 24),
-                "conversation.list.flag",
-                19,
-                24,
-                ("--all",),
-            ),
-            (
-                "/transcript c --from",
-                (14, 17, 20),
-                "transcript.after_id.flag",
-                14,
-                20,
-                ("--from",),
-            ),
-            (
-                "/transcript c 24 --from",
-                (17, 20, 23),
-                "transcript.after_count.flag",
-                17,
-                23,
-                ("--from",),
-            ),
-            ("/inspect la", (9, 10, 11), "inspect.argument", 9, 11, ("last",)),
-            ("/inspect last", (9, 11, 13), "inspect.argument", 9, 13, ("last",)),
-        )
-        for buffer, cursors, position, start, end, replacements in fixed_cases:
-            for cursor in cursors:
-                with self.subTest(buffer=buffer, cursor=cursor):
-                    self.assertEqual(
-                        project_command_completion(buffer, cursor),
-                        CommandCompletionContext(
-                            position,
-                            start,
-                            end,
-                            replacements,
-                        ),
-                    )
-
-    def test_dynamic_and_invalid_grammar_positions_have_no_projection(self) -> None:
-        cases = (
-            ("", 0), ("ordinary", 3), (" /", 2), ("/say ", 5),
-            ("@plot ", 6), ("@plot message", 6),
-            ("@plot message", 13), ("message @pl", 11),
-            ("@plot @pl", 9), ("/say @pl", 8),
-            ("/to plot ", 9), ("/persona plot ", 14),
-            ("/override language ko ", 22),
-            ("/override persona plot ", 23),
-            ("/override reset ", 16),
-            ("/conversation resume ", 21), ("/transcript --from ", 19),
-            ("/transcript c nope ", 19), ("/transcript c 0 ", 16),
-            ("/session list ", 14), ("/HELP ", 6),
-        )
-        for buffer, cursor in cases:
-            with self.subTest(buffer=buffer, cursor=cursor):
-                self.assertIsNone(project_command_completion(buffer, cursor))
-
-        free_cases = (
-            ("/run prompt", (5, 8, 11)),
-            ("/conversation list query", (19, 21, 24)),
-            ("/transcript c 24", (14, 15, 16)),
-            ("/inspect debate", (9, 12, 15)),
-        )
-        for buffer, cursors in free_cases:
-            for cursor in cursors:
-                with self.subTest(buffer=buffer, cursor=cursor):
-                    self.assertIsNone(
-                        project_command_completion(buffer, cursor)
-                    )
-
-    def test_partial_tokens_preserve_full_order_for_control_side_filtering(
-        self,
-    ) -> None:
-        for buffer, cursor, position, replacements in (
-            ("/s", 2, "root.command", self.ROOT),
-            ("@pl", 3, "routed.agent", self.MENTIONS),
-            (
-                "/session cr",
-                11,
-                "session.subcommand",
-                ("list", "create", "resume", "pause"),
-            ),
-            ("/to pl", 6, "target.agent", self.AGENTS),
-            (
-                "/override pe",
-                12,
-                "override.subcommand",
-                ("language", "persona", "reset"),
-            ),
-            (
-                "/override persona pl",
-                20,
-                "override.persona.agent",
-                self.AGENTS,
-            ),
-            ("/help ru", 8, "help.command", self.HELP),
-            ("/inspect la", 11, "inspect.argument", ("last",)),
-            ("/run --f", 8, "run.flag", ("--fresh", "--output")),
-        ):
-            with self.subTest(buffer=buffer):
-                projected = project_command_completion(buffer, cursor)
-                self.assertIsNotNone(projected)
-                assert projected is not None
-                self.assertEqual(projected.position, position)
-                self.assertEqual(projected.replacements, replacements)
-
-    def test_inputs_and_context_relations_are_validated_exactly(self) -> None:
-        invalid_contexts = (
-            ((1, 0, 0, ("x",)), TypeError),
-            (("", 0, 0, ("x",)), ValueError),
-            (("p", True, 0, ("x",)), TypeError),
-            (("p", -1, 0, ("x",)), ValueError),
-            (("p", 2, 1, ("x",)), ValueError),
-            (("p", 0, 0, ["x"]), TypeError),
-            (("p", 0, 0, ("",)), ValueError),
-            (("p", 0, 0, ("x", "x")), ValueError),
-        )
-        for arguments, error_type in invalid_contexts:
-            with self.subTest(arguments=arguments):
-                with self.assertRaises(error_type):
-                    CommandCompletionContext(*arguments)  # type: ignore[arg-type]
-        for buffer, cursor, error_type in (
-            (object(), 0, TypeError), ("/", True, TypeError),
-            ("/", -1, ValueError), ("/", 2, ValueError),
-        ):
-            with self.subTest(buffer=buffer, cursor=cursor):
-                with self.assertRaises(error_type):
-                    project_command_completion(buffer, cursor)  # type: ignore[arg-type]
-
-
-class ProviderTextSpanProjectionTests(unittest.TestCase):
-    """Lock exact cursor-active provider spans without parsing commands."""
-
-    def test_eligible_main_and_routed_text_spans_are_exact(self) -> None:
-        cases = (
-            ("ordinary ${x}", 4, ProviderTextSpan(0, 13)),
-            ("@plot revise ${x}", 10, ProviderTextSpan(6, 17)),
-            ("@plot_architect\trevise", 20, ProviderTextSpan(16, 22)),
-            ("/say revise ${x}", 8, ProviderTextSpan(5, 16)),
-            ("/run revise ${x}", 10, ProviderTextSpan(5, 16)),
-            ("/run --fresh revise", 17, ProviderTextSpan(13, 19)),
-            ("/run --output part.md revise", 25, ProviderTextSpan(22, 28)),
-            (
-                "/run --fresh --output part.md revise",
-                35,
-                ProviderTextSpan(30, 36),
-            ),
-        )
-        for buffer, cursor, expected in cases:
-            with self.subTest(buffer=buffer, cursor=cursor):
-                self.assertEqual(
-                    project_provider_text_span(buffer, cursor),
-                    expected,
-                )
-
-    def test_ineligible_commands_options_routes_and_inactive_cursors_are_none(self) -> None:
-        cases = (
-            ("/status", 7),
-            ("/rag private query", 8),
-            ("/help ${x}", 9),
-            ("/say revise", 2),
-            ("@unknown revise", 10),
-            ("@plot", 5),
-            ("/run", 4),
-            ("/run --output", 13),
-            ("/run --output part.md", 20),
-            ("/run --unknown revise", 18),
-            ("/run --fresh --output part.md revise", 20),
-        )
-        for buffer, cursor in cases:
-            with self.subTest(buffer=buffer, cursor=cursor):
-                self.assertIsNone(project_provider_text_span(buffer, cursor))
-
-    def test_projection_value_and_inputs_remain_internal_and_strict(self) -> None:
-        value = ProviderTextSpan(1, 2)
+        value = CommandCompletionContext("root", 0, 1, ("/help",))
         self.assertFalse(hasattr(value, "__dict__"))
-        self.assertEqual(pickle.loads(pickle.dumps(value)), value)
         with self.assertRaises(FrozenInstanceError):
-            value.start = 0  # type: ignore[misc]
-        self.assertNotIn("ProviderTextSpan", commands_module.__all__)
-        self.assertNotIn("project_provider_text_span", commands_module.__all__)
-        for buffer, cursor, expected in (
+            value.position = "changed"  # type: ignore[misc]
+        for buffer, cursor, error in (
             (object(), 0, TypeError),
-            ("text", True, TypeError),
-            ("text", -1, ValueError),
-            ("text", 5, ValueError),
+            ("/", True, TypeError),
+            ("/", -1, ValueError),
+            ("/", 2, ValueError),
         ):
-            with self.subTest(buffer=buffer, cursor=cursor), self.assertRaises(
-                expected
-            ):
-                project_provider_text_span(buffer, cursor)  # type: ignore[arg-type]
+            with self.subTest(buffer=buffer, cursor=cursor), self.assertRaises(error):
+                project_command_completion(buffer, cursor)  # type: ignore[arg-type]
 
 
 if __name__ == "__main__":

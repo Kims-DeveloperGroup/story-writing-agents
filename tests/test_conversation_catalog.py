@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import ast
+import inspect
 import json
 import subprocess
 import sys
@@ -9,12 +11,18 @@ import tempfile
 import unittest
 from dataclasses import FrozenInstanceError
 from pathlib import Path
+from typing import get_type_hints
 from unittest import mock
 from uuid import UUID
 
 import story_writing_agents
 import story_writing_agents.conversations as conversations_module
+import story_writing_agents.conversations.catalog as conversation_catalog_module
+import story_writing_agents.conversations.context as conversation_context_module
+import story_writing_agents.conversations.events as conversation_events_module
+import story_writing_agents.conversation_storage.filesystem as filesystem_module
 import story_writing_agents.workspace as workspace_module
+import story_writing_agents.workspace.core as workspace_core_module
 from story_writing_agents import (
     CONVERSATION_METADATA_SCHEMA_VERSION,
     CONVERSATION_SUBJECT_NORMALIZATION_VERSION,
@@ -40,10 +48,64 @@ from tests.conversation_catalog_contract import (
     CONVERSATION_CATALOG_METHODS,
     ConversationCatalogContractMixin,
 )
+from tests.helpers import initialize_test_workspace
+from tests.collaboration_contract_fixture import (
+    COLLABORATION_CONTEXT_EXPORTS,
+    COLLABORATION_EVENT_EXPORTS,
+    CONVERSATION_FACADE_EXPORTS,
+)
 
 
 _CREATED_AT = "2026-08-12T01:02:03.456789+00:00"
 _UPDATED_AT = "2026-08-12T02:03:04.567890+00:00"
+
+_V1_CONVERSATION_FACADE_EXPORTS = (
+    "CONVERSATION_CONTEXT_POLICY",
+    "CONVERSATION_EVENT_SCHEMA_VERSION",
+    "CONVERSATION_METADATA_SCHEMA_VERSION",
+    "CONVERSATION_SUBJECT_NORMALIZATION_VERSION",
+    "MAX_CONVERSATION_SUBJECT_LENGTH",
+    "ConversationCatalog",
+    "ConversationContextPolicy",
+    "ConversationContextWindow",
+    "ConversationEvent",
+    "ConversationEventKind",
+    "ConversationMetadata",
+    "ConversationStatus",
+    "normalize_conversation_subject",
+    "select_bounded_conversation_context",
+    "validate_conversation_context_window",
+)
+_CONVERSATION_FACADE_EXPORTS = CONVERSATION_FACADE_EXPORTS
+_CATALOG_EXPORTS = {
+    "CONVERSATION_METADATA_SCHEMA_VERSION",
+    "CONVERSATION_SUBJECT_NORMALIZATION_VERSION",
+    "MAX_CONVERSATION_SUBJECT_LENGTH",
+    "ConversationCatalog",
+    "ConversationMetadata",
+    "ConversationStatus",
+    "normalize_conversation_subject",
+}
+_EVENT_EXPORTS = set(COLLABORATION_EVENT_EXPORTS)
+_CONTEXT_EXPORTS = set(COLLABORATION_CONTEXT_EXPORTS)
+_ROOT_CONVERSATION_EXPORTS = set(_V1_CONVERSATION_FACADE_EXPORTS).difference(
+    {
+        "select_bounded_conversation_context",
+        "validate_conversation_context_window",
+    }
+)
+_PUBLIC_CONVERSATION_OBJECTS = {
+    "ConversationCatalog",
+    "ConversationContextPolicy",
+    "ConversationContextWindow",
+    "ConversationEvent",
+    "ConversationEventKind",
+    "ConversationMetadata",
+    "ConversationStatus",
+    "normalize_conversation_subject",
+    "select_bounded_conversation_context",
+    "validate_conversation_context_window",
+}
 
 
 def _metadata(**overrides: object) -> ConversationMetadata:
@@ -244,7 +306,7 @@ class FilesystemConversationCatalogContractTests(
     def make_catalog(self) -> ConversationCatalog:
         temporary = tempfile.TemporaryDirectory()
         self.addCleanup(temporary.cleanup)
-        self.workspace = Workspace(temporary.name).initialize()
+        self.workspace = initialize_test_workspace(temporary.name)
         self.services = compose_filesystem_conversation_storage(self.workspace)
         return self.services.catalog
 
@@ -286,15 +348,13 @@ class FilesystemConversationCatalogPersistenceTests(unittest.TestCase):
             ["metadata.json"],
         )
 
-        reloaded = FilesystemConversationCatalog(Workspace(workspace.root))
+        reloaded = FilesystemConversationCatalog(workspace)
         self.assertEqual(
             reloaded.get("story_session", metadata.conversation_id),
             metadata,
         )
 
-    def test_absent_catalog_reads_as_empty_without_mutating_legacy_workspace(
-        self,
-    ) -> None:
+    def test_unready_legacy_workspace_is_rejected_without_mutation(self) -> None:
         workspace = self.new_workspace(initialize=False)
         legacy = workspace.root / "legacy.jsonl"
         legacy.write_bytes(b"legacy bytes\n")
@@ -306,8 +366,9 @@ class FilesystemConversationCatalogPersistenceTests(unittest.TestCase):
         }
         catalog = FilesystemConversationCatalog(workspace)
 
-        self.assertEqual(catalog.list("legacy_session"), ())
-        with self.assertRaises(ConversationNotFoundError):
+        with self.assertRaisesRegex(WorkspaceFormatError, "workspace is not ready"):
+            catalog.list("legacy_session")
+        with self.assertRaisesRegex(WorkspaceFormatError, "workspace is not ready"):
             catalog.get("legacy_session", "missing_conversation")
 
         after = {
@@ -323,7 +384,11 @@ class FilesystemConversationCatalogPersistenceTests(unittest.TestCase):
         workspace = self.new_workspace()
         catalog = FilesystemConversationCatalog(workspace)
         fixed_uuid = UUID("11111111-2222-3333-4444-555555555555")
-        with mock.patch.object(workspace_module, "uuid4", return_value=fixed_uuid):
+        with mock.patch.object(
+            filesystem_module,
+            "uuid4",
+            return_value=fixed_uuid,
+        ):
             first = catalog.create("session_a", "First session")
             second = catalog.create("session_b", "Second session")
 
@@ -349,7 +414,7 @@ class FilesystemConversationCatalogPersistenceTests(unittest.TestCase):
         catalog = FilesystemConversationCatalog(workspace)
         fixed_uuid = UUID("aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee")
         with mock.patch.object(
-            workspace_module,
+            filesystem_module,
             "uuid4",
             return_value=fixed_uuid,
         ) as generate:
@@ -376,9 +441,13 @@ class FilesystemConversationCatalogPersistenceTests(unittest.TestCase):
         fixed_uuid = UUID("12345678-1234-5678-1234-567812345678")
         conversation_id = f"c_{fixed_uuid.hex}"
 
-        with mock.patch.object(workspace_module, "uuid4", return_value=fixed_uuid):
+        with mock.patch.object(
+            filesystem_module,
+            "uuid4",
+            return_value=fixed_uuid,
+        ):
             with mock.patch.object(
-                workspace_module.os,
+                workspace_core_module.os,
                 "link",
                 side_effect=OSError("simulated create link failure"),
             ):
@@ -405,7 +474,7 @@ class FilesystemConversationCatalogPersistenceTests(unittest.TestCase):
         before = target.read_bytes()
 
         with mock.patch.object(
-            workspace_module.os,
+            workspace_core_module.os,
             "replace",
             side_effect=OSError("simulated replace failure"),
         ):
@@ -482,9 +551,11 @@ class FilesystemConversationCatalogPersistenceTests(unittest.TestCase):
         duplicate = catalog.create("session_a", "Duplicate field")
         payload = duplicate.to_dict()
         pairs = list(payload.items()) + [("status", "active")]
-        duplicate_json = "{" + ",".join(
-            f"{json.dumps(key)}:{json.dumps(value)}" for key, value in pairs
-        ) + "}"
+        duplicate_json = (
+            "{"
+            + ",".join(f"{json.dumps(key)}:{json.dumps(value)}" for key, value in pairs)
+            + "}"
+        )
         _metadata_path(
             workspace,
             "session_a",
@@ -700,14 +771,20 @@ class FilesystemConversationCatalogPersistenceTests(unittest.TestCase):
             if case == "catalog":
                 catalog_root.parent.mkdir(parents=True)
                 catalog_root.symlink_to(outside, target_is_directory=True)
-                operation = lambda: catalog.list("session_a")
+
+                def operation() -> object:
+                    return catalog.list("session_a")
+
             elif case == "conversation":
                 catalog_root.mkdir(parents=True)
                 (catalog_root / "conversation_a").symlink_to(
                     outside,
                     target_is_directory=True,
                 )
-                operation = lambda: catalog.get("session_a", "conversation_a")
+
+                def operation() -> object:
+                    return catalog.get("session_a", "conversation_a")
+
             else:
                 metadata = catalog.create("session_a", "Symlink metadata")
                 target = _metadata_path(
@@ -722,10 +799,9 @@ class FilesystemConversationCatalogPersistenceTests(unittest.TestCase):
                 )
                 target.unlink()
                 target.symlink_to(outside_metadata)
-                operation = lambda: catalog.get(
-                    "session_a",
-                    metadata.conversation_id,
-                )
+
+                def operation() -> object:
+                    return catalog.get("session_a", metadata.conversation_id)
 
             with self.subTest(case=case):
                 with self.assertRaises(WorkspaceSecurityError):
@@ -734,58 +810,151 @@ class FilesystemConversationCatalogPersistenceTests(unittest.TestCase):
 
 class ConversationPackageBoundaryTests(unittest.TestCase):
     def test_supported_package_exports_are_identity_stable(self) -> None:
-        expected = {
-            "CONVERSATION_CONTEXT_POLICY",
-            "CONVERSATION_EVENT_SCHEMA_VERSION",
-            "CONVERSATION_METADATA_SCHEMA_VERSION",
-            "CONVERSATION_SUBJECT_NORMALIZATION_VERSION",
-            "MAX_CONVERSATION_SUBJECT_LENGTH",
-            "ConversationCatalog",
-            "ConversationContextPolicy",
-            "ConversationContextWindow",
-            "ConversationEvent",
-            "ConversationEventAppend",
-            "ConversationEventKind",
-            "ConversationEventStore",
+        expected_root = _ROOT_CONVERSATION_EXPORTS | {
             "ConversationExistsError",
-            "ConversationMetadata",
             "ConversationNotFoundError",
-            "ConversationStatus",
             "FilesystemConversationCatalog",
-            "FilesystemConversationEventStore",
-            "normalize_conversation_subject",
         }
-        self.assertTrue(expected.issubset(set(story_writing_agents.__all__)))
+        self.assertTrue(expected_root.issubset(set(story_writing_agents.__all__)))
         self.assertEqual(
-            set(conversations_module.__all__),
-            expected.difference(
-                {
-                    "ConversationExistsError",
-                    "ConversationNotFoundError",
-                    "FilesystemConversationCatalog",
-                    "FilesystemConversationEventStore",
-                }
-            )
-            | {
-                "select_bounded_conversation_context",
-                "validate_conversation_context_window",
-            },
+            tuple(conversations_module.__all__),
+            _CONVERSATION_FACADE_EXPORTS,
         )
-        self.assertNotIn(
+        self.assertNotIn("__getattr__", vars(conversations_module))
+
+        owner_exports = (
+            (conversation_catalog_module, _CATALOG_EXPORTS),
+            (conversation_events_module, _EVENT_EXPORTS),
+            (conversation_context_module, _CONTEXT_EXPORTS),
+        )
+        for owner, expected in owner_exports:
+            with self.subTest(owner=owner.__name__):
+                self.assertEqual(set(owner.__all__), expected)
+                self.assertEqual(len(owner.__all__), len(expected))
+                for name in expected:
+                    self.assertIs(
+                        getattr(owner, name),
+                        getattr(conversations_module, name),
+                    )
+
+        for name in _ROOT_CONVERSATION_EXPORTS:
+            with self.subTest(root_export=name):
+                self.assertIn(name, story_writing_agents.__all__)
+                self.assertIs(
+                    getattr(story_writing_agents, name),
+                    getattr(conversations_module, name),
+                )
+        for name in (
             "select_bounded_conversation_context",
-            story_writing_agents.__all__,
-        )
-        self.assertIs(
-            story_writing_agents.ConversationMetadata,
-            conversations_module.ConversationMetadata,
+            "validate_conversation_context_window",
+        ):
+            with self.subTest(module_only=name):
+                self.assertNotIn(name, story_writing_agents.__all__)
+                self.assertFalse(hasattr(story_writing_agents, name))
+
+        for name in _PUBLIC_CONVERSATION_OBJECTS:
+            with self.subTest(canonical_module=name):
+                self.assertEqual(
+                    getattr(conversations_module, name).__module__,
+                    "story_writing_agents.conversations",
+                )
+        self.assertEqual(
+            conversations_module.CONVERSATION_CONTEXT_POLICY.__class__.__module__,
+            "story_writing_agents.conversations",
         )
         self.assertIs(
             story_writing_agents.FilesystemConversationCatalog,
             workspace_module.FilesystemConversationCatalog,
         )
+        self.assertIs(
+            story_writing_agents.FilesystemConversationCatalog,
+            filesystem_module.FilesystemConversationCatalog,
+        )
+        self.assertEqual(
+            filesystem_module.FilesystemConversationCatalog.__module__,
+            filesystem_module.__name__,
+        )
         self.assertTrue(getattr(ConversationCatalog, "_is_protocol", False))
         self.assertTrue(issubclass(ConversationExistsError, StoryWritingAgentsError))
         self.assertTrue(issubclass(ConversationNotFoundError, StoryWritingAgentsError))
+
+    def test_public_definitions_live_in_their_exact_owner_modules(self) -> None:
+        package = (
+            Path(__file__).resolve().parents[1]
+            / "src"
+            / "story_writing_agents"
+            / "conversations"
+        )
+        expected_by_file = {
+            "__init__.py": set(),
+            "catalog.py": _CATALOG_EXPORTS,
+            "events.py": _EVENT_EXPORTS,
+            "context.py": _CONTEXT_EXPORTS,
+        }
+        public_names = set(_CONVERSATION_FACADE_EXPORTS)
+
+        for filename, expected in expected_by_file.items():
+            tree = ast.parse(
+                (package / filename).read_text(encoding="utf-8"),
+                filename=filename,
+            )
+            definitions: set[str] = set()
+            for node in tree.body:
+                if isinstance(node, (ast.ClassDef, ast.FunctionDef)):
+                    definitions.add(node.name)
+                elif isinstance(node, ast.Assign):
+                    definitions.update(
+                        target.id
+                        for target in node.targets
+                        if isinstance(target, ast.Name)
+                    )
+                elif isinstance(node, ast.AnnAssign) and isinstance(
+                    node.target,
+                    ast.Name,
+                ):
+                    definitions.add(node.target.id)
+            with self.subTest(filename=filename):
+                self.assertEqual(definitions & public_names, expected)
+
+    def test_catalog_signatures_and_type_hints_are_unchanged(self) -> None:
+        expected_parameters = {
+            "create": ("self", "session_id", "subject"),
+            "get": ("self", "session_id", "conversation_id"),
+            "list": ("self", "session_id", "include_archived"),
+            "rename": ("self", "session_id", "conversation_id", "subject"),
+            "archive": ("self", "session_id", "conversation_id"),
+            "unarchive": ("self", "session_id", "conversation_id"),
+        }
+        for name, expected in expected_parameters.items():
+            method = getattr(conversation_catalog_module.ConversationCatalog, name)
+            with self.subTest(method=name):
+                self.assertEqual(tuple(inspect.signature(method).parameters), expected)
+                expected_return = (
+                    tuple[conversations_module.ConversationMetadata, ...]
+                    if name == "list"
+                    else conversations_module.ConversationMetadata
+                )
+                self.assertEqual(
+                    get_type_hints(method)["return"],
+                    expected_return,
+                )
+
+        list_signature = inspect.signature(
+            conversation_catalog_module.ConversationCatalog.list
+        )
+        include_archived = list_signature.parameters["include_archived"]
+        self.assertIs(include_archived.kind, inspect.Parameter.KEYWORD_ONLY)
+        self.assertIs(include_archived.default, False)
+        normalize = conversation_catalog_module.normalize_conversation_subject
+        self.assertEqual(tuple(inspect.signature(normalize).parameters), ("subject",))
+        self.assertEqual(
+            get_type_hints(normalize),
+            {"subject": str, "return": str},
+        )
+        self.assertIs(
+            get_type_hints(conversation_catalog_module.ConversationMetadata)["status"],
+            conversations_module.ConversationStatus,
+        )
 
     def test_package_and_boundary_modules_import_cleanly_in_fresh_interpreter(
         self,
@@ -795,19 +964,36 @@ class ConversationPackageBoundaryTests(unittest.TestCase):
         code = f"""
 import sys
 sys.path.insert(0, {str(source)!r})
-import story_writing_agents
+import story_writing_agents.conversations.context as context
+import story_writing_agents.conversations.events as events
+import story_writing_agents.conversations.catalog as catalog
 import story_writing_agents.conversations as conversations
+import story_writing_agents
+import story_writing_agents.conversation_storage.filesystem as filesystem
 import story_writing_agents.workspace as workspace
 assert story_writing_agents.ConversationCatalog is conversations.ConversationCatalog
 assert story_writing_agents.ConversationMetadata is conversations.ConversationMetadata
+assert catalog.ConversationCatalog is conversations.ConversationCatalog
+assert events.ConversationEvent is conversations.ConversationEvent
+assert context.CollaborationEventStore is conversations.CollaborationEventStore
+assert tuple(conversations.__all__) == {_CONVERSATION_FACADE_EXPORTS!r}
+assert "__getattr__" not in vars(conversations)
+for name in {tuple(sorted(_PUBLIC_CONVERSATION_OBJECTS))!r}:
+    assert getattr(conversations, name).__module__ == "story_writing_agents.conversations"
 assert (
     story_writing_agents.FilesystemConversationCatalog
     is workspace.FilesystemConversationCatalog
+    is filesystem.FilesystemConversationCatalog
 )
+assert filesystem.__all__ == [
+    "FilesystemConversationCatalog",
+    "FilesystemCollaborationEventStore",
+]
+assert filesystem.FilesystemConversationCatalog.__module__ == filesystem.__name__
 assert set({sorted(CONVERSATION_CATALOG_METHODS)!r}) <= set(dir(conversations.ConversationCatalog))
 """
         completed = subprocess.run(
-            [sys.executable, "-I", "-c", code],
+            [sys.executable, "-B", "-I", "-c", code],
             cwd=repository_root,
             capture_output=True,
             text=True,
