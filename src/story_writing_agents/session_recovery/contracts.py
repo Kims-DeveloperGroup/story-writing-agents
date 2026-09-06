@@ -399,6 +399,14 @@ def reconcile_session_recovery(
             SessionRecoveryFailureCode.OWNER_OUTCOME_UNKNOWN,
         )
 
+    if _is_unproposed_lead_history(history):
+        return _result(
+            evidence,
+            SessionRecoveryState.READY,
+            SessionRecoveryOwner.LEAD,
+            SessionRecoveryFailureCode.NONE,
+        )
+
     if commit is not None and commit.state is GitSessionHistoryState.COMMITTED:
         return _result(
             evidence,
@@ -549,12 +557,39 @@ def _recovery_failure(
                 SessionRecoveryOwner.COLLABORATION_HISTORY,
             )
         return None
-    if proposal is None or history.current_state is None or history.last_sequence < 1:
+    unproposed_lead = _is_unproposed_lead_history(history)
+    if unproposed_lead and any(
+        value is not None
+        for value in (reviewed, application, candidate, commit, checkpoint)
+    ):
         return (
             SessionRecoveryFailureCode.MISSING_PREDECESSOR,
             SessionRecoveryOwner.COLLABORATION_HISTORY,
         )
-    if (
+    if unproposed_lead:
+        if any(
+            state is GitSessionHistoryState.STAGED
+            for _, state in evidence.session_history.commit_operations
+        ):
+            return (
+                SessionRecoveryFailureCode.OWNER_RECOVERY_REQUIRED,
+                SessionRecoveryOwner.STORY_COMMIT,
+            )
+        if len(evidence.session_history.candidate_ids) != len(
+            evidence.session_history.commit_operations
+        ):
+            return (
+                SessionRecoveryFailureCode.MISSING_PREDECESSOR,
+                SessionRecoveryOwner.STORY_COMMIT,
+            )
+    if not unproposed_lead and (
+        proposal is None or history.current_state is None or history.last_sequence < 1
+    ):
+        return (
+            SessionRecoveryFailureCode.MISSING_PREDECESSOR,
+            SessionRecoveryOwner.COLLABORATION_HISTORY,
+        )
+    if not unproposed_lead and (
         history.current_step_id != proposal.step_id
         or history.current_turn_id is None
         or (
@@ -739,6 +774,35 @@ def _recovery_failure(
             SessionRecoveryOwner.STORY_COMMIT,
         )
     return None
+
+
+def _is_unproposed_lead_history(history: CollaborationHistoryProjection) -> bool:
+    """Recognize a scoped Lead conversation with no collaboration workflow."""
+
+    if (
+        history.session_id is None
+        or history.conversation_id is None
+        or history.last_sequence < 1
+        or history.current_turn_id is None
+        or history.current_step_id is None
+    ):
+        return False
+    return history == CollaborationHistoryProjection(
+        session_id=history.session_id,
+        conversation_id=history.conversation_id,
+        last_sequence=history.last_sequence,
+        current_turn_id=history.current_turn_id,
+        current_step_id=history.current_step_id,
+        current_proposal=None,
+        current_state=None,
+        confirmation_request_id=None,
+        confirmation_decision=None,
+        execution_attempt_id=None,
+        execution_result_event_id=None,
+        execution_result=None,
+        next_safe_action=CollaborationNextAction.NONE,
+        physical_calls_spent=history.physical_calls_spent,
+    )
 
 
 def is_unmatched_submitted_lead_projection(

@@ -6236,21 +6236,23 @@ every intermediate arrow. The current runtime graph is acyclic.
   `tests/test_session_recovery_contracts.py`; exact imports and the content-free
   boundary are documented in
   `docs/reference/package-api.md#correlated-session-recovery-api`, and the
-  nine states, actions, user meanings, and examples are documented in
+  workflow states, actions, user meanings, and examples are documented in
   `docs/operations/recovery-and-limitations.md#correlated-session-recovery-projection`.
 
 ### `story_writing_agents.session_recovery.contracts`
 
 - **Source:** `src/story_writing_agents/session_recovery/contracts.py`
-- **Responsibility note:** The package-internal
-  `is_unmatched_submitted_lead_projection` predicate owns the one admissible
-  proposal-free nonempty recovery shape and rejects downstream artifacts.
+- **Responsibility note:** Exact ordinary proposal-free Lead history projects
+  `ready` only after correlation, lifecycle, repository, and unresolved-owner
+  safety checks. The package-internal
+  `is_unmatched_submitted_lead_projection` predicate separately recognizes
+  submitted Lead outcome uncertainty; both shapes reject downstream artifacts.
 - **Responsibility:** Define and deterministically classify immutable evidence
   for one active correlated story-session workflow.
 - **Supported surface:** Exactly the facade's four closed enums, content-safe
   `SessionRecoveryError`, three frozen slotted evidence values, frozen slotted
   result, and `reconcile_session_recovery(evidence)`. The function accepts one
-  already assembled exact `SessionRecoveryEvidence` and returns one of nine
+  already assembled exact `SessionRecoveryEvidence` and returns one of ten
   fixed state/action pairs; it exports no capability, adapter, owner reader,
   serializer, compatibility shape, or executable recovery action.
 - **Direct internal dependencies:** `conversations`, `git`,
@@ -6275,9 +6277,11 @@ every intermediate arrow. The current runtime graph is acyclic.
 ### `story_writing_agents.session_recovery.reconciliation`
 
 - **Source:** `src/story_writing_agents/session_recovery/reconciliation.py`
-- **Responsibility note:** Reconciliation admits that exact proposal-free shape
-  and reports collaboration-history owner outcome uncertainty without reading
-  raw events, repairing history, or replaying work.
+- **Responsibility note:** Reconciliation admits exact ordinary proposal-free
+  Lead history after stable owner observations, including candidate/commit
+  mapping checks. The separate unmatched-submitted shape reports
+  collaboration-history owner outcome uncertainty. Neither path reads raw
+  events, repairs history, or replays work.
 - **Responsibility:** Observe authoritative owners and assemble one stable,
   correlated story-session recovery result without replaying work.
 - **Supported surface:** Direct-module `__all__` contains exactly

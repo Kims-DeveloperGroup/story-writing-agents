@@ -155,8 +155,10 @@ class SessionRecoveryReconciler:
         if not empty_history and not unmatched_submitted_lead and (
             history_a.session_id is None
             or history_a.conversation_id is None
-            or history_a.current_proposal is None
-            or history_a.current_state is None
+            or (
+                (history_a.current_proposal is None)
+                != (history_a.current_state is None)
+            )
             or tail < 1
         ):
             return _blocked(
@@ -260,6 +262,27 @@ class SessionRecoveryReconciler:
         )
         if history_blocker is not None:
             return history_blocker
+
+        if (
+            not empty_history
+            and history_a.current_proposal is None
+            and history_a.current_state is None
+        ):
+            for candidate in snapshot_a.candidates:
+                operations = tuple(
+                    operation
+                    for operation in snapshot_a.commit_operations
+                    if operation.candidate_id == candidate.candidate_id
+                )
+                if len(operations) != 1:
+                    return _blocked(
+                        session_id,
+                        conversation,
+                        tail,
+                        SessionRecoveryState.RECOVERY_REQUIRED,
+                        SessionRecoveryOwner.STORY_COMMIT,
+                        SessionRecoveryFailureCode.MISSING_PREDECESSOR,
+                    )
 
         if application is not None:
             application_blocker = _inspect_application(
