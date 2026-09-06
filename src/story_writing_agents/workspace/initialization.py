@@ -824,6 +824,8 @@ def _is_interactive_runtime_file(path: str) -> bool:
         or not parts[3].endswith(".json")
     ):
         return False
+    if parts[2] == "provider_sessions" and parts[3].endswith(".access.json"):
+        return _is_workspace_identifier(parts[3][: -len(".access.json")])
     return _is_workspace_identifier(parts[3][:-5])
 
 

@@ -11,7 +11,12 @@ import unittest
 from pathlib import Path
 from unittest import mock
 
-from story_writing_agents import Workspace
+from story_writing_agents import (
+    AgentBackend,
+    SessionAccessState,
+    SessionDurableState,
+    Workspace,
+)
 from story_writing_agents.errors import (
     ConfigurationError,
     WorkspaceFormatError,
@@ -647,6 +652,10 @@ class WorkspaceV2InitializationTests(WorkspaceV2GitTestCase):
             f"agent_states/orchestrator_state/conversation_defaults/{session_id}.json": b"{}\n",
             "agent_states/orchestrator_state/provider_sessions/.access-claims.lock": b"",
             f"agent_states/orchestrator_state/provider_sessions/{session_id}.json": b"{}\n",
+            f"agent_states/orchestrator_state/provider_sessions/{session_id}.access.json": b"claim bytes\n",
+            "agent_states/orchestrator_state/provider_sessions/a.access.json": b"short ID\n",
+            f"agent_states/orchestrator_state/provider_sessions/{'a' * 64}.access.json": b"maximum ID\n",
+            "agent_states/orchestrator_state/provider_sessions/session-2.access.json": b"hyphenated ID\n",
             "config/.conversation_storage.lock": b"",
             f"discussion_logs/{session_id}/interactive/conversations/{conversation_id}/metadata.json": b"{}\n",
             f"discussion_logs/{session_id}/interactive/conversations/{conversation_id}/transcript.jsonl": b"",
@@ -658,11 +667,43 @@ class WorkspaceV2InitializationTests(WorkspaceV2GitTestCase):
             target.parent.mkdir(parents=True, exist_ok=True)
             target.write_bytes(content)
 
-        reopened = Workspace(root)
+        before = _namespace_snapshot(root)
+        reopened = Workspace(root).require_ready()
 
         self.assertEqual(reopened.root, root)
+        self.assertEqual(_namespace_snapshot(root), before)
         for relative, content in files.items():
             self.assertEqual((root / relative).read_bytes(), content)
+
+    def test_backend_access_claim_allows_second_session_and_destination_entry(self) -> None:
+        workspace = self.initialize_workspace_fixture("backend-access-claim")
+        with mock.patch.dict(os.environ, self.initialization_environment(), clear=True):
+            backend = AgentBackend(workspace)
+            self.addCleanup(backend.close)
+            claims = {}
+            for session_id in ("Session_1", "session-2"):
+                resources = backend.provision_session_resources(session_id)
+                state = backend.create_session_with_access(session_id)
+                self.assertIs(state.durable_state, SessionDurableState.READY)
+                self.assertIs(state.access_state, SessionAccessState.HELD_HERE)
+                relative = f"agent_states/orchestrator_state/provider_sessions/{session_id}"
+                claim_path = workspace.root / f"{relative}.access.json"
+                claims[claim_path] = claim_path.read_bytes()
+                self.assertEqual(
+                    workspace.read_json(f"{relative}.json")["provider_threads"], {},
+                )
+                before = _namespace_snapshot(workspace.root)
+                self.assertEqual(Workspace(workspace.root).require_ready().root, workspace.root)
+                destination = Workspace(resources.identity.worktree_root).require_ready()
+                self.assertEqual(destination.root, resources.identity.worktree_root)
+                self.assertEqual(_namespace_snapshot(workspace.root), before)
+                for path, content in claims.items():
+                    self.assertEqual(path.read_bytes(), content)
+
+            backend.close()
+            for path in claims:
+                self.assertFalse(path.exists())
+            Workspace(workspace.root).require_ready()
 
     def test_exact_registered_runtime_owner_paths_survive_reopen(self) -> None:
         root = self.initialize_workspace_fixture("registered-runtime-paths").root
@@ -737,6 +778,11 @@ class WorkspaceV2InitializationTests(WorkspaceV2GitTestCase):
                 f"discussion_logs/session/interactive/conversations/{conversation_id}/nested/metadata.json"
             ),
             "unknown-runtime": "agent_states/orchestrator_state/provider_sessions/session.txt",
+            "empty-claim-session": "agent_states/orchestrator_state/provider_sessions/.access.json",
+            "dotted-claim-session": "agent_states/orchestrator_state/provider_sessions/session.one.access.json",
+            "overlong-claim-session": f"agent_states/orchestrator_state/provider_sessions/{'a' * 65}.access.json",
+            "duplicate-claim-suffix": "agent_states/orchestrator_state/provider_sessions/session.access.access.json",
+            "wrong-claim-owner": "agent_states/orchestrator_state/conversation_defaults/session.access.json",
         }
         for name, relative in cases.items():
             with self.subTest(name=name):
