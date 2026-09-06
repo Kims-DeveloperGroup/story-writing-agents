@@ -4549,7 +4549,10 @@ every intermediate arrow. The current runtime graph is acyclic.
   Story header facts, lazily imports only installed `jsonl_viewer`, validates
   its exact three-name facade, `ViewerSpec` constructor, `ViewerHost` method
   shapes, `view_jsonl(source, spec, host)` signature, and constructed spec
-  projection before returning an operation. Missing packages produce fixed
+  projection before returning an operation. The exact constructor must expose
+  appended `input_protocol="semantic"`; preparation supplies and verifies
+  `input_protocol="keys"`, rejecting older installations before terminal
+  acquisition without consulting package-version metadata. Missing packages produce fixed
   installation guidance; opaque, missing, variadic, or incompatible API
   shapes produce the fixed incompatible category before terminal acquisition.
   The generic spec labels the full Conversation or Debate ID and subject,
@@ -4941,9 +4944,13 @@ every intermediate arrow. The current runtime graph is acyclic.
   complete-frame presentation, closed event reads, and idempotent view close.
   Private validation admits printable text, newlines, and authorized ANSI SGR
   only, so cursor, alternate-screen, raw-mode, and arbitrary control sequences
-  cannot cross from a viewer. The private ordinary-line host maps bounded
-  commands to the same closed navigation/search/goto/help/cancel vocabulary
-  and borrows rather than closes its callbacks or streams.
+  cannot cross from a viewer. The private ordinary-line host validates bounded
+  single-line input and emits `line<TAB>` followed by the literal input,
+  retaining whitespace without parsing command grammar. Overlength input emits
+  `key<TAB>unknown`; interrupts emit `key<TAB>interrupt`. It adds no viewer
+  prompt text and borrows rather than closes its callbacks or streams. All
+  viewer bindings, actions, prompt editing, and cancellation policy belong to
+  the external viewer.
 - **Direct internal dependencies:** None.
 - **State, resources, and side effects:** Protocols, pure validation, and one
   call-local borrowed fallback host only. The module owns no terminal mode,
@@ -5213,13 +5220,19 @@ every intermediate arrow. The current runtime graph is acyclic.
   provides one synchronous input-operation exclusion boundary. A live reader
   retains one incremental decoder, reads exactly one byte at a time, exposes
   pending decoded suffix state for Escape lookahead, and returns one code point
-  at a time from a maximum four-code-point queue.
+  at a time from a maximum four-code-point queue. `read_character` accepts an
+  optional keyword `before_read` callback, defaulting to `None`, before every
+  physical byte read, including incomplete-character continuations. Ordinary
+  calls retain the existing decoding behavior; callers own any readiness
+  wait or deadline supplied through that callback.
 - **Direct internal dependencies:** None.
 - **State, resources, and side effects:** Construction and decoder inspection
   perform no input read, output, descriptor wait, terminal mutation, or
   callback invocation. A selected live reader borrows the exact byte-read
   callable for the driver lifetime; clean EOF remains stable, strict incomplete
-  EOF and read/decode/shape failures poison later reads. The latch exposes the
+  EOF and read/decode/shape/callback failures poison later reads. This also
+  prevents a character interrupted by a failed readiness deadline from being
+  reinterpreted as later input. The latch exposes the
   exact driver-invoked `KeyboardInterrupt` reset that clears only incomplete
   decoder and pending-suffix state without changing the selected mode. The
   latch owns no stream closure, termios, descriptor,
@@ -5505,12 +5518,24 @@ every intermediate arrow. The current runtime graph is acyclic.
   rejects reentry and progress overlap through the existing input latch, and
   supplies either a borrowed ordinary-line host or one raw-driver-owned host.
   The capable path alone owns raw activation, alternate-screen entry/exit,
-  complete-frame redraw, geometry, closed key/event decoding, canonical
-  restored line prompts for goto, history-free live Search field/query prompts,
-  prompt-local Escape and unrecognized-sequence cancellation, reactivation,
-  retained-frame redraw, and exact terminal restoration. A cancelled Search
-  prompt resumes viewer input without emitting an event or changing the
-  viewer's existing search state.
+  complete-frame presentation, geometry, normalized physical input decoding,
+  and exact terminal restoration. It emits `text<TAB>` code points or
+  `key<TAB>` physical keys, including configured interrupt/EOF, edit controls,
+  cursor keys, and bounded CSI/SS3 sequences. Escape recognition uses the
+  existing 64-character storage bound, a total 50 ms deadline, and a
+  4,096-character drain ceiling; unsupported/incomplete sequences become
+  `unknown_escape`, while a drain-bound failure raises fixed text. A driver
+  callback enforces readiness before each physical byte during Escape
+  decoding, so an incomplete Unicode character cannot bypass the deadline.
+  Expiry within a character raises a fixed `TimeoutError` through the reader's
+  existing sticky-failure path; terminal restoration remains driver-owned.
+  It owns no
+  viewer command bindings, line grammar, search/goto prompt, draft editing,
+  cancellation policy, or cancellation-specific retained frame. Search and
+  goto remain within the same acquired terminal lifecycle through the viewer's
+  ordinary frames and events. The removed viewer-only Escape parameter does
+  not alter generic prompt/control cancellation or its `_PromptCancelled`
+  exception.
   Operation failures outrank host and alternate-screen cleanup failures, while
   uncertain terminal restoration remains fatal; close and all cleanup are
   attempted exactly once. The driver never imports or interprets Story exchange

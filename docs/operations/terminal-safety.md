@@ -120,7 +120,8 @@ The hosted external view uses the same sole driver and input latch but no Story
 renderer state. A capable operation uses one raw-mode/alternate-screen
 lifecycle; fallback borrows plain line callbacks. Nested input, nested view, and
 progress overlap are rejected. The external host receives only complete-frame
-geometry, color eligibility, presentation, closed events, and idempotent close.
+geometry, color eligibility, presentation, normalized physical input, and
+idempotent close.
 
 For startup storage activation, authenticated runtime preparation, native
 authentication probes, persisted omitted-resume preparation, advisory and
@@ -317,7 +318,7 @@ does not parse or restyle those frames: its host admits only printable text, LF,
 and SGR when color is eligible, rejects every other control, and rejects SGR in
 plain mode. Removing the renderer's allowed decoration preserves the exact
 plain text, gutter markers, JSON, search position, and help. The pinned external
-[design system](https://github.com/Kims-DeveloperGroup/jsonl-viewer/blob/1d4f5f86ccb4ebd2f458f046df7a0b99b9fbeaec/docs/design-system.md)
+[design system](https://github.com/Kims-DeveloperGroup/jsonl-viewer/blob/aa2e30b85cdcf14f1c444fa8fb77c2594cac76bc/docs/design-system.md)
 is authoritative for those roles.
 
 The controller constructs semantic components only from trusted roles/states
@@ -797,7 +798,8 @@ and [viewer recovery guidance](recovery-and-limitations.md#ranged-text-viewer-ex
 
 The private `ExternalViewerHost` transfers no terminal resource. Its five
 operations expose bounded geometry, current color eligibility, one complete
-frame, one closed event, and idempotent close. Frame validation accepts exact
+frame, one normalized text/key/literal-line input, and idempotent close. Frame
+validation accepts exact
 printable text and LF, plus SGR only when color is enabled. It rejects carriage
 return, other control/format/surrogate characters, line/paragraph separators,
 and every non-SGR escape before output. This is display neutralization, not
@@ -805,8 +807,11 @@ redaction of request or provider-response content.
 
 The controller lazily validates the exact required `jsonl_viewer` facade,
 constructor and callable signatures, host shape, immutable header/field
-projection, and primary-field order before asking the terminal to open.
-Missing or incompatible standard-install packages therefore acquire no raw
+projection, primary-field order, and the appended `input_protocol="semantic"`
+constructor default before asking the terminal to open. It constructs and
+verifies the specification with `input_protocol="keys"`. The older 0.1.1 API
+lacks this required capability and is rejected. Missing or incompatible
+standard-install packages therefore acquire no raw
 mode or alternate screen and produce fixed repair/reinstall guidance. The
 renderer receives only immutable bytes and a generic specification; it opens no
 Story file and owns no Story scope, storage, provider, retry, replay, or focus
@@ -822,20 +827,25 @@ the host's printable-or-SGR frame validation or mutate source bytes.
 The capable lifecycle acquires the universal input latch, rejects reentry or
 progress overlap, validates the current terminal configuration, activates raw
 mode, enters one alternate screen, runs the operation, closes the host, exits
-the screen, restores termios, and releases the latch. Goto temporarily restores
-ordinary input. Search field and query instead use the sole driver's transient,
-history-free line editor and reactivate the same outer viewer configuration
-before another view event. Escape at either Search prompt discards its draft,
-redraws the exact last validated successfully presented frame, and emits no
-external-view event. Supported prompt navigation remains editing-local;
-unsupported, truncated, and over-limit escape sequences are bounded, drained,
-and treated as prompt cancellation so suffix bytes cannot become viewer
-commands. Restoration failure remains fatal; an active operation failure takes
-precedence over host-close failure.
+the screen, restores termios, and releases the latch. During the operation,
+Story only decodes bounded physical input into `text<TAB>TEXT` or
+`key<TAB>NAME`; the viewer owns bindings, actions, search/goto drafts, editing,
+and cancellation. Drafts and printable logical cursors are rendered in complete
+validated frames under that same terminal lifecycle. Story opens no search or
+goto editor and retains no viewer draft or committed-frame cache.
+
+Bare or unsupported/incomplete ASCII Escape input becomes a physical event
+for the viewer to interpret. Malformed decoding or a transport deadline reached
+while assembling an incomplete Unicode code point can fail the view through
+the existing terminal-error and restoration path. These failures are not draft
+cancellation. Restoration failure remains fatal; an active operation failure
+takes precedence over host-close failure.
 
 Fallback uses the existing borrowed line callbacks, forces plain frames, and
-never enters raw mode or an alternate screen. Its complete frames, `viewer> `
-prompts, and typed input remain in scrollback. Neither path closes borrowed
+never enters raw mode or an alternate screen. It forwards bounded literal
+lines as `line<TAB>COMMAND` without applying command grammar or adding a
+Story-authored viewer prompt. Complete frames and typed input remain in
+scrollback. Neither path closes borrowed
 streams or retains the operation, source, frame, event, cursor, search, match,
 footer result/index, help, picker, or mode after return. This is transient
 lifecycle state, not secure erasure from terminal infrastructure or process

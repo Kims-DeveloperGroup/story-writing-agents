@@ -1795,7 +1795,7 @@ print(f"SHELL_VALUE={input('shell> ')}")
 
         output = process.wait_for_text("SHELL_VALUE=after-view")
         self.assertEqual(process.wait_for_exit(), 0, process.normalized_text)
-        self.assertIn("VIEW_EVENT=close", output)
+        self.assertIn("VIEW_EVENT=text\tq", output)
         self.assertEqual(process.raw_bytes.count(b"\x1b[?1049h"), 1)
         self.assertEqual(process.raw_bytes.count(b"\x1b[?1049l"), 1)
         self.assertEqual(
@@ -1805,125 +1805,70 @@ print(f"SHELL_VALUE={input('shell> ')}")
         self.assertEqual(_durable_tree(self.workspace.root), before)
         self.assertFalse(self.provider_log.exists())
 
-    def test_external_view_search_escape_restores_state_and_keeps_input_raw(
-        self,
-    ) -> None:
-        """Cancel both hosted Search drafts without leaving the active view."""
+    def test_external_view_search_escape_restores_state_and_keeps_input_raw(self) -> None:
+        self._exercise_external_library_pty(edit_query=False)
 
-        source = r"""
-import hashlib
+    def test_external_view_key_editing_matches_standalone_and_restores_terminal(self) -> None:
+        self._exercise_external_library_pty(edit_query=True)
+
+    def _exercise_external_library_pty(self, *, edit_query: bool) -> None:
+        source = r'''
 import json
 import sys
-
-from story_writing_agents.interactive_terminal import (
-    InteractiveExternalViewer,
-    build_stream_terminal,
-)
-
-source = b'{"content":"needle","sequence":2}\n'
+from story_writing_agents.agent_exchanges import AgentExchangeScopeKind
+from story_writing_agents.interactive_controller._exchange_viewer import prepare_agent_exchange_view
+from story_writing_agents.interactive_terminal import InteractiveExternalViewer, build_stream_terminal
+source = b"".join((json.dumps({"content": "개요 " + str(i)}, ensure_ascii=False) + "\n").encode() for i in range(7))
 original = bytes(source)
-active = (
-    "Session session_1 | Conversation debate_1 | Agent character_custodian\n"
-    "VERBOSE | selected exchange_2 | Search content='needle' | 2/5\n"
-    "Footer: result 2/5"
-)
-advanced = active.replace("exchange_2", "exchange_3").replace("2/5", "3/5")
-events = []
-
-def operation(host):
-    host.present(active)
-    event = host.read_event()
-    events.append(event)
-    if event != "next_match":
-        raise AssertionError(f"unexpected first viewer event: {event!r}")
-    host.present(advanced)
-    events.append(host.read_event())
-
-viewer = InteractiveExternalViewer(
-    build_stream_terminal(input, sys.stdin, sys.stdout)
-)
+operation = prepare_agent_exchange_view(source, session_id="s", scope_kind=AgentExchangeScopeKind.CONVERSATION, scope_id="c", scope_subject="Subject", agent_id="lead_orchestrator")
+viewer = InteractiveExternalViewer(build_stream_terminal(input, sys.stdin, sys.stdout))
 viewer.open(operation)
-print(
-    "RESULT="
-    + json.dumps(
-        {
-            "events": events,
-            "source_sha256": hashlib.sha256(source).hexdigest(),
-            "source_unchanged": source == original,
-        },
-        separators=(",", ":"),
-    )
-)
+assert source == original
+print("SOURCE_UNCHANGED=True")
 print(f"SHELL_VALUE={input('shell> ')}")
-"""
-        active = (
-            "Session session_1 | Conversation debate_1 | Agent character_custodian\n"
-            "VERBOSE | selected exchange_2 | Search content='needle' | 2/5\n"
-            "Footer: result 2/5"
-        )
-        advanced = active.replace("exchange_2", "exchange_3").replace("2/5", "3/5")
+'''
         before = _durable_tree(self.workspace.root)
-        process = self._spawn_python(
-            source,
-            environment_overrides={"TERM": "xterm-256color"},
-            terminal_columns=88,
-            decorative_color=True,
-        )
-        process.wait_for_text(active)
+        process = self._spawn_python(source, environment_overrides={
+            "TERM": "xterm-256color",
+            "PYTHONPATH": os.pathsep.join((str(_SOURCE_ROOT), str(_REPOSITORY_ROOT / "vendor/jsonl-viewer/src"))),
+        }, terminal_columns=120)
+        process.wait_for_text("h help • q close")
         assert termios is not None
-        initial_raw = termios.tcgetattr(process.master_fd)
-        self.assertFalse(initial_raw[3] & termios.ICANON)
-        self.assertFalse(initial_raw[3] & termios.ECHO)
-
-        field_mark = process.output_mark()
-        for byte in b"/provi":
-            process.send_bytes(bytes((byte,)))
-        process.wait_for_text("Search field: ", after=field_mark)
-        process.send_bytes(b"\x1b")
-        process.wait_for_text(active, after=field_mark)
-        after_field_cancel = termios.tcgetattr(process.master_fd)
-        self.assertFalse(after_field_cancel[3] & termios.ICANON)
-        self.assertFalse(after_field_cancel[3] & termios.ECHO)
-
-        query_mark = process.output_mark()
-        for byte in b"/content\npartial":
-            process.send_bytes(bytes((byte,)))
-        process.wait_for_text("Search query: ", after=query_mark)
-        process.send_bytes(b"\x1b")
-        process.wait_for_text(active, after=query_mark)
-        after_query_cancel = termios.tcgetattr(process.master_fd)
-        self.assertFalse(after_query_cancel[3] & termios.ICANON)
-        self.assertFalse(after_query_cancel[3] & termios.ECHO)
-
-        next_mark = process.output_mark()
-        process.send_text("n")
-        process.wait_for_text(advanced, after=next_mark)
-        process.send_text("q")
-        result = process.wait_for_text("shell> ")
-        restored = termios.tcgetattr(process.master_fd)
-        self.assertTrue(restored[3] & termios.ICANON)
-        self.assertTrue(restored[3] & termios.ECHO)
-        process.send_line("after-cancelled-search")
-        process.wait_for_text("SHELL_VALUE=after-cancelled-search")
-
+        self.assertFalse(termios.tcgetattr(process.master_fd)[3] & termios.ICANON)
+        mark = process.output_mark()
+        query = b"wrong\x15" + "개요".encode() if edit_query else "개요".encode()
+        process.send_bytes(b"/content\n" + query + b"\nn")
+        process.wait_for_text("Search content='개요' • 2/7", after=mark)
+        process.wait_for_text("h help • q close", after=mark)
+        # Wait for the final selected-match frame, not an earlier search frame.
+        selected = process.normalized_text.rfind("Search content='개요' • 2/7")
+        footer = process.normalized_text.find("h help • q close", selected)
+        if footer < 0:
+            process.wait_for_text("h help • q close", after=selected)
+        active = process.normalized_text.rsplit("\x1b[H\x1b[2J", 1)[1]
+        active = active[:active.index("h help • q close") + len("h help • q close")]
+        for draft, prompt in ((b"/draft", "Search field: draft│"), (b"/content\ndraft", "Search query: draft│"), (b"g999", "Go to source line: 999│")):
+            mark = process.output_mark()
+            process.send_bytes(draft)
+            process.wait_for_text(prompt, after=mark)
+            self.assertFalse(termios.tcgetattr(process.master_fd)[3] & termios.ICANON)
+            mark = process.output_mark()
+            process.send_bytes(b"\x1b")
+            process.wait_for_text("\x1b[H\x1b[2J" + active, after=mark)
+        mark = process.output_mark()
+        process.send_bytes(b"n")
+        process.wait_for_text("Search content='개요' • 3/7", after=mark)
+        process.send_bytes(b"q")
+        process.wait_for_text("shell> ")
+        self.assertTrue(termios.tcgetattr(process.master_fd)[3] & termios.ICANON)
+        process.send_line("after-view")
+        process.wait_for_text("SHELL_VALUE=after-view")
         self.assertEqual(process.wait_for_exit(), 0, process.normalized_text)
-        self.assertIn(
-            'RESULT={"events":["next_match","close"],',
-            result,
-        )
-        self.assertIn('"source_unchanged":true}', result)
-        self.assertNotIn("unknown", result)
-        active_redraw = ("\x1b[H\x1b[2J" + active).encode("utf-8")
-        advanced_redraw = ("\x1b[H\x1b[2J" + advanced).encode("utf-8")
-        self.assertEqual(process.normalized_bytes.count(active_redraw), 3)
-        self.assertEqual(process.normalized_bytes.count(advanced_redraw), 1)
+        self.assertIn("SOURCE_UNCHANGED=True", process.normalized_text)
+        self.assertNotIn("U0015", process.normalized_text)
         self.assertEqual(process.raw_bytes.count(b"\x1b[?1049h"), 1)
         self.assertEqual(process.raw_bytes.count(b"\x1b[?1049l"), 1)
-        self.assertNotIn(b"\x1b[?25", process.raw_bytes)
-        self.assertEqual(
-            process.final_terminal_attributes,
-            process.original_terminal_attributes,
-        )
+        self.assertEqual(process.final_terminal_attributes, process.original_terminal_attributes)
         self.assertEqual(_durable_tree(self.workspace.root), before)
         self.assertFalse(self.provider_log.exists())
 

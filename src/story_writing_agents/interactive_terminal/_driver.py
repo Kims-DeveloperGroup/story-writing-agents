@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import os
 import select as _select
+import time
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from typing import TextIO, TypeAlias, TypeVar
@@ -171,7 +172,6 @@ class _RawExternalViewerHost:
         "_closed",
         "_configuration",
         "_driver",
-        "_last_presented_frame",
     )
 
     def __init__(
@@ -184,7 +184,6 @@ class _RawExternalViewerHost:
         self._capabilities = capabilities
         self._configuration = configuration
         self._closed = False
-        self._last_presented_frame: str | None = None
 
     def terminal_size(self) -> tuple[int, int]:
         if self._closed:
@@ -202,21 +201,18 @@ class _RawExternalViewerHost:
             color_enabled=self._capabilities.decorative_sgr,
         )
         self._driver._write_live_text(f"{_VIEWER_SCREEN_REDRAW}{validated}")
-        self._last_presented_frame = validated
 
     def read_event(self) -> str | None:
         if self._closed:
             return None
         return self._driver._read_live_external_view_event(
             self._configuration,
-            self._last_presented_frame,
         )
 
     def close_view(self) -> None:
         if self._closed:
             return
         self._closed = True
-        self._last_presented_frame = None
         self._driver._write_live_text(_VIEWER_SCREEN_REDRAW)
 
 
@@ -2426,192 +2422,126 @@ class RawTerminalDriver:
     def _read_live_external_view_event(
         self,
         configuration: _TerminalConfiguration,
-        last_presented_frame: str | None,
     ) -> str | None:
-        """Decode one raw key into the external viewer's closed vocabulary."""
+        """Deliver one physical input without interpreting viewer behavior."""
 
-        if last_presented_frame is not None and type(last_presented_frame) is not str:
-            raise TypeError("last_presented_frame must be a string or None")
-        while True:
-            try:
-                character = self._read_character()
-            except KeyboardInterrupt:
-                return "cancel"
-            except EOFError:
-                return None
-            if (
-                configuration.interrupt_character is not None
-                and character == configuration.interrupt_character
-            ):
-                return "cancel"
-            if (
-                configuration.eof_character is not None
-                and character == configuration.eof_character
-            ):
-                return None
-            if character == "\x1b":
-                return self._read_external_view_escape(configuration)
-            mapping = {
-                "q": "close",
-                "j": "down",
-                "k": "up",
-                " ": "page_down",
-                "b": "page_up",
-                "n": "next_match",
-                "N": "previous_match",
-                "m": "toggle_mode",
-                "h": "help",
-                "?": "help",
-                "c": "clear_search",
-            }
-            if character in mapping:
-                return mapping[character]
-            if character == "g":
-                line = self._read_live_external_view_prompt(
-                    configuration,
-                    "Go to source line: ",
-                )
-                return None if line is None else f"goto\t{line}"
-            if character == "/":
-                try:
-                    field = self._read_live_external_view_search_prompt(
-                        configuration,
-                        "Search field: ",
-                    )
-                    if field is None:
-                        return None
-                    query = self._read_live_external_view_search_prompt(
-                        configuration,
-                        "Search query: ",
-                    )
-                except _PromptCancelled:
-                    self._write_live_text(
-                        f"{_VIEWER_SCREEN_REDRAW}{last_presented_frame or ''}"
-                    )
-                    continue
-                if query is None:
-                    return None
-                if not field or not query or "\t" in field or "\t" in query:
-                    return "unknown"
-                return f"search\t{field}\t{query}"
-            return "unknown"
+        try:
+            character = self._read_character()
+        except KeyboardInterrupt:
+            return "key\tinterrupt"
+        except EOFError:
+            return None
+        if (
+            configuration.interrupt_character is not None
+            and character == configuration.interrupt_character
+        ):
+            return "key\tinterrupt"
+        if (
+            configuration.eof_character is not None
+            and character == configuration.eof_character
+        ):
+            return "key\teof"
+        if character == "\x1b":
+            return self._read_external_view_escape(configuration)
+        controls = {
+            "\r": "enter",
+            "\n": "enter",
+            "\x08": "backspace",
+            "\x7f": "backspace",
+            "\x01": "ctrl_a",
+            "\x05": "ctrl_e",
+            "\x15": "ctrl_u",
+            "\x0b": "ctrl_k",
+            "\x17": "ctrl_w",
+        }
+        if character in controls:
+            return "key\t" + controls[character]
+        if ord(character) < 0x20 or character == "\x7f":
+            return "key\tunknown"
+        return "text\t" + character
 
     def _read_external_view_escape(
         self,
         configuration: _TerminalConfiguration,
     ) -> str:
-        """Read one bounded CSI/SS3 navigation sequence after Escape."""
+        """Decode bounded physical CSI/SS3 input with a total lookahead deadline."""
 
-        try:
-            if not self._escape_continuation_is_ready(configuration):
-                return "cancel"
-            sequence = "\x1b"
-            while len(sequence) < _MAX_ESCAPE_SEQUENCE_LENGTH:
-                character = self._read_character()
-                sequence += character
-                if len(sequence) == 2 and character not in {"[", "O"}:
-                    return "cancel"
-                if len(sequence) > 2 and "@" <= character <= "~":
-                    break
-        except (EOFError, KeyboardInterrupt):
-            return "cancel"
-        return {
-            "\x1b[A": "up",
-            "\x1bOA": "up",
-            "\x1b[B": "down",
-            "\x1bOB": "down",
-            "\x1b[5~": "page_up",
-            "\x1b[6~": "page_down",
-        }.get(sequence, "unknown")
+        deadline = time.monotonic() + _ESCAPE_LOOKAHEAD_SECONDS
 
-    def _read_live_external_view_prompt(
-        self,
-        configuration: _TerminalConfiguration,
-        prompt: str,
-    ) -> str | None:
-        """Borrow one canonical line prompt, then reacquire raw view input."""
-
-        _restore_terminal_or_raise(configuration, None)
-        value: object = None
-        active_failure: BaseException | None = None
-        try:
-            value = self._fallback_read_line(prompt)
-        except BaseException as failure:
-            active_failure = failure
-        try:
-            _activate_terminal(configuration)
-        except BaseException as failure:
-            fatal = RuntimeError("external viewer input reactivation failed")
-            if active_failure is not None:
-                fatal.add_note(
-                    "Reactivation failed while a viewer prompt failure was active."
-                )
-            raise fatal from failure
-        if active_failure is not None:
-            if isinstance(active_failure, (EOFError, KeyboardInterrupt)):
-                return None
-            raise active_failure
-        if not isinstance(value, str):
-            raise TypeError("external viewer prompt must return text")
-        line = str.__str__(value)
-        if "\r" in line or "\n" in line:
-            raise ValueError("external viewer prompt must return one line")
-        if len(line) > 8_192:
-            return ""
-        return line.strip()
-
-    def _read_live_external_view_search_prompt(
-        self,
-        configuration: _TerminalConfiguration,
-        prompt: str,
-    ) -> str | None:
-        """Read one cancellable history-free line, then resume raw view input."""
-
-        def transition(
-            state: _ControlState,
-            event: KeyEvent,
-        ) -> tuple[_ControlState, ControlOutcome | None]:
-            if type(state) is not LineInputState:
-                raise TypeError("external viewer prompt requires LineInputState")
-            if event.kind is KeyKind.ESCAPE:
-                return state, ControlOutcome(ControlOutcomeKind.CANCEL)
-            return self._line_transition(state, event)
-
-        value: object = None
-        active_failure: BaseException | None = None
-        try:
-            value = self._read_control_line(
-                prompt,
-                _empty_suggestion_preview,
-                LineInputState(),
-                transition,
-                configuration=configuration,
-                transient=True,
-                cancel_unrecognized_escape=True,
+        def before_read() -> None:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                raise TimeoutError("external terminal character deadline expired")
+            ready, _, _ = _select.select(
+                (configuration.input_descriptor,), (), (), remaining
             )
-        except BaseException as failure:
-            active_failure = failure
-        try:
-            _activate_terminal(configuration)
-        except BaseException as failure:
-            fatal = RuntimeError("external viewer input reactivation failed")
-            if active_failure is not None:
-                fatal.add_note(
-                    "Reactivation failed while a viewer prompt failure was active."
-                )
-            raise fatal from failure
-        if active_failure is not None:
-            if isinstance(active_failure, (EOFError, KeyboardInterrupt)):
-                return None
-            raise active_failure
-        if not isinstance(value, str):
-            raise TypeError("external viewer prompt must return text")
-        line = str.__str__(value)
-        if "\r" in line or "\n" in line:
-            raise ValueError("external viewer prompt must return one line")
-        if len(line) > 8_192:
-            return ""
-        return line.strip()
+            if not ready:
+                raise TimeoutError("external terminal character deadline expired")
+
+        sequence = "\x1b"
+        received = 0
+        while True:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                return "key\tescape" if not received else "key\tunknown_escape"
+            if not self._input_latch.live_reader.has_pending_codepoint:
+                try:
+                    ready, _, _ = _select.select(
+                        (configuration.input_descriptor,), (), (), remaining
+                    )
+                except KeyboardInterrupt:
+                    self._input_latch.reset_after_interrupt()
+                    return "key\tinterrupt"
+                if not ready:
+                    return "key\tescape" if not received else "key\tunknown_escape"
+            try:
+                character = self._read_character(before_read=before_read)
+            except EOFError:
+                return "key\teof"
+            except KeyboardInterrupt:
+                return "key\tinterrupt"
+            if character == configuration.interrupt_character:
+                return "key\tinterrupt"
+            if character == configuration.eof_character:
+                return "key\teof"
+            received += 1
+            if received > 4_096:
+                raise ValueError("external terminal escape exceeds its drain bound")
+            if len(sequence) < _MAX_ESCAPE_SEQUENCE_LENGTH:
+                sequence += character
+            if received == 1 and character in {"[", "O"}:
+                continue
+            if sequence[1] == "[":
+                if "@" <= character <= "~":
+                    break
+                if not " " <= character <= "?":
+                    return "key\tunknown_escape"
+                continue
+            if sequence[1] == "O" and "@" <= character <= "~":
+                break
+            return "key\tunknown_escape"
+        if received + 1 > _MAX_ESCAPE_SEQUENCE_LENGTH:
+            return "key\tunknown_escape"
+        if sequence == "\x1b[5~":
+            return "key\tpage_up"
+        if sequence == "\x1b[6~":
+            return "key\tpage_down"
+        event = _escape_event(sequence)
+        names = {
+            KeyKind.UP: "up",
+            KeyKind.DOWN: "down",
+            KeyKind.LEFT: "left",
+            KeyKind.RIGHT: "right",
+            KeyKind.HOME: "home",
+            KeyKind.END: "end",
+            KeyKind.DELETE: "delete",
+        }
+        name = (
+            names.get(event.kind, "unknown_escape")
+            if event is not None
+            else "unknown_escape"
+        )
+        return "key\t" + name
 
     def _read_live_text_viewer_lifecycle(
         self,
@@ -2820,7 +2750,6 @@ class RawTerminalDriver:
         reference_bindings: ReferenceInputBindings | None = None,
         input_frame_provider: _InputFrameProvider | None = None,
         transient: bool = False,
-        cancel_unrecognized_escape: bool = False,
     ) -> str:
         """Read one exact buffer through one pure logical-state transition.
 
@@ -2846,8 +2775,6 @@ class RawTerminalDriver:
             raise TypeError("configuration must be a _TerminalConfiguration")
         if type(transient) is not bool:
             raise TypeError("transient must be a bool")
-        if type(cancel_unrecognized_escape) is not bool:
-            raise TypeError("cancel_unrecognized_escape must be a bool")
         if (
             rendered_input is not None
             and type(rendered_input) is not RenderedInputFrame
@@ -2921,7 +2848,6 @@ class RawTerminalDriver:
                 palette_renderer,
                 reference_bindings,
                 input_frame_provider,
-                cancel_unrecognized_escape,
             )
             if transient:
                 self._clear_live_display(display_state, line_break=False)
@@ -2965,7 +2891,6 @@ class RawTerminalDriver:
         palette_renderer: _PaletteRenderer | None,
         reference_bindings: ReferenceInputBindings | None,
         input_frame_provider: _InputFrameProvider | None,
-        cancel_unrecognized_escape: bool,
     ) -> tuple[str, LineInputState]:
         """Edit one code-point buffer until submit, interrupt, EOF, or failure.
 
@@ -2990,13 +2915,6 @@ class RawTerminalDriver:
             input_frame_provider,
         )
         while True:
-            if (
-                cancel_unrecognized_escape
-                and display_state.escape_sequence is not None
-                and not self._escape_continuation_is_ready(configuration)
-            ):
-                display_state.escape_sequence = None
-                raise _PromptCancelled
             try:
                 character = self._read_character()
             except EOFError:
@@ -3043,19 +2961,10 @@ class RawTerminalDriver:
                 continue
 
             if display_state.escape_sequence is not None:
-                previous_escape_sequence = display_state.escape_sequence
                 event, reprocess = _consume_escape_character(
                     display_state,
                     character,
                 )
-                if (
-                    cancel_unrecognized_escape
-                    and event is None
-                    and not reprocess
-                    and previous_escape_sequence is not None
-                    and display_state.escape_sequence is None
-                ):
-                    raise _PromptCancelled
                 if event is not None:
                     control_state, outcome, changed = _apply_control_event(
                         control_state,
@@ -3597,7 +3506,7 @@ class RawTerminalDriver:
             self._input_latch.reset_after_interrupt()
             raise
 
-    def _read_character(self) -> str:
+    def _read_character(self, *, before_read: Callable[[], None] | None = None) -> str:
         """Read one decoded code point from the borrowed active input stream.
 
         Physical EOF raises ``EOFError``. Invalid stream return shapes raise
@@ -3606,7 +3515,9 @@ class RawTerminalDriver:
         """
 
         try:
-            character = self._input_latch.live_reader.read_character()
+            character = self._input_latch.live_reader.read_character(
+                before_read=before_read,
+            )
         except KeyboardInterrupt:
             self._input_latch.reset_after_interrupt()
             raise
