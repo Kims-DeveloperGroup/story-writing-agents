@@ -25,9 +25,9 @@ Or install the distribution normally:
 python -m pip install story-writing-agents
 ```
 
-Both forms install the required independent `jsonl-viewer` 0.1.1 from its exact
+Both forms install the required independent `jsonl-viewer` 0.2.0 from its exact
 HTTPS VCS requirement at
-`1d4f5f86ccb4ebd2f458f046df7a0b99b9fbeaec`. A first install normally needs
+`aa2e30b85cdcf14f1c444fa8fb77c2594cac76bc`. A first install normally needs
 Git, network access, and repository access. Installation does not invoke a
 story provider, open an exchange, or enable a service. The historical
 `story-writing-agents[viewer]` and editable `'.[viewer]'` forms remain accepted
@@ -41,7 +41,7 @@ pulling updated Story source, rerun the normal editable installation:
 python -m pip install --editable .
 ```
 
-That ordinary reinstall upgrades viewer 0.1.0 to required 0.1.1 without an
+That ordinary reinstall upgrades viewer 0.1.1 to required 0.2.0 without an
 uninstall, `--force-reinstall`, or `--ignore-installed`. Reserve a forced
 reinstall for a genuinely damaged same-version installation, as described in
 [Troubleshooting](troubleshooting.md#exchanges-does-not-open-the-expected-response).
@@ -56,13 +56,16 @@ git submodule sync -- vendor/jsonl-viewer
 git submodule update --init --checkout vendor/jsonl-viewer
 ```
 
-The `.gitmodules` entry, gitlink, `pyproject.toml`, and `uv.lock` must identify
-the same full commit. Story wheels and source distributions deliberately omit
+The `.gitmodules` entry must identify the matching repository; the gitlink,
+`pyproject.toml`, and `uv.lock` must identify the same full commit. Story wheels
+and source distributions deliberately omit
 the vendored repository, while installed metadata retains the required VCS
 dependency. The external package is Python 3.11+, MIT licensed, has no runtime
 dependencies, and has no Story import. Story loads and validates its exact
-three-name API only when `/exchanges` prepares a view; required installation
-does not create a static Story-to-viewer import.
+three-name API and physical-input capability only when `/exchanges` prepares a
+view. Version 0.1.1 lacks that required capability and is rejected before Story
+opens the viewer terminal. Required installation does not create a static
+Story-to-viewer import.
 
 ## Open a recorded scope
 
@@ -132,8 +135,8 @@ Record 1/3 • source line 1 • JSON display 2 expanded, 0 skipped, 0 truncated
 This preview shows the renderer's topology, not a retained Story screenshot.
 The external repository owns the byte-tested renderer contract:
 
-- [Terminal design system and Story-hosted scenario](https://github.com/Kims-DeveloperGroup/jsonl-viewer/blob/1d4f5f86ccb4ebd2f458f046df7a0b99b9fbeaec/docs/design-system.md)
-- [Nine deterministic complete sample frames](https://github.com/Kims-DeveloperGroup/jsonl-viewer/tree/1d4f5f86ccb4ebd2f458f046df7a0b99b9fbeaec/docs/samples)
+- [Terminal design system and Story-hosted scenario](https://github.com/Kims-DeveloperGroup/jsonl-viewer/blob/aa2e30b85cdcf14f1c444fa8fb77c2594cac76bc/docs/design-system.md)
+- [Nine deterministic complete sample frames](https://github.com/Kims-DeveloperGroup/jsonl-viewer/tree/aa2e30b85cdcf14f1c444fa8fb77c2594cac76bc/docs/samples)
 
 Every body record is well-formatted multiline JSON. The left gutter repeats
 the physical JSONL source-record line on continuation rows, so `g` can move to
@@ -177,14 +180,23 @@ content_full_characters, content_retained_characters, content_truncated,
 content_sha256
 ```
 
-On a capable terminal, both `Search field: ` and `Search query: ` are
-history-free transient editors. Pressing Escape at either prompt discards only
-that unfinished draft and redraws the exact last successfully presented viewer
-frame. Story sends no viewer event, so the selected source record, mode, active
-search, current match, and `current/total` footer position stay unchanged; the
-next key is read as a viewer command. Prompt navigation keys edit locally.
-Unsupported, truncated, or over-limit escape sequences cancel after bounded
-consumption instead of leaking their remaining bytes into viewer commands.
+On a capable terminal, the isolated viewer owns the `Search field:` and
+`Search query:` drafts and the `Go to source line:` draft opened by `g`.
+Each appears in the frame footer with a printable `│` insertion cursor.
+Left/Right, Home/End or Ctrl-A/E, Backspace, and Delete edit the draft. Ctrl-U
+deletes before the cursor, Ctrl-K deletes after it, and Ctrl-W deletes the
+preceding word and intervening whitespace. Command letters such as `j`, `k`,
+`n`, and `q` insert literal text while a draft is open; Up/Down and Page keys
+leave the draft and viewer position unchanged. Enter submits the current
+stage; invalid input keeps the draft open with a visible error.
+
+Escape discards only the unfinished draft. The viewer renders its prior
+committed selection, mode, active search, current match, and `current/total`
+position. Unsupported or incomplete Escape sequences that decode to the
+viewer's unknown-Escape input also cancel the draft. Input failures can instead
+close the view and restore Story's terminal.
+Story owns the terminal lifecycle and transports physical input; the viewer
+owns editing, command interpretation, and cancellation.
 
 The footer reports transient `current/total` position. `n` moves to the next
 match and `N` to the previous match, wrapping in both directions. Searching a
@@ -194,10 +206,13 @@ search, and `h` or `?` opens transient help.
 
 Escape dismisses help, then search, then a transient status; with nothing left
 to dismiss it closes. This main-view behavior begins after a prompt has
-finished or been cancelled; prompt-local Escape does not clear or close the
-view. `q` or EOF closes immediately. In ordinary-line fallback,
+finished or been cancelled; draft Escape preserves the committed view.
+Ctrl-C applies the same cancel behavior in the main view and closes the view
+during a draft. EOF always closes; `q` closes from the main view. In
+ordinary-line fallback,
 use `g LINE`, `/ FIELD QUERY`, `j`/`down`, `k`/`up`, `pgdn`, `pgup`, `n`, `N`,
-`m`, `h`, `c`, and `q`/`quit` at `viewer> `.
+`m`, `h`, `c`, and `q`/`quit`. The viewer interprets these complete literal
+lines; Story adds no command prompt of its own.
 
 ### Where color is used
 
@@ -346,9 +361,9 @@ Common bounded failures are:
 | --- | --- |
 | No attached session | Attach the intended session, then retry bare `/exchanges`. |
 | No records for the session | Run the intended provider work; do not invoke it merely to manufacture diagnostics. |
-| Viewer 0.1.0 remains after updating a checkout | Rerun the normal editable Story install to upgrade it to required 0.1.1; do not force or uninstall. |
+| Viewer 0.1.1 remains after updating a checkout | Rerun the normal editable Story install to upgrade it to required 0.2.0; do not force or uninstall. |
 | Required viewer unavailable | Rerun the normal Story installation, then retry. The compatibility extra is not a separate repair path. |
-| Viewer 0.1.1 is installed but incompatible or damaged | Verify the approved exact pin, then use the bounded forced-repair path in Troubleshooting. |
+| Viewer 0.2.0 is installed but incompatible or damaged | Verify the approved exact pin, then use the bounded forced-repair path in Troubleshooting. |
 | Store busy | Retry after the concurrent exchange write completes. |
 | Unsafe, corrupt, or uncorrelatable records | Preserve the workspace and inspect the content-safe runtime diagnostic before retrying. |
 | Selected stream disappeared | Rerun `/exchanges` to refresh retained inventory. |

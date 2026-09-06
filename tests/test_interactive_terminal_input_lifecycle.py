@@ -335,6 +335,41 @@ class LiveCharacterReaderTests(unittest.TestCase):
                 self.assertIs(second.exception, first.exception)
                 self.assertEqual(stream.calls, [("read1", 1)])
 
+    def test_before_read_checks_each_byte_and_timeout_is_sticky(self) -> None:
+        stream = _ByteBackedInput(b"\xe2", b"\x82", b"\xac")
+        reader = LiveCharacterReader(_spec(stream))
+        failure = TimeoutError("fixed deadline")
+        ready = mock.Mock(side_effect=[None, failure])
+        with self.assertRaises(TimeoutError) as first:
+            reader.read_character(before_read=ready)
+        self.assertIs(first.exception, failure)
+        self.assertEqual(stream.calls, [("read1", 1)])
+        self.assertEqual(ready.call_count, 2)
+        reader.reset_incomplete()
+        with self.assertRaises(TimeoutError) as again:
+            reader.read_character(before_read=ready)
+        self.assertIs(again.exception, failure)
+        self.assertEqual(stream.calls, [("read1", 1)])
+        self.assertEqual(ready.call_count, 2)
+
+    def test_before_read_does_not_wait_for_pending_codepoints_or_stable_eof(self) -> None:
+        class SuffixDecoder:
+            def decode(self, chunk: bytes, *, final: bool) -> str:
+                return "ab" if chunk else ""
+        stream = _ByteBackedInput(b"x", b"")
+        with mock.patch.object(lifecycle.codecs, "getincrementaldecoder", return_value=lambda *, errors: SuffixDecoder()):
+            reader = LiveCharacterReader(_spec(stream))
+        ready = mock.Mock()
+        self.assertEqual(reader.read_character(before_read=ready), "a")
+        self.assertEqual(ready.call_count, 1)
+        self.assertEqual(reader.read_character(before_read=ready), "b")
+        self.assertEqual(ready.call_count, 1)
+        self.assertEqual(reader.read_character(before_read=ready), "")
+        self.assertEqual(ready.call_count, 2)
+        self.assertEqual(reader.read_character(before_read=ready), "")
+        self.assertEqual(ready.call_count, 2)
+        self.assertEqual(stream.calls, [("read1", 1), ("read1", 1)])
+
 
 class InputLatchAndDriverTests(unittest.TestCase):
     """Lock irreversible selection, exclusion, and pre-latch validation."""

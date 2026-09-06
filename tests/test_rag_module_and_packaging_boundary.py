@@ -36,9 +36,9 @@ _GENERIC_RAG_REPOSITORY = "https://github.com/Kims-DeveloperGroup/generic-rag.gi
 _GENERIC_RAG_REQUIREMENT = (
     f"generic-rag @ git+{_GENERIC_RAG_REPOSITORY}@{_GENERIC_RAG_PIN}"
 )
-_OLD_JSONL_VIEWER_PIN = "5d3047aa86212810d867d5b40cb1df3262f1810f"
-_JSONL_VIEWER_PIN = "1d4f5f86ccb4ebd2f458f046df7a0b99b9fbeaec"
-_JSONL_VIEWER_VERSION = "0.1.1"
+_OLD_JSONL_VIEWER_PIN = "1d4f5f86ccb4ebd2f458f046df7a0b99b9fbeaec"
+_JSONL_VIEWER_PIN = "aa2e30b85cdcf14f1c444fa8fb77c2594cac76bc"
+_JSONL_VIEWER_VERSION = "0.2.0"
 _JSONL_VIEWER_REPOSITORY = "https://github.com/Kims-DeveloperGroup/jsonl-viewer.git"
 _JSONL_VIEWER_REQUIREMENT = (
     f"jsonl-viewer @ git+{_JSONL_VIEWER_REPOSITORY}@{_JSONL_VIEWER_PIN}"
@@ -1663,7 +1663,7 @@ class RagPackagingBoundaryTests(unittest.TestCase):
                 import importlib.metadata
                 import json
                 viewer = importlib.metadata.distribution("jsonl-viewer")
-                assert viewer.version == "0.1.0"
+                assert viewer.version == "0.1.1"
                 direct_url = json.loads(viewer.read_text("direct_url.json"))
                 assert direct_url == {{
                     "url": {_JSONL_VIEWER_REPOSITORY!r},
@@ -1673,6 +1673,23 @@ class RagPackagingBoundaryTests(unittest.TestCase):
                         "vcs": "git",
                     }},
                 }}, direct_url
+                """
+            )
+            old_probe += textwrap.dedent(
+                f"""
+                import sys
+                sys.path.insert(0, {str(story_project / "src")!r})
+                from story_writing_agents.agent_exchanges import AgentExchangeScopeKind
+                from story_writing_agents.interactive_controller._exchange_viewer import AgentExchangeViewerError, prepare_agent_exchange_view
+                try:
+                    prepare_agent_exchange_view(
+                        b"", session_id="s", scope_kind=AgentExchangeScopeKind.CONVERSATION,
+                        scope_id="c", scope_subject="Subject", agent_id="lead_orchestrator",
+                    )
+                except AgentExchangeViewerError as failure:
+                    assert failure.code == "incompatible"
+                else:
+                    raise AssertionError("old viewer admitted before terminal operation")
                 """
             )
             old_verified = subprocess.run(
@@ -1834,6 +1851,30 @@ class RagPackagingBoundaryTests(unittest.TestCase):
                     )
                 ]
                 assert len(set(key_lines)) == len(key_lines)
+                """
+            )
+            upgraded_probe += textwrap.dedent(
+                """
+                searched_source = b"".join(
+                    (json.dumps({"content": "개요 " + str(index)}, ensure_ascii=False) + "\\n").encode()
+                    for index in range(7)
+                )
+                class SearchHost(Host):
+                    def __init__(self):
+                        super().__init__()
+                        self.events = iter(("text\\t/", "text\\tcontent", "key\\tenter", "text\\twrong", "key\\tctrl_u", "text\\t개요", "key\\tenter", "close"))
+                    def read_event(self): return next(self.events)
+                searched_host = SearchHost()
+                prepare_agent_exchange_view(
+                    searched_source, session_id="session_1",
+                    scope_kind=AgentExchangeScopeKind.CONVERSATION,
+                    scope_id="conversation_1", scope_subject="Upgrade subject",
+                    agent_id="lead_orchestrator",
+                )(searched_host)
+                assert searched_host.closed == 1
+                assert "Search content='개요' • 1/7" in searched_host.frames[-1]
+                assert "U0015" not in searched_host.frames[-1]
+                assert "wrong" not in searched_host.frames[-1]
                 """
             )
             verified = subprocess.run(

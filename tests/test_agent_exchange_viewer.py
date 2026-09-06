@@ -140,6 +140,7 @@ class _ExactViewerSpec:
         title="JSONL Viewer",
         conversation_label="Conversation",
         conversation_subject=None,
+        input_protocol="semantic",
     ):
         self.session_id = session_id
         self.conversation_id = conversation_id
@@ -151,6 +152,7 @@ class _ExactViewerSpec:
         self.title = title
         self.conversation_label = conversation_label
         self.conversation_subject = conversation_subject
+        self.input_protocol = input_protocol
 
     @property
     def primary_fields(self):
@@ -481,6 +483,7 @@ class LazyViewerAdapterTests(unittest.TestCase):
                 spec.title,
                 spec.conversation_label,
                 spec.conversation_subject,
+                spec.input_protocol,
             ),
             (
                 "session_1",
@@ -491,6 +494,7 @@ class LazyViewerAdapterTests(unittest.TestCase):
                 "Agent Exchanges",
                 "Debate",
                 "Subject",
+                "keys",
             ),
         )
         self.assertEqual(host.closed, 1)
