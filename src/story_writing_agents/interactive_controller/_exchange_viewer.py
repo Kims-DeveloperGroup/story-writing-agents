@@ -26,6 +26,7 @@ _VIEWER_SPEC_PARAMETERS = (
     ("title", "JSONL Viewer"),
     ("conversation_label", "Conversation"),
     ("conversation_subject", None),
+    ("input_protocol", "semantic"),
 )
 _VIEWER_HOST_METHODS = {
     "terminal_size": ("self",),
@@ -215,6 +216,7 @@ def prepare_agent_exchange_view(
         ("title", "Agent Exchanges"),
         ("conversation_label", scope_kind.value.title()),
         ("conversation_subject", scope_subject),
+        ("input_protocol", "keys"),
     )
     try:
         spec = viewer_spec_type(
@@ -228,6 +230,7 @@ def prepare_agent_exchange_view(
             title="Agent Exchanges",
             conversation_label=scope_kind.value.title(),
             conversation_subject=scope_subject,
+            input_protocol="keys",
         )
     except Exception as exc:
         raise AgentExchangeViewerError("incompatible") from exc

@@ -9,7 +9,7 @@ from typing import Protocol, TypeAlias, runtime_checkable
 
 
 _DEFAULT_ROWS = 24
-_MAX_LINE_COMMAND_CHARACTERS = 8_192
+_MAX_LINE_INPUT_CHARACTERS = 8_192
 _SGR = re.compile(r"\x1b\[[0-9;]*m")
 
 
@@ -33,7 +33,7 @@ class ExternalViewerHost(Protocol):
         ...
 
     def read_event(self) -> str | None:
-        """Return one closed viewer event or ``None`` for EOF."""
+        """Return normalized text/key/literal-line transport or ``None`` for EOF."""
 
         ...
 
@@ -68,51 +68,16 @@ def _require_external_view_frame(frame: object, *, color_enabled: bool) -> str:
 
 
 def _line_view_event(value: object) -> str:
-    """Map one bounded ordinary-line command to the closed viewer vocabulary."""
+    """Wrap one bounded literal input line without interpreting its grammar."""
 
     if not isinstance(value, str):
         raise TypeError("external viewer input must be text")
     line = str.__str__(value)
+    if len(line) > _MAX_LINE_INPUT_CHARACTERS:
+        return "key\tunknown"
     if "\r" in line or "\n" in line:
         raise ValueError("external viewer input must be one line")
-    if len(line) > _MAX_LINE_COMMAND_CHARACTERS:
-        return "unknown"
-    command = line.strip()
-    mapping = {
-        "q": "close",
-        "quit": "close",
-        "j": "down",
-        "down": "down",
-        "k": "up",
-        "up": "up",
-        "pgdn": "page_down",
-        "pgup": "page_up",
-        "n": "next_match",
-        "N": "previous_match",
-        "m": "toggle_mode",
-        "h": "help",
-        "?": "help",
-        "esc": "cancel",
-        "c": "clear_search",
-        "clear": "clear_search",
-    }
-    if command in mapping:
-        return mapping[command]
-    if command.startswith("g "):
-        line_number = command[2:].strip()
-        if line_number and "\t" not in line_number:
-            return f"goto\t{line_number}"
-    if command.startswith("/ "):
-        parts = command[2:].split(maxsplit=1)
-        if (
-            len(parts) == 2
-            and parts[0]
-            and parts[1]
-            and "\t" not in parts[0]
-            and "\t" not in parts[1]
-        ):
-            return f"search\t{parts[0]}\t{parts[1]}"
-    return "unknown"
+    return "line\t" + line
 
 
 class _BorrowedLineViewerHost:
@@ -159,11 +124,11 @@ class _BorrowedLineViewerHost:
         if self._closed:
             return None
         try:
-            value = self._read_line("viewer> ")
+            value = self._read_line("")
         except EOFError:
             return None
         except KeyboardInterrupt:
-            return "cancel"
+            return "key\tinterrupt"
         return _line_view_event(value)
 
     def close_view(self) -> None:

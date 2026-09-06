@@ -804,11 +804,12 @@ owner of input, output, raw mode, alternate screen, signals, geometry, and
 restoration. Capable close restores the prior shell surface; ordinary-line
 fallback necessarily leaves its plain frames and input in scrollback. Either
 path can be retained by terminal, remote-session, accessibility, recording, or
-operating-system infrastructure. Picker, cursor, mode, search, match position,
-footer result/index, and help state are process-local and discarded on close;
+operating-system infrastructure. Story picker state and viewer-owned drafts,
+logical cursor, mode, search, match position, footer result/index, and help
+state are process-local and discarded on close;
 that does not erase exchange files, process memory, scrollback, screenshots, or
 copied frames. See [Inspect agent exchanges](../guides/agent-exchanges.md) and
-the pinned external [design system](https://github.com/Kims-DeveloperGroup/jsonl-viewer/blob/1d4f5f86ccb4ebd2f458f046df7a0b99b9fbeaec/docs/design-system.md).
+the pinned external [design system](https://github.com/Kims-DeveloperGroup/jsonl-viewer/blob/aa2e30b85cdcf14f1c444fa8fb77c2594cac76bc/docs/design-system.md).
 
 Retention is bounded but not secure erasure. Per-stream rotation and global
 oldest-record pruning use ordinary unlink or replacement. User deletion,

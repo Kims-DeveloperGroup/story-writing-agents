@@ -154,8 +154,14 @@ class LiveCharacterReader:
 
         return bool(self._pending)
 
-    def read_character(self) -> str:
-        """Return one decoded code point or a stable empty string at clean EOF."""
+    def read_character(self, *, before_read: Callable[[], None] | None = None) -> str:
+        """Return a code point or stable empty string, gating each byte if asked.
+
+        The optional callback runs before every physical byte read, including
+        continuation bytes. Callback failures follow ordinary sticky transport
+        failure semantics; they cannot release an incomplete character as later
+        input. The reader owns no readiness clock or feature-specific policy.
+        """
 
         if self._failure is not None:
             raise self._failure
@@ -171,6 +177,8 @@ class LiveCharacterReader:
         self._reading = True
         try:
             while not self._pending and not self._eof:
+                if before_read is not None:
+                    before_read()
                 chunk = self.spec.read_one_byte(1)
                 if type(chunk) is not bytes:
                     raise TypeError(

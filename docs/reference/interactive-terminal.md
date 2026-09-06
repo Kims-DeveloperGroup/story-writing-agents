@@ -170,8 +170,13 @@ runtime authorization rather than embedded by the control.
 
 `/exchanges` uses a different hosted external viewer. After attachment, the
 controller chooses an immutable scope/agent snapshot and opens the installed
-isolated read-only JSONL viewer. Closing it returns to the same shell scope.
-It cannot call or replay a provider.
+isolated read-only JSONL viewer. Story validates the pinned 0.2.0 API and
+`ViewerSpec.input_protocol="keys"` capability before terminal acquisition;
+the older 0.1.1 API is incompatible. The viewer owns key bindings, ordinary-line
+grammar, search/goto drafts, editing, and cancellation. Story transports decoded
+physical text/keys or literal lines and owns terminal modes, geometry, frame
+presentation, and restoration. Closing the view returns to the same shell
+scope. It cannot call or replay a provider.
 
 ## Safety
 

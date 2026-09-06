@@ -172,38 +172,11 @@ class ExternalViewContractTests(unittest.TestCase):
             external_view_module.__all__,
             ["ExternalViewOperation", "ExternalViewerHost"],
         )
-        cases = {
-            "q": "close",
-            " quit ": "close",
-            "j": "down",
-            "down": "down",
-            "k": "up",
-            "up": "up",
-            "pgdn": "page_down",
-            "pgup": "page_up",
-            "n": "next_match",
-            "N": "previous_match",
-            "m": "toggle_mode",
-            "h": "help",
-            "?": "help",
-            "esc": "cancel",
-            "c": "clear_search",
-            "clear": "clear_search",
-            "g 17": "goto\t17",
-            "/ provider CODEX": "search\tprovider\tCODEX",
-            "": "unknown",
-            "g": "unknown",
-            "/ provider": "unknown",
-            "g 1\t2": "unknown",
-            "/ provider x\tbad": "unknown",
-        }
-        for value, expected in cases.items():
-            with self.subTest(value=value):
-                self.assertEqual(external_view_module._line_view_event(value), expected)
-        self.assertEqual(
-            external_view_module._line_view_event("x" * 8_193),
-            "unknown",
-        )
+        values = ("q", " quit ", "j", "down", "k", "up", "pgdn", "pgup", "n", "N", "m", "h", "?", "esc", "c", "clear", "g 17", "/ provider CODEX", "", "g", "/ provider", "g 1\t2", "/ provider x\tbad", "개요", "x" * 8192)
+        for value in values:
+            with self.subTest(value=value[:40]):
+                self.assertEqual(external_view_module._line_view_event(value), "line\t" + value)
+        self.assertEqual(external_view_module._line_view_event("x" * 8193), "key\tunknown")
         with self.assertRaises(ValueError):
             external_view_module._line_view_event("q\n")
 
@@ -271,17 +244,17 @@ class ExternalViewContractTests(unittest.TestCase):
             [
                 (72, 24),
                 False,
-                "search\tprovider\tcodex",
-                "cancel",
-                "next_match",
-                "close",
+                "line\t/ provider codex",
+                "line\tesc",
+                "line\tn",
+                "line\tq",
             ],
         )
         self.assertEqual(writes, ["plain frame\n"])
-        self.assertEqual(prompts, ["viewer> "] * 4)
+        self.assertEqual(prompts, [""] * 4)
 
         viewer.open(lambda host: observed.append(host.read_event()))
-        self.assertEqual(observed[-1], "close")
+        self.assertEqual(observed[-1], "line\tq")
 
     def test_operation_and_cleanup_failure_precedence_preserves_identity(self) -> None:
         driver, *_rest = _raw_driver("q")
@@ -304,47 +277,17 @@ class ExternalViewContractTests(unittest.TestCase):
 
 class RawExternalViewLifecycleTests(unittest.TestCase):
     def test_live_host_owns_geometry_color_events_screen_and_restoration(self) -> None:
-        driver, _input, output, fallback, termios = _raw_driver(
-            "\x1b[A\x1b[B\x1b[5~\x1b[6~jkb nNmh?cq",
-            width=91,
-            height=27,
-        )
-        events: list[object] = []
-
-        def operation(host: ExternalViewerHost) -> None:
+        driver, _input, output, fallback, termios = _raw_driver("\x1b[A\x1b[B\x1b[5~\x1b[6~jkb nNmh?cq", width=91, height=27)
+        events = []
+        def operation(host):
             events.extend((host.terminal_size(), host.color_enabled()))
             host.present("\x1b[36mframe\x1b[0m")
-            for _index in range(15):
-                events.append(host.read_event())
+            events.extend(host.read_event() for _ in range(15))
             host.close_view()
-
-        with mock.patch.object(
-            driver_module,
-            "_escape_input_is_ready",
-            return_value=True,
-        ):
+        with mock.patch.object(driver_module._select, "select", return_value=((7,), (), ())):
             driver.open_external_view(operation)
         self.assertEqual(events[:2], [(91, 27), True])
-        self.assertEqual(
-            events[2:],
-            [
-                "up",
-                "down",
-                "page_up",
-                "page_down",
-                "down",
-                "up",
-                "page_up",
-                "page_down",
-                "next_match",
-                "previous_match",
-                "toggle_mode",
-                "help",
-                "help",
-                "clear_search",
-                "close",
-            ],
-        )
+        self.assertEqual(events[2:], ["key\tup", "key\tdown", "key\tpage_up", "key\tpage_down"] + ["text\t" + c for c in "jkb nNmh?cq"])
         fallback.assert_not_called()
         self.assertEqual(termios.events.count("activate"), 1)
         self.assertEqual(termios.events.count("restore"), 1)
@@ -353,355 +296,97 @@ class RawExternalViewLifecycleTests(unittest.TestCase):
         self.assertEqual(rendered.count(driver_module._VIEWER_SCREEN_EXIT), 1)
         self.assertIn("\x1b[36mframe\x1b[0m", rendered)
 
-    def test_goto_stays_canonical_while_search_commits_through_raw_prompts(
-        self,
-    ) -> None:
-        driver, _input, _output, fallback, termios = _raw_driver(
-            "g/provider\nCodex response\nq",
-            answers=("19",),
-        )
-        events: list[str | None] = []
-
-        def operation(host: ExternalViewerHost) -> None:
-            events.append(host.read_event())
-            events.append(host.read_event())
-            events.append(host.read_event())
-
-        driver.open_external_view(operation)
-        self.assertEqual(
-            events,
-            ["goto\t19", "search\tprovider\tCodex response", "close"],
-        )
-        self.assertEqual(
-            fallback.call_args_list,
-            [mock.call("Go to source line: ")],
-        )
-        self.assertEqual(termios.events.count("activate"), 6)
-        self.assertEqual(termios.events.count("restore"), 4)
+    def test_physical_input_has_no_viewer_bindings_prompts_or_history(self) -> None:
+        text = "/gqjkb nNmh?c개요😀e\u0301"
+        controls = "\r\n\x08\x7f\x01\x05\x15\x0b\x17\x03\x04\t"
+        names = ("enter", "enter", "backspace", "backspace", "ctrl_a", "ctrl_e", "ctrl_u", "ctrl_k", "ctrl_w", "interrupt", "eof", "unknown")
+        driver, _input, output, fallback, termios = _raw_driver(text + controls)
+        events = []
+        driver.open_external_view(lambda host: events.extend(host.read_event() for _ in range(len(text + controls))))
+        self.assertEqual(events, ["text\t" + c for c in text] + ["key\t" + n for n in names])
+        self.assertEqual(output.records, [driver_module._VIEWER_SCREEN_ENTER, driver_module._VIEWER_SCREEN_REDRAW, driver_module._VIEWER_SCREEN_EXIT])
+        self.assertEqual(termios.events.count("activate"), 1)
+        self.assertEqual(termios.events.count("restore"), 1)
+        fallback.assert_not_called()
         self.assertEqual(driver._history_state, driver_module.MainInputHistoryState())
 
-    def test_search_field_escape_redraws_exact_frame_without_emitting_event(
-        self,
-    ) -> None:
-        driver, _input, output, fallback, termios = _raw_driver("/provid\x1bq")
-        frame = (
-            "Session session_1 | Conversation debate_1 | Agent character_custodian\n"
-            "SIMPLE | selected exchange_2 | Search content='needle' | 2/5\n"
-            "Footer: n/N matches; / search; q close"
-        )
-        events: list[str | None] = []
+    def test_escape_sequences_are_physical_bounded_and_drained(self) -> None:
+        for suffix, expected in (("[C", "right"), ("OD", "left"), ("[H", "home"), ("OF", "end"), ("[3~", "delete"), ("[Z", "unknown_escape"), ("[" + "0" * 40 + "Z", "unknown_escape")):
+            with self.subTest(suffix=suffix):
+                driver, _input, output, fallback, _termios = _raw_driver("\x1b" + suffix + "q")
+                events = []
+                with mock.patch.object(driver_module._select, "select", return_value=((7,), (), ())):
+                    driver.open_external_view(lambda host: events.extend((host.read_event(), host.read_event())))
+                self.assertEqual(events, ["key\t" + expected, "text\tq"])
+                self.assertNotIn("Search", "".join(output.records))
+                fallback.assert_not_called()
+        driver, _input, _output, _fallback, _termios = _raw_driver("\x1bq")
+        events = []
+        with mock.patch.object(driver_module._select, "select", return_value=((), (), ())):
+            driver.open_external_view(lambda host: events.extend((host.read_event(), host.read_event())))
+        self.assertEqual(events, ["key\tescape", "text\tq"])
 
-        def operation(host: ExternalViewerHost) -> None:
-            host.present(frame)
-            events.append(host.read_event())
-
-        with mock.patch.object(
-            driver_module,
-            "_escape_input_is_ready",
-            return_value=False,
+    def test_escape_partial_utf8_deadline_stops_byte_reads_and_restores_terminal(self) -> None:
+        driver, input_stream, output, fallback, termios = _raw_driver("")
+        input_stream.characters = [0x1B, 0xE2, 0x82, 0xAC]
+        original_read = input_stream.read1
+        with (
+            mock.patch.object(input_stream, "read1", wraps=original_read) as reads,
+            mock.patch.object(driver_module.time, "monotonic", return_value=100.0),
+            mock.patch.object(driver_module._select, "select", side_effect=[((7,), (), ()), ((7,), (), ()), ((), (), ())]),
+            self.assertRaisesRegex(TimeoutError, "^external terminal character deadline expired$") as raised,
         ):
-            driver.open_external_view(operation)
-
-        self.assertEqual(events, ["close"])
-        self.assertEqual(
-            output.records.count(f"{driver_module._VIEWER_SCREEN_REDRAW}{frame}"),
-            2,
-        )
-        final_redraw = "".join(output.records).rfind(frame)
-        self.assertNotEqual(final_redraw, -1)
-        self.assertNotIn("provid", "".join(output.records)[final_redraw:])
-        fallback.assert_not_called()
-        self.assertEqual(termios.events.count("activate"), 3)
-        self.assertEqual(termios.events.count("restore"), 2)
-        self.assertEqual(driver._history_state, driver_module.MainInputHistoryState())
-
-    def test_search_query_escape_preserves_state_source_and_next_match(self) -> None:
-        driver, _input, output, fallback, _termios = _raw_driver(
-            "/content\npartial query\x1bnq"
-        )
-        source = b'{"content":"needle","sequence":2}\n'
-        source_before = bytes(source)
-        active = (
-            "Session session_1 | Conversation conversation_1 | Agent plot_architect\n"
-            "VERBOSE | selected exchange_2 | Search content='needle' | 2/5\n"
-            "Footer: result 2/5"
-        )
-        advanced = active.replace("exchange_2", "exchange_3").replace("2/5", "3/5")
-        events: list[str | None] = []
-
-        def operation(host: ExternalViewerHost) -> None:
-            host.present(active)
-            event = host.read_event()
-            events.append(event)
-            if event == "next_match":
-                host.present(advanced)
-            events.append(host.read_event())
-
-        with mock.patch.object(
-            driver_module,
-            "_escape_input_is_ready",
-            return_value=False,
-        ):
-            driver.open_external_view(operation)
-
-        self.assertEqual(events, ["next_match", "close"])
-        self.assertEqual(source, source_before)
-        self.assertEqual(
-            output.records.count(f"{driver_module._VIEWER_SCREEN_REDRAW}{active}"),
-            2,
-        )
-        self.assertEqual(
-            output.records.count(f"{driver_module._VIEWER_SCREEN_REDRAW}{advanced}"),
-            1,
-        )
+            driver.open_external_view(lambda host: host.read_event())
+        self.assertEqual(reads.call_args_list, [mock.call(1), mock.call(1)])
+        self.assertEqual(input_stream.characters, [0x82, 0xAC])
+        reader = driver._input_latch.live_reader
+        reader.reset_incomplete()
+        with self.assertRaises(TimeoutError) as again:
+            reader.read_character()
+        self.assertIs(again.exception, raised.exception)
+        self.assertEqual(termios.events.count("activate"), 1)
+        self.assertEqual(termios.events.count("restore"), 1)
+        self.assertEqual("".join(output.records).count(driver_module._VIEWER_SCREEN_EXIT), 1)
         fallback.assert_not_called()
 
-    def test_retained_frame_is_transactional_discarded_and_host_local(self) -> None:
-        driver, _input, output, _fallback, _termios = _raw_driver(
-            "/draft\x1bq/draft\x1bq"
-        )
-        stable = "stable successfully presented frame"
-        rejected = "rejected candidate frame"
-        presentation_failure = OSError("candidate presentation failed")
-        first_host: list[ExternalViewerHost] = []
-
-        def first(host: ExternalViewerHost) -> None:
-            first_host.append(host)
-            host.present(stable)
-            with self.assertRaises(ValueError):
-                host.present("unsafe\rframe")
-            output.failure = presentation_failure
-            with self.assertRaises(OSError) as raised:
-                host.present(rejected)
-            self.assertIs(raised.exception, presentation_failure)
-            output.failure = None
-            self.assertEqual(host.read_event(), "close")
-
-        with mock.patch.object(
-            driver_module,
-            "_escape_input_is_ready",
-            return_value=False,
+    def test_escape_drain_bound_fails_closed_and_restores_terminal(self) -> None:
+        driver, input_stream, output, fallback, termios = _raw_driver("\x1b[" + "0" * 4096 + "q")
+        with (
+            mock.patch.object(driver_module.time, "monotonic", return_value=100.0),
+            mock.patch.object(driver_module._select, "select", return_value=((7,), (), ())),
+            self.assertRaisesRegex(ValueError, "drain bound"),
         ):
-            driver.open_external_view(first)
-        self.assertEqual(
-            output.records.count(f"{driver_module._VIEWER_SCREEN_REDRAW}{stable}"),
-            2,
-        )
-        self.assertNotIn(rejected, "".join(output.records))
-        retained_host = first_host[0]
-        self.assertIsNone(retained_host.read_event())
-
-        mark = len(output.records)
-        with mock.patch.object(
-            driver_module,
-            "_escape_input_is_ready",
-            return_value=False,
-        ):
-            driver.open_external_view(
-                lambda host: self.assertEqual(host.read_event(), "close")
-            )
-        self.assertNotIn(stable, "".join(output.records[mark:]))
-
-    def test_prompt_escape_sequences_are_bounded_consumed_and_do_not_leak(
-        self,
-    ) -> None:
-        self.assertEqual(driver_module._MAX_ESCAPE_SEQUENCE_LENGTH, 64)
-        supported = {
-            "CSI": "\x1b[D",
-            "SS3": "\x1bOD",
-        }
-        for name, sequence in supported.items():
-            with self.subTest(kind=name):
-                driver, _input, _output, fallback, _termios = _raw_driver(
-                    f"/ab{sequence}X\nneedle\nq"
-                )
-                supported_events: list[str | None] = []
-
-                def operation(host: ExternalViewerHost) -> None:
-                    host.present("frame")
-                    supported_events.append(host.read_event())
-                    supported_events.append(host.read_event())
-
-                with mock.patch.object(
-                    driver_module,
-                    "_escape_input_is_ready",
-                    return_value=True,
-                ):
-                    driver.open_external_view(operation)
-                self.assertEqual(
-                    supported_events,
-                    ["search\taXb\tneedle", "close"],
-                )
-                fallback.assert_not_called()
-
-        exact = "\x1b[" + "1" * 61 + "B"
-        over_cap = "\x1b[" + "1" * 62 + "B"
-        self.assertEqual(len(exact), driver_module._MAX_ESCAPE_SEQUENCE_LENGTH)
-        self.assertEqual(len(over_cap), driver_module._MAX_ESCAPE_SEQUENCE_LENGTH + 1)
-        for name, sequence in (
-            ("unsupported_csi", "\x1b[99~"),
-            ("unsupported_ss3", "\x1bOP"),
-            ("exact_boundary", exact),
-            ("over_cap", over_cap),
-        ):
-            with self.subTest(kind=name):
-                driver, _input, output, fallback, _termios = _raw_driver(
-                    f"/draft{sequence}q"
-                )
-                cancelled_events: list[str | None] = []
-
-                def operation(host: ExternalViewerHost) -> None:
-                    host.present("retained frame")
-                    cancelled_events.append(host.read_event())
-
-                with mock.patch.object(
-                    driver_module,
-                    "_escape_input_is_ready",
-                    return_value=True,
-                ):
-                    driver.open_external_view(operation)
-                self.assertEqual(cancelled_events, ["close"])
-                self.assertEqual(
-                    output.records.count(
-                        f"{driver_module._VIEWER_SCREEN_REDRAW}retained frame"
-                    ),
-                    2,
-                )
-                fallback.assert_not_called()
-
-        driver, _input, output, fallback, _termios = _raw_driver("/draft\x1b[")
-
-        def truncated_operation(host: ExternalViewerHost) -> None:
-            host.present("retained frame")
-            self.assertIsNone(host.read_event())
-
-        with mock.patch.object(
-            driver_module,
-            "_escape_input_is_ready",
-            return_value=True,
-        ):
-            driver.open_external_view(truncated_operation)
-        self.assertEqual(
-            output.records.count(
-                f"{driver_module._VIEWER_SCREEN_REDRAW}retained frame"
-            ),
-            1,
-        )
+            driver.open_external_view(lambda host: host.read_event())
+        self.assertEqual(input_stream.characters, [ord("q")])
+        self.assertEqual(termios.events.count("restore"), 1)
+        self.assertEqual("".join(output.records).count(driver_module._VIEWER_SCREEN_EXIT), 1)
         fallback.assert_not_called()
 
-    def test_main_escape_remains_cancel_and_does_not_use_prompt_redraw(self) -> None:
-        driver, _input, output, _fallback, _termios = _raw_driver("\x1bq")
-        events: list[str | None] = []
+    def test_real_library_raw_and_line_fallback_have_equal_search_behavior(self) -> None:
+        import io
+        from jsonl_viewer import ViewerSpec, view_jsonl
+        from jsonl_viewer._standalone import _TerminalHost
 
-        def operation(host: ExternalViewerHost) -> None:
-            host.present("active search frame")
-            events.append(host.read_event())
-            events.append(host.read_event())
-
-        with mock.patch.object(
-            driver_module,
-            "_escape_input_is_ready",
-            return_value=False,
-        ):
-            driver.open_external_view(operation)
-        self.assertEqual(events, ["cancel", "close"])
-        self.assertEqual(
-            output.records.count(
-                f"{driver_module._VIEWER_SCREEN_REDRAW}active search frame"
-            ),
-            1,
-        )
-
-    def test_search_prompt_interrupt_and_eof_paths_never_submit_drafts(self) -> None:
-        cases: tuple[tuple[str, str, object | None], ...] = (
-            ("field configured VINTR", "/draft\x03", None),
-            ("query configured VINTR", "/field\ndraft\x03", None),
-            ("field configured VEOF", "/\x04", None),
-            ("query configured VEOF", "/field\n\x04", None),
-            ("field physical EOF", "/draft", None),
-            ("query physical EOF", "/field\ndraft", None),
-            ("field physical interrupt", "", KeyboardInterrupt()),
-            ("query physical interrupt", "", KeyboardInterrupt()),
-        )
-        for name, characters, physical in cases:
-            with self.subTest(kind=name):
-                driver, _input, output, fallback, termios = _raw_driver(characters)
-                events: list[str | None] = []
-
-                def operation(host: ExternalViewerHost) -> None:
-                    host.present("retained frame")
-                    events.append(host.read_event())
-
-                read_patch = None
-                if physical is not None:
-                    prefix = ["/"] if name.startswith("field") else ["/", *"field\n"]
-                    read_patch = mock.patch.object(
-                        RawTerminalDriver,
-                        "_read_character",
-                        side_effect=(*prefix, physical),
-                    )
-                context = (
-                    read_patch
-                    if read_patch is not None
-                    else mock.patch.object(
-                        driver_module,
-                        "_escape_input_is_ready",
-                        return_value=False,
-                    )
-                )
-                with context:
-                    driver.open_external_view(operation)
-                self.assertEqual(events, [None])
-                self.assertEqual(
-                    output.records.count(
-                        f"{driver_module._VIEWER_SCREEN_REDRAW}retained frame"
-                    ),
-                    1,
-                )
-                fallback.assert_not_called()
-                self.assertEqual(termios.events[-1], "restore")
-
-    def test_prompt_failure_precedence_preserves_active_or_restoration_error(
-        self,
-    ) -> None:
-        driver, _input, output, _fallback, termios = _raw_driver("/")
-        active = OSError("prompt render failed")
-        failed_hosts: list[ExternalViewerHost] = []
-
-        def fail_prompt(host: ExternalViewerHost) -> None:
-            failed_hosts.append(host)
-            host.present("retained frame")
-            output.failure = active
-            host.read_event()
-
-        with self.assertRaises(OSError) as raised:
-            driver.open_external_view(fail_prompt)
-        self.assertIs(raised.exception, active)
-        self.assertEqual(termios.events[-1], "restore")
-        output.failure = None
-        self.assertIsNone(failed_hosts[0].read_event())
-
-        driver, _input, output, _fallback, termios = _raw_driver("/")
-        active = OSError("prompt render failed")
-        restoration = OSError("terminal restore failed")
-
-        def fail_prompt_and_restore(host: ExternalViewerHost) -> None:
-            host.present("retained frame")
-            output.failure = active
-            termios.restoration_failure = restoration
-            host.read_event()
-
-        with self.assertRaisesRegex(
-            RuntimeError, "interactive terminal restoration failed"
-        ) as restoration_raised:
-            driver.open_external_view(fail_prompt_and_restore)
-        self.assertIs(restoration_raised.exception.__cause__, restoration)
-        self.assertTrue(
-            any(
-                "another interactive input failure" in note
-                for note in restoration_raised.exception.__notes__
-            )
-        )
+        source = ('{"content":"개요 one"}\n{"content":"개요 two"}\n').encode()
+        spec = ViewerSpec("s", "c", "a", ("content",), input_protocol="keys")
+        command = "/ content 개요\nn\nesc\nq\n"
+        standalone_output = io.StringIO()
+        with _TerminalHost(io.StringIO(command), standalone_output, no_color=True) as host:
+            view_jsonl(source, spec, host)
+        lines = iter(command.splitlines())
+        story_output = []
+        viewer = InteractiveExternalViewer(InteractiveTerminal(lambda prompt: next(lines), story_output.append, width=80))
+        viewer.open(lambda host: view_jsonl(source, spec, host))
+        self.assertIn("Search content='개요' • 2/2", "".join(story_output))
+        self.assertIn("Search content='개요' • 2/2", standalone_output.getvalue())
+        driver, _input, output, fallback, termios = _raw_driver("/content\nwrong\x15개요\nnq")
+        driver.open_external_view(lambda host: view_jsonl(source, spec, host))
+        self.assertIn("Search content='개요' • 2/2", "".join(output.records))
+        self.assertNotIn("U0015", "".join(output.records))
+        self.assertEqual(termios.events.count("activate"), 1)
+        self.assertEqual(termios.events.count("restore"), 1)
+        fallback.assert_not_called()
+        self.assertEqual(source, ('{"content":"개요 one"}\n{"content":"개요 two"}\n').encode())
 
     def test_fallback_never_acquires_raw_or_ansi_and_maps_interrupt_eof(self) -> None:
         driver, _input, output, fallback, termios = _raw_driver(
@@ -719,7 +404,7 @@ class RawExternalViewLifecycleTests(unittest.TestCase):
             observed.append(host.read_event())
 
         driver.open_external_view(operation)
-        self.assertEqual(observed, [(80, 24), False, "cancel", None])
+        self.assertEqual(observed, [(80, 24), False, "key\tinterrupt", None])
         self.assertEqual("".join(output.records), "fallback frame\n")
         self.assertEqual(termios.events, [])
         self.assertEqual(fallback.call_count, 2)
@@ -735,13 +420,13 @@ class RawExternalViewLifecycleTests(unittest.TestCase):
                 driver.open_external_view(lambda _nested: None)
             except BaseException as failure:
                 reentry.append(failure)
-            self.assertEqual(host.read_event(), "close")
+            self.assertEqual(host.read_event(), "text\tq")
 
         driver.open_external_view(operation)
         self.assertIsInstance(reentry[0], RuntimeError)
         self.assertIn("already active", str(reentry[0]))
         driver.open_external_view(
-            lambda host: self.assertEqual(host.read_event(), "close")
+            lambda host: self.assertEqual(host.read_event(), "text\tq")
         )
 
         driver._progress_active = True
