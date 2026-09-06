@@ -2065,6 +2065,61 @@ class ControllerStartupTests(ControllerTestCase):
 class ControllerConversationStartupTests(ControllerTestCase):
     """Verify saved conversation restoration and nested session switching."""
 
+    def test_direct_lead_reply_allows_switch_return_and_pause(self) -> None:
+        from tests.test_session_recovery_reconciliation import _ordinary_lead_batch
+
+        workspace = self.make_workspace()
+        for session_id in ("source", "destination"):
+            self.seed_session(workspace, session_id, durable_state=SessionDurableState.READY)
+        save_default_session(workspace, "source")
+        services = compose_filesystem_conversation_storage(workspace)
+        metadata = services.catalog.create("source", "Workflow question")
+        save_default_conversation(workspace, "source", metadata.conversation_id)
+        store = services.event_store
+        calls = []
+        persisted = []
+
+        async def lead_turn(session, conversation_id, text):
+            calls.append((session.session_id, conversation_id, text))
+            batch = _ordinary_lead_batch(
+                session_id=session.session_id, conversation_id=conversation_id,
+            )
+            store.append_batch(batch)
+            persisted.extend(store.read(session.session_id, conversation_id))
+            reply = batch.events[-1]
+            return LeadTurnResult(
+                session.session_id, conversation_id, reply.turn_id, reply.step_id,
+                LeadOutcomeKind.ANSWER, reply.payload.message, None,
+                CollaborationStepState.COMPLETED, None,
+                CollaborationNextAction.CONTINUE_WITH_LEAD,
+                evidence=reply.payload.evidence,
+            )
+
+        controller, _backend, callbacks = self.make_controller(
+            workspace,
+            "Explain the conversation workflow.",
+            "/session resume destination",
+            "/session resume source",
+            "/session pause", "yes", "/quit",
+            conversation_storage_services=services,
+            terminal_width=200,
+        )
+        with mock.patch.object(RuntimeSession, "lead_turn", lead_turn):
+            self.assertEqual(controller.run_session_lobby(), 0)
+
+        self.assertEqual(calls, [("source", metadata.conversation_id, "Explain the conversation workflow.")])
+        self.assertEqual(store.read("source", metadata.conversation_id), tuple(persisted))
+        projection = store.read_context("source", metadata.conversation_id)
+        self.assertEqual(projection.last_sequence, 4)
+        self.assertIsNone(projection.current_proposal)
+        self.assertEqual(workspace.read_json(_manifest_relative("source"))["durable_state"], "paused")
+        self.assertEqual(workspace.read_json(_manifest_relative("destination"))["durable_state"], "ready")
+        self.assertEqual(load_default_conversation(workspace, "source"), metadata.conversation_id)
+        rendered = "".join(callbacks.records)
+        self.assertIn("A direct Lead reply.", rendered)
+        self.assertIn("Session: destination (opened)", rendered)
+        self.assertIn("Paused source; default retained", rendered)
+
     def test_focused_lead_references_survive_quit_reopen_and_continue(self) -> None:
         workspace = self.make_workspace()
         self.seed_session(

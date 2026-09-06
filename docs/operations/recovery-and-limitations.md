@@ -339,6 +339,7 @@ cleans evidence, or performs `next_action`.
 
 | Projected state | What it means to a user | Exact next action |
 | --- | --- | --- |
+| `ready` | Stable correlated owner checks prove safe empty history or exact ordinary, proposal-free Lead history, with no pending workflow, unresolved outcome, or recovery blocker. This grants no execution or session-transition authority. | `continue_with_lead` |
 | `proposed` | The collaboration history has an active proposal, but no exact reviewed artifact candidate is supplied. | `continue_with_lead` |
 | `reviewed` | The reviewed proposal/candidate facts agree, but no application-confirmation request exists. | `request_application_confirmation` |
 | `awaiting_application` | The exact application request and its visible Confirm/Reject/Revise choices are durable and still correlated. No executable capability is retained. | `submit_application_decision` |

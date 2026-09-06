@@ -19,6 +19,12 @@ from story_writing_agents.conversations import (
     CollaborationBudget,
     CollaborationConfirmationDecision,
     CollaborationHistoryProjection,
+    CollaborationEventBatch,
+    CollaborationEventKind,
+    CollaborationInvocationKind,
+    CollaborationLeadEvidence,
+    CollaborationLeadJudgmentPayload,
+    CollaborationMessagePayload,
     CollaborationInputKind,
     CollaborationInputRevision,
     CollaborationInputState,
@@ -28,6 +34,10 @@ from story_writing_agents.conversations import (
     CollaborationSideEffect,
     CollaborationStepKind,
     CollaborationStepState,
+    LeadEvidenceStatus,
+    LeadOutcomeKind,
+    LeadOutcomeScope,
+    project_collaboration_history,
 )
 from story_writing_agents.git import (
     GitChangeKind,
@@ -73,6 +83,13 @@ from story_writing_agents.session_recovery import (
 from story_writing_agents.session_recovery import reconciliation as reconciliation_module
 from story_writing_agents.session_recovery.reconciliation import (
     SessionRecoveryReconciler,
+)
+from story_writing_agents.session_recovery.transition_assessment import (
+    SessionTransitionAssessor,
+    SessionTransitionOperation,
+)
+from tests.collaboration_contract_fixture import (
+    LEAD, USER, make_batch, make_draft, provider_call_drafts, store_batch,
 )
 from story_writing_agents.writing_artifacts import (
     ArtifactApplicationError,
@@ -189,6 +206,45 @@ def _empty_history() -> CollaborationHistoryProjection:
         None,
         CollaborationNextAction.NONE,
     )
+
+
+def _ordinary_lead_batch(
+    kind: LeadOutcomeKind = LeadOutcomeKind.ANSWER,
+    *,
+    session_id: str = _SESSION,
+    conversation_id: str = _CONVERSATION,
+) -> CollaborationEventBatch:
+    calls = provider_call_drafts(
+        invocation_id="lead_invocation",
+        call_id="lead_call",
+        role="lead_orchestrator",
+        recipient=LEAD,
+        invocation_kind=CollaborationInvocationKind.LEAD,
+    )
+    events = (
+        make_draft("user_message", CollaborationEventKind.MESSAGE, USER, LEAD,
+                   CollaborationMessagePayload("Explain the conversation workflow.")),
+        *calls,
+        make_draft("lead_reply", CollaborationEventKind.MESSAGE, LEAD, USER,
+                   CollaborationLeadJudgmentPayload(
+                       kind, "A direct Lead reply.",
+                       CollaborationLeadEvidence(
+                           LeadOutcomeScope.WORKFLOW_META,
+                           LeadEvidenceStatus.NOT_APPLICABLE, (),
+                       ),
+                   )),
+    )
+    return make_batch(
+        (), "ordinary_lead_batch",
+        *(replace(event, session_id=session_id, conversation_id=conversation_id)
+          for event in events),
+    )
+
+
+def _ordinary_lead_history(
+    kind: LeadOutcomeKind = LeadOutcomeKind.ANSWER,
+) -> CollaborationHistoryProjection:
+    return project_collaboration_history(store_batch((), _ordinary_lead_batch(kind)))
 
 
 def _lifecycle(
@@ -420,6 +476,7 @@ def _observe(
     reviewed: SessionReviewedProposalEvidence | None = None,
     application: SessionArtifactApplicationEvidence | None = None,
     stored_application: object | None = None,
+    transition: bool = False,
 ) -> _Observation:
     trace: list[str] = []
     store = _Store(histories or (_history(), _history()), trace)
@@ -491,11 +548,16 @@ def _observe(
         )
         stack.enter_context(mock.patch.object(reconciliation_module, "GitRepositoryAdapter", Adapter))
         stack.enter_context(mock.patch.object(reconciliation_module, "WritingArtifactRepository", Repository))
-        result = SessionRecoveryReconciler(_WORKSPACE, store).inspect(
+        owner = (
+            SessionTransitionAssessor(_WORKSPACE)
+            if transition else SessionRecoveryReconciler(_WORKSPACE, store)
+        )
+        result = owner.inspect(
             lifecycle_state=lifecycle or _lifecycle(),
             conversation_id=_CONVERSATION,
             reviewed_proposal=reviewed,
             artifact_application=application,
+            **({"collaboration_store": store} if transition else {}),
         )
     return _Observation(result, store, trace, adapter_instances, repository_instances)
 
@@ -533,6 +595,106 @@ class SessionRecoveryReconcilerContractTests(unittest.TestCase):
 
 
 class SessionRecoveryLifecycleTests(unittest.TestCase):
+    def test_ordinary_lead_outcomes_allow_all_transitions_after_two_generations(self) -> None:
+        for kind in (LeadOutcomeKind.ANSWER, LeadOutcomeKind.QUESTION,
+                     LeadOutcomeKind.CRITIQUE, LeadOutcomeKind.RECOMMENDATION):
+            with self.subTest(kind=kind.value):
+                history = _ordinary_lead_history(kind)
+                self.assertEqual(history.last_sequence, 4)
+                self.assertEqual(history.physical_calls_spent, 1)
+                self.assertIsNone(history.current_proposal)
+                self.assertIsNone(history.current_state)
+                observed = _observe(histories=(history, history), transition=True)
+                self.assertEqual(observed.result.allowed_operations, tuple(SessionTransitionOperation))
+                result = observed.result.recovery_result
+                self.assertIs(result.state, SessionRecoveryState.READY)
+                self.assertIs(result.owner, SessionRecoveryOwner.LEAD)
+                self.assertEqual(result.collaboration_tail_sequence, history.last_sequence)
+                self.assertEqual(observed.trace,
+                    ["collaboration", "resources", "history", "external", "status"] * 2)
+                self.assertEqual(observed.store.histories, [])
+                self.assertEqual(observed.repository_instances, [])
+
+    def test_unproposed_lead_history_blocks_unresolved_git_inventory(self) -> None:
+        history = _ordinary_lead_history()
+        candidate = _candidate()
+        terminal = _snapshot(GitSessionHistoryState.REJECTED)
+        duplicate = replace(terminal.commit_operations[0], operation_id="b" * 32)
+        candidates = tuple(sorted(
+            (candidate, _candidate(suffix="unmapped")), key=lambda item: item.candidate_id,
+        ))
+        snapshots = {
+            "staged-commit": _snapshot(GitSessionHistoryState.STAGED),
+            "candidate-only": GitSessionHistorySnapshot(
+                GitSessionHistoryInspection(_SESSION, (candidate.candidate_id,), (), (), ()),
+                (candidate,), (), (),
+            ),
+            "duplicate-candidate-operations": GitSessionHistorySnapshot(
+                replace(terminal.inspection,
+                    candidate_ids=tuple(item.candidate_id for item in candidates),
+                    commit_operations=(
+                        *terminal.inspection.commit_operations, (duplicate.operation_id, duplicate.state))),
+                candidates, (*terminal.commit_operations, duplicate), (),
+            ),
+        }
+        for state in (GitSessionHistoryState.RUNNING,
+                      GitSessionHistoryState.OUTCOME_UNKNOWN, GitSessionHistoryState.RECOVERY_REQUIRED):
+            checkpoint = GitSessionCheckpointOperationRecord(
+                _SESSION, "c" * 32, _CORRELATION, state, 1, _TIP, _TREE, "d" * 64,
+            )
+            snapshots[f"checkpoint-{state.value}"] = GitSessionHistorySnapshot(
+                GitSessionHistoryInspection(_SESSION, (), (), ((checkpoint.operation_id, state),), ()),
+                (), (), (checkpoint,),
+            )
+        for state in (GitSessionHistoryState.RUNNING, GitSessionHistoryState.OUTCOME_UNKNOWN,
+                      GitSessionHistoryState.RECOVERY_REQUIRED):
+            snapshots[f"commit-{state.value}"] = _snapshot(state)
+        for name, snapshot in snapshots.items():
+            with self.subTest(name=name):
+                observed = _observe(histories=(history, history), snapshots=(snapshot, snapshot), transition=True)
+                self.assertEqual(observed.result.allowed_operations, ())
+                self.assertIsNot(observed.result.recovery_result.state, SessionRecoveryState.READY)
+
+    def test_unproposed_lead_history_accepts_terminal_git_inventory(self) -> None:
+        history = _ordinary_lead_history()
+        for state in (GitSessionHistoryState.COMMITTED, GitSessionHistoryState.REJECTED):
+            with self.subTest(state=state.value):
+                snapshot = _snapshot(state)
+                checkpoint = GitSessionCheckpointOperationRecord(
+                    _SESSION, "c" * 32, _CORRELATION, GitSessionHistoryState.COMMITTED,
+                    1, _TIP, _TREE, "d" * 64, checkpoint_id=_COMMIT,
+                )
+                snapshot = replace(snapshot,
+                    inspection=replace(snapshot.inspection,
+                        checkpoint_operations=((checkpoint.operation_id, checkpoint.state),)),
+                    checkpoint_operations=(checkpoint,))
+                observed = _observe(histories=(history, history), snapshots=(snapshot, snapshot), transition=True)
+                self.assertEqual(observed.result.allowed_operations, tuple(SessionTransitionOperation))
+                self.assertIs(observed.result.recovery_result.state, SessionRecoveryState.READY)
+
+    def test_unproposed_lead_history_preserves_owner_and_drift_blockers(self) -> None:
+        history = _ordinary_lead_history()
+        cases = {
+            "dirty": {"statuses": (_status("applied"),) * 2},
+            "staged": {"statuses": (_status("staged"),) * 2},
+            "wrong-branch": {"statuses": (replace(_status(), branch="main"),) * 2},
+            "external": {"externals": (_external(GitExternalOperationKind.MERGE),) * 2},
+            "wrong-session": {"histories": (replace(history, session_id="other"),) * 2},
+            "wrong-conversation": {"histories": (replace(history, conversation_id="other"),) * 2},
+            "collaboration-drift": {"histories": (history, replace(history, last_sequence=5))},
+            "status-drift": {"statuses": (_status(), _status("applied"))},
+            "git-history-drift": {"snapshots": (_snapshot(), _snapshot(GitSessionHistoryState.REJECTED))},
+        }
+        for state in (GitSessionResourceState.PROVISIONING, GitSessionResourceState.OUTCOME_UNKNOWN,
+                      GitSessionResourceState.RECOVERY_REQUIRED):
+            cases[state.value] = {"resources": (_resources(state),) * 2}
+        for name, values in cases.items():
+            with self.subTest(name=name):
+                observed = _observe(**({"histories": (history, history), **values}), transition=True)
+                self.assertIsNot(observed.result.recovery_result.state, SessionRecoveryState.READY)
+                self.assertNotIn(SessionTransitionOperation.LEAVE_SOURCE, observed.result.allowed_operations)
+                self.assertNotIn(SessionTransitionOperation.PAUSE_SESSION, observed.result.allowed_operations)
+
     def test_unmatched_submitted_lead_is_inspectable_only_without_downstream_facts(
         self,
     ) -> None:
@@ -921,8 +1083,8 @@ class SessionRecoveryBoundaryTests(unittest.TestCase):
         self.assertNotIn("git.process", dependencies)
         self.assertNotIn("git.session_history", dependencies)
         index = (_ROOT / "PYTHON_MODULE_INDEX.md").read_text()
-        self.assertIn("Importable production units indexed: 132.", index)
-        self.assertIn("Direct internal dependency edges indexed: 514.", index)
+        self.assertIn("Importable production units indexed: 135.", index)
+        self.assertIn("Direct internal dependency edges indexed: 526.", index)
         self.assertIn("Directed internal dependency cycles indexed: 0.", index)
         self.assertIn("tests/test_session_recovery_reconciliation.py", index)
 

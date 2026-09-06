@@ -13,6 +13,7 @@ from pathlib import Path
 import story_writing_agents
 from story_writing_agents.conversations import (
     CollaborationAgentProfile,
+    ArtifactProposalState,
     CollaborationAssignment,
     CollaborationBudget,
     CollaborationConfirmationDecision,
@@ -582,6 +583,43 @@ class SessionRecoveryEvidenceTests(unittest.TestCase):
 
 
 class SessionRecoveryProjectionTests(unittest.TestCase):
+    def test_unproposed_lead_projection_requires_exact_absent_workflow_fields(self) -> None:
+        from tests.test_session_recovery_reconciliation import _ordinary_lead_history
+
+        history = _ordinary_lead_history()
+        base = replace(_base_evidence(), collaboration_history=history)
+        ready = reconcile_session_recovery(base)
+        self.assertIs(ready.state, SessionRecoveryState.READY)
+        self.assertEqual(ready.collaboration_tail_sequence, 4)
+        malformed = {
+            "proposal-only": {"current_proposal": _proposal()},
+            "state-only": {"current_state": CollaborationStepState.COMPLETED},
+            "confirmation-request": {"confirmation_request_id": "request-1"},
+            "confirmation-decision": {"confirmation_decision": CollaborationConfirmationDecision.CONFIRM},
+            "execution-attempt": {"execution_attempt_id": "attempt-1"},
+            "execution-result-id": {"execution_result_event_id": "result-1"},
+            "rounds": {"rounds_spent": 1},
+            "artifact-state": {"current_artifact_state": ArtifactProposalState.REVIEWED},
+            "missing-turn": {"current_turn_id": None},
+            "missing-step": {"current_step_id": None},
+            "empty-tail": {"last_sequence": 0},
+            "wrong-session": {"session_id": "other"},
+            "pending-action": {"next_safe_action": CollaborationNextAction.SUBMIT_CONFIRMATION},
+        }
+        for name, values in malformed.items():
+            with self.subTest(name=name):
+                result = reconcile_session_recovery(replace(
+                    base, collaboration_history=replace(history, **values),
+                ))
+                self.assertIs(result.state, SessionRecoveryState.RECOVERY_REQUIRED)
+
+        reviewed, application = _artifact_facts()
+        for facts in ({"reviewed_proposal": reviewed},
+                      {"reviewed_proposal": reviewed, "artifact_application": application}):
+            with self.subTest(facts=tuple(facts)):
+                result = reconcile_session_recovery(replace(base, **facts))
+                self.assertIs(result.state, SessionRecoveryState.RECOVERY_REQUIRED)
+
     def test_all_ten_states_project_their_exact_safe_next_action(self) -> None:
         reviewed, _ = _artifact_facts()
         awaiting = replace(
@@ -825,11 +863,11 @@ class SessionRecoveryBoundaryTests(unittest.TestCase):
         )
         self.assertEqual(completed.returncode, 0, completed.stderr)
         modules, edges = _module_graph()
-        self.assertEqual((len(modules), len(edges)), (132, 514))
+        self.assertEqual((len(modules), len(edges)), (135, 526))
         self.assertFalse(_has_cycle(modules, edges))
         index = (_ROOT / "PYTHON_MODULE_INDEX.md").read_text()
-        self.assertIn("Importable production units indexed: 132.", index)
-        self.assertIn("Direct internal dependency edges indexed: 514.", index)
+        self.assertIn("Importable production units indexed: 135.", index)
+        self.assertIn("Direct internal dependency edges indexed: 526.", index)
         self.assertIn("session_recovery.contracts", index)
 
 
@@ -848,7 +886,19 @@ def _module_graph() -> tuple[set[str], set[tuple[str, str]]]:
     edges: set[tuple[str, str]] = set()
     for source_name, path in paths.items():
         package = source_name if path.name == "__init__.py" else source_name.rpartition(".")[0]
-        for node in ast.walk(ast.parse(path.read_text())):
+        pending = [ast.parse(path.read_text())]
+        while pending:
+            node = pending.pop()
+            if isinstance(node, ast.If) and (
+                isinstance(node.test, ast.Name) and node.test.id == "TYPE_CHECKING"
+                or isinstance(node.test, ast.Attribute)
+                and isinstance(node.test.value, ast.Name)
+                and node.test.value.id == "typing"
+                and node.test.attr == "TYPE_CHECKING"
+            ):
+                pending.extend(node.orelse)
+                continue
+            pending.extend(ast.iter_child_nodes(node))
             if not isinstance(node, ast.ImportFrom) or node.level == 0:
                 continue
             parts = package.split(".") if package else []
