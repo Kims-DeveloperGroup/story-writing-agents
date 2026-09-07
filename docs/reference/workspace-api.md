@@ -37,8 +37,10 @@ is the convenience wrapper for `Workspace(root).initialize()`.
 
 Construction performs a nonmutating classification. A ready root is fully
 verified at construction; a missing, empty, or exactly initializing root is
-captured as not ready. Unsupported, malformed, arbitrary nonempty, drifted, or
-unsafe state raises immediately. Construction retains no open descriptor and
+captured as not ready. Unsupported, malformed, markerless arbitrary nonempty,
+required-path-drifted, staged/disallowed-tracked, or unsafe state raises
+immediately. Unknown ignored and untracked entries in an otherwise ready root
+are opaque to this classification. Construction retains no open descriptor and
 performs no Git or filesystem mutation.
 
 A ready root may be the pristine initialization root or one exact #504 session
@@ -54,7 +56,7 @@ remains the exact root that was discovered or supplied.
 ```text
 missing/empty
   -> exact initialization journal
-  -> exact 22-file scaffold
+  -> exact 25-file scaffold
   -> one #448 main baseline
   -> ready verification with journal
   -> journal removal and directory synchronization
@@ -78,8 +80,28 @@ A ready `initialize()` call is validation-only. It does not rewrite, restage,
 or recommit. If an initialization attempt fails, the object becomes terminal;
 later calls on that same object raise `OSError` before another attempt. A fresh
 object or process may inspect and resume only an exact durable journal and
-matching partial scaffold. Unknown or divergent bytes are preserved and
-rejected rather than adopted, reset, or overwritten.
+matching partial scaffold. That initializing state remains recursively closed:
+unknown or divergent bytes are preserved and rejected rather than adopted,
+reset, deleted, or overwritten.
+
+Journal-free readiness uses a narrower required-path projection. For a main
+root it checks root identity and journal absence; required directories and all
+25 scaffold files through descriptor-relative no-follow reads; canonical
+marker and immutable bytes; valid mutable configuration and the safe regular
+presence of referenced personae; and the exact baseline, index, `main`
+topology/history, and correlated session-resource inventory. It does not list,
+stat, open, decode, or descend into unknown filesystem entries. Git readiness
+likewise does not enumerate ignored or untracked paths. Those entries are
+permitted but not trusted: the provider or runtime owner must validate optional
+state when consuming it. Staged changes and tracked unknown additions remain
+recovery conditions.
+
+A ready session root validates the same 25 scaffold leaves and every ancestor
+that Git materializes, plus its local marker, configuration, referenced
+personae, clean index, and exact correlated session topology. It does not
+require schema-only empty runtime directories that are absent from a linked
+worktree. Unstaged story edits and untracked entries are allowed; staged
+changes are not.
 
 `require_ready()` checks the readiness already authorized for that object. It
 does not perform a live filesystem rescan. Supported CLI entry points and
@@ -94,7 +116,7 @@ Exact expected failure categories include:
 | --- | --- |
 | Effective Git author or committer is missing, invalid, or divergent | `ConfigurationError("effective Git identity is unavailable or invalid")`; a fresh process may resume the exact journal after identity is configured. |
 | Recognizable markerless workspace or non-v2 numeric marker/journal | `WorkspaceVersionUnsupportedError` with guidance that migration and compatibility are unsupported and a new workspace is required. |
-| Arbitrary nonempty root, malformed record, partial mismatch, dirty status, or baseline drift | `WorkspaceFormatError`; bytes are preserved and recovery is required. |
+| Markerless arbitrary nonempty root, malformed record, partial mismatch, required-path drift, staged/disallowed tracked state, tracked unknown addition, or baseline drift | `WorkspaceFormatError`; bytes are preserved and recovery is required. Unknown ignored/untracked entries alone are not this condition. |
 | Parent repository, arbitrary or uncorrelated linked worktree, submodule, sparse/bare/mismatched repository, symlinked administration, or unsafe root | `WorkspaceSecurityError` or a content-free workspace topology error before unsafe mutation. An exact correlated #504 session worktree is the only supported linked-worktree form. |
 
 Initialization rejects parent/nested repositories and creates no session
@@ -109,6 +131,11 @@ object's captured ready state. Text is strict UTF-8. JSON readers reject
 malformed structures where the consuming contract performs schema validation.
 Package-internal root helpers recheck the bound identity for diagnostic and
 storage owners, but they are not public imports.
+
+This explicit path contract is unchanged by opaque readiness. For example,
+readiness does not inspect an unknown symlink beneath `.antigravity/`, but a
+later `Workspace.path()` or read directed through that symlink still rejects
+it as uncontained/unsafe rather than following it.
 
 `Workspace.read_text()` is a raw, safely contained UTF-8 read. It does not
 classify canonical paths or perform the artifact repository's descriptor-safe
@@ -129,10 +156,12 @@ target mutation. Canonical application writes must go through the artifact
 repository so bytes, authorship, commit history, and the current catalog cannot
 diverge. Generic writes remain low-level operations, but using them against the
 original initialization root makes a later fresh readiness check reject that
-root. Later legitimate mutable state belongs in the exact session/internal
-worktrees after #455 composition. External edits do not create or repair catalog, authorship, or
-commit records. Stop all workspace processes before any external inspection or
-recovery action.
+root when they alter a required or tracked path or stage an unknown path. An
+untracked unknown file is outside readiness, but remains untrusted and creates
+no catalog, authorship, ownership, or commit record. Later legitimate mutable
+state belongs in the exact session/internal worktrees after #455 composition.
+Stop all workspace processes before any external inspection or recovery
+action.
 
 Cataloged manuscript paths are permanent create-only publication identities.
 Deleting one externally removes it from source discovery but does not free the

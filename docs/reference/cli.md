@@ -40,7 +40,7 @@ story init [WORKSPACE]
 
 The default workspace is `.`. Initialization accepts an absent root, an empty
 safe directory, or one exact journal-backed interrupted-v2 root. It creates the
-strict schema-v2 marker, exact 22-file scaffold, four zero-byte core documents,
+strict schema-v2 marker, exact 25-file scaffold, four zero-byte core documents,
 and one parentless `main` commit named `Initialize story workspace` using the
 effective Git author and committer. It emits no post-baseline diagnostic or
 untracked residue.
@@ -70,9 +70,12 @@ ConfigurationError: effective Git identity is unavailable or invalid
 
 That failure can leave the exact journal/scaffold but creates no absent Git
 repository. Configure a valid Git identity and run a fresh command to resume.
-Malformed, arbitrary, dirty, drifted, nested-Git, or unsafe roots are preserved
-and rejected. Initialization failures occur before a usable workspace is
-available and therefore never add the debug-log hint.
+Malformed required state, markerless arbitrary content, a partial mismatch,
+staged/disallowed tracked state, tracked unknown additions, nested Git, or an
+unsafe root are preserved and rejected. On a journal-free ready root, ignored
+and untracked entries are opaque and do not block validation; they are not
+trusted or consumed. Initialization failures occur before a usable workspace
+is available and therefore never add the debug-log hint.
 
 ## Session lifecycle
 

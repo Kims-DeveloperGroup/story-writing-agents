@@ -293,8 +293,15 @@ the independent range viewer. Both insert durable identity-only indicators. See
 - Initialization accepts only an absent/empty root or one exact resumable
   initialization journal. It never adopts, overwrites, upgrades, or migrates a
   legacy or arbitrary nonempty directory.
-- A dirty or drifted original `main` root is preserved and reported as requiring
-  recovery. Exact correlated session branches, sibling worktrees, internal
+- After that strict initialization has completed, journal-free readiness
+  validates only the required scaffold paths and exact Git invariants. Unknown
+  untracked or ignored files, directories, symlinks, and other entries are
+  opaque and permitted: readiness does not enumerate or consume them, and
+  their owning provider/runtime must still validate them before use. Staged
+  changes and tracked unknown additions remain recovery conditions.
+- A required-path-drifted, staged, or disallowed-tracked original `main` root
+  is preserved and reported as requiring recovery. Exact correlated session
+  branches, sibling worktrees, internal
   refs, content-free session history, exact confirmed story commits, and
   closed-path internal checkpoints are supported internally. These internal
   capabilities do not grant the lead Apply, commit, or checkpoint authority.

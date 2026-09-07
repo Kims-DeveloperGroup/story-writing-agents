@@ -5,6 +5,8 @@ from __future__ import annotations
 import contextlib
 import io
 import json
+import os
+import stat
 import subprocess
 import sys
 import tempfile
@@ -15,7 +17,6 @@ from unittest import mock
 from story_writing_agents import AgentBackend, Workspace
 from story_writing_agents import cli as cli_module
 from story_writing_agents import smoke as smoke_module
-from story_writing_agents.errors import WorkspaceFormatError
 from story_writing_agents.smoke import run_smoke
 
 from tests.helpers import initialize_test_workspace, workspace_git_identity
@@ -211,14 +212,53 @@ class SmokeExplicitWorkspaceTests(unittest.TestCase):
         self.assertEqual(report["workspace"]["path"], str(self.workspace.root))
         self.assertEqual(tree_snapshot(self.workspace.root), before)
 
-    def test_dirty_explicit_workspace_is_preserved_and_rejected(self) -> None:
-        private = self.workspace.root / "private.tmp"
+    def test_opaque_antigravity_state_survives_explicit_smoke_unchanged(
+        self,
+    ) -> None:
+        root = self.workspace.root
+        provider = (
+            root / "agent_states/orchestrator_state/provider_sessions/.antigravity"
+        )
+        opaque = provider / "sessions/novel/provider/opaque-unreadable"
+        opaque.mkdir(parents=True)
+        private = opaque / "private.bin"
         private.write_bytes(b"private smoke bytes\n")
-        before = tree_snapshot(self.workspace.root)
-        with self.assertRaises(WorkspaceFormatError) as caught:
-            run_smoke(self.workspace)
-        self.assertNotIn("private smoke bytes", str(caught.exception))
-        self.assertEqual(tree_snapshot(self.workspace.root), before)
+        outside = root.parent / "outside-smoke-target"
+        outside.write_bytes(b"outside smoke bytes\n")
+        nested_link = provider / "sessions/novel/provider/native-link"
+        nested_link.symlink_to(outside)
+        native_pipe = provider / "provider-native.pipe"
+        os.mkfifo(native_pipe)
+        opaque.chmod(0)
+        self.addCleanup(opaque.chmod, 0o700)
+
+        selected = (provider, opaque, nested_link, native_pipe, outside)
+
+        def identities() -> tuple[tuple[int, int, int], ...]:
+            return tuple(
+                (
+                    stat.S_IFMT(value.st_mode) | stat.S_IMODE(value.st_mode),
+                    value.st_size,
+                    value.st_mtime_ns,
+                )
+                for value in (path.lstat() for path in selected)
+            )
+
+        before = identities()
+        index_before = root.joinpath(".git/index").read_bytes()
+
+        report, exit_code = run_smoke(self.workspace)
+
+        self.assertEqual(exit_code, 0)
+        self.assertEqual(report["checks"], EXPLICIT_CHECKS)
+        self.assertIs(report["provider_tested"], False)
+        self.assertEqual(identities(), before)
+        self.assertEqual(root.joinpath(".git/index").read_bytes(), index_before)
+        self.assertEqual(os.readlink(nested_link), os.fspath(outside))
+        self.assertEqual(outside.read_bytes(), b"outside smoke bytes\n")
+        opaque.chmod(0o700)
+        self.assertEqual(private.read_bytes(), b"private smoke bytes\n")
+        opaque.chmod(0)
 
     def test_valid_dirty_configuration_survives_smoke_and_fresh_cli_restart(
         self,

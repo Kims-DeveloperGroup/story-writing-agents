@@ -12,7 +12,7 @@ external-operation inspection work:
   baseline, inspect external-operation metadata, and read bounded status, diff,
   and log metadata.
 - `story init` now composes this adapter internally after it records the exact
-  schema-v2 initialization journal and installs its exact 22-file scaffold.
+  schema-v2 initialization journal and installs its exact 25-file scaffold.
   The CLI does not expose manifest selection or another Git operation.
 - The public adapter still has no session branch, worktree, internal-ref, or
   later-commit method. Separate package-internal #504 modules now own exact
@@ -32,10 +32,13 @@ one root commit named `Initialize story workspace`. The commit and index
 contain exactly the regular files selected by the caller's manifest.
 
 Users running `story init` on an absent/empty safe root receive this baseline
-automatically with the initializer's exact 22-file manifest. That composition
-is stricter than the adapter alone: the workspace lifecycle rejects arbitrary
-extra files even though the direct adapter leaves unrelated untracked files
-unchanged.
+automatically with the initializer's exact 25-file manifest. During strict
+initialization or journal recovery, the workspace lifecycle rejects arbitrary
+extra entries even though the direct adapter leaves unrelated untracked files
+unchanged. After journal removal, workspace readiness instead omits ignored
+and untracked entries and validates only required paths plus exact Git
+invariants. Staged changes and tracked unknown additions still require
+recovery.
 
 Users cannot choose a manifest from the CLI, use this API to make a second
 commit, apply a story proposal, manage a session worktree, contact a remote, or
@@ -527,9 +530,9 @@ supported surface remains the seven typed methods shown below.
 
 ## Package-internal session Git resources
 
-The #504 substrate is deliberately absent from the project, `git`, and
-`workspace` facades. It exposes four direct-module operations solely for the
-later #455 composition:
+The session-resource substrate is deliberately absent from the project, `git`,
+and `workspace` facades. It exposes four direct-module operations for installed
+session lifecycle composition:
 
 ```text
 inspect one session       read-only
@@ -541,9 +544,9 @@ require one ready session read-only
 They accept a validated session ID and the initializer's exact baseline
 manifest. They do not accept raw Git arguments, arbitrary refs or paths,
 provider or lead text, serialized tool instructions, commit messages, or
-credentials. Current `story session create` and `story session reopen` do not
-call them. A command reporting provider-session `ready` therefore does not yet
-report Git-resource readiness.
+credentials. Session Create provisions/verifies the correlated resources;
+Reopen requires them ready. Provider-session readiness remains a separate
+lifecycle fact and never substitutes for Git-resource readiness.
 
 For session `novel`, the exact identity is:
 
@@ -615,12 +618,24 @@ The result vocabulary is closed:
 | `outcome_unknown` | `operator_recovery` | An attempted mutation cannot be classified safely. |
 | `recovery_required` | `operator_recovery` | State is partial without a journal, malformed, colliding, moved, substituted, mismatched, or topologically unsafe. |
 
+Main-root Git readiness verifies the exact baseline tree/history/topology and
+uses `git status --untracked-files=no`; ignored and untracked entries are not
+enumerated. Each present session worktree must have an index equal to `HEAD`
+through a targeted cached-index check, without scanning its untracked paths.
+The workspace layer separately reads all 25 Git-materialized scaffold leaves
+and ancestors, validates local configuration/personae, and allows unstaged
+story changes. Staged changes remain recovery conditions. Generic session
+readiness permits later branch tips without classifying their committed
+contents; story-commit and session-recovery owners validate that history.
+These omissions provide opacity, not trust: optional state is validated by its
+owning consumer.
+
 An exact complete triple is authoritative and idempotent even after its journal
 has been removed. Require-ready/Reopen never creates or continues a prefix.
-Any unknown or non-exact fact is preserved; there is no automatic branch, ref,
-worktree, administration-entry, object, or recovery-journal deletion. The seam
-has no migration, compatibility, remote, reset, clean, prune, garbage
-collection, rebase, merge, or history-rewrite operation.
+Any unknown or non-exact Git-resource fact is preserved; there is no automatic
+branch, ref, worktree, administration-entry, object, or recovery-journal
+deletion. The seam has no migration, compatibility, remote, reset, clean,
+prune, garbage collection, rebase, merge, or history-rewrite operation.
 
 For user-oriented scenarios and illustrative typed values, see
 [Workspaces](../guides/workspaces.md#session-git-resources). For failures and

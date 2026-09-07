@@ -73,7 +73,7 @@ The boundary can create or verify only the exact fixed `main` root commit and
 return bounded content-free repository metadata. It has no arbitrary command
 runner, provider, remote, migration, session branch/worktree, or later-commit
 operation. The internal schema-v2 workspace initializer now composes this
-adapter with its exact 22-file manifest; callers cannot supply a CLI manifest
+adapter with its exact 25-file manifest; callers cannot supply a CLI manifest
 or use that initialization authorization for a later commit.
 See [Safe Git adapter and story baseline](git-adapter.md) for the manifest,
 identity, topology, retry, security, and sample input/output contracts.

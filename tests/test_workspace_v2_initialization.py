@@ -500,38 +500,62 @@ class WorkspaceV2InitializationTests(WorkspaceV2GitTestCase):
         self.assertEqual(self.run_git(root, "rev-parse", "HEAD").stdout, head)
         self.assert_exact_baseline(root)
 
-    def test_dirty_original_root_states_are_preserved_and_rejected(self) -> None:
-        cases = ("tracked", "staged", "untracked")
+    def test_unknown_untracked_and_ignored_entries_are_opaque_and_preserved(
+        self,
+    ) -> None:
+        cases = {
+            "untracked": "private.tmp",
+            "ignored": "agent_states/private-provider-state/payload.bin",
+        }
+        for case, relative in cases.items():
+            with self.subTest(case=case):
+                root = self.initialize_workspace_fixture(f"opaque-{case}").root
+                target = root / relative
+                target.parent.mkdir(parents=True, exist_ok=True)
+                target.write_bytes(b"private unknown bytes\n")
+                before = _namespace_snapshot(root)
+
+                reopened = Workspace(root).require_ready()
+
+                self.assertEqual(reopened.root, root)
+                self.assertEqual(_namespace_snapshot(root), before)
+
+    def test_tracked_required_and_staged_unknown_changes_remain_recovery(
+        self,
+    ) -> None:
+        cases = ("tracked-required", "staged-unknown", "committed-unknown")
         for case in cases:
             with self.subTest(case=case):
                 root = self.initialize_workspace_fixture(f"dirty-{case}").root
-                if case == "untracked":
-                    (root / "private.tmp").write_bytes(b"private untracked bytes\n")
-                else:
+                if case == "tracked-required":
                     target = root / "core_documents/global_outline.md"
                     target.write_bytes(b"private changed prose\n")
-                    if case == "staged":
+                else:
+                    target = root / "private-added.txt"
+                    target.write_bytes(b"private added bytes\n")
+                    self.run_git(root, "add", "--", target.name)
+                    if case == "committed-unknown":
+                        self.configure_identity(root)
                         self.run_git(
-                            root, "add", "--", "core_documents/global_outline.md"
+                            root,
+                            "commit",
+                            "--quiet",
+                            "-m",
+                            "Add unknown tracked entry",
                         )
                 before = _namespace_snapshot(root)
-                with self.assertRaisesRegex(
-                    WorkspaceFormatError,
-                    "requires recovery",
-                ) as caught:
+                with self.assertRaises(WorkspaceFormatError) as caught:
                     Workspace(root)
                 self.assertEqual(_namespace_snapshot(root), before)
+                self.assertIn("recovery", str(caught.exception))
                 self.assertNotIn("private changed prose", str(caught.exception))
-                self.assertNotIn("private untracked bytes", str(caught.exception))
-                self.assertEqual(
-                    self.run_git(root, "rev-list", "--count", "HEAD").stdout, b"1\n"
-                )
+                self.assertNotIn("private added bytes", str(caught.exception))
 
     def test_configuration_git_shapes_other_than_unstaged_modify_fail_closed(
         self,
     ) -> None:
         path = "config/system_defaults.json"
-        for case in ("staged", "renamed", "untracked"):
+        for case in ("staged", "renamed"):
             with self.subTest(case=case):
                 root = self.initialize_workspace_fixture(f"config-{case}").root
                 defaults = json.loads((root / path).read_text(encoding="utf-8"))
@@ -544,14 +568,160 @@ class WorkspaceV2InitializationTests(WorkspaceV2GitTestCase):
                     self.run_git(root, "add", "--", path)
                 elif case == "renamed":
                     self.run_git(root, "mv", "--", path, "config/renamed.json")
-                else:
-                    (root / "config/untracked.json").write_bytes(b"{}\n")
                 before = _namespace_snapshot(root)
 
                 with self.assertRaises(WorkspaceFormatError):
                     Workspace(root)
 
                 self.assertEqual(_namespace_snapshot(root), before)
+
+    def test_ready_antigravity_tree_is_never_enumerated_inspected_or_opened(
+        self,
+    ) -> None:
+        root = self.initialize_workspace_fixture("opaque-antigravity").root
+        provider = (
+            root
+            / "agent_states/orchestrator_state/provider_sessions/.antigravity"
+        )
+        opaque = provider / "sessions/novel/provider/opaque-unreadable"
+        opaque.mkdir(parents=True)
+        private = opaque / "private.bin"
+        private.write_bytes(b"private provider bytes\n")
+        outside = self.test_root / "outside-provider-target"
+        outside.write_bytes(b"outside provider bytes\n")
+        nested_link = provider / "sessions/novel/provider/native-link"
+        nested_link.symlink_to(outside)
+        native_pipe = provider / "provider-native.pipe"
+        os.mkfifo(native_pipe)
+        opaque.chmod(0)
+        self.addCleanup(opaque.chmod, 0o700)
+
+        selected = (provider, opaque, nested_link, native_pipe, outside)
+
+        def identities() -> tuple[tuple[int, int, int, int], ...]:
+            return tuple(
+                (
+                    stat.S_IFMT(value.st_mode) | stat.S_IMODE(value.st_mode),
+                    value.st_size,
+                    value.st_mtime_ns,
+                    value.st_ctime_ns,
+                )
+                for value in (path.lstat() for path in selected)
+            )
+
+        before = identities()
+        head_before = self.run_git(root, "rev-parse", "HEAD").stdout
+        index_before = (root / ".git/index").read_bytes()
+        real_stat = initialization_module.os.stat
+        real_open = initialization_module.os.open
+
+        def reject_unknown(operation, path, *args, **kwargs):
+            try:
+                spelling = os.fspath(path)
+            except TypeError:
+                spelling = ""
+            if isinstance(spelling, bytes):
+                spelling = os.fsdecode(spelling)
+            if any(
+                name in spelling
+                for name in (
+                    ".antigravity",
+                    "opaque-unreadable",
+                    "native-link",
+                    "provider-native.pipe",
+                )
+            ):
+                raise AssertionError(f"readiness {operation} unknown entry")
+            return None
+
+        def guarded_stat(path, *args, **kwargs):
+            reject_unknown("stated", path, *args, **kwargs)
+            return real_stat(path, *args, **kwargs)
+
+        def guarded_open(path, *args, **kwargs):
+            reject_unknown("opened", path, *args, **kwargs)
+            return real_open(path, *args, **kwargs)
+
+        with (
+            mock.patch.object(
+                initialization_module,
+                "_root_names",
+                side_effect=AssertionError("ready root was enumerated"),
+            ),
+            mock.patch.object(
+                initialization_module,
+                "_snapshot_relative_files",
+                side_effect=AssertionError("ready tree was enumerated"),
+            ),
+            mock.patch.object(
+                initialization_module.os,
+                "stat",
+                side_effect=guarded_stat,
+            ),
+            mock.patch.object(
+                initialization_module.os,
+                "open",
+                side_effect=guarded_open,
+            ),
+        ):
+            reopened = Workspace(root).require_ready()
+
+        self.assertEqual(reopened.root, root)
+        self.assertEqual(identities(), before)
+        self.assertEqual(os.readlink(nested_link), os.fspath(outside))
+        self.assertEqual(outside.read_bytes(), b"outside provider bytes\n")
+        self.assertEqual(self.run_git(root, "rev-parse", "HEAD").stdout, head_before)
+        self.assertEqual((root / ".git/index").read_bytes(), index_before)
+
+    def test_required_path_substitutions_fail_closed_without_target_mutation(
+        self,
+    ) -> None:
+        cases = (
+            "missing",
+            "directory",
+            "symlink",
+            "fifo",
+            "content",
+            "marker-schema",
+        )
+        for case in cases:
+            with self.subTest(case=case):
+                root = self.initialize_workspace_fixture(f"required-{case}").root
+                target = root / (
+                    WORKSPACE_MARKER_PATH
+                    if case == "marker-schema"
+                    else "core_documents/global_outline.md"
+                )
+                target.unlink()
+                pipe_descriptor = None
+                outside = self.test_root / f"outside-required-{case}"
+                outside.write_bytes(b"outside required target\n")
+                if case == "directory":
+                    target.mkdir()
+                elif case == "symlink":
+                    target.symlink_to(outside)
+                elif case == "fifo":
+                    os.mkfifo(target)
+                    pipe_descriptor = os.open(
+                        target,
+                        os.O_RDWR | getattr(os, "O_NONBLOCK", 0),
+                    )
+                elif case == "content":
+                    target.write_bytes(b"private required drift\n")
+                elif case == "marker-schema":
+                    target.write_bytes(b'{"schema_version":2}\n')
+                before = _namespace_snapshot(root)
+
+                try:
+                    with self.assertRaises(WorkspaceFormatError) as caught:
+                        Workspace(root)
+                finally:
+                    if pipe_descriptor is not None:
+                        os.close(pipe_descriptor)
+
+                self.assertEqual(_namespace_snapshot(root), before)
+                self.assertEqual(outside.read_bytes(), b"outside required target\n")
+                self.assertNotIn("private required drift", str(caught.exception))
 
     def test_invalid_utf8_mutable_configuration_fails_with_typed_readiness_error(
         self,
@@ -738,7 +908,7 @@ class WorkspaceV2InitializationTests(WorkspaceV2GitTestCase):
         for relative, content in files.items():
             self.assertEqual((root / relative).read_bytes(), content)
 
-    def test_unknown_registered_runtime_owner_shapes_fail_closed(self) -> None:
+    def test_unknown_registered_runtime_owner_shapes_are_opaque(self) -> None:
         digest = "a" * 64
         cases = {
             "debug-unknown": "debug_logs/unknown.jsonl",
@@ -757,12 +927,12 @@ class WorkspaceV2InitializationTests(WorkspaceV2GitTestCase):
                 target.write_bytes(b"unexpected\n")
                 before = _namespace_snapshot(root)
 
-                with self.assertRaises(WorkspaceFormatError):
-                    Workspace(root)
+                reopened = Workspace(root).require_ready()
 
+                self.assertEqual(reopened.root, root)
                 self.assertEqual(_namespace_snapshot(root), before)
 
-    def test_malformed_unknown_and_unsafe_interactive_paths_fail_closed(self) -> None:
+    def test_malformed_unknown_interactive_paths_are_opaque(self) -> None:
         conversation_id = "c_" + "a" * 32
         cases = {
             "invalid-session": (
@@ -792,9 +962,9 @@ class WorkspaceV2InitializationTests(WorkspaceV2GitTestCase):
                 target.write_bytes(b"unexpected\n")
                 before = _namespace_snapshot(root)
 
-                with self.assertRaises(WorkspaceFormatError):
-                    Workspace(root)
+                reopened = Workspace(root).require_ready()
 
+                self.assertEqual(reopened.root, root)
                 self.assertEqual(_namespace_snapshot(root), before)
 
 

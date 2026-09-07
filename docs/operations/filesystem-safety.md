@@ -28,16 +28,18 @@
 > yet connected to installed story commands or lead confirmation UI.
 
 Key terms: **containment**—keeping paths beneath the workspace root; **symlink**—
-a filesystem alias the runtime rejects; **exclusive creation**—failure instead
-of overwrite; **atomic file**—a replacement observed as old or complete new data.
+a filesystem alias rejected when it occupies or crosses a path an owner
+consumes; **exclusive creation**—failure instead of overwrite; **atomic
+file**—a replacement observed as old or complete new data.
 
 ## Workspace boundary
 
 `Workspace` classifies the exact lexical absolute root without mutation. An
 existing root must be a non-symlinked directory with a meaningful device/inode
 identity. An absent root remains pending; an empty root is eligible; an exact
-initialization journal is resumable; an exact clean v2 root is ready. Any other
-nonempty, malformed, drifted, or unsafe state fails closed.
+initialization journal is resumable; a journal-free v2 root is ready when its
+required paths and Git invariants pass. A markerless nonempty, malformed,
+required-path-drifted, or unsafe state fails closed.
 
 Before creating a missing root, initialization rejects any repository ancestor.
 Before mutating an empty root, it requires Git topology `absent`. Journal-backed
@@ -54,7 +56,7 @@ required primitive is unavailable, it raises `OSError` before root mutation.
 For a missing or empty root, the first scaffold mutation is an exclusively
 created and synchronized `.story-writing-agents-initialize-v2.json`. Its strict
 canonical JSON binds schema version `2`, state `initializing`, and the SHA-256
-identity of the exact 22-file manifest. Existing entries during recovery must
+identity of the exact 25-file manifest. Existing entries during recovery must
 be byte-identical members of that manifest; unknown files, undeclared
 directories, symlinks, nonregular entries, mismatched bytes, or a different
 journal are preserved and rejected. There is no overwrite, adoption, cleanup,
@@ -78,9 +80,21 @@ An `OSError`, `KeyboardInterrupt`, `SystemExit`, typed workspace failure, or Git
 failure terminalizes that `Workspace` object. It does not roll back durable
 exact partial progress. Every later `initialize()` call on the same object
 raises before another attempt; a fresh object/process must reclassify the
-journal and all bytes. A clean ready-root `initialize()` is read-only and
-creates no second commit. Dirty or drifted ready state is preserved and reported
-as recovery-required.
+journal and all bytes. A ready-root `initialize()` is read-only and creates no
+second commit.
+
+Journal-free readiness deliberately does not reuse that recursive
+initialization walk. Main-root readiness opens only the exact marker, 25
+scaffold leaves, required directories, two mutable configuration documents,
+and configuration-selected persona locations. It validates immutable scaffold
+bytes and exact Git baseline/topology/history while omitting ignored and
+untracked entries from Git status. It never lists, stats, opens, decodes, or
+descends into any other file, directory, symlink, FIFO, or special entry.
+Unknown entries are therefore permitted and preserved, not trusted. Each
+optional-state owner must apply its own safe-path, type, content, and lifecycle
+validation when it later consumes an entry. Staged changes, tracked unknown
+additions, required-path substitutions, and disallowed tracked drift remain
+recovery-required.
 
 `Workspace.require_ready()` checks the authorization captured by that object;
 it is not a live disk scan. Fresh CLI resolution, explicit smoke, and fresh
@@ -143,14 +157,24 @@ verify main baseline and exhaustive inventory
 -> verify the complete journal-free result again
 ```
 
-The main root must keep symbolic `HEAD` on `main`, the same baseline/tree/index,
-the exact initializer files, and clean status. Inventory accounts for every
+The main root must keep symbolic `HEAD` on `main`, the exact baseline tree and
+index rules, immutable initializer files, and valid mutable configuration.
+Its readiness status query uses `--untracked-files=no`, so ignored and
+untracked entries do not participate. Inventory still accounts for every
 branch, session internal ref, registered worktree, and provisioning journal;
-unknown or uncorrelated facts are not ignored. An accepted session worktree
-must be at its schema-derived sibling path, have exact common-Git indirection
-and registration, use its expected symbolic session branch, and retain the
-immutable baseline and seed roots. Later tips may advance, but #504 does not
-interpret that #505 history.
+unknown or uncorrelated Git-resource facts are not ignored. An accepted
+session worktree must be at its schema-derived sibling path, have exact
+common-Git indirection and registration, use its expected symbolic session
+branch, retain the immutable baseline and seed roots, and have an index equal
+to `HEAD`. Workspace composition additionally validates every one of the 25
+Git-materialized scaffold leaves and its ancestors through no-follow access,
+plus the local marker, mutable configuration, and referenced personae. It does
+not require schema-only empty runtime directories that Git cannot materialize.
+Untracked entries and unstaged story edits are allowed; staged changes and
+tracked unknown additions to the main baseline require recovery. Later session
+tips may advance, and generic session readiness does not classify their
+committed contents; story-commit and session-recovery owners validate that
+history.
 
 Every Git child uses fixed arguments, `shell=False`, bounded streams and time,
 disabled prompting, hooks, signing, filters, pagers, and inherited Git control

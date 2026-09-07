@@ -6,23 +6,15 @@ import errno
 import hashlib
 import os
 import stat
+from collections.abc import Callable
 from dataclasses import dataclass
 from enum import StrEnum
 from pathlib import Path
 from uuid import uuid4
 
-from ..agent_exchange_paths import (
-    is_agent_exchange_runtime_directory,
-    is_agent_exchange_runtime_file,
-)
-from ..runtime_state_paths import (
-    is_orchestrator_runtime_directory,
-    is_orchestrator_runtime_file,
-)
-from ..config import (
-    decode_provider_route_generations,
-    validate_persisted_configuration_bytes,
-)
+from ..agent_exchange_paths import is_agent_exchange_runtime_directory
+from ..runtime_state_paths import is_orchestrator_runtime_directory
+from ..config import validate_persisted_configuration_bytes
 from ..errors import (
     ConfigurationError,
     SessionIdError,
@@ -79,9 +71,6 @@ _LEGACY_SENTINELS = (
 )
 _MUTABLE_CONFIGURATION_PATHS = frozenset(
     {"config/system_defaults.json", "config/agent_configs.json"}
-)
-_PROVIDER_ROUTE_GENERATIONS_PATH = (
-    "agent_states/orchestrator_state/provider_route_generations.json"
 )
 
 
@@ -169,10 +158,10 @@ def inspect_workspace_root(root: Path) -> WorkspaceRootInspection:
         raise WorkspaceSecurityError("workspace root is not a safe directory")
     descriptor = _open_existing_root(root, identity)
     try:
-        names = _root_names(descriptor)
-        if not names:
-            return WorkspaceRootInspection(WorkspaceRootState.EMPTY, identity)
-        if WORKSPACE_INITIALIZATION_JOURNAL_PATH in names:
+        if _relative_entry_exists(
+            descriptor,
+            WORKSPACE_INITIALIZATION_JOURNAL_PATH,
+        ):
             _validate_initializing_root(descriptor)
             return WorkspaceRootInspection(
                 WorkspaceRootState.INITIALIZING,
@@ -191,6 +180,9 @@ def inspect_workspace_root(root: Path) -> WorkspaceRootInspection:
                 session_id,
                 main_root,
             )
+        names = _root_names(descriptor)
+        if not names:
+            return WorkspaceRootInspection(WorkspaceRootState.EMPTY, identity)
         if _contains_legacy_boundary(descriptor):
             raise WorkspaceVersionUnsupportedError(
                 "workspace version is unsupported; migration and compatibility "
@@ -401,7 +393,12 @@ def _validated_configuration_allowance(root: Path) -> tuple[str, ...]:
         raise WorkspaceSecurityError("workspace root is not a safe directory")
     descriptor = _open_existing_root(root, identity)
     try:
-        _validate_mutable_configuration(_snapshot_relative_files(descriptor))
+        system_content, agent_content = _read_mutable_configuration(descriptor)
+        _validate_mutable_configuration(
+            system_content,
+            agent_content,
+            persona_exists=lambda name: _persona_exists(descriptor, name),
+        )
     finally:
         os.close(descriptor)
     return tuple(sorted(_MUTABLE_CONFIGURATION_PATHS))
@@ -501,9 +498,15 @@ def _verify_ready(
     if role is WorkspaceRootRole.SESSION:
         try:
             marker_bytes = _read_relative_regular(descriptor, WORKSPACE_MARKER_PATH)
-        except OSError:
+        except (OSError, WorkspaceFormatError):
             raise WorkspaceFormatError("workspace marker is missing") from None
         decode_workspace_marker(marker_bytes)
+        snapshot = _required_scaffold_projection(descriptor, scaffold)
+        _validate_mutable_configuration(
+            snapshot["config/system_defaults.json"],
+            snapshot["config/agent_configs.json"],
+            persona_exists=lambda name: _persona_exists(descriptor, name),
+        )
         assert session_id is not None
         try:
             _require_ready_git_session_resources(
@@ -519,14 +522,14 @@ def _verify_ready(
                 "workspace session resources require recovery"
             ) from None
         return role, session_id, main_root
-    snapshot = _snapshot_relative_files(descriptor)
-    marker_bytes = snapshot.get(WORKSPACE_MARKER_PATH)
-    if marker_bytes is None:
-        raise WorkspaceFormatError("workspace marker is missing")
-    decode_workspace_marker(marker_bytes)
-    _require_directories(descriptor)
-    allowed_files = {entry.path: entry.content for entry in scaffold}
     if journal_present:
+        snapshot = _snapshot_relative_files(descriptor)
+        marker_bytes = snapshot.get(WORKSPACE_MARKER_PATH)
+        if marker_bytes is None:
+            raise WorkspaceFormatError("workspace marker is missing")
+        decode_workspace_marker(marker_bytes)
+        _require_directories(descriptor)
+        allowed_files = {entry.path: entry.content for entry in scaffold}
         journal_bytes = snapshot.get(WORKSPACE_INITIALIZATION_JOURNAL_PATH)
         if journal_bytes is None:
             raise WorkspaceFormatError("workspace initialization journal is missing")
@@ -534,30 +537,38 @@ def _verify_ready(
         if journal.manifest_digest != manifest.manifest_digest:
             raise WorkspaceFormatError("workspace initialization journal is invalid")
         allowed_files[WORKSPACE_INITIALIZATION_JOURNAL_PATH] = journal_bytes
-    elif WORKSPACE_INITIALIZATION_JOURNAL_PATH in snapshot:
-        raise WorkspaceFormatError("workspace initialization requires recovery")
-    if not journal_present:
-        _validate_mutable_configuration(snapshot)
-        route_generations = snapshot.get(_PROVIDER_ROUTE_GENERATIONS_PATH)
-        if route_generations is not None:
-            decode_provider_route_generations(route_generations)
-    scaffold_snapshot = {
-        path: content
-        for path, content in snapshot.items()
-        if not _is_consensus_runtime_file(path)
-        and not _is_conversation_runtime_file(path)
-        and not _is_debug_runtime_file(path)
-        and not is_agent_exchange_runtime_file(path)
-        and not is_orchestrator_runtime_file(path)
-        and not _is_interactive_runtime_file(path)
-        and (journal_present or path not in _MUTABLE_CONFIGURATION_PATHS)
-    }
-    if not journal_present:
-        for path in _MUTABLE_CONFIGURATION_PATHS:
-            allowed_files.pop(path)
-    if scaffold_snapshot != allowed_files:
-        raise WorkspaceFormatError("workspace scaffold requires recovery")
-    if not journal_present:
+        if snapshot != allowed_files:
+            raise WorkspaceFormatError("workspace scaffold requires recovery")
+    else:
+        if _relative_entry_exists(
+            descriptor,
+            WORKSPACE_INITIALIZATION_JOURNAL_PATH,
+        ):
+            raise WorkspaceFormatError("workspace initialization requires recovery")
+        try:
+            marker_bytes = _read_relative_regular(descriptor, WORKSPACE_MARKER_PATH)
+        except (OSError, WorkspaceFormatError):
+            raise WorkspaceFormatError("workspace marker is missing") from None
+        decode_workspace_marker(marker_bytes)
+        _require_directories(descriptor)
+        snapshot = _required_scaffold_projection(descriptor, scaffold)
+        _validate_mutable_configuration(
+            snapshot["config/system_defaults.json"],
+            snapshot["config/agent_configs.json"],
+            persona_exists=lambda name: _persona_exists(descriptor, name),
+        )
+        immutable_snapshot = {
+            path: content
+            for path, content in snapshot.items()
+            if path not in _MUTABLE_CONFIGURATION_PATHS
+        }
+        immutable_scaffold = {
+            entry.path: entry.content
+            for entry in scaffold
+            if entry.path not in _MUTABLE_CONFIGURATION_PATHS
+        }
+        if immutable_snapshot != immutable_scaffold:
+            raise WorkspaceFormatError("workspace scaffold requires recovery")
         try:
             inventory = _list_git_session_resources(
                 root,
@@ -737,33 +748,72 @@ def _snapshot_relative_files(descriptor: int) -> dict[str, bytes]:
     return result
 
 
-def _is_consensus_runtime_file(path: str) -> bool:
-    """Recognize only canonical runtime-owned consensus storage leaves."""
+def _required_scaffold_projection(
+    descriptor: int,
+    scaffold: tuple[WorkspaceScaffoldEntry, ...],
+) -> dict[str, bytes]:
+    """Read only the exact required scaffold leaves through the bound root."""
 
-    workflow_prefix = "agent_states/orchestrator_state/consensus_workflows/v2/"
-    if path.startswith(workflow_prefix):
-        name = path.removeprefix(workflow_prefix)
-        return name == ".store.lock" or (
-            len(name) == 69
-            and name.endswith(".json")
-            and all(character in "0123456789abcdef" for character in name[:-5])
+    result: dict[str, bytes] = {}
+    try:
+        for entry in scaffold:
+            result[entry.path] = _read_relative_regular(descriptor, entry.path)
+    except (OSError, WorkspaceFormatError):
+        raise WorkspaceFormatError("workspace scaffold requires recovery") from None
+    return result
+
+
+def _read_mutable_configuration(descriptor: int) -> tuple[bytes, bytes]:
+    """Read only the two exact mutable configuration leaves."""
+
+    try:
+        return (
+            _read_relative_regular(descriptor, "config/system_defaults.json"),
+            _read_relative_regular(descriptor, "config/agent_configs.json"),
         )
-    material_prefix = "agent_states/orchestrator_state/consensus_materials/v1/"
-    if not path.startswith(material_prefix):
-        return False
-    relative = path.removeprefix(material_prefix)
-    parts = relative.split("/")
-    if len(parts) != 2 or len(parts[0]) != 2 or any(
-        character not in "0123456789abcdef" for character in parts[0]
+    except (OSError, WorkspaceFormatError):
+        raise WorkspaceFormatError("workspace configuration is missing") from None
+
+
+def _persona_exists(descriptor: int, name: str) -> bool:
+    """Check only the two exact no-follow locations for one referenced persona."""
+
+    for relative in (
+        f"config/persona_templates/{name}.md",
+        f"config/persona_templates/alternative_templates/{name}.md",
     ):
-        return False
-    if parts[1] == ".lock":
-        return True
-    return (
-        len(parts[1]) == 67
-        and parts[1].endswith(".utf8")
-        and all(character in "0123456789abcdef" for character in parts[1][:-5])
-    )
+        parts = Path(relative).parts
+        try:
+            parent = _walk_directories(descriptor, parts[:-1], create=False)
+        except FileNotFoundError:
+            continue
+        except OSError:
+            return False
+        try:
+            flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0)
+            for option in ("O_CLOEXEC", "O_NOINHERIT", "O_BINARY", "O_NONBLOCK"):
+                flags |= getattr(os, option, 0)
+            try:
+                candidate = os.open(
+                    parts[-1],
+                    flags,
+                    dir_fd=parent,
+                )
+            except FileNotFoundError:
+                continue
+            except OSError:
+                return False
+            try:
+                try:
+                    value = os.fstat(candidate)
+                except OSError:
+                    return False
+                return stat.S_ISREG(value.st_mode)
+            finally:
+                os.close(candidate)
+        finally:
+            os.close(parent)
+    return False
 
 
 def _is_conversation_runtime_directory(path: str) -> bool:
@@ -789,69 +839,13 @@ def _is_conversation_runtime_directory(path: str) -> bool:
     )
 
 
-def _is_conversation_runtime_file(path: str) -> bool:
-    """Recognize only canonical filesystem-conversation runtime leaves."""
-
-    parts = path.split("/")
-    return (
-        len(parts) == 6
-        and _is_conversation_runtime_directory("/".join(parts[:-1]))
-        and parts[-1]
-        in {
-            "metadata.json",
-            "transcript.jsonl",
-            "collaboration-history.jsonl",
-            ".collaboration-history.lock",
-        }
-    )
-
-
-def _is_interactive_runtime_file(path: str) -> bool:
-    """Recognize only established controller/session runtime-owned leaves."""
-
-    if path in {
-        "agent_states/orchestrator_state/cli_context.json",
-        _PROVIDER_ROUTE_GENERATIONS_PATH,
-        "agent_states/orchestrator_state/provider_sessions/.access-claims.lock",
-        "config/.conversation_storage.lock",
-    }:
-        return True
-    parts = path.split("/")
-    if (
-        len(parts) != 4
-        or parts[:2] != ["agent_states", "orchestrator_state"]
-        or parts[2] not in {"conversation_defaults", "provider_sessions"}
-        or not parts[3].endswith(".json")
-    ):
-        return False
-    if parts[2] == "provider_sessions" and parts[3].endswith(".access.json"):
-        return _is_workspace_identifier(parts[3][: -len(".access.json")])
-    return _is_workspace_identifier(parts[3][:-5])
-
-
-def _is_debug_runtime_file(path: str) -> bool:
-    """Recognize only the two established WorkspaceDebugLog-owned leaves."""
-
-    return path in {"debug_logs/.runtime.lock", "debug_logs/runtime.jsonl"}
-
-
-def _validate_mutable_configuration(snapshot: dict[str, bytes]) -> None:
-    """Validate the two runtime-mutable configuration leaves from one snapshot."""
-
-    try:
-        system_content = snapshot["config/system_defaults.json"]
-        agent_content = snapshot["config/agent_configs.json"]
-    except KeyError:
-        raise WorkspaceFormatError("workspace configuration is missing") from None
-
-    def persona_exists(name: str) -> bool:
-        return any(
-            path in snapshot
-            for path in (
-                f"config/persona_templates/{name}.md",
-                f"config/persona_templates/alternative_templates/{name}.md",
-            )
-        )
+def _validate_mutable_configuration(
+    system_content: bytes,
+    agent_content: bytes,
+    *,
+    persona_exists: Callable[[str], bool],
+) -> None:
+    """Validate targeted mutable configuration and referenced persona presence."""
 
     try:
         validate_persisted_configuration_bytes(
@@ -860,7 +854,12 @@ def _validate_mutable_configuration(snapshot: dict[str, bytes]) -> None:
             validate_persona_name=validate_workspace_template_name,
             persona_exists=persona_exists,
         )
-    except (ConfigurationError, WorkspaceFormatError, WorkspaceSecurityError):
+    except (
+        ConfigurationError,
+        TypeError,
+        WorkspaceFormatError,
+        WorkspaceSecurityError,
+    ):
         raise WorkspaceFormatError("workspace configuration is invalid") from None
 
 
@@ -879,6 +878,18 @@ def _workspace_marker_present(descriptor: int) -> bool:
         return False
     except OSError:
         raise WorkspaceFormatError("workspace marker cannot be inspected") from None
+    return True
+
+
+def _relative_entry_exists(descriptor: int, relative: str) -> bool:
+    """Probe one exact root-relative entry without following its final component."""
+
+    try:
+        os.stat(relative, dir_fd=descriptor, follow_symlinks=False)
+    except FileNotFoundError:
+        return False
+    except OSError:
+        raise WorkspaceFormatError("workspace entry cannot be inspected") from None
     return True
 
 

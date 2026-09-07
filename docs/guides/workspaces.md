@@ -10,8 +10,9 @@
 
 Key terms: **initialization root**—the pristine `main` baseline; **marker**—the
 strict `config/workspace.json` identity; **journal**—the temporary durable
-initialization record; **ready**—the marker, scaffold, Git baseline, index,
-tree, branch, and status all match exactly.
+initialization record; **ready**—every required path and the applicable Git
+baseline, index, tree, branch, and topology checks pass. Unknown entries are
+outside this readiness decision.
 
 ## User impact
 
@@ -20,7 +21,8 @@ Users can:
 - initialize an absent path or empty safe directory;
 - receive four empty, named core documents ready for later lead-guided work;
 - receive one local `main` root commit named `Initialize story workspace`;
-- validate an unchanged ready root by rerunning `story init`; and
+- validate a ready root by rerunning `story init`, without readiness scanning
+  unrelated provider or user entries; and
 - resume an exact interrupted initialization with a fresh command.
 
 Users cannot:
@@ -30,13 +32,15 @@ Users cannot:
 - initialize inside another repository, submodule, linked worktree, sparse
   checkout, bare repository, or mismatched Git root;
 - use initialization as authorization for a later commit; or
-- treat a dirty, drifted, partial, or unsafe root as ready.
+- treat required-path drift, staged changes, tracked unknown additions, a
+  partial initialization, or unsafe Git topology as ready.
 
 ## Before and after
 
 Earlier initialization filled missing scaffold entries, preserved arbitrary
 existing bytes, optionally overwrote prompts, created no core files, and
-created no Git baseline. The current contract is closed:
+created no Git baseline. The current initialization and recovery contract is
+recursively closed:
 
 ```text
 story init PATH
@@ -98,9 +102,10 @@ The committed `.gitignore` names only runtime-owned state families such as
 provider-session records, conversation history, locks, and debug logs. Those
 bytes are checkpointed through the internal session history instead of story
 commits. It does not ignore core documents, manuscript files, configuration,
-agent prompts, or arbitrary new paths. Consequently, opening the lobby and
-creating the first session preserves a clean `main` status while an unrelated
-user file still makes readiness fail closed.
+agent prompts, or arbitrary new paths. Journal-free readiness nevertheless
+does not ask Git to enumerate ignored or untracked entries. An unrelated
+untracked note therefore remains untouched and does not block readiness;
+staging it or committing an unknown path does.
 
 Provider authentication at lobby startup is also nonpersistent. If no default
 provider has been saved, the authenticated choice is held in memory for that
@@ -116,10 +121,36 @@ initialization journal or other untracked initializer residue.
 | Missing root or empty safe directory | Initialization creates the journal and converges to ready v2. | Wait for success before using the root. |
 | Exact journal plus matching partial scaffold | A fresh command validates every existing byte and continues only missing exact steps. | Rerun the same `story init PATH` in a fresh process. |
 | Exact baseline plus journal | The initializer verifies the baseline, removes only the journal, and verifies again. | Rerun with a fresh process. |
-| Ready v2, journal absent, clean | `story init` is validation-only and creates no second commit. | Continue only through the supported session-worktree workflow. |
+| Ready v2, journal absent, required paths and Git invariants valid | `story init` is validation-only and creates no second commit. Unknown ignored/untracked entries are left opaque. | Continue only through the supported session-worktree workflow. |
 | Effective Git identity unavailable | Initialization reports `ConfigurationError`; the exact journal/scaffold may remain, but an absent repository is not created. | Configure a valid effective author and committer, then rerun with a fresh process. |
 | Recognizable legacy/markerless root or non-v2 numeric version | The command reports that migration and compatibility are unsupported. | Preserve it and create a separate new workspace. |
-| Malformed, arbitrary, dirty, drifted, or unsafe state | The command preserves all bytes and reports invalid/recovery-required state. | Stop; inspect or restore trusted state outside the runtime. Do not delete the journal or reset files to force success. |
+| Markerless arbitrary content, partial initialization, required-path drift, staged or disallowed tracked changes, or unsafe state | The command preserves all bytes and reports invalid/recovery-required state. | Stop; inspect or restore trusted state outside the runtime. Do not delete the journal or reset files to force success. |
+
+## Ready-workspace scenarios
+
+The readiness check follows one compact rule:
+
+```text
+fresh ready check
+  -> bind the supplied root without following a symlink
+  -> require the journal to be absent
+  -> read and validate only required scaffold/configuration/persona paths
+  -> verify the applicable exact Git baseline, index, and session topology
+  -> return ready without listing, stating, opening, decoding, or traversing unknown entries
+```
+
+That last step is an opacity boundary, not a trust decision. A provider,
+conversation store, artifact repository, or other runtime owner validates its
+optional state when it actually consumes that state.
+
+| Input | Readiness outcome |
+| --- | --- |
+| A ready main or session root contains provider-managed `.antigravity/` state with an unreadable directory, nested native symlink, or FIFO. | Pass, provided all required paths and Git invariants still pass. Readiness neither follows nor validates those unknown entries; the Antigravity owner must validate them before use. |
+| `notes.txt` is an untracked user file. | Pass and preserve it. The file is not trusted, staged, committed, opened, or interpreted. |
+| Required `config/agent_configs.json` is missing or replaced by a symlink. | Fail closed with a workspace readiness error. The symlink target is not followed or changed. |
+| An unknown file is staged, or an unknown path is committed. | Staging requires recovery in either root. A tracked unknown in the main baseline also requires recovery. Generic session readiness permits later branch tips and does not classify their committed contents; story-commit and session-recovery owners validate that history. |
+| Initialization stopped after writing the exact journal and a matching scaffold prefix. | A fresh `story init` may resume only that exact prefix. Any unknown extra entry keeps initialization closed and requires recovery. |
+| A session worktree contains unstaged story edits and/or untracked notes. | Pass session Git readiness if its index, 25 materialized scaffold leaves, local configuration/personae, and correlated Git resources remain valid. |
 
 After any failed `Workspace.initialize()` attempt, that Python object is
 terminal. A fresh object or CLI process must reclassify the durable state before
@@ -276,6 +307,15 @@ tree:   <same-baseline-tree-id>
 index:  <same-baseline-index>
 status: clean
 ```
+
+Later journal-free main readiness still requires the exact baseline history,
+tree, index rules, `main` topology, and exhaustive correlated session-resource
+inventory, but its Git status query omits ignored and untracked entries. Ready
+session validation checks all 25 Git-materialized scaffold leaves and their
+ancestors with no-follow access, plus the session-local marker,
+configuration, and referenced persona files. It does not require schema-only
+empty runtime directories that Git cannot materialize in a linked worktree.
+The session index must match `HEAD`; unstaged story work is allowed.
 
 Inside `/stories/my-novel.story-worktrees/novel`, discovery returns that exact
 session root, session ID `novel`, and main root `/stories/my-novel`. Discovery
@@ -671,9 +711,12 @@ The four packaged role prompts remain at
 `config/agents/<agent-id>/AGENTS.md`, for `lead_orchestrator`,
 `plot_architect`, `character_custodian`, and `execution_specialist`. They are
 part of the exact baseline. There is no prompt-overwrite option. Editing a
-prompt, configuration file, core document, or adding any other file to the
-original root makes a fresh readiness check reject that root; later supported
-edits belong in the exact session worktree after #455 composes it.
+prompt or core document in the original root makes a fresh readiness check
+reject that root. The two mutable configuration documents may differ from the
+baseline only when their bytes and referenced persona presence validate.
+Unknown untracked entries are opaque; staged changes and tracked unknown
+additions require recovery. Later supported story edits belong in the exact
+session worktree after #455 composes it.
 
 Persona templates are plaintext UTF-8 Markdown under
 `config/persona_templates/`. Do not put secrets in them.

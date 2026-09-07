@@ -721,7 +721,7 @@ and `activation_state: "recovery_required"`. A no-op, cancelled save, or
 pre-persist failure emits no successful transition.
 
 Workspace lifecycle persistence has three owners. Internal `workspace.schema`
-defines the pure canonical v2 marker, initializing journal, exact 22-file
+defines the pure canonical v2 marker, initializing journal, exact 25-file
 scaffold, four empty core identities, and static session naming policy.
 Internal `workspace.initialization` owns root classification, descriptor-bound
 journal/scaffold convergence, Git composition, ready verification, and nearest-
@@ -730,9 +730,15 @@ object, generic contained persistence, and package-internal root helpers, and
 delegates lifecycle policy instead of interpreting a second schema.
 
 Construction is observational. Missing and empty roots remain pending; one
-exact journal-backed partial root is initializing; one exact clean baseline is
-ready. Recognizable legacy, arbitrary nonempty, malformed, dirty, drifted, or
-unsafe state fails closed. Before mutation, initialization rejects repository
+exact journal-backed partial root is initializing. Its recursive inventory is
+closed, so unknown content cannot be adopted or deleted. A journal-free root is
+ready when required paths and exact Git invariants pass. Readiness does not
+enumerate, inspect, open, decode, or descend into other filesystem entries and
+does not enumerate ignored/untracked Git entries. Such optional state is opaque
+and permitted, not trusted; its owner validates it before consumption.
+Recognizable legacy, markerless arbitrary nonempty, malformed required state,
+staged/disallowed tracked state, tracked unknown additions, and unsafe
+topology fail closed. Before mutation, initialization rejects repository
 ancestors and unsupported Git topology and preflights descriptor-relative,
 no-follow, exclusive-create, synchronization, identity, and cleanup support.
 
@@ -748,11 +754,12 @@ baseline.
 
 Failures preserve exact durable partial progress. The failed `Workspace` object
 becomes terminal before any second attempt; a fresh object/process must
-reclassify and may resume only the exact journal plus matching bytes. Clean
-ready reopen is read-only. Unknown or divergent state is never overwritten,
-reset, migrated, or adopted. `Workspace.require_ready()` checks the readiness
-captured for that object and is not a live rescan; fresh supported entry points
-construct and validate a fresh object before activation.
+reclassify and may resume only the exact journal plus matching bytes. A ready
+reopen is read-only. Unknown content in a partial initialization and
+divergent required state are never overwritten, reset, migrated, adopted, or
+deleted. Journal-free unknown content is left opaque. `Workspace.require_ready()`
+checks the readiness captured for that object and is not a live rescan; fresh
+supported entry points construct and validate a fresh object before activation.
 
 For each supported storage attempt, the internal writer owns the lifetimes of
 the root, debug-directory, guard, and active-log descriptors. It creates or opens

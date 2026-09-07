@@ -492,7 +492,7 @@ class _Repository:
                 GitSessionRecoveryAction.OPERATOR_RECOVERY,
             )
         status = self._required(
-            ("status", "--porcelain=v1", "-z", "--untracked-files=all"), read_only=True
+            ("status", "--porcelain=v1", "-z", "--untracked-files=no"), read_only=True
         )
         if not _status_matches_allowed_worktree_changes(
             status.stdout,
@@ -797,7 +797,10 @@ class _Repository:
                 or worktree_head != branch
             ):
                 return _recovery(identity, baseline)
-            if not self._verify_worktree_indirection(identity):
+            if (
+                not self._verify_worktree_indirection(identity)
+                or not self._session_index_is_clean(identity)
+            ):
                 return _recovery(identity, baseline)
         if present == (True, True, True):
             return GitSessionResourceInspection(
@@ -1053,6 +1056,20 @@ class _Repository:
             opened.st_dev,
             opened.st_ino,
         )
+
+    def _session_index_is_clean(self, identity: GitSessionIdentity) -> bool:
+        """Require the session index to match HEAD without scanning untracked paths."""
+
+        try:
+            session_identity = _bind_directory(identity.worktree_root)
+            result = GitProcessRunner(identity.worktree_root).run(
+                ("diff-index", "--cached", "--quiet", "HEAD", "--"),
+                expected_identity=session_identity,
+                read_only=True,
+            )
+        except (GitProcessFailure, GitSessionResourceError):
+            return False
+        return result.returncode == 0 and not result.stdout
 
     def _required(
         self,
