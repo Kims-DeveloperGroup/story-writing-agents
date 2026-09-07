@@ -87,9 +87,11 @@ from story_writing_agents.agent_context import (
     canonical_provider_json,
 )
 from story_writing_agents.agent_context.manifest import (
+    ContextContinuationIdentity,
     ContextScope,
     ContextSubjectKind,
 )
+from story_writing_agents.agents import LEAD_ORCHESTRATOR
 from story_writing_agents.agent_context.service import (
     ContextProviderCallRequest,
     ContextProviderTerminalCode,
@@ -1918,6 +1920,100 @@ class CodexBackendTestCase(unittest.IsolatedAsyncioTestCase):
             session_id="definition_session",
             agent_id=agent_id,
         )
+
+    async def test_both_native_backends_preserve_session_continuation_and_legacy_namespaces(self):
+        for provider_id in ("codex", "antigravity"):
+            with self.subTest(provider=provider_id):
+                session = f"continuation_{provider_id}"
+                definition = replace(self.definition(LEAD_ORCHESTRATOR), backend=provider_id)
+
+                def factory():
+                    value = AgentBackend(
+                        self.workspace, executable=str(self.executable),
+                        antigravity_executable=str(self.executable),
+                        backend_overrides={LEAD_ORCHESTRATOR: provider_id},
+                    )
+                    self.addCleanup(value.close)
+                    return value
+
+                backend = factory()
+                backend.create_session_with_access(session)
+                scope = ContextScope("continuity-workspace", session, ContextSubjectKind.CONVERSATION, "conversation_a", LEAD_ORCHESTRATOR)
+                identity = ContextContinuationIdentity(scope.workspace_id, session, LEAD_ORCHESTRATOR)
+                policy = "sha256:" + "7" * 64
+                calls = []
+
+                async def invoke(_binding, invocation):
+                    calls.append(invocation)
+                    return ProviderResult(invocation.thread_id or f"native-thread-{len(calls)}", "{}", actual_transport_utf8_bytes=len(invocation.payload_json))
+
+                async def call(owner, current, continuation):
+                    provider = (await owner.bind(definition))._context_provider()
+                    async with provider.invocation(current, policy, continuation_identity=continuation):
+                        expected = provider.inspect_context_thread(current, policy)
+                        result = await provider.invoke_context(ContextProviderCallRequest(
+                            current, policy, f"call-{len(calls) + 1}",
+                            ProviderCallKind.COLLABORATION_INITIAL, {"type": "object"},
+                            {"context": "synthetic exact session context"},
+                            expected_thread_id=expected, continuation_identity=continuation,
+                        ))
+                        result.finalizer.accepted()
+                        return result.thread_id
+
+                adapter = getattr(backend, f"_{provider_id}_adapter")
+                with mock.patch.object(adapter, "invoke", new=invoke):
+                    legacy = await call(backend, scope, None)
+                    directory = self.workspace.path(f"agent_states/orchestrator_state/provider_sessions/.contextual/v1/{session}")
+                    retained = {path: path.read_bytes() for path in directory.glob("*.json")}
+                    self.assertEqual(len(retained), 1)
+                    first = await call(backend, scope, identity)
+                    second = await call(backend, replace(scope, subject_id="conversation_b"), identity)
+                self.assertNotEqual(first, legacy)
+                self.assertEqual(second, first)
+                self.assertEqual({path: path.read_bytes() for path in retained}, retained)
+                backend.pause_session_and_release_access(session)
+                backend.reopen_session_with_access(session)
+                with mock.patch.object(adapter, "invoke", new=invoke):
+                    self.assertEqual(await call(backend, scope, identity), first)
+                backend.close()
+                restarted = factory()
+                restarted.acquire_session_access(session)
+                with mock.patch.object(getattr(restarted, f"_{provider_id}_adapter"), "invoke", new=invoke):
+                    self.assertEqual(await call(restarted, replace(scope, subject_id="conversation_c"), identity), first)
+                    provider = (await restarted.bind(definition))._context_provider()
+                    async with provider.invocation(scope, policy, continuation_identity=identity):
+                        provider.taint_context_thread(scope, policy)
+                    replacement = await call(restarted, scope, identity)
+                self.assertNotEqual(replacement, first)
+                self.assertIsNone(calls[-1].thread_id)
+                self.assertEqual({path: path.read_bytes() for path in retained}, retained)
+                restarted.close()
+
+    async def test_native_mismatched_thread_is_ambiguous_without_replay_proof(self):
+        backend = AgentBackend(self.workspace, executable=str(self.executable))
+        self.addCleanup(backend.close)
+        backend.create_session_with_access("story_session")
+        bound = await backend.bind(self.definition())
+        await bound.converse(self.conversation_request())
+        before = len(self.provider_invocations())
+        native_failures = []
+        invoke = backend._codex_adapter.invoke
+
+        async def observe_native_failure(*args, **kwargs):
+            try:
+                return await invoke(*args, **kwargs)
+            except ProviderInvocationError as failure:
+                native_failures.append(failure)
+                raise
+
+        with mock.patch.object(backend._codex_adapter, "parse_events", return_value=({"type": "thread.started", "thread_id": "foreign-thread"},)), mock.patch.object(backend._codex_adapter, "invoke", new=observe_native_failure):
+            with self.assertRaisesRegex(BackendProtocolError, "different continuation identity") as caught:
+                await bound.converse(self.conversation_request())
+        self.assertEqual(len(native_failures), 1)
+        self.assertIsNone(native_failures[0].continuation_rejection)
+        self.assertEqual(len(self.provider_invocations()), before + 1)
+        await bound.converse(self.conversation_request())
+        self.assertNotIn("resume", self.provider_invocations()[-1]["argv"])
 
     def antigravity_definition(self, agent_id: str = PLOT_ARCHITECT):
         return PromptAssembler(
@@ -5772,6 +5868,15 @@ class CodexBackendTestCase(unittest.IsolatedAsyncioTestCase):
         bound = await backend.bind(self.definition())
         real_wait_for = asyncio.wait_for
         communication_pending = True
+        native_failures = []
+        native_invoke = backend._codex_adapter.invoke
+
+        async def observe_native_failure(*args, **kwargs):
+            try:
+                return await native_invoke(*args, **kwargs)
+            except ProviderInvocationError as failure:
+                native_failures.append(failure)
+                raise
 
         async def wait_for_after_provider_ready(awaitable, timeout):
             nonlocal communication_pending
@@ -5791,9 +5896,12 @@ class CodexBackendTestCase(unittest.IsolatedAsyncioTestCase):
                 "story_writing_agents.backend.asyncio.wait_for",
                 new=wait_for_after_provider_ready,
             ),
+            mock.patch.object(backend._codex_adapter, "invoke", new=observe_native_failure),
         ):
-            with self.assertRaisesRegex(BackendProtocolError, "timed out"):
+            with self.assertRaisesRegex(BackendProtocolError, "timed out") as caught:
                 await bound.invoke(self.request(session_id="timeout_session"))
+        self.assertEqual(len(native_failures), 1)
+        self.assertIsNone(native_failures[0].continuation_rejection)
         self.assertTrue(
             any(item.get("terminated") is True for item in self.invocations())
         )

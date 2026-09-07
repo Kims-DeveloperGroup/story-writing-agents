@@ -566,7 +566,7 @@ class SessionLifecycleContractTests(unittest.TestCase):
             ]
         )
         source_files = tuple(source_root.rglob("*.py"))
-        self.assertEqual(len(source_files), 132)
+        self.assertEqual(len(source_files), 137)
         self.assertTrue(
             {
                 source_root / "artifact_proposals.py",
@@ -601,8 +601,8 @@ class SessionLifecycleContractTests(unittest.TestCase):
         index = (source_root.parents[1] / "PYTHON_MODULE_INDEX.md").read_text(
             encoding="utf-8"
         )
-        self.assertIn("Importable production units indexed: 132.", index)
-        self.assertIn("Direct internal dependency edges indexed: 514.", index)
+        self.assertIn("Importable production units indexed: 137.", index)
+        self.assertIn("Direct internal dependency edges indexed: 539.", index)
         self.assertIn("Directed internal dependency cycles indexed: 0.", index)
         headings = tuple(re.findall(r"^### `([^`]+)`$", index, flags=re.MULTILINE))
         expected_modules: set[str] = set()
@@ -612,8 +612,8 @@ class SessionLifecycleContractTests(unittest.TestCase):
             if parts[-1] == "__init__":
                 parts = parts[:-1]
             expected_modules.add(".".join(("story_writing_agents", *parts)))
-        self.assertEqual(len(headings), 132)
-        self.assertEqual(len(set(headings)), 132)
+        self.assertEqual(len(headings), 137)
+        self.assertEqual(len(set(headings)), 137)
         self.assertEqual(set(headings), expected_modules)
         self.assertIn("facade contains exactly 134 exports", index)
         self.assertIn("context and events owners contain 28 and 98 respectively", index)

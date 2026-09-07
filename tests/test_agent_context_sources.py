@@ -218,6 +218,7 @@ class SourceSurfacePolicyAndValueTests(unittest.TestCase):
                 "ContextSourceSearchMatch",
                 "ContextSourceSnapshot",
                 "FocusedConversationSourceAdapter",
+                "SessionHistorySourceAdapter",
                 "OwnAgentStateSourceAdapter",
                 "WritingArtifactSourceAdapter",
             ),

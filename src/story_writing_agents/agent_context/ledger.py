@@ -453,6 +453,7 @@ class ContextLedgerReadyCheckpoint:
     committed_at: str
     catalog_sources: tuple[ContextCatalogCursor, ...] = ()
     source_alias_high_watermark: int = 0
+    session_history_coverage: tuple[tuple[str, int, str], ...] = ()
 
     def __post_init__(self) -> None:
         if type(self.conditions) is not ContextPlanningConditions:
@@ -497,6 +498,7 @@ class ContextLedgerReadyCheckpoint:
             self.delta_depth,
             ordered_catalog,
             self.source_alias_high_watermark,
+            self.session_history_coverage,
         )
         if context_checkpoint_proposal_digest(proposal) != self.proposal_digest:
             raise _invalid()
@@ -621,6 +623,8 @@ class ContextLedgerInspection:
                     != ready.provider_thread_id
                     or self.checkpoint_view.sources != ready.sources
                     or self.checkpoint_view.delta_depth != ready.delta_depth
+                    or self.checkpoint_view.session_history_coverage
+                    != ready.session_history_coverage
                 ):
                     raise _invalid()
 
@@ -983,6 +987,8 @@ def _decode_catalog_cursor(value: object) -> ContextCatalogCursor:
 
 def _proposal_value(value: ContextCheckpointProposal) -> dict[str, object]:
     return {
+        **({"session_history_coverage": value.session_history_coverage}
+           if value.session_history_coverage else {}),
         "catalog_sources": [
             _catalog_cursor_value(source) for source in value.catalog_sources
         ],
@@ -1496,6 +1502,8 @@ def _ready_checkpoint_value(
     value: ContextLedgerReadyCheckpoint,
 ) -> dict[str, object]:
     return {
+        **({"session_history_coverage": value.session_history_coverage}
+           if value.session_history_coverage else {}),
         "catalog_sources": [
             _catalog_cursor_value(source) for source in value.catalog_sources
         ],
@@ -1512,6 +1520,22 @@ def _ready_checkpoint_value(
 
 
 def _decode_ready_checkpoint(value: object) -> ContextLedgerReadyCheckpoint:
+    coverage: tuple[tuple[str, int, str], ...] = ()
+    if type(value) is dict and "session_history_coverage" in value:
+        value = dict(value)
+        raw_coverage = _decoded_list(value.pop("session_history_coverage"))
+        if len(raw_coverage) > MAX_CONTEXT_LEDGER_SOURCES:
+            raise _DecodeError
+        decoded_coverage = []
+        for raw in raw_coverage:
+            row = _decoded_list(raw)
+            if len(row) != 3:
+                raise _DecodeError
+            decoded_coverage.append((
+                _decoded_string(row[0]), _decoded_integer(row[1]),
+                _decoded_string(row[2]),
+            ))
+        coverage = tuple(decoded_coverage)
     item = _decoded_dict(
         value,
         frozenset(
@@ -1547,6 +1571,7 @@ def _decode_ready_checkpoint(value: object) -> ContextLedgerReadyCheckpoint:
         source_alias_high_watermark=_decoded_integer(
             item["source_alias_high_watermark"]
         ),
+        session_history_coverage=coverage,
     )
 
 
@@ -2326,6 +2351,7 @@ def _inspection_for_record(record: ContextLedgerRecord) -> ContextLedgerInspecti
             delta_depth=ready.delta_depth,
             catalog_sources=ready.catalog_sources,
             source_alias_high_watermark=ready.source_alias_high_watermark,
+            session_history_coverage=ready.session_history_coverage,
         )
     elif record.state is ContextLedgerRecordState.STALE:
         view = ContextCheckpointView(ContextCheckpointState.STALE)
@@ -2746,6 +2772,7 @@ class ContextLedger:
                     source_alias_high_watermark=(
                         proposal.source_alias_high_watermark
                     ),
+                    session_history_coverage=proposal.session_history_coverage,
                 )
                 attempt = replace(
                     record.attempt,

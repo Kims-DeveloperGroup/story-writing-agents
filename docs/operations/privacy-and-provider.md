@@ -538,10 +538,13 @@ is only accidental-display reduction, not encryption or erasure.
 
 Readable collaboration projection exposes only artifact review message,
 decision, state, and closed failure code. Candidate and reviewed-proposal bytes
-are not searchable readable fields and are not automatically selected into
-bounded agent context. Direct event-store/API readers and canonical
-filesystem/SQLite/archive/transfer bytes can still access them; protect those
-stores as story content.
+are not searchable readable fields in the bounded SEARCH/READ adapter.
+Required Lead session memory separately includes visible review rationale,
+impact, limitations, and exact proposed-operation text/bytes from retained
+candidate and reviewed-proposal events. Later Lead calls can therefore disclose
+these values again, including after catalog archiving. Direct event-store/API
+readers and canonical filesystem/SQLite/archive/transfer bytes can still access
+them; protect those stores as story content.
 
 If non-null artifact intent is malformed or claims Apply/Git authority,
 canonical collaboration history records only content-free
@@ -612,11 +615,29 @@ role-relevant P2 source bodies, focused record changes, content-free catalog
 facts, and applicable mandatory-reference bodies. Continuations expose only
 the newly authorized SEARCH/READ observation.
 
+Every ordinary Lead invocation and consultation/artifact-review synthesis also
+receives required session context (`h`). Bootstrap includes all retained active
+and archived conversations; compatible continuation includes unseen events.
+This contains exact readable fields, original timestamps, visible workflow
+facts, review rationale/impact/limitations, proposed operation bytes, proposed
+commit messages, and application/commit decision or revision-request text.
+It also carries current
+session directives and complete current canonical core-document bytes on both
+bootstrap and delta. No current receipt or private confirmation, write, or Git
+capability is copied. These are sensitive provider-readable inputs, subject
+to provider retention and the separate local exchange-diagnostic limits.
+
+Catalog archive status is not deletion, a session-memory exclusion, or a
+provider-disclosure opt-out. Canonical archive export/import values are a
+separate storage/transfer representation; creating an archive copy does not
+alter the retained history that Lead context captures.
+
 The lead initial payload also exposes four content-free canonical-core status
 rows and the strict scope/status/evidence answer contract. Status inventory
-does not itself expose core bytes. With no explicit reference and no provider
-SEARCH/READ, a workflow/meta answer receives no story body through this
-evidence path.
+does not itself expose core bytes or grant a story-body receipt. Even with no
+explicit reference or provider SEARCH/READ, `workflow_meta` turns receive
+current core bytes and retained history through the separate required `h`
+context. Memory cannot satisfy the current evidence contract.
 
 SEARCH/READ is route-restricted to canonical writing artifacts, focused
 same-session conversation, active debate, and the invoking agent's own state.
@@ -643,12 +664,17 @@ compatibility value, not the current built-in provider envelope. Direct eager
 use provider-managed context with empty mutable-core bindings. Optional
 conversation RAG stays separate from deterministic lexical context actions.
 
-Provider threads are keyed by session/backend/agent and can span conversations
-and debates. Cache/history/compaction may retain previously disclosed content
-under provider policy, but never authorize correctness or omission. Missing or
-tainted native history causes a new bootstrap epoch from local authoritative
-sources; switching provider routes also starts a fresh target thread without
-deleting older native data.
+Ordinary Lead turns and consultation/artifact-review synthesis share compatible
+workspace/session/agent continuation across conversations. Specialists and
+consensus retain their exact scopes and do not share that Lead session thread.
+Cache/history/compaction may retain previously disclosed content under provider
+policy, but never grant current authority. Missing or tainted native history
+selects exact recovery from local retained history/current state on the next
+safe authorized work. An unresolved submitted outcome remains blocked in its
+conversation. Switching provider routes starts a fresh target thread without
+deleting older native data. Exact delivery has a finite capacity and never
+silently summarizes or omits required history; see
+[Lead session memory](../guides/agent-context.md#lead-session-memory).
 
 The backend-selected provider/model/effort profile and provider argv are the
 execution evidence shown by the terminal. Provider reply prose, including a

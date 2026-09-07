@@ -16,11 +16,15 @@ Source root: `src/`
 
 Package root: `src/story_writing_agents/`
 
-Importable production units indexed: 135.
+Importable production units indexed: 137.
 
-Direct internal dependency edges indexed: 526.
+Direct internal dependency edges indexed: 539.
 
 Directed internal dependency cycles indexed: 0.
+
+Edge and cycle totals exclude annotation-only `TYPE_CHECKING` imports. The
+all-import AST graph has 541 edges; its annotation-only workspace cycle was
+already present in the 135-unit baseline (528 all-import / 526 runtime edges).
 
 ## Current Dependency Direction
 
@@ -39,14 +43,16 @@ __main__ -> cli -> conversation_rag_cli
                  -> session_recovery.transition_assessment
                  -> debug_log -> agents/provider_adapter/workspace
                  -> orchestrator -> agents/agent_context.accounting
-                 |               -> agent_context.manifest/planning/service/sources
+                 |               -> agent_context.continuation/manifest/planning/service/sources
                  |               -> backend/config/conversations/debug_log/directives
+                 |               -> conversations.session_context
                  |               -> conversation_rag_runtime
                  |               -> conversation_storage.composition/contracts
                  |               -> consensus.contracts/consensus.execution/consensus.event_store/consensus.material_store/consensus.runtime_adapter
                  |               -> errors/prompts/workspace
-                 |               -> writing_artifacts/repository/runtime_references
-                 -> backend -> agent_context/agent_context.service
+                 |               -> writing_artifacts/catalog/repository/runtime_references
+                 -> backend -> agent_context/agent_context.manifest/agent_context.service
+                 |          -> conversations.session_context
                  |          -> agent_exchanges/agent_exchanges.capture
                  |          -> antigravity_adapter -> agent_context/models
                  |          |                        -> provider_adapter
@@ -197,15 +203,17 @@ models -> conversations/agents/errors
 agent_context -> agent_context.accounting
 agent_context.accounting -> (standard library only)
 agent_context.actions -> agent_context.manifest/planning
+agent_context.continuation -> agent_context.manifest
 agent_context.ledger -> agent_context.accounting/manifest/planning
                      -> runtime_state_paths/workspace
 agent_context.manifest -> (standard library only)
 agent_context.planning -> agent_context.manifest
-agent_context.service -> agent_context.accounting/actions/ledger
+agent_context.service -> agent_context.accounting/actions/continuation/ledger
                       -> agent_context.manifest/planning/sources
-                      -> workspace
+                      -> conversations.session_context/workspace
 agent_context.sources -> agent_context.actions/manifest
                       -> conversations/errors/models/workspace
+                      -> conversations.session_context
                       -> writing_artifacts.catalog
                       -> writing_artifacts.filesystem_sources
                       -> writing_artifacts.references/repository
@@ -262,6 +270,8 @@ session_lifecycle -> (standard library only)
 conversations -> conversations.catalog/context/events/git.story_commit_contracts
 conversations.catalog -> errors
 conversations.context -> conversations.events/errors/git.story_commit_contracts
+conversations.session_context -> conversations.catalog/context/events
+                              -> writing_artifacts.change_sets
 conversations.events -> agents/artifact_proposals/errors/git.story_commit_contracts
                      -> writing_artifacts
 artifact_proposals -> agents/writing_artifacts
@@ -560,7 +570,7 @@ every intermediate arrow. The current runtime graph is acyclic.
   `ProviderJsonEncodingError`, `ProviderPayloadAccounting`, `ProviderUsage`,
   `account_provider_payload`, and `canonical_provider_json`. This is the
   facade's complete exposed surface. The package-internal `actions`, `ledger`,
-  `manifest`, `planning`, `service`, and `sources` modules intentionally remain
+  `continuation`, `manifest`, `planning`, `service`, and `sources` modules intentionally remain
   direct-module contracts and are not re-exported here.
 - **Direct internal dependencies:** `agent_context.accounting`.
 - **State, resources, and side effects:** Re-exports immutable values and pure
@@ -658,18 +668,39 @@ every intermediate arrow. The current runtime graph is acyclic.
   `tests/test_session_lifecycle.py`, and
   `tests/test_interactive_controller.py`.
 
+### `story_writing_agents.agent_context.continuation`
+
+- **Source:** `src/story_writing_agents/agent_context/continuation.py`
+- **Responsibility:** Serialize the whole session Lead lifecycle and defer
+  continuation commitment until authoritative reply publication.
+- **Supported surface:** Direct-module internal `ContextContinuationTransaction`;
+  no facade export. The service lends the async context manager; the active task
+  may stage exactly one synchronous commit/abort/publication-validation triple.
+- **Direct internal dependencies:** `agent_context.manifest`.
+- **State, resources, and side effects:** A weak, mutex-protected process-local
+  asyncio-lock registry keys on workspace/session/agent, independent of provider
+  and conversation. Import creates only in-memory coordination objects; it
+  performs no I/O, creates no task, and claims no cross-process authority.
+  Exit validates publication and commits or aborts before releasing the lease.
+  Backend session-access claims remain the process-exclusion authority.
+- **Primary verification/documentation:** `tests/test_lead_orchestration.py`,
+  `tests/test_agent_context_execution.py`, `docs/design/agent-context.md`, and
+  `docs/reference/backend-and-sessions.md`.
+
 ### `story_writing_agents.agent_context.sources`
 
 - **Source:** `src/story_writing_agents/agent_context/sources.py`
 - **Responsibility:** Adapt the fixed authorized owner domains into bounded
-  canonical context-source snapshots.
+  canonical context-source snapshots and separately capture exact retained
+  session history for the Lead continuation owner.
 - **Supported surface:** No project-root or `agent_context`-facade-supported
   API. The direct-module package-internal `__all__` exposes
   `CONTEXT_SOURCE_POLICY`, `ActiveDebateSourceAdapter`,
   `ContextSourceDescriptor`, `ContextSourceError`, `ContextSourceErrorCode`,
   `ContextSourcePolicy`, `ContextSourceRecord`, `ContextSourceRegistry`,
   `ContextSourceSearchMatch`, `ContextSourceSnapshot`,
-  `FocusedConversationSourceAdapter`, `OwnAgentStateSourceAdapter`, and
+  `FocusedConversationSourceAdapter`, `OwnAgentStateSourceAdapter`,
+  `SessionHistorySourceAdapter`, and
   `WritingArtifactSourceAdapter`. The non-facade package-internal
   `writing_artifact_source_id(path)` helper is the single canonical source-ID
   projection consumed by runtime composition. The writing-artifact adapter and
@@ -706,7 +737,8 @@ every intermediate arrow. The current runtime graph is acyclic.
   missing or out-of-authority paths so parallel invocations cannot discover a
   sibling's artifact sources.
 - **Direct internal dependencies:** `agent_context.actions`,
-  `agent_context.manifest`, `conversations`, `errors`, `models`, `workspace`,
+  `agent_context.manifest`, `conversations`, `conversations.session_context`,
+  `errors`, `models`, `workspace`,
   `writing_artifacts.catalog`, `writing_artifacts.filesystem_sources`,
   `writing_artifacts.references`, and `writing_artifacts.repository`.
 - **State, resources, and side effects:** Adapters retain borrowed public owner
@@ -720,7 +752,11 @@ every intermediate arrow. The current runtime graph is acyclic.
   prechecks manifest byte facts, acquires sources in canonical manifest order,
   omits over-limit records without minting handles, and revalidates every
   touched source after selection. All source bodies and normalization buffers
-  remain call-local. Importing performs no I/O.
+  remain call-local. `SessionHistorySourceAdapter` borrows the same public
+  catalog/event-store ports, includes archived conversations, reads each whole
+  canonical history, and revalidates the catalog inventory. It never uses the
+  bounded searchable selector, cache, source aliases, or evidence authority.
+  Importing performs no I/O.
 - **Primary verification/documentation:**
   `tests/test_agent_context_sources.py`,
   `tests/test_agent_context_runtime_adoption.py`,
@@ -739,7 +775,7 @@ every intermediate arrow. The current runtime graph is acyclic.
 - **Supported surface:** No project-root or `agent_context`-facade-supported
   API. The direct-module package-internal `__all__` exposes
   `AgentContextService`, `ContextExecutionError`,
-  `ContextExecutionErrorCode`, `ContextExecutionEvent`,
+  `ContextContinuationRejection`, `ContextExecutionErrorCode`, `ContextExecutionEvent`,
   `ContextExecutionEventKind`, `ContextExecutionEventSink`,
   `ContextInvocationBinding`, `ContextInvocationKind`,
   `ContextInvocationRequest`, `ContextInvocationResult`,
@@ -860,8 +896,9 @@ every intermediate arrow. The current runtime graph is acyclic.
   rejects every unmatched strict classification, and omits only an unmatched
   classification carrying that explicit conditional-presence fact.
 - **Direct internal dependencies:** `agent_context.accounting`,
-  `agent_context.actions`, `agent_context.ledger`, `agent_context.manifest`,
-  `agent_context.planning`, `agent_context.sources`, and `workspace`.
+  `agent_context.actions`, `agent_context.continuation`, `agent_context.ledger`,
+  `agent_context.manifest`, `agent_context.planning`, `agent_context.sources`,
+  `conversations.session_context`, and `workspace`.
 - **State, resources, and side effects:** A workspace-scoped service retains
   immutable planning/action/source policies, one ledger collaborator, the
   content-free workspace digest, and process-local async locks keyed by exact
@@ -873,7 +910,20 @@ every intermediate arrow. The current runtime graph is acyclic.
   delegated to the injected registry adapters, ledger persistence remains
   ledger-owned, and provider transport/native-thread storage remains delegated
   through `ContextProvider`. Every physical call is appended in order; only a
-  revalidated and synchronously domain-validated terminal answer commits READY.
+  revalidated and synchronously domain-validated terminal answer may commit
+  READY. For an explicit session continuation, `session_continuation()` lends
+  a transaction and `invoke()` stages READY/coverage/finalizer commitment until
+  the caller proves durable authoritative reply publication. Pending results
+  are marked `checkpoint_pending`; failed publication or commitment taints the
+  attempt. Invocation scope remains conversation-bound for references, evidence,
+  correlation, source authority, and exchange attribution. Only checkpoint and
+  native resource identity use the separate SESSION scope. Exact full history
+  or validated-prefix deltas are mandatory payload material, independent of P3
+  packing. Changed accepted prefixes invalidate into full bootstrap; corrupt
+  canonical history fails closed. Known bootstrap material is byte-checked
+  before reference work, and every complete physical payload is checked before
+  submission. Generated reference results can exceed the limit only after the
+  preceding reference call; no truncation or summary fallback exists.
   Typed lifecycle delivery is synchronous and inline. Observer failure before
   authority aborts and remains the primary invocation failure; failure while
   receiving `CHECKPOINT_ADVANCED` propagates after READY commit without
@@ -927,6 +977,10 @@ every intermediate arrow. The current runtime graph is acyclic.
   digest, and physical-call accounting. Codec validation, size/count limits,
   and digest reconstruction map malformed, duplicate, non-reusable, or
   inconsistent alias/cursor state to corruption without loading source bodies.
+  Optional `session_history_coverage` stores only a sorted conversation-ID to
+  sequence/digest vector. Absent/empty coverage preserves existing schema-v2
+  encodings and proposal digests. SESSION keys bootstrap in a distinct namespace;
+  legacy conversation checkpoints remain untouched and are never relabeled.
 - **Direct internal dependencies:** `agent_context.accounting`,
   `agent_context.manifest`, `agent_context.planning`, `runtime_state_paths`, and
   `workspace`.
@@ -960,16 +1014,20 @@ every intermediate arrow. The current runtime graph is acyclic.
   and their canonical classification and ordering rules.
 - **Supported surface:** No project-root or `agent_context`-facade-supported
   API. The direct-module package-internal `__all__` exposes
-  `ContextAuthorityKind`, `ContextManifest`, `ContextManifestEntry`,
+  `ContextAuthorityKind`, `ContextContinuationIdentity`, `ContextManifest`, `ContextManifestEntry`,
   `ContextManifestError`, `ContextManifestErrorCode`, `ContextPriority`,
   `ContextProvenance`, `ContextScope`, `ContextSemanticChannel`,
   `ContextSourceKind`, `ContextSubjectKind`,
-  `context_manifest_entry_key`, `validate_context_digest`, and
+  `context_manifest_entry_key`, `validate_context_digest`,
+  `validate_context_history_coverage`, and
   `validate_context_identity`. These contracts validate bounded content-free
   identities, strict source/channel/priority/authority/searchability mappings,
   subject scope, provenance, lowercase SHA-256 identities, exact byte counts,
   unique source IDs, and locale-independent canonical order. Mutable writing
   artifacts remain P2/P3 sources rather than stable P1 definitions.
+  `ContextContinuationIdentity` separates persistent session/agent identity from
+  call scope. Its SESSION checkpoint projection cannot be used as an invocation
+  scope; `accepts()` binds only a same-workspace/session/agent conversation call.
 - **Direct internal dependencies:** None.
 - **State, resources, and side effects:** Owns frozen metadata values only.
   Validation and normalization use call-local memory; importing performs no
@@ -984,6 +1042,11 @@ every intermediate arrow. The current runtime graph is acyclic.
 ### `story_writing_agents.agent_context.planning`
 
 - **Source:** `src/story_writing_agents/agent_context/planning.py`
+- **Continuation compatibility:** SESSION checkpoint conditions bypass only
+  arbitrary delta-depth rollover; missing, tainted, stale, incompatible, or
+  mismatched threads still bootstrap. All other scopes retain the existing
+  depth policy. Checkpoint views/proposals carry validated content-free history
+  coverage without admitting session history into optional source packing.
 - **Responsibility:** Produce deterministic budgeted bootstrap or delta
   projections from validated context manifests.
 - **Supported surface:** No project-root or `agent_context`-facade-supported
@@ -1118,10 +1181,11 @@ every intermediate arrow. The current runtime graph is acyclic.
   typed synthesis next-phase/deadlock metadata and finalization references to
   an existing reviewed proposal; duplicate JSON fields and prose-derived
   authority are rejected before orchestration.
-- **Direct internal dependencies:** `agent_context`, `agent_context.service`,
+- **Direct internal dependencies:** `agent_context`, `agent_context.manifest`,
+  `agent_context.service`,
   the supported `agent_exchanges` facade, the internal
   `agent_exchanges.capture` module, `agents`, `antigravity_adapter`,
-  `codex_adapter`, `config`, `conversations`,
+  `codex_adapter`, `config`, `conversations`, `conversations.session_context`,
   `conversation_retrieval`, `debug_log`, `errors`, `git.session_contracts`,
   `interactive_settings`,
   `models`, `provider_adapter`, `provider_error_artifacts`, `provider_process`,
@@ -1263,6 +1327,13 @@ every intermediate arrow. The current runtime graph is acyclic.
   policy fingerprint, and their content-free schema stores only that key,
   thread identity, taint, and update facts. Missing, malformed, mismatched, or
   tainted records yield bootstrap rather than implicit reuse. Submitted
+  Lead continuation requests project the distinct session identity into both
+  the native-record key and lifecycle lock, while raw exchanges retain their
+  actual conversation attribution. Legacy conversation keys remain intact.
+  The backend enforces the exact session-payload byte limit before every native
+  submission, including reference preludes. Typed adapter rejection proof is
+  mapped only for an attempted continuation and never inferred from prose.
+  Submitted
   cancellation, timeout, malformed result, continuation mismatch, and failed
   reference completion preserve fixed failure facts and taint the exact
   contextual continuation without mutating the legacy thread slot. At
@@ -1439,6 +1510,10 @@ every intermediate arrow. The current runtime graph is acyclic.
 ### `story_writing_agents.codex_adapter`
 
 - **Source:** `src/story_writing_agents/codex_adapter.py`
+- **Continuation safety:** A resumed call rejects/taints any structured
+  `thread.started` identity differing from its requested thread; it cannot
+  safely replay that already-submitted outcome. Current exec envelopes do not
+  supply a proven pre-execution continuation-rejection classification.
 - **Responsibility:** Adapt immutable agent bindings and structured turns to the
   Codex CLI protocol.
 - **Supported surface:** No package-supported API. Package-internal
@@ -1506,6 +1581,11 @@ every intermediate arrow. The current runtime graph is acyclic.
   prepared/submitted failure seam. `ProviderInvocationError` and the
   `ProviderAdapter` protocol retain their existing substitution and taint
   contracts, including exact idempotent `release(binding)` retirement.
+  Additive `ProviderContinuationRejection` distinguishes unavailable and
+  capacity rejection only when a trusted transport proves pre-execution
+  rejection. `ProviderInvocationError` may carry that closed proof; current
+  Codex and Antigravity native formats do not emit it. Generic exit failures,
+  timeouts, prose lookalikes, and uncertain submissions never authorize retry.
 - **Direct internal dependencies:** `agent_context` and `models`.
 - **State, resources, and side effects:** Owns no mutable module state or
   external resource. Construction creates only immutable mappings, canonical
@@ -4044,6 +4124,32 @@ every intermediate arrow. The current runtime graph is acyclic.
   `docs/reference/conversation-catalog.md`, and
   `docs/reference/package-api.md`.
 
+### `story_writing_agents.conversations.session_context`
+
+- **Source:** `src/story_writing_agents/conversations/session_context.py`
+- **Responsibility:** Pure exact visible-session-history projection and
+  per-conversation accepted-prefix coverage, separate from bounded search.
+- **Supported surface:** Direct-module internal `SessionConversationHistory`,
+  `SessionHistorySnapshot`, `SessionContextCapacityError`,
+  `SessionContextHistoryChangedError`, and `MAX_SESSION_CONTEXT_UTF8_BYTES`;
+  no package-facade export. Sorted active/archived conversation snapshots retain
+  complete contiguous canonical events and emit full history or validated
+  sequence/digest-prefix deltas with timestamps and provenance. Explicit public
+  artifact/review/application/commit fields supplement readable fields without
+  exposing private evidence receipts or confirmation capabilities.
+- **Direct internal dependencies:** `conversations.catalog`,
+  `conversations.context`, `conversations.events`, and
+  `writing_artifacts.change_sets`.
+- **State, resources, and side effects:** Frozen transient values hide history
+  bodies from representation. Canonical UTF-8 projection has an inclusive
+  262,144-byte limit; the service/backend additionally bound the entire payload.
+  Capacity and prefix-change errors contain no content. No history is omitted
+  or summarized, and retained decisions/unknown outcomes grant no replay or
+  current authority. Import and projection perform no I/O or provider work.
+- **Primary verification/documentation:** `tests/test_lead_orchestration.py`,
+  `tests/test_collaboration_context.py`, `docs/design/agent-context.md`, and
+  `docs/guides/lead-agent.md`.
+
 ### `story_writing_agents.conversations.context`
 
 - **Source:** `src/story_writing_agents/conversations/context.py`
@@ -5970,6 +6076,18 @@ every intermediate arrow. The current runtime graph is acyclic.
 ### `story_writing_agents.orchestrator`
 
 - **Source:** `src/story_writing_agents/orchestrator.py`
+- **Session continuation:** Ordinary Lead and Lead/artifact-review synthesis
+  opt into the same compatible session thread. A session/agent lease spans
+  canonical snapshot capture, provider work, durable terminal publication, and
+  deferred checkpoint/coverage commitment. Normal turns deliver new retained
+  history plus current overrides/core state; every safe replacement bootstraps
+  exact complete history. A transport-proven rejection permits at most one
+  replacement within the original physical-call budget and accounting lineage;
+  current native CLIs cannot prove that rejection, so ambiguous failures end
+  the call and the next safe user turn bootstraps. Existing corrective-answer
+  handling remains bounded. No path replays an unknown outcome, revives a
+  confirmation, or duplicates the initiating user event. Specialist, debate,
+  consensus, evidence, and reference scopes remain per invocation.
 - **Responsibility note:** Immediate and restart Lead recovery consume the
   collaboration projection's submitted-call classification; only PREPARED-only
   detection remains local for the established recovery-required path.
@@ -6085,15 +6203,16 @@ every intermediate arrow. The current runtime graph is acyclic.
   session-bound wrappers for those operations without adding another owner or
   public package export.
 - **Direct internal dependencies:** `agent_context.accounting`,
-  `agent_context.manifest`, `agent_context.planning`, `agent_context.service`,
+  `agent_context.continuation`, `agent_context.manifest`, `agent_context.planning`, `agent_context.service`,
   `agent_context.sources`, `agents`, `artifact_proposals`, `backend`, `config`,
   `consensus.contracts`, `consensus.execution`, `consensus.event_store`,
   `consensus.material_store`, `consensus.runtime_adapter`, `conversations`,
+  `conversations.session_context`,
   `git.story_commit_contracts`, `git.story_commits`,
   `conversation_rag_runtime`, `conversation_storage.composition`,
   `conversation_storage.contracts`, `debug_log`, `directives`, `errors`,
   `models`, `prompts`, `workspace`, `workspace.initialization`,
-  `writing_artifacts`, `writing_artifacts.repository`, and
+  `writing_artifacts`, `writing_artifacts.catalog`, `writing_artifacts.repository`, and
   `writing_artifacts.runtime_references`.
 - **State, resources, and side effects:** Retains workspace, prompt/config, one
   composed v2 `ConversationStorageServices` bundle, optional RAG service,
@@ -7318,7 +7437,11 @@ every intermediate arrow. The current runtime graph is acyclic.
 
 ## Consistency Notes
 
-- The inventory contains 122 modules. Static AST derivation over every module-
+- Session continuation adds two internal modules and 13 inward runtime edges
+  over the accepted 135-unit/526-edge baseline: 137 units, 539 runtime edges,
+  and no new or existing runtime cycle. Facade exports are unchanged. Source
+  inventory was statically parsed without importing production or running tests.
+- Historical inventory: 122 modules. Static AST derivation over every module-
   level and function-local import yields 477 unique direct internal edges and
   no directed cycle. The v2 cutover contributes 97 modules and 362 edges;
   `writing_artifacts.change_sets` and `writing_artifacts.relationship_policy`
@@ -7364,12 +7487,12 @@ every intermediate arrow. The current runtime graph is acyclic.
   Exact reviewed-artifact application adds only the two direct edges from
   `conversations.events` to the writing-artifact facade and from
   `writing_artifacts.application_contracts` to
-  `writing_artifacts.relationship_policy`, producing the current 122-module,
+  `writing_artifacts.relationship_policy`, producing the historical 122-module,
   470-edge acyclic graph without a project-root export or new module. Confirmed
   local story commit adds seven edges from the three conversation units to the
   commit contracts, from orchestrator to the commit contracts, commit service,
   and workspace initializer, and from workspace initialization to the commit
-  service, producing the current 122-module, 477-edge acyclic graph.
+  service, producing the historical 122-module, 477-edge acyclic graph.
 - The project-root facade contains exactly 104 unique exports. It removes the
   active schema-v1 store, search/page/service, and transcript-retrieval surface;
   adds only `ConversationRetrievalHistoryRecord`; and exports no concrete v2

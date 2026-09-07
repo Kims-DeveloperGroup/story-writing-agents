@@ -18,6 +18,13 @@ from types import MappingProxyType
 from typing import AsyncContextManager, Protocol, cast, runtime_checkable
 
 from ..workspace import Workspace
+from ..conversations.session_context import (
+    MAX_SESSION_CONTEXT_UTF8_BYTES,
+    SessionContextCapacityError,
+    SessionContextHistoryChangedError,
+    SessionHistorySnapshot,
+)
+from .continuation import ContextContinuationTransaction
 from .accounting import (
     ContextComponentKind,
     JsonPath,
@@ -50,6 +57,7 @@ from .actions import (
     serialize_context_action_observation,
 )
 from .manifest import (
+    ContextContinuationIdentity,
     ContextManifest,
     ContextManifestEntry,
     ContextManifestError,
@@ -124,6 +132,7 @@ __all__ = [
     "ContextProviderCallRequest",
     "ContextProviderCallResult",
     "ContextProviderFailureFacts",
+    "ContextContinuationRejection",
     "ContextProviderTerminalCode",
     "ContextReferencePreludeRequest",
     "ContextReferencePreludeResult",
@@ -1201,10 +1210,13 @@ class ContextInvocationRequest:
     invocation_kind: ContextInvocationKind | None = None
     physical_call_limit: int | None = None
     include_core_statuses: bool = False
+    session_state_json: str | None = field(default=None, repr=False)
 
     def __post_init__(self) -> None:
         _safe_identity(self.session_id)
         if type(self.subject_kind) is not ContextSubjectKind:
+            raise _execution_error(ContextExecutionErrorCode.INVALID_VALUE)
+        if self.subject_kind is ContextSubjectKind.SESSION:
             raise _execution_error(ContextExecutionErrorCode.INVALID_VALUE)
         # Reuse the canonical subject grammar without accepting workspace input.
         ContextScope(
@@ -1278,6 +1290,21 @@ class ContextInvocationRequest:
             raise _execution_error(ContextExecutionErrorCode.INVALID_VALUE)
         if type(self.include_core_statuses) is not bool:
             raise _execution_error(ContextExecutionErrorCode.INVALID_VALUE)
+        if self.session_state_json is not None:
+            try:
+                state = json.loads(self.session_state_json)
+                if type(state) is not dict:
+                    raise ValueError
+                _canonical_bytes(state)
+            except (TypeError, ValueError):
+                raise _execution_error(ContextExecutionErrorCode.INVALID_VALUE) from None
+
+
+class ContextContinuationRejection(StrEnum):
+    """Transport-proven rejection before execution, never inferred from text."""
+
+    UNAVAILABLE = "continuation_unavailable"
+    CAPACITY = "context_capacity"
 
 
 @dataclass(frozen=True, slots=True)
@@ -1290,8 +1317,14 @@ class ContextProviderFailureFacts:
     submitted_accountings: tuple[ProviderCallAccounting, ...] = ()
     submission_uncertain: bool = False
     response_rejection_code: ContextProviderTerminalCode | None = None
+    continuation_rejection: ContextContinuationRejection | None = None
 
     def __post_init__(self) -> None:
+        if self.continuation_rejection is not None and (
+            type(self.continuation_rejection) is not ContextContinuationRejection
+            or self.timed_out or self.submission_uncertain
+        ):
+            raise _execution_error(ContextExecutionErrorCode.INVALID_VALUE)
         if self.accounting is not None and type(self.accounting) is not (
             ProviderCallAccounting
         ):
@@ -1441,9 +1474,15 @@ class ContextProviderCallRequest:
     )
     mandatory_reference_paths: tuple[JsonPath, ...] = ()
     expected_thread_id: str | None = None
+    continuation_identity: ContextContinuationIdentity | None = None
 
     def __post_init__(self) -> None:
         if type(self.scope) is not ContextScope:
+            raise _execution_error(ContextExecutionErrorCode.INVALID_VALUE)
+        if self.continuation_identity is not None and (
+            type(self.continuation_identity) is not ContextContinuationIdentity
+            or not self.continuation_identity.accepts(self.scope)
+        ):
             raise _execution_error(ContextExecutionErrorCode.INVALID_VALUE)
         _safe_digest(self.policy_fingerprint)
         _safe_identity(self.call_id)
@@ -1502,9 +1541,15 @@ class ContextReferencePreludeRequest:
     call_id: str
     reference_operation_id: str
     expected_thread_id: str | None
+    continuation_identity: ContextContinuationIdentity | None = None
 
     def __post_init__(self) -> None:
         if type(self.scope) is not ContextScope:
+            raise _execution_error(ContextExecutionErrorCode.INVALID_VALUE)
+        if self.continuation_identity is not None and (
+            type(self.continuation_identity) is not ContextContinuationIdentity
+            or not self.continuation_identity.accepts(self.scope)
+        ):
             raise _execution_error(ContextExecutionErrorCode.INVALID_VALUE)
         _safe_digest(self.policy_fingerprint)
         _safe_identity(self.call_id)
@@ -1548,6 +1593,8 @@ class ContextProvider(Protocol):
         self,
         scope: ContextScope,
         policy_fingerprint: str,
+        *,
+        continuation_identity: ContextContinuationIdentity | None = None,
     ) -> AsyncContextManager[None]:
         """Retain the provider binding for one complete contextual lifecycle."""
 
@@ -1605,6 +1652,7 @@ class ContextInvocationResult:
     provider_thread_id: str
     provider_calls: tuple[ContextLedgerProviderCall, ...]
     ledger_generation: int
+    checkpoint_pending: bool = False
 
     def __post_init__(self) -> None:
         if type(self.answer) is not str or not self.answer:
@@ -3830,6 +3878,15 @@ class AgentContextService:
             agent_id,
         )
 
+    def session_continuation(
+        self, session_id: str, agent_id: str,
+    ) -> ContextContinuationTransaction:
+        """Serialize a lead operation until its authoritative result is durable."""
+
+        return ContextContinuationTransaction(ContextContinuationIdentity(
+            self._workspace_id, session_id, agent_id,
+        ))
+
     def _scope_for(self, request: ContextInvocationRequest) -> ContextScope:
         return self.scope(
             request.session_id,
@@ -4100,6 +4157,9 @@ class AgentContextService:
         event_sink: ContextExecutionEventSink | None = None,
         phase: str | None = None,
         round_number: int | None = None,
+        continuation: ContextContinuationTransaction | None = None,
+        session_history: SessionHistorySnapshot | None = None,
+        publication_validator: Callable[[], bool] | None = None,
     ) -> ContextInvocationResult:
         """Execute one complete contextual lifecycle under its exact scope lock."""
 
@@ -4133,9 +4193,29 @@ class AgentContextService:
         if reference_operation_id != request.reference_operation_id:
             raise _execution_error(ContextExecutionErrorCode.PROVIDER_CONTRACT)
         scope = self._scope_for(request)
+        if continuation is not None:
+            continuation.require_active()
+            if (
+                not continuation.identity.accepts(scope)
+                or type(session_history) is not SessionHistorySnapshot
+                or session_history.session_id != scope.session_id
+                or not callable(publication_validator)
+            ):
+                raise _execution_error(ContextExecutionErrorCode.INVALID_VALUE)
+        elif (
+            session_history is not None or publication_validator is not None
+            or request.session_state_json is not None
+        ):
+            raise _execution_error(ContextExecutionErrorCode.INVALID_VALUE)
         lock = self._lock_for(scope, provider_id, definition_fingerprint)
         policy_fingerprint = self._execution_policy_fingerprint
-        context_manager = provider.invocation(scope, policy_fingerprint)
+        context_manager = (
+            provider.invocation(scope, policy_fingerprint)
+            if continuation is None else provider.invocation(
+                scope, policy_fingerprint,
+                continuation_identity=continuation.identity,
+            )
+        )
         if not hasattr(context_manager, "__aenter__") or not hasattr(
             context_manager,
             "__aexit__",
@@ -4158,6 +4238,9 @@ class AgentContextService:
                     event_sink=event_sink,
                     phase=phase,
                     round_number=round_number,
+                    continuation=continuation,
+                    session_history=session_history,
+                    publication_validator=publication_validator,
                 )
 
     async def _invoke_locked(
@@ -4177,9 +4260,15 @@ class AgentContextService:
         event_sink: ContextExecutionEventSink | None,
         phase: str | None,
         round_number: int | None,
+        continuation: ContextContinuationTransaction | None,
+        session_history: SessionHistorySnapshot | None,
+        publication_validator: Callable[[], bool] | None,
     ) -> ContextInvocationResult:
         policy_fingerprint = self._execution_policy_fingerprint
-        key = ContextLedgerKey(scope, provider_id)
+        checkpoint_scope = (
+            scope if continuation is None else continuation.identity.checkpoint_scope()
+        )
+        key = ContextLedgerKey(checkpoint_scope, provider_id)
         attempt_id: str | None = None
         generation: int | None = None
         calls: list[ContextLedgerProviderCall] = []
@@ -4249,7 +4338,7 @@ class AgentContextService:
             if active_thread_id is not None:
                 _safe_identity(active_thread_id)
             execution_conditions = ContextPlanningConditions(
-                scope,
+                checkpoint_scope,
                 provider_id,
                 definition_fingerprint,
                 policy_fingerprint,
@@ -4279,7 +4368,7 @@ class AgentContextService:
                         ContextCheckpointState.STALE
                     )
             projection = plan_context_projection(
-                manifest,
+                replace(manifest, scope=checkpoint_scope),
                 materials,
                 policy=self._planning_policy,
                 conditions=planning_conditions,
@@ -4288,13 +4377,82 @@ class AgentContextService:
                 mandatory_references=request.mandatory_references,
                 fresh=request.fresh,
             )
+            history_delivery = None
+            if session_history is not None:
+                try:
+                    history_delivery = session_history.delivery(
+                        planning_checkpoint.session_history_coverage
+                        if projection.mode is ContextDeliveryMode.DELTA else ()
+                    )
+                except SessionContextHistoryChangedError:
+                    inspection = self._ledger.invalidate(
+                        key, expected_generation=inspection.generation,
+                    )
+                    planning_checkpoint = inspection.checkpoint_view
+                    projection = plan_context_projection(
+                        replace(manifest, scope=checkpoint_scope), materials,
+                        policy=self._planning_policy,
+                        conditions=planning_conditions,
+                        checkpoint=planning_checkpoint,
+                        active_provider_thread_id=active_thread_id,
+                        mandatory_references=request.mandatory_references,
+                        fresh=request.fresh,
+                    )
+                    history_delivery = session_history.delivery()
+                if request.session_state_json is not None:
+                    history_delivery["current_state"] = json.loads(request.session_state_json)
+                history_delivery["delivery_mode"] = projection.mode.value
             projection = replace(
                 projection,
                 checkpoint_proposal=replace(
                     projection.checkpoint_proposal,
                     conditions=execution_conditions,
+                    session_history_coverage=(
+                        () if session_history is None else session_history.coverage
+                    ),
                 ),
             )
+            binding = ContextInvocationBinding(
+                scope,
+                request.operation_id,
+                request.result_correlation_id,
+                manifest,
+                request.reference_operation_id,
+                request.mandatory_references,
+            )
+            action_session = ContextInvocationSession(
+                binding,
+                registry,
+                action_policy=self._action_policy,
+                source_policy=self._source_policy,
+                source_aliases=_invocation_source_aliases(
+                    manifest,
+                    projection,
+                ),
+                allowed_search_source_kinds=(request.allowed_search_source_kinds),
+                physical_call_limit=(
+                    physical_call_limit - int(bool(request.mandatory_references))
+                ),
+                core_statuses=core_statuses,
+            )
+
+            # All statically available mandatory material is checked before the
+            # reference prelude. Its generated observation is checked again in
+            # the exact substantive payload before that physical submission.
+            if history_delivery is not None:
+                known_payload, _, _ = _initial_payload(
+                    binding, projection, planning_checkpoint, action_session,
+                    materials, phase_contract=_invocation_phase_contract(request),
+                    action_index=1,
+                    allowed_actions=action_session.allowed_actions(
+                        after=None, search_had_hits=False,
+                    ),
+                    reference_context=(),
+                )
+                known_payload["h"] = history_delivery
+                if len(_canonical_bytes(known_payload)) > MAX_SESSION_CONTEXT_UTF8_BYTES:
+                    raise SessionContextCapacityError()
+
             if projection.mode is ContextDeliveryMode.BOOTSTRAP:
                 retired_thread_id = active_thread_id
                 if retired_thread_id is not None:
@@ -4372,29 +4530,6 @@ class AgentContextService:
                 plan=plan,
             )
             generation = reserved.generation
-            binding = ContextInvocationBinding(
-                scope,
-                request.operation_id,
-                request.result_correlation_id,
-                manifest,
-                request.reference_operation_id,
-                request.mandatory_references,
-            )
-            action_session = ContextInvocationSession(
-                binding,
-                registry,
-                action_policy=self._action_policy,
-                source_policy=self._source_policy,
-                source_aliases=_invocation_source_aliases(
-                    manifest,
-                    projection,
-                ),
-                allowed_search_source_kinds=(request.allowed_search_source_kinds),
-                physical_call_limit=(
-                    physical_call_limit - int(bool(request.mandatory_references))
-                ),
-                core_statuses=core_statuses,
-            )
 
             current_thread_id = active_thread_id
             reference_context: tuple[Mapping[str, object], ...] = ()
@@ -4410,6 +4545,7 @@ class AgentContextService:
                             call_id,
                             request.reference_operation_id,
                             current_thread_id,
+                            None if continuation is None else continuation.identity,
                         )
                     )
                 except BaseException as failure:
@@ -4543,6 +4679,11 @@ class AgentContextService:
                         allowed_actions=allowed_actions,
                         reference_context=reference_context,
                     )
+                    if history_delivery is not None:
+                        payload["h"] = history_delivery
+                        component_paths[("h",)] = ContextComponentKind.CONVERSATION_CONTEXT
+                        if len(_canonical_bytes(payload)) > MAX_SESSION_CONTEXT_UTF8_BYTES:
+                            raise SessionContextCapacityError()
                     call_kind = (
                         ProviderCallKind.DEBATE
                         if scope.subject_kind is ContextSubjectKind.DEBATE
@@ -4582,7 +4723,14 @@ class AgentContextService:
                     component_paths=component_paths,
                     mandatory_reference_paths=reference_paths,
                     expected_thread_id=current_thread_id,
+                    continuation_identity=(
+                        None if continuation is None else continuation.identity
+                    ),
                 )
+                if continuation is not None and (
+                    len(_canonical_bytes(payload)) > MAX_SESSION_CONTEXT_UTF8_BYTES
+                ):
+                    raise SessionContextCapacityError()
                 stage = "provider"
                 provider_failure = True
                 try:
@@ -4885,10 +5033,7 @@ class AgentContextService:
                 stage = "commit"
                 assert current_thread_id is not None
                 assert terminal_call_id is not None
-                commit = self._ledger.commit_attempt(
-                    key,
-                    expected_generation=generation,
-                    authorization=ContextLedgerCommitAuthorization(
+                commit_authorization = ContextLedgerCommitAuthorization(
                         attempt_id=attempt_id,
                         operation_id=request.operation_id,
                         result_correlation_id=request.result_correlation_id,
@@ -4900,7 +5045,56 @@ class AgentContextService:
                             request.reference_operation_id
                         ),
                         output_action_authorization_id=(authorization.authorization_id),
-                    ),
+                )
+                if continuation is not None:
+                    assert publication_validator is not None
+                    deferred_finalizer = call_finalizer
+                    call_finalizer = None
+                    deferred_committed = False
+
+                    def commit_published() -> None:
+                        nonlocal deferred_committed
+                        self._ledger.commit_attempt(
+                            key, expected_generation=generation,
+                            authorization=commit_authorization,
+                        )
+                        deferred_committed = True
+                        if deferred_finalizer is not None:
+                            _accept_provider_call_without_replacing(deferred_finalizer)
+                        _emit_context_event(event_sink, execution_event(
+                            ContextExecutionEventKind.CHECKPOINT_ADVANCED,
+                            provider_input_tokens=_provider_input_token_total(submitted_accountings),
+                        ))
+
+                    def abort_unpublished() -> None:
+                        if deferred_committed:
+                            return
+                        try:
+                            self._ledger.taint_attempt(
+                                key, expected_generation=generation,
+                                attempt_id=attempt_id,
+                                outcome=ContextLedgerAttemptOutcome.FAILED,
+                            )
+                        except BaseException:
+                            pass
+                        if deferred_finalizer is not None:
+                            _fail_provider_call_without_replacing(
+                                deferred_finalizer,
+                                ContextProviderTerminalCode.CONTEXT_RUNTIME_FAILED,
+                            )
+                        _emit_context_event_without_replacing(event_sink, execution_event(
+                            ContextExecutionEventKind.CHECKPOINT_NOT_ADVANCED,
+                        ))
+
+                    continuation.stage(commit_published, abort_unpublished, publication_validator)
+                    return ContextInvocationResult(
+                        action.answer, authorization, projection.accounting,
+                        current_thread_id, tuple(calls), generation,
+                        checkpoint_pending=True,
+                    )
+                commit = self._ledger.commit_attempt(
+                    key, expected_generation=generation,
+                    authorization=commit_authorization,
                 )
                 terminal_provider_succeeded = False
                 checkpoint_committed = True
@@ -4979,9 +5173,10 @@ class AgentContextService:
                     ),
                 )
             failure_code = getattr(getattr(failure, "code", None), "value", "")
-            if isinstance(failure_code, str) and (
-                "budget_exceeded" in failure_code or "limit_exceeded" in failure_code
-            ):
+            if (
+                isinstance(failure_code, str)
+                and ("budget_exceeded" in failure_code or "limit_exceeded" in failure_code)
+            ) or isinstance(failure, SessionContextCapacityError):
                 _emit_context_event_without_replacing(
                     event_sink,
                     execution_event(
@@ -5076,6 +5271,7 @@ class AgentContextService:
                         )
                     ),
                     response_rejection_code=response_rejection_code,
+                    continuation_rejection=existing_facts.continuation_rejection,
                 ),
             )
             raise

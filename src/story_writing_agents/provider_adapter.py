@@ -204,6 +204,17 @@ class ProviderFailureAccounting:
 _PREPARED_PROVIDER_FAILURE = ProviderFailureAccounting()
 
 
+class ProviderContinuationRejection(StrEnum):
+    """A deterministic provider rejection proving no turn was executed.
+
+    Adapters may set this only from a supported machine-readable rejection
+    envelope. Exit status, diagnostic prose, and missing output are insufficient.
+    """
+
+    UNAVAILABLE = "continuation_unavailable"
+    CAPACITY = "context_capacity"
+
+
 class ProviderInvocationError(Exception):
     """Carry one safe adapter diagnostic and thread-taint decision."""
 
@@ -212,10 +223,14 @@ class ProviderInvocationError(Exception):
         diagnostic: str,
         *,
         taint_existing_thread: bool,
+        continuation_rejection: ProviderContinuationRejection | None = None,
     ) -> None:
         super().__init__(diagnostic)
         self.diagnostic = diagnostic
         self.taint_existing_thread = taint_existing_thread
+        if continuation_rejection is not None and type(continuation_rejection) is not ProviderContinuationRejection:
+            raise TypeError("continuation rejection must be a closed provider code")
+        self.continuation_rejection = continuation_rejection
         self._call_accounting = _PREPARED_PROVIDER_FAILURE
 
 

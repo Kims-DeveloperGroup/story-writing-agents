@@ -136,6 +136,8 @@ class ManifestSurfaceTests(unittest.TestCase):
                 "ContextPriority",
                 "ContextProvenance",
                 "ContextScope",
+                "ContextContinuationIdentity",
+                "validate_context_history_coverage",
                 "ContextSemanticChannel",
                 "ContextSourceKind",
                 "ContextSubjectKind",
@@ -146,7 +148,7 @@ class ManifestSurfaceTests(unittest.TestCase):
         )
         self.assertEqual(
             tuple(item.value for item in ContextSubjectKind),
-            ("conversation", "debate"),
+            ("conversation", "debate", "session"),
         )
         self.assertEqual(
             tuple(item.value for item in ContextAuthorityKind),

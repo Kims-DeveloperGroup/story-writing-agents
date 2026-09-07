@@ -16,6 +16,8 @@ __all__ = [
     "ContextPriority",
     "ContextProvenance",
     "ContextScope",
+    "ContextContinuationIdentity",
+    "validate_context_history_coverage",
     "ContextSemanticChannel",
     "ContextSourceKind",
     "ContextSubjectKind",
@@ -55,6 +57,7 @@ class ContextSubjectKind(StrEnum):
 
     CONVERSATION = "conversation"
     DEBATE = "debate"
+    SESSION = "session"
 
 
 class ContextAuthorityKind(StrEnum):
@@ -173,6 +176,55 @@ class ContextScope:
         ):
             raise ContextManifestError(ContextManifestErrorCode.INVALID_VALUE)
         validate_context_identity(self.agent_id)
+
+
+@dataclass(frozen=True, slots=True)
+class ContextContinuationIdentity:
+    """Persistent session ownership, distinct from a physical call's scope.
+
+    The session storage namespace must never replace conversation/debate
+    attribution or authorize a source, reference, or collaboration decision.
+    """
+
+    workspace_id: str
+    session_id: str
+    agent_id: str
+
+    def __post_init__(self) -> None:
+        self.checkpoint_scope()
+
+    def checkpoint_scope(self) -> ContextScope:
+        return ContextScope(
+            self.workspace_id, self.session_id, ContextSubjectKind.SESSION,
+            self.session_id, self.agent_id,
+        )
+
+    def accepts(self, scope: ContextScope) -> bool:
+        return (
+            type(scope) is ContextScope
+            and scope.subject_kind is ContextSubjectKind.CONVERSATION
+            and (scope.workspace_id, scope.session_id, scope.agent_id)
+            == (self.workspace_id, self.session_id, self.agent_id)
+        )
+
+
+def validate_context_history_coverage(
+    coverage: tuple[tuple[str, int, str], ...],
+) -> None:
+    """Validate canonical conversation/sequence/digest delivery watermarks."""
+
+    if type(coverage) is not tuple or len(coverage) > 4096:
+        raise ContextManifestError(ContextManifestErrorCode.INVALID_VALUE)
+    previous = ""
+    for item in coverage:
+        if type(item) is not tuple or len(item) != 3:
+            raise ContextManifestError(ContextManifestErrorCode.INVALID_VALUE)
+        conversation_id, sequence, digest = item
+        validate_context_identity(conversation_id)
+        if conversation_id <= previous or type(sequence) is not int or sequence < 0:
+            raise ContextManifestError(ContextManifestErrorCode.INVALID_VALUE)
+        validate_context_digest(digest)
+        previous = conversation_id
 
 
 @dataclass(frozen=True, slots=True)

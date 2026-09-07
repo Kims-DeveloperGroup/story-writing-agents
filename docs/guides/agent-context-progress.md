@@ -39,6 +39,14 @@ A Python application may render compact lines from the callback:
 The interactive semantic renderer may vary decoration, but preserves these
 content-free meanings.
 
+For Lead session continuity, `bootstrap` means exact retained-context recovery;
+`delta` means compatible continuation. Selected-source counts and bytes describe
+the bounded source projection and exclude the separate required `h` session
+context; actual provider-payload accounting includes it. `checkpoint_advanced`
+follows durable publication of the Lead judgment or synthesis, so failed
+publication cannot earn coverage for a later delta. No new status surface is
+introduced. See [Lead session memory](agent-context.md#lead-session-memory).
+
 ## Direct types
 
 The observation types remain in the direct module:

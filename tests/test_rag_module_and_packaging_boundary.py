@@ -73,13 +73,25 @@ def _resolve_internal_module(
 
 
 def _internal_edges(modules: dict[str, Path]) -> set[tuple[str, str]]:
+    def runtime_nodes(node: ast.AST):
+        yield node
+        if isinstance(node, ast.If) and (
+            isinstance(node.test, ast.Name) and node.test.id == "TYPE_CHECKING"
+            or isinstance(node.test, ast.Attribute) and node.test.attr == "TYPE_CHECKING"
+        ):
+            for child in node.orelse:
+                yield from runtime_nodes(child)
+            return
+        for child in ast.iter_child_nodes(node):
+            yield from runtime_nodes(child)
+
     edges: set[tuple[str, str]] = set()
     for module, path in modules.items():
         tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
         context = (
             module.split(".") if path.name == "__init__.py" else module.split(".")[:-1]
         )
-        for node in ast.walk(tree):
+        for node in runtime_nodes(tree):
             targets: list[str] = []
             if isinstance(node, ast.Import):
                 targets.extend(alias.name for alias in node.names)
@@ -332,8 +344,8 @@ class RagModuleBoundaryTests(unittest.TestCase):
     ) -> None:
         modules = _module_inventory()
         edges = _internal_edges(modules)
-        self.assertEqual(len(modules), 132)
-        self.assertEqual(len(edges), 514)
+        self.assertEqual(len(modules), 137)
+        self.assertEqual(len(edges), 539)
         self.assertIsNone(_cycle_witness(modules, edges))
         conversation_dependencies = {
             "story_writing_agents.conversations": {
@@ -379,12 +391,16 @@ class RagModuleBoundaryTests(unittest.TestCase):
                 "story_writing_agents.writing_artifacts",
             },
             "story_writing_agents.workspace.initialization": {
+                "story_writing_agents.agent_exchange_paths",
+                "story_writing_agents.config",
                 "story_writing_agents.errors",
                 "story_writing_agents.git",
                 "story_writing_agents.git.session_contracts",
+                "story_writing_agents.git.session_checkpoints",
                 "story_writing_agents.git.session_history",
                 "story_writing_agents.git.session_resources",
                 "story_writing_agents.git.story_commits",
+                "story_writing_agents.runtime_state_paths",
                 "story_writing_agents.workspace.schema",
             },
             "story_writing_agents.workspace.schema": {
@@ -625,6 +641,7 @@ class RagModuleBoundaryTests(unittest.TestCase):
                 "story_writing_agents.agent_context.accounting",
                 "story_writing_agents.agent_context.manifest",
                 "story_writing_agents.agent_context.planning",
+                "story_writing_agents.runtime_state_paths",
                 "story_writing_agents.workspace",
             },
         )
@@ -649,6 +666,7 @@ class RagModuleBoundaryTests(unittest.TestCase):
                 "story_writing_agents.agent_context.actions",
                 "story_writing_agents.agent_context.manifest",
                 "story_writing_agents.conversations",
+                "story_writing_agents.conversations.session_context",
                 "story_writing_agents.errors",
                 "story_writing_agents.models",
                 "story_writing_agents.workspace",
@@ -667,10 +685,12 @@ class RagModuleBoundaryTests(unittest.TestCase):
             {
                 "story_writing_agents.agent_context.accounting",
                 "story_writing_agents.agent_context.actions",
+                "story_writing_agents.agent_context.continuation",
                 "story_writing_agents.agent_context.ledger",
                 "story_writing_agents.agent_context.manifest",
                 "story_writing_agents.agent_context.planning",
                 "story_writing_agents.agent_context.sources",
+                "story_writing_agents.conversations.session_context",
                 "story_writing_agents.workspace",
             },
         )

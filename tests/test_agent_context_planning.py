@@ -2753,7 +2753,7 @@ class PlanningBoundaryAndPurityTests(PlanningTestCase):
         script = (
             "import story_writing_agents.agent_context.manifest as manifest; "
             "import story_writing_agents.agent_context.planning as planning; "
-            "assert len(manifest.__all__) == 14; "
+            "assert len(manifest.__all__) == 16; "
             "assert len(planning.__all__) == 26"
         )
         with tempfile.TemporaryDirectory() as directory:

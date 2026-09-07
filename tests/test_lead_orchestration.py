@@ -25,6 +25,7 @@ from story_writing_agents.agent_context.accounting import (
 from story_writing_agents.agent_context.service import (
     ContextProviderCallRequest,
     ContextProviderCallResult,
+    ContextContinuationRejection,
     ContextProviderFailureFacts,
     ContextProviderTerminalCode,
     ContextReferencePreludeRequest,
@@ -105,6 +106,7 @@ class _SubmittedFailure:
     failure: BaseException
     timed_out: bool = False
     submission_uncertain: bool = False
+    continuation_rejection: ContextContinuationRejection | None = None
 
 
 class _LeadContextProvider:
@@ -131,6 +133,7 @@ class _LeadContextProvider:
         )
         self._threads: dict[tuple[object, str], str] = {}
         self._active: tuple[object, str] | None = None
+        self._continuation_identity: object | None = None
         self._reference_prepared = False
         self._reference_terminal = False
         self.used_handles: tuple[str, ...] = ()
@@ -141,12 +144,20 @@ class _LeadContextProvider:
         )
 
     @asynccontextmanager
-    async def invocation(self, scope: object, policy_fingerprint: str):
+    async def invocation(
+        self, scope: object, policy_fingerprint: str, *,
+        continuation_identity: object | None = None,
+    ):
         self._active = (scope, policy_fingerprint)
+        self._continuation_identity = continuation_identity
         try:
             yield
         finally:
             self._active = None
+            self._continuation_identity = None
+
+    def _thread_key(self, scope: object, policy_fingerprint: str):
+        return (self._continuation_identity or scope, policy_fingerprint)
 
     def _require_active(self, scope: object, policy_fingerprint: str) -> None:
         if self._active != (scope, policy_fingerprint):
@@ -158,7 +169,7 @@ class _LeadContextProvider:
         policy_fingerprint: str,
     ) -> str | None:
         self._require_active(scope, policy_fingerprint)
-        return self._threads.get((scope, policy_fingerprint))
+        return self._threads.get(self._thread_key(scope, policy_fingerprint))
 
     @staticmethod
     def _account(
@@ -211,7 +222,7 @@ class _LeadContextProvider:
             call_kind=ProviderCallKind.WRITING_ARTIFACT_REFERENCE_READ,
         )
         thread_id = request.expected_thread_id or "thread-reference"
-        self._threads[(request.scope, request.policy_fingerprint)] = thread_id
+        self._threads[self._thread_key(request.scope, request.policy_fingerprint)] = thread_id
         self._reference_prepared = True
         self.backend.reference_contexts.append(context)
         self.backend.reference_records.append((self.agent_id, context))
@@ -242,6 +253,7 @@ class _LeadContextProvider:
                     timed_out=scripted.timed_out,
                     taint_existing_thread=True,
                     submission_uncertain=scripted.submission_uncertain,
+                    continuation_rejection=scripted.continuation_rejection,
                 ),
             )
             raise scripted.failure
@@ -265,7 +277,7 @@ class _LeadContextProvider:
         thread_id = request.expected_thread_id or (
             f"thread-lead-{len(self.backend.finalizers) + 1}"
         )
-        self._threads[(request.scope, request.policy_fingerprint)] = thread_id
+        self._threads[self._thread_key(request.scope, request.policy_fingerprint)] = thread_id
         finalizer = _Finalizer()
         self.backend.finalizers.append(finalizer)
         return ContextProviderCallResult(
@@ -305,7 +317,7 @@ class _LeadContextProvider:
         self._reference_terminal = True
 
     def taint_context_thread(self, scope: object, policy_fingerprint: str) -> None:
-        thread_id = self._threads.pop((scope, policy_fingerprint), None)
+        thread_id = self._threads.pop(self._thread_key(scope, policy_fingerprint), None)
         if thread_id is not None:
             self.backend.tainted_thread_ids.append(thread_id)
 
@@ -712,7 +724,7 @@ class LeadOutcomeAndProposalTests(LeadOrchestrationTestCase):
             tuple(call.payload["q"][1] for call in calls),
             ("sa", "sra", "sa"),
         )
-        self.assertNotIn(
+        self.assertIn(
             "Visible lead response.",
             json.dumps(dict(calls[0].payload), ensure_ascii=False),
         )

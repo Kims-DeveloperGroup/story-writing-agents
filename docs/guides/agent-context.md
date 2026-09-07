@@ -1,9 +1,8 @@
 # Bounded agent context
 
 Bounded agent context assembles small, authoritative inputs and lets an agent
-request additional evidence. `StoryRuntime.lead_turn()` uses it for the Python
-lead workflow. The public shell, debate commands, reference picker, and
-specialist execution do not invoke it in this integration stage.
+request additional evidence. Python and interactive Lead turns and confirmed
+specialist consultations use the same component.
 
 ## Why the component exists
 
@@ -13,6 +12,7 @@ every physical provider call. It separates context by purpose:
 | Category | Examples | Component behavior |
 | --- | --- | --- |
 | Required work | Current instruction and complete logical candidate | Always present; omission fails validation. |
+| Lead session memory | Retained session history, current directives, and complete current core documents | Required independently of optional source budgets; exact bootstrap or unseen-history delta. |
 | Stable identity | Agent role, persona, language, and protocol | Reused only while its fingerprint remains compatible. |
 | Working knowledge | Current constraints and focused records | Selected within explicit byte budgets. |
 | Additive knowledge | Older conversation, manuscript passage, debate record, or the invoking agent's state | Remains available through bounded lexical search and exact read actions. |
@@ -44,18 +44,50 @@ most four nonterminal actions across five provider calls, with at most two
 searches and two reads. Mandatory references have a separate limit of 16
 references, 128 KiB each, and 256 KiB in aggregate.
 
-Focused conversation history follows an additional rule: the adapter's default
+Searchable conversation history follows an additional rule: the adapter's default
 `CollaborationReadableContext` bootstrap is content-free and contains zero
 records. The lead runtime explicitly enables bounded searchable history across
-active same-session conversations, but still sends no eager record bodies.
+active same-session conversations, with no eager record bodies from this adapter.
 SEARCH and READ add only authorized whole records under the fixed
-24-record/32,768-byte bound. The adapter never loads the full transcript or
-exposes private typed payload fields.
+24-record/32,768-byte bound. This search boundary is separate from required
+Lead session memory below and does not expose private typed payload fields.
 
 Search returns invocation-bound handles rather than permanent authority. Read
 accepts only live handles from the same invocation. Guessed, stale, consumed,
 cross-agent, cross-scope, or drifting evidence fails closed. A final answer
 must identify the handles it used.
+
+## Lead session memory
+
+Ordinary Lead turns and consultation/artifact-review synthesis share one
+compatible provider thread across conversations in the same workspace and
+story session. Compatibility includes the agent, provider, definition, and
+context policy. Pause/reopen and process restart preserve compatible
+continuation; the Lead thread does not rotate after an arbitrary 16 turns.
+Specialists and consensus retain their separate invocation scopes.
+
+The initial substantive payload of each Lead invocation includes required
+session context (`h`). Bootstrap supplies all retained active and archived
+conversation histories with exact readable text and visible workflow/review
+details. A compatible continuation supplies unseen events. Both include
+current session directives and complete current canonical core-document bytes,
+including for `workflow_meta` turns. A zero optional P3 budget does not omit
+this material. See the [provider disclosure details](../operations/privacy-and-provider.md#provider-disclosure).
+
+Archiving a conversation only changes its catalog status: it does not remove
+its history from Lead memory or prevent provider disclosure. Memory grants no
+current evidence receipt, confirmation, replay, artifact-write, or Git
+authority. Explicit references and SEARCH/READ evidence rules still apply.
+
+Exact delivery permits at most 4,096 conversations and an inclusive limit of
+262,144 UTF-8 bytes for the canonically serialized contextual payload, including
+framing and any reference observation it carries. Excess fails with
+`exact session context exceeds the delivery capacity`; runtime never silently
+omits or summarizes required history. Known history, current state, input, and
+framing are checked before provider work. Generated observations are checked
+before the subsequent substantive submission, so their excess does not imply
+that no earlier provider call occurred. This runtime byte limit does not
+guarantee that the selected model's token window can hold the context.
 
 ## Checkpoints and provider input
 
@@ -70,6 +102,11 @@ an exact unchanged-candidate pointer. Missing, corrupt, stale, tainted, or
 incompatible state forces a fresh bootstrap or an explicit failure. Provider
 input-token totals are reported only when every submitted physical call
 reports an exact count; the component does not estimate missing usage.
+
+For the Lead, bootstrap reconstructs exact retained session memory on the next
+safe authorized work. An unresolved submitted call still blocks its original
+conversation as `outcome_unknown`; a fresh thread cannot resolve or replay it.
+See [continuation recovery](../reference/backend-and-sessions.md#lead-session-continuation).
 
 ## Reference enforcement
 

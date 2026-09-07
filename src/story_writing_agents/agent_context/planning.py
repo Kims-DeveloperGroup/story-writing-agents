@@ -16,6 +16,8 @@ from .manifest import (
     ContextScope,
     ContextSemanticChannel,
     ContextSourceKind,
+    ContextSubjectKind,
+    validate_context_history_coverage,
     context_manifest_entry_key,
     validate_context_digest,
     validate_context_identity,
@@ -641,8 +643,10 @@ class ContextCheckpointView:
     delta_depth: int | None = None
     catalog_sources: tuple[ContextCatalogCursor, ...] = ()
     source_alias_high_watermark: int = 0
+    session_history_coverage: tuple[tuple[str, int, str], ...] = ()
 
     def __post_init__(self) -> None:
+        validate_context_history_coverage(self.session_history_coverage)
         if type(self.state) is not ContextCheckpointState:
             raise ContextPlanningError(ContextPlanningErrorCode.INVALID_CHECKPOINT)
         if self.state is not ContextCheckpointState.READY:
@@ -653,6 +657,7 @@ class ContextCheckpointView:
                 or self.delta_depth is not None
                 or self.catalog_sources
                 or self.source_alias_high_watermark != 0
+                or self.session_history_coverage
             ):
                 raise ContextPlanningError(
                     ContextPlanningErrorCode.INVALID_CHECKPOINT
@@ -1247,8 +1252,10 @@ class ContextCheckpointProposal:
     delta_depth: int
     catalog_sources: tuple[ContextCatalogCursor, ...] = ()
     source_alias_high_watermark: int = 0
+    session_history_coverage: tuple[tuple[str, int, str], ...] = ()
 
     def __post_init__(self) -> None:
+        validate_context_history_coverage(self.session_history_coverage)
         if type(self.conditions) is not ContextPlanningConditions:
             raise ContextPlanningError(ContextPlanningErrorCode.INVALID_VALUE)
         if type(self.sources) is not tuple or any(
@@ -1689,7 +1696,10 @@ def _bootstrap_reason(
         return ContextBootstrapReason.POLICY_FINGERPRINT_MISMATCH
     if previous.schema_version != conditions.schema_version:
         return ContextBootstrapReason.SCHEMA_MISMATCH
-    if checkpoint.delta_depth >= policy.max_delta_depth:
+    if (
+        conditions.scope.subject_kind is not ContextSubjectKind.SESSION
+        and checkpoint.delta_depth >= policy.max_delta_depth
+    ):
         return ContextBootstrapReason.MAX_DELTA_DEPTH
     return None
 
