@@ -61,9 +61,11 @@ from .agent_context.service import (
     ContextReferencePreludeRequest,
     ContextReferencePreludeResult,
     ContextScope,
+    ContextContinuationRejection,
     record_context_provider_failure,
 )
 from .agent_exchanges import AgentExchangeProvider, AgentExchangeScopeKind
+from .agent_context.manifest import ContextContinuationIdentity
 from .agent_exchanges.capture import (
     AgentExchangeCaptureLifecycle,
     AgentExchangeTerminalCode,
@@ -73,6 +75,10 @@ from .antigravity_adapter import AntigravityAdapter
 from .config import ConfigurationSnapshot, ConfigManager
 from .codex_adapter import CodexAdapter
 from .conversations import CollaborationEventStore
+from .conversations.session_context import (
+    MAX_SESSION_CONTEXT_UTF8_BYTES,
+    SessionContextCapacityError,
+)
 from .conversation_retrieval import (
     CONVERSATION_RETRIEVAL_POLICY,
     ConversationRetrievalAction,
@@ -354,6 +360,7 @@ class _BoundContextProvider:
         self._reference_prepared = False
         self._reference_terminal = False
         self._active_scope: ContextScope | None = None
+        self._continuation_identity: ContextContinuationIdentity | None = None
         self._active_policy_fingerprint: str | None = None
         if reference_read is None:
             self.reference_operation_id = None
@@ -402,6 +409,8 @@ class _BoundContextProvider:
         self,
         scope: ContextScope,
         policy_fingerprint: str,
+        *,
+        continuation_identity: ContextContinuationIdentity | None = None,
     ) -> AsyncIterator[None]:
         if (
             type(scope) is not ContextScope
@@ -411,9 +420,18 @@ class _BoundContextProvider:
         ):
             raise ContextExecutionError(ContextExecutionErrorCode.PROVIDER_CONTRACT)
         with self._bound_agent._reference_call_use(self._reference_read):
+            if continuation_identity is not None and (
+                type(continuation_identity) is not ContextContinuationIdentity
+                or not continuation_identity.accepts(scope)
+            ):
+                raise ContextExecutionError(ContextExecutionErrorCode.PROVIDER_CONTRACT)
+            storage_scope = (
+                scope if continuation_identity is None
+                else continuation_identity.checkpoint_scope()
+            )
             try:
                 lock = self._bound_agent.backend._context_thread_lock(
-                    scope,
+                    storage_scope,
                     self.provider_id,
                     self.definition_fingerprint,
                     policy_fingerprint,
@@ -429,11 +447,13 @@ class _BoundContextProvider:
                 self._reference_read,
             ):
                 self._active_scope = scope
+                self._continuation_identity = continuation_identity
                 self._active_policy_fingerprint = policy_fingerprint
                 try:
                     yield
                 finally:
                     self._active_scope = None
+                    self._continuation_identity = None
                     self._active_policy_fingerprint = None
 
     def _require_active(
@@ -454,7 +474,8 @@ class _BoundContextProvider:
     ) -> str | None:
         self._require_active(scope, policy_fingerprint)
         return self._bound_agent.backend._load_context_thread(
-            scope,
+            scope if self._continuation_identity is None
+            else self._continuation_identity.checkpoint_scope(),
             self.provider_id,
             self.definition_fingerprint,
             policy_fingerprint,
@@ -465,6 +486,8 @@ class _BoundContextProvider:
         request: ContextReferencePreludeRequest,
     ) -> ContextReferencePreludeResult:
         self._require_active(request.scope, request.policy_fingerprint)
+        if request.continuation_identity != self._continuation_identity:
+            raise ContextExecutionError(ContextExecutionErrorCode.PROVIDER_CONTRACT)
         if (
             self._reference_read is None
             or self._reference_prepared
@@ -499,6 +522,8 @@ class _BoundContextProvider:
         request: ContextProviderCallRequest,
     ) -> ContextProviderCallResult:
         self._require_active(request.scope, request.policy_fingerprint)
+        if request.continuation_identity != self._continuation_identity:
+            raise ContextExecutionError(ContextExecutionErrorCode.PROVIDER_CONTRACT)
         return await self._bound_agent.backend._invoke_context_physical(
             self._bound_agent,
             scope=request.scope,
@@ -509,6 +534,7 @@ class _BoundContextProvider:
             call_kind=request.call_kind,
             component_paths=request.component_paths,
             mandatory_reference_paths=request.mandatory_reference_paths,
+            continuation_identity=request.continuation_identity,
         )
 
     def complete_references(
@@ -582,7 +608,8 @@ class _BoundContextProvider:
     ) -> None:
         self._require_active(scope, policy_fingerprint)
         self._bound_agent.backend._taint_context_thread(
-            scope,
+            scope if self._continuation_identity is None
+            else self._continuation_identity.checkpoint_scope(),
             self.provider_id,
             self.definition_fingerprint,
             policy_fingerprint,
@@ -4420,6 +4447,7 @@ class AgentBackend:
         call_kind: ProviderCallKind,
         component_paths: Mapping[JsonPath, ContextComponentKind],
         mandatory_reference_paths: tuple[JsonPath, ...],
+        continuation_identity: ContextContinuationIdentity | None = None,
     ) -> ContextProviderCallResult:
         """Build and submit one exact contextual ProviderInvocation."""
 
@@ -4432,9 +4460,18 @@ class AgentBackend:
         ):
             raise ContextExecutionError(ContextExecutionErrorCode.PROVIDER_CONTRACT)
         session = self.workspace.validate_identifier(scope.session_id)
+        if continuation_identity is not None and (
+            type(continuation_identity) is not ContextContinuationIdentity
+            or not continuation_identity.accepts(scope)
+        ):
+            raise ContextExecutionError(ContextExecutionErrorCode.PROVIDER_CONTRACT)
+        storage_scope = (
+            scope if continuation_identity is None
+            else continuation_identity.checkpoint_scope()
+        )
         self._assert_provider_work_ready(session)
         stored_thread_id = self._load_context_thread(
-            scope,
+            storage_scope,
             bound_agent.vendor,
             f"sha256:{bound_agent.definition.fingerprint}",
             policy_fingerprint,
@@ -4460,6 +4497,11 @@ class AgentBackend:
         )
         if invocation.call_accounting is None or invocation.payload_json is None:
             raise ContextExecutionError(ContextExecutionErrorCode.PROVIDER_CONTRACT)
+        if continuation_identity is not None and (
+            len(invocation.payload_json)
+            > MAX_SESSION_CONTEXT_UTF8_BYTES
+        ):
+            raise SessionContextCapacityError()
 
         definition_fingerprint = f"sha256:{bound_agent.definition.fingerprint}"
         exchange = self._begin_context_agent_exchange(
@@ -4480,7 +4522,7 @@ class AgentBackend:
             taint = bool(failure.taint_existing_thread or submitted)
             if taint:
                 self._taint_context_thread_without_replacing(
-                    scope,
+                    storage_scope,
                     bound_agent.vendor,
                     definition_fingerprint,
                     policy_fingerprint,
@@ -4492,6 +4534,13 @@ class AgentBackend:
                     accounting,
                     timed_out=self._context_failure_timed_out(failure),
                     taint_existing_thread=taint,
+                    continuation_rejection=(
+                        ContextContinuationRejection(failure.continuation_rejection.value)
+                        if expected_thread_id is not None
+                        and failure.continuation_rejection is not None
+                        and not self._context_failure_timed_out(failure)
+                        else None
+                    ),
                 ),
             )
             self._capture_provider_failure_without_replacing(
@@ -4514,7 +4563,7 @@ class AgentBackend:
             )
             if submitted:
                 self._taint_context_thread_without_replacing(
-                    scope,
+                    storage_scope,
                     bound_agent.vendor,
                     definition_fingerprint,
                     policy_fingerprint,
@@ -4537,7 +4586,7 @@ class AgentBackend:
             )
             if submitted:
                 self._taint_context_thread_without_replacing(
-                    scope,
+                    storage_scope,
                     bound_agent.vendor,
                     definition_fingerprint,
                     policy_fingerprint,
@@ -4583,7 +4632,7 @@ class AgentBackend:
                 ),
             )
             self._taint_context_thread_without_replacing(
-                scope,
+                storage_scope,
                 bound_agent.vendor,
                 definition_fingerprint,
                 policy_fingerprint,
@@ -4607,7 +4656,7 @@ class AgentBackend:
                 ),
             )
             self._taint_context_thread_without_replacing(
-                scope,
+                storage_scope,
                 bound_agent.vendor,
                 definition_fingerprint,
                 policy_fingerprint,
@@ -4629,7 +4678,7 @@ class AgentBackend:
                 ),
             )
             self._taint_context_thread_without_replacing(
-                scope,
+                storage_scope,
                 bound_agent.vendor,
                 definition_fingerprint,
                 policy_fingerprint,
@@ -4641,7 +4690,7 @@ class AgentBackend:
             raise failure
         try:
             self._store_context_thread(
-                scope,
+                storage_scope,
                 bound_agent.vendor,
                 definition_fingerprint,
                 policy_fingerprint,
@@ -4658,7 +4707,7 @@ class AgentBackend:
                     ),
                 )
                 self._taint_context_thread_without_replacing(
-                    scope,
+                    storage_scope,
                     bound_agent.vendor,
                     definition_fingerprint,
                     policy_fingerprint,
@@ -4722,6 +4771,7 @@ class AgentBackend:
             call_kind=ProviderCallKind.WRITING_ARTIFACT_REFERENCE_READ,
             component_paths=component_paths,
             mandatory_reference_paths=mandatory_paths,
+            continuation_identity=request.continuation_identity,
         )
         finalizer = result.finalizer
         reference_stage = "decode"
@@ -4783,7 +4833,8 @@ class AgentBackend:
                 ),
             )
             self._taint_context_thread_without_replacing(
-                request.scope,
+                request.scope if request.continuation_identity is None
+                else request.continuation_identity.checkpoint_scope(),
                 bound_agent.vendor,
                 f"sha256:{bound_agent.definition.fingerprint}",
                 request.policy_fingerprint,

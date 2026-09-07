@@ -244,11 +244,17 @@ core identities. It is not the current built-in provider payload.
 
 The contextual service translates authoritative capture into
 `agent-context-wire-v7`: compact required input/candidate and selected P2
-material, content-free catalog/record changes, and bounded observations. P3
-history and invoking-agent state are SEARCH-first. A fresh provider thread
-bootstraps current role-relevant sources; later compatible calls use revisions,
+material, content-free catalog/record changes, and bounded observations. Optional
+P3 history and invoking-agent state remain SEARCH-first. Separately, ordinary
+Lead turns and consultation/artifact-review synthesis carry required `h`:
+exact retained active/archived session history plus current directives and
+complete core bytes, even for `workflow_meta` or a zero P3 budget. Compatible
+calls share the session's Lead thread and send unseen events; a fresh thread
+receives all retained history. Neither form supplies current receipts or
+confirmation authority. Other source deltas use revisions,
 record changes, tombstones, and an exact candidate pointer or beneficial
-lossless single-splice. See
+lossless single-splice. Invocation and evidence scope stays conversation-bound;
+specialists and consensus retain their separate scopes. See
 [Agent-context design](agent-context.md#typed-provider-wire-v7).
 
 <a id="explicit-reference-provider-flow"></a>

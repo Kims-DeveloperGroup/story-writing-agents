@@ -1059,8 +1059,12 @@ provider switch, including A→B→A, deliberately advances freshness. Restore a
 verified complete backup if the record is corrupt or inconsistent.
 
 A fresh target-provider thread starts a new contextual epoch and bootstraps
-current role-relevant authoritative sources. It is expected to lack
-provider-native hidden history; that history is never correctness authority.
+current role-relevant authoritative sources. For ordinary Lead turns and
+consultation/artifact-review synthesis, this includes exact retained active and
+archived session history, current directives, and complete current core bytes
+on the next safe authorized work. It does not resolve or replay an unmatched
+submitted call. It is expected to lack provider-native hidden history; that
+history is never correctness authority.
 Use `/history`, `/status`, live `[context]` progress, and reply metadata to
 distinguish story-session continuity from native-thread reuse. See
 [Story sessions](../guides/story-sessions.md#execution-identity-and-fresh-thread-continuity).
@@ -1239,8 +1243,11 @@ or invocation is final. A failed runtime invocation terminates its top-level
 operation. An explicit retry therefore uses a new operation, capture, ordinal
 sequence, coordinator, and one-use capability.
 
-The backend does not retry automatically. An explicit retry or replacement
-needs a fresh invocation ID, ordinal/attempt correlation, private coordinator,
+The backend does not retry automatically. The runtime's narrow
+[typed continuation replacement](../reference/backend-and-sessions.md#lead-session-continuation)
+requires proof of pre-execution rejection, which current native adapters do
+not emit. An explicit retry or replacement needs a fresh invocation ID,
+ordinal/attempt correlation, private coordinator,
 and one-use capability; it cannot reuse terminal evidence. Cancellation,
 provider or workflow failure, drift, malformed or nonexact provider action,
 and wrong correlation terminate the current coordinator with a fixed
@@ -1438,10 +1445,12 @@ Backend close releases recorded access claims and ephemeral Codex staging. It
 does not pause or delete the durable story session, remove saved provider-thread
 references, or erase provider-native conversations. Antigravity definitions,
 work directories, and isolated native state remain plaintext under its
-provider-state root. A transport or protocol failure can taint one
-session/backend/agent thread; its next call starts a fresh provider conversation
-and preserves the old native data. There is no user-facing session-close
-command or secure-erasure workflow.
+provider-state root. A transport or protocol failure can taint a compatible
+thread; the next safe authorized work can start fresh while preserving old
+native data. Lead recovery restores exact retained session context, but an
+unresolved submitted outcome still blocks its original conversation and is
+never replayed. There is no user-facing session-close command or secure-erasure
+workflow.
 
 During a long-running process, a changed agent definition becomes current for
 new work without disrupting an operation already using the old immutable
@@ -1564,14 +1573,24 @@ workflow](privacy-and-provider.md#rejected-provider-response-artifacts).
 - Codex and Antigravity are supported. Nullable routes inherit the workspace
   default and final Codex fallback. The legacy backend name `gemini` is
   rejected with guidance to use `antigravity`.
-- Provider calls have a timeout but no retry or rate-limit manager.
+- Provider calls have a timeout but no general retry or rate-limit manager.
+  At most one typed continuation replacement requires deterministic
+  pre-execution proof; current native Codex/Antigravity adapters do not provide
+  it. Generic errors, timeouts, malformed responses, and thread mismatches
+  do not authorize automatic same-request replay.
 - Owner history has no compaction, expiry, or retention policy.
 - Agent-context planning, source inventory, SEARCH/READ rounds, observations,
-  references, and delta depth have independent finite limits. Required excess
-  fails explicitly; optional P3 material remains SEARCH-first. Checkpoint
-  absence/corruption/mismatch/taint/thread loss bootstraps from authoritative
-  sources. Provider usage is exact only when supplied and otherwise
-  unavailable. There is no semantic artifact RAG, free-form durable memory,
+  references, and non-session delta depth have independent finite limits.
+  Required Lead memory is separate from SEARCH-first optional P3 material:
+  exact delivery allows 4,096 conversations and at most 262,144 canonical
+  payload UTF-8 bytes, without summary or silent omission. Excess reports
+  `exact session context exceeds the delivery capacity`. Known material is
+  checked before provider work; generated observations are checked before
+  their subsequent substantive submission. Checkpoint
+  absence/corruption/mismatch/taint/thread loss selects bootstrap on the next
+  safe authorized work; corrupt canonical history fails closed, and unresolved
+  submitted work remains blocked. Provider usage is exact only when supplied
+  and otherwise unavailable. There is no semantic artifact RAG, free-form durable memory,
   arbitrary filesystem discovery, or progress replay API. See
   [Bounded agent context](../guides/agent-context.md#c20-decisions-limits-and-user-impact).
 - Artifact publication is recoverable and catalog-last, but does not share one

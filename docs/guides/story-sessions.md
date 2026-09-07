@@ -127,6 +127,8 @@ New creates and focuses an active conversation. Resume accepts an exact ID or
 an eligible unique prefix; omitting it opens a picker. Subject changes the
 focused display subject. Archive removes a conversation from the active list
 without deleting its stored identity/history. `--all` includes archives.
+Archived history remains part of required Lead session memory and can be sent
+to the configured provider. Archive is not a privacy opt-out or deletion.
 
 `/history` reads the focused schema-v2 collaboration history and explains its
 current state and next safe action. `/search` performs bounded literal search
@@ -213,6 +215,15 @@ review, Apply, and Commit remain separately confirmed. In focused Lead input,
 `$` selects a whole canonical artifact and `$$` selects an artifact before
 opening the independent range viewer. The inserted durable forms are
 `${path}` and `${path}#Lstart-Lend`.
+
+The Lead shares compatible provider continuation across this session's
+conversations, including its consultation and artifact-review syntheses.
+Pause/reopen and restart retain that continuity when compatibility holds;
+replacement reconstructs all retained active and archived history plus current
+directives and core documents. Specialists and consensus keep separate scopes.
+Memory does not carry current evidence or confirmation authority, and exact
+delivery can fail its finite capacity limit. See
+[Lead session memory](agent-context.md#lead-session-memory).
 
 ## Recovery
 

@@ -10,7 +10,7 @@ See [Agent-context progress](../guides/agent-context-progress.md).
 <a id="package-boundary-and-owners"></a>
 ## Package boundary and owners
 
-The accepted package has eight importable units with inward dependencies and no
+The accepted package has nine importable units with inward dependencies and no
 cycle:
 
 | Unit | Responsibility |
@@ -20,8 +20,9 @@ cycle:
 | `agent_context.manifest` | Immutable scope, authority, provenance, source identity/kind/priority/channel, and deterministic manifest ordering. |
 | `agent_context.planning` | Pure bootstrap/delta selection, budgets, deduplication, tombstones, compact catalog/record aliases, reference reservation, and checkpoint proposal. |
 | `agent_context.ledger` | Internal v2 READY/incomplete/tainted/stale state, locks, atomic publication, restart/corruption handling, and content-free metrics. |
+| `agent_context.continuation` | Shared process-local Lead session transaction; defer coverage commitment until authoritative result publication. |
 | `agent_context.actions` | SEARCH/READ/ANSWER values, policies, correlations, opaque handles, evidence authorization, and provider observations. |
-| `agent_context.sources` | Bounded current capture of canonical artifacts, focused conversation, active debate, and invoking-agent state; lexical search/read and drift checks. |
+| `agent_context.sources` | Bounded searchable source capture and drift checks; separate exact retained-session-history capture for Lead continuation. |
 | `agent_context.service` | Provider-neutral typed wire-v7 call loop, reference prelude, lifecycle authority, source/action orchestration, checkpoint commit, usage aggregation, and optional progress observer. |
 
 The retained execution entry points are backend/provider component interfaces,
@@ -48,8 +49,9 @@ focused user input + zero or more ${path} / ${path}#Lx-Ly references
      READ   -> runtime recaptures issued handles and returns bounded current text
      ANSWER -> runtime authorizes used handles, recaptures sources, and validates
                the invocation-specific semantic result
-  -> COMMIT: atomically publish READY checkpoint and close accepted provider call
   -> Lead orchestration persists the typed judgment/proposal or fixed rejection
+  -> COMMIT: after successful publication, atomically publish READY coverage
+             and close the accepted provider call
   -> interactive presenter renders Lead outcome/message/next action
      or FAIL: fixed facts, taint when required, checkpoint_not_advanced;
               uncertain submitted work is preserved without replay
@@ -69,6 +71,12 @@ assignments return valid typed replies does a separate `lead_synthesis`
 invocation run. The runtime persists the result batch and performs terminal or
 round-two finalization locally; context checkpoints are not execution-result
 authority.
+
+The Lead session transaction covers history capture, provider work, public
+terminal-event append, and READY coverage commit. Its process-local lock is
+shared across runtime/service instances; existing backend access claims remain
+the cross-process exclusion authority. Failed publication aborts coverage.
+Non-session context invocations retain their service-owned commit boundary.
 
 PREPARE has no distinct public progress event. A normal PLAN starts with
 `bootstrap` or `delta`; a duplicate `omission` fact is callback-only in the
@@ -133,16 +141,19 @@ is deterministic for the same manifest, policy, material, and checkpoint.
 | P3 optional | Additive history and invoking-agent state; SEARCH-first by default. |
 
 Default planning bytes are total 131,072; P0 73,728; P1 16,384; P2
-32,768; P3 0; mandatory references 262,144; maximum delta depth 16. Exact-byte
-groups deduplicate only within an eligible semantic channel and only after
+32,768; P3 0; mandatory references 262,144; maximum delta depth 16 for
+non-session checkpoints. Required Lead session memory is separate from these
+source budgets, and compatible Lead continuation has no 16-turn rotation.
+Exact-byte groups deduplicate only within an eligible semantic channel and only after
 byte equality; digest equality alone is insufficient. Every semantic pointer
 and provenance remains represented.
 
 <a id="bootstrap-delta-and-checkpoint-authority"></a>
 ## Bootstrap, delta, and checkpoint authority
 
-Scope binds workspace, story session, subject kind/ID, agent, provider,
-provider thread, definition fingerprint, planning policy, and wire schema.
+Invocation scope binds workspace, story session, conversation/debate kind/ID,
+and agent. Compatibility also checks provider thread, definition fingerprint,
+planning policy, and wire schema.
 Bootstrap sends current required/P2 material and starts a distinct provider
 thread epoch. A compatible READY checkpoint allows unchanged sources to be
 suppressed and changed records/source bodies or tombstones to be delivered.
@@ -150,8 +161,25 @@ suppressed and changed records/source bodies or tombstones to be delivered.
 Catalog aliases are durable within a resumable epoch, never reused after
 removal, and distinct from record aliases. Record cursors retain ordering and
 deletion facts without prose. Missing, corrupt, incompatible, stale, tainted,
-provider-mismatched, or excessive-depth state selects bootstrap. Ambiguous
-provider failure taints the continuation; it never authorizes later omission.
+provider-mismatched, or excessive-depth non-session state selects bootstrap.
+Ambiguous provider failure taints the continuation; it never authorizes later
+omission or replay of unresolved submitted work.
+
+Ordinary Lead turns and consultation/artifact-review synthesis use a separate
+`SESSION` continuation/checkpoint identity for one workspace/session/agent.
+Invocation correlation, reference/evidence authority, exchanges, and progress
+remain `CONVERSATION` scoped. Specialists and consensus keep their existing
+exact scopes. The new session namespace bootstraps without reading, migrating,
+or rewriting old conversation-scoped namespace bytes.
+
+Lead bootstrap sends all retained active and archived conversation histories;
+a compatible delta sends unseen events. `conversations.session_context` owns
+the exact visible projection and a coverage vector of conversation ID,
+sequence, and prefix digest, with original event timestamps. It invents no
+global session event sequence. A changed valid prefix invalidates continuation
+and bootstraps from current authority; corrupt canonical history fails closed.
+Current directives and complete current core bytes accompany both modes.
+Neither remembered decisions nor visible workflow facts grant capabilities.
 
 Ledger v2 lives below the internal agent-state area and stores only identities,
 digests, revisions, boundaries, sizes, aliases, numeric usage/accounting, and
@@ -161,9 +189,9 @@ sources remain the workspace repositories, not the ledger or provider history.
 <a id="authorized-sources-search-and-read"></a>
 ## Authorized sources, SEARCH, and READ
 
-The registry has exactly four scoped adapters: canonical writing artifacts,
-focused same-session conversation, active debate, and the invoking agent's own
-state. Operation routing further restricts which kinds may be searched.
+The SEARCH/READ registry has exactly four scoped adapters: canonical writing
+artifacts, focused same-session conversation, active debate, and the invoking
+agent's own state. Operation routing further restricts which kinds may be searched.
 Canonical artifact inventory covers every eligible canonical directory
 descendant and excludes transcripts, discussion logs, agent states, ledgers,
 symlink escapes, and other internal files.
@@ -182,8 +210,9 @@ a content-free bootstrap with no provider-readable record body. The lead
 runtime explicitly enables bounded searchable history across active
 same-session conversations: it still sends zero eager bodies, then SEARCH and
 READ add only authorized selected records under the 24-record/32,768-byte
-bound. Private payload fields and automatic full-history injection are
-excluded.
+bound. Private payload fields are excluded from this search adapter.
+`SessionHistorySourceAdapter` separately captures complete retained active and
+archived history for required Lead memory; the search bound does not limit it.
 
 The default action policy permits four nonterminal actions and five provider
 calls: at most two SEARCH, two READ, four queries per SEARCH/eight cumulative,
@@ -242,11 +271,16 @@ are absent from durable collaboration evidence.
 
 Contextual bindings define `agent-context-wire-v7`. The initial compact
 payload uses `c` (correlation), `q` (phase/result contract), and `i` (required
-current input), with applicable compact candidate `n`, selected documents
-`docs`, projection `p`, and tombstone/record `t` data. Mandatory reference
+current input), with required Lead session memory `h`, applicable compact
+candidate `n`, selected documents `docs`, projection `p`, and tombstone/record
+`t` data. Mandatory reference
 bodies appear only after the separate prelude as
 `untrusted_writing_artifact_context`. Continuations contain only correlation,
-contract, and the new observation (`c`, `q`, `o`).
+contract, and the new observation (`c`, `q`, `o`). The Lead `h` object contains
+exact visible history, `delivery_mode`, and `current_state` with session
+directives and complete current canonical core bytes. It is mandatory even
+with P3 budget zero or a `workflow_meta` answer contract, but cannot satisfy
+invocation-local evidence or reference obligations.
 
 Provider results are exact closed objects with required `correlation` and
 `action` fields. `correlation` must echo the current input `c` token. `action`
@@ -367,8 +401,16 @@ when every submitted call—including a reference prelude—reported an exact
 value; otherwise the field is `None`. No estimate is labeled exact.
 
 Provider-native cache, conversation history, and compaction may improve
-performance but are never correctness authority. Thread loss forces a
-bootstrap from local authoritative data. The finite planner, action, source,
+performance but are never correctness authority. Thread loss selects a
+bootstrap from local authoritative data on the next safe authorized work.
+For Lead session delivery, the inclusive canonical payload cap is 262,144
+UTF-8 bytes and the history inventory cap is 4,096 conversations. Known input,
+history, current state, and framing are preflighted before provider work;
+generated reference observations are checked before substantive submission.
+Overflow raises `exact session context exceeds the delivery capacity` without
+lossy summary or silent omission. Actual payload accounting includes `h`;
+source-selection progress counts do not. This byte cap is independent of the
+provider's token window. The finite planner, action, source,
 reference, and ledger limits are enforced independently; exhaustion is an
 explicit content-free failure rather than silent omission of required data.
 

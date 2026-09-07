@@ -741,6 +741,7 @@ class LedgerLifecycleTests(LedgerTestCase):
                 "committed_at",
                 "catalog_sources",
                 "source_alias_high_watermark",
+                "session_history_coverage",
             ),
             ContextLedgerRecord: (
                 "key",
@@ -2355,6 +2356,7 @@ class LedgerBoundaryTests(LedgerTestCase):
                 (1, "accounting"),
                 (1, "manifest"),
                 (1, "planning"),
+                (2, "runtime_state_paths"),
                 (2, "workspace"),
             },
         )

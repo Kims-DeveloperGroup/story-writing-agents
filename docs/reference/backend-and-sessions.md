@@ -87,6 +87,33 @@ are accepted. The custom definition's `tools: [finish]` is declarative rather
 than capability proof: CLI 1.1.27 still advertised 57 tools. See the
 [sanitized command and stream](../guides/antigravity.md#sanitized-provider-call-and-native-stream).
 
+## Lead session continuation
+
+The runtime's ordinary Lead turns and consultation/artifact-review syntheses
+share one compatible workspace/session/agent provider continuation, including
+across conversation focus changes, pause/reopen, and restart. Compatibility
+checks provider, definition, and policy; compatible Lead threads have no fixed
+16-turn rotation. Only continuation storage and checkpoint identity use
+`SESSION`. Requests, correlation, references, evidence, and exchanges retain
+their exact `CONVERSATION` scope. Specialists and consensus remain separately
+scoped. The new session namespace bootstraps while old conversation namespace
+bytes remain untouched. See [Lead session memory](../guides/agent-context.md#lead-session-memory)
+for exact history/current-state delivery and capacity limits.
+
+Missing, tainted, or incompatible continuation bootstraps on the next safe
+authorized work. An unmatched submitted call remains `outcome_unknown` and
+blocks its conversation; replacement cannot replay or resolve it. Separately
+authorized safe work in another conversation may recover session context while
+preserving that uncertainty.
+
+The typed continuation-rejection seam permits at most one same-request
+replacement only with deterministic proof that the rejected turn did not
+execute, remaining call budget, and fresh invocation/reference authority.
+Current native Codex exec and Antigravity CLI adapters do not emit that proof.
+Generic errors, timeouts, malformed responses, and mismatched thread IDs do
+not authorize this replacement. Diagnostic prose or exit status is not proof
+of non-execution; there is no native automatic-retry guarantee.
+
 <a id="referenced-invocation-boundary"></a>
 
 ## Referenced invocation boundary

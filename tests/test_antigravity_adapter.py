@@ -2903,6 +2903,7 @@ class AntigravityAdapterTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(str(caught.exception), diagnostic)
             self.assertIs(caught.exception.taint_existing_thread, True)
             self.assertNotIn(confidential, str(caught.exception))
+            self.assertIsNone(caught.exception.continuation_rejection)
 
     async def test_nonzero_timeout_and_cancellation_use_bounded_cleanup(
         self,
@@ -2995,6 +2996,7 @@ class AntigravityAdapterTests(unittest.IsolatedAsyncioTestCase):
                     self.assertEqual(str(caught.exception), diagnostic)
                     self.assertIs(caught.exception.taint_existing_thread, True)
                     self.assertNotIn("CONFIDENTIAL", str(caught.exception))
+                    self.assertIsNone(caught.exception.continuation_rejection)
                 accounting = provider_failure_accounting(caught.exception)
                 self.assertIs(accounting.state, ProviderCallState.SUBMITTED)
                 self.assertEqual(
