@@ -401,7 +401,7 @@ class ArtifactProposalOrchestrationTests(LeadOrchestrationTestCase):
         )
         self.assertEqual(self.artifact_snapshot(), rename_before)
 
-    async def test_ordinary_discussion_bypasses_snapshot_and_specialists(self) -> None:
+    async def test_ordinary_discussion_captures_current_state_without_specialists(self) -> None:
         conversation_id = self.conversation("Ordinary discussion")
         calls = 0
         original = self.runtime.artifacts.capture_complete_state
@@ -425,7 +425,8 @@ class ArtifactProposalOrchestrationTests(LeadOrchestrationTestCase):
         )
         self.assertIs(result.kind, LeadOutcomeKind.ANSWER)
         self.assertIsNone(result.artifact_proposal)
-        self.assertEqual(calls, 0)
+        self.assertEqual(calls, 1)
+        self.assertIn("current_state", self.backend.calls[0].payload["h"])
         self.assertEqual(
             tuple(agent_id for agent_id, _call in self.backend.call_records),
             (LEAD_ORCHESTRATOR,),

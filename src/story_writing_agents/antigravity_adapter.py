@@ -1016,6 +1016,8 @@ class AntigravityAdapter:
         submitted = True
         try:
             if result.returncode != 0:
+                # This CLI envelope does not prove a rejection before execution.
+                # Never turn diagnostic prose or exit status into retry authority.
                 raise ProviderInvocationError(
                     f"Antigravity CLI exited with status {result.returncode}",
                     taint_existing_thread=True,

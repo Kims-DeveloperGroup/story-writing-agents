@@ -35,6 +35,14 @@ In the installed `story` shell, attach a session, focus a conversation, and
 type ordinary non-slash text. It is passed literally to the session-bound Lead
 API. The async Python methods below expose the same authority model.
 
+Ordinary Lead turns and consultation/artifact-review synthesis share compatible
+provider continuation across the session's conversations and pause/reopen or
+restart. Each invocation receives required retained session memory and current
+directives/core documents, including for workflow/meta questions. Archived
+history remains eligible for provider disclosure. This memory grants no
+current receipt, confirmation, replay, write, or Git authority; exact capacity
+and recovery limits are in [Lead session memory](agent-context.md#lead-session-memory).
+
 ## Lead responsibilities and limits
 
 The lead is expected to:
@@ -671,6 +679,9 @@ Runtime binds the selected agent and drives one bounded contextual invocation.
 The samples below are sanitized from the orchestration acceptance fixtures;
 generated correlations, IDs, handles, digests, and compact planning counters
 vary.
+Initial-payload samples below omit the separate required `h` session-context
+object for readability; they are excerpts, not complete on-wire payloads.
+SEARCH/READ continuation frames carry only their new observation.
 
 Codex and Antigravity receive byte-identical provider-neutral wire-v7 schema
 and payload semantics; only their native transport differs. The closed outer
@@ -750,10 +761,10 @@ Does the planned reveal conflict with the current opening?
 ```
 
 the initial compact call includes required workflow material and four
-content-free canonical-core statuses. Inventory does not send story bodies. A
-meta turn with no explicit reference and no provider SEARCH/READ therefore
-receives no new story content through this path and does not gain story
-evidence merely because runtime inventoried the status facts.
+content-free canonical-core statuses. The status inventory itself grants no
+story-body receipt. Separate required `h` context includes retained history and
+complete current core bytes even for a meta turn without references or
+SEARCH/READ; those bytes do not satisfy the current evidence contract.
 
 ```json
 {

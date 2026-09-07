@@ -630,15 +630,16 @@ class ContextExecutionValueTests(ContextExecutionTestCase):
                 "operation_id",
                 "result_correlation_id",
                 "materials",
+                "result_contract",
                 "source_classifications",
                 "reference_operation_id",
                 "mandatory_references",
                 "fresh",
                 "allowed_search_source_kinds",
                 "invocation_kind",
-                "result_contract",
                 "physical_call_limit",
                 "include_core_statuses",
+                "session_state_json",
             ),
         )
         request = self.request()
@@ -662,6 +663,7 @@ class ContextExecutionValueTests(ContextExecutionTestCase):
         self.assertEqual(request.result_contract, contract)
         self.assertEqual(request.physical_call_limit, 3)
         invalid = (
+            {"subject_kind": ContextSubjectKind.SESSION, "subject_id": "session"},
             {"result_contract": None},
             {"result_contract": object()},
             {"physical_call_limit": 0},

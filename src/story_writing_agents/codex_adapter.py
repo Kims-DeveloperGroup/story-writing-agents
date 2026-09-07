@@ -406,6 +406,17 @@ class CodexAdapter:
 
                 events = self.parse_events(result.stdout)
                 thread_id = invocation.thread_id
+                reported_thread_ids = tuple(
+                    event.get("thread_id") for event in events
+                    if event.get("type") == "thread.started"
+                )
+                if thread_id is not None and any(
+                    reported != thread_id for reported in reported_thread_ids
+                ):
+                    raise ProviderInvocationError(
+                        "Codex CLI returned a different continuation identity",
+                        taint_existing_thread=True,
+                    )
                 if thread_id is None:
                     thread_id = self.started_thread(events)
                     if thread_id is None:

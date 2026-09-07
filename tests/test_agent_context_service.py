@@ -359,6 +359,7 @@ class ServiceSurfaceAndBindingTests(unittest.TestCase):
                 "ContextProviderCallRequest",
                 "ContextProviderCallResult",
                 "ContextProviderFailureFacts",
+                "ContextContinuationRejection",
                 "ContextProviderTerminalCode",
                 "ContextReferencePreludeRequest",
                 "ContextReferencePreludeResult",
@@ -517,6 +518,21 @@ class ServiceSurfaceAndBindingTests(unittest.TestCase):
             actual_transport_utf8_bytes=len(encoded),
         )
         prepared = ProviderCallAccounting(payload)
+        for rejection in service_module.ContextContinuationRejection:
+            facts = service_module.ContextProviderFailureFacts(
+                submitted, continuation_rejection=rejection,
+            )
+            self.assertIs(facts.continuation_rejection, rejection)
+            for incompatible in ({"timed_out": True}, {"submission_uncertain": True}):
+                with self.subTest(rejection=rejection, incompatible=incompatible):
+                    with self.assertRaises(service_module.ContextExecutionError):
+                        service_module.ContextProviderFailureFacts(
+                            submitted, continuation_rejection=rejection, **incompatible,
+                        )
+        with self.assertRaises(service_module.ContextExecutionError):
+            service_module.ContextProviderFailureFacts(
+                submitted, continuation_rejection="continuation_unavailable",
+            )
         rejection_codes = (
             service_module.ContextProviderTerminalCode.MALFORMED_STRUCTURED_RESPONSE,
             service_module.ContextProviderTerminalCode.RESPONSE_CORRELATION_MISMATCH,
@@ -536,6 +552,7 @@ class ServiceSurfaceAndBindingTests(unittest.TestCase):
                 "submitted_accountings",
                 "submission_uncertain",
                 "response_rejection_code",
+                "continuation_rejection",
             ),
         )
         for code in rejection_codes:

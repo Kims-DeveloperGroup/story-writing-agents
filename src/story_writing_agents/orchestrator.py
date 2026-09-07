@@ -8,9 +8,10 @@ import inspect
 import json
 import uuid
 from collections.abc import Callable
+from contextlib import asynccontextmanager
 from dataclasses import dataclass, replace
 from pathlib import Path
-from typing import Any, AsyncContextManager, Mapping, cast
+from typing import Any, AsyncContextManager, AsyncIterator, Mapping, cast
 
 from .agents import (
     CHARACTER_CUSTODIAN,
@@ -26,6 +27,7 @@ from .agent_context.accounting import (
     ProviderCallState,
 )
 from .agent_context.manifest import (
+    ContextContinuationIdentity,
     ContextAuthorityKind,
     ContextManifestEntry,
     ContextPriority,
@@ -35,6 +37,8 @@ from .agent_context.manifest import (
     ContextSubjectKind,
 )
 from .agent_context.planning import ContextMaterial, MandatoryReferenceReservation
+from .agent_context.continuation import ContextContinuationTransaction
+from .conversations.session_context import SessionContextCapacityError
 from .agent_context.service import (
     AgentContextService,
     ContextAnswerAuthorization,
@@ -42,6 +46,7 @@ from .agent_context.service import (
     ContextExecutionEvent,
     ContextInvocationKind,
     ContextInvocationRequest,
+    ContextInvocationResult,
     ContextJsonObjectResultContract,
     ContextProviderCallRequest,
     ContextProviderCallResult,
@@ -53,6 +58,7 @@ from .agent_context.service import (
     ContextSourceStatusReceipt,
     ContextZeroHitSearchReceipt,
     context_provider_failure_facts,
+    record_context_provider_failure,
 )
 from .agent_context.sources import (
     CONTEXT_SOURCE_POLICY,
@@ -60,6 +66,7 @@ from .agent_context.sources import (
     ContextSourceSnapshot,
     ContextSourceStatusKind,
     FocusedConversationSourceAdapter,
+    SessionHistorySourceAdapter,
     OwnAgentStateSourceAdapter,
     WritingArtifactSourceAdapter,
     writing_artifact_source_id,
@@ -86,6 +93,7 @@ from .artifact_proposals import (
     serialize_artifact_review_candidate,
 )
 from .config import ConfigurationSnapshot, ConfigManager
+from .writing_artifacts.catalog import CORE_ARTIFACT_PATHS
 from .consensus.contracts import (
     CONSENSUS_AUDITORS,
     ConsensusAuditVerdict,
@@ -832,7 +840,14 @@ class _AccountingContextProvider:
         self,
         scope: ContextScope,
         policy_fingerprint: str,
+        *,
+        continuation_identity: ContextContinuationIdentity | None = None,
     ) -> AsyncContextManager[None]:
+        if continuation_identity is not None:
+            return getattr(self._delegate, "invocation")(
+                scope, policy_fingerprint,
+                continuation_identity=continuation_identity,
+            )
         return getattr(self._delegate, "invocation")(scope, policy_fingerprint)
 
     def inspect_context_thread(
@@ -1161,6 +1176,7 @@ class StoryRuntime:
         self._binding_lock = asyncio.Lock()
         self._conversation_locks: dict[tuple[str, str], asyncio.Lock] = {}
         self._agent_context_service = AgentContextService(self.workspace)
+        self._lead_continuations: dict[str, ContextContinuationTransaction] = {}
         self._confirmed_capabilities: dict[
             tuple[str, str, str], _ConfirmedStepCapability
         ] = {}
@@ -2016,7 +2032,7 @@ class StoryRuntime:
         text = self._validate_visible_text(text, label="lead input")
         self._validate_context_event_sink(context_event_sink)
         lock = self._conversation_lock(session_id, conversation_id)
-        async with lock:
+        async with self._lead_session_lifecycle(session_id), lock:
             events, projection, failure = self._read_lead_history(
                 session_id,
                 conversation_id,
@@ -2299,7 +2315,7 @@ class StoryRuntime:
             decision.session_id,
             decision.conversation_id,
         )
-        async with lock:
+        async with self._lead_session_lifecycle(decision.session_id), lock:
             events = self.conversation_storage_services.event_store.read(
                 decision.session_id,
                 decision.conversation_id,
@@ -3813,10 +3829,14 @@ class StoryRuntime:
                 source_classifications=(),
                 reference_operation_id=reference_operation_id,
                 mandatory_references=reservations,
-                fresh=True,
+                fresh=agent_id != LEAD_ORCHESTRATOR,
                 invocation_kind=context_invocation_kind,
                 result_contract=result_contract,
                 physical_call_limit=physical_call_limit,
+                session_state_json=(
+                    self._session_context_state(session_id)
+                    if agent_id == LEAD_ORCHESTRATOR else None
+                ),
             )
             decoded: object | None = None
 
@@ -3824,14 +3844,21 @@ class StoryRuntime:
                 nonlocal decoded
                 decoded = decoder(answer)
 
-            result = await self._agent_context_service.invoke(
+            result = await self._invoke_context_with_recovery(
                 request,
                 provider,
+                reference_operation=reference_operation,
+                provider_factory=factory,
+                round_number=round_number,
                 writing_artifacts=authorities[0],
                 focused_conversation=authorities[1],
                 active_debate=authorities[2],
                 own_agent_state=authorities[3],
                 answer_validator=validate,
+                **self._lead_continuation_arguments(
+                    session_id, conversation_id, turn_id, step_id,
+                    agent_id=agent_id, synthesis=True,
+                ),
             )
             value = decoded if decoded is not None else decoder(result.answer)
             reference_operation.finish()
@@ -5682,7 +5709,7 @@ class StoryRuntime:
                 source_classifications=(),
                 reference_operation_id=reference_operation_id,
                 mandatory_references=reservations,
-                fresh=True,
+                fresh=False,
                 invocation_kind=ContextInvocationKind.LEAD,
                 result_contract=_lead_front_result_contract(
                     expected_relation,
@@ -5690,6 +5717,7 @@ class StoryRuntime:
                 ),
                 physical_call_limit=physical_call_limit,
                 include_core_statuses=True,
+                session_state_json=self._session_context_state(session_id),
             )
             decoded: LeadProviderOutcome | None = None
             decoded_evidence: CollaborationLeadEvidence | None = None
@@ -5755,15 +5783,21 @@ class StoryRuntime:
             correction_failure_code: CollaborationLeadOutcomeFailureCode | None = None
             rejected_call_id: str | None = None
             try:
-                result = await self._agent_context_service.invoke(
+                result = await self._invoke_context_with_recovery(
                     contextual_request,
                     provider,
+                    reference_operation=reference_operation,
+                    provider_factory=provider_factory,
+                    round_number=None,
                     writing_artifacts=authorities[0],
                     focused_conversation=authorities[1],
                     active_debate=authorities[2],
                     own_agent_state=authorities[3],
                     answer_validator=validate,
                     event_sink=context_event_sink,
+                    **self._lead_continuation_arguments(
+                        session_id, conversation_id, turn_id, step_id,
+                    ),
                 )
             except BaseException as first_failure:
                 facts = context_provider_failure_facts(first_failure)
@@ -5857,6 +5891,9 @@ class StoryRuntime:
                         own_agent_state=authorities[3],
                         answer_validator=validate,
                         event_sink=context_event_sink,
+                        **self._lead_continuation_arguments(
+                            session_id, conversation_id, turn_id, step_id,
+                        ),
                     )
                 except BaseException as correction_failure:
                     if (
@@ -5909,9 +5946,14 @@ class StoryRuntime:
             )
         except BaseException as failure:
             reference_failure = reference_operation.failure(failure)
+            if isinstance(failure, SessionContextCapacityError):
+                # Reference cleanup must not erase this safe, actionable exact-
+                # context failure, including preflight before any submission.
+                raise
             facts = context_provider_failure_facts(failure)
             if (
-                facts.response_rejection_code is not None
+                (facts.response_rejection_code is not None
+                 or facts.continuation_rejection is not None)
                 and not facts.submission_uncertain
                 and provider is not None
                 and provider.last_submitted_call_id is not None
@@ -8357,6 +8399,117 @@ class StoryRuntime:
             or inspect.isasyncgenfunction(call)
         ):
             raise TypeError("context_event_sink must be a synchronous callable")
+
+    async def _invoke_context_with_recovery(
+        self, request: ContextInvocationRequest, provider: _AccountingContextProvider,
+        *, reference_operation: RuntimeReferenceOperation,
+        provider_factory: Callable[[object], object], round_number: int | None,
+        **arguments: Any,
+    ) -> ContextInvocationResult:
+        """Replace once only after a transport-proven rejection before execution."""
+
+        submitted_before = provider.submitted_physical_calls
+        try:
+            return await self._agent_context_service.invoke(request, provider, **arguments)
+        except BaseException as failure:
+            facts = context_provider_failure_facts(failure)
+            spent = provider.submitted_physical_calls - submitted_before
+            limit = request.physical_call_limit
+            if (
+                arguments.get("continuation") is None
+                or facts.continuation_rejection is None
+                or facts.submission_uncertain or facts.timed_out
+                or limit is None
+                or limit - spent < 1 + int(bool(request.mandatory_references))
+            ):
+                raise
+            rejected_facts = facts
+        retry_submitted_before = provider.submitted_physical_calls
+        try:
+            reference_read = reference_operation.begin_invocation(
+                agent_id=request.agent_id,
+                phase=cast(ContextInvocationKind, request.invocation_kind).value,
+                round_number=round_number,
+            )
+            delegate = provider_factory(reference_read)
+            if inspect.isawaitable(delegate):
+                raise BackendProtocolError("context provider factory must be synchronous")
+            provider.renew_delegate(delegate)
+            services = self.conversation_storage_services
+            arguments["session_history"] = SessionHistorySourceAdapter(
+                services.catalog, services.event_store, request.session_id,
+            ).capture()
+            return await self._agent_context_service.invoke(
+                replace(request, physical_call_limit=limit - spent),
+                provider, **arguments,
+            )
+        except BaseException as failure:
+            if provider.submitted_physical_calls == retry_submitted_before:
+                # A locally rejected recovery did not create an uncertain second
+                # submission. Preserve the exact known first rejection closure.
+                record_context_provider_failure(failure, rejected_facts)
+            raise
+
+    @asynccontextmanager
+    async def _lead_session_lifecycle(self, session_id: str) -> AsyncIterator[None]:
+        transaction = self._agent_context_service.session_continuation(
+            session_id, LEAD_ORCHESTRATOR,
+        )
+        async with transaction:
+            self._lead_continuations[session_id] = transaction
+            try:
+                yield
+            finally:
+                del self._lead_continuations[session_id]
+
+    def _session_context_state(self, session_id: str) -> str:
+        """Capture current instructions and canonical core bytes as context only."""
+
+        snapshots = {
+            item.path: item for item in self.artifacts.capture_complete_state()
+            if item.path in CORE_ARTIFACT_PATHS
+        }
+        value = {
+            "runtime_overrides": self.workspace.load_session_overrides(session_id),
+            "core_documents": [
+                {"path": path, "present": path in snapshots,
+                 "content": (
+                     snapshots[path].content.decode("utf-8", errors="strict")
+                     if path in snapshots else None
+                 )}
+                for path in CORE_ARTIFACT_PATHS
+            ],
+        }
+        return json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+
+    def _lead_continuation_arguments(
+        self, session_id: str, conversation_id: str, turn_id: str, step_id: str,
+        *, agent_id: str = LEAD_ORCHESTRATOR, synthesis: bool = False,
+    ) -> dict[str, Any]:
+        if agent_id != LEAD_ORCHESTRATOR:
+            return {}
+        services = self.conversation_storage_services
+
+        def published() -> bool:
+            events = services.event_store.read(session_id, conversation_id)
+            project_collaboration_history(events)
+            return any(
+                event.turn_id == turn_id and event.step_id == step_id
+                and (
+                    type(event.payload) is CollaborationLeadSynthesisPayload
+                    if synthesis else
+                    type(event.payload) is CollaborationLeadJudgmentPayload
+                )
+                for event in events
+            )
+
+        return {
+            "continuation": self._lead_continuations[session_id],
+            "session_history": SessionHistorySourceAdapter(
+                services.catalog, services.event_store, session_id,
+            ).capture(),
+            "publication_validator": published,
+        }
 
     def _conversation_lock(
         self,

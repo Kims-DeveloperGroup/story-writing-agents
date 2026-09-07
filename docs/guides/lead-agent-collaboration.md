@@ -134,7 +134,9 @@ The lead's cooperation with specialists is the outer workflow. SEARCH, READ,
 and ANSWER are inner actions of one provider invocation.
 
 1. Runtime gives the lead identity, assignment, conversation input, reference
-   identities, and content-free core-document status.
+   identities, content-free core-document status, and required session memory:
+   retained active/archived history plus current directives and complete core
+   documents. This also applies to workflow/meta turns and Lead synthesis.
 2. The lead may ask runtime for a bounded SEARCH. A search result is only a
    locator.
 3. The lead asks runtime to READ a selected locator. READ produces the content
@@ -149,12 +151,17 @@ and ANSWER are inner actions of one provider invocation.
 The outer route is not a provider action, and SEARCH/READ are not a way for a
 specialist to contact another specialist. A provider reply is attribution, not
 story evidence until the lead uses it in a valid synthesis.
+The Lead shares compatible continuation across the session's conversations;
+specialists retain isolated scopes. Session memory supplies no current receipt
+or confirmation authority. Archive status does not prevent its provider
+disclosure. See [Lead session memory](agent-context.md#lead-session-memory) for
+exact delivery, capacity, and recovery limits.
 
 ### Provider-shaped examples
 
-For a story question, runtime sends a compact lead request containing identity,
-input aliases, core statuses, and the answer contract—not an unrestricted
-workspace dump:
+For a story question, this excerpt shows identity, input aliases, core statuses,
+and the answer contract. The separate required session-memory payload is
+omitted from the example:
 
 ```json
 {
