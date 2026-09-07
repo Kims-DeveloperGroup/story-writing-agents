@@ -39,6 +39,10 @@ Nontrivial feature, bug, dependency/packaging, security, architecture, workflow,
 documentation work needs an Issue unless a maintainer approves a mechanical exception.
 Parents represent initiatives; leaves are independently complete.
 
+Keep-one-implementation/delivery-unit on current-Issue. Children require planned/known
+direct-child sets of >=2 independently-complete necessary units/slices/releases,
+created/verified together; never sole-child/wrapper/placeholder chains.
+
 Root records objective, non-goals, integration criteria, children/order, risks, evidence,
 base. Leaf records root/parent/Project, objective/context, in/out scope, testable completion,
 verification/docs/components/dependencies/constraints/risks. Use native sub-Issues and
@@ -67,7 +71,7 @@ without a user/maintainer decision.
 
 |Rule|Policy|
 |---|---|
-|Initial plan|Classify-all-known-leaves;create-only-nonempty-numbered-`MUST-01`/`RECOMMENDED-01`/`OPTIONAL-01`-release-Issues;use-`-02+`-for-capacity|
+|Initial plan|Classify-all-known-leaves;one-implementation/delivery-unit-stays-on-current-Issue/no-sole-child-or-wrapper;children-only-as-known-at-least-2-direct-independently-complete-necessary-slice/release-siblings-created/verified-together;subdivide-only-into-at-least-2-independently-complete-children-else-enlarge/update-own-scope;no-phase/metadata/branch-PR/scope-mirror-placeholders;single-release-owned-by-current/root-Issue;numbered-release-children-only-when-at-least-2-releases-required;release-with-one-unit-implements-directly;feature-leaf-children-require-at-least-2-independent-slices;use-`-02+`-for-capacity|
 |Release integrity|Dependency-closed/testable/user-usable/complete-features-or-functions;never-scaffolding/half-API/dormant-config;ship-supporting-tests/docs/migrations|
 |Order|Later-may-depend-on-earlier;never-reverse|
 |Capacity|Every-implementation-leaf-needs-Size;`XS=1,S=2,M=3,L=5,XL=8`;release-load=sum-of-unfinished-leaf-points;record-capacity;planned-load-must-not-exceed-it|
@@ -76,7 +80,7 @@ without a user/maintainer decision.
 |Oversize|Split-oversized-work-into-complete-slices/releases;indivisible-over-cap-needs-capacity-exception;preserve-all-`Must`|
 |Iteration|One-per-release;leaves-inherit-Iteration/waves;active-statuses-require-it;`Backlog`-may-omit;root-tracks-current-`Must`;completed-releases-retain-theirs|
 |Closure|Each-release-has-publishable-`main`-PR-and-closes-on-publication;root-closes-after-all-`Must`/integration;other-tiers-stay-linked/nonblocking|
-|Topology|Feature-leaf-PR-targets-release-branch-and-squashes;numbered-release-PR-targets-`main`-and-closes-release;umbrella-normally-planning-only/administrative-close-after-`Must`/core-verification;distinct-diff-uses-own-Development-linked-branch/PR-targeting-`main`,starts-after-all-`Must`-release-PRs/core-integration,and-may-close-root|
+|Topology|Single-release=current/root-Issue;feature-leaf-PR-targets-release-branch-and-squashes;numbered-release-PR-targets-`main`-and-closes-release;umbrella-normally-planning-only/administrative-close-after-`Must`/core-verification;distinct-diff-uses-own-Development-linked-branch/PR-targeting-`main`,starts-after-all-`Must`-release-PRs/core-integration,and-may-close-root|
 
 ## Project Status
 

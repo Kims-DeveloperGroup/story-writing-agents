@@ -707,7 +707,7 @@ class RepositoryAgentPolicyTests(unittest.TestCase):
             self.assertTerms(frontmatter(self.skill_sources[name])[1], *terms)
         self.assertTerms(
             self.agents_source,
-            "Load `$github-task-lifecycle` for GitHub-tracked work",
+            "For GitHub-tracked work load `$github-task-lifecycle`",
             "Load `$subagent-routing` before evaluating/dispatching subagents",
             "Load `$subagent-model-selection` before selecting, requesting, overriding, or inheriting a child model/reasoning effort",
             "Load `$adaptive-verification` before planning, running, reusing, escalating, or accepting evidence for nontrivial tracked changes",
@@ -758,6 +758,8 @@ class RepositoryAgentPolicyTests(unittest.TestCase):
     def test_github_authorization_planning_and_relationships_are_exact(self) -> None:
         authority = markdown_section(self.workflow_source, "## Authority and Authorization")
         gate = markdown_section(self.workflow_source, "## Initial Planning Gate")
+        issues = markdown_section(self.workflow_source, "## Issues")
+        agents_gate = markdown_section(self.agents_source, "## GitHub Planning Gate")
         requirement = markdown_section(self.workflow_source, "## Requirement Releases")
         self.assertTerms(
             authority,
@@ -775,30 +777,49 @@ class RepositoryAgentPolicyTests(unittest.TestCase):
             "Partial failure preserves IDs, repairs gaps, blocks writing, and never duplicates",
         )
         self.assertTerms(
+            issues,
+            "Keep-one-implementation/delivery-unit on current-Issue",
+            "Children require planned/known direct-child sets of >=2 independently-complete necessary units/slices/releases, created/verified together",
+            "never sole-child/wrapper/placeholder chains",
+        )
+        self.assertTerms(
+            agents_gate,
+            "One-implementation/delivery-unit plans stay on their Issue",
+            "direct-child-sets/subdivision require >=2 independently-complete necessary siblings, created/verified together",
+            "otherwise enlarge/update current scope",
+        )
+        self.assertTerms(
             requirement,
             "New work uses organization Issue `Requirement=Must|Recommended|Optional`, replacing Priority",
             "The old field is renamed `Legacy Priority`; preserve historical values and make no new assignments",
             "Classify existing Issues only when entering a new phase/Iteration; record basis",
             "Unset blocks `Ready`",
             "Dependencies necessary for delivery are `Must`; agents never downgrade `Must` without a user/maintainer decision",
-            "|Initial plan|Classify-all-known-leaves;create-only-nonempty-numbered-`MUST-01`/`RECOMMENDED-01`/`OPTIONAL-01`-release-Issues;use-`-02+`-for-capacity|",
+            "|Initial plan|Classify-all-known-leaves;one-implementation/delivery-unit-stays-on-current-Issue/no-sole-child-or-wrapper;children-only-as-known-at-least-2-direct-independently-complete-necessary-slice/release-siblings-created/verified-together;subdivide-only-into-at-least-2-independently-complete-children-else-enlarge/update-own-scope;no-phase/metadata/branch-PR/scope-mirror-placeholders;single-release-owned-by-current/root-Issue;numbered-release-children-only-when-at-least-2-releases-required;release-with-one-unit-implements-directly;feature-leaf-children-require-at-least-2-independent-slices;use-`-02+`-for-capacity|",
             "|Release integrity|Dependency-closed/testable/user-usable/complete-features-or-functions;never-scaffolding/half-API/dormant-config;ship-supporting-tests/docs/migrations|",
             "|Order|Later-may-depend-on-earlier;never-reverse|",
             "|Capacity|Every-implementation-leaf-needs-Size;`XS=1,S=2,M=3,L=5,XL=8`;release-load=sum-of-unfinished-leaf-points;record-capacity;planned-load-must-not-exceed-it|",
         )
         self.assertTerms(
             self.lifecycle_source,
-            "Search every Issue-state; create/reuse root before descendants",
+            "Search all Issue-states; create/reuse root; descendants require general-sibling-gate",
             "Use one-Iteration-per-Requirement-release; leaves-inherit; root-tracks-current-`Must`; completed-releases-retain-theirs",
-            "Create fields/native relations; re-read complete graph/metadata and unblocked `Ready` leaf",
+            "Create fields/native-relations; re-read complete graph/metadata and unblocked `Ready` leaf",
             "|Requirement|Set-organization-Issue-Requirement-`Must`/`Recommended`/`Optional`;record-basis;existing-only-at-new-phase/Iteration;unset-blocks-`Ready`;necessary-dependencies-`Must`;never-agent-downgrade|",
-            "|Release-plan|Classify-all-known-leaves;require-each-implementation-leaf-Size;load=sum(unfinished-leaf-points)<=recorded-capacity;create-only-nonempty-numbered-tier-releases;one-Iteration/publishable-main-PR;verify-completeness/usability/dependencies/publication/root/follow-ups|",
+            "|Release-plan|Classify-all-known-leaves;one-implementation/delivery-unit=current-Issue/no-sole-child-or-wrapper;create/verify-only-known-at-least-2-direct-independently-complete-necessary-slice/release-siblings;subdivide-only-into-at-least-2-independent-children-else-enlarge/update-own-scope;no-phase/metadata/branch-PR/scope-mirror-placeholders;single-release=current/root-Issue;numbered-release-children-only-if-at-least-2-releases-required;one-unit-release-implements-directly;feature-children-only-if-at-least-2-independent-slices;require-each-implementation-leaf-Size;load=sum(unfinished-leaf-points)<=capacity;verify-integrity/topology|",
         )
         self.assertNotIn("Use one tree-wide logical Iteration", self.lifecycle_source)
         self.assertNotIn("|Priority|Organization-Issue-field", self.lifecycle_source)
         self.assertNotIn(
             "|Capacity|`XS=1,S=2,M=3,L=5,XL=8`;record-release-capacity|",
             requirement,
+        )
+        self.assertNotIn("create-only-nonempty-numbered-", requirement)
+        self.assertNotIn(
+            "create-only-nonempty-numbered-tier-releases", self.lifecycle_source
+        )
+        self.assertNotIn(
+            "create/reuse root before descendants", self.lifecycle_source
         )
 
     def test_github_branch_status_integration_and_cleanup_are_exact(self) -> None:
@@ -825,7 +846,7 @@ class RepositoryAgentPolicyTests(unittest.TestCase):
             "|Oversize|Split-oversized-work-into-complete-slices/releases;indivisible-over-cap-needs-capacity-exception;preserve-all-`Must`|",
             "|Iteration|One-per-release;leaves-inherit-Iteration/waves;active-statuses-require-it;`Backlog`-may-omit;root-tracks-current-`Must`;completed-releases-retain-theirs|",
             "|Closure|Each-release-has-publishable-`main`-PR-and-closes-on-publication;root-closes-after-all-`Must`/integration;other-tiers-stay-linked/nonblocking|",
-            "|Topology|Feature-leaf-PR-targets-release-branch-and-squashes;numbered-release-PR-targets-`main`-and-closes-release;umbrella-normally-planning-only/administrative-close-after-`Must`/core-verification;distinct-diff-uses-own-Development-linked-branch/PR-targeting-`main`,starts-after-all-`Must`-release-PRs/core-integration,and-may-close-root|",
+            "|Topology|Single-release=current/root-Issue;feature-leaf-PR-targets-release-branch-and-squashes;numbered-release-PR-targets-`main`-and-closes-release;umbrella-normally-planning-only/administrative-close-after-`Must`/core-verification;distinct-diff-uses-own-Development-linked-branch/PR-targeting-`main`,starts-after-all-`Must`-release-PRs/core-integration,and-may-close-root|",
         )
         self.assertTerms(
             issues,

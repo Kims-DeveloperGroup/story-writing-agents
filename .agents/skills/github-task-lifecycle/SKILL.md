@@ -13,15 +13,15 @@ creation. Separately authorize every push/stage/commit/PR/merge/closure/deletion
 Preflight repository/`gh`-project-scope/Project-fields/milestones/Iterations/dependencies/
 worktrees; stop on missing/mismatch. Mutate/verify once; preserve successes; repair gaps.
 
-Search every Issue-state; create/reuse root before descendants. Resolve IDs. Use
+Search all Issue-states; create/reuse root; descendants require general-sibling-gate. Resolve IDs. Use
 one-Iteration-per-Requirement-release; leaves-inherit; root-tracks-current-`Must`;
-completed-releases-retain-theirs; creation needs schema authorization. Create fields/native relations; re-read
+completed-releases-retain-theirs; creation needs schema authorization. Create fields/native-relations; re-read
 complete graph/metadata and unblocked `Ready` leaf.
 
 |Rule|Procedure|
 |---|---|
 |Requirement|Set-organization-Issue-Requirement-`Must`/`Recommended`/`Optional`;record-basis;existing-only-at-new-phase/Iteration;unset-blocks-`Ready`;necessary-dependencies-`Must`;never-agent-downgrade|
-|Release-plan|Classify-all-known-leaves;require-each-implementation-leaf-Size;load=sum(unfinished-leaf-points)<=recorded-capacity;create-only-nonempty-numbered-tier-releases;one-Iteration/publishable-main-PR;verify-completeness/usability/dependencies/publication/root/follow-ups|
+|Release-plan|Classify-all-known-leaves;one-implementation/delivery-unit=current-Issue/no-sole-child-or-wrapper;create/verify-only-known-at-least-2-direct-independently-complete-necessary-slice/release-siblings;subdivide-only-into-at-least-2-independent-children-else-enlarge/update-own-scope;no-phase/metadata/branch-PR/scope-mirror-placeholders;single-release=current/root-Issue;numbered-release-children-only-if-at-least-2-releases-required;one-unit-release-implements-directly;feature-children-only-if-at-least-2-independent-slices;require-each-implementation-leaf-Size;load=sum(unfinished-leaf-points)<=capacity;verify-integrity/topology|
 |Resize|Preserve-all-`Must`;select-`Recommended`-by-accepted-user-order;defer-`Optional`-first,then-nonfitting-`Recommended`-to-`Backlog`;clear-Iteration/wave;record-reason/reconsideration;pause-only-with-approval/partial-state/branch-PR-disposition/recoverability;split-complete-slices-or-record-indivisible-exception|
 |Bases/order|Release/standalone=approved-main;feature-leaf=current-release;dependencies-wait;ordinary-child-parent-excludes-release-PRs|
 |Local-branch|Omit-`--track`/`-b`|
