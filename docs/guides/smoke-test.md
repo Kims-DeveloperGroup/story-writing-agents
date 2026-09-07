@@ -68,8 +68,8 @@ story smoke --workspace ./my-story
 ```
 
 The explicit form does not initialize or repair the supplied path. It requires
-an already ready, exact, clean v2 initialization root and constructs a fresh
-workspace verifier. Success has this shape:
+an already ready v2 initialization root and constructs a fresh workspace
+verifier. Success has this shape:
 
 ```json
 {
@@ -96,6 +96,14 @@ provider state, manuscript, or other residue. `retained:true` means only that
 the caller-owned directory remains; it does not mean smoke wrote retained
 diagnostics. Capture the one-line stdout yourself if audit evidence is needed.
 
+For example, a ready workspace may already contain provider-managed
+`agent_states/orchestrator_state/provider_sessions/.antigravity/` data,
+including a nested native symlink, FIFO, or unreadable subtree. Explicit smoke
+can still pass because readiness does not list, stat, open, decode, or traverse
+unknown entries and does not enumerate ignored/untracked Git paths. Smoke
+preserves that state byte-for-byte but does not validate or trust it; the
+Antigravity owner must validate it before provider use.
+
 ## Failures and limits
 
 Exit code `0` means the applicable checks passed. A disposable invariant
@@ -103,9 +111,11 @@ failure returns `status:"failed"`, the completed check prefix, `failed_check`,
 and code `1`. Argument, initialization, identity, discovery, or unexpected
 failures use the CLI status-2 error path.
 
-Explicit smoke rejects a missing, interrupted, unsupported, arbitrary, dirty,
-drifted, or unsafe root without changing it. It is not a recovery mechanism;
-follow [workspace initialization recovery](../operations/recovery-and-limitations.md#workspace-initialization-recovery).
+Explicit smoke rejects a missing, interrupted, unsupported, markerless
+arbitrary, required-path-drifted, staged/disallowed-tracked, or unsafe root
+without changing it. Unknown ignored/untracked entries alone are not a
+failure. Smoke is not a recovery mechanism; follow
+[workspace initialization recovery](../operations/recovery-and-limitations.md#workspace-initialization-recovery).
 
 A pass does not validate:
 

@@ -950,6 +950,39 @@ class GitSessionResourceSafetyTests(GitSessionResourceGitTestCase):
             ],
         )
         self.assertTrue(all(type(arguments) is tuple for arguments, _options in calls))
+        readiness_status = (
+            "status",
+            "--porcelain=v1",
+            "-z",
+            "--untracked-files=no",
+        )
+        self.assertTrue(
+            any(
+                arguments == readiness_status and options.get("read_only") is True
+                for arguments, options in calls
+            )
+        )
+        staged_session_status = (
+            "diff-index",
+            "--cached",
+            "--quiet",
+            "HEAD",
+            "--",
+        )
+        self.assertTrue(
+            any(
+                arguments == staged_session_status
+                and options.get("read_only") is True
+                for arguments, options in calls
+            )
+        )
+        self.assertFalse(
+            any(
+                arguments[:3] == ("status", "--porcelain=v1", "-z")
+                and "--untracked-files=all" in arguments
+                for arguments, _options in calls
+            )
+        )
         self.assertFalse(
             any(
                 arguments[:1]

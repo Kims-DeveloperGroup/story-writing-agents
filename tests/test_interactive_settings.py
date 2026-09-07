@@ -668,8 +668,12 @@ class SettingsLoadingAndUpdateTests(SettingsTestCase):
                 invalid = pristine_initialized_workspace(self)
                 invalid.write_json(_ROUTE_PATH, malformed)
                 before = _files(invalid.root)
+                restarted = Workspace(invalid.root).require_ready()
                 with self.assertRaises(WorkspaceFormatError):
-                    Workspace(invalid.root)
+                    read_provider_route_generations(
+                        restarted,
+                        ConfigManager(restarted).load_configuration_snapshot(),
+                    )
                 self.assertEqual(_files(invalid.root), before)
 
     def test_conversation_rag_save_uses_the_existing_exact_cas_contract(self) -> None:

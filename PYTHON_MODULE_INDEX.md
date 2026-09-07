@@ -278,8 +278,8 @@ artifact_proposals -> agents/writing_artifacts
 workspace -> conversation_storage.filesystem/workspace.core
 workspace.core -> agents/conversations/errors/models
                -> workspace.initialization/workspace.schema/writing_artifacts
-workspace.initialization -> agent_exchange_paths/config/errors/git/git.session_contracts
-                         -> git.session_history/git.session_resources/git.story_commits
+workspace.initialization -> agent_exchange_paths/config/errors/git/git.session_checkpoints
+                         -> git.session_contracts/git.session_history/git.session_resources/git.story_commits
                          -> runtime_state_paths/workspace.schema
 workspace.schema -> agents/errors/git.session_contracts
 writing_artifacts -> writing_artifacts.application_contracts/authorization/catalog
@@ -471,7 +471,9 @@ every intermediate arrow. The current runtime graph is acyclic.
 - **State, resources, and side effects:** Pure deterministic path-shape
   classification only; it performs no filesystem, content, provider, or
   import-time I/O. `agent_exchanges.storage` remains the content and lifecycle
-  owner, while workspace readiness consumes only these path predicates.
+  owner. Strict workspace initialization/recovery traversal consumes only the
+  directory predicate; journal-free readiness does not classify
+  agent-exchange paths or consume the file predicate.
 - **Primary verification/documentation:** `tests/test_agent_exchange_storage.py`
   and `tests/test_workspace_v2_initialization.py`; agent-exchange persistence
   and workspace safety documentation remain owned by their documentation
@@ -2660,11 +2662,14 @@ every intermediate arrow. The current runtime graph is acyclic.
   the inspect, list, provision, and require-ready operations additionally
   accept a private optional tuple of exact caller-validated worktree paths and
   tolerate only unstaged modifications of those identities. Their workspace
-  lifecycle callers freshly validate configuration from a descriptor snapshot
-  before supplying only the two
-  schema-validated mutable configuration paths; every staged, renamed,
-  untracked, duplicate, malformed, or other dirty status remains rejected.
-  they expose no descriptor, raw Git output, argv/environment, generic command,
+  lifecycle callers freshly validate configuration from targeted
+  descriptor-bound reads before supplying only the two schema-validated
+  mutable configuration paths. Staged, renamed, duplicate, malformed, or other
+  tracked dirty status remains rejected; ignored and untracked entries are not
+  enumerated and do not participate in readiness. Each present correlated
+  session worktree must also have an index matching its `HEAD`; untracked and
+  unstaged story changes remain outside session-resource readiness. They expose
+  no descriptor, raw Git output, argv/environment, generic command,
   or reusable mutation capability and are absent from all facades.
 - **Direct internal dependencies:** `git.contracts`, `git.process`,
   `git.repository_lock`, and `git.session_contracts`.
@@ -2675,7 +2680,11 @@ every intermediate arrow. The current runtime graph is acyclic.
   linked-worktree creation, exhaustive correlated inventory, double final
   verification, and removal of only its proved journal file. Inspection and
   require-ready are read-only; provision alone may create or resume the exact
-  ordered prefix. Partial, moved, aliased, malformed, uncertain, or colliding
+  ordered prefix. Its main-worktree readiness status query uses
+  `--untracked-files=no`, while its identity-bound session-worktree check uses
+  `git diff-index --cached --quiet HEAD --`; the independent story-commit and
+  checkpoint owners retain their exhaustive untracked-entry safety checks.
+  Partial, moved, aliased, malformed, uncertain, or colliding
   facts are preserved and classified without deleting any named ref, branch,
   worktree, administration record, journal-backed fact, or object. It owns no
   later #505 history interpretation, provider/session state, remote, cleanup,
@@ -6567,7 +6576,10 @@ every intermediate arrow. The current runtime graph is acyclic.
 - **State, resources, and side effects:** Deterministic shape validation for
   exact versions, safe identities, lowercase digests, bounded event ordinals,
   artifact lock/state leaves, and staging retirement names. Runtime owners
-  retain all content validation and lifecycle authority.
+  retain all content validation and lifecycle authority. Strict workspace
+  initialization/recovery traversal consumes only the directory predicate;
+  journal-free readiness does not classify orchestrator runtime paths or
+  consume the file predicate.
 - **Primary verification/documentation:** Existing owner and workspace tests;
   documentation remains assigned to its specialist.
 
@@ -6645,37 +6657,46 @@ every intermediate arrow. The current runtime graph is acyclic.
   module `__all__` is empty and neither the workspace nor project facade
   exports them.
 - **Direct internal dependencies:** `agent_exchange_paths`, `config`, `errors`, the public `git` facade,
-  `git.session_contracts`, `git.session_history`, `git.session_resources`,
-  `git.story_commits`, and `workspace.schema`.
+  `git.session_checkpoints`, `git.session_contracts`, `git.session_history`,
+  `git.session_resources`, `git.story_commits`, `runtime_state_paths`, and
+  `workspace.schema`.
 - **State, resources, and side effects:** Classifies absent, empty,
   journal-backed initializing, exact ready-v2, unsupported, and recovery states
   without adopting unknown bytes. Initialization exclusively owns the open
   root descriptor, no-follow traversal, create-only journal/scaffold
-  convergence, exact 22-file manifest composition, and one #448 baseline call.
+  convergence, exact 25-file manifest composition, and one #448 baseline call.
   It preflights every required descriptor-relative, descriptor-path,
   no-follow, flag, read/write, sync, stat, and cleanup capability plus
   parent/root Git topology before mutation. It retains and rechecks root
   identity, verifies the journal-only residue once before removal, fsyncs that
   final mutation, then verifies the exact clean baseline once before success. A
-  ready reopen is read-only; dirty, drifted, unsafe, or ambiguous state is
-  preserved and rejected. Git identity failure becomes the fixed
+  ready reopen is read-only; required-path drift, staged or disallowed tracked
+  changes, unsafe required topology, and ambiguous Git state are preserved and
+  rejected. Git identity failure becomes the fixed
   content-free `ConfigurationError` message; all other Git failures become
   content-free topology or recovery errors with cleared exception graphs.
-  Ready-main validation composes the exact clean baseline with an exhaustive
-  correlated session inventory. It validates the two runtime-mutable
-  configuration leaves through `config` before excluding them from immutable
-  scaffold comparison. It likewise validates the exact optional provider-route
-  generation leaf before treating it as interactive runtime state. Session
-  inspect, provision, and require-ready composition freshly revalidates those
-  configuration bytes before granting the same exact-path Git tolerance. It accepts
-  exactly `debug_logs/.runtime.lock` and `debug_logs/runtime.jsonl` as the
-  runtime-owned debug leaves, without accepting sibling debug paths, and recognizes
-  only identifier-bounded canonical
-  filesystem-conversation directories and the four owned metadata/transcript/
-  collaboration-history/lock leaves as dynamic state. It also recognizes the
-  exact CLI context and storage/access lock leaves plus identifier-bounded
-  conversation-default and provider-session JSON records; malformed, unknown,
-  and unsafe descendants remain invalid. Exact linked-session roots validate their
+  Journal-free ready-main validation reads only required scaffold paths through
+  the bound descriptor, decodes the marker before other readiness checks,
+  validates immutable bytes plus the two runtime-mutable configuration
+  documents and the safe regular-file existence of their referenced personae,
+  and composes the exact baseline with an exhaustive correlated session
+  inventory. It does not enumerate, stat, open, classify,
+  or descend into unknown files, directories, symlinks, nonregular entries, or
+  optional owner state; ignored and untracked Git entries do not affect
+  readiness, while staged or tracked unknown entries require recovery. Optional
+  state content is validated only by its owning consumer. Session inspect,
+  provision, and require-ready composition freshly revalidates the same
+  targeted main-root configuration bytes before granting exact-path Git
+  tolerance. Ready linked-session validation separately projects all 25
+  canonical scaffold leaves from the session root, enforcing each leaf and its
+  materialized ancestors through descriptor-bound no-follow access; it decodes
+  the local marker, validates local configuration and referenced personae, and
+  requires a clean session index while permitting untracked and unstaged story
+  changes. Schema-only empty runtime directories are main-initializer resources
+  and are not required in a Git-materialized session root.
+  Strict absent, empty, and journal-backed initialization retains the recursive
+  snapshot and its registered runtime-directory predicates. Exact
+  linked-session roots validate their
   schema-derived sibling path, Git indirection, registration, branch, and
   immutable baseline/seed anchors without interpreting later history.
   Discovery returns the nearest typed main/session boundary and never skips a

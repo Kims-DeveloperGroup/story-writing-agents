@@ -38,7 +38,7 @@ migrates, upgrades, or resets other state.
 
 | Observation or failure | Meaning | Safe response |
 | --- | --- | --- |
-| Success JSON and no journal | The marker, exact 22-file scaffold, one parentless `main` commit, index/tree, and clean status were verified after journal removal. | Keep the original root pristine. Mutable session and runtime state belongs in the exact sibling/internal resources provisioned by session Create. |
+| Success JSON and no journal | The marker, exact 25-file scaffold, one parentless `main` commit, index/tree, and clean status were verified after journal removal. | Keep the original root pristine. Mutable session and runtime state belongs in the exact sibling/internal resources provisioned by session Create. |
 | `ConfigurationError: effective Git identity is unavailable or invalid` | The runtime did not invent an author/committer. Exact scaffold/journal bytes may exist, but an absent Git repository was not created. | Configure a valid effective Git author and committer under normal host policy, then run the same init command in a fresh process. |
 | Exact `.story-writing-agents-initialize-v2.json` remains | Initialization stopped after durable progress. The failed `Workspace` object is terminal. | Preserve all bytes and rerun with a fresh object/process. It will validate every present byte and continue only missing exact steps. |
 | `WorkspaceVersionUnsupportedError` | A recognizable markerless/pre-v2 root or unsupported numeric marker/journal was found. | Preserve it and create a separate new workspace. Migration and compatibility are unsupported. |
@@ -46,17 +46,22 @@ migrates, upgrades, or resets other state.
 | `WorkspaceSecurityError` or topology failure | The root or Git layout is nested, linked, symlinked, replaced, sparse, bare, mismatched, or otherwise unsafe. | Do not follow or repair suspicious paths in place. Preserve evidence and choose a new standalone safe root. |
 | `OSError`, interruption, or process exit | Safe primitives or an operation failed. Exact completed partial steps are not rolled back. | Use a fresh process only after the environment is stable; exact journal recovery will converge or fail closed. |
 
-A clean ready root can be passed to `story init` again. That call validates only
-and does not rewrite, restage, or create a second commit. Any dirty tracked,
-staged, or untracked original-root state is preserved and rejected. Initialization
-itself creates no debug record, so its stderr and the protected root are the
-recovery evidence.
+A ready root can be passed to `story init` again. That call validates only and
+does not rewrite, restage, or create a second commit. It reads required paths
+and omits ignored and untracked entries from Git readiness; an untracked user
+note or opaque provider `.antigravity/` tree is preserved and does not by
+itself require recovery. This does not validate or trust that optional state:
+its owner must validate it when consumed. Required-path drift, staged changes,
+disallowed tracked changes, and tracked unknown additions are preserved and
+rejected. Initialization itself creates no debug record, so its stderr and the
+protected root are the recovery evidence.
 
 `story smoke --workspace PATH` is read-only validation, not repair. It requires
-an already clean ready root, returns null session/conversation IDs, and creates
-no directive, catalog record, history, or diagnostic. `story smoke` without a
-path uses the real initializer inside a disposable directory, reports identity
-failures, and removes the directory.
+an already ready root, returns null session/conversation IDs, and creates no
+directive, catalog record, history, or diagnostic. Opaque ignored/untracked
+entries are neither inspected nor repaired. `story smoke` without a path uses
+the real initializer inside a disposable directory, reports identity failures,
+and removes the directory.
 
 Discovery stops at the nearest recognizable boundary. It does not skip an
 unsupported or malformed inner marker/journal/legacy sentinel to select an
@@ -165,6 +170,10 @@ Concrete cases:
   mutation. A foreign registered worktree, unknown ref, packed-ref collision,
   moved worktree, malformed `.git` indirection, or changed anchor likewise
   fails closed.
+- Ready session inspection requires the index to match `HEAD`, so any staged
+  change is recovery-required. Unstaged story work and untracked entries are
+  allowed; the workspace layer still checks all 25 Git-materialized scaffold
+  leaves, their ancestors, local configuration, and referenced personae.
 - Concurrent Create calls for the same or different session IDs serialize
   across the repository. Exact same-session calls converge; case-distinct IDs
   follow filesystem identity truth and a real alias fails closed.

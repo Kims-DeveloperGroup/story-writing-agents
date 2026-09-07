@@ -62,10 +62,14 @@ the runtime never invents an identity. The initialization journal is absent and
 the worktree is clean when success is printed.
 
 Rerunning `story init` on that unchanged root validates it without rewriting,
-staging, or committing. A legacy, markerless, arbitrary nonempty, nested-Git,
-dirty, or drifted root is preserved and rejected. There is no prompt-overwrite,
-migration, compatibility, upgrade, or adoption mode; create a new workspace
-instead.
+staging, or committing. On any journal-free ready root, validation reads only
+required paths and exact Git invariants; it leaves untracked notes and unknown
+provider state opaque. Those entries are permitted, not trusted, and their
+owner validates them when used. A legacy, markerless arbitrary nonempty,
+nested-Git, partially initialized, required-path-drifted, staged, or
+disallowed-tracked root is preserved and rejected. There is no prompt-
+overwrite, migration, compatibility, upgrade, or adoption mode; create a new
+workspace instead.
 
 To verify the completed root without changing it:
 

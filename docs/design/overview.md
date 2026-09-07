@@ -80,9 +80,13 @@ They add no public facade exports.
 Externally, success means one standalone clean `main` root with exactly one
 parentless commit named `Initialize story workspace`. A clean rerun validates
 without mutation. An exact interrupted journal can be resumed only by a fresh
-object/process; legacy, arbitrary, ambiguous, dirty, drifted, or unsafe state is
-preserved and rejected. There is no migration, compatibility, prompt overwrite,
-or adoption path.
+object/process, and that initialization/recovery traversal remains recursively
+closed. Once the journal is absent, readiness instead projects only required
+paths and exact Git invariants: unknown ignored/untracked entries are opaque
+and permitted, while required-path drift, staged or disallowed tracked state,
+tracked unknown additions, and unsafe topology are preserved and rejected.
+Opaque state is not trusted; its owner validates it on consumption. There is no
+migration, compatibility, prompt overwrite, or adoption path.
 
 The marker stores `story/session/`,
 `refs/story-writing-agents/runtime/sessions/`, and `.story-worktrees` naming
@@ -107,13 +111,18 @@ repeated afterward. Exact facts are idempotently ready; an exact journal prefix
 can resume; partial, unknown, colliding, moved, substituted, or mismatched facts
 are preserved and fail closed.
 
-Main readiness now composes the exact scaffold/baseline with an exhaustive
-correlated session inventory. Session-root readiness recognizes only the exact
-schema-derived linked worktree and immutable baseline/seed roots. It reports
-current tips without interpreting later #505 history. Typed discovery retains
-main/session role and session identity. Inspect, list, and require-ready are
-read-only; provision is the only mutation authority and cannot be invoked by
-provider or lead text. See
+Main readiness now composes descriptor-bound reads of required directories,
+the 25 scaffold leaves, mutable configuration and referenced personae with the
+exact scaffold/baseline and an exhaustive correlated session inventory. It
+does not enumerate unknown filesystem or untracked Git entries. Session-root
+readiness checks the 25 Git-materialized leaves and ancestors, local
+configuration/personae, a clean index, the exact schema-derived linked
+worktree, and immutable baseline/seed roots; schema-only empty runtime
+directories need not be materialized there, and unstaged story work is
+allowed. It reports current tips without interpreting later #505 history.
+Typed discovery retains main/session role and session identity. Inspect, list,
+and require-ready are read-only; provision is the only mutation authority and
+cannot be invoked by provider or lead text. See
 [the exact contract](../reference/git-adapter.md#package-internal-session-git-resources).
 
 ### Durable session-history infrastructure

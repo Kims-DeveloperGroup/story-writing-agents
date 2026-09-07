@@ -16,7 +16,7 @@ Key terms: **default**—a persisted command or conversation fallback;
 
 ## Canonical workspace tree
 
-`story init` creates one exact pristine schema-v2 root and commits its 22
+`story init` creates one exact pristine schema-v2 root and commits its 25
 initializer-owned files to `main`. “Lazy” paths below describe later runtime
 owners; #454 does not create them in the initialization baseline.
 
@@ -26,6 +26,7 @@ workspace/
 │   └── story-writing-agents/runtime/session-provisioning/
 │       ├── .lock                                               [lazy persistent repository guard]
 │       └── <session_id>.json                                   [transient immutable provisioning journal]
+├── .gitignore                                                   [exact runtime-family exclusions]
 ├── .story-writing-agents-initialize-v2.json                    [transient initialization journal; absent on success]
 ├── config/
 │   ├── workspace.json                                          [exact schema-v2 marker and topology policy]
@@ -117,6 +118,7 @@ The one parentless commit named `Initialize story workspace` contains every and
 only these paths, sorted by UTF-8 path bytes:
 
 ```text
+.gitignore
 agent_states/character_custodian_state/.gitkeep
 agent_states/execution_specialist_state/.gitkeep
 agent_states/orchestrator_state/.gitkeep
@@ -125,9 +127,11 @@ agent_states/orchestrator_state/sessions/.gitkeep
 agent_states/plot_architect_state/.gitkeep
 config/agent_configs.json
 config/agents/character_custodian/AGENTS.md
+config/agents/common/AGENTS.md
 config/agents/execution_specialist/AGENTS.md
 config/agents/lead_orchestrator/AGENTS.md
 config/agents/plot_architect/AGENTS.md
+config/agents/specialist_collaboration/AGENTS.md
 config/persona_templates/alternative_templates/.gitkeep
 config/persona_templates/default_kim_eun_hee.md
 config/system_defaults.json
@@ -143,10 +147,22 @@ manuscript/.gitkeep
 
 The transient `.story-writing-agents-initialize-v2.json`, `.git`, empty
 directory entries, mutable logs/state, later artifacts, and arbitrary files are
-excluded. A clean ready reopen requires the marker/scaffold bytes, commit,
-index/tree, `refs/heads/main`, clean main status, and an exhaustive inventory in
-which every additional session branch/ref/worktree/journal fact is exactly
-correlated.
+excluded. Journal-backed initialization remains recursively closed and rejects
+any extra entry. A journal-free ready-main check instead reads only required
+directories, these 25 scaffold leaves, mutable configuration and referenced
+personae, then verifies the exact baseline/index/`main` topology/history and an
+exhaustive inventory in which every session branch/ref/worktree/journal fact is
+exactly correlated. It does not enumerate unknown filesystem entries or
+ignored/untracked Git entries. Those optional entries remain untrusted and are
+validated by their owner when consumed.
+
+A ready linked session validates all 25 Git-materialized leaves and their
+ancestors, plus its local marker, configuration, referenced personae, index,
+and correlated Git identity. It does not require schema-only empty runtime
+directories that Git cannot materialize. Untracked entries and unstaged story
+work are allowed; staged changes require recovery. Later session branch tips
+may contain added paths, whose committed story/history validity belongs to the
+story-commit and session-recovery owners rather than generic readiness.
 
 `config/workspace.json` records this naming policy for one validated
 session ID `<id>`:
