@@ -1415,7 +1415,7 @@ every intermediate arrow. The current runtime graph is acyclic.
   defensive immutable copies of explicit/system/per-agent model and effort
   primitives, bound-agent selection, exact explicit-over-agent-over-system-
   over-provider-default precedence, isolated provider state, command
-  construction, headless capability check, NDJSON stream validation, and
+  construction, headless capability check, strict JSON result validation, and
   provider conversation-ID protocol. When supplied by the backend, the
   roster-filtered immutable execution profiles are the exact model/effort
   source for `--model` and `--effort`; the older private precedence path remains
@@ -1425,7 +1425,15 @@ every intermediate arrow. The current runtime graph is acyclic.
   Direct binding constructs the established deterministic rules bytes and exact
   same-snapshot content-free component partition for binding structure, role,
   persona, language, each canonical core-document path, and provider
-  constraints. A definition's internal `provider_managed_context` marker instead
+  constraints. In both direct and contextual staging, only role-system-prompt
+  text replaces the exact sentence `invoke another agent, provider subagent,
+  tool, or model.` with `invoke another agent, provider subagent, or model.`
+  before UTF-8 encoding and component accounting. This local rendering leaves
+  the shared immutable definition, fingerprint, captured references, common
+  prompt and workspace template unchanged; persona and evidence text are not
+  transformed. The direct binding's separate provider execution constraints
+  retain their established tool prohibition.
+  A definition's internal `provider_managed_context` marker instead
   selects the compact contextual rules: the same role/persona/language facts
   plus the symmetric wire-v7 grammar for untrusted evidence, the exact typed
   `{correlation, action}` envelope, schema-selected SEARCH/READ/ANSWER variant,
@@ -1434,9 +1442,10 @@ every intermediate arrow. The current runtime graph is acyclic.
   per-call `q` contract, retained-state candidate reconstruction, alias-keyed
   patch upsert, and typed tombstone removal, with
   no bound core-document bytes. `agent_context.service` and
-  `agent_context.actions` retain the inner protocol semantics; Codex and
-  Antigravity stage byte-identical contextual constraint bytes and component
-  accounting while their direct-definition framing remains unchanged.
+  `agent_context.actions` retain the inner protocol semantics. Antigravity's
+  contextual constraints prohibit subagents and CoT but omit Codex's explicit
+  tool prohibition; each adapter accounts for its own exact constraint bytes.
+  Their direct-definition framing remains unchanged.
   Antigravity wraps those canonical definition bytes exactly once in the static,
   deterministic custom-main-agent YAML framing required by the provider
   (`name`, declarative `tools: [finish]`, `mainAgent: true`, `subagent: false`,
@@ -1470,8 +1479,9 @@ every intermediate arrow. The current runtime graph is acyclic.
   anchored, so these rules-file protections likewise do not claim application
   access control or race-proof containment.
   Invocation uses the shared canonical encoder for its output schema and
-  payload, then accounts for the exact provider-specific NDJSON stdin bytes
-  before creating any new per-session runtime tree; encoding failure therefore
+  payload, then decodes the exact payload bytes into one `--print` argument and
+  accounts for that argument's UTF-8 payload bytes before creating any new
+  per-session runtime tree; encoding failure therefore
   creates no new provider or workspace directory. Process creation distinguishes
   prepared from submitted failures without replacing established diagnostics,
   and only recognized nonnegative terminal usage counters become exact usage;
@@ -1480,8 +1490,10 @@ every intermediate arrow. The current runtime graph is acyclic.
   `agent_states/orchestrator_state/provider_sessions/.antigravity/sessions/<session>/<agent>/<fingerprint>/provider`
   and sibling `workspace`, installs only the bound custom agent at
   `workspace/.agents/agents/<agent>/agent.md`,
-  sends the story request as one NDJSON stdin event, and delegates bounded
-  `agy` subprocess ownership to `provider_process`. Every call explicitly
+  sends the story request through `--print` with `--input-format text`,
+  `--output-format json`, and empty stdin, and delegates bounded `agy`
+  subprocess ownership to `provider_process`. The prompt argument can be
+  visible in operating-system process listings. Every call explicitly
   selects that custom main agent. A fresh call uses `--new-project`; an exact
   conversation resume uses only `--conversation`, reusing the isolated project
   associated with that provider conversation. No default project or blanket
@@ -1489,16 +1501,17 @@ every intermediate arrow. The current runtime graph is acyclic.
   bounded, provider-free `agy --help` capability check with an isolated
   `--gemini_dir`. Its fixed `state_root/capability-probe` scratch directory is
   best-effort removed after every capability check and is not retained
-  provider-native state. The returned init must identify the selected agent,
-  the canonical application-owned runtime cwd, and `request-review`. The
-  adapter accepts only content-bearing/nonoperational `user_input`,
-  `agent_response`, `checkpoint`, and `finish` steps and rejects native tool,
-  tool-name, subagent, or unknown operational step payloads. This output
-  rejection is layered containment, not proof that the CLI's advertised tools
-  were removed. A successful schema-constrained terminal result must
-  contain one root-object `structured_output` and an exact canonical echo of
-  the submitted `json_schema`; absence, mismatch, or malformed content fails
-  closed without falling back to free response text. No existing provider
+  provider-native state. The adapter decodes exactly one UTF-8 JSON object,
+  rejecting duplicate fields, nonfinite numbers, malformed content, and
+  concatenated or streamed envelopes with content-free diagnostics. It requires
+  `SUCCESS`, a safe conversation ID matching an exact requested resume ID,
+  one root-object `structured_output`, and an exact canonical echo of the
+  submitted `json_schema`; absence, mismatch, or malformed content fails closed
+  without falling back to free response text. This terminal envelope provides
+  no init or step events, so the adapter does not attest the selected agent,
+  cwd, permission mode, or tool activity from provider output. Custom-agent
+  staging, `--sandbox`, `--mode plan`, and disabled slash commands remain
+  explicit invocation controls. No existing provider
   project, conversation, or workspace is migrated. `close()` intentionally
   retains definitions, session
   workspaces, and provider-native conversation state for later backend
@@ -1540,9 +1553,12 @@ every intermediate arrow. The current runtime graph is acyclic.
   retained-state candidate reconstruction, alias-keyed patch upsert, and typed
   tombstone removal, with no bound core-document bytes.
   `agent_context.service` and `agent_context.actions` retain the inner protocol
-  semantics; provider-managed constraint bytes and their component accounting
-  are byte-identical to Antigravity, and direct-definition framing remains
-  unchanged.
+  semantics. Codex retains the explicit tool prohibition in its contextual
+  constraints while Antigravity omits it. Codex also stages the original
+  role/common prompt bytes without Antigravity's role-text transformation;
+  staged role and contextual constraint bytes can therefore differ between
+  adapters, each with exact component accounting. Codex rendering and
+  direct-definition framing remain unchanged.
   Partitions are retained only with their corresponding ephemeral staging
   directory.
   Invocation uses shared canonical schema and payload bytes, distinguishes

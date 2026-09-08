@@ -734,8 +734,8 @@ than duplicated) has the same semantics for either provider:
 Codex receives that schema by `--output-schema <schema-file>`. Antigravity
 receives the same canonical schema by `--json-schema <canonical-json>` and must
 return a root-object `structured_output` plus an exact `json_schema` echo; its
-custom-agent, isolated-project, and native-stream boundary is documented in
-the [Antigravity guide](antigravity.md#sanitized-provider-call-and-native-stream).
+custom-agent, isolated-project, and JSON-result boundary is documented in
+the [Antigravity guide](antigravity.md#sanitized-provider-call-and-json-result).
 Applications do not call separate provider search/read endpoints.
 
 For example, either provider can return this provider-neutral SEARCH output:

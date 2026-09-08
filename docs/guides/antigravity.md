@@ -7,8 +7,9 @@
 > configured route fallback.
 > Settings Model/Effort editors also use bounded `agy models` discovery for a
 > pending Antigravity route without persisting the catalog.
-> Focused deterministic tests verify this contract; live Antigravity acceptance
-> remains environment- and provider-dependent and is not claimed as evidence here.
+> Focused deterministic tests cover the adapter contract. Live acceptance with
+> CLI 1.1.27 verified fresh and resumed Lead turns for Pro, Flash, and Sonnet;
+> availability and results remain dependent on the environment and provider.
 
 Key terms: **backend name**—the configuration value `antigravity`;
 **executable**—the resolved Antigravity command, `agy` by default; **provider
@@ -248,8 +249,9 @@ effective provider routes. For an Antigravity route it also runs a bounded,
 provider-free `agy --help` capability probe in isolated state and requires the
 public help tokens `--agent`, `--conversation`, `--disable-slash-commands`,
 `--effort`, `--input-format`, `--json-schema`, `--mode`, `--model`,
-`--new-project`, `--output-format`, `--print-timeout`, and `--sandbox`. The
-adapter also passes the inherited hidden option `--gemini_dir=<state-dir>`, but
+`--new-project`, `--output-format`, `--print`, `--print-timeout`, and
+`--sandbox`. The adapter also passes the inherited hidden option
+`--gemini_dir=<state-dir>`, but
 does not require that compatibility spelling to appear in public help. A
 successful probe does not validate authentication, network access, model
 access, account quota, response quality, or a provider turn.
@@ -262,25 +264,23 @@ For each turn, the runtime launches `agy` directly without shell evaluation. It:
 - adds `--new-project` for a fresh provider thread, or resumes only the exact
   retained ID with `--conversation <id>`; it never registers the canonical
   story workspace root as an Antigravity project;
-- sends the confidential story request as one newline-delimited stream-JSON
-  event on standard input and requests stream-JSON output;
+- passes the exact confidential story request JSON as one `--print` argument,
+  selects `--input-format text --output-format json`, and sends empty stdin;
 - enables the CLI sandbox, selects plan mode, and disables slash commands;
 - does not pass an approval-bypass or unrestricted-execution option; and
-- drains stdout and stderr, requires the selected agent, exact runtime working
-  directory, `request-review` permission mode, accepted step metadata,
-  root-object structured output, and an exact schema echo, then applies the
-  shared runtime correlation and semantic checks.
+- drains stdout and stderr, requires one successful JSON object with a valid
+  conversation ID, root-object structured output, and an exact schema echo,
+  then applies the shared runtime correlation and semantic checks.
 
 The custom definition declares `tools: [finish]`, `mainAgent: true`,
-`subagent: false`, and `commandExecutionPolicy: off`. Those declarations,
-sandboxing, plan mode, and request-review are layered containment signals—not
-proof that the vendor removed capabilities. Antigravity CLI 1.1.27 still
-advertised its main agent's full 57-tool catalog in the native `init` event
-when the definition declared only `finish`; content-free probes did not prove
-provider-level tool removal. Story therefore accepts only the non-operational
-`user_input`, `checkpoint`, `agent_response`, and `finish` step types. A tool,
-subagent, or unknown operational step invalidates the returned stream rather
-than granting it authority.
+`subagent: false`, and `commandExecutionPolicy: off`. These declarations and
+CLI flags do not prove provider-level capability removal. Earlier stream
+probes of Antigravity CLI 1.1.27 advertised its full 57-tool main-agent catalog
+when the definition declared only `finish`. The JSON result has no `init` or
+step metadata, so Story cannot attest the selected agent, cwd, permission mode,
+or tool/subagent behavior from this output. CLI 1.1.27 also warns that plan
+mode has no effect when slash commands are disabled; Story retains both flags
+without claiming that plan mode enforces containment.
 The definition location and selection mechanism follow Antigravity's official
 [custom-agent documentation](https://antigravity.google/docs/cli/commands/agents/).
 
@@ -294,14 +294,19 @@ absent artifact does not change or narrow the original failure. Treat any saved
 body as hostile plaintext and follow the inspection workflow in
 [Privacy](../operations/privacy-and-provider.md#rejected-provider-response-artifacts).
 
-The command line still contains the runtime-owned output schema, isolated state
-path, and any configured model, effort, or provider conversation ID. Treat
-model names and local path/session metadata as process-visible, not secret.
-Story prompts, drafts, retrieval observations, provider replies, and credentials
-are not inserted into argv; credentials may instead be available through the
-inherited environment or provider keyring.
+The command line contains the full request, including any story input, drafts,
+references, or retrieval observations carried in that request. Local process
+listings and process-inspection tools may expose it. The runtime-owned schema,
+isolated state path, configured model/effort, and provider conversation ID are
+also process-visible. Credentials may be available through the inherited
+environment or provider keyring; do not put them in request content.
+Operating-system argument-size limits can reject a large request before the
+provider process starts, producing a typed `ProviderInvocationError` with a
+fixed start-failure diagnostic. Such a call has no submitted transport count.
 
-### Sanitized provider call and native stream
+<a id="sanitized-provider-call-and-native-stream"></a>
+
+### Sanitized provider call and JSON result
 
 For a session named `novel`, the process working directory has this exact
 adapter-owned structure (the root and fingerprint are sanitized):
@@ -318,10 +323,11 @@ readability:
 ```text
 cwd=/workspace/agent_states/orchestrator_state/provider_sessions/.antigravity/sessions/novel/lead_orchestrator/<definition-sha256>/workspace
 agy --gemini_dir=<runtime-root>/provider \
-  --input-format stream-json --output-format stream-json \
+  --input-format text --output-format json \
   --json-schema '<exact generated wire-v7 schema>' \
   --agent lead_orchestrator --sandbox --mode plan \
-  --disable-slash-commands --print-timeout 300s --new-project
+  --disable-slash-commands --print-timeout 300s --new-project \
+  --print '<exact confidential wire-v7 payload JSON, one argument>'
 ```
 
 On a compatible later call, the adapter keeps `--agent lead_orchestrator` and
@@ -331,33 +337,51 @@ project associated with that exact conversation. Story never supplies
 project. This matches the provider's documented
 [project and conversation behavior](https://antigravity.google/docs/cli/projects/).
 
-The confidential wire-v7 payload is nested as text in the native input event,
-not in argv. The inner JSON uses compact runtime field names, while the
-response schema still requires the descriptive typed outer result:
+The payload is the exact UTF-8 inner JSON string, without a native event wrapper
+or an added newline. Standard input is empty. This transport was verified with
+CLI 1.1.27: raw text stdin was ignored in probes with an empty `--print` argument,
+`-`, or a constant print value. The response schema still requires the descriptive
+typed result even though the input uses compact runtime field names.
+
+A successful native response is exactly one UTF-8 JSON object. This sanitized
+shape is deliberately non-executable: `json_schema` stands for the complete
+object supplied on argv, whose canonical bytes must match exactly.
 
 ```json
-{"event":"user","message":{"content":"{\"c\":\"<correlation-1>\",\"q\":[\"lead\",\"sa\",\"wcdo\",[4,2,2,4,8,8,16,200],[\"lead\",\"outcome-v1\"]],\"i\":{\"workflow\":\"lead_front_channel\",\"command\":\"Explain how confirmation works.\"}}"}}
+{
+  "status": "SUCCESS",
+  "conversation_id": "agy-c-1",
+  "structured_output": {
+    "correlation": "<correlation-1>",
+    "action": {
+      "kind": "answer",
+      "result": {
+        "scope": "workflow_meta",
+        "evidence_status": "not_applicable",
+        "evidence_ids": [],
+        "kind": "answer",
+        "message": "<sanitized reply>",
+        "artifact_intent": null,
+        "proposal": null
+      },
+      "used_handles": []
+    }
+  },
+  "json_schema": {"<documentation-placeholder>": "exact generated wire-v7 schema object"},
+  "usage": {"input_tokens": 100, "output_tokens": 20, "cache_read_tokens": 0}
+}
 ```
 
-A successful native stream has one `init`, only accepted safe steps, and one
-terminal `result`. This shortened sanitized sample preserves the fields Story
-validates. The tool-list marker represents the other provider-advertised names;
-it is not accepted as an actual tool name. In a real result, `json_schema` is
-the complete JSON object passed on argv, and canonical bytes must match exactly:
-
-```json
-{"event":"init","conversation_id":"agy-c-1","init":{"agent":"lead_orchestrator","cwd":"/workspace/agent_states/orchestrator_state/provider_sessions/.antigravity/sessions/novel/lead_orchestrator/<definition-sha256>/workspace","permission_mode":"request-review","tools":["finish","ListDir","<55 additional CLI-advertised tools>"]}}
-{"event":"step_update","step_update":{"conversation_id":"agy-c-1","state":"DONE","step_index":0,"step_type":"user_input","text_delta":""}}
-{"event":"step_update","step_update":{"conversation_id":"agy-c-1","state":"DONE","step_index":1,"step_type":"checkpoint"}}
-{"event":"step_update","step_update":{"conversation_id":"agy-c-1","state":"ACTIVE","step_index":2,"step_type":"agent_response","text_delta":""}}
-{"event":"step_update","step_update":{"conversation_id":"agy-c-1","state":"DONE","step_index":3,"step_type":"finish"}}
-{"event":"result","result":{"conversation_id":"agy-c-1","status":"SUCCESS","structured_output":{"correlation":"<correlation-1>","action":{"kind":"answer","result":{"scope":"workflow_meta","evidence_status":"not_applicable","evidence_ids":[],"kind":"answer","message":"I will show the exact proposal before any specialist work starts.","artifact_intent":null,"proposal":null},"used_handles":[]}},"json_schema":{"<documentation-placeholder>":"the exact generated wire-v7 schema object"}}}
-```
-
-The placeholder makes this excerpt deliberately non-executable. A missing,
-string-valued, or different schema echo is rejected before Story constructs a
-`ProviderResult`. The complete closed SEARCH, READ, and seven-field Lead ANSWER
-branches are shown in [What providers receive](lead-agent.md#what-providers-receive).
+The example shows a Lead ANSWER; other calls require their selected result type.
+Story rejects invalid UTF-8, duplicate fields, non-finite numbers, additional
+JSON objects, and trailing non-whitespace data. It requires `SUCCESS`, a safe
+`conversation_id` matching the retained ID on resume, object
+`structured_output`, and the exact object schema echo before constructing a
+`ProviderResult`. It never falls back to a string-valued `response` field.
+Usage comes only from the terminal object's recognized exact nonnegative
+integer counters; absent or invalid counters remain unavailable. The complete
+closed SEARCH, READ, and seven-field Lead ANSWER branches are shown in
+[What providers receive](lead-agent.md#what-providers-receive).
 
 ### Shared structured-output contract
 
@@ -396,7 +420,7 @@ projected as `outcome_unknown` during recovery.
 | Before | Current implementation |
 | --- | --- |
 | Provider default agent and project could be selected from the outer story Git root. | Runtime selects its bound custom Lead agent in an isolated nested workspace and creates or resumes only that provider project. |
-| An attempted `ListDir` could end in request-review denial without a valid terminal result. | Operational tool/subagent steps are rejected, while accepted safe steps must end in object `structured_output` plus an exact schema echo. |
+| An attempted `ListDir` could end in request-review denial without a valid terminal result. | A successful JSON object must contain object `structured_output` and an exact schema echo; this output cannot attest tool behavior. |
 | The user saw a coarse invocation failure and recovery could find a submitted unknown outcome. | Deterministic returned rejections close with `retry_lead_turn`; only a genuinely unresolved submitted call stays `outcome_unknown` and non-replayable. |
 
 That failure is different from a deterministic returned-result rejection. An

@@ -51,10 +51,7 @@ from tests.helpers import initialized_workspace
 
 
 _UNSET = object()
-_DEFAULT_STREAM_SCHEMA = {"type": "object"}
-_DEFAULT_STREAM_AGENT = PLOT_ARCHITECT
-_DEFAULT_STREAM_CWD = "/private/antigravity-workspace"
-_DEFAULT_STREAM_TOOLS = ("finish", "list_dir")
+_DEFAULT_RESULT_SCHEMA = {"type": "object"}
 _REQUIRED_HEADLESS_FLAGS = (
     "--agent",
     "--conversation",
@@ -66,110 +63,32 @@ _REQUIRED_HEADLESS_FLAGS = (
     "--model",
     "--new-project",
     "--output-format",
+    "--print",
     "--print-timeout",
     "--sandbox",
 )
 
 
-def _stream(
+def _json_result(
     conversation_id: str,
     *,
-    init_agent: object = _DEFAULT_STREAM_AGENT,
-    init_cwd: object = _DEFAULT_STREAM_CWD,
-    permission_mode: object = "request-review",
-    tools: object = _DEFAULT_STREAM_TOOLS,
-    steps: object = _UNSET,
     result_conversation_id: str | None = None,
     status: str = "SUCCESS",
     structured_output: object = _UNSET,
-    json_schema: object = _DEFAULT_STREAM_SCHEMA,
+    json_schema: object = _DEFAULT_RESULT_SCHEMA,
     response: object = _UNSET,
     usage: object = _UNSET,
 ) -> bytes:
-    """Build one documented Antigravity stream without provider access."""
+    """Build one native JSON result without provider access."""
 
-    init: dict[str, object] = {}
-    for field, value in (
-        ("agent", init_agent),
-        ("cwd", init_cwd),
-        ("permission_mode", permission_mode),
-        ("tools", list(tools) if isinstance(tools, tuple) else tools),
-    ):
-        if value is not _UNSET:
-            init[field] = value
-    if steps is _UNSET:
-        steps = (
-            {
-                "conversation_id": conversation_id,
-                "state": "DONE",
-                "step_index": 0,
-                "step_type": "user_input",
-                "text_delta": "",
-            },
-            {
-                "conversation_id": conversation_id,
-                "duration_seconds": 0.0,
-                "state": "DONE",
-                "step_index": 1,
-                "step_type": "checkpoint",
-                "usage": {
-                    "cache_read_tokens": 0,
-                    "input_tokens": 1,
-                    "output_tokens": 1,
-                    "thinking_tokens": 0,
-                    "total_tokens": 2,
-                },
-            },
-            {
-                "conversation_id": conversation_id,
-                "state": "ACTIVE",
-                "step_index": 2,
-                "step_type": "agent_response",
-                "text_delta": "",
-            },
-            {
-                "conversation_id": conversation_id,
-                "duration_seconds": 0,
-                "state": "DONE",
-                "step_index": 3,
-                "step_type": "finish",
-            },
-        )
     terminal: dict[str, object] = {
-        "conversation_id": (
-            conversation_id
-            if result_conversation_id is None
-            else result_conversation_id
-        ),
+        "conversation_id": conversation_id if result_conversation_id is None else result_conversation_id,
         "status": status,
     }
-    if structured_output is not _UNSET:
-        terminal["structured_output"] = structured_output
-    if json_schema is not _UNSET:
-        terminal["json_schema"] = json_schema
-    if response is not _UNSET:
-        terminal["response"] = response
-    if usage is not _UNSET:
-        terminal["usage"] = usage
-    events = [
-        {
-            "event": "init",
-            "conversation_id": conversation_id,
-            "init": init,
-        },
-    ]
-    assert isinstance(steps, tuple)
-    events.extend(
-        {"event": "step_update", "step_update": step} for step in steps
-    )
-    events.append({"event": "result", "result": terminal})
-    return (
-        "\n".join(
-            json.dumps(event, ensure_ascii=False, separators=(",", ":"))
-            for event in events
-        )
-        + "\n"
-    ).encode("utf-8")
+    for field, value in (("structured_output", structured_output), ("json_schema", json_schema), ("response", response), ("usage", usage)):
+        if value is not _UNSET:
+            terminal[field] = value
+    return (json.dumps(terminal, ensure_ascii=False, separators=(",", ":")) + "\n").encode("utf-8")
 
 
 def _mode(path: Path) -> int:
@@ -397,23 +316,16 @@ class AntigravityAdapterTests(unittest.IsolatedAsyncioTestCase):
             / "agent.md"
         )
 
-    def stream(
+    def result_bytes(
         self,
         adapter: AntigravityAdapter,
         session_id: str,
         conversation_id: str,
         **values: object,
     ) -> bytes:
-        """Build a valid stream bound to one invocation's canonical cwd."""
+        """Build one valid native result for a prepared invocation."""
 
-        return _stream(
-            conversation_id,
-            init_agent=self.definition.agent_id,
-            init_cwd=str(
-                self.runtime_working_directory(adapter, session_id).resolve()
-            ),
-            **values,
-        )
+        return _json_result(conversation_id, **values)
 
     def assert_agent_installation(self, target: Path, expected: bytes) -> None:
         """Assert one exact private custom-agent file and no temporary residue."""
@@ -561,7 +473,13 @@ class AntigravityAdapterTests(unittest.IsolatedAsyncioTestCase):
             (len(wrapper),) + (0,) * (len(body_components) - 1),
         )
         rules = body.decode("utf-8")
-        self.assertIn(self.definition.system_prompt_file.read_text(), rules)
+        original_prompt = self.definition.system_prompt_file.read_text()
+        original_clause = "invoke another agent, provider subagent, tool, or model."
+        staged_clause = "invoke another agent, provider subagent, or model."
+        self.assertIn(original_clause, original_prompt)
+        self.assertIn(original_prompt.replace(original_clause, staged_clause), rules)
+        self.assertNotIn(original_clause, rules)
+        self.assertEqual(self.definition.system_prompt_file.read_text(), original_prompt)
         self.assertIn(self.definition.persona_file.read_text(), rules)
         for reference in self.definition.context_document_files:
             self.assertIn(reference.path.name, rules)
@@ -589,7 +507,7 @@ class AntigravityAdapterTests(unittest.IsolatedAsyncioTestCase):
             ):
                 adapter.bind(invalid)
 
-    def test_contextual_binding_bytes_components_and_vendor_parity_are_exact(
+    def test_contextual_binding_shared_semantics_and_vendor_constraints_are_exact(
         self,
     ) -> None:
         definition = PromptAssembler(
@@ -601,39 +519,58 @@ class AntigravityAdapterTests(unittest.IsolatedAsyncioTestCase):
         )
         self.assertIs(definition.provider_managed_context, True)
         self.assertEqual(definition.context_document_files, ())
-        self.assertEqual(
-            definition.fingerprint,
-            "53aa2e28967e5b9992a35a87140d9d81ba7939b0bf7abc27c69fd6aa829f1bce",
-        )
 
         codex_bytes, codex_components = CodexAdapter._definition_file(definition)
         antigravity_bytes, antigravity_components = AntigravityAdapter._definition_file(
             definition
         )
-        self.assertEqual(antigravity_bytes, codex_bytes)
-        self.assertEqual(antigravity_components, codex_components)
+        original_role_clause = b"invoke another agent, provider subagent, tool, or model."
+        staged_role_clause = b"invoke another agent, provider subagent, or model."
+        original_constraint = b"No tool, subagent, or CoT."
+        staged_constraint = b"No subagent or CoT."
+        captured_prompt = definition.system_prompt_file.content
+        self.assertIn(original_role_clause, captured_prompt)
+        self.assertEqual(
+            definition.fingerprint,
+            "53aa2e28967e5b9992a35a87140d9d81ba7939b0bf7abc27c69fd6aa829f1bce",
+        )
         self.assertEqual(len(codex_bytes), 5879)
         self.assertEqual(
             hashlib.sha256(codex_bytes).hexdigest(),
             "e39d65811afa29f6c127d10386e4cbcf570b7da2d257071725e42348904336e9",
         )
         self.assertEqual(
-            tuple(
-                (
-                    component.kind,
-                    component.identity,
-                    component.serialized_utf8_bytes,
-                )
-                for component in codex_components
-            ),
-            (
-                (ContextComponentKind.BINDING_STRUCTURE, None, 4),
-                (ContextComponentKind.ROLE_SYSTEM_PROMPT, None, 4952),
-                (ContextComponentKind.PERSONA, None, 251),
-                (ContextComponentKind.RESPONSE_LANGUAGE, None, 10),
-                (ContextComponentKind.PROVIDER_CONSTRAINTS, None, 662),
+            antigravity_bytes,
+            codex_bytes.replace(original_role_clause, staged_role_clause).replace(
+                original_constraint, staged_constraint
             ),
         )
+        self.assertIn(captured_prompt, codex_bytes)
+        self.assertIn(original_constraint, codex_bytes)
+        self.assertNotIn(original_role_clause, antigravity_bytes)
+        self.assertNotIn(original_constraint, antigravity_bytes)
+        self.assertIn(staged_constraint, antigravity_bytes)
+        self.assertEqual(definition.system_prompt_file.content, captured_prompt)
+        self.assertEqual(CodexAdapter._definition_file(definition), (codex_bytes, codex_components))
+        deltas = {
+            ContextComponentKind.ROLE_SYSTEM_PROMPT: len(original_role_clause) - len(staged_role_clause),
+            ContextComponentKind.PROVIDER_CONSTRAINTS: len(original_constraint) - len(staged_constraint),
+        }
+        self.assertEqual(
+            tuple(item.serialized_utf8_bytes for item in codex_components),
+            (4, 4952, 251, 10, 662),
+        )
+        for codex_component, antigravity_component in zip(
+            codex_components, antigravity_components, strict=True
+        ):
+            self.assertEqual(codex_component.kind, antigravity_component.kind)
+            self.assertEqual(codex_component.identity, antigravity_component.identity)
+            self.assertEqual(
+                codex_component.serialized_utf8_bytes - antigravity_component.serialized_utf8_bytes,
+                deltas.get(codex_component.kind, 0),
+            )
+        self.assertEqual(len(codex_bytes), sum(item.serialized_utf8_bytes for item in codex_components))
+        self.assertEqual(len(antigravity_bytes), sum(item.serialized_utf8_bytes for item in antigravity_components))
         provider_constraints = codex_bytes[-663:-1]
         self.assertEqual(len(provider_constraints), 662)
         self.assertEqual(
@@ -672,20 +609,18 @@ class AntigravityAdapterTests(unittest.IsolatedAsyncioTestCase):
         antigravity_sample, antigravity_sample_components = (
             AntigravityAdapter._definition_file(sample_definition)
         )
-        self.assertEqual(antigravity_sample, codex_sample)
-        self.assertEqual(antigravity_sample_components, codex_sample_components)
         self.assertEqual(len(codex_sample), 6779)
         self.assertEqual(
             hashlib.sha256(codex_sample).hexdigest(),
             "654257fbe448e034ff926557fb0b76e4dcc060c052a56d4dc8cee274db8fe256",
         )
         self.assertEqual(
-            tuple(
-                component.serialized_utf8_bytes
-                for component in codex_sample_components
-            ),
+            tuple(item.serialized_utf8_bytes for item in codex_sample_components),
             (4, 5852, 251, 10, 662),
         )
+        self.assertEqual(antigravity_sample, codex_sample.replace(original_constraint, staged_constraint))
+        self.assertEqual(len(codex_sample), sum(item.serialized_utf8_bytes for item in codex_sample_components))
+        self.assertEqual(len(antigravity_sample), sum(item.serialized_utf8_bytes for item in antigravity_sample_components))
         for reference in self.definition.context_document_files:
             self.assertNotIn(reference.read_text(), text)
 
@@ -722,7 +657,7 @@ class AntigravityAdapterTests(unittest.IsolatedAsyncioTestCase):
 
                 process = mock.AsyncMock(
                     return_value=ProcessResult(
-                        stdout=self.stream(
+                        stdout=self.result_bytes(
                             adapter,
                             f"mode-{label}-session",
                             "mode-conversation",
@@ -836,7 +771,7 @@ class AntigravityAdapterTests(unittest.IsolatedAsyncioTestCase):
                 retained.write_bytes(b"PRIVATE_RETAINED_BYTES")
                 process = mock.AsyncMock(
                     return_value=ProcessResult(
-                        stdout=self.stream(
+                        stdout=self.result_bytes(
                             adapter,
                             f"ordinary-{seam}",
                             "ordinary-mode",
@@ -1423,7 +1358,7 @@ class AntigravityAdapterTests(unittest.IsolatedAsyncioTestCase):
 
             process = mock.AsyncMock(
                 return_value=ProcessResult(
-                    stdout=self.stream(
+                    stdout=self.result_bytes(
                         adapter,
                         session_id,
                         "rules-leaf-swap",
@@ -1583,7 +1518,7 @@ class AntigravityAdapterTests(unittest.IsolatedAsyncioTestCase):
                     retained.write_bytes(b"PRIVATE_RETAINED_ENTRY")
                 process = mock.AsyncMock(
                     return_value=ProcessResult(
-                        stdout=self.stream(
+                        stdout=self.result_bytes(
                             adapter,
                             session_id,
                             f"rules-{label}",
@@ -2020,7 +1955,7 @@ class AntigravityAdapterTests(unittest.IsolatedAsyncioTestCase):
         results = iter(
             (
                 ProcessResult(
-                    stdout=self.stream(
+                    stdout=self.result_bytes(
                         adapter,
                         "story-session",
                         "conversation-one",
@@ -2035,7 +1970,7 @@ class AntigravityAdapterTests(unittest.IsolatedAsyncioTestCase):
                     returncode=0,
                 ),
                 ProcessResult(
-                    stdout=self.stream(
+                    stdout=self.result_bytes(
                         adapter,
                         "story-session",
                         "conversation-one",
@@ -2100,11 +2035,11 @@ class AntigravityAdapterTests(unittest.IsolatedAsyncioTestCase):
         )
         self.assertEqual(
             fresh.actual_transport_utf8_bytes,
-            len(requests[0].stdin),
+            len(canonical_provider_json(payload)),
         )
         self.assertEqual(
             resumed.actual_transport_utf8_bytes,
-            len(requests[1].stdin),
+            len(canonical_provider_json(payload)),
         )
         self.assertIsNone(fresh.usage)
         self.assertIsNone(resumed.usage)
@@ -2122,9 +2057,9 @@ class AntigravityAdapterTests(unittest.IsolatedAsyncioTestCase):
             "agy-test",
             f"--gemini_dir={provider_directory}",
             "--input-format",
-            "stream-json",
+            "text",
             "--output-format",
-            "stream-json",
+            "json",
             "--json-schema",
             canonical_provider_json(schema).decode("utf-8"),
             "--agent",
@@ -2142,11 +2077,11 @@ class AntigravityAdapterTests(unittest.IsolatedAsyncioTestCase):
         ]
         self.assertEqual(
             list(requests[0].command),
-            expected_command + ["--new-project"],
+            expected_command + ["--new-project", "--print", canonical_provider_json(payload).decode("utf-8")],
         )
         self.assertEqual(
             list(requests[1].command),
-            expected_command + ["--conversation", "conversation-one"],
+            expected_command + ["--conversation", "conversation-one", "--print", canonical_provider_json(payload).decode("utf-8")],
         )
         self.assertNotIn("--project", requests[0].command)
         self.assertNotIn("--project", requests[1].command)
@@ -2156,29 +2091,9 @@ class AntigravityAdapterTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(request.cwd, working_directory)
             self.assertEqual(request.timeout_seconds, 7)
             self.assertIsNone(request.env)
-            lines = request.stdin.decode("utf-8").splitlines()
-            self.assertEqual(len(lines), 1)
-            self.assertEqual(
-                json.loads(lines[0]),
-                {
-                    "event": "user",
-                    "message": {
-                        "content": json.dumps(
-                            payload,
-                            ensure_ascii=False,
-                            separators=(",", ":"),
-                        )
-                    },
-                },
-            )
-            self.assertNotIn(
-                "PRIVATE_STORY_PROMPT",
-                "\0".join(request.command),
-            )
-            self.assertNotIn(
-                "PRIVATE_STORY_PAYLOAD",
-                "\0".join(request.command),
-            )
+            self.assertEqual(request.stdin, b"")
+            self.assertEqual(request.command.count("--print"), 1)
+            self.assertEqual(request.command[request.command.index("--print") + 1], canonical_provider_json(payload).decode("utf-8"))
         self.assertEqual(
             json.loads(expected_command[expected_command.index("--json-schema") + 1]),
             schema,
@@ -2201,7 +2116,7 @@ class AntigravityAdapterTests(unittest.IsolatedAsyncioTestCase):
             [f".agents/agents/{self.definition.agent_id}/agent.md"],
         )
 
-    async def test_contextual_unicode_keeps_inner_application_bytes_distinct_from_ndjson_transport(
+    async def test_contextual_unicode_print_argument_and_transport_accounting_match_payload(
         self,
     ) -> None:
         adapter = self.adapter("contextual-runtime")
@@ -2228,7 +2143,7 @@ class AntigravityAdapterTests(unittest.IsolatedAsyncioTestCase):
         ) -> ProcessResult:
             requests.append(request)
             return ProcessResult(
-                stdout=self.stream(
+                stdout=self.result_bytes(
                     adapter,
                     "contextual-session",
                     "contextual-conversation",
@@ -2248,19 +2163,9 @@ class AntigravityAdapterTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(len(requests), 1)
         assert invocation.payload_json is not None
-        outer = json.loads(requests[0].stdin)
-        self.assertEqual(
-            outer,
-            {
-                "event": "user",
-                "message": {"content": invocation.payload_json.decode("utf-8")},
-            },
-        )
-        self.assertNotEqual(requests[0].stdin.rstrip(b"\n"), invocation.payload_json)
-        self.assertEqual(result.actual_transport_utf8_bytes, len(requests[0].stdin))
-        self.assertGreater(
-            result.actual_transport_utf8_bytes, len(invocation.payload_json)
-        )
+        self.assertEqual(requests[0].stdin, b"")
+        self.assertEqual(requests[0].command[requests[0].command.index("--print") + 1].encode("utf-8"), invocation.payload_json)
+        self.assertEqual(result.actual_transport_utf8_bytes, len(invocation.payload_json))
         self.assertEqual(result.usage, ProviderUsage(0, 4))
         self.assertEqual(
             invocation.payload_accounting.payload_utf8_bytes,
@@ -2309,7 +2214,7 @@ class AntigravityAdapterTests(unittest.IsolatedAsyncioTestCase):
         self,
     ) -> None:
         result = AntigravityAdapter._provider_result(
-            _stream(
+            _json_result(
                 "conversation-usage",
                 structured_output={"value": "valid provider response"},
                 usage={
@@ -2320,9 +2225,8 @@ class AntigravityAdapterTests(unittest.IsolatedAsyncioTestCase):
                 },
             ),
             expected_thread_id=None,
-            expected_schema=_DEFAULT_STREAM_SCHEMA,
-            expected_agent_id=_DEFAULT_STREAM_AGENT,
-            expected_working_directory=_DEFAULT_STREAM_CWD,
+            expected_schema=_DEFAULT_RESULT_SCHEMA,
+
         )
 
         self.assertEqual(result.thread_id, "conversation-usage")
@@ -2611,7 +2515,7 @@ class AntigravityAdapterTests(unittest.IsolatedAsyncioTestCase):
         second_invocation = second_invoke.await_args.args[1]
         self.assertEqual(second_invocation.thread_id, "agy-conversation")
 
-    async def test_identifier_and_stream_failures_are_fixed_and_confidential(
+    async def test_identifier_and_json_failures_are_fixed_and_confidential(
         self,
     ) -> None:
         adapter = self.adapter("validation-state")
@@ -2659,246 +2563,38 @@ class AntigravityAdapterTests(unittest.IsolatedAsyncioTestCase):
 
         confidential = "CONFIDENTIAL_PROVIDER_OUTPUT"
 
-        def step(**updates: object) -> tuple[dict[str, object], ...]:
-            value: dict[str, object] = {
-                "conversation_id": "safe-conversation",
-                "state": "DONE",
-                "step_index": 0,
-                "step_type": "finish",
-            }
-            value.update(updates)
-            return (value,)
-
-        stream_cases = (
-            (
-                "unsafe ID",
-                _stream(
-                    "--CONFIDENTIAL_PROVIDER_OUTPUT",
-                    steps=(),
-                    response=confidential,
-                ),
-                None,
-                "Antigravity CLI returned an invalid conversation ID",
-            ),
-            (
-                "mismatched ID",
-                _stream("other-conversation", response=confidential),
-                "expected-conversation",
-                "Antigravity CLI returned an invalid conversation ID",
-            ),
-            (
-                "malformed JSONL",
-                b'{"event":"init","CONFIDENTIAL_PROVIDER_OUTPUT":\n',
-                None,
-                "Antigravity CLI emitted malformed JSONL at line 1",
-            ),
-            (
-                "non-success",
-                _stream(
-                    "failed-conversation",
-                    status="FAILED_CONFIDENTIAL_PROVIDER_OUTPUT",
-                    response=confidential,
-                ),
-                None,
-                "Antigravity CLI did not complete successfully",
-            ),
-            (
-                "missing selected agent",
-                _stream(
-                    "safe-conversation",
-                    init_agent=_UNSET,
-                    structured_output={"value": "safe"},
-                ),
-                None,
-                "Antigravity CLI returned a malformed event stream",
-            ),
-            (
-                "wrong selected agent",
-                _stream(
-                    "safe-conversation",
-                    init_agent=confidential,
-                    structured_output={"value": "safe"},
-                ),
-                None,
-                "Antigravity CLI returned a malformed event stream",
-            ),
-            (
-                "missing cwd",
-                _stream(
-                    "safe-conversation",
-                    init_cwd=_UNSET,
-                    structured_output={"value": "safe"},
-                ),
-                None,
-                "Antigravity CLI returned a malformed event stream",
-            ),
-            (
-                "wrong cwd",
-                _stream(
-                    "safe-conversation",
-                    init_cwd=f"{_DEFAULT_STREAM_CWD}/escape",
-                    structured_output={"value": "safe"},
-                ),
-                None,
-                "Antigravity CLI returned a malformed event stream",
-            ),
-            (
-                "missing permission mode",
-                _stream(
-                    "safe-conversation",
-                    permission_mode=_UNSET,
-                    structured_output={"value": "safe"},
-                ),
-                None,
-                "Antigravity CLI returned a malformed event stream",
-            ),
-            (
-                "wrong permission mode",
-                _stream(
-                    "safe-conversation",
-                    permission_mode="dangerously-skip-permissions",
-                    structured_output={"value": "safe"},
-                ),
-                None,
-                "Antigravity CLI returned a malformed event stream",
-            ),
-            *(
-                (
-                    f"malformed tools {label}",
-                    _stream(
-                        "safe-conversation",
-                        tools=value,
-                        structured_output={"value": "safe"},
-                    ),
-                    None,
-                    "Antigravity CLI returned a malformed event stream",
-                )
-                for label, value in (
-                    ("missing", _UNSET),
-                    ("scalar", "finish"),
-                    ("empty", []),
-                    ("duplicate", ["finish", "finish"]),
-                    ("non-string", ["finish", 1]),
-                    ("empty string", ["finish", ""]),
-                    ("missing finish", ["list_dir"]),
-                )
-            ),
-            (
-                "wrong step conversation",
-                _stream(
-                    "safe-conversation",
-                    steps=step(conversation_id="other-conversation"),
-                    structured_output={"value": "safe"},
-                ),
-                None,
-                "Antigravity CLI returned an invalid conversation ID",
-            ),
-            *(
-                (
-                    f"forbidden operational shape {label}",
-                    _stream(
-                        "safe-conversation",
-                        steps=step(**updates),
-                        structured_output={"value": "safe"},
-                    ),
-                    None,
-                    "Antigravity CLI returned a malformed event stream",
-                )
-                for label, updates in (
-                    ("native tool", {"step_type": "tool"}),
-                    ("tool name", {"tool_name": "list_dir"}),
-                    ("tool info", {"tool_info": {"name": "list_dir"}}),
-                    ("subagent info", {"subagent_info": {"name": "unsafe"}}),
-                    ("unknown step", {"step_type": "browser"}),
-                )
-            ),
-            *(
-                (
-                    f"invalid step scalar {label}",
-                    _stream(
-                        "safe-conversation",
-                        steps=step(**updates),
-                        structured_output={"value": "safe"},
-                    ),
-                    None,
-                    "Antigravity CLI returned a malformed event stream",
-                )
-                for label, updates in (
-                    ("boolean index", {"step_index": True}),
-                    ("negative index", {"step_index": -1}),
-                    ("state type", {"state": 1}),
-                    ("unknown state", {"state": "FAILED"}),
-                    ("text delta", {"text_delta": 1}),
-                    ("boolean duration", {"duration_seconds": True}),
-                    ("negative duration", {"duration_seconds": -1}),
-                    ("nonfinite duration", {"duration_seconds": float("inf")}),
-                )
-            ),
-            *(
-                (
-                    f"invalid step usage {label}",
-                    _stream(
-                        "safe-conversation",
-                        steps=step(usage=value),
-                        structured_output={"value": "safe"},
-                    ),
-                    None,
-                    "Antigravity CLI returned a malformed event stream",
-                )
-                for label, value in (
-                    ("scalar", 1),
-                    ("unknown counter", {"unknown": 1}),
-                    ("boolean counter", {"input_tokens": True}),
-                    ("negative counter", {"input_tokens": -1}),
-                )
-            ),
-            (
-                "missing structured output",
-                _stream("missing-output", response=confidential),
-                None,
-                "Antigravity CLI returned malformed structured output",
-            ),
-            (
-                "scalar structured output",
-                _stream(
-                    "scalar-output",
-                    structured_output=confidential,
-                ),
-                None,
-                "Antigravity CLI returned malformed structured output",
-            ),
-            (
-                "missing schema echo",
-                _stream(
-                    "missing-schema",
-                    structured_output={"value": "safe"},
-                    json_schema=_UNSET,
-                ),
-                None,
-                "Antigravity CLI returned malformed structured output",
-            ),
-            (
-                "mismatched schema echo",
-                _stream(
-                    "mismatched-schema",
-                    structured_output={"value": "safe"},
-                    json_schema={"type": "string"},
-                ),
-                None,
-                "Antigravity CLI returned malformed structured output",
-            ),
+        malformed = "Antigravity CLI returned malformed JSON"
+        bad_output = "Antigravity CLI returned malformed structured output"
+        result_cases = (
+            ("unsafe ID", _json_result("--CONFIDENTIAL_PROVIDER_OUTPUT"), None, "Antigravity CLI returned an invalid conversation ID"),
+            ("mismatched ID", _json_result("other"), "expected", "Antigravity CLI returned an invalid conversation ID"),
+            ("invalid UTF-8", b"\xff", None, "Antigravity CLI result is not valid UTF-8"),
+            ("malformed JSON", b'{"CONFIDENTIAL_PROVIDER_OUTPUT":', None, malformed),
+            ("empty", b"", None, malformed),
+            ("array", b"[]", None, "Antigravity CLI returned a non-object JSON result"),
+            ("scalar", b"null", None, "Antigravity CLI returned a non-object JSON result"),
+            ("trailing data", _json_result("safe") + b"CONFIDENTIAL_PROVIDER_OUTPUT", None, malformed),
+            ("NDJSON", _json_result("safe") * 2, None, malformed),
+            ("duplicate root key", b'{"status":"SUCCESS","status":"ERROR"}', None, malformed),
+            ("duplicate nested key", b'{"nested":{"x":1,"x":2}}', None, malformed),
+            *((label, ('{"value":'+value+'}').encode(), None, malformed) for label,value in (("NaN", "NaN"), ("infinity", "Infinity"), ("overflow", "1e999"))),
+            ("non-success", _json_result("safe", status="FAILED_CONFIDENTIAL_PROVIDER_OUTPUT"), None, "Antigravity CLI did not complete successfully"),
+            ("missing structured output", _json_result("safe", response=confidential), None, bad_output),
+            ("scalar structured output", _json_result("safe", structured_output=confidential), None, bad_output),
+            ("missing schema echo", _json_result("safe", structured_output={}, json_schema=_UNSET), None, bad_output),
+            ("mismatched schema echo", _json_result("safe", structured_output={}, json_schema={"type":"string"}), None, bad_output),
+            ("surrogate output", b'{"status":"SUCCESS","conversation_id":"safe","structured_output":{"value":"\\ud800"},"json_schema":{"type":"object"}}', None, bad_output),
         )
-        for label, stdout, expected_thread_id, diagnostic in stream_cases:
+        for label, stdout, expected_thread_id, diagnostic in result_cases:
             with (
-                self.subTest(stream=label),
+                self.subTest(result=label),
                 self.assertRaises(ProviderInvocationError) as caught,
             ):
                 adapter._provider_result(
                     stdout,
                     expected_thread_id=expected_thread_id,
-                    expected_schema=_DEFAULT_STREAM_SCHEMA,
-                    expected_agent_id=_DEFAULT_STREAM_AGENT,
-                    expected_working_directory=_DEFAULT_STREAM_CWD,
+                    expected_schema=_DEFAULT_RESULT_SCHEMA,
+
                 )
             self.assertEqual(str(caught.exception), diagnostic)
             self.assertIs(caught.exception.taint_existing_thread, True)
@@ -2975,17 +2671,7 @@ class AntigravityAdapterTests(unittest.IsolatedAsyncioTestCase):
                     thread_id=None,
                 )
                 assert invocation.payload_json is not None
-                expected_stdin = (
-                    canonical_provider_json(
-                        {
-                            "event": "user",
-                            "message": {
-                                "content": invocation.payload_json.decode("utf-8")
-                            },
-                        }
-                    )
-                    + b"\n"
-                )
+                expected_stdin = b""
                 if isinstance(communication_failure, asyncio.CancelledError):
                     with self.assertRaises(asyncio.CancelledError) as caught:
                         await adapter.invoke(binding, invocation)
@@ -2997,11 +2683,12 @@ class AntigravityAdapterTests(unittest.IsolatedAsyncioTestCase):
                     self.assertIs(caught.exception.taint_existing_thread, True)
                     self.assertNotIn("CONFIDENTIAL", str(caught.exception))
                     self.assertIsNone(caught.exception.continuation_rejection)
+                process.communicate.assert_called_once_with(expected_stdin)
                 accounting = provider_failure_accounting(caught.exception)
                 self.assertIs(accounting.state, ProviderCallState.SUBMITTED)
                 self.assertEqual(
                     accounting.actual_transport_utf8_bytes,
-                    len(expected_stdin),
+                    len(invocation.payload_json),
                 )
 
                 if communication_failure is None:
