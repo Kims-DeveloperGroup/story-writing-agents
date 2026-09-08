@@ -142,6 +142,34 @@ def _expected_antigravity_role(value: bytes, *, contextual: bool = True) -> byte
             b"no additional fields. Submit the complete schema-selected outer object\n"
             b"with correlation and action through finish; do not submit this inner\n"
             b"assessment alone:",
+        ).replace(
+            b"Use evidence IDs in runtime order: attached references by ordinal, canonical\n"
+            b"core statuses, then completed SEARCH/READ actions by action order.",
+            b"After mandatory reference reading, the attached-reference aliases in\n"
+            b"i.input_aliases (such as reference_1) are content evidence IDs. They\n"
+            b"are distinct from the status IDs in core_statuses. For verified story\n"
+            b"content, evidence_ids must include a supporting attached-reference or\n"
+            b"completed READ evidence ID; status IDs alone are insufficient. Use\n"
+            b"only current, actually supplied IDs.\n\n"
+            b"Keep evidence_ids separate from proposal assignment input_ids. For a\n"
+            b"proposal, assignments must collectively cover every input_id supplied in\n"
+            b"i.input_aliases, including user_input, and every cited READ evidence ID.\n"
+            b"Do not drop user_input because it is not a content evidence receipt.\n\n"
+            b"Use evidence IDs in runtime order: attached references by ordinal, canonical\n"
+            b"core statuses, then completed SEARCH/READ actions by action order.",
+        ).replace(
+            b"Never omit, duplicate, reorder, or invent attribution IDs. Synthesis preserves\n"
+            b"the proposal's scope, evidence status, and evidence IDs exactly.",
+            b"For lead_synthesis, i.answer_contract supplies required values, not\n"
+            b"examples. Copy its scope, evidence_status, evidence_ids, and reply_event_ids\n"
+            b"exactly. Preserve every required unresolved_input_ids entry in the supplied\n"
+            b"order before any additional unresolved original inputs. A concern, conflict,\n"
+            b"or insufficient_evidence assessment keeps its input IDs unresolved even if\n"
+            b"the synthesis explains a remedy or ends the consultation. Only an empty\n"
+            b"required list permits an empty unresolved_input_ids. This applies to every\n"
+            b"specialist consultation, including those without an artifact candidate.\n\n"
+            b"Never omit, duplicate, reorder, or invent attribution IDs. Synthesis preserves\n"
+            b"the proposal's scope, evidence status, and evidence IDs exactly.",
         )
     return value
 
@@ -751,6 +779,29 @@ class AntigravityAdapterTests(unittest.IsolatedAsyncioTestCase):
             (4, 5852, 251, 10, 662),
         )
         self.assertEqual(antigravity_sample, _expected_antigravity_role(codex_sample).replace(original_provider, expected_provider))
+        captured_lead_role = sample_definition.system_prompt_file.content
+        expected_lead_role = _expected_antigravity_role(captured_lead_role)
+        self.assertIn(b"status IDs alone are insufficient", expected_lead_role)
+        self.assertIn(b"assignments must collectively cover every input_id", expected_lead_role)
+        self.assertIn(b"including user_input, and every cited READ evidence ID", expected_lead_role)
+        self.assertIn(b"Preserve every required unresolved_input_ids entry", expected_lead_role)
+        self.assertIn(b"including those without an artifact candidate", expected_lead_role)
+        self.assertEqual(
+            sample_definition.system_prompt_file.content,
+            (repository_root / "config/agents/lead_orchestrator/AGENTS.md").read_bytes(),
+        )
+        self.assertEqual(sample_definition.fingerprint, "0" * 64)
+        for original, staged in zip(codex_sample_components, antigravity_sample_components, strict=True):
+            self.assertEqual((original.kind, original.identity), (staged.kind, staged.identity))
+            delta = {
+                ContextComponentKind.ROLE_SYSTEM_PROMPT: len(expected_lead_role) - len(captured_lead_role),
+                ContextComponentKind.PROVIDER_CONSTRAINTS: len(expected_provider) - len(original_provider),
+            }.get(original.kind, 0)
+            self.assertEqual(staged.serialized_utf8_bytes, original.serialized_utf8_bytes + delta)
+        self.assertEqual(
+            CodexAdapter._definition_file(sample_definition),
+            (codex_sample, codex_sample_components),
+        )
         self.assertEqual(len(codex_sample), sum(item.serialized_utf8_bytes for item in codex_sample_components))
         self.assertEqual(len(antigravity_sample), sum(item.serialized_utf8_bytes for item in antigravity_sample_components))
         for reference in self.definition.context_document_files:

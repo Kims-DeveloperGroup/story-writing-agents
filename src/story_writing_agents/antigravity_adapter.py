@@ -789,6 +789,36 @@ class AntigravityAdapter:
                         "with correlation and action through finish; do not submit this inner\n"
                         "assessment alone:",
                     )
+                    text = text.replace(
+                        "Use evidence IDs in runtime order: attached references by ordinal, canonical\n"
+                        "core statuses, then completed SEARCH/READ actions by action order.",
+                        "After mandatory reference reading, the attached-reference aliases in\n"
+                        "i.input_aliases (such as reference_1) are content evidence IDs. They\n"
+                        "are distinct from the status IDs in core_statuses. For verified story\n"
+                        "content, evidence_ids must include a supporting attached-reference or\n"
+                        "completed READ evidence ID; status IDs alone are insufficient. Use\n"
+                        "only current, actually supplied IDs.\n\n"
+                        "Keep evidence_ids separate from proposal assignment input_ids. For a\n"
+                        "proposal, assignments must collectively cover every input_id supplied in\n"
+                        "i.input_aliases, including user_input, and every cited READ evidence ID.\n"
+                        "Do not drop user_input because it is not a content evidence receipt.\n\n"
+                        "Use evidence IDs in runtime order: attached references by ordinal, canonical\n"
+                        "core statuses, then completed SEARCH/READ actions by action order.",
+                    )
+                    text = text.replace(
+                        "Never omit, duplicate, reorder, or invent attribution IDs. Synthesis preserves\n"
+                        "the proposal's scope, evidence status, and evidence IDs exactly.",
+                        "For lead_synthesis, i.answer_contract supplies required values, not\n"
+                        "examples. Copy its scope, evidence_status, evidence_ids, and reply_event_ids\n"
+                        "exactly. Preserve every required unresolved_input_ids entry in the supplied\n"
+                        "order before any additional unresolved original inputs. A concern, conflict,\n"
+                        "or insufficient_evidence assessment keeps its input IDs unresolved even if\n"
+                        "the synthesis explains a remedy or ends the consultation. Only an empty\n"
+                        "required list permits an empty unresolved_input_ids. This applies to every\n"
+                        "specialist consultation, including those without an artifact candidate.\n\n"
+                        "Never omit, duplicate, reorder, or invent attribution IDs. Synthesis preserves\n"
+                        "the proposal's scope, evidence status, and evidence IDs exactly.",
+                    )
             content = text.encode("utf-8", errors="strict")
             fragments.append(content)
             key = (kind, identity)

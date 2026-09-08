@@ -414,11 +414,34 @@ It also directs structured delivery through `finish` with the complete supplied
 outer schema. Contextual specialist instructions identify their assessment as
 `action.result`, inside the root `correlation` and `action` fields; they do not
 ask `finish` to receive the inner assessment alone. Its compact provider-managed
-constraints carry the same rule and omit the tool ban. Shared policy/prompt
-sources, workspace initialization, Codex rendering and stdin/JSONL transport,
-and provider-neutral domain semantics remain unchanged. Existing workspace
-prompt files are not migrated or rewritten; these transformations apply to the
-Antigravity staged definition.
+constraints carry the same rule and omit the tool ban.
+
+The Antigravity staged Lead prompt additionally clarifies three existing
+contracts:
+
+- After mandatory reference reading, attached-reference aliases in
+  `i.input_aliases` are content evidence IDs, distinct from `core_statuses`
+  status IDs. A verified story judgment needs a supporting attached-reference
+  or completed READ evidence ID; status IDs alone are insufficient. Only
+  current, actually supplied IDs are eligible.
+- `evidence_ids` and proposal assignment `input_ids` have different roles.
+  Assignments collectively cover every input ID in `i.input_aliases`, including
+  `user_input`, and every cited READ evidence ID. The absence of a content
+  receipt for `user_input` does not remove it from the assignment inputs.
+- For `lead_synthesis`, `i.answer_contract` supplies required values. The Lead
+  copies `scope`, `evidence_status`, `evidence_ids`, and `reply_event_ids` exactly,
+  preserving the supplied order. Every required `unresolved_input_ids` entry
+  precedes any additional unresolved original inputs. A `concern`, `conflict`,
+  or `insufficient_evidence` assessment keeps its inputs unresolved even when
+  the synthesis explains a remedy or ends the consultation. Only an empty
+  required list permits an empty unresolved list. This applies to every
+  specialist consultation, including those without an artifact candidate.
+
+These clarifications change staged text only. Shared policy/prompt sources,
+workspace initialization, Codex rendering and stdin/JSONL transport, domain
+validation, confirmation authority, and process-launch controls remain
+unchanged. Existing workspace prompt files are not migrated or rewritten; these
+transformations apply to the Antigravity staged definition.
 
 Runtime-built contextual debate calls use typed wire v7 for task/input,
 candidate pointer/splice/full fallback, selected sources, and record changes.

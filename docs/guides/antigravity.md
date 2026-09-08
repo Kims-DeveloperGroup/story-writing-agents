@@ -11,7 +11,8 @@
 > CLI 1.1.27 verified fresh and resumed Lead turns for Pro, Flash, and Sonnet;
 > availability and results remain dependent on the environment and provider.
 > The new [16-case conversation matrix](#opt-in-live-conversation-matrix) is
-> still preliminary: three complete cases pass and thirteen remain pending.
+> still incomplete: fifteen complete cases pass; the F02 restart and
+> reconfirmation case remains failed.
 
 Key terms: **backend name**—the configuration value `antigravity`;
 **executable**—the resolved Antigravity command, `agy` by default; **provider
@@ -464,6 +465,23 @@ belongs in `action.result` inside `correlation` and `action`. This rendering
 changes no common prompt file, existing workspace prompt, or Codex adapter or
 transport.
 
+The staged Lead instructions also clarify three existing requirements:
+
+- Verified story judgments need a supporting attached-reference or completed
+  READ receipt. A core-document status ID alone is not content evidence.
+- Proposal assignments collectively cover all supplied input aliases, including
+  `user_input`, and all cited READ evidence IDs. Assignment inputs and content
+  evidence serve different purposes.
+- Every consultation synthesis preserves the runtime-supplied scope, evidence,
+  and ordered reply IDs, plus every required unresolved input. A concern,
+  conflict, or insufficient-evidence assessment remains unresolved even when
+  the Lead describes a remedy or ends the consultation.
+
+These Antigravity-only clarifications change staged instructions; domain
+validation, confirmation authority, and process-launch controls remain the same.
+The [design reference](../design/prompts-and-provider.md#provider-process-boundaries)
+describes the exact fields.
+
 OpenAI Structured Outputs requires an object root, every declared field in
 `required`, `additionalProperties: false` on closed objects, explicitly typed
 array items, and a union with `null` for nullable values. See the official
@@ -610,7 +628,10 @@ The current routes are:
 | L06A-QUESTION, L06B-CRITIQUE, L06C-RECOMMENDATION | Flash: each exact direct Lead outcome. |
 | L07-SEARCH-READ, L08-DECISIONS | Flash: observed SEARCH→READ→ANSWER; exact Reject/Revise, stale/forged decisions, and ordinary `Yes`. |
 | L09-SECOND-ROUND | Pro High: two actual rounds with separate confirmation. |
-| F01-REFERENCE-DRIFT, F02-LOST-AUTHORITY, F03-CANCELLATION, F04-FAILURE-RECOVERY | Flash: separately labeled drift, restart, cancellation, and completed-process exit fault injection. |
+| F01-REFERENCE-DRIFT | Flash: named reference drift before confirmation. |
+| F02-LOST-AUTHORITY | Flash: crash after confirmation and local reconfirmation after restart; full case remains failed. |
+| F03-CANCELLATION | Flash: named cancellation, completed sibling preservation, and inspection without replay. |
+| F04-FAILURE-RECOVERY | Flash: injected exit failure, then a new request, proposal, and Confirm for the same failed character specialist on a fresh thread, through terminal synthesis. |
 | F05-DIAGNOSTICS-RECOVERY | Pro High: one unchanged completion plus five labeled mutations after real completion, including gated recovery. |
 
 Run from the repository root in an installed development environment with
@@ -645,15 +666,30 @@ cases as unexecuted, and exits nonzero. A complete matrix also requires all five
 Lead outcomes and all four specialist assessment categories; one native result
 or one successful case is insufficient.
 
-The declared ceiling is 209 reserved physical calls and 45,000 seconds from
+The declared ceiling is 312 reserved physical calls and 45,000 seconds from
 the original budget epoch, with a 180-second native timeout and per-case limits
-in the inventory. Scenarios run sequentially; specialist concurrency comes only
-from runtime dispatch. Reservations precede process creation, so failed attempts
-remain charged. Preserve `call-budget.json`, the original epoch, and earlier
+in the inventory. The reusable fresh inventory totals at most 210 calls. F04's
+24-call allowance covers two separately confirmed lineages of at most 12 calls
+each. Scenarios run sequentially; specialist concurrency comes only from runtime
+dispatch. Reservations precede process creation, so failed attempts remain
+charged. Preserve `call-budget.json`, the original epoch, and earlier
 attempt directories. A separately authorized attempt in a fresh evidence
 directory must retain the original ledger via `STORY_LIVE_BUDGET_ROOT` and record
 prior case reservations through `STORY_LIVE_PRIOR_CASE_SUBMISSIONS`; changing
 directories does not authorize a new budget. There is no automatic retry.
+
+The harness pins the original fixture-artifact baseline before a crash and
+checks that same baseline after reopening; it never treats reopened bytes as
+a new baseline. This protection is present in F02 even though its complete
+restart scenario remains failed. F04 checks actual recovery of the failed
+`character_custodian`: a fresh user request and proposal require a new Confirm,
+then the same specialist runs on a fresh native thread and the Lead synthesizes
+the result. The successful sibling and failed history remain intact.
+
+For identical request payloads, the exchange audit requires a unique match from
+the returned thread and structured response, or exact diagnostic stdout/stderr
+bytes and exit status. Missing or indistinguishable evidence remains rejected;
+list order does not establish a match.
 
 Normal cases deliver actual provider results unchanged. Fault cases label each
 injected change separately; mutations after process completion preserve the
@@ -670,14 +706,41 @@ That setup does not cover the interactive artifact review, Apply, or Commit
 flow. One-round scenarios explicitly request a terminal synthesis; focused
 two-round coverage belongs to L09. Provider-neutral finalization when a proposed
 continuation exceeds the remaining budget remains separately tracked in
-Recommended Backlog #624; this matrix does not establish arbitrary conversation
+Recommended Backlog [#624](https://github.com/Kims-DeveloperGroup/story-writing-agents/issues/624);
+this matrix does not establish arbitrary conversation
 paths or resolve that issue.
 
-**Draft evidence snapshot (2026-09-08):** 101 unique deterministic tests pass.
-Three full live cases pass: L02-PRO-LOW-ONE, L06A-QUESTION, and L04-SONNET-ONE.
-The other thirteen remain pending. Earlier native 503/400 failures and incomplete
-model-branch attempts remain in private history; they are not successful cases.
-The final declared matrix result remains outstanding.
+**Draft evidence snapshot (2026-09-08):** 110 unique deterministic tests pass,
+and 15 of the 16 complete cases pass on actual provider evidence. The accepted
+cases include Pro High/Low, Flash, Sonnet, mixed Codex/Antigravity, and the actual
+PTY workflow.
+All five Lead outcomes and all four specialist assessment categories were
+observed. F03 passed cancellation, sibling preservation, and inspection without
+replay; F04 passed the separately confirmed failed-specialist recovery above.
+The global ledger retains 204 charged reservations against the 312 ceiling.
+
+F05 used six actual completions: the unchanged completion and a named injected
+known `ERROR` were accepted; the four named invalid-UTF-8, invalid-JSON,
+unrelated-error, and schema-mismatch mutations were rejected. Its corrected
+full final audit reused retained calls with zero replay and preserved all 459
+original evidence files. That accepted revalidation is separate from the
+historical failed audit. It does not establish naturally occurring native
+`ERROR` recovery.
+
+The first current Flash three-specialist attempt produced ten native `SUCCESS`
+responses but failed on the unaffordable continuation tracked in #624. One
+explicitly authorized repeat with identical input passed in eleven calls. Both
+attempts remain recorded; the bounded repeat does not fix #624 or establish
+reliable completion for arbitrary continuation paths. Earlier native 503/400
+failures and incomplete attempts also remain in private history.
+
+F02-LOST-AUTHORITY remains failed because the shared reconfirmation path is
+missing required proposal evidence, tracked in
+[#627](https://github.com/Kims-DeveloperGroup/story-writing-agents/issues/627).
+The proposed shared fix awaits scope confirmation; that code has not changed.
+The matrix has not passed all 16 cases, and
+[PR #625](https://github.com/Kims-DeveloperGroup/story-writing-agents/pull/625)
+remains a draft.
 
 ### Provider-free local checks
 

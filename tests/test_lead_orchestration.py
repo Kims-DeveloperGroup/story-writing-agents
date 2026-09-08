@@ -1024,6 +1024,17 @@ class LeadOutcomeAndProposalTests(LeadOrchestrationTestCase):
                 ],
             ),
             (
+                "omitted-user-input",
+                "Check ${core_documents/global_outline.md}",
+                [
+                    {
+                        "agent_id": PLOT_ARCHITECT,
+                        "instruction": "Review the supplied outline.",
+                        "input_ids": ["reference_1"],
+                    }
+                ],
+            ),
+            (
                 "missing-reviewer",
                 "Check ${core_documents/global_outline.md}",
                 [
@@ -1038,8 +1049,18 @@ class LeadOutcomeAndProposalTests(LeadOrchestrationTestCase):
         for label, text, assignments in cases:
             with self.subTest(label=label):
                 conversation_id = self.conversation(label)
-                self.backend.enqueue(_proposal_outcome(assignments))
-                self.backend.enqueue(_proposal_outcome(assignments))
+                response = _proposal_outcome(assignments)
+                if label == "omitted-user-input":
+                    def reference_grounded_response(call, provider):
+                        envelope = json.loads(_proposal_outcome(assignments)(call, provider))
+                        answer = envelope["action"]["result"]
+                        answer["evidence_status"] = "verified"
+                        answer["evidence_ids"] = ["reference_1"]
+                        return json.dumps(envelope)
+
+                    response = reference_grounded_response
+                self.backend.enqueue(response)
+                self.backend.enqueue(response)
                 result = await self.runtime.lead_turn(
                     self.session_id,
                     conversation_id,

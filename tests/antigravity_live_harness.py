@@ -18,7 +18,7 @@ import sys
 import time
 from typing import Any
 from unittest import mock
-from story_writing_agents import AgentBackend, StoryRuntime
+from story_writing_agents import AgentBackend, BackendProtocolError, StoryRuntime
 from story_writing_agents import antigravity_adapter, codex_adapter
 from story_writing_agents.agent_context import canonical_provider_json
 from story_writing_agents.agents import ROSTER
@@ -234,6 +234,43 @@ def audit_exchanges(exchanges, calls, history=()):
             content = json.loads(request['content'])
             if semantic_digest(content['payload']) == call['payload_semantic_sha256']:
                 matches.append(records)
+        if len(matches) > 1 and 'delivered_returncode' in call:
+            directory = Path(call['directory'])
+            stdout = (directory / 'delivered.stdout').read_bytes()
+            stderr = (directory / 'delivered.stderr').read_bytes()
+            identified = []
+            for candidate in matches:
+                responses = [json.loads(record['content']) for record in candidate
+                             if record['request_type'] == 'response']
+                if len(responses) != 1:
+                    continue
+                response = responses[0]
+                diagnostic = response.get('response_diagnostic')
+                try:
+                    if diagnostic is not None:
+                        def decoded_stream(item):
+                            if item['encoding'] == 'utf-8':
+                                return item['data'].encode()
+                            if item['encoding'] == 'base64':
+                                return base64.b64decode(item['data'], validate=True)
+                            raise ValueError('Unknown diagnostic stream encoding')
+
+                        exact = (diagnostic['exit_code'] == call['delivered_returncode']
+                                 and decoded_stream(diagnostic['stdout']) == stdout
+                                 and decoded_stream(diagnostic['stderr']) == stderr)
+                    else:
+                        native_value = (json.loads(stdout)['structured_output']
+                                        if call['vendor'] == 'antigravity' else
+                                        json.loads((directory / 'codex-response.raw').read_bytes()))
+                        exact = (not response.get('provider_failure')
+                                 and response.get('thread_id') == call.get('thread_id')
+                                 and semantic_digest(json.loads(response['response_text']))
+                                 == semantic_digest(native_value))
+                except (KeyError, TypeError, ValueError):
+                    exact = False
+                if exact:
+                    identified.append(candidate)
+            matches = identified
         require(len(matches) == 1, 'Actual call has no unambiguous durable REQUEST payload')
         records = matches[0]
         remaining.remove(records)
@@ -358,6 +395,100 @@ def assert_visible_messages(text, history):
                     'Actual terminal text differs from a persisted visible message')
 
 
+SEEDED_ARTIFACT_PATHS = frozenset({
+    'core_documents/global_outline.md', 'core_documents/character_sheets.md',
+    'manuscript/part-01/opening.md', 'manuscript/part-02/schedule.md',
+})
+
+
+def assert_seeded_artifacts(workspace, baseline):
+    require(type(baseline) is dict and set(baseline) == SEEDED_ARTIFACT_PATHS,
+            'Missing or incomplete original artifact baseline')
+    for name, expected in baseline.items():
+        require(type(expected) is str and len(expected) == 64
+                and all(c in '0123456789abcdef' for c in expected),
+                'Invalid original artifact digest')
+        require(digest(workspace.path(name).read_bytes()) == expected,
+                'Original fixture artifact changed')
+
+
+def restore_artifact_baseline(directory, workspace, checkpoint):
+    raw = (directory / 'initial-artifacts.private.json').read_bytes()
+    require(digest(raw) == checkpoint['artifact_baseline_sha256'],
+            'Original artifact baseline checkpoint differs')
+    baseline = json.loads(raw)
+    assert_seeded_artifacts(workspace, baseline)
+    return baseline
+
+
+def assert_character_recovery(history, failed_prefix, failed_call, recovery_calls,
+                              proposed, completed):
+    require(canonical_history(history[:len(failed_prefix)]) == failed_prefix,
+            'Recovery rewrote failed execution history')
+    require(completed.state is CollaborationStepState.COMPLETED,
+            'Recovered consultation did not complete')
+    require(completed.step_id == proposed.step_id, 'Recovery completed another step')
+    require(tuple(a.specialist_id for a in proposed.proposal.assignments)
+            == ('character_custodian',), 'Recovery roster differs from faulted agent')
+    calls = [c for c in recovery_calls if c['agent'] == 'character_custodian']
+    require(calls and all(c['agent'] in ('lead_orchestrator', 'character_custodian')
+                         for c in recovery_calls), 'Faulted character recovery call missing')
+    first = calls[0]
+    require(failed_call['agent'] == 'character_custodian'
+            and failed_call['fault'] == 'nonzero' and failed_call.get('thread_id'),
+            'Faulted character identity missing')
+    require(first['prior_thread_id'] is None and not first['resumed']
+            and first.get('thread_id') and first['thread_id'] != failed_call['thread_id'],
+            'Faulted character reused native thread')
+    for call in calls:
+        require(call['vendor'] == failed_call['vendor']
+                and call['model'] == failed_call['model'] and call['fault'] is None,
+                'Recovered character provider identity differs')
+        # Adapter and final exchange audit own native acceptance, including recovered ERROR.
+        require(call['delivered_returncode'] == 0,
+                'Recovered character native call failed')
+    old_stage = json.loads((Path(failed_call['directory']) / 'staged.sanitized.json').read_text())
+    new_stage = json.loads((Path(first['directory']) / 'staged.sanitized.json').read_text())
+    require(old_stage == new_stage, 'Recovered character staged definition changed')
+    if len(calls) > 1:
+        assert_resumed_call_chain(calls[1:], first['thread_id'], [])
+    scoped = [e for e in history[len(failed_prefix):] if e.step_id == proposed.step_id]
+    require(any(getattr(e.payload, 'state', None) is CollaborationStepState.CONFIRMED
+                for e in scoped), 'Recovered consultation lacks fresh Confirm')
+    replies = [e for e in scoped if isinstance(e.payload, CollaborationSpecialistReplyPayload)]
+    syntheses = [e for e in scoped if isinstance(e.payload, CollaborationLeadSynthesisPayload)]
+    results = [e.payload for e in scoped if isinstance(e.payload, CollaborationExecutionResult)]
+    require(len(replies) == len(syntheses) == len(results) == 1,
+            'Recovered reply synthesis or execution missing')
+    reply, synthesis, execution = replies[0], syntheses[0].payload, results[0]
+    assignment = proposed.proposal.assignments[0]
+    require(reply.sender.agent_id == 'character_custodian'
+            and reply.payload.assignment_id == assignment.assignment_id
+            and reply.payload.input_ids == assignment.input_ids,
+            'Recovered reply attribution differs')
+    for payload in (reply.payload, synthesis, execution):
+        require(payload.proposal_id == proposed.proposal.proposal_id
+                and payload.proposal_revision == proposed.proposal.proposal_revision
+                and payload.proposal_digest == proposed.proposal.proposal_digest,
+                'Recovered proposal correlation differs')
+    require(reply.payload.execution_attempt_id == synthesis.execution_attempt_id
+            == execution.execution_attempt_id, 'Recovered execution correlation differs')
+    require(synthesis.reply_event_ids == (reply.event_id,) and synthesis.next_intent is None,
+            'Recovered synthesis attribution or terminal intent differs')
+    if reply.payload.assessment.value != 'supports':
+        require(set(reply.payload.input_ids) <= set(synthesis.unresolved_input_ids),
+                'Recovered synthesis erased unresolved inputs')
+    require(execution.overall_outcome.value == 'succeeded'
+            and execution.synthesis_outcome.value == 'succeeded'
+            and execution.synthesis_result_event_id == syntheses[0].event_id
+            and len(execution.assignment_outcomes) == 1
+            and execution.assignment_outcomes[0].outcome.value == 'succeeded'
+            and execution.assignment_outcomes[0].reply_event_id == reply.event_id,
+            'Recovered execution result differs')
+    return {'agent': 'character_custodian', 'fresh_thread': True,
+            'physical_calls': len(calls), 'step_id': proposed.step_id}
+
+
 class CallEvidence:
     """One serial-case budget; runtime's sibling calls may run concurrently."""
 
@@ -367,7 +498,7 @@ class CallEvidence:
         self.global_root = Path(os.environ.get('STORY_LIVE_BUDGET_ROOT', str(global_root))).resolve()
         self.source_hashes = source_closure()
         self.run_budget = load_inventory()['budget']
-        require(0 < self.run_budget['matrix_max_calls'] <= self.run_budget['max_calls'] <= 209,
+        require(0 < self.run_budget['matrix_max_calls'] <= self.run_budget['max_calls'] <= 312,
                 'Declared provider cap exceeds the absolute authorization')
         save(directory / 'source-closure.sanitized.json', self.source_hashes)
         self.prior_submissions = int(os.environ.get('STORY_LIVE_PRIOR_CASE_SUBMISSIONS', '0'))
@@ -632,6 +763,9 @@ class ConversationCase:
         require(result.state is StoryCommitState.COMMITTED, 'Fixture owner commit did not complete')
         save(self.directory / 'fixture-commit.private.json', dataclasses.asdict(result))
         self.initial_artifacts = {name: digest(self.workspace.path(name).read_bytes()) for name in values}
+        if self.spec['id'] == 'F02-LOST-AUTHORITY':
+            assert_seeded_artifacts(self.workspace, self.initial_artifacts)
+            save(self.directory / 'initial-artifacts.private.json', self.initial_artifacts)
 
     def history(self):
         return self.runtime.conversation_storage_services.event_store.read(self.session, self.conversation)
@@ -778,7 +912,7 @@ class ConversationCase:
         rejected = await self.runtime.decide_lead_step(decision(first, CollaborationConfirmationDecision.REJECT))
         require(rejected.turn.state is CollaborationStepState.REJECTED and len(self.observer.calls) == before, 'Reject dispatched work')
         second = await self.propose(text=text, references=False)
-        await self.rejects_decision(decision(second, proposal_digest='0' * 64))
+        await self.rejects_decision(decision(second, proposal_digest='sha256:' + '0' * 64))
         revised = await self.runtime.decide_lead_step(decision(second, CollaborationConfirmationDecision.REVISE, revision_request='Keep only plot_architect, but focus the pending review on chronology. Return the revised consultation proposal and wait.'))
         self.turns.append(revised.turn)
         require(revised.turn.kind is LeadOutcomeKind.PROPOSAL, 'Required live revised proposal absent')
@@ -808,7 +942,9 @@ class ConversationCase:
         before = len(self.observer.calls)
         try:
             outcome = await self.runtime.decide_lead_step(decision(proposed))
-        except ValueError:
+        except BackendProtocolError as exc:
+            if str(exc) != 'lead proposal authority drift requires regeneration and confirmation':
+                raise
             outcome = None
         require(len(self.observer.calls) == before, 'Reference drift launched specialist work')
         if outcome is not None:
@@ -823,7 +959,7 @@ class ConversationCase:
         def append_then_stop(batch):
             result = original(batch)
             if any((getattr(e.payload, 'state', None) is CollaborationStepState.CONFIRMED for e in batch.events)):
-                save(self.directory / 'lost-authority-checkpoint.sanitized.json', {'session': self.session, 'conversation': self.conversation, 'calls': len(self.observer.calls), 'stage': 'confirmed_before_running'})
+                save(self.directory / 'lost-authority-checkpoint.sanitized.json', {'session': self.session, 'conversation': self.conversation, 'calls': len(self.observer.calls), 'stage': 'confirmed_before_running', 'artifact_baseline_sha256': digest((self.directory / 'initial-artifacts.private.json').read_bytes())})
                 os._exit(86)
             return result
         with mock.patch.object(store, 'append_batch', side_effect=append_then_stop):
@@ -835,6 +971,7 @@ class ConversationCase:
         from story_writing_agents.workspace import Workspace
         paths = json.loads((self.directory / 'workspace.private.json').read_text())
         self.workspace = Workspace(paths['session'])
+        self.initial_artifacts = restore_artifact_baseline(self.directory, self.workspace, checkpoint)
         self.open_backend()
         self.conversation = checkpoint['conversation']
         self.observer.install()
@@ -846,6 +983,7 @@ class ConversationCase:
         require(reconfirm.confirmation_request_id != old['confirmation_request_id'], 'Restart reused authority')
         completed = await self.confirm(reconfirm)
         self.verify_completed(completed, ('plot_architect',))
+        assert_seeded_artifacts(self.workspace, self.initial_artifacts)
 
     async def interrupted_or_failed(self, *, cancel):
         agents = ('plot_architect', 'character_custodian')
@@ -893,8 +1031,32 @@ class ConversationCase:
             finalized = await self.lead('Inspect the already durable interrupted result; do not replay it.')
             require(finalized.state is CollaborationStepState.INTERRUPTED and len(self.observer.calls) == before, 'Interrupted execution replayed')
         else:
-            next_turn = await self.lead('The previous consultation failed. Give a brief workflow status only; do not replay specialist work.')
-            require(next_turn.kind in (LeadOutcomeKind.ANSWER, LeadOutcomeKind.RECOMMENDATION), 'Safe explicit follow-up did not complete')
+            await self.recover_failed_character(proposed)
+
+    async def recover_failed_character(self, failed_proposal):
+        failed_prefix = canonical_history(self.history())
+        faulted = [c for c in self.observer.calls
+                   if c['agent'] == 'character_custodian' and c['fault'] == 'nonzero']
+        require(len(faulted) == 1, 'Expected one actual faulted character call')
+        before = len(self.observer.calls)
+        proposed = await self.propose(
+            ('character_custodian',), references=False,
+            text=self.spec['recovery_instruction'],
+        )
+        require(proposed.step_id != failed_proposal.step_id
+                and proposed.proposal.budget.rounds_spent == 0
+                and proposed.confirmation_request_id != failed_proposal.confirmation_request_id,
+                'Recovery reused failed step or confirmation authority')
+        require(all(c['agent'] == 'lead_orchestrator' for c in self.observer.calls[before:]),
+                'Recovery dispatched before Confirm')
+        completed = await self.confirm(proposed)
+        audit = assert_character_recovery(
+            self.history(), failed_prefix, faulted[0], self.observer.calls[before:],
+            proposed, completed,
+        )
+        require(project_collaboration_history(self.history()).current_state
+                is CollaborationStepState.COMPLETED, 'Recovery projection did not complete')
+        save(self.directory / 'character-recovery.sanitized.json', audit)
 
     async def diagnostic_cases(self):
         from story_writing_agents.prompts import PromptAssembler

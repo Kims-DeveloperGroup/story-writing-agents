@@ -3,17 +3,17 @@
   "scope": "Lead conversation and specialist consultation only; artifact Apply/Commit excluded",
   "budget": {
     "seconds": 45000,
-    "max_calls": 209,
-    "matrix_max_calls": 209,
+    "max_calls": 312,
+    "matrix_max_calls": 312,
     "unallocated_calls": 0,
     "estimated_seconds": 5130,
     "per_call_seconds": 180,
     "parallelism": "scenarios sequential; specialist concurrency only actual runtime1/2/3 dispatch",
     "retry_policy": "No automatic retries; any retry requires separate root disposition within all existing caps.",
     "budget_stop": "count before spawn and record actual submission separately; no launch if per-case/global cap reached; finish/join submitted owned work; mark remaining steps unexecuted, never pass",
-    "configuration_id": "issue623-runtime-bounds-209",
-    "authorization_reason": "Root authorized209 session-wide calls and45000 seconds from the original epoch. All31 historical reservations remain charged; the remaining14 cases have178 fresh calls reserved. Inventory stores reusable fresh bounds; each attempt records prior+fresh cumulative caps. No automatic retry.",
-    "fresh_inventory_max_calls": 202
+    "configuration_id": "issue623-recovery-coverage-312",
+    "authorization_reason": "Root approved F02 original artifact baseline and F04 same-agent recovery coverage. All186 historical reservations remain charged; F01\u2013F05 require at most59 fresh calls (245 total) under unchanged312 global ceiling and original45000-second epoch. Fresh full inventory bound210. No automatic retry.",
+    "fresh_inventory_max_calls": 210
   },
   "cases": [
     {
@@ -24,7 +24,7 @@
       "max_calls": 18,
       "estimated_seconds": 480,
       "fixture": "consistent outline + explicit contrasting character motivation + recall marker",
-      "instruction": "Read the attached outline and character facts. Propose exactly plot_architect and character_custodian consultation; do not execute until I confirm. After their assessments synthesize once, preserving disagreement. Remember FLOW623-HIGH. Complete only this one consultation round, then give the final synthesis and stop. Do not propose another consultation round.",
+      "instruction": "Read the attached outline and character facts. Propose exactly plot_architect and character_custodian consultation; do not execute until I confirm. After their assessments synthesize once, preserving disagreement. Remember FLOW623-RECALL. Complete only this one consultation round, then give the final synthesis and stop. Do not propose another consultation round.",
       "steps": [
         "Initialize disposable workspace using current package; create session and focused conversation; retain baseline hashes.",
         "Submit fixed request through real lead_turn or real PTY; require exact PROPOSAL and exact specialist roster.",
@@ -53,7 +53,7 @@
       "max_calls": 18,
       "estimated_seconds": 360,
       "fixture": "consistent outline + same-facts candidate",
-      "instruction": "Consult only plot_architect on whether this candidate preserves the attached outline chronology. Request an honest bounded assessment; then synthesize and remember FLOW623-LOW.",
+      "instruction": "Consult only plot_architect on whether this candidate preserves the attached outline chronology. Request an honest bounded assessment; then synthesize and remember FLOW623-RECALL.",
       "steps": [
         "Initialize disposable workspace using current package; create session and focused conversation; retain baseline hashes.",
         "Submit fixed request through real lead_turn or real PTY; require exact PROPOSAL and exact specialist roster.",
@@ -107,7 +107,7 @@
       "max_calls": 18,
       "estimated_seconds": 420,
       "fixture": "consistent outline + same-facts candidate",
-      "instruction": "Consult only plot_architect on the attached coherent chronology, synthesize once, then remember FLOW623-SONNET. Complete only this one consultation round, then give the final synthesis and stop. Do not propose another consultation round.",
+      "instruction": "Consult only plot_architect on the attached coherent chronology, synthesize once, then remember FLOW623-RECALL. Complete only this one consultation round, then give the final synthesis and stop. Do not propose another consultation round.",
       "steps": [
         "Initialize disposable workspace using current package; create session and focused conversation; retain baseline hashes.",
         "Submit fixed request through real lead_turn or real PTY; require exact PROPOSAL and exact specialist roster.",
@@ -380,15 +380,15 @@
       "test_id": "tests.test_antigravity_live_conversations.LiveConversationTests.test_f04_failure_recovery",
       "route": "API",
       "model": "gemini-3.8-flash-low",
-      "max_calls": 16,
-      "estimated_seconds": 300,
+      "max_calls": 24,
+      "estimated_seconds": 600,
       "fixture": "live two-reviewer workflow consultation",
       "instruction": "Request two bounded methodology assessments, awaiting confirmation.",
       "steps": [
         "Confirm; let both native calls run.",
         "After one actual completion, test-only completed-process wrapper injects selected nonzero exit on that one result, preserving captured real bytes and labeling altered returncode.",
         "Both siblings joined; one valid sibling retained; no synthesis; failure diagnostics response precedes provider-failure outcome once.",
-        "Send explicit fresh follow-up; real next call uses safe fresh provider thread and completes."
+        "Send a new explicit Lead request for character_custodian only; receive a new-step proposal, give fresh structured Confirm, and complete the actual character reply and terminal synthesis. Verify the faulted character starts a fresh native thread, successful sibling and failed history remain intact, and all captures correlate."
       ],
       "pass_assertions": [
         "Exact typed outcome and expected next_action; no successful-call-only pass.",
@@ -399,7 +399,8 @@
         "Injected fault distinct from naturally failed provider; response diagnostic accurately labels captured vs injected fields; no semantic diagnostic leak."
       ],
       "classification": "live_fault_injection",
-      "depends": []
+      "depends": [],
+      "recovery_instruction": "Start a new independent consultation, not a continuation or replay of the failed step. Ask only character_custodian for one bounded assessment of how to evaluate a fictional observer whose motivation has not been supplied. Wait for structured Confirm. After that assessment, synthesize once, preserve every unresolved input, and end this consultation without another round."
     },
     {
       "id": "F05-DIAGNOSTICS-RECOVERY",

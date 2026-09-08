@@ -1452,10 +1452,29 @@ every intermediate arrow. The current runtime graph is acyclic.
   delivery instruction as a complete schema-selected `finish` call. Contextual
   role rendering identifies the specialist's bare assessment example as
   `action.result`, requiring the outer correlation/action object through
-  `finish`. This local rendering leaves
+  `finish`. Contextual Lead role rendering also clarifies that, after mandatory
+  reference reading, supplied `i.input_aliases` attached-reference IDs are
+  content evidence distinct from `core_statuses` IDs. Verified story content
+  requires a supporting attached-reference or completed READ evidence ID;
+  status IDs alone are insufficient. Only current supplied IDs are eligible,
+  with the existing runtime evidence ordering and domain rules preserved.
+  Supporting `evidence_ids` remain distinct from proposal assignment
+  `input_ids`: assignments collectively cover every supplied `i.input_aliases`
+  input ID, including `user_input`, plus every cited READ evidence ID. This
+  staging clarification preserves the canonical routing and validators.
+  For `lead_synthesis`, contextual Lead staging requires literal copies of
+  `i.answer_contract` scope, evidence status, evidence IDs, and reply-event
+  attribution IDs. Required `unresolved_input_ids` remain in supplied order
+  before any additional unresolved original inputs. Concern, conflict, or
+  insufficient-evidence inputs remain unresolved even when synthesis explains
+  a remedy or ends the consultation; empty `unresolved_input_ids` require an
+  empty required list. These instructions apply to every consultation, including ordinary
+  consultations and artifact reviews, without changing schemas, validators,
+  or authority for another round.
+  This local rendering leaves
   the shared immutable definition, fingerprint, captured references, common
-  prompt and workspace template unchanged; persona and evidence text are not
-  transformed. Direct provider constraints permit `finish` only for structured
+  prompt and workspace template unchanged; persona and captured context-document
+  content are not transformed. Direct provider constraints permit `finish` only for structured
   delivery and retain prohibitions on shell, web, plugins, skills, MCP, and
   subagents.
   A definition's internal `provider_managed_context` marker instead
