@@ -53,10 +53,13 @@ whitespace: `ensure_ascii=False`, `allow_nan=False`, and
 fixed content-free diagnostic that does not echo the rejected input.
 
 Codex sends the inner prompt itself on standard input, so its diagnostic
-transport byte count is the inner-prompt count. Antigravity wraps that same
-inner JSON string in its provider-owned outer NDJSON input event. The outer
-NDJSON byte count is retained only as provider-specific transport evidence; it
-is not added to provider-neutral gross model input.
+transport byte count is the inner-prompt count. Antigravity passes that exact
+inner JSON string as one `--print` argument with empty stdin.
+`actual_transport_utf8_bytes` counts those payload argument bytes, without an
+outer event wrapper or added newline. This diagnostic count is not added again
+to provider-neutral gross model input. Process-start failure, including an OS
+argument-size rejection, occurs before submission and has no actual transport
+count.
 
 Every serialized byte is attributed once. Binding attribution separates
 binding structure, role system prompt, persona, response language, each core
@@ -85,9 +88,12 @@ Provider token usage is evidence reported by the provider, not an estimate.
 Only recognized counters whose values are exact nonnegative integers (and not
 booleans) are accepted. A missing, malformed, negative, or unrecognized value
 remains `None`; the runtime never derives a replacement. Provider values must
-be treated as reported snapshots. In particular, Antigravity streaming usage
-for a provider conversation may be cumulative and must not be summed as if
-each snapshot were an independent call delta.
+be treated as reported snapshots. Antigravity reads only the terminal JSON
+object's `usage`: `input_tokens`, `output_tokens`, and `cache_read_tokens`
+(the last maps to `cached_input_tokens`). Missing or invalid counters stay
+unavailable; values are not inferred from response text or intermediate events.
+Historical streaming usage for a provider conversation may be cumulative and
+must not be summed as if each snapshot were an independent call delta.
 
 <a id="provider-context-baseline-v1"></a>
 
@@ -314,8 +320,8 @@ The request diagnostic is canonical JSON containing only `call_kind`,
 contains only `actual_transport_utf8_bytes`, `response_text`, `thread_id`, and
 nullable validated `usage`. The terminal diagnostic contains only `outcome`
 and one fixed code. These are exact provider-neutral inputs and evidence, not
-Codex standard streams or Antigravity NDJSON/tool/reasoning events. Storage may
-retain only the longest complete UTF-8 prefix at or below 262,144 bytes; its
+Codex standard streams or Antigravity raw JSON/tool/reasoning output. Storage
+may retain only the longest complete UTF-8 prefix at or below 262,144 bytes; its
 full byte/code-point counts and SHA-256 still describe the complete capture
 input.
 
@@ -352,24 +358,32 @@ agent with `--agent`, and launches `agy` without a shell from the nested
 adapter-owned workspace. A fresh thread uses `--new-project`; exact resume uses
 `--conversation <id>`, whose associated project Antigravity reopens. Story
 does not register the canonical story workspace root or pass `--project`.
-Story payloads enter standard input using stream JSON and output returns as a
-stream. The same canonical per-call schema is passed inline with
-`--json-schema`. A successful terminal event must identify the selected agent,
-exact cwd, `request-review` mode, and a nonempty tool catalog containing
-`finish`; it may contain only safe non-operational steps. The terminal event
-must contain a root-object `structured_output` and a `json_schema` whose
-canonical bytes exactly echo the requested schema before Story creates
-`ProviderResult`. See Antigravity's
-official [headless CLI guide](https://antigravity.google/docs/cli/headless/)
-and Google's [structured output guide](https://ai.google.dev/gemini-api/docs/structured-output).
-Runtime-owned JSON schema, provider-state path, optional
-model/effort, and provider conversation ID remain process arguments. Slash
-commands are disabled, plan mode is selected, sandbox controls are applied,
-and no bypass is requested. The custom definition's `tools: [finish]` is
-declarative containment: CLI 1.1.27 still advertised 57 tools, so Story does
-not claim provider-level capability removal. Exact setup, precedence,
-preflight, and lifecycle contracts are in the
+Story passes the exact payload as one `--print` argument with empty stdin,
+selecting `--input-format text --output-format json`. The same canonical
+per-call schema is passed inline with `--json-schema`. Exactly one UTF-8 JSON
+object must report `SUCCESS`, a safe conversation ID matching the retained ID
+on resume, object `structured_output`, and an object `json_schema` whose
+canonical bytes exactly echo the request. Duplicate fields, non-finite values,
+and trailing data are rejected; there is no string-response fallback. Only
+then does Story create `ProviderResult` for the shared runtime checks.
+
+This output has no `init` or step metadata to attest agent, cwd, permission
+mode, or tool behavior. The selected custom agent, isolated state/cwd,
+sandbox, plan-mode, and disabled-slash flags remain configured, without an
+approval bypass. Their presence does not prove provider capability removal;
+CLI 1.1.27 warns that plan mode has no effect with slash commands disabled.
+The full payload, schema, state path, optional model/effort, and conversation
+ID are process-visible arguments. Exact setup and privacy limits are in the
 [Antigravity guide](../guides/antigravity.md).
+
+Only Antigravity's staged `ROLE_SYSTEM_PROMPT` rendering changes the exact
+common-policy clause `invoke another agent, provider subagent, tool, or model.`
+to `invoke another agent, provider subagent, or model.` before byte accounting.
+Its compact provider-managed constraints also omit the tool ban. Shared
+policy/configuration sources, workspace initialization, Codex rendering and
+stdin/JSONL transport, and provider-neutral request/schema contracts remain
+unchanged. Existing workspace prompt files are not migrated or rewritten;
+the Antigravity transformation applies to the staged definition.
 
 Runtime-built contextual debate calls use typed wire v7 for task/input,
 candidate pointer/splice/full fallback, selected sources, and record changes.

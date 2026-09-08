@@ -997,20 +997,26 @@ approvals, ignored project/user configuration, and disabled shell, web, app,
 and multi-agent tools. Installation-level or vendor-global instructions can
 still apply, and the vendor may retain remote conversations.
 
-Antigravity also runs without shell evaluation. The backend sends confidential
-story request JSON through standard input and requests streamed JSON output. It
-stages a selected custom main agent beneath the isolated provider workspace,
-uses `--new-project` for a fresh conversation or the exact retained
-`--conversation` ID for resume, disables slash commands, selects plan mode,
-applies sandbox controls, and does not request an approval bypass. It never
-registers the canonical story root as the provider project. The process
-argument list still contains
-runtime-owned output schema, the isolated provider-state path, optional
-model/effort, and an optional provider conversation ID. The child process
-inherits the runtime environment. Do not place credentials in model names,
-paths, configuration fields, shell history, or diagnostics, and start the
-runtime only from an environment whose inherited variables are suitable for a
-provider subprocess.
+Antigravity also runs without shell evaluation. The backend passes the exact
+confidential story request JSON as one `--print` argument, uses
+`--input-format text --output-format json`, and sends empty stdin. The full
+request can therefore appear in local process listings and inspection tools,
+including any story text, drafts, references, and retrieval observations it
+contains. CLI 1.1.27 ignored raw text stdin in transport probes, so this adapter
+uses the prompt argument. OS argument-size limits may reject large requests
+before process creation with a typed start failure and no submitted transport
+count.
+
+It stages and selects a custom main agent beneath an isolated provider
+workspace, uses `--new-project` for fresh history or the exact retained
+`--conversation` ID for resume, and passes sandbox, plan-mode, and
+disabled-slash flags without an approval bypass. It never registers the
+canonical story root as the provider project. CLI 1.1.27 warns that plan mode
+has no effect when slash commands are disabled. The argument list also contains
+the output schema, isolated state path, optional model/effort, and conversation
+ID. The child inherits the runtime environment. Keep credentials out of request
+content, model names, paths, configuration fields, shell history, and
+diagnostics; inherited variables must be suitable for a provider subprocess.
 
 Workspace fallback and per-agent Codex model/reasoning values are plaintext
 configuration. An `AgentBackend` passes each bound agent's effective non-null
@@ -1041,15 +1047,17 @@ so these protections are neither application access control nor race-proof
 containment. Protect the complete workspace and provider-state paths with
 OS-level controls; the runtime provides neither encryption nor secure erase.
 
-The custom definition declares only `finish`, but Antigravity CLI 1.1.27 still
-advertised a 57-tool main-agent catalog. Treat that declaration as one layer of
-containment, not proof of provider capability removal. Story validates the
-selected agent, exact isolated cwd, `request-review` permission, and safe step
-metadata; an operational tool, subagent, or unknown step invalidates the
-stream. It also requires root-object `structured_output` and an exact
-`json_schema` echo before shared correlation, evidence, artifact-authority,
-and confirmation checks. See the exact command and sanitized stream in the
-[Antigravity guide](../guides/antigravity.md#sanitized-provider-call-and-native-stream).
+The custom definition declares only `finish`, but earlier CLI 1.1.27 stream
+probes advertised a 57-tool main-agent catalog. Neither that declaration nor
+the launch flags prove capability removal. The JSON result has no `init` or
+step metadata, so Story cannot attest selected agent, cwd, permissions, or
+tool/subagent behavior from the output. Story requires one valid UTF-8 JSON
+object with `SUCCESS`, a safe conversation ID matching the retained ID on
+resume, object `structured_output`, and an exact object `json_schema` echo;
+duplicate fields, non-finite numbers, and trailing data are rejected. There is
+no response-string fallback. Shared correlation, evidence, artifact-authority, and confirmation
+checks still apply. See the sanitized command and JSON shape in the
+[Antigravity guide](../guides/antigravity.md#sanitized-provider-call-and-json-result).
 
 Use interactive `/auth` or the startup picker to enter native sign-in. Never put
 credentials in story content, configuration, filenames, prompts, replies,

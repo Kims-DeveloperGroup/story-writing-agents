@@ -727,7 +727,13 @@ copies only the verified bound rules into the working directory. The runtime
 deliberately retains this plaintext state across switch, pause, quit, EOF, and
 `AgentBackend.close()` so a compatible provider conversation can resume later.
 
-The manifest stores only the validated provider conversation reference;
+Each successful invocation supplies one JSON result with a safe
+`conversation_id`; resume requires it to equal the retained reference. The
+manifest stores only that validated reference. It does not store native
+`init`/step attestations: the JSON transport exposes none. Request JSON travels
+as a process-visible `--print` argument with empty stdin; see
+[provider privacy](../../operations/privacy-and-provider.md#provider-processes-and-credentials).
+
 Antigravity owns the native conversation contents beneath its isolated state.
 Neither close nor taint is deletion, secure erase, or a retention policy. Back
 up and protect this root with the rest of the workspace, and do not edit its

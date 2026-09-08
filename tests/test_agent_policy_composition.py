@@ -128,11 +128,23 @@ class AgentPolicyCompositionTests(unittest.TestCase):
         for component in definition.behavior_policy_components:
             component.path.write_text("MUTATED_AFTER_BINDING", encoding="utf-8")
 
-        codex_bytes, _ = CodexAdapter._definition_file(definition)
-        antigravity_bytes, _ = AntigravityAdapter._definition_file(definition)
-        for provider_bytes in (codex_bytes, antigravity_bytes):
-            self.assertIn(captured, provider_bytes)
+        codex_bytes, codex_components = CodexAdapter._definition_file(definition)
+        antigravity_bytes, antigravity_components = AntigravityAdapter._definition_file(definition)
+        original_clause = b"invoke another agent, provider subagent, tool, or model."
+        staged_clause = b"invoke another agent, provider subagent, or model."
+        self.assertIn(original_clause, captured)
+        self.assertIn(captured, codex_bytes)
+        self.assertIn(captured.replace(original_clause, staged_clause), antigravity_bytes)
+        self.assertEqual(definition.system_prompt_file.content, captured)
+        for provider_bytes, components in (
+            (codex_bytes, codex_components),
+            (antigravity_bytes, antigravity_components),
+        ):
             self.assertNotIn(b"MUTATED_AFTER_BINDING", provider_bytes)
+            self.assertEqual(
+                len(provider_bytes),
+                sum(component.serialized_utf8_bytes for component in components),
+            )
 
 
 if __name__ == "__main__":

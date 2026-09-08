@@ -80,12 +80,18 @@ For Antigravity, runtime installs the selected definition at
 session/agent/fingerprint working directory and always supplies `--agent`.
 Fresh history uses `--new-project`; compatible history resumes the exact
 `--conversation` ID and its associated project. Runtime never passes
-`--project` or makes the canonical story root the Antigravity project. Native
-`init` must report the selected agent, exact isolated cwd, `request-review`,
-and a nonempty tool list containing `finish`; only safe non-operational steps
-are accepted. The custom definition's `tools: [finish]` is declarative rather
-than capability proof: CLI 1.1.27 still advertised 57 tools. See the
-[sanitized command and stream](../guides/antigravity.md#sanitized-provider-call-and-native-stream).
+`--project` or makes the canonical story root the Antigravity project. The exact
+request is one `--print` argument with empty stdin and
+`--input-format text --output-format json`. Its single JSON result must report
+`SUCCESS` and a safe `conversation_id` matching the retained ID on resume.
+Duplicate fields, non-finite numbers, trailing data, missing or non-object
+structured output, and a different schema echo fail transport validation;
+there is no string-response fallback. This output contains no `init` or step
+metadata to attest agent, cwd, permissions, or tool behavior. The custom
+agent declarations and retained sandbox/plan/disabled-slash flags do not prove
+capability removal. See the
+[sanitized command and JSON result](../guides/antigravity.md#sanitized-provider-call-and-json-result),
+including process-argument visibility and plan-mode limitations.
 
 ## Lead session continuation
 
