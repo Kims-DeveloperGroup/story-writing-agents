@@ -149,6 +149,21 @@ class ProviderInvocation:
         )
 
 
+@dataclass(frozen=True, slots=True)
+class ProviderResponseDiagnostic:
+    """Passive completed-process bytes for private exchange diagnostics only."""
+
+    stdout: bytes = field(repr=False)
+    stderr: bytes = field(repr=False)
+    exit_code: int
+
+    def __post_init__(self) -> None:
+        if type(self.stdout) is not bytes or type(self.stderr) is not bytes:
+            raise TypeError("provider response diagnostic streams must be bytes")
+        if type(self.exit_code) is not int:
+            raise TypeError("provider response diagnostic exit code must be an integer")
+
+
 @dataclass(frozen=True)
 class ProviderResult:
     """Validated provider transport output awaiting domain-level decoding."""
@@ -157,8 +172,18 @@ class ProviderResult:
     response_text: str
     usage: ProviderUsage | None = field(default=None, compare=False)
     actual_transport_utf8_bytes: int | None = field(default=None, compare=False)
+    response_diagnostic: ProviderResponseDiagnostic | None = field(
+        default=None,
+        compare=False,
+        repr=False,
+    )
 
     def __post_init__(self) -> None:
+        if (
+            self.response_diagnostic is not None
+            and type(self.response_diagnostic) is not ProviderResponseDiagnostic
+        ):
+            raise TypeError("provider response diagnostic has an invalid type")
         if self.usage is not None and type(self.usage) is not ProviderUsage:
             raise TypeError("provider result usage must be ProviderUsage or None")
         if self.actual_transport_utf8_bytes is not None:
@@ -232,6 +257,24 @@ class ProviderInvocationError(Exception):
             raise TypeError("continuation rejection must be a closed provider code")
         self.continuation_rejection = continuation_rejection
         self._call_accounting = _PREPARED_PROVIDER_FAILURE
+        self._response_diagnostic: ProviderResponseDiagnostic | None = None
+
+    def record_response_diagnostic(
+        self,
+        diagnostic: ProviderResponseDiagnostic,
+    ) -> None:
+        """Attach exact completed output without changing the safe error text."""
+
+        if type(diagnostic) is not ProviderResponseDiagnostic:
+            raise TypeError("provider response diagnostic has an invalid type")
+        self._response_diagnostic = diagnostic
+
+    @property
+    def response_diagnostic(self) -> ProviderResponseDiagnostic | None:
+        """Expose only a validated optional value to the exchange coordinator."""
+
+        value = self._response_diagnostic
+        return value if type(value) is ProviderResponseDiagnostic else None
 
 
 def record_provider_failure_accounting(

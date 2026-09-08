@@ -134,7 +134,18 @@ class AgentPolicyCompositionTests(unittest.TestCase):
         staged_clause = b"invoke another agent, provider subagent, or model."
         self.assertIn(original_clause, captured)
         self.assertIn(captured, codex_bytes)
-        self.assertIn(captured.replace(original_clause, staged_clause), antigravity_bytes)
+        expected = captured.replace(original_clause, staged_clause).replace(
+            b"Return only the one invocation-specific structured result requested by the\nruntime.",
+            b"Submit the invocation-specific structured result requested by the runtime\n"
+            b"through finish, using the complete supplied output schema.",
+        ).replace(
+            b"Return exactly one JSON object with this shape and no additional fields:",
+            b"The specialist assessment in action.result has exactly this shape and\n"
+            b"no additional fields. Submit the complete schema-selected outer object\n"
+            b"with correlation and action through finish; do not submit this inner\n"
+            b"assessment alone:",
+        )
+        self.assertIn(expected, antigravity_bytes)
         self.assertEqual(definition.system_prompt_file.content, captured)
         for provider_bytes, components in (
             (codex_bytes, codex_components),

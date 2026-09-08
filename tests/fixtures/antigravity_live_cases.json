@@ -1,0 +1,432 @@
+{
+  "schema_version": 1,
+  "scope": "Lead conversation and specialist consultation only; artifact Apply/Commit excluded",
+  "budget": {
+    "seconds": 45000,
+    "max_calls": 209,
+    "matrix_max_calls": 209,
+    "unallocated_calls": 0,
+    "estimated_seconds": 5130,
+    "per_call_seconds": 180,
+    "parallelism": "scenarios sequential; specialist concurrency only actual runtime1/2/3 dispatch",
+    "retry_policy": "No automatic retries; any retry requires separate root disposition within all existing caps.",
+    "budget_stop": "count before spawn and record actual submission separately; no launch if per-case/global cap reached; finish/join submitted owned work; mark remaining steps unexecuted, never pass",
+    "configuration_id": "issue623-runtime-bounds-209",
+    "authorization_reason": "Root authorized209 session-wide calls and45000 seconds from the original epoch. All31 historical reservations remain charged; the remaining14 cases have178 fresh calls reserved. Inventory stores reusable fresh bounds; each attempt records prior+fresh cumulative caps. No automatic retry.",
+    "fresh_inventory_max_calls": 202
+  },
+  "cases": [
+    {
+      "id": "L01-PRO-HIGH-PTY",
+      "test_id": "tests.test_antigravity_live_conversations.LiveConversationTests.test_l01_pro_high_pty",
+      "route": "PTY",
+      "model": "gemini-3.1-pro-high",
+      "max_calls": 18,
+      "estimated_seconds": 480,
+      "fixture": "consistent outline + explicit contrasting character motivation + recall marker",
+      "instruction": "Read the attached outline and character facts. Propose exactly plot_architect and character_custodian consultation; do not execute until I confirm. After their assessments synthesize once, preserving disagreement. Remember FLOW623-HIGH. Complete only this one consultation round, then give the final synthesis and stop. Do not propose another consultation round.",
+      "steps": [
+        "Initialize disposable workspace using current package; create session and focused conversation; retain baseline hashes.",
+        "Submit fixed request through real lead_turn or real PTY; require exact PROPOSAL and exact specialist roster.",
+        "Before confirmation assert no specialist dispatch; construct LeadStepDecision solely from returned confirmation_request_id/session/conversation/step/proposal/revision/digest, or use terminal Confirm control.",
+        "Confirm once; inspect actual dispatch, every typed specialist reply, then actual Lead synthesis and COMPLETED state; fail if unexpected round2.",
+        "Re-submit consumed decision and assert ValueError/zero calls; quit/recreate runtime and send marker follow-up in same conversation.",
+        "Inspect /history and /exchanges using actual terminal controls; exit viewer normally.",
+        "Quit/reopen same session/conversation; verify marker recall and resume conversation flag; create/focus second conversation, then return and verify original state without replay."
+      ],
+      "pass_assertions": [
+        "Exact typed outcome and expected next_action; no successful-call-only pass.",
+        "Authoritative event store projection matches visible result; ordered reply_event_ids/assignment IDs/input IDs and all non-supporting unresolved IDs preserved.",
+        "Prepared/submitted lifecycle and exact provider payload/accounting correlate with one request/response/outcome stream per physical call, including preludes.",
+        "No unconfirmed specialist calls; no duplicate user input/dispatch; no tool-invented authority; no artifact writes or Git effects from conversation.",
+        "All provider processes joined and bound resources released; failure/cancel is not success; no raw diagnostic/private reasoning in visible or semantic history.",
+        "Both terminal replies match stored messages after line-wrap normalization; terminal restored on exit; two specialist attribution."
+      ],
+      "classification": "live_normal",
+      "depends": []
+    },
+    {
+      "id": "L02-PRO-LOW-ONE",
+      "test_id": "tests.test_antigravity_live_conversations.LiveConversationTests.test_l02_pro_low_one",
+      "route": "API",
+      "model": "gemini-3.1-pro-low",
+      "max_calls": 18,
+      "estimated_seconds": 360,
+      "fixture": "consistent outline + same-facts candidate",
+      "instruction": "Consult only plot_architect on whether this candidate preserves the attached outline chronology. Request an honest bounded assessment; then synthesize and remember FLOW623-LOW.",
+      "steps": [
+        "Initialize disposable workspace using current package; create session and focused conversation; retain baseline hashes.",
+        "Submit fixed request through real lead_turn or real PTY; require exact PROPOSAL and exact specialist roster.",
+        "Before confirmation assert no specialist dispatch; construct LeadStepDecision solely from returned confirmation_request_id/session/conversation/step/proposal/revision/digest, or use terminal Confirm control.",
+        "Confirm once; inspect actual dispatch, every typed specialist reply, then actual Lead synthesis and COMPLETED state; fail if unexpected round2.",
+        "Re-submit consumed decision and assert ValueError/zero calls; quit/recreate runtime and send marker follow-up in same conversation."
+      ],
+      "pass_assertions": [
+        "Exact typed outcome and expected next_action; no successful-call-only pass.",
+        "Authoritative event store projection matches visible result; ordered reply_event_ids/assignment IDs/input IDs and all non-supporting unresolved IDs preserved.",
+        "Prepared/submitted lifecycle and exact provider payload/accounting correlate with one request/response/outcome stream per physical call, including preludes.",
+        "No unconfirmed specialist calls; no duplicate user input/dispatch; no tool-invented authority; no artifact writes or Git effects from conversation.",
+        "All provider processes joined and bound resources released; failure/cancel is not success; no raw diagnostic/private reasoning in visible or semantic history.",
+        "Exactly one specialist; target natural supports assessment; subsequent follow-up accepted on same provider thread."
+      ],
+      "classification": "live_normal",
+      "depends": []
+    },
+    {
+      "id": "L03-FLASH-THREE",
+      "test_id": "tests.test_antigravity_live_conversations.LiveConversationTests.test_l03_flash_three",
+      "route": "API",
+      "model": "gemini-3.8-flash-low",
+      "max_calls": 18,
+      "estimated_seconds": 480,
+      "fixture": "outline timing conflict + character uncertainty + prose execution concern",
+      "instruction": "Consult exactly plot_architect, character_custodian, execution_specialist, in canonical order. Ask plot to compare the explicit day-1/day-3 timing contradiction. Ask character whether the supplied evidence establishes any prior promise by Nara to keep the sealed door closed; report missing evidence if no promise is documented, without inventing a promise or treating omission as a conflicting fact. Ask execution to assess the visibly duplicated report sentences. Preserve every actual assessment and unresolved input; no edits. Complete only this one consultation round, then give the final synthesis and stop. Do not propose another consultation round.",
+      "steps": [
+        "Initialize disposable workspace using current package; create session and focused conversation; retain baseline hashes.",
+        "Submit fixed request through real lead_turn or real PTY; require exact PROPOSAL and exact specialist roster.",
+        "Before confirmation assert no specialist dispatch; construct LeadStepDecision solely from returned confirmation_request_id/session/conversation/step/proposal/revision/digest, or use terminal Confirm control.",
+        "Confirm once; inspect actual dispatch, every typed specialist reply, then actual Lead synthesis and COMPLETED state; fail if unexpected round2.",
+        "Re-submit consumed decision and assert ValueError/zero calls; quit/recreate runtime and send marker follow-up in same conversation."
+      ],
+      "pass_assertions": [
+        "Exact typed outcome and expected next_action; no successful-call-only pass.",
+        "Authoritative event store projection matches visible result; ordered reply_event_ids/assignment IDs/input IDs and all non-supporting unresolved IDs preserved.",
+        "Prepared/submitted lifecycle and exact provider payload/accounting correlate with one request/response/outcome stream per physical call, including preludes.",
+        "No unconfirmed specialist calls; no duplicate user input/dispatch; no tool-invented authority; no artifact writes or Git effects from conversation.",
+        "All provider processes joined and bound resources released; failure/cancel is not success; no raw diagnostic/private reasoning in visible or semantic history.",
+        "Exactly three specialist dispatches in one atomic batch; expected conflict/insufficient_evidence/concern are observed, not rewritten; synthesis preserves all unresolved supporting input identities."
+      ],
+      "classification": "live_normal",
+      "depends": []
+    },
+    {
+      "id": "L04-SONNET-ONE",
+      "test_id": "tests.test_antigravity_live_conversations.LiveConversationTests.test_l04_sonnet_one",
+      "route": "API",
+      "model": "claude-sonnet-4-6",
+      "max_calls": 18,
+      "estimated_seconds": 420,
+      "fixture": "consistent outline + same-facts candidate",
+      "instruction": "Consult only plot_architect on the attached coherent chronology, synthesize once, then remember FLOW623-SONNET. Complete only this one consultation round, then give the final synthesis and stop. Do not propose another consultation round.",
+      "steps": [
+        "Initialize disposable workspace using current package; create session and focused conversation; retain baseline hashes.",
+        "Submit fixed request through real lead_turn or real PTY; require exact PROPOSAL and exact specialist roster.",
+        "Before confirmation assert no specialist dispatch; construct LeadStepDecision solely from returned confirmation_request_id/session/conversation/step/proposal/revision/digest, or use terminal Confirm control.",
+        "Confirm once; inspect actual dispatch, every typed specialist reply, then actual Lead synthesis and COMPLETED state; fail if unexpected round2.",
+        "Re-submit consumed decision and assert ValueError/zero calls; quit/recreate runtime and send marker follow-up in same conversation."
+      ],
+      "pass_assertions": [
+        "Exact typed outcome and expected next_action; no successful-call-only pass.",
+        "Authoritative event store projection matches visible result; ordered reply_event_ids/assignment IDs/input IDs and all non-supporting unresolved IDs preserved.",
+        "Prepared/submitted lifecycle and exact provider payload/accounting correlate with one request/response/outcome stream per physical call, including preludes.",
+        "No unconfirmed specialist calls; no duplicate user input/dispatch; no tool-invented authority; no artifact writes or Git effects from conversation.",
+        "All provider processes joined and bound resources released; failure/cancel is not success; no raw diagnostic/private reasoning in visible or semantic history.",
+        "Exactly one specialist; complete follow-up and stored transcript checked."
+      ],
+      "classification": "live_normal",
+      "depends": []
+    },
+    {
+      "id": "L05-MIXED",
+      "test_id": "tests.test_antigravity_live_conversations.LiveConversationTests.test_l05_mixed",
+      "route": "API",
+      "model": "Codex Lead configured model captured; Antigravity Pro High plot + Sonnet character",
+      "max_calls": 18,
+      "estimated_seconds": 600,
+      "fixture": "two-reviewer outline/character fixture",
+      "instruction": "Request a two-domain consultation, await my confirmation, retain attribution and conflicting input identities in the synthesis. Complete only this one consultation round, then give the final synthesis and stop. Do not propose another consultation round.",
+      "steps": [
+        "Initialize disposable workspace using current package; create session and focused conversation; retain baseline hashes.",
+        "Submit fixed request through real lead_turn or real PTY; require exact PROPOSAL and exact specialist roster.",
+        "Before confirmation assert no specialist dispatch; construct LeadStepDecision solely from returned confirmation_request_id/session/conversation/step/proposal/revision/digest, or use terminal Confirm control.",
+        "Confirm once; inspect actual dispatch, every typed specialist reply, then actual Lead synthesis and COMPLETED state; fail if unexpected round2.",
+        "Re-submit consumed decision and assert ValueError/zero calls; quit/recreate runtime and send marker follow-up in same conversation."
+      ],
+      "pass_assertions": [
+        "Exact typed outcome and expected next_action; no successful-call-only pass.",
+        "Authoritative event store projection matches visible result; ordered reply_event_ids/assignment IDs/input IDs and all non-supporting unresolved IDs preserved.",
+        "Prepared/submitted lifecycle and exact provider payload/accounting correlate with one request/response/outcome stream per physical call, including preludes.",
+        "No unconfirmed specialist calls; no duplicate user input/dispatch; no tool-invented authority; no artifact writes or Git effects from conversation.",
+        "All provider processes joined and bound resources released; failure/cancel is not success; no raw diagnostic/private reasoning in visible or semantic history.",
+        "Actual Codex subprocess for proposal/synthesis/follow-up and actual Antigravity subprocesses for specialists; provider thread stores disjoint; Codex argv/parser/default diagnostics unchanged."
+      ],
+      "classification": "live_normal",
+      "depends": []
+    },
+    {
+      "id": "L06A-QUESTION",
+      "test_id": "tests.test_antigravity_live_conversations.LiveConversationTests.test_l06a_question",
+      "route": "API",
+      "model": "gemini-3.8-flash-low",
+      "max_calls": 6,
+      "estimated_seconds": 60,
+      "fixture": "empty core fixture",
+      "instruction": "I have not chosen any genre or protagonist. Ask one clarification question before proposing work; do not consult specialists.",
+      "steps": [
+        "Submit ordinary lead input once."
+      ],
+      "pass_assertions": [
+        "Exact typed outcome and expected next_action; no successful-call-only pass.",
+        "Authoritative event store projection matches visible result; ordered reply_event_ids/assignment IDs/input IDs and all non-supporting unresolved IDs preserved.",
+        "Prepared/submitted lifecycle and exact provider payload/accounting correlate with one request/response/outcome stream per physical call, including preludes.",
+        "No unconfirmed specialist calls; no duplicate user input/dispatch; no tool-invented authority; no artifact writes or Git effects from conversation.",
+        "All provider processes joined and bound resources released; failure/cancel is not success; no raw diagnostic/private reasoning in visible or semantic history.",
+        "Exact QUESTION, continue_with_lead, no proposal/specialists."
+      ],
+      "classification": "live_normal",
+      "depends": []
+    },
+    {
+      "id": "L06B-CRITIQUE",
+      "test_id": "tests.test_antigravity_live_conversations.LiveConversationTests.test_l06b_critique",
+      "route": "API",
+      "model": "gemini-3.8-flash-low",
+      "max_calls": 7,
+      "estimated_seconds": 150,
+      "fixture": "explicit whole and ranged draft containing clear timing contradiction",
+      "instruction": "Critique the contradiction between the attached whole outline and draft lines2-4. Give critique only, without consultation or edits.",
+      "steps": [
+        "Submit ordered whole/ranged references.",
+        "Inspect mandatory prelude order and provenance; require typed critique grounded in attached references."
+      ],
+      "pass_assertions": [
+        "Exact typed outcome and expected next_action; no successful-call-only pass.",
+        "Authoritative event store projection matches visible result; ordered reply_event_ids/assignment IDs/input IDs and all non-supporting unresolved IDs preserved.",
+        "Prepared/submitted lifecycle and exact provider payload/accounting correlate with one request/response/outcome stream per physical call, including preludes.",
+        "No unconfirmed specialist calls; no duplicate user input/dispatch; no tool-invented authority; no artifact writes or Git effects from conversation.",
+        "All provider processes joined and bound resources released; failure/cancel is not success; no raw diagnostic/private reasoning in visible or semantic history.",
+        "Exact CRITIQUE; verified/conflicting evidence valid; no off-range or unauthorized source data."
+      ],
+      "classification": "live_normal",
+      "depends": []
+    },
+    {
+      "id": "L06C-RECOMMENDATION",
+      "test_id": "tests.test_antigravity_live_conversations.LiveConversationTests.test_l06c_recommendation",
+      "route": "API",
+      "model": "gemini-3.8-flash-low",
+      "max_calls": 6,
+      "estimated_seconds": 60,
+      "fixture": "workflow meta",
+      "instruction": "Recommend one safe next workflow step for getting specialist feedback; do not create a consultation proposal yet.",
+      "steps": [
+        "Submit once."
+      ],
+      "pass_assertions": [
+        "Exact typed outcome and expected next_action; no successful-call-only pass.",
+        "Authoritative event store projection matches visible result; ordered reply_event_ids/assignment IDs/input IDs and all non-supporting unresolved IDs preserved.",
+        "Prepared/submitted lifecycle and exact provider payload/accounting correlate with one request/response/outcome stream per physical call, including preludes.",
+        "No unconfirmed specialist calls; no duplicate user input/dispatch; no tool-invented authority; no artifact writes or Git effects from conversation.",
+        "All provider processes joined and bound resources released; failure/cancel is not success; no raw diagnostic/private reasoning in visible or semantic history.",
+        "Exact RECOMMENDATION; no proposal or specialist dispatch."
+      ],
+      "classification": "live_normal",
+      "depends": []
+    },
+    {
+      "id": "L07-SEARCH-READ",
+      "test_id": "tests.test_antigravity_live_conversations.LiveConversationTests.test_l07_search_read",
+      "route": "API",
+      "model": "gemini-3.8-flash-low",
+      "max_calls": 6,
+      "estimated_seconds": 180,
+      "fixture": "seeded searchable manuscript token ORBIT623 unseen in initial context",
+      "instruction": "Find the manuscript passage containing ORBIT623, SEARCH first, READ its returned handle, then answer its exact quoted scheduling fact and cite only successful READ handles.",
+      "steps": [
+        "No explicit reference indicator: ensure target not directly attached.",
+        "Inspect actual provider action sequence SEARCH then READ then ANSWER and authorized observations."
+      ],
+      "pass_assertions": [
+        "Exact typed outcome and expected next_action; no successful-call-only pass.",
+        "Authoritative event store projection matches visible result; ordered reply_event_ids/assignment IDs/input IDs and all non-supporting unresolved IDs preserved.",
+        "Prepared/submitted lifecycle and exact provider payload/accounting correlate with one request/response/outcome stream per physical call, including preludes.",
+        "No unconfirmed specialist calls; no duplicate user input/dispatch; no tool-invented authority; no artifact writes or Git effects from conversation.",
+        "All provider processes joined and bound resources released; failure/cancel is not success; no raw diagnostic/private reasoning in visible or semantic history.",
+        "SEARCH/READ actually observed, not merely available; used_handles points to successful current READ; nonzero query/read observation and final answer token."
+      ],
+      "classification": "live_normal",
+      "depends": []
+    },
+    {
+      "id": "L08-DECISIONS",
+      "test_id": "tests.test_antigravity_live_conversations.LiveConversationTests.test_l08_decisions",
+      "route": "API",
+      "model": "gemini-3.8-flash-low",
+      "max_calls": 24,
+      "estimated_seconds": 360,
+      "fixture": "workflow meta consultation plans",
+      "instruction": "Propose one specialist discussion of review methodology, wait for structured confirmation; revise the requested topic only when I use Revise.",
+      "steps": [
+        "Create proposalA, send REJECT: zero additional calls, REJECTED recommendation.",
+        "Create proposalB; submit forged digest/request once: ValueError, identical history and zero calls.",
+        "Submit exact REVISE with new scope: real Lead replacement proposalC, increased revision/new request; staleB rejected.",
+        "Send ordinary Yes while C pending: ordinary actual Lead turn supersedes C, no specialists; staleC rejected."
+      ],
+      "pass_assertions": [
+        "Exact typed outcome and expected next_action; no successful-call-only pass.",
+        "Authoritative event store projection matches visible result; ordered reply_event_ids/assignment IDs/input IDs and all non-supporting unresolved IDs preserved.",
+        "Prepared/submitted lifecycle and exact provider payload/accounting correlate with one request/response/outcome stream per physical call, including preludes.",
+        "No unconfirmed specialist calls; no duplicate user input/dispatch; no tool-invented authority; no artifact writes or Git effects from conversation.",
+        "All provider processes joined and bound resources released; failure/cancel is not success; no raw diagnostic/private reasoning in visible or semantic history.",
+        "Reject/Revise/free text/forged/stale all individually checked; no free-text confirmation."
+      ],
+      "classification": "live_normal",
+      "depends": []
+    },
+    {
+      "id": "L09-SECOND-ROUND",
+      "test_id": "tests.test_antigravity_live_conversations.LiveConversationTests.test_l09_second_round",
+      "route": "API",
+      "model": "gemini-3.1-pro-high",
+      "max_calls": 12,
+      "estimated_seconds": 480,
+      "fixture": "inline bounded review task with explicit unresolved first-round question",
+      "instruction": "First consult plot_architect on ambiguity A. After its reply propose a focused second round using that reply to resolve only A; await a second explicit confirmation. After second round give a terminal synthesis; do not propose a third.",
+      "steps": [
+        "Require first proposal; confirm.",
+        "Require real synthesis next_intent continue_lineage, second awaiting_confirmation, same step, revision+1, prior reply-event inputs and cumulative budget.",
+        "Old confirmation denied; second exact confirmation executes fresh actual calls.",
+        "Require round2 terminal no next_intent, rounds_spent=2, physical calls<=12; new unrelated user turn may start fresh lineage."
+      ],
+      "pass_assertions": [
+        "Exact typed outcome and expected next_action; no successful-call-only pass.",
+        "Authoritative event store projection matches visible result; ordered reply_event_ids/assignment IDs/input IDs and all non-supporting unresolved IDs preserved.",
+        "Prepared/submitted lifecycle and exact provider payload/accounting correlate with one request/response/outcome stream per physical call, including preludes.",
+        "No unconfirmed specialist calls; no duplicate user input/dispatch; no tool-invented authority; no artifact writes or Git effects from conversation.",
+        "All provider processes joined and bound resources released; failure/cancel is not success; no raw diagnostic/private reasoning in visible or semantic history.",
+        "Two actual rounds required; no synthetic next_intent or additional prompt retry if absent.",
+        "Exact third-round rejection/12-vs13 boundary additionally covered by mandatory deterministic contracts, not claimed live saturation."
+      ],
+      "classification": "live_normal",
+      "depends": []
+    },
+    {
+      "id": "F01-REFERENCE-DRIFT",
+      "test_id": "tests.test_antigravity_live_conversations.LiveConversationTests.test_f01_reference_drift",
+      "route": "API",
+      "model": "gemini-3.8-flash-low",
+      "max_calls": 7,
+      "estimated_seconds": 120,
+      "fixture": "fresh explicit reference consultation",
+      "instruction": "Propose one reference-grounded plot review, await confirmation.",
+      "steps": [
+        "Obtain real proposal; modify only disposable referenced fixture bytes as named external drift.",
+        "Confirm old request; inspect rejection/state, no specialist launch, original authoritative evidence retained."
+      ],
+      "pass_assertions": [
+        "Exact typed outcome and expected next_action; no successful-call-only pass.",
+        "Authoritative event store projection matches visible result; ordered reply_event_ids/assignment IDs/input IDs and all non-supporting unresolved IDs preserved.",
+        "Prepared/submitted lifecycle and exact provider payload/accounting correlate with one request/response/outcome stream per physical call, including preludes.",
+        "No unconfirmed specialist calls; no duplicate user input/dispatch; no tool-invented authority; no artifact writes or Git effects from conversation.",
+        "All provider processes joined and bound resources released; failure/cancel is not success; no raw diagnostic/private reasoning in visible or semantic history.",
+        "Reference-drift guard before any additional call."
+      ],
+      "classification": "live_fault_injection",
+      "depends": []
+    },
+    {
+      "id": "F02-LOST-AUTHORITY",
+      "test_id": "tests.test_antigravity_live_conversations.LiveConversationTests.test_f02_lost_authority",
+      "route": "API subprocess restart",
+      "model": "gemini-3.8-flash-low",
+      "max_calls": 12,
+      "estimated_seconds": 360,
+      "fixture": "live one-reviewer workflow consultation",
+      "instruction": "Propose one bounded specialist review and wait.",
+      "steps": [
+        "Obtain live proposal, confirm using exact public decision.",
+        "Test-only delegating event-store append barrier stops owned test process after real CONFIRMED commit but before RUNNING/dispatch; no event fabrication.",
+        "Reopen real runtime: RECONFIRMATION_REQUIRED, same proposal digest/new request, zero provider calls until new exact confirmation.",
+        "Reconfirm then complete real specialist+synthesis."
+      ],
+      "pass_assertions": [
+        "Exact typed outcome and expected next_action; no successful-call-only pass.",
+        "Authoritative event store projection matches visible result; ordered reply_event_ids/assignment IDs/input IDs and all non-supporting unresolved IDs preserved.",
+        "Prepared/submitted lifecycle and exact provider payload/accounting correlate with one request/response/outcome stream per physical call, including preludes.",
+        "No unconfirmed specialist calls; no duplicate user input/dispatch; no tool-invented authority; no artifact writes or Git effects from conversation.",
+        "All provider processes joined and bound resources released; failure/cancel is not success; no raw diagnostic/private reasoning in visible or semantic history.",
+        "No reconstructed private capability, no replay, fresh confirmation single-use."
+      ],
+      "classification": "live_fault_injection",
+      "depends": []
+    },
+    {
+      "id": "F03-CANCELLATION",
+      "test_id": "tests.test_antigravity_live_conversations.LiveConversationTests.test_f03_cancellation",
+      "route": "API",
+      "model": "gemini-3.8-flash-low",
+      "max_calls": 10,
+      "estimated_seconds": 300,
+      "fixture": "live two-reviewer workflow consultation",
+      "instruction": "Propose exactly two reviewers, awaiting confirmation.",
+      "steps": [
+        "Confirm live proposal.",
+        "Allow one actual specialist response through completely; hold other native process after observed submission using owned process gate; cancel outer decision.",
+        "Join every child; persist completed sibling and known cancelled/ambiguous outcome; skip synthesis; restart locally finalizes interrupted result without a call."
+      ],
+      "pass_assertions": [
+        "Exact typed outcome and expected next_action; no successful-call-only pass.",
+        "Authoritative event store projection matches visible result; ordered reply_event_ids/assignment IDs/input IDs and all non-supporting unresolved IDs preserved.",
+        "Prepared/submitted lifecycle and exact provider payload/accounting correlate with one request/response/outcome stream per physical call, including preludes.",
+        "No unconfirmed specialist calls; no duplicate user input/dispatch; no tool-invented authority; no artifact writes or Git effects from conversation.",
+        "All provider processes joined and bound resources released; failure/cancel is not success; no raw diagnostic/private reasoning in visible or semantic history.",
+        "Cancellation propagated; no orphan; preserved sibling unchanged; no invented unavailable partial stdout."
+      ],
+      "classification": "live_fault_injection",
+      "depends": []
+    },
+    {
+      "id": "F04-FAILURE-RECOVERY",
+      "test_id": "tests.test_antigravity_live_conversations.LiveConversationTests.test_f04_failure_recovery",
+      "route": "API",
+      "model": "gemini-3.8-flash-low",
+      "max_calls": 16,
+      "estimated_seconds": 300,
+      "fixture": "live two-reviewer workflow consultation",
+      "instruction": "Request two bounded methodology assessments, awaiting confirmation.",
+      "steps": [
+        "Confirm; let both native calls run.",
+        "After one actual completion, test-only completed-process wrapper injects selected nonzero exit on that one result, preserving captured real bytes and labeling altered returncode.",
+        "Both siblings joined; one valid sibling retained; no synthesis; failure diagnostics response precedes provider-failure outcome once.",
+        "Send explicit fresh follow-up; real next call uses safe fresh provider thread and completes."
+      ],
+      "pass_assertions": [
+        "Exact typed outcome and expected next_action; no successful-call-only pass.",
+        "Authoritative event store projection matches visible result; ordered reply_event_ids/assignment IDs/input IDs and all non-supporting unresolved IDs preserved.",
+        "Prepared/submitted lifecycle and exact provider payload/accounting correlate with one request/response/outcome stream per physical call, including preludes.",
+        "No unconfirmed specialist calls; no duplicate user input/dispatch; no tool-invented authority; no artifact writes or Git effects from conversation.",
+        "All provider processes joined and bound resources released; failure/cancel is not success; no raw diagnostic/private reasoning in visible or semantic history.",
+        "Injected fault distinct from naturally failed provider; response diagnostic accurately labels captured vs injected fields; no semantic diagnostic leak."
+      ],
+      "classification": "live_fault_injection",
+      "depends": []
+    },
+    {
+      "id": "F05-DIAGNOSTICS-RECOVERY",
+      "test_id": "tests.test_antigravity_live_conversations.LiveConversationTests.test_f05_diagnostics_recovery",
+      "route": "actual adapter calls and backend route",
+      "model": "gemini-3.1-pro-high",
+      "max_calls": 6,
+      "estimated_seconds": 420,
+      "fixture": "one actual specialist query; captured regression fixtures separately",
+      "instruction": "Return a bounded specialist assessment using normal schema delivery.",
+      "steps": [
+        "One actual Pro-high call passes through unchanged: record whether natural malformed-finish recovery occurs; absence does not prove natural recovery.",
+        "For separately labeled injected case, run a real completion, then alter only terminal status/error to known malformed-call ERROR while retaining exact structured_output and authentic current-call completion evidence: require gated recovery and recovered diagnostic response.",
+        "Use four fresh actual completed calls with named mutations: malformed UTF8, malformed JSON, unrelated ERROR status, mismatched schema/identity (one representative live mutation; complete cross-product deterministic).",
+        "Each failure remains failure, diagnostic bytes/exit correlate with response then outcome; available valid success never manufactured by test."
+      ],
+      "pass_assertions": [
+        "Exact typed outcome and expected next_action; no successful-call-only pass.",
+        "Authoritative event store projection matches visible result; ordered reply_event_ids/assignment IDs/input IDs and all non-supporting unresolved IDs preserved.",
+        "Prepared/submitted lifecycle and exact provider payload/accounting correlate with one request/response/outcome stream per physical call, including preludes.",
+        "No unconfirmed specialist calls; no duplicate user input/dispatch; no tool-invented authority; no artifact writes or Git effects from conversation.",
+        "All provider processes joined and bound resources released; failure/cancel is not success; no raw diagnostic/private reasoning in visible or semantic history.",
+        "Injected recovery proves integration against actual completion evidence, not naturally occurring ERROR recovery.",
+        "Captured real failing fixture is mandatory deterministic proof; old raw proof never substituted into a live normal pass."
+      ],
+      "classification": "live_fault_injection",
+      "depends": []
+    }
+  ]
+}

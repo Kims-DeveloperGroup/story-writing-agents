@@ -7,9 +7,11 @@
 > configured route fallback.
 > Settings Model/Effort editors also use bounded `agy models` discovery for a
 > pending Antigravity route without persisting the catalog.
-> Focused deterministic tests cover the adapter contract. Live acceptance with
+> Focused deterministic tests cover the adapter contract. Earlier live acceptance with
 > CLI 1.1.27 verified fresh and resumed Lead turns for Pro, Flash, and Sonnet;
 > availability and results remain dependent on the environment and provider.
+> The new [16-case conversation matrix](#opt-in-live-conversation-matrix) is
+> still preliminary: three complete cases pass and thirteen remain pending.
 
 Key terms: **backend name**—the configuration value `antigravity`;
 **executable**—the resolved Antigravity command, `agy` by default; **provider
@@ -268,9 +270,11 @@ For each turn, the runtime launches `agy` directly without shell evaluation. It:
   selects `--input-format text --output-format json`, and sends empty stdin;
 - enables the CLI sandbox, selects plan mode, and disables slash commands;
 - does not pass an approval-bypass or unrestricted-execution option; and
-- drains stdout and stderr, requires one successful JSON object with a valid
-  conversation ID, root-object structured output, and an exact schema echo,
-  then applies the shared runtime correlation and semantic checks.
+- drains stdout and stderr, validates one JSON envelope with a safe conversation
+  ID, root-object structured output, and an exact rendered-schema echo, then
+  applies the shared runtime correlation and semantic checks. Native `SUCCESS`
+  is the normal path; only the [bounded recovery](#recover-a-completed-native-error)
+  below admits the known malformed-function-call `ERROR`.
 
 The custom definition declares `tools: [finish]`, `mainAgent: true`,
 `subagent: false`, and `commandExecutionPolicy: off`. These declarations and
@@ -293,6 +297,16 @@ excluded. The terminal and `debug_logs/runtime.jsonl` stay content-safe, and an
 absent artifact does not change or narrow the original failure. Treat any saved
 body as hostile plaintext and follow the inspection workflow in
 [Privacy](../operations/privacy-and-provider.md#rejected-provider-response-artifacts).
+
+Separately, `debug_logs/agent_exchanges/` can retain completed Antigravity
+failure stdout, stderr, and exit status before its fixed `provider_failure`
+outcome. A recovered native `ERROR` retains the same private diagnostic envelope
+alongside its returned structured result. These bytes use strict UTF-8 or
+explicit base64 encoding within the existing capture bounds and retention.
+Timeout, cancellation, and failures before a completed process supply no partial
+bytes through the shared process runner, so capture invents no response. Capture
+remains best effort and at most once; gaps never establish replay safety. See
+[agent-exchange privacy](../operations/privacy-and-provider.md#agent-exchange-privacy).
 
 The command line contains the full request, including any story input, drafts,
 references, or retrieval observations carried in that request. Local process
@@ -324,7 +338,7 @@ readability:
 cwd=/workspace/agent_states/orchestrator_state/provider_sessions/.antigravity/sessions/novel/lead_orchestrator/<definition-sha256>/workspace
 agy --gemini_dir=<runtime-root>/provider \
   --input-format text --output-format json \
-  --json-schema '<exact generated wire-v7 schema>' \
+  --json-schema '<exact Antigravity-rendered wire-v7 schema>' \
   --agent lead_orchestrator --sandbox --mode plan \
   --disable-slash-commands --print-timeout 300s --new-project \
   --print '<exact confidential wire-v7 payload JSON, one argument>'
@@ -367,36 +381,96 @@ object supplied on argv, whose canonical bytes must match exactly.
       "used_handles": []
     }
   },
-  "json_schema": {"<documentation-placeholder>": "exact generated wire-v7 schema object"},
+  "json_schema": {"<documentation-placeholder>": "exact Antigravity-rendered wire-v7 schema object"},
   "usage": {"input_tokens": 100, "output_tokens": 20, "cache_read_tokens": 0}
 }
 ```
 
 The example shows a Lead ANSWER; other calls require their selected result type.
 Story rejects invalid UTF-8, duplicate fields, non-finite numbers, additional
-JSON objects, and trailing non-whitespace data. It requires `SUCCESS`, a safe
+JSON objects, and trailing non-whitespace data. It requires a safe
 `conversation_id` matching the retained ID on resume, object
-`structured_output`, and the exact object schema echo before constructing a
-`ProviderResult`. It never falls back to a string-valued `response` field.
+`structured_output`, and the exact rendered object schema echo before
+constructing a `ProviderResult`. Status must be `SUCCESS` or pass the narrow
+completed-error recovery below. It never falls back to a string-valued
+`response` field.
 Usage comes only from the terminal object's recognized exact nonnegative
 integer counters; absent or invalid counters remain unavailable. The complete
 closed SEARCH, READ, and seven-field Lead ANSWER branches are shown in
 [What providers receive](lead-agent.md#what-providers-receive).
 
+### Recover a completed native error
+
+The adapter can recover the known improperly formatted function-call `ERROR`
+only when the process exits with status zero and the complete strict JSON
+envelope passes the same conversation, structured-output, and schema-echo
+checks. It then requires matching native evidence for this physical call:
+
+- a pre-call baseline ties fresh history to a newly created conversation, or
+  resumed history to an unchanged prior transcript prefix;
+- the appended request matches the exact current prompt, with valid ordered
+  native steps and timestamps;
+- the final single `finish` call matches `structured_output`, apart from the
+  recognized string-valued native tool metadata, and is followed by the exact
+  supported completion marker. Intervening tool activity or unknown errors
+  cannot serve as completion proof.
+
+Evidence is read through no-follow directory descriptors from the exact native
+conversation beneath the adapter-owned provider state. The reader requires a
+stable, singly linked regular transcript, bounded to 4 MiB, 512 KiB per line,
+and 4,096 steps; a fresh-call directory snapshot admits at most 1,024 entries.
+Missing safe filesystem primitives, unsafe paths, changed or stale evidence,
+oversized traces, and unknown native formats leave the call failed. The reader
+is coupled to Antigravity's native transcript format. It ignores private
+`thinking` fields and does not copy the transcript into exchanges or story
+history. This completion check does not attest tool containment or permissions.
+
+Recovery adds no model retry and preserves the native error envelope in private
+exchange diagnostics. The recovered semantic result still undergoes ordinary
+correlation, domain, evidence, and authority validation. Native `SUCCESS` can
+also fail those checks. The live audit preserves a rejected answer and verifies
+any single explicit runtime-authorized correction separately; native success
+alone never establishes domain acceptance.
+
 ### Shared structured-output contract
 
-Codex and Antigravity receive byte-identical provider-neutral schema and
-payload semantics. Typed wire v7 has a closed required root object with
+Codex and Antigravity share provider-neutral result constraints and payload
+semantics. Typed wire v7 has a closed required root object with
 `correlation` and one closed `action`: SEARCH, READ, or ANSWER. ANSWER embeds
 the invocation-specific result object directly; there is no JSON-in-string
 result layer.
+
+Antigravity locally renders two equivalent constraints for its native
+function-schema conversion: `{"type":"null","enum":[null]}` becomes
+`{"type":"null"}`, and an integer singleton enum becomes equal `minimum` and
+`maximum` when the integer is within ±(2^53−1) and neither bound already exists.
+The renderer visits schema nodes without changing instance data. The original
+domain schema and Codex schema remain unchanged. The equivalence follows the
+JSON Schema definitions of [null](https://json-schema.org/understanding-json-schema/reference/null)
+and [numeric bounds](https://json-schema.org/understanding-json-schema/reference/numeric);
+Google's native [Schema representation](https://ai.google.dev/api/generate-content#Schema)
+declares enum entries as strings and numeric bounds as numbers.
+
+Before constructing an Antigravity `ProviderInvocation`, the backend uses the
+adapter-owned renderer. Request capture, schema-byte accounting, argv, and the
+required schema echo therefore use the actual rendered transport schema.
+Rendered bytes can grow: the captured canary changed from 1,314 to 1,326 bytes.
+The original schema size is neither transport byte identity nor a conservative
+bound. Shared accounting definitions and the exact payload remain unchanged.
+
+Antigravity's staged prompt also directs `finish` to receive the complete
+schema-selected outer object. For contextual calls, the specialist assessment
+belongs in `action.result` inside `correlation` and `action`. This rendering
+changes no common prompt file, existing workspace prompt, or Codex adapter or
+transport.
 
 OpenAI Structured Outputs requires an object root, every declared field in
 `required`, `additionalProperties: false` on closed objects, explicitly typed
 array items, and a union with `null` for nullable values. See the official
 [OpenAI Structured Outputs guide](https://developers.openai.com/api/docs/guides/structured-outputs).
-The common schema also stays within the subset documented for
-[Gemini structured output](https://ai.google.dev/gemini-api/docs/structured-output).
+The [Gemini structured-output guide](https://ai.google.dev/gemini-api/docs/structured-output)
+describes a separate schema surface; Antigravity's native function conversion
+also needs the local rendering above.
 Antigravity transport success additionally requires the root-object
 `structured_output` and exact `json_schema` echo described by its official
 [headless CLI guide](https://antigravity.google/docs/cli/headless/).
@@ -519,6 +593,93 @@ They cover retained adapter/provider component contracts, mixed providers,
 session/thread partitioning, resume, taint/restart, timeout and cancellation
 cleanup, fixed diagnostics, and confidentiality boundaries. Passing these
 component tests does not perform a live provider call.
+
+## Opt-in live conversation matrix
+
+The repository-owned [case inventory](../../tests/fixtures/antigravity_live_cases.json)
+and [runner](../../tests/antigravity_live_harness.py) declare 16 complete cases.
+The current routes are:
+
+| Cases | Actual route and required scenario |
+| --- | --- |
+| L01-PRO-HIGH-PTY | `gemini-3.1-pro-high`: shell consultation with two specialists, history/exchanges inspection, close and resume. |
+| L02-PRO-LOW-ONE | `gemini-3.1-pro-low`: one-specialist consultation and resume. |
+| L03-FLASH-THREE | `gemini-3.8-flash-low`: three-specialist consultation. |
+| L04-SONNET-ONE | `claude-sonnet-4-6`: one-specialist consultation and resume. |
+| L05-MIXED | Configured Codex Lead, Antigravity Pro High plot specialist, and Sonnet character specialist. |
+| L06A-QUESTION, L06B-CRITIQUE, L06C-RECOMMENDATION | Flash: each exact direct Lead outcome. |
+| L07-SEARCH-READ, L08-DECISIONS | Flash: observed SEARCH→READ→ANSWER; exact Reject/Revise, stale/forged decisions, and ordinary `Yes`. |
+| L09-SECOND-ROUND | Pro High: two actual rounds with separate confirmation. |
+| F01-REFERENCE-DRIFT, F02-LOST-AUTHORITY, F03-CANCELLATION, F04-FAILURE-RECOVERY | Flash: separately labeled drift, restart, cancellation, and completed-process exit fault injection. |
+| F05-DIAGNOSTICS-RECOVERY | Pro High: one unchanged completion plus five labeled mutations after real completion, including gated recovery. |
+
+Run from the repository root in an installed development environment with
+already authenticated providers and access to the configured models. The runner
+does not install or authenticate providers. It consumes real quota and creates
+disposable Git-backed writing workspaces in the private evidence directory.
+For a newly authorized run:
+
+```bash
+umask 077
+live_evidence="$(mktemp -d "${TMPDIR:-/tmp}/story-antigravity-live.XXXXXX")"
+STORY_RUN_LIVE=1 python -B -m tests.antigravity_live_harness \
+  --case all --evidence "$live_evidence"
+```
+
+Select one complete case by replacing `--case all` with, for example,
+`--case L06A-QUESTION`. Alternatively, with a fresh private directory, the
+unittest entry point for that case is:
+
+```bash
+STORY_RUN_LIVE=1 STORY_LIVE_EVIDENCE_DIR="$live_evidence" \
+  python -B -m unittest \
+  tests.test_antigravity_live_conversations.LiveConversationTests.test_l06a_question -v
+```
+
+Without `STORY_RUN_LIVE=1`, unittest skips live cases; a skip proves no live
+behavior. The standalone runner rejects missing opt-in. Optional
+`STORY_ANTIGRAVITY_EXECUTABLE` and `STORY_CODEX_EXECUTABLE` select executables.
+Missing steps, unexpected outcomes, missing cleanup, or exhausted budgets fail
+the case. The standalone matrix stops at the first failure, records remaining
+cases as unexecuted, and exits nonzero. A complete matrix also requires all five
+Lead outcomes and all four specialist assessment categories; one native result
+or one successful case is insufficient.
+
+The declared ceiling is 209 reserved physical calls and 45,000 seconds from
+the original budget epoch, with a 180-second native timeout and per-case limits
+in the inventory. Scenarios run sequentially; specialist concurrency comes only
+from runtime dispatch. Reservations precede process creation, so failed attempts
+remain charged. Preserve `call-budget.json`, the original epoch, and earlier
+attempt directories. A separately authorized attempt in a fresh evidence
+directory must retain the original ledger via `STORY_LIVE_BUDGET_ROOT` and record
+prior case reservations through `STORY_LIVE_PRIOR_CASE_SUBMISSIONS`; changing
+directories does not authorize a new budget. There is no automatic retry.
+
+Normal cases deliver actual provider results unchanged. Fault cases label each
+injected change separately; mutations after process completion preserve the
+actual native result as well as the injected change. F05's injected
+`ERROR` proves recovery against authentic completion evidence; it does not prove
+that a native malformed-finish error occurred naturally. Private captured
+regressions and the checked-in sanitized synthetic fixture are separate evidence
+classes. Keep raw story transcripts, provider thinking, local IDs, commands,
+credentials, and native bytes private; review even `*.sanitized.json` before
+sharing. See [exchange privacy](../operations/privacy-and-provider.md#agent-exchange-privacy).
+
+Fixture provisioning may execute the actual internal `StoryCommitService`.
+That setup does not cover the interactive artifact review, Apply, or Commit
+flow. One-round scenarios explicitly request a terminal synthesis; focused
+two-round coverage belongs to L09. Provider-neutral finalization when a proposed
+continuation exceeds the remaining budget remains separately tracked in
+Recommended Backlog #624; this matrix does not establish arbitrary conversation
+paths or resolve that issue.
+
+**Draft evidence snapshot (2026-09-08):** 101 unique deterministic tests pass.
+Three full live cases pass: L02-PRO-LOW-ONE, L06A-QUESTION, and L04-SONNET-ONE.
+The other thirteen remain pending. Earlier native 503/400 failures and incomplete
+model-branch attempts remain in private history; they are not successful cases.
+The final declared matrix result remains outstanding.
+
+### Provider-free local checks
 
 Local vendor checks are optional and still do not make a provider turn:
 

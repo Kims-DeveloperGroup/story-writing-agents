@@ -1,0 +1,9 @@
+{
+  "fixture_kind": "sanitized synthetic replacement of observed Antigravity ERROR-with-completed-finish format",
+  "sanitization": [
+    "All prompt/story text, identifiers, timestamps and numeric usage replaced with synthetic values.",
+    "No private thinking, local paths or live identifiers retained.",
+    "Outer result/schema ordering and native event/tool-call structure preserved."
+  ],
+  "original_provenance": "Original hashes and raw evidence retained privately by test owner; this fixture is derived, not a verbatim provider response."
+}

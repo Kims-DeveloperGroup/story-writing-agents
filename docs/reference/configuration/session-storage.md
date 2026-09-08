@@ -427,8 +427,10 @@ selection returns the fixed `not_found` storage failure without creating it.
 `AgentBackend` now automatically maps every physical structured provider call
 at its established and contextual seams into this store on a best-effort
 basis. It records the request before invocation, any exact valid
-`ProviderResult` immediately on return, and one closed outcome attempt. There
-is now a separate bare `/exchanges` integration. The controller resolves
+`ProviderResult` immediately on return, and one closed outcome attempt. A typed
+completed Antigravity failure can also supply a diagnostic response before its
+failure outcome without constructing a valid `ProviderResult`. There
+is a separate bare `/exchanges` integration. The controller resolves
 conversation/debate subjects outside this store, selects exact inventory
 identities, and passes one immutable session/scope/agent snapshot to the
 base-installed isolated viewer. The store still has no subject, terminal,
@@ -479,7 +481,7 @@ or enforce record grouping, outcome transitions, provider behavior, or a
 required `no_response` body.
 
 Automatic capture places one compact key-sorted JSON value inside `content`.
-Expanded examples of the three nested shapes are:
+The following are separate ordinary request, response, and outcome values:
 
 ```json
 {
@@ -488,6 +490,9 @@ Expanded examples of the three nested shapes are:
   "prior_thread_id": null,
   "schema": {}
 }
+```
+
+```json
 {
   "actual_transport_utf8_bytes": null,
   "response_text": "provider text",
@@ -498,6 +503,9 @@ Expanded examples of the three nested shapes are:
     "output_tokens": 7
   }
 }
+```
+
+```json
 {
   "code": "accepted",
   "outcome": "accepted"
@@ -505,10 +513,48 @@ Expanded examples of the three nested shapes are:
 ```
 
 The request fields are exactly `call_kind`, `payload`, `prior_thread_id`, and
-`schema`. The response fields are exactly `actual_transport_utf8_bytes`,
+`schema`. A returned response has `actual_transport_utf8_bytes`,
 `response_text`, `thread_id`, and nullable `usage`; non-null usage has exactly
-`cached_input_tokens`, `input_tokens`, and `output_tokens`. Outcome values are
-exactly `accepted`, `rejected`, `provider_failure`, `cancelled`, and
+`cached_input_tokens`, `input_tokens`, and `output_tokens`. These four response
+fields remain unchanged when no diagnostic is supplied. An optional
+`response_diagnostic` adds the completed native process's integer `exit_code`
+and `stdout`/`stderr` stream objects. Each stream has exactly `encoding` and
+`data`: `utf-8` with strict decoded text, or `base64` when the original bytes
+are not valid UTF-8. Both encodings preserve the original stream bytes before
+the storage prefix bound is applied.
+
+A recovered Antigravity native `ERROR` includes that diagnostic alongside its
+returned response fields. A completed Antigravity failure instead uses exactly
+`provider_failure: true` and `response_diagnostic`, as in this synthetic example:
+
+```json
+{
+  "provider_failure": true,
+  "response_diagnostic": {
+    "exit_code": 1,
+    "stderr": {"data": "/w==", "encoding": "base64"},
+    "stdout": {"data": "", "encoding": "utf-8"}
+  }
+}
+```
+
+The corresponding terminal attempt has `outcome: "provider_failure"` and a
+fixed code such as `provider_invocation_failed`. Diagnostic bytes never become
+a semantic result or retry authority. Not every failure supplies them: failures
+before a completed process, timeouts, and cancellations provide no partial bytes
+through the shared runner, so automatic capture invents no response.
+
+These nested values do not change the outer schema-v1 field set, the 262,144-byte
+content prefix bound, or rotation and retention below. The bound covers the
+complete encoded `content`, so truncation can leave incomplete nested JSON or
+base64; inspect full/retained counts, `content_truncated`, and `content_sha256`
+before decoding a stream. Encoding is not redaction. The separate
+`provider_error_responses` store still accepts only returned bodies rejected by
+shared decoding, excluding pre-result native failures. See
+[agent-exchange privacy](../../operations/privacy-and-provider.md#agent-exchange-privacy)
+and the [recovery gates](../../guides/antigravity.md#recover-a-completed-native-error).
+
+Outcome values are exactly `accepted`, `rejected`, `provider_failure`, `cancelled`, and
 `post_response_runtime_failure`. Their permitted fixed codes are:
 
 | Outcome | Code |
@@ -581,8 +627,10 @@ digest. It does not return content, a path, or a writable storage object.
 Automatic capture treats every append as fail-open. Its lifecycle state moves
 before each append, catches every serialization/storage failure, and never
 retries. A request failure disables that exchange; a later failure can leave a
-request without a response or outcome. Gaps, absent exchange IDs, and cleanup-
-only storage failures are therefore not proof that no provider call occurred.
+request without a response or outcome. A completed-failure diagnostic response
+is attempted at most once; failure of its serialization or append still permits
+the fixed terminal attempt. Gaps, absent exchange IDs, and cleanup-only storage
+failures are therefore not proof that no provider call occurred.
 
 All store files are verified owner-only regular single-link leaves with mode
 `0600`; the exchange and session directories are mode `0700`. The independent

@@ -43,6 +43,7 @@ from story_writing_agents.provider_adapter import (
     ProviderInvocation,
     ProviderInvocationError,
     ProviderResult,
+    ProviderResponseDiagnostic,
     provider_failure_accounting,
 )
 from story_writing_agents.provider_process import ProcessRequest, ProcessResult
@@ -122,6 +123,126 @@ _NO_FOLLOW_DIRECTORY_HARDENING = "chmod" in {
     and bool(getattr(os, "O_DIRECTORY", 0))
     and hasattr(os, "fchmod")
 )
+
+
+
+def _expected_antigravity_role(value: bytes, *, contextual: bool = True) -> bytes:
+    value = value.replace(
+        b"invoke another agent, provider subagent, tool, or model.",
+        b"invoke another agent, provider subagent, or model.",
+    ).replace(
+        b"Return only the one invocation-specific structured result requested by the\nruntime.",
+        b"Submit the invocation-specific structured result requested by the runtime\n"
+        b"through finish, using the complete supplied output schema.",
+    )
+    if contextual:
+        value = value.replace(
+            b"Return exactly one JSON object with this shape and no additional fields:",
+            b"The specialist assessment in action.result has exactly this shape and\n"
+            b"no additional fields. Submit the complete schema-selected outer object\n"
+            b"with correlation and action through finish; do not submit this inner\n"
+            b"assessment alone:",
+        )
+    return value
+
+
+def _singleton_correlation_schema():
+    """Synthetic public shape from the native compatibility regression."""
+    return {
+        "type": "object",
+        "properties": {
+            "round_number": {"type": "null", "enum": [None]},
+            "invocation_ordinal": {"type": "integer", "enum": [1]},
+            "attempt": {"type": "integer", "enum": [1]},
+        },
+    }
+
+
+class AntigravitySchemaRenderingTests(unittest.TestCase):
+    """Verify equivalent schema transport without optional dependencies."""
+
+    def test_nested_schema_positions_render_exact_null_and_integer_singletons(self):
+        leaf = {"type": "integer", "enum": [1], "description": "retained"}
+        expected = {"type": "integer", "minimum": 1, "maximum": 1,
+                    "description": "retained"}
+        maps = ("properties", "patternProperties", "$defs", "definitions",
+                "dependentSchemas", "dependencies")
+        arrays = ("allOf", "anyOf", "oneOf", "prefixItems", "items")
+        values = ("additionalProperties", "additionalItems", "unevaluatedProperties",
+                  "unevaluatedItems", "items", "contains", "propertyNames", "not",
+                  "if", "then", "else", "contentSchema")
+        for keyword in maps:
+            with self.subTest(keyword=keyword):
+                self.assertEqual(AntigravityAdapter.native_output_schema(
+                    {keyword: {"x": leaf, "boolean": True, "dependency": ["name"]}}),
+                    {keyword: {"x": expected, "boolean": True, "dependency": ["name"]}})
+        for keyword in arrays:
+            with self.subTest(keyword=keyword):
+                self.assertEqual(AntigravityAdapter.native_output_schema(
+                    {keyword: [leaf, False]}), {keyword: [expected, False]})
+        for keyword in values:
+            with self.subTest(keyword=keyword):
+                self.assertEqual(AntigravityAdapter.native_output_schema(
+                    {keyword: leaf}), {keyword: expected})
+        nested = {"properties": {"action": {"allOf": [_singleton_correlation_schema()]}}}
+        result = AntigravityAdapter.native_output_schema(nested)
+        properties = result["properties"]["action"]["allOf"][0]["properties"]
+        self.assertEqual(properties["round_number"], {"type": "null"})
+        self.assertEqual(properties["attempt"], {"type": "integer", "minimum": 1, "maximum": 1})
+        self.assertEqual(len(canonical_provider_json(result)) - len(canonical_provider_json(nested)), 12)
+
+    def test_annotations_and_non_target_constraints_remain_byte_exact(self):
+        targets = {"type": "integer", "enum": [1]}
+        annotations = {name: targets for name in ("const", "default", "examples", "custom")}
+        annotations["enum"] = [targets]
+        self.assertEqual(canonical_provider_json(AntigravityAdapter.native_output_schema(annotations)),
+                         canonical_provider_json(annotations))
+        cases = [
+            {"type": "integer", "enum": value}
+            for value in ([], [1, 2], [None, 1], [True], [1.0], [2**53], [-2**53])
+        ]
+        cases += [{"type": kind, "enum": [1]} for kind in ("number", "string", ["integer", "null"])]
+        cases += [{"type": "integer", "enum": [1], bound: 0}
+                  for bound in ("minimum", "maximum")]
+        cases += [{"type": "null", "enum": [False]}, {"enum": [1]}]
+        for node in cases:
+            with self.subTest(node=node):
+                self.assertEqual(canonical_provider_json(AntigravityAdapter.native_output_schema(node)),
+                                 canonical_provider_json(node))
+
+    def test_rendering_is_deeply_immutable_idempotent_and_order_preserving(self):
+        shared = {"description": "first", "enum": [2], "type": "integer", "title": "last"}
+        original = {"properties": {"a": shared, "b": shared}, "default": shared}
+        before = canonical_provider_json(original)
+        rendered = AntigravityAdapter.native_output_schema(original)
+        self.assertEqual(canonical_provider_json(original), before)
+        self.assertEqual(list(rendered["properties"]["a"]),
+                         ["description", "minimum", "maximum", "type", "title"])
+        self.assertEqual(canonical_provider_json(AntigravityAdapter.native_output_schema(rendered)),
+                         canonical_provider_json(rendered))
+        rendered["properties"]["a"]["title"] = "changed"
+        rendered["default"]["enum"].append(3)
+        self.assertEqual(canonical_provider_json(original), before)
+        self.assertEqual(rendered["properties"]["b"]["title"], "last")
+        no_target = {"title": "ordered", "additionalProperties": False, "type": "object"}
+        self.assertEqual(canonical_provider_json(AntigravityAdapter.native_output_schema(no_target)),
+                         canonical_provider_json(no_target))
+
+    def test_safe_integer_edges_and_original_constraint_equivalence(self):
+        for number in (0, -1, 1, -(2**53 - 1), 2**53 - 1):
+            original = {"type": "integer", "enum": [number], "exclusiveMinimum": number - 1}
+            lowered = AntigravityAdapter.native_output_schema(original)
+            self.assertEqual(lowered, {"type": "integer", "minimum": number,
+                                      "maximum": number, "exclusiveMinimum": number - 1})
+            for candidate in (number - 1, number, number + 1, None, True, str(number), number + .5):
+                # Exact typed runtime scalar contract; no undeclared schema validator.
+                original_accepts = type(candidate) is int and candidate == number
+                lowered_accepts = (type(candidate) is int and lowered["minimum"] <= candidate
+                                   <= lowered["maximum"] and candidate > lowered["exclusiveMinimum"])
+                self.assertEqual(original_accepts, lowered_accepts)
+        impossible = {"type": "integer", "enum": [1], "exclusiveMinimum": 1}
+        self.assertEqual(AntigravityAdapter.native_output_schema(impossible),
+                         {"type": "integer", "minimum": 1, "maximum": 1, "exclusiveMinimum": 1})
 
 
 class AntigravityAdapterTests(unittest.IsolatedAsyncioTestCase):
@@ -477,7 +598,7 @@ class AntigravityAdapterTests(unittest.IsolatedAsyncioTestCase):
         original_clause = "invoke another agent, provider subagent, tool, or model."
         staged_clause = "invoke another agent, provider subagent, or model."
         self.assertIn(original_clause, original_prompt)
-        self.assertIn(original_prompt.replace(original_clause, staged_clause), rules)
+        self.assertIn(_expected_antigravity_role(original_prompt.encode(), contextual=False).decode(), rules)
         self.assertNotIn(original_clause, rules)
         self.assertEqual(self.definition.system_prompt_file.read_text(), original_prompt)
         self.assertIn(self.definition.persona_file.read_text(), rules)
@@ -489,7 +610,7 @@ class AntigravityAdapterTests(unittest.IsolatedAsyncioTestCase):
             rules,
         )
         self.assertIn("Do not use shell commands, web search, plugins", rules)
-        self.assertIn("Return only the JSON object required", rules)
+        self.assertIn("by calling finish with that complete object as its arguments.", rules)
         self.assertFalse((state_root / "sessions").exists())
 
         invalid_definitions = (
@@ -539,11 +660,22 @@ class AntigravityAdapterTests(unittest.IsolatedAsyncioTestCase):
             hashlib.sha256(codex_bytes).hexdigest(),
             "e39d65811afa29f6c127d10386e4cbcf570b7da2d257071725e42348904336e9",
         )
+        expected_role = _expected_antigravity_role(captured_prompt)
+        original_provider = codex_bytes[-663:-1]
+        expected_provider = original_provider.replace(
+            b"JSON only.", b"Submit JSON through finish."
+        ).replace(
+            b"No tool, subagent, or CoT.", b"No subagent or CoT."
+        ).replace(
+            b"Return exactly the schema-selected root object with correlation and action.",
+            b"Call finish with exactly the schema-selected root object as its arguments, including correlation and action.",
+        )
+        expected_provider = expected_provider.replace(
+            b"directly in result", b"directly in action.result"
+        )
         self.assertEqual(
             antigravity_bytes,
-            codex_bytes.replace(original_role_clause, staged_role_clause).replace(
-                original_constraint, staged_constraint
-            ),
+            codex_bytes.replace(captured_prompt, expected_role).replace(original_provider, expected_provider),
         )
         self.assertIn(captured_prompt, codex_bytes)
         self.assertIn(original_constraint, codex_bytes)
@@ -553,8 +685,8 @@ class AntigravityAdapterTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(definition.system_prompt_file.content, captured_prompt)
         self.assertEqual(CodexAdapter._definition_file(definition), (codex_bytes, codex_components))
         deltas = {
-            ContextComponentKind.ROLE_SYSTEM_PROMPT: len(original_role_clause) - len(staged_role_clause),
-            ContextComponentKind.PROVIDER_CONSTRAINTS: len(original_constraint) - len(staged_constraint),
+            ContextComponentKind.ROLE_SYSTEM_PROMPT: len(captured_prompt) - len(expected_role),
+            ContextComponentKind.PROVIDER_CONSTRAINTS: len(original_provider) - len(expected_provider),
         }
         self.assertEqual(
             tuple(item.serialized_utf8_bytes for item in codex_components),
@@ -618,7 +750,7 @@ class AntigravityAdapterTests(unittest.IsolatedAsyncioTestCase):
             tuple(item.serialized_utf8_bytes for item in codex_sample_components),
             (4, 5852, 251, 10, 662),
         )
-        self.assertEqual(antigravity_sample, codex_sample.replace(original_constraint, staged_constraint))
+        self.assertEqual(antigravity_sample, _expected_antigravity_role(codex_sample).replace(original_provider, expected_provider))
         self.assertEqual(len(codex_sample), sum(item.serialized_utf8_bytes for item in codex_sample_components))
         self.assertEqual(len(antigravity_sample), sum(item.serialized_utf8_bytes for item in antigravity_sample_components))
         for reference in self.definition.context_document_files:
@@ -3048,6 +3180,332 @@ class AntigravityAdapterTests(unittest.IsolatedAsyncioTestCase):
                 capability_run.assert_called_once()
                 cleanup.assert_called_once_with(probe, ignore_errors=True)
 
+
+    async def test_rendered_schema_echo_is_exact_for_success_and_recovered_error(self):
+        fixtures = Path(__file__).parent / "fixtures/antigravity_recovered_finish"
+        schema = _singleton_correlation_schema()
+        lowered = AntigravityAdapter.native_output_schema(schema)
+        for status in ("SUCCESS", "ERROR"):
+            with self.subTest(status=status):
+                adapter = self.adapter("rendered-" + status.lower())
+                binding = adapter.bind(self.definition)
+                terminal = json.loads((fixtures / "terminal.json").read_text())
+                terminal["status"] = status
+                terminal["json_schema"] = lowered
+                invocation = ProviderInvocation(
+                    session_id="rendered-echo", schema=schema,
+                    payload=json.loads((fixtures / "request.json").read_text()), thread_id=None)
+                async def completed(request, **_kwargs):
+                    self.assertEqual(request.command[request.command.index("--json-schema") + 1].encode(),
+                                     canonical_provider_json(lowered))
+                    provider = Path(request.command[1].split("=", 1)[1])
+                    trace = provider / "antigravity-cli/brain/synthetic-thread/.system_generated/logs/transcript_full.jsonl"
+                    trace.parent.mkdir(parents=True)
+                    trace.write_bytes((fixtures / "transcript.jsonl").read_bytes())
+                    return ProcessResult(stdout=canonical_provider_json(terminal), stderr=b"warning", returncode=0)
+                with mock.patch("story_writing_agents.antigravity_adapter.run_process", new=completed):
+                    result = await adapter.invoke(binding, invocation)
+                self.assertEqual(json.loads(result.response_text), terminal["structured_output"])
+                if status == "ERROR":
+                    self.assertEqual(result.response_diagnostic.stdout, canonical_provider_json(terminal))
+                self.assertEqual(schema, _singleton_correlation_schema())
+
+    async def test_unrendered_or_mismatched_echo_retains_completed_failure_bytes(self):
+        schema = _singleton_correlation_schema()
+        lowered = AntigravityAdapter.native_output_schema(schema)
+        wrong_bound = json.loads(canonical_provider_json(lowered))
+        wrong_bound["properties"]["attempt"]["maximum"] = 2
+        reordered = dict(reversed(list(lowered.items())))
+        for index, echoed in enumerate((schema, wrong_bound, reordered)):
+            with self.subTest(index=index):
+                adapter = self.adapter("bad-echo-" + str(index))
+                binding = adapter.bind(self.definition)
+                invocation = ProviderInvocation(session_id="echo-failure", schema=schema,
+                                                payload={"q": "synthetic"}, thread_id=None)
+                stdout = _json_result("echo-thread", structured_output={}, json_schema=echoed)
+                with mock.patch("story_writing_agents.antigravity_adapter.run_process",
+                                new=mock.AsyncMock(return_value=ProcessResult(
+                                    stdout=stdout, stderr=b"retained", returncode=0))):
+                    with self.assertRaises(ProviderInvocationError) as caught:
+                        await adapter.invoke(binding, invocation)
+                self.assertEqual(caught.exception.response_diagnostic,
+                                 ProviderResponseDiagnostic(stdout, b"retained", 0))
+
+    async def test_direct_invocation_preserves_prepared_payload_and_failure_facts(self):
+        adapter = self.adapter("direct-schema")
+        binding = adapter.bind(self.definition)
+        schema = AntigravityAdapter.native_output_schema(_singleton_correlation_schema())
+        payload = {"q": "captured", "nested": [1]}
+        invocation = ProviderInvocation(session_id="direct", schema=schema, payload=payload,
+                                        thread_id=None, binding_components=binding.binding_components)
+        original_payload = invocation.payload_json
+        original_preparation = invocation.call_accounting
+        payload["q"] = "later mutation"
+        payload["nested"].append(2)
+        async def failed(request, **_kwargs):
+            self.assertEqual(request.command[request.command.index("--print") + 1].encode(), original_payload)
+            return ProcessResult(stdout=b"completed failure", stderr=b"diagnostic", returncode=7)
+        with mock.patch("story_writing_agents.antigravity_adapter.run_process", new=failed):
+            with self.assertRaises(ProviderInvocationError) as caught:
+                await adapter.invoke(binding, invocation)
+        self.assertIs(invocation.call_accounting, original_preparation)
+        self.assertEqual(invocation.payload_json, original_payload)
+        self.assertEqual(invocation.payload_accounting.schema_utf8_bytes, len(canonical_provider_json(schema)))
+        facts = provider_failure_accounting(caught.exception)
+        self.assertIs(facts.state, ProviderCallState.SUBMITTED)
+        self.assertEqual(facts.actual_transport_utf8_bytes, len(original_payload))
+        self.assertIsNone(facts.usage)
+        self.assertEqual(caught.exception.response_diagnostic,
+                         ProviderResponseDiagnostic(b"completed failure", b"diagnostic", 7))
+
+    async def test_completed_failures_retain_exact_native_diagnostic_and_accounting(self) -> None:
+        adapter = self.adapter('diagnostic-state')
+        binding = adapter.bind(self.definition)
+        invocation = ProviderInvocation(session_id='diagnostic', schema={'type': 'object'}, payload={'q': 'synthetic'}, thread_id=None)
+        for label, stdout, code in (('exit', b'raw output', 7), ('utf8', b'\xff', 0), ('json', b'{', 0), ('status', b'{"status":"ERROR"}', 0), ('schema', _json_result('thread', structured_output={}, json_schema={}), 0), ('identity', _json_result('../bad', structured_output={}), 0)):
+            with self.subTest(label=label), mock.patch('story_writing_agents.antigravity_adapter.run_process', new=mock.AsyncMock(return_value=ProcessResult(stdout=stdout, stderr=b'private stderr', returncode=code))), self.assertRaises(ProviderInvocationError) as caught:
+                await adapter.invoke(binding, invocation)
+            error = caught.exception
+            self.assertEqual(error.response_diagnostic, ProviderResponseDiagnostic(stdout, b'private stderr', code))
+            self.assertNotIn('private stderr', str(error))
+            self.assertNotIn('private stderr', repr(error.response_diagnostic))
+            self.assertTrue(error.taint_existing_thread)
+            self.assertIs(provider_failure_accounting(error).state, ProviderCallState.SUBMITTED)
+            self.assertEqual(provider_failure_accounting(error).actual_transport_utf8_bytes, len(invocation.payload_json))
+
+    async def test_recovered_invoke_uses_actual_current_trace_and_retains_error_envelope(self) -> None:
+        adapter = self.adapter('recovered-invoke')
+        binding = adapter.bind(self.definition)
+        fixtures = Path(__file__).parent / 'fixtures/antigravity_recovered_finish'
+        terminal = json.loads((fixtures / 'terminal.json').read_text())
+        invocation = ProviderInvocation(session_id='recovery', schema=terminal['json_schema'], payload=json.loads((fixtures / 'request.json').read_text()), thread_id=None)
+
+        async def completed(request, **_kwargs):
+            provider = Path(request.command[1].split('=', 1)[1])
+            trace = provider / 'antigravity-cli/brain/synthetic-thread/.system_generated/logs/transcript_full.jsonl'
+            trace.parent.mkdir(parents=True)
+            trace.write_bytes((fixtures / 'transcript.jsonl').read_bytes())
+            return ProcessResult(stdout=canonical_provider_json(terminal), stderr=b'native warning', returncode=0)
+        with mock.patch('story_writing_agents.antigravity_adapter.run_process', new=completed):
+            result = await adapter.invoke(binding, invocation)
+        self.assertEqual(json.loads(result.response_text), terminal['structured_output'])
+        self.assertEqual(result.response_diagnostic.stdout, canonical_provider_json(terminal))
+        self.assertEqual(result.actual_transport_utf8_bytes, len(invocation.payload_json))
+
+    async def test_unavailable_process_output_is_not_invented(self) -> None:
+        from story_writing_agents.provider_process import ProcessTimedOut, ProcessExecutableNotFound
+        adapter = self.adapter('missing-output')
+        binding = adapter.bind(self.definition)
+        invocation = ProviderInvocation(session_id='missing', schema={'type': 'object'}, payload={'q': 'synthetic'}, thread_id=None)
+        for failure in (ProcessTimedOut(), ProcessExecutableNotFound(), asyncio.CancelledError()):
+            with self.subTest(type=type(failure).__name__), mock.patch('story_writing_agents.antigravity_adapter.run_process', new=mock.AsyncMock(side_effect=failure)), self.assertRaises((ProviderInvocationError, asyncio.CancelledError)) as caught:
+                await adapter.invoke(binding, invocation)
+            self.assertIsNone(getattr(caught.exception, 'response_diagnostic', None))
+
+
+class AntigravityRecoveryEvidenceTests(unittest.TestCase):
+    """Exercise real no-follow native evidence reads with synthetic public facts."""
+
+    def setUp(self) -> None:
+        self.temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temporary.cleanup)
+        self.root = Path(self.temporary.name)
+        self.adapter = AntigravityAdapter(executable='unused', timeout_seconds=1, state_root=self.root, explicit_model=None, explicit_effort=None)
+        self.provider = self.root / 'provider'
+        self.provider.mkdir()
+        fixtures = Path(__file__).parent / 'fixtures/antigravity_recovered_finish'
+        self.terminal = json.loads((fixtures / 'terminal.json').read_text())
+        self.prompt = (fixtures / 'request.json').read_text()
+        self.steps = [json.loads(line) for line in (fixtures / 'transcript.jsonl').read_text().splitlines()]
+        self.trace = self.provider / 'antigravity-cli/brain/synthetic-thread/.system_generated/logs/transcript_full.jsonl'
+
+    def write_trace(self, steps=None, *, content=None) -> None:
+        self.trace.parent.mkdir(parents=True, exist_ok=True)
+        self.trace.write_bytes(content if content is not None else b''.join((canonical_provider_json(step) + b'\n' for step in (self.steps if steps is None else steps))))
+
+    def accepts(self, baseline, *, terminal=None):
+        value = self.terminal if terminal is None else terminal
+        diagnostic = ProviderResponseDiagnostic(canonical_provider_json(value), b'diagnostic', 0)
+        return self.adapter._provider_result(diagnostic.stdout, expected_thread_id=baseline.thread_id if baseline else None, expected_schema=self.terminal['json_schema'], response_diagnostic=diagnostic, completion_check=lambda thread, output, error: self.adapter._has_current_finish(self.provider, baseline, thread, self.prompt, output, error))
+
+    def test_captured_shape_and_clean_current_finish_recover(self) -> None:
+        for clean in (False, True):
+            with self.subTest(clean=clean):
+                if self.trace.exists():
+                    self.trace.unlink()
+                    import shutil
+                    shutil.rmtree(self.trace.parents[2])
+                baseline = self.adapter._native_recovery_baseline(self.provider, None)
+                steps = self.steps if not clean else [self.steps[0], self.steps[-2], self.steps[-1]]
+                steps = json.loads(json.dumps(steps))
+                for index, step in enumerate(steps):
+                    step['step_index'] = index
+                self.write_trace(steps)
+                result = self.accepts(baseline)
+                self.assertEqual(json.loads(result.response_text), self.terminal['structured_output'])
+                self.assertIsNotNone(result.response_diagnostic)
+
+    def test_reordered_finish_arguments_match_but_scalar_types_do_not(self) -> None:
+        baseline = self.adapter._native_recovery_baseline(self.provider, None)
+        args = self.steps[-2]['tool_calls'][0]['args']
+        self.steps[-2]['tool_calls'][0]['args'] = dict(reversed(list(args.items())))
+        self.write_trace()
+        self.assertIsNotNone(self.accepts(baseline))
+        for expected, actual in ((True, 1), (1, True), (1, 1.0), ('1', 1)):
+            with self.subTest(expected=expected, actual=actual):
+                terminal = json.loads(json.dumps(self.terminal))
+                terminal['structured_output']['action']['result']['typed'] = expected
+                self.steps[-2]['tool_calls'][0]['args']['action']['result']['typed'] = actual
+                self.write_trace()
+                with self.assertRaises(ProviderInvocationError):
+                    self.accepts(baseline, terminal=terminal)
+
+    def test_resume_requires_unchanged_prefix_and_new_matching_request(self) -> None:
+        self.write_trace()
+        baseline = self.adapter._native_recovery_baseline(self.provider, 'synthetic-thread')
+        with self.assertRaises(ProviderInvocationError):
+            self.accepts(baseline)
+        resumed = json.loads(json.dumps(self.steps))
+        for step in resumed:
+            step['step_index'] += len(self.steps)
+        self.write_trace(self.steps + resumed)
+        self.assertIsNotNone(self.accepts(baseline))
+        self.steps[0]['content'] += 'changed'
+        self.write_trace(self.steps + resumed)
+        with self.assertRaises(ProviderInvocationError):
+            self.accepts(baseline)
+
+    def test_missing_preexisting_wrong_request_or_replaced_directory_reject(self) -> None:
+        baseline = self.adapter._native_recovery_baseline(self.provider, None)
+        with self.assertRaises(ProviderInvocationError):
+            self.accepts(baseline)
+        self.write_trace()
+        preexisting = self.adapter._native_recovery_baseline(self.provider, None)
+        with self.assertRaises(ProviderInvocationError):
+            self.accepts(preexisting)
+        self.steps[0]['content'] = '<USER_REQUEST>\nother\n</USER_REQUEST>'
+        self.write_trace()
+        with self.assertRaises(ProviderInvocationError):
+            self.accepts(baseline)
+        self.provider.rename(self.root / 'old-provider')
+        self.provider.mkdir()
+        self.write_trace()
+        with self.assertRaises(ProviderInvocationError):
+            self.accepts(baseline)
+
+    def test_unsafe_native_paths_and_bounded_trace_reject(self) -> None:
+        import story_writing_agents.antigravity_adapter as module
+        for kind in ('symlink', 'hardlink', 'fifo', 'directory', 'oversized', 'too_many_steps', 'long_line'):
+            with self.subTest(kind=kind):
+                if self.trace.exists() or self.trace.is_symlink():
+                    if self.trace.is_dir():
+                        self.trace.rmdir()
+                    else:
+                        self.trace.unlink()
+                baseline = self.adapter._native_recovery_baseline(self.provider, None)
+                self.write_trace()
+                baseline = replace(baseline, conversation_ids=frozenset())
+                if kind == 'oversized':
+                    with mock.patch.object(module, '_NATIVE_TRACE_MAX_BYTES', 10):
+                        with self.assertRaises(ProviderInvocationError):
+                            self.accepts(baseline)
+                elif kind == 'too_many_steps':
+                    with mock.patch.object(module, '_NATIVE_TRACE_MAX_STEPS', 2):
+                        with self.assertRaises(ProviderInvocationError):
+                            self.accepts(baseline)
+                elif kind == 'long_line':
+                    with mock.patch.object(module, '_NATIVE_TRACE_MAX_LINE_BYTES', 8):
+                        with self.assertRaises(ProviderInvocationError):
+                            self.accepts(baseline)
+                else:
+                    self.trace.unlink()
+                    outside = self.root / ('outside-' + kind)
+                    if kind == 'symlink':
+                        outside.write_text('outside')
+                        self.trace.symlink_to(outside)
+                    elif kind == 'hardlink':
+                        outside.write_text('outside')
+                        os.link(outside, self.trace)
+                    elif kind == 'fifo':
+                        os.mkfifo(self.trace)
+                    else:
+                        self.trace.mkdir()
+                    with self.assertRaises(ProviderInvocationError):
+                        self.accepts(baseline)
+                    if outside.exists():
+                        self.assertEqual(outside.read_text(), 'outside')
+        if self.trace.exists() or self.trace.is_symlink():
+            if self.trace.is_dir():
+                self.trace.rmdir()
+            else:
+                self.trace.unlink()
+        self.write_trace()
+        brain = self.provider / 'antigravity-cli/brain'
+        with mock.patch.object(module, '_NATIVE_SNAPSHOT_MAX_ENTRIES', 0):
+            self.assertIsNone(self.adapter._native_recovery_baseline(self.provider, None))
+        baseline = self.adapter._native_recovery_baseline(self.provider, None)
+        baseline = replace(baseline, conversation_ids=frozenset())
+        real_read = os.read
+        mutated = False
+
+        def changing_read(fd, length):
+            nonlocal mutated
+            value = real_read(fd, length)
+            if not mutated and value:
+                mutated = True
+                with self.trace.open('ab') as stream:
+                    stream.write(b'\n')
+            return value
+        with mock.patch.object(module.os, 'read', side_effect=changing_read):
+            with self.assertRaises(ProviderInvocationError):
+                self.accepts(baseline)
+        self.assertTrue(mutated)
+        self.write_trace()
+        original_bytes = self.trace.read_bytes()
+        outside_brain = self.root / 'outside-brain'
+        brain.rename(outside_brain)
+        brain.symlink_to(outside_brain, target_is_directory=True)
+        with self.assertRaises(ProviderInvocationError):
+            self.accepts(baseline)
+        outside_trace = outside_brain / 'synthetic-thread/.system_generated/logs/transcript_full.jsonl'
+        self.assertEqual(outside_trace.read_bytes(), original_bytes)
+
+    def test_incomplete_ambiguous_nonmonotonic_and_forged_native_steps_reject(self) -> None:
+        baseline = self.adapter._native_recovery_baseline(self.provider, None)
+        original = json.loads(json.dumps(self.steps))
+        variants = []
+
+        def changed(index, key, value):
+            steps = json.loads(json.dumps(original))
+            steps[index][key] = value
+            return steps
+        variants += [original[:-1], original + [dict(original[-1], step_index=7)], changed(0, 'step_index', True), changed(2, 'source', 'MODEL'), changed(-2, 'status', 'ACTIVE'), changed(-1, 'type', 'ERROR_MESSAGE'), changed(2, 'content', 'Error: unrelated failure'), changed(4, 'content', original[2]['content']), changed(4, 'content', original[4]['content'][:-1] + '1'), changed(-1, 'created_at', '2025-01-01T00:00:00Z'), changed(-1, 'content', 'Task is complete.'), changed(-2, 'tool_calls', [{'name': 'search', 'args': {}}]), changed(-2, 'tool_calls', [{'name': 'finish', 'args': {}}])]
+        for index, steps in enumerate(variants):
+            with self.subTest(index=index):
+                self.write_trace(steps)
+                with self.assertRaises(ProviderInvocationError):
+                    self.accepts(baseline)
+        for content in (b'\xff\n', b'{}\n{}', b'{"step_index":0,"step_index":0}\n', b'{"step_index":NaN}\n'):
+            with self.subTest(content=content):
+                self.write_trace(content=content)
+                with self.assertRaises(ProviderInvocationError):
+                    self.accepts(baseline)
+
+    def test_status_identity_schema_and_diagnostic_requirements_remain_strict(self) -> None:
+        baseline = self.adapter._native_recovery_baseline(self.provider, None)
+        self.write_trace()
+        for key, value in (('status', 'FAILED'), ('error', 'unrelated'), ('error', self.terminal['error'][:-1] + '9'), ('conversation_id', '../escape'), ('structured_output', []), ('json_schema', {})):
+            with self.subTest(key=key, value=value):
+                terminal = dict(self.terminal, **{key: value})
+                with self.assertRaises(ProviderInvocationError):
+                    self.accepts(baseline, terminal=terminal)
+        reordered = dict(self.terminal, json_schema=dict(reversed(list(self.terminal['json_schema'].items()))))
+        with self.assertRaises(ProviderInvocationError):
+            self.accepts(baseline, terminal=reordered)
+        with self.assertRaises(ProviderInvocationError):
+            self.accepts(None)
+        success = dict(self.terminal, status='SUCCESS')
+        self.assertIsNone(self.accepts(None, terminal=success).response_diagnostic)
 
 if __name__ == "__main__":
     unittest.main()

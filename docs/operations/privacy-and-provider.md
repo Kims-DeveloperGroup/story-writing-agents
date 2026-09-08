@@ -600,13 +600,20 @@ for the user-visible lifecycle and limits.
 ## Provider disclosure
 
 A built-in substantive call uses typed agent-context wire v7. Codex and
-Antigravity receive the same closed response schema and payload semantics: the
+Antigravity share the same closed domain constraints and payload semantics: the
 required root fields are `correlation` and `action`, and `action` is one closed
 SEARCH, READ, or ANSWER object. ANSWER embeds its invocation-specific result
 object directly and names only successful supporting READ handles in
 `used_handles`, or `[]` when none was used. There is no JSON-in-string layer,
 compatibility decoder, or migration. Typed structure does not redact or reduce
 the sensitivity of action data.
+
+Antigravity uses an equivalent local rendering of singleton null/integer enum
+constraints for native function-schema conversion. Its `ProviderInvocation`,
+request capture, schema-byte accounting, argv, and required echo contain the
+actual rendered schema; those bytes can differ from and exceed the unchanged
+domain/Codex schema. Payload bytes and shared accounting definitions remain
+unchanged. See the [rendering rules](../guides/antigravity.md#shared-structured-output-contract).
 
 Stable binding material contains role/persona/language/behavior/protocol, not
 mutable core bytes. Initial contextual input can expose the current command,
@@ -696,9 +703,11 @@ anonymous; identifiers and operational timing can still be sensitive.
 There is no field for story prose, prompts, replies, provider payloads,
 arbitrary details, or caller-supplied messages. Exception projection does not
 read exception text or representation, filenames, source text, locals,
-arguments, notes, causes, or contexts. The concrete backend continues to drain
-and discard nonzero provider stderr without decoding it, so that stream is not
-available to this log.
+arguments, notes, causes, or contexts. Provider stdout/stderr and typed native
+diagnostic bytes never enter this log. Completed Antigravity failures can expose
+those bytes through the separate private [agent-exchange channel](#agent-exchange-privacy);
+the fixed exception/debug-log projection does not read them. Codex native stderr
+remains discarded by its adapter.
 
 Ordinary operational records remain schema version 1. Execution-profile
 records use schema version 2 and one of `execution_setting_change`,
@@ -758,8 +767,10 @@ records can persist a provider `request`, `response`, `no_response`, or
 story agent, provider, and physical-call exchange ID. `AgentBackend` now
 automatically offers every established or contextual physical structured call
 to this channel: request before invocation, valid `ProviderResult` before
-accounting/decode/thread persistence, then one closed terminal attempt. Direct
-store use remains possible.
+accounting/decode/thread persistence, then one closed terminal attempt. A typed
+completed Antigravity failure can also offer a diagnostic response before its
+failure outcome, even though it has no valid `ProviderResult`. Direct store use
+remains possible.
 
 Each content value is plaintext strict UTF-8. The retained value is the longest
 complete prefix at or below 262,144 bytes; its retained/full UTF-8 byte counts
@@ -772,20 +783,30 @@ omitted suffix. It is a comparison fact, not encryption, redaction, a signature,
 origin authentication, or a way to reconstruct truncated text.
 
 Automatic request content is canonical JSON of only `call_kind`, `payload`,
-`prior_thread_id`, and `schema`. Response content contains only
+`prior_thread_id`, and `schema`. A normal returned response contains
 `actual_transport_utf8_bytes`, `response_text`, `thread_id`, and nullable
-validated usage. Terminal content contains only a closed `outcome` and fixed
-`code`, never arbitrary exception text. “Exact” means this exact
-provider-neutral capture input/evidence subject to the prefix bound, not an
-unbounded raw process transcript; inspect the outer full/retained counts,
-truncation flag, and full-input digest before treating nested JSON as complete.
+validated usage. A recovered Antigravity native `ERROR` adds
+`response_diagnostic`, preserving its completed stdout, stderr, and exit code.
+A completed Antigravity failure instead uses a response object containing only
+`provider_failure: true` and `response_diagnostic`, followed by a fixed
+`provider_failure` outcome. Inside `response_diagnostic`, `exit_code` is the
+native integer status; `stdout` and `stderr` each contain `encoding` and `data`.
+Each stream uses strict `utf-8` when possible, otherwise reversible `base64`.
+This is private diagnostic evidence, not a semantic result or a retry grant.
 
-Automatic capture never reads or copies provider stderr, raw stdout or NDJSON,
-native tool/reasoning streams, authentication/catalog output, browser/OAuth
-facts, environment values, tokens, credentials, or arbitrary exception text.
-That exclusion is not semantic redaction: payload/schema or provider
-`response_text` may contain secrets, and a direct caller can place excluded
-material inside `content`.
+Terminal content still contains only a closed `outcome` and fixed `code`, never
+arbitrary exception text. “Exact” describes the capture input subject to the
+existing prefix bound and retention. Encoding does not remove sensitive data;
+inspect the outer full/retained counts, truncation flag, and full-input digest
+before treating nested JSON or a base64 stream as complete.
+
+Automatic capture consumes only these typed completed-process diagnostics; it
+does not import Codex raw streams, Antigravity's native proof transcript or its
+private thinking, authentication/catalog output, browser/OAuth facts, or
+environment values. Authentication and discovery probes retain their existing
+output exclusions. This is not semantic redaction: payload/schema, returned
+text, and native stdout/stderr may contain secrets or other provider-controlled
+content, and a direct caller can place arbitrary material inside `content`.
 
 Sequence values, millisecond timestamps, provider/agent/scope identities,
 exchange correlation, byte counts, truncation, and digests remain sensitive
@@ -851,10 +872,24 @@ Consequently, a missing store, gap, exchange, response, or outcome never proves
 that no provider call or result occurred. Conversely, `io_failed` does not
 prove a record is absent. Do not retry provider work merely to fill diagnostics.
 
-The historical malformed Antigravity no-result pattern would retain only a
-request plus a fixed `provider_failure` outcome when both appends succeed. It
-would contain no response and would not import native tool/reasoning or NDJSON
-streams.
+Completed Antigravity nonzero exits, malformed UTF-8/JSON, unknown error status,
+or failed schema/identity checks can now retain a diagnostic response before
+the fixed failure outcome. A response-append failure still permits the terminal
+attempt and can leave a gap. Failures before a completed process, timeouts, and
+cancellations supply no partial bytes through the shared process runner, so no
+response is invented. Earlier records without this diagnostic channel can
+contain only request and outcome.
+
+The narrowly recovered malformed-function-call `ERROR` retains its native
+diagnostic envelope alongside the structured result, which still undergoes
+ordinary domain validation. The recovery reader checks bounded current-call
+native evidence without copying its transcript or private thinking. Its format
+and filesystem requirements are described in the
+[recovery gates](../guides/antigravity.md#recover-a-completed-native-error); they
+do not attest provider tool containment. Separate live-test evidence can retain
+raw native files and PTY output beyond this store's caps, so it requires its own
+private directory and review before sharing. See the
+[live matrix](../guides/antigravity.md#opt-in-live-conversation-matrix).
 
 These exchange codes are diagnostic boundaries, not durable story-history
 prose. `provider_invocation_failed` is intentionally coarse and does not expose
@@ -948,13 +983,17 @@ internal compatibility-preserving capture.
 
 ## Transcript and backend diagnostic redaction
 
-Concrete `AgentBackend` drains nonzero provider stderr but never includes it in
-the raised or persisted diagnostic. For example, Codex nonzero exit raises
+Concrete `AgentBackend` keeps exception text and runtime JSONL diagnostics fixed
+and content-safe. For example, Codex nonzero exit raises
 `BackendProtocolError` with exact `Codex CLI exited with status N`;
 Antigravity uses fixed provider-specific diagnostics for capability, transport,
-protocol, and timeout failures. Python callers retain
-the exception category, but lose stderr detail; reproduce the provider failure
-outside this runtime if that detail is required.
+protocol, and timeout failures. Codex native stderr remains unavailable by
+default. A completed Antigravity `ProviderInvocationError` can carry a private
+typed `response_diagnostic` with stdout/stderr bytes and exit status for the optional
+agent-exchange capture path. Those bytes do not enter exception text, semantic
+collaboration history, or `debug_logs/runtime.jsonl`; inspect retained exchanges
+for available native detail without replaying the failed call. Absence of a
+record does not prove that no output existed.
 
 If a completed response instead reaches and fails the shared decoder, its body
 may be available through the separate
@@ -1052,11 +1091,15 @@ probes advertised a 57-tool main-agent catalog. Neither that declaration nor
 the launch flags prove capability removal. The JSON result has no `init` or
 step metadata, so Story cannot attest selected agent, cwd, permissions, or
 tool/subagent behavior from the output. Story requires one valid UTF-8 JSON
-object with `SUCCESS`, a safe conversation ID matching the retained ID on
-resume, object `structured_output`, and an exact object `json_schema` echo;
-duplicate fields, non-finite numbers, and trailing data are rejected. There is
-no response-string fallback. Shared correlation, evidence, artifact-authority, and confirmation
-checks still apply. See the sanitized command and JSON shape in the
+object with a safe conversation ID matching the retained ID on resume, object
+`structured_output`, and an exact object echo of the rendered `json_schema`.
+Status must be native `SUCCESS` or the known malformed-function-call `ERROR`
+after exit zero and matching current-call native finish/completion proof.
+Missing, unsafe, stale, or unknown proof remains failure; recovery adds no model
+retry. Duplicate fields, non-finite numbers, and trailing data are rejected.
+There is no response-string fallback. Shared correlation, evidence,
+artifact-authority, and confirmation checks still apply to native success and
+recovered results. See the sanitized command and JSON shape in the
 [Antigravity guide](../guides/antigravity.md#sanitized-provider-call-and-json-result).
 
 Use interactive `/auth` or the startup picker to enter native sign-in. Never put

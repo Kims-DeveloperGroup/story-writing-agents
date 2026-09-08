@@ -491,11 +491,13 @@ every intermediate arrow. The current runtime graph is acyclic.
   binds the durable store; `begin(...)` requires exact session, conversation or
   debate scope, canonical agent, provider, and `ProviderInvocation` values and
   records the request before returning a shared `exchange_<uuidhex>` lifecycle.
-  That lifecycle admits at most one exact `ProviderResult` response and one
+  That lifecycle admits at most one exact `ProviderResult` response or typed
+  native failure diagnostic response, and one
   closed accepted, rejected, provider-failure, cancelled, or post-response
   runtime-failure terminal attempt. The 13 terminal codes are fixed enums; no
-  arbitrary exception, diagnostic, metadata, or provider-native stream enters
-  the contract.
+  arbitrary exception or metadata enters the contract. Optional
+  `ProviderResponseDiagnostic` values carry completed native stdout/stderr
+  bytes and exit code through this private seam.
 - **Direct internal dependencies:** `agent_exchanges.contracts`,
   `agent_exchanges.storage`, `provider_adapter`, and `workspace`.
 - **State, resources, and side effects:** Import and construction perform no
@@ -503,8 +505,15 @@ every intermediate arrow. The current runtime graph is acyclic.
   appends canonical compact JSON for the exact invocation schema, payload,
   prior thread, and call kind, and returns a lifecycle retaining that exact
   identity plus a private thread lock and state. A completed response projects
-  only response text, result thread, exact-or-null usage, and exact-or-null
-  transport bytes; a terminal projects only outcome and fixed code. Response
+  response text, result thread, exact-or-null usage, and exact-or-null
+  transport bytes, plus a diagnostic only when supplied. Diagnostic streams
+  use explicit UTF-8 or reversible base64 encoding. `provider_failure(...)`
+  may attempt one diagnostic RESPONSE marked `provider_failure: true` before
+  the closed PROVIDER_FAILURE outcome, without entering a validated response
+  state; failed diagnostic serialization or append still permits the outcome
+  attempt. Recovered results retain the normal response and accepted-outcome
+  path. Absent diagnostics preserve the established response content and
+  no-response failure path. A terminal projects only outcome and fixed code. Response
   and terminal state advances before append, so duplicate or failed attempts
   are never retried. Every begin, response, or terminal serialization,
   validation, or storage `BaseException` is fail-open; a failed begin returns a
@@ -1260,7 +1269,12 @@ every intermediate arrow. The current runtime graph is acyclic.
   ineligible; response bodies are neither rendered nor sent through
   `debug_log`. Independently, the backend retains one construction-time,
   I/O-free `WorkspaceAgentExchangeCapture` and invokes it only at the two
-  physical structured-call seams. Each exactly correlated conversation or
+  physical structured-call seams. Both direct and contextual `ProviderInvocation`
+  construction sites prepare `AntigravityAdapter.native_output_schema(...)`
+  only for Antigravity, before canonical invocation accounting and capture, so
+  schema content and byte counts describe the exact native transport. Domain
+  schema builders and response/correlation decoders retain their original
+  contracts; Codex receives its original schema. Each exactly correlated conversation or
   debate call records its canonical schema, payload, prior thread, and call
   kind before adapter invocation; a valid completed `ProviderResult` is
   submitted immediately after adapter return and before accounting observation,
@@ -1275,9 +1289,13 @@ every intermediate arrow. The current runtime graph is acyclic.
   ambiguous legacy correlation disables capture, and every capture call catches
   `BaseException` without changing provider execution, accounting, thread,
   taint, decoding, artifact, reference, cancellation, or exception semantics.
-  The capture sees only provider-neutral invocation/result fields and fixed
-  terminal codes, never stderr, stdout, native NDJSON, authentication,
-  credentials, environment values, or arbitrary exception text; its package
+  At both direct and contextual typed provider-failure paths, the backend
+  forwards only the validated optional `ProviderInvocationError` response
+  diagnostic to capture; recovered results already carry that diagnostic in
+  `ProviderResult`. Absent diagnostics retain the existing call shape and
+  Codex default behavior. This private forwarding adds no arbitrary exception,
+  traceback, argv, environment, or authentication capture. Exact native output
+  may contain provider content; capture owns serialization and its package
   remains the sole exchange schema, state, and storage owner. For a referenced
   logical invocation, the
   same thread lock first runs one strict content-free read-action prelude. The
@@ -1409,6 +1427,8 @@ every intermediate arrow. The current runtime graph is acyclic.
   Antigravity CLI protocol.
 - **Supported surface:** No package-supported API. Package-internal
   `AntigravityAdapter` implements the private provider-adapter contract.
+  Its pure package-internal `native_output_schema(schema)` preparation method
+  supplies the backend's native transport schema without a facade export.
 - **Direct internal dependencies:** `agent_context`, `models`,
   `provider_adapter`, and `provider_process`.
 - **State, resources, and side effects:** Owns the Antigravity executable,
@@ -1425,14 +1445,19 @@ every intermediate arrow. The current runtime graph is acyclic.
   Direct binding constructs the established deterministic rules bytes and exact
   same-snapshot content-free component partition for binding structure, role,
   persona, language, each canonical core-document path, and provider
-  constraints. In both direct and contextual staging, only role-system-prompt
+  constraints. In both direct and contextual staging, role-system-prompt
   text replaces the exact sentence `invoke another agent, provider subagent,
   tool, or model.` with `invoke another agent, provider subagent, or model.`
-  before UTF-8 encoding and component accounting. This local rendering leaves
+  before UTF-8 encoding and component accounting, and renders the structured
+  delivery instruction as a complete schema-selected `finish` call. Contextual
+  role rendering identifies the specialist's bare assessment example as
+  `action.result`, requiring the outer correlation/action object through
+  `finish`. This local rendering leaves
   the shared immutable definition, fingerprint, captured references, common
   prompt and workspace template unchanged; persona and evidence text are not
-  transformed. The direct binding's separate provider execution constraints
-  retain their established tool prohibition.
+  transformed. Direct provider constraints permit `finish` only for structured
+  delivery and retain prohibitions on shell, web, plugins, skills, MCP, and
+  subagents.
   A definition's internal `provider_managed_context` marker instead
   selects the compact contextual rules: the same role/persona/language facts
   plus the symmetric wire-v7 grammar for untrusted evidence, the exact typed
@@ -1444,7 +1469,9 @@ every intermediate arrow. The current runtime graph is acyclic.
   no bound core-document bytes. `agent_context.service` and
   `agent_context.actions` retain the inner protocol semantics. Antigravity's
   contextual constraints prohibit subagents and CoT but omit Codex's explicit
-  tool prohibition; each adapter accounts for its own exact constraint bytes.
+  tool prohibition, requiring `finish` arguments to be the complete
+  schema-selected root object; each adapter accounts for its own exact
+  constraint bytes.
   Their direct-definition framing remains unchanged.
   Antigravity wraps those canonical definition bytes exactly once in the static,
   deterministic custom-main-agent YAML framing required by the provider
@@ -1478,8 +1505,23 @@ every intermediate arrow. The current runtime graph is acyclic.
   history. Parent traversal remains pathname-based rather than descriptor-
   anchored, so these rules-file protections likewise do not claim application
   access control or race-proof containment.
-  Invocation uses the shared canonical encoder for its output schema and
-  payload, then decodes the exact payload bytes into one `--print` argument and
+  The adapter's idempotent native schema renderer deep-copies JSON values,
+  including immutable mappings, preserving non-target content and key order.
+  It traverses only schema-valued keywords, subschema maps, and schema arrays;
+  annotations and instance values in enum/const/default/examples remain opaque.
+  Exact `type:null` nodes lose only `enum:[null]`. Exact `type:integer` nodes
+  with one integer enum value of magnitude at most `2**53 - 1` replace that
+  enum with equal inclusive minimum/maximum bounds only when both bounds are
+  absent. Booleans, mixed/multiple enums, nullable unions, existing bound-bearing
+  nodes, and unsafe integers remain unchanged; all other constraints, including
+  exclusivity, remain intact. Caller schemas and nested instance data are not
+  mutated. Invocation, command construction, and exact schema-echo validation
+  use the same rendering, including recovered ERROR. Backend callers prepare
+  it before invocation construction for exact schema-byte accounting; direct
+  callers requiring that accounting use the same preparation method. Rendering
+  never recreates the invocation or re-encodes its mutable payload mapping.
+  Invocation uses the shared canonical encoder for the rendered output schema,
+  then decodes the captured exact payload bytes into one `--print` argument and
   accounts for that argument's UTF-8 payload bytes before creating any new
   per-session runtime tree; encoding failure therefore
   creates no new provider or workspace directory. Process creation distinguishes
@@ -1504,10 +1546,38 @@ every intermediate arrow. The current runtime graph is acyclic.
   provider-native state. The adapter decodes exactly one UTF-8 JSON object,
   rejecting duplicate fields, nonfinite numbers, malformed content, and
   concatenated or streamed envelopes with content-free diagnostics. It requires
-  `SUCCESS`, a safe conversation ID matching an exact requested resume ID,
+  `SUCCESS` or the narrowly recovered native ERROR described below, a safe
+  conversation ID matching an exact requested resume ID,
   one root-object `structured_output`, and an exact canonical echo of the
-  submitted `json_schema`; absence, mismatch, or malformed content fails closed
-  without falling back to free response text. This terminal envelope provides
+  submitted rendered `json_schema`; absence, mismatch, or malformed content fails closed
+  without falling back to free response text. Recovery additionally requires
+  exit zero and the exact known improperly-formatted-function-call error with
+  bounded retries remaining. Before launch the adapter snapshots native brain
+  directory identities and existing conversation names for fresh calls, or the
+  exact bounded transcript prefix hash, byte count, and prior step count for
+  resume. Afterward it reads only the validated conversation's
+  `provider/antigravity-cli/brain/<id>/.system_generated/logs/transcript_full.jsonl`
+  through no-follow descriptors below its owned state anchor, requiring a
+  stable singly linked regular leaf. Bounds are 4 MiB per trace, 512 KiB per
+  line, 4096 steps, and 1024 snapshot entries; unavailable platform safeguards
+  or missing, unsafe, stale, changed, or incomplete evidence disable recovery.
+  A fresh conversation must be absent from the prelaunch names; resume must
+  append to the unchanged prior prefix. The new segment must contain this
+  exact payload in USER_REQUEST framing, consistent indices/source/DONE state
+  and ordered timestamps, a matching `finish` call, and the native completed
+  terminal with no later work. Finish argument equality ignores object key
+  order while preserving scalar types and excludes only recognized string
+  `toolAction`/`toolSummary` metadata absent from the result; schema echo remains
+  exact. Clean traces need no error records; any present errors must match the
+  known diagnostic, decreasing retries, and final envelope error. Private
+  thinking is discarded from proof and never returned as evidence. Recovery
+  authorizes only adapter acceptance; normal runtime domain/correlation
+  validation still follows, with no retry or replay.
+  Completed native failures attach exact stdout/stderr bytes and exit code as
+  passive `ProviderResponseDiagnostic` data on `ProviderInvocationError`;
+  recovered ERROR results retain it on `ProviderResult`. Ordinary SUCCESS
+  omits it. Unavailable partial timeout/cancellation output is not fabricated,
+  and the shared process owner remains unchanged. This terminal envelope provides
   no init or step events, so the adapter does not attest the selected agent,
   cwd, permission mode, or tool activity from provider output. Custom-agent
   staging, `--sandbox`, `--mode plan`, and disabled slash commands remain
@@ -1592,8 +1662,14 @@ every intermediate arrow. The current runtime graph is acyclic.
   `ProviderInvocation` retains compatibility mappings while hiding those
   content-bearing mappings and canonical payload bytes from representation and
   exposes prepared content-free accounting;
-  `ProviderResult` additively carries optional exact usage and transport-byte
-  facts without changing value equality. `ProviderFailureAccounting`,
+  `ProviderResult` additively carries optional exact usage, transport-byte facts,
+  and a repr-hidden `response_diagnostic` without changing value equality.
+  Frozen slotted `ProviderResponseDiagnostic` validates exact stdout/stderr
+  bytes and integer exit code, hiding raw streams from repr. The optional
+  `ProviderInvocationError.record_response_diagnostic(...)` attachment and
+  validated `response_diagnostic` property form a passive completed-process
+  data seam; safe error text, taint, retry authority, and absent-default Codex
+  behavior remain unchanged. `ProviderFailureAccounting`,
   `record_provider_failure_accounting`, and `provider_failure_accounting`
   provide the coordinator and concrete adapters one validated package-internal
   prepared/submitted failure seam. `ProviderInvocationError` and the
@@ -1607,9 +1683,12 @@ every intermediate arrow. The current runtime graph is acyclic.
 - **Direct internal dependencies:** `agent_context` and `models`.
 - **State, resources, and side effects:** Owns no mutable module state or
   external resource. Construction creates only immutable mappings, canonical
-  call-local bytes, and content-free accounting; failure helpers attach only
-  validated content-free facts to the current exception. Importing performs no
-  I/O.
+  call-local bytes, content-free accounting, and optional immutable diagnostic
+  bytes. Failure accounting helpers attach validated content-free facts, while
+  the separate response-diagnostic method attaches the validated passive value
+  to the current exception. This contract owns neither native recovery,
+  process capture, diagnostic serialization, nor storage. Importing performs
+  no I/O.
 - **Primary verification/documentation:**
   `tests/test_agent_context_accounting.py`, `tests/test_codex_backend.py`,
   `tests/test_antigravity_adapter.py`, `tests/test_antigravity_parity.py`, and
