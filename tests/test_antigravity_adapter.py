@@ -689,7 +689,12 @@ class AntigravityAdapterTests(unittest.IsolatedAsyncioTestCase):
             "e39d65811afa29f6c127d10386e4cbcf570b7da2d257071725e42348904336e9",
         )
         expected_role = _expected_antigravity_role(captured_prompt)
-        original_provider = codex_bytes[-663:-1]
+        provider_constraint_bytes = next(
+            component.serialized_utf8_bytes
+            for component in codex_components
+            if component.kind is ContextComponentKind.PROVIDER_CONSTRAINTS
+        )
+        original_provider = codex_bytes[-(provider_constraint_bytes + 1):-1]
         expected_provider = original_provider.replace(
             b"JSON only.", b"Submit JSON through finish."
         ).replace(
@@ -731,7 +736,7 @@ class AntigravityAdapterTests(unittest.IsolatedAsyncioTestCase):
             )
         self.assertEqual(len(codex_bytes), sum(item.serialized_utf8_bytes for item in codex_components))
         self.assertEqual(len(antigravity_bytes), sum(item.serialized_utf8_bytes for item in antigravity_components))
-        provider_constraints = codex_bytes[-663:-1]
+        provider_constraints = original_provider
         self.assertEqual(len(provider_constraints), 662)
         self.assertEqual(
             hashlib.sha256(provider_constraints).hexdigest(),

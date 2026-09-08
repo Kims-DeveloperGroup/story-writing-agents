@@ -1245,7 +1245,7 @@ class AntigravityAdapter:
         thread_id: str | None,
         agent_id: str,
     ) -> list[str]:
-        """Build Antigravity options before attaching the turn's print payload."""
+        """Build Antigravity options from the already rendered transport schema."""
 
         if _SAFE_CONVERSATION_ID.fullmatch(agent_id) is None:
             raise ValueError("Antigravity custom agent ID is invalid")
@@ -1258,7 +1258,7 @@ class AntigravityAdapter:
             "--output-format",
             "json",
             "--json-schema",
-            canonical_provider_json(self.native_output_schema(schema)).decode(
+            canonical_provider_json(schema).decode(
                 "utf-8", errors="strict"
             ),
             "--agent",
