@@ -8,6 +8,9 @@ description: >-
 [GITHUB_WORKFLOW.md](../../../GITHUB_WORKFLOW.md): authorization/metadata;
 [AGENTS.md](../../../AGENTS.md): routing/verification.
 
+Before creating or updating reader-facing records through any client, read the
+[authoring guide](references/issue-pr-authoring.md) and relevant template source.
+
 Implementation authorizes only policy-defined planning/Development-linked branch
 creation. Separately authorize every push/stage/commit/PR/merge/closure/deletion/cleanup.
 Preflight repository/`gh`-project-scope/Project-fields/milestones/Iterations/dependencies/
@@ -83,6 +86,6 @@ git worktree list --porcelain
 test ! -e "$worktree"
 ```
 
-Reopen failed closure to `Backlog` and replan. Never auto-merge/
-close/clean or force-remove. Cleanup needs authorization and clean/integrated/recoverable
-state; branch deletion is separate. Retain release until main integration.
+Follow [completion](../../../GITHUB_WORKFLOW.md#completion-and-exceptions) and
+[cleanup](../../../GITHUB_WORKFLOW.md#worktree-disposition-and-cleanup) rules. Never auto-merge/
+close/clean or force-remove.
