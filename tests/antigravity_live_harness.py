@@ -981,6 +981,13 @@ class ConversationCase:
         old = json.loads((self.directory / 'confirmed-proposal.private.json').read_text())
         require(reconfirm.proposal.proposal_digest == old['proposal']['proposal_digest'], 'Reconfirmation changed proposal')
         require(reconfirm.confirmation_request_id != old['confirmation_request_id'], 'Restart reused authority')
+        require(reconfirm.evidence == reconfirm.proposal.basis.evidence
+                and json.loads(json.dumps(dataclasses.asdict(reconfirm.evidence), default=str)) == old['evidence'],
+                'Reconfirmation lost exact proposal evidence')
+        require(json.loads(json.dumps(dataclasses.asdict(reconfirm.proposal), default=str)) == old['proposal'],
+                'Reconfirmation changed the preserved proposal')
+        await self.rejects_decision(decision(
+            reconfirm, confirmation_request_id=old['confirmation_request_id']))
         completed = await self.confirm(reconfirm)
         self.verify_completed(completed, ('plot_architect',))
         assert_seeded_artifacts(self.workspace, self.initial_artifacts)

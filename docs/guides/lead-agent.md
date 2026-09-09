@@ -207,8 +207,8 @@ story[novel]> Does the opening conflict with ${core_documents/global_outline.md}
 For a story-specific provider judgment, `result.evidence` identifies its
 declared `scope`, `status`, and ordered content-free receipts. A workflow/meta
 judgment also has an evidence value, but it is exactly
-`workflow_meta`/`not_applicable` with no receipts. Runtime-generated recovery
-notices instead have `evidence=None`.
+`workflow_meta`/`not_applicable` with no receipts. Proposal-free runtime-generated
+recovery notices instead have `evidence=None`.
 
 An artifact-intent outcome is still `kind=proposal` and carries the ordinary
 consultation proposal, state, confirmation request, and evidence. It also
@@ -1142,6 +1142,13 @@ Restart behavior follows durable facts:
 - unresolved `running` without a live owner/result becomes `outcome_unknown`
   and is never replayed; and
 - corrupt or ambiguous authority becomes `recovery_required`.
+
+For a consultation proposed by the Lead, the reconfirmation turn returns the
+unchanged original proposal with its existing evidence: the same scope, status,
+and ordered receipts. It issues a fresh confirmation request; the old
+confirmation authority is not revived. Returning this proposal makes no
+provider call and grants no artifact-write authority. Only a fresh structured
+Confirm can start the disclosed work after normal revalidation.
 
 ### Submitted Lead outcome unavailable after restart
 
