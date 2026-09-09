@@ -26,7 +26,7 @@ class RecommendationActionContractTests(RecommendationCase):
             "Purpose", "Instruction", "Expected result", ("current_response",), (OUTLINE,))
         expected = [
             (semantic, "kind purpose instruction expected_result source_ids target_paths specialist_ids objective_id"),
-            (request, "request_event_id request_id action_id action_revision kind purpose instruction expected_result target_paths specialist_ids objective_id source_recommendation_event_id source_recommendation_digest draft_sources basis source_fingerprint physical_calls_spent max_preparation_physical_calls tail_sequence user_impact source_proposal_id source_proposal_revision source_proposal_digest source_execution_attempt_id action_digest"),
+            (request, "request_event_id request_id action_id action_revision kind purpose instruction expected_result target_paths specialist_ids objective_id source_recommendation_event_id source_recommendation_digest draft_sources basis source_fingerprint physical_calls_spent max_preparation_physical_calls tail_sequence user_impact source_proposal_id source_proposal_revision source_proposal_digest source_execution_attempt_id authoring_scope action_digest"),
             (choice, "session_id conversation_id request_event_id request_tail_sequence request_id action_id action_revision action_digest kind revision_request"),
             (projection.current_recommendation_decision, "decision"),
             (projection.current_recommendation_start, "start_event_id request_event_id decision_event_id request_id action_id action_revision action_digest execution_attempt_id"),
@@ -60,6 +60,27 @@ class RecommendationActionContractTests(RecommendationCase):
                 replace(request, **changes)
         self.assertNotEqual(replace(request, instruction="Different instruction").action_digest, request.action_digest)
 
+    async def test_scoped_request_digest_and_legacy_absent_scope_remain_distinct(self):
+        conversation_id, turn = await self.recommend()
+        request = turn.recommendation_request
+        event = self.history(conversation_id)[-1]
+        scoped_wire = c.encode_collaboration_event(event)
+        self.assertEqual(c.decode_collaboration_event(scoped_wire), event)
+        self.assertTrue(next(field for field in dataclasses.fields(request)
+                             if field.name == "authoring_scope").kw_only)
+        changed = replace(request, authoring_scope=replace(request.authoring_scope,
+            interpretation="Another concrete candidate review interpretation."))
+        self.assertNotEqual(changed.action_digest, request.action_digest)
+        legacy = replace(request, authoring_scope=None)
+        self.assertNotEqual(legacy.action_digest, request.action_digest)
+        legacy_draft = replace(event.to_draft(), payload=legacy)
+        legacy_wire = c.encode_collaboration_event_draft(legacy_draft)
+        self.assertNotIn("authoring_scope", json.loads(legacy_wire)["payload"])
+        self.assertEqual(c.encode_collaboration_event_draft(c.decode_collaboration_event_draft(legacy_wire)), legacy_wire)
+        self.assertIsNone(legacy.authoring_scope)
+        self.assertEqual(replace(legacy).action_digest, legacy.action_digest)
+        self.assertEqual(self.history(conversation_id)[-1], event)
+
     async def test_current_response_alias_binds_exact_whole_message_before_action(self):
         message = "초안 e\u0301\r\n" + DRAFT + "\n"
         conversation_id, turn = await self.recommend(message=message)
@@ -78,8 +99,9 @@ class RecommendationActionContractTests(RecommendationCase):
                           request.source_proposal_digest, request.source_execution_attempt_id), (None,) * 4)
         # Ordered offered sources remain whole-message snapshots, including the new reply.
         self.backend.enqueue(recommendation(message="Second whole reply", recommended_action=action(
-            source_ids=(source.event_id, "current_response"))))
+            source_ids=(source.event_id, "current_response")), authoring_scope=c.authoring_scope_to_dict(request.authoring_scope)))
         second = await self.runtime.lead_turn(self.session_id, conversation_id, "Offer another plan.")
+        self.assertEqual(second.recommendation_request.authoring_scope, request.authoring_scope)
         self.assertEqual(tuple(s.content_digest for s in second.recommendation_request.draft_sources),
                          (digest(message), digest("Second whole reply")))
         for sources in (("foreign_event",), ("current_response", "current_response")):

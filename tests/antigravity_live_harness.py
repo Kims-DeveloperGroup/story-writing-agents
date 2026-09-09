@@ -24,7 +24,9 @@ from story_writing_agents.agent_context import canonical_provider_json
 from story_writing_agents.agents import ROSTER
 from story_writing_agents.conversations import CollaborationConfirmationDecision, CollaborationExecutionResult, CollaborationLeadJudgmentPayload, CollaborationLeadSynthesisPayload, CollaborationSpecialistReplyPayload, CollaborationProviderCallPayload, CollaborationStepState, LeadOutcomeKind, LeadStepDecision, project_collaboration_history
 from story_writing_agents.provider_process import ProcessResult
-from story_writing_agents.conversations import encode_collaboration_event
+from story_writing_agents.conversations import encode_collaboration_event, CollaborationProposal
+from story_writing_agents.specialist_routing import (AuthoringActivity, SpecialistAssignmentMode,
+    required_authoring_specialists, validate_specialist_assignment)
 from story_writing_agents.workspace import initialize_workspace
 MODEL_BY_CASE = {'L01-PRO-HIGH-PTY': 'gemini-3.1-pro-high', 'L02-PRO-LOW-ONE': 'gemini-3.1-pro-low', 'L03-FLASH-THREE': 'gemini-3.8-flash-low', 'L04-SONNET-ONE': 'claude-sonnet-4-6', 'L05-MIXED': 'gemini-3.1-pro-high', 'L09-SECOND-ROUND': 'gemini-3.1-pro-high', 'F05-DIAGNOSTICS-RECOVERY': 'gemini-3.1-pro-high'}
 AGENTS_BY_CASE = {'L01-PRO-HIGH-PTY': ('plot_architect', 'character_custodian'), 'L02-PRO-LOW-ONE': ('plot_architect',), 'L03-FLASH-THREE': ('plot_architect', 'character_custodian', 'execution_specialist'), 'L04-SONNET-ONE': ('plot_architect',), 'L05-MIXED': ('plot_architect', 'character_custodian')}
@@ -35,6 +37,167 @@ CONSISTENT_CANDIDATE = ('Nara receives the invitation on day 1.\n'
                         'Nara observes the sealed door being revealed on day 3.\n'
                         'Nara records these observations without judging anyone.\n')
 MARKER = 'FLOW623-RECALL'
+
+
+WORKFLOW_FOLLOWUP = ('Treat this as a fresh workflow-only status task, not continued story authoring. '
+                    'Repeat the conversation marker, then report only which consultation completed '
+                    'and its recorded state. Do not interpret, critique, revise or recommend story content.')
+
+
+def consultation_request(spec, agents, *, text=None, references=True):
+    request = text or spec['instruction']
+    if spec.get('candidate_text') and not (text is not None and text == spec.get('recovery_instruction')):
+        request += '\nFinished user-supplied candidate (review this exact text):\n' + spec['candidate_text']
+    request += (' Disclose REVIEW mode, the concrete candidate input aliases and bounded review criteria '
+                'for each assignment. Use a REVIEW authoring scope with exactly the requested domains. '
+                'Preserve the current task/revision for a continuation; use a fresh task for independent work. '
+                'Produce a consultation proposal for exactly these reviewers in this order: '
+                + ', '.join(agents) + '. Do not execute before structured Confirm. Do not propose artifact changes. ')
+    if references:
+        if 'plot_architect' in agents:
+            request += ' ${core_documents/global_outline.md}'
+        if 'character_custodian' in agents:
+            request += ' ${core_documents/character_sheets.md}'
+        if 'execution_specialist' in agents:
+            request += ' ${manuscript/part-01/opening.md}'
+    return request
+
+
+def assert_review_proposal(proposal, agents):
+    scope = proposal.authoring_scope
+    require(scope is not None and scope.activity is AuthoringActivity.REVIEW,
+            'Live review proposal lacks REVIEW task scope')
+    paths = []
+    for item in proposal.basis.inputs:
+        if item.kind.value in {'core_document', 'manuscript', 'writing_artifact'}:
+            locator = item.locator
+            paths.append(locator[2:locator.index('}')] if locator.startswith('${') else locator)
+    require(required_authoring_specialists(scope, affected_paths=tuple(paths)) == tuple(agents)
+            and proposal.participants == tuple(agents), 'Review scope/reference domains differ from exact roster')
+    inputs = {item.input_id: item for item in proposal.basis.inputs}
+    for assignment in proposal.assignments:
+        require(assignment.mode is SpecialistAssignmentMode.REVIEW and assignment.review_basis is not None,
+                'Live review assignment lacks mode or concrete review basis')
+        validate_specialist_assignment(assignment.mode, assignment.input_ids, assignment.review_basis)
+        for alias in assignment.review_basis.candidate_input_ids:
+            require(alias in inputs and inputs[alias].state.value == 'present'
+                    and inputs[alias].kind.value in {'user_input', 'core_document', 'manuscript',
+                                                    'writing_artifact', 'specialist_reply'},
+                    'Review candidate is unavailable or is not candidate material')
+    return proposal
+
+
+def assert_scoped_synthesis(proposal, replies, synthesis):
+    require(proposal.authoring_scope is not None
+            and synthesis.authoring_scope == proposal.authoring_scope,
+            'Synthesis task scope differs from actual proposal')
+    require((synthesis.proposal_id, synthesis.proposal_revision, synthesis.proposal_digest)
+            == (proposal.proposal_id, proposal.proposal_revision, proposal.proposal_digest),
+            'Synthesis proposal correlation differs')
+    require(synthesis.reply_event_ids == tuple(e.event_id for e in replies),
+            'Synthesis reply attribution differs')
+    assignments = {a.assignment_id: a for a in proposal.assignments}
+    require(len(replies) == len(assignments)
+            and {e.payload.assignment_id for e in replies} == set(assignments)
+            and len({e.event_id for e in replies}) == len(replies),
+            'Scoped synthesis lacks complete assignments')
+    for event in replies:
+        reply = event.payload
+        assignment = assignments.get(reply.assignment_id)
+        require(assignment is not None and event.sender.agent_id == assignment.specialist_id
+                and reply.input_ids == assignment.input_ids and reply.mode is assignment.mode,
+                'Reply mode or assignment correlation differs')
+        require((reply.proposal_id, reply.proposal_revision, reply.proposal_digest, reply.execution_attempt_id)
+                == (synthesis.proposal_id, synthesis.proposal_revision, synthesis.proposal_digest,
+                    synthesis.execution_attempt_id), 'Reply proposal/attempt correlation differs')
+        validate_specialist_assignment(assignment.mode, assignment.input_ids, assignment.review_basis)
+        assessment = reply.assessment.value
+        if assignment.mode is SpecialistAssignmentMode.DRAFT:
+            require(assessment in {'drafted', 'insufficient_evidence'}, 'Draft reply claims review assessment')
+        else:
+            require(assignment.mode is SpecialistAssignmentMode.REVIEW
+                    and assessment in {'supports', 'concern', 'conflict', 'insufficient_evidence'},
+                    'Review reply claims drafting success')
+        if assessment in {'concern', 'conflict', 'insufficient_evidence'}:
+            require(set(reply.input_ids) <= set(synthesis.unresolved_input_ids),
+                    'Synthesis erased unresolved inputs')
+
+
+def assert_workflow_judgment(history, result):
+    require(result.kind in {LeadOutcomeKind.ANSWER, LeadOutcomeKind.QUESTION, LeadOutcomeKind.CRITIQUE},
+            'Workflow-only outcomes cannot disclose recommendation authority')
+    judgments = [e.payload for e in history if isinstance(e.payload, CollaborationLeadJudgmentPayload)]
+    require(judgments and judgments[-1].kind is result.kind
+            and judgments[-1].authoring_scope is not None
+            and judgments[-1].authoring_scope.activity is AuthoringActivity.WORKFLOW
+            and not judgments[-1].authoring_scope.domains and not judgments[-1].authoring_scope.target_paths,
+            'Direct outcome lacks fresh workflow-only scope')
+    prior_story = [e.payload.authoring_scope for e in history
+                   if getattr(e.payload, 'authoring_scope', None) is not None
+                   and e.payload.authoring_scope.activity is not AuthoringActivity.WORKFLOW]
+    require(not prior_story or judgments[-1].authoring_scope.task_id != prior_story[-1].task_id,
+            'Workflow followup reused a story task')
+
+def assert_pending_plot_recommendation(history, result, calls):
+    """Accept one scoped consultation preparation request, before any decision."""
+    from story_writing_agents import conversations as contracts
+    require(result.kind is LeadOutcomeKind.RECOMMENDATION
+            and result.next_action is contracts.CollaborationNextAction.SUBMIT_RECOMMENDATION_DECISION,
+            'L06C lacks a separately confirmable recommendation')
+    request = result.recommendation_request
+    require(type(request) is contracts.LeadRecommendationRequestPayload,
+            'L06C lacks an exact typed recommendation request')
+    scope = request.authoring_scope
+    require(scope is not None and scope.activity is AuthoringActivity.REVIEW,
+            'L06C requires substantive REVIEW scope')
+    require(required_authoring_specialists(scope) == ('plot_architect',)
+            and request.specialist_ids == ('plot_architect',)
+            and request.kind is contracts.LeadRecommendationActionKind.PREPARE_CONSULTATION,
+            'L06C must disclose exactly the required Plot consultation')
+    require(request.objective_id is None and request.target_paths == (),
+            'L06C consultation preparation acquired artifact authority')
+    require(all(getattr(result, name) is None for name in
+                ('state', 'proposal', 'confirmation_request_id', 'artifact_proposal',
+                 'artifact_application_request', 'story_commit_request')),
+            'L06C created downstream proposal or write authority')
+    requests = [e for e in history if isinstance(e.payload, contracts.LeadRecommendationRequestPayload)]
+    require(len(requests) == 1 and requests[0].payload == request
+            and requests[0].event_id == request.request_event_id
+            and history[-1] == requests[0] and history[-1].sequence == request.tail_sequence
+            and all(getattr(requests[0], name) == getattr(result, name) for name in
+                    ('session_id', 'conversation_id', 'turn_id', 'step_id'))
+            and result.evidence == request.basis.evidence,
+            'L06C request differs from the exact durable tail')
+    source = [e for e in history if e.event_id == request.source_recommendation_event_id]
+    require(len(source) == 1 and isinstance(source[0].payload, CollaborationLeadJudgmentPayload),
+            'L06C source judgment is absent')
+    judgment = source[0].payload
+    require(judgment.kind is LeadOutcomeKind.RECOMMENDATION and judgment.authoring_scope == scope,
+            'L06C source/request task scope differs')
+    # The durable request owns the action; the judgment retains source facts.
+    require(dataclasses.replace(request) == request,
+            'L06C request action fields or digest differ')
+    require(request.source_recommendation_digest == 'sha256:' + digest(judgment.message.encode('utf-8')),
+            'L06C source message digest differs')
+    forbidden = (contracts.CollaborationAssignmentDispatchPayload, contracts.CollaborationConfirmationPayload,
+                 contracts.LeadRecommendationDecisionPayload, contracts.LeadRecommendationStartedPayload,
+                 contracts.LeadRecommendationResultPayload, contracts.ArtifactApplicationRequestPayload,
+                 contracts.ArtifactApplicationDecisionPayload, contracts.ArtifactApplicationResultPayload,
+                 contracts.StoryCommitRequestPayload, contracts.StoryCommitDecisionPayload,
+                 contracts.StoryCommitResultPayload)
+    require(not any(isinstance(e.payload, forbidden) for e in history)
+            and all(call['agent'] == 'lead_orchestrator' for call in calls),
+            'L06C executed or fabricated unconfirmed downstream authority')
+    projection = project_collaboration_history(history)
+    require(projection.current_recommendation_request == request
+            and projection.current_recommendation_state is contracts.LeadRecommendationState.PENDING
+            and projection.current_recommendation_decision is None
+            and projection.current_recommendation_start is None
+            and projection.current_recommendation_result is None
+            and not projection.artifact_objectives,
+            'L06C durable recommendation is not exclusively pending')
+    return request
+
 
 def digest(value: bytes) -> str:
     return hashlib.sha256(value).hexdigest()
@@ -246,10 +409,11 @@ def inject_budget_next_intent(stdout, payload, *, agent, returncode, physical_ca
             and type(action['used_handles']) is list, 'Budget synthesis is not an ANSWER')
     result = action['result']
     require(set(result) == {'evidence_ids', 'evidence_status', 'scope', 'message',
-                           'reply_event_ids', 'unresolved_input_ids', 'next_intent'},
+                           'reply_event_ids', 'unresolved_input_ids', 'next_intent', 'authoring_scope', 'recommended_action'},
             'Budget synthesis fields differ')
+    require(result['recommended_action'] is None, 'Budget continuation cannot replace a recommended action')
     contract = material['answer_contract']
-    for name in ('evidence_ids', 'evidence_status', 'scope', 'reply_event_ids'):
+    for name in ('evidence_ids', 'evidence_status', 'scope', 'reply_event_ids', 'authoring_scope'):
         require(result[name] == contract[name], 'Budget synthesis contract differs: ' + name)
     inputs = material['inputs']
     input_ids = [item['input_id'] for item in inputs]
@@ -270,10 +434,16 @@ def inject_budget_next_intent(stdout, payload, *, agent, returncode, physical_ca
     minimum = 2 * len(BUDGET_REVIEWERS) + 2
     require(minimum > 12 - physical_calls_spent,
             'Requested next intent would fit the actual remaining budget')
+    scope = contract['authoring_scope']
+    require(scope['activity'] == 'review', 'Budget continuation requires a current review task')
+    candidate_ids = [item['input_id'] for item in references]
     intent = {'relation': 'continue_lineage', 'purpose': 'Reconsider every unresolved finding.',
+              'authoring_scope': json.loads(json.dumps(scope)),
               'assignments': [
                   {'agent_id': reviewer, 'instruction': 'Review the original inputs and all replies again.',
-                   'input_ids': [*input_ids, *reply_ids]}
+                   'input_ids': [*input_ids, *reply_ids], 'mode': 'review',
+                   'review_basis': {'schema_version': 1, 'candidate_input_ids': candidate_ids,
+                                    'criteria': 'Review the exact original candidates against the recorded findings.'}}
                   for reviewer in BUDGET_REVIEWERS]}
     before = result['next_intent']
     result['next_intent'] = intent
@@ -360,13 +530,17 @@ def audit_exchanges(exchanges, calls, history=()):
         require(semantic_digest(payload) == call['payload_semantic_sha256'],
                 'Recorded payload semantic digest differs')
         completed = 'delivered_returncode' in call
-        require(len(responses) == (1 if completed else 0),
+        require(len(responses) == (1 if completed or outcome == 'provider_failure' else 0),
                 'Completed/unavailable native output has incorrect RESPONSE count')
         row = dict(number=call['number'], payload_sha256=call['payload_sha256'],
                    outcome=outcome, completed_output=completed)
         if not completed:
             require(call.get('exception_type') is not None and outcome in {'cancelled', 'provider_failure'},
                     'Unavailable output was accepted or unexplained')
+            if outcome == 'provider_failure':
+                require(responses[0] == {'provider_failure': True}
+                        and responses[0]['provider_failure'] is True,
+                        'Unavailable failure response must be the exact synthetic marker')
         else:
             response = responses[0]
             directory = Path(call['directory'])
@@ -556,9 +730,7 @@ def assert_character_recovery(history, failed_prefix, failed_call, recovery_call
             == execution.execution_attempt_id, 'Recovered execution correlation differs')
     require(synthesis.reply_event_ids == (reply.event_id,) and synthesis.next_intent is None,
             'Recovered synthesis attribution or terminal intent differs')
-    if reply.payload.assessment.value != 'supports':
-        require(set(reply.payload.input_ids) <= set(synthesis.unresolved_input_ids),
-                'Recovered synthesis erased unresolved inputs')
+    assert_scoped_synthesis(proposed.proposal, replies, synthesis)
     require(execution.overall_outcome.value == 'succeeded'
             and execution.synthesis_outcome.value == 'succeeded'
             and execution.synthesis_result_event_id == syntheses[0].event_id
@@ -871,17 +1043,11 @@ class ConversationCase:
         return result
 
     async def propose(self, agents=('plot_architect',), *, text=None, references=True):
-        suffix = ' ${core_documents/global_outline.md}' if references else ''
-        if references and 'character_custodian' in agents:
-            suffix += ' ${core_documents/character_sheets.md}'
-        if references and ('execution_specialist' in agents or self.spec['id'] == 'L02-PRO-LOW-ONE'):
-            suffix += ' ${manuscript/part-01/opening.md}'
-        request = text or self.spec['instruction']
-        request += ' Produce a consultation proposal for exactly these reviewers in this order: ' + ', '.join(agents) + '. Do not execute before structured Confirm. Do not propose artifact changes. ' + suffix
+        request = consultation_request(self.spec, agents, text=text, references=references)
         before = len(self.observer.calls)
         result = await self.lead(request)
         require(result.kind is LeadOutcomeKind.PROPOSAL and result.state is CollaborationStepState.AWAITING_CONFIRMATION, 'Required live proposal branch was not observed')
-        require(tuple((a.specialist_id for a in result.proposal.assignments)) == tuple(agents), 'Live proposal reviewer roster differed')
+        assert_review_proposal(result.proposal, agents)
         require(all((c['agent'] == 'lead_orchestrator' for c in self.observer.calls[before:])), 'Unconfirmed specialist call')
         return result
 
@@ -919,10 +1085,11 @@ class ConversationCase:
         for synthesis in syntheses:
             matching = [e for e in replies if e.payload.proposal_revision == synthesis.proposal_revision]
             require(tuple((e.event_id for e in matching)) == synthesis.reply_event_ids, 'Synthesis attribution order differs from persisted replies')
-            unresolved = set(synthesis.unresolved_input_ids)
-            for reply in matching:
-                if reply.payload.assessment.value != 'supports':
-                    require(set(reply.payload.input_ids) <= unresolved, 'Non-supporting specialist input erased')
+            proposals = [e.payload for e in history if isinstance(e.payload, CollaborationProposal)
+                         and e.payload.proposal_id == synthesis.proposal_id
+                         and e.payload.proposal_revision == synthesis.proposal_revision]
+            require(len(proposals) == 1, 'Synthesis lacks exact durable proposal')
+            assert_scoped_synthesis(proposals[0], matching, synthesis)
         executions = [e.payload for e in history if isinstance(e.payload, CollaborationExecutionResult)]
         require(executions and all((e.overall_outcome.value == 'succeeded' for e in executions)), 'Execution outcome did not complete')
         projection = project_collaboration_history(history)
@@ -934,13 +1101,14 @@ class ConversationCase:
         self.open_backend()
         before = len(self.observer.calls)
         prior = [call for call in self.observer.calls if call['agent'] == 'lead_orchestrator']
-        reply = await self.lead('Repeat the conversation marker I gave you earlier, then summarize the completed consultation without starting another consultation.')
+        reply = await self.lead(WORKFLOW_FOLLOWUP)
         current = self.observer.calls[before:]
         require(current and current[0]['resumed'], 'Reopened follow-up failed to resume provider state')
         if prior and prior[-1].get('thread_id'):
             argv = json.loads((Path(current[0]['directory']) / 'command.private.json').read_text())['argv']
             require(current[0]['prior_thread_id'] == prior[-1]['thread_id'], 'Reopened follow-up used another provider thread')
         require(reply.kind is LeadOutcomeKind.ANSWER and MARKER in reply.message, 'Live resumed follow-up did not recall marker')
+        assert_workflow_judgment(self.history(), reply)
         assert_resumed_call_chain(current, prior[-1]['thread_id'], audit_case_exchanges(self))
         return reply
 
@@ -999,7 +1167,7 @@ class ConversationCase:
         self.observer.close()
 
     async def decisions(self):
-        text = 'Plan a plot review of an unwritten observation diary. The outline is incomplete; ask only plot_architect and wait.'
+        text = self.spec['instruction']
         first = await self.propose(text=text, references=False)
         before = len(self.observer.calls)
         rejected = await self.runtime.decide_lead_step(decision(first, CollaborationConfirmationDecision.REJECT))
@@ -1009,6 +1177,10 @@ class ConversationCase:
         revised = await self.runtime.decide_lead_step(decision(second, CollaborationConfirmationDecision.REVISE, revision_request='Keep only plot_architect, but focus the pending review on chronology. Return the revised consultation proposal and wait.'))
         self.turns.append(revised.turn)
         require(revised.turn.kind is LeadOutcomeKind.PROPOSAL, 'Required live revised proposal absent')
+        assert_review_proposal(revised.turn.proposal, ('plot_architect',))
+        require(revised.turn.proposal.authoring_scope.task_id == second.proposal.authoring_scope.task_id
+                and revised.turn.proposal.authoring_scope.task_revision == second.proposal.authoring_scope.task_revision + 1,
+                'Revised review lost the offered task revision')
         require(revised.turn.proposal.proposal_revision > second.proposal.proposal_revision, 'Revision did not increase')
         await self.rejects_decision(decision(second))
         before = len(self.observer.calls)
@@ -1022,6 +1194,10 @@ class ConversationCase:
         require(second.kind is LeadOutcomeKind.PROPOSAL and second.state is CollaborationStepState.AWAITING_CONFIRMATION, 'Real focused second-round proposal not observed')
         require(second.step_id == proposed.step_id and second.proposal.budget.rounds_spent == 1, 'Round lineage not preserved')
         require(second.proposal.proposal_revision == proposed.proposal.proposal_revision + 1, 'Second round revision differs')
+        assert_review_proposal(second.proposal, ('plot_architect',))
+        require((second.proposal.authoring_scope.task_id, second.proposal.authoring_scope.task_revision)
+                == (proposed.proposal.authoring_scope.task_id, proposed.proposal.authoring_scope.task_revision),
+                'Second review round changed current task/revision')
         replies = {e.event_id for e in self.history() if isinstance(e.payload, CollaborationSpecialistReplyPayload)}
         require(any((i.input_id in replies for i in second.proposal.basis.inputs)), 'Second-round reply input absent')
         await self.rejects_decision(decision(proposed))
@@ -1143,6 +1319,8 @@ class ConversationCase:
             ('character_custodian',), references=False,
             text=self.spec['recovery_instruction'],
         )
+        require(proposed.proposal.authoring_scope.task_id != failed_proposal.proposal.authoring_scope.task_id,
+                'Independent recovery reused failed authoring task')
         require(proposed.step_id != failed_proposal.step_id
                 and proposed.proposal.budget.rounds_spent == 0
                 and proposed.confirmation_request_id != failed_proposal.confirmation_request_id,
@@ -1273,10 +1451,7 @@ class ConversationCase:
         synthesis = syntheses[0]
         require(synthesis.reply_event_ids == tuple(event.event_id for event in replies),
                 'Budget synthesis lost exact reply attribution')
-        for reply in replies:
-            if reply.payload.assessment.value != 'supports':
-                require(set(reply.payload.input_ids) <= set(synthesis.unresolved_input_ids),
-                        'Budget synthesis erased non-supporting inputs')
+        assert_scoped_synthesis(proposed.proposal, replies, synthesis)
         injected = [call for call in self.observer.calls if call['fault'] == 'budget_next_intent']
         require(len(injected) == 1, 'Budget case changed more than one actual completion')
         call = injected[0]
@@ -1300,7 +1475,8 @@ class ConversationCase:
         self.open_backend()
         require(self.history() == history and len(self.observer.calls) == before,
                 'Reopening replayed or changed completed budget work')
-        answer = await self.lead('Summarize the completed consultation in a direct answer. Do not request another specialist consultation.')
+        answer = await self.lead(WORKFLOW_FOLLOWUP)
+        assert_workflow_judgment(self.history(), answer)
         require(answer.kind is LeadOutcomeKind.ANSWER and answer.proposal is None,
                 'Fresh post-budget Lead answer was not observed')
         require(self.history()[:len(history)] == history,
@@ -1317,13 +1493,18 @@ class ConversationCase:
         id = self.spec['id']
         if id in AGENTS_BY_CASE:
             await self.normal_consultation()
-        elif id in {'L06A-QUESTION', 'L06B-CRITIQUE', 'L06C-RECOMMENDATION'}:
+        elif id == 'L06C-RECOMMENDATION':
+            text = self.spec['instruction'] + '\nFinished user-supplied outline:\n' + self.spec['candidate_text']
+            result = await self.lead(text)
+            assert_pending_plot_recommendation(self.history(), result, self.observer.calls)
+        elif id in {'L06A-QUESTION', 'L06B-CRITIQUE'}:
             text = self.spec['instruction']
             if id == 'L06B-CRITIQUE':
                 text += ' ${core_documents/global_outline.md} ${manuscript/part-01/opening.md}#L2-L4'
             result = await self.lead(text)
-            expected = {'L06A-QUESTION': LeadOutcomeKind.QUESTION, 'L06B-CRITIQUE': LeadOutcomeKind.CRITIQUE, 'L06C-RECOMMENDATION': LeadOutcomeKind.RECOMMENDATION}[id]
+            expected = {'L06A-QUESTION': LeadOutcomeKind.QUESTION, 'L06B-CRITIQUE': LeadOutcomeKind.CRITIQUE}[id]
             require(result.kind is expected, 'Required natural Lead outcome absent')
+            assert_workflow_judgment(self.history(), result)
             require(result.proposal is None, 'Unexpected specialist proposal')
             if id == 'L06B-CRITIQUE':
                 judgments = [e.payload for e in self.history()
@@ -1344,6 +1525,7 @@ class ConversationCase:
         elif id == 'L07-SEARCH-READ':
             result = await self.lead(self.spec['instruction'])
             require(result.kind is LeadOutcomeKind.ANSWER and 'day 4' in result.message, 'Retrieved fact absent')
+            assert_workflow_judgment(self.history(), result)
             exchanges = [json.loads(line)
                          for path in self.workspace.path('debug_logs/agent_exchanges/live').glob('*.jsonl')
                          for line in path.read_text().splitlines()]
@@ -1518,7 +1700,7 @@ async def pty_consultation(case):
         await terminal.wait('story[live]> ', after=cursor)
         assert_terminal_focus(case, terminal.text()[cursor:])
         cursor = len(terminal.text())
-        terminal.send(case.spec['instruction'] + ' After the single round, give the final synthesis and stop without proposing further consultation. The recall marker is ' + MARKER + '. ${core_documents/global_outline.md} ${core_documents/character_sheets.md}')
+        terminal.send(consultation_request(case.spec, AGENTS_BY_CASE[case.spec['id']]))
         reached = await terminal.wait(('Lead proposal decision > ', 'story[live]> '), after=cursor, seconds=stage_seconds(7))
         require(reached == 'Lead proposal decision > ', 'Required actual shell proposal absent')
         projection = project_collaboration_history(case.history())
@@ -1530,7 +1712,7 @@ async def pty_consultation(case):
             proposal_revision=projection.current_proposal.proposal_revision,
             proposal_digest=projection.current_proposal.proposal_digest,
             kind=CollaborationConfirmationDecision.CONFIRM, revision_request=None)
-        require(tuple((a.specialist_id for a in projection.current_proposal.assignments)) == AGENTS_BY_CASE[case.spec['id']], 'Shell proposal reviewer count/order differed')
+        assert_review_proposal(projection.current_proposal, AGENTS_BY_CASE[case.spec['id']])
         require(not any((c.get('agent') != 'lead_orchestrator' for c in read_call_records(case.directory))), 'Shell dispatched before confirmation')
         cursor = len(terminal.text())
         terminal.send('1')
@@ -1567,11 +1749,13 @@ async def pty_consultation(case):
         await reopened.wait('story[live]> ', seconds=60)
         assert_terminal_focus(case, reopened.text())
         cursor = len(reopened.text())
-        reopened.send('Repeat the conversation marker I provided; briefly recall the consultation without starting new work.')
+        reopened.send(WORKFLOW_FOLLOWUP)
         await reopened.wait('story[live]> ', after=cursor, seconds=stage_seconds(6))
         require('Outcome: answer' in reopened.text()[cursor:] and MARKER in reopened.text()[cursor:], 'Reopened shell did not answer/recall')
         followup_text = reopened.text()[cursor:]
         followup_history = case.history()
+        from types import SimpleNamespace
+        assert_workflow_judgment(followup_history, SimpleNamespace(kind=LeadOutcomeKind.ANSWER))
         latest = [e.payload for e in followup_history
                   if isinstance(e.payload, CollaborationLeadJudgmentPayload)][-1]
         require(normalized_visible(latest.message) in normalized_visible(followup_text),

@@ -122,6 +122,8 @@ class RuntimeExecutionRetirementTests(unittest.TestCase):
                 "specialist_id",
                 "text",
                 "context_event_sink",
+                "authoring_scope",
+                "review_basis",
             ),
             RuntimeSession.lead_turn: (
                 "self",
@@ -138,6 +140,8 @@ class RuntimeExecutionRetirementTests(unittest.TestCase):
                 "specialist_id",
                 "text",
                 "context_event_sink",
+                "authoring_scope",
+                "review_basis",
             ),
         }
         for function, parameters in expected.items():
@@ -146,6 +150,15 @@ class RuntimeExecutionRetirementTests(unittest.TestCase):
                 signature = inspect.signature(function)
                 self.assertEqual(tuple(signature.parameters), parameters)
                 self.assertNotIn("agent_id", signature.parameters)
+                if function in (
+                    StoryRuntime.propose_specialist_advisory,
+                    RuntimeSession.propose_specialist_advisory,
+                ):
+                    self.assertEqual(
+                        tuple(name for name, parameter in signature.parameters.items()
+                              if parameter.kind is inspect.Parameter.KEYWORD_ONLY),
+                        ("authoring_scope", "review_basis"),
+                    )
 
 
 if __name__ == "__main__":

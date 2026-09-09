@@ -22,6 +22,8 @@ from .events import (
     ArtifactApplicationResultPayload, ArtifactReviewCandidatePayload,
     ArtifactReviewedProposal, ArtifactReviewSynthesisPayload,
     CollaborationLeadSynthesisPayload, CollaborationProposal,
+    CollaborationLeadJudgmentPayload, CollaborationSpecialistReplyPayload,
+    CollaborationAssignmentDispatchPayload, authoring_scope_to_dict, review_basis_to_dict,
     CollaborationProviderCallPayload, StoryCommitDecisionPayload,
     StoryCommitRequestPayload, StoryCommitResultPayload,
     ArtifactObjectivePayload, ArtifactObjectivePayloadV2, CollaborationEvent,
@@ -97,7 +99,31 @@ def _visible_details(payload: object) -> dict[str, object]:
         LeadRecommendationRequestPayload, LeadRecommendationDecisionPayload,
         LeadRecommendationStartedPayload, LeadRecommendationResultPayload,
     }:
-        return asdict(payload)
+        details = asdict(payload)
+        if type(payload) is LeadRecommendationRequestPayload:
+            details.pop("authoring_scope", None)
+            if payload.authoring_scope is not None:
+                details["authoring_scope"] = authoring_scope_to_dict(payload.authoring_scope)
+        return details
+    details = _legacy_visible_details(payload)
+    if type(payload) in {CollaborationProposal, CollaborationLeadJudgmentPayload,
+                         CollaborationLeadSynthesisPayload} and payload.authoring_scope is not None:
+        details["authoring_scope"] = authoring_scope_to_dict(payload.authoring_scope)
+    assignments = (payload.assignments if type(payload) is CollaborationProposal else
+                   (payload.assignment,) if type(payload) is CollaborationAssignmentDispatchPayload else ())
+    if assignments and any(item.mode is not None for item in assignments):
+        details["assignments"] = [
+            {"assignment_id": item.assignment_id, "specialist_id": item.specialist_id,
+             "mode": None if item.mode is None else item.mode.value,
+             "review_basis": None if item.review_basis is None else review_basis_to_dict(item.review_basis)}
+            for item in assignments
+        ]
+    if type(payload) is CollaborationSpecialistReplyPayload and payload.mode is not None:
+        details["mode"] = payload.mode.value
+    return details
+
+
+def _legacy_visible_details(payload: object) -> dict[str, object]:
     if type(payload) in {ArtifactReviewSynthesisPayload, ArtifactReviewedProposal}:
         value = {"rationale": payload.rationale, "user_impact": payload.user_impact,
                  "limitations": payload.limitations,

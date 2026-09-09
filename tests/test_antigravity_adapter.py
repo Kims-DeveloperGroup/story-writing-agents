@@ -681,12 +681,12 @@ class AntigravityAdapterTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn(original_role_clause, captured_prompt)
         self.assertEqual(
             definition.fingerprint,
-            "53aa2e28967e5b9992a35a87140d9d81ba7939b0bf7abc27c69fd6aa829f1bce",
+            "7d856feaa92d88789c41248a7b33594620b230d0e0022aeb46ab194aeb639943",
         )
-        self.assertEqual(len(codex_bytes), 5879)
+        self.assertEqual(len(codex_bytes), 9934)
         self.assertEqual(
             hashlib.sha256(codex_bytes).hexdigest(),
-            "e39d65811afa29f6c127d10386e4cbcf570b7da2d257071725e42348904336e9",
+            "ad563bdb0c07dee0c51b77d7e01adf454ec32ad8b176cab9c7fe9c217ba2a6a5",
         )
         expected_role = _expected_antigravity_role(captured_prompt)
         provider_constraint_bytes = next(
@@ -723,7 +723,7 @@ class AntigravityAdapterTests(unittest.IsolatedAsyncioTestCase):
         }
         self.assertEqual(
             tuple(item.serialized_utf8_bytes for item in codex_components),
-            (4, 4952, 251, 10, 662),
+            (4, 9007, 251, 10, 662),
         )
         for codex_component, antigravity_component in zip(
             codex_components, antigravity_components, strict=True
@@ -767,6 +767,7 @@ class AntigravityAdapterTests(unittest.IsolatedAsyncioTestCase):
                 repository_root / "config/agents/lead_orchestrator/AGENTS.md"
             ),
             behavior_policy_components=(),
+            runtime_behavior_policy=b"",
         )
         codex_sample, codex_sample_components = CodexAdapter._definition_file(
             sample_definition
@@ -774,14 +775,14 @@ class AntigravityAdapterTests(unittest.IsolatedAsyncioTestCase):
         antigravity_sample, antigravity_sample_components = (
             AntigravityAdapter._definition_file(sample_definition)
         )
-        self.assertEqual(len(codex_sample), 6779)
+        self.assertEqual(len(codex_sample), 14156)
         self.assertEqual(
             hashlib.sha256(codex_sample).hexdigest(),
-            "654257fbe448e034ff926557fb0b76e4dcc060c052a56d4dc8cee274db8fe256",
+            "030b2069229dbe2d247a855bea446fc0313bb20ce7edc70f22fd02ec28931188",
         )
         self.assertEqual(
             tuple(item.serialized_utf8_bytes for item in codex_sample_components),
-            (4, 5852, 251, 10, 662),
+            (4, 13229, 251, 10, 662),
         )
         self.assertEqual(antigravity_sample, _expected_antigravity_role(codex_sample).replace(original_provider, expected_provider))
         captured_lead_role = sample_definition.system_prompt_file.content

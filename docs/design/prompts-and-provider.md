@@ -190,16 +190,35 @@ The preceding byte table is the immutable historical #381 baseline. The
 built-in runtime now constructs definitions with `provider_managed_context=True`
 and no mutable `context_document_files`. Role prompt, persona, language,
 provider restrictions, and typed wire-v7 protocol remain stable binding material.
+Prompt assembly captures ordered common/family/role file components and appends
+runtime-owned specialist routing policy v1. The effective `system_prompt_file`
+retains the role path but contains the full composition, so its bytes/hash
+differ from the role file alone. `behavior_policy_components` holds the ordered
+captured policies; the Lead component also includes its in-memory v4 contract
+overlay. Trailing `runtime_behavior_policy` holds the appended routing bytes.
+The fingerprint includes both. Valid customized session-worktree policy files
+are preserved; updating the runtime policy invalidates incompatible bindings.
+This does not make modified main-root policies admissible. Journal-free
+workspace readiness recognizes only the complete current policy set or one of
+three exact published v2 sets (pre-routing `68a0782`, contextual-objective
+`2e9ef96`, and recommendation-action `1e482fe`),
+with the matching Git baseline and all other scaffold, marker, index, and
+topology checks. Main-root selection also
+supplies the expected manifest to session-resource/history and Commit/checkpoint
+composition; session customizations do not change it. New initialization and
+incomplete-journal recovery remain current-only. See
+[Workspace API](../reference/workspace-api.md#construction-and-common-methods).
+
 Current core documents are P2 authoritative sources selected by the context
 planner; manuscripts and other additive sources are SEARCH-first.
 
 Lead binding appends a deterministic runtime contract overlay after the
 retained common and Lead policies. Fresh embedded and checked-in Lead defaults
-use the nine-field `lead-outcome-v3` contract. Existing workspace policy files
+use the ten-field `lead-outcome-v4` contract. Existing workspace policy files
 remain unchanged; the overlay supersedes their older front-channel field
 lists and describes contextual objectives. It also preserves the independent
 `lead_synthesis` schema when the same Lead binding synthesizes a review.
-Ordinary `lead-synthesis-v2` results add nullable `recommended_action`, mutually
+Ordinary `lead-synthesis-v3` results add nullable `recommended_action`, mutually
 exclusive with `next_intent`; artifact-review synthesis keeps its exact contract.
 
 A direct custom `AgentDefinition` can still bind explicit
@@ -235,19 +254,22 @@ from route-permitted sources. Focused Lead input and confirmed collaboration in
 the current shell enter this same provider-context flow.
 
 The dynamic workflow material is role-specific. A specialist assignment
-receives one disclosed instruction, exact ordered input IDs, typed assessment
-contract, and only its assignment-local story references. `lead_synthesis`
+receives one disclosed instruction, explicit draft/review mode and review basis,
+exact authoring scope, ordered input IDs, a typed assessment contract, and only
+its assignment-local story references. `lead_synthesis`
 receives every typed reply in canonical order, direct story-artifact inputs,
-mandatory unresolved IDs, and at most one same-lineage continuation contract.
+mandatory unresolved IDs, the proposal's exact authoring scope, and at most
+one same-lineage continuation contract.
 Provider output never supplies confirmation, runtime IDs/budgets, write/Git
 authority, or a call to another agent.
 
 `lead_front_channel` receives the current command, identity, content-free input
-aliases, current owner-conversation objectives and offered draft sources, a
-strict nine-field `lead-outcome-v3` answer contract, and four canonical-core
-status rows. `objective_intent` is explicitly null or a `start`, `continue`, or
-`cancel` intent. Inventory alone supplies no story body. The lead must classify the
-turn as `story_specific` or `workflow_meta`; runtime performs no NLP relabeling.
+aliases, current owner-conversation objectives and offered draft sources,
+offered authoring tasks, a strict ten-field `lead-outcome-v4` answer contract,
+and four canonical-core status rows. `objective_intent`, `recommended_action`, and
+`authoring_scope` are required. Objective intent is explicitly null or a
+`start`, `continue`, or `cancel` intent. Inventory alone supplies no story body.
+The lead must classify the turn as `story_specific` or `workflow_meta`; runtime performs no NLP relabeling.
 For story-specific results the provider selects the minimum ordered current
 evidence IDs supporting `verified`, `missing`, `empty`, `incomplete`, or
 `conflicting`. For workflow/meta it must use `not_applicable`, no IDs, and no
@@ -284,6 +306,12 @@ recommendation Confirm records v2 request/decision origins; a continued objectiv
 keeps its immutable v1 or v2 facts. Execution origin remains independently
 validated, without a synthetic user message. See the
 [objective contract](../reference/runtime-api.md#contextual-authoring-objectives).
+
+Live result contracts are `lead-outcome-v4`, `specialist-reply-v2`,
+`lead-synthesis-v3`, and `artifact-review-synthesis-v2`. Routing scope and review
+basis use schema 1, independently of wire v7, runtime policy v1, and durable
+collaboration history schema v2. Historical omitted routing fields remain
+readable; they cannot authorize a new unscoped consultation.
 
 The lead role prompt never grants tool or agent-dispatch authority. Provider
 SEARCH/READ/ANSWER values are requests to the context service. A proposal in

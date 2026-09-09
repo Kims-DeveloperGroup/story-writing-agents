@@ -401,9 +401,26 @@ class AgentExchangeCaptureLifecycleTests(unittest.TestCase):
         )
         self.assertEqual(len(store.attempts), 1)
         lifecycle.provider_failure(AgentExchangeTerminalCode.PROVIDER_TIMED_OUT)
+        self.assertEqual(len(store.attempts), 3)
+        self.assertEqual(
+            [record.request_type for record in store.records],
+            [
+                AgentExchangeRequestType.REQUEST,
+                AgentExchangeRequestType.RESPONSE,
+                AgentExchangeRequestType.OUTCOME,
+            ],
+        )
+        self.assertEqual(_decoded(store.records)[1], {"provider_failure": True})
+        self.assertEqual(
+            _decoded(store.records)[2],
+            {"code": "provider_timed_out", "outcome": "provider_failure"},
+        )
+        terminal_attempts = tuple(store.attempts)
+        terminal_records = tuple(store.records)
         lifecycle.cancelled()
         lifecycle.record_response(_result())
-        self.assertEqual(len(store.attempts), 2)
+        self.assertEqual(tuple(store.attempts), terminal_attempts)
+        self.assertEqual(tuple(store.records), terminal_records)
 
     def test_response_and_terminal_are_attempted_at_most_once_before_append(
         self,

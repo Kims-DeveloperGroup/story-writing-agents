@@ -43,12 +43,18 @@ boundaries. No CLI or lead path invokes checkpoints merely because a provider
 session is `ready`.
 
 Python callers can call `lead_turn()` and `decide_lead_step()` without an agent
-selector. A lead turn can return a direct answer, question, critique, or
-recommendation, or disclose a bounded consultation proposal. Confirming that
-proposal records authority, atomically records `running` plus every dispatch
+selector. A lead turn can answer workflow/status questions or clarify a request directly.
+Substantive story work requires every affected specialist domain. The Lead can
+first recommend preparing a scoped consultation or artifact-review proposal.
+Confirming the resulting disclosed specialist proposal records authority,
+atomically records `running` plus every dispatch
 before provider work, executes one to three specialists concurrently, and
-returns an authoritative terminal or round-two turn. Specialist advice is
-read-only. A lead artifact intent is resolved by runtime against the complete
+returns an authoritative terminal or round-two turn. Specialists return drafts or reviews without writing files. The Lead integrates
+all required drafts for the current task/revision before final candidate review.
+A fresh finished user-supplied candidate may enter review directly when the Lead
+discloses that interpretation. Mixed work requires the union of its affected
+Plot, Character, and Execution domains. A lead artifact intent is resolved by
+runtime against the complete
 canonical artifact state. Runtime derives its reviewers and, after exact
 confirmation, sends every reviewer the same immutable candidate. A successful
 lead `propose` synthesis records a reviewed proposal whose Apply/write/Git
@@ -77,7 +83,8 @@ Unknown outcomes and recovery states require resolution first.
 
 After a session is attached and an active conversation is focused, every
 ordinary non-slash line is sent literally to the Lead Orchestrator. The lead
-can answer directly or disclose a specialist or artifact-review proposal.
+can answer workflow/status questions directly or disclose a specialist drafting,
+review, or artifact-review proposal.
 Only the terminal's structured decision controls authorize that exact step.
 Slash-prefixed management commands remain provider-free; removed execution
 commands remain unavailable.
@@ -150,7 +157,7 @@ session worktree:
 /conversation new Opening structure
 /status
 /history
-Does this opening conflict with ${core_documents/global_outline.md}?
+Draft a global outline in ${core_documents/global_outline.md}: a courier loses a letter, retraces the route, and returns it.
 /conversation list
 /search opening
 /quit
@@ -164,16 +171,18 @@ only, while the subject is display metadata on a hit.
 Ordinary focused input addresses the Lead without an agent selector:
 
 ```text
-story[novel]> Does this opening conflict with ${core_documents/global_outline.md}?
+story[novel]> Draft a global outline in ${core_documents/global_outline.md}: a courier loses a letter, retraces the route, and returns it.
 [Lead]
-  Outcome: answer
-  Lead: The referenced outline supports the current opening order.
-  Next action: continue_with_lead
+  Outcome: proposal
+  Lead: I propose Plot drafting from your brief for the empty global outline.
+  Next action: submit_confirmation
 ```
 
-Exact wording comes from the configured provider; the typed fields and
-authority boundaries are stable. If the lead recommends preparation or proposes
-specialist work, the shell opens a Confirm/Reject/Revise picker. Free-form `Yes` is contextual Lead
+This synthetic example supplies a drafting brief for the initialized empty
+outline; it does not assume a manuscript already exists. Exact wording comes
+from the configured provider; the typed fields and
+authority boundaries are stable. If the lead recommends preparation or proposes specialist work, the
+shell opens a Confirm/Reject/Revise picker. Free-form `Yes` is contextual Lead
 input. It can express approval of a visible draft, but it never confirms
 review, Apply, or Commit.
 

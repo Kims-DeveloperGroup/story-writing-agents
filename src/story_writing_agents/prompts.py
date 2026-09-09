@@ -29,17 +29,20 @@ from .writing_artifacts.repository import WritingArtifactRepository
 
 
 _LEAD_CONTEXTUAL_CONTRACT_OVERLAY = (
-    "Runtime Lead contract overlay (lead-outcome-v3). This instruction supersedes "
+    "Runtime Lead contract overlay (lead-outcome-v4). This instruction supersedes "
     "older lead_front_channel field lists in the retained workspace policies. "
     "Every front-channel result has exactly scope, evidence_status, evidence_ids, "
-    "kind, message, proposal, artifact_intent, objective_intent, and recommended_action. Follow the "
+    "kind, message, proposal, artifact_intent, objective_intent, recommended_action, and authoring_scope. Follow the "
     "current invocation's strict schema. Interpret the user's intent from the "
     "complete session context and runtime-owned artifact objectives, including "
     "abbreviated approval of a visible draft. No exact command words are required "
-    "to prepare authoring work. When the request and evidence are sufficient, "
+    "to prepare authoring work. When the request, evidence, and all required "
+    "current-task specialist drafts are sufficient, "
     "select objective PREPARE and return an exact artifact proposal. A missing "
-    "detail requires a focused clarification; additional specialist advice is "
-    "appropriate only when needed. Keep the objective OPEN during consultation "
+    "detail requires a focused clarification. Required specialist drafting uses "
+    "objective CONSULT before PREPARE. Fresh review of an actual user-supplied "
+    "finished candidate may proceed without runtime drafting; selected earlier "
+    "Lead draft text is not that exception. Keep the objective OPEN during consultation "
     "and synthesis; advice, review, prose completion and null objective_intent "
     "never satisfy or cancel it. Only the exact successful structured Apply "
     "result satisfies an objective. Draft references are context, not artifact "
@@ -60,6 +63,31 @@ _LEAD_CONTEXTUAL_CONTRACT_OVERLAY = (
     "Ordinary contextual approval remains ordinary authoring input. The lead_synthesis result schema remains the one supplied "
     "by its own invocation; do not copy front-channel fields into synthesis."
 ).encode("utf-8")
+_RUNTIME_BEHAVIOR_POLICY = b"""Runtime specialist routing policy v1
+This runtime-owned policy governs story work even when workspace policies are customized.
+The Lead interprets and visibly discloses versioned authoring scope, coordinates work,
+integrates specialist draft material, and presents results. Workflow, factual status,
+and clarification may be answered directly. Substantive story answers, recommendations,
+critiques, drafting, revision, and review require all affected specialists.
+Plot Architect owns global and part outlines, plot, causality, chronology, pacing,
+and progression. Character Custodian owns motivations, relations, world, and continuity.
+Execution Specialist owns prose, narrative rules, POV, tone, voice, and manuscript.
+Union semantic domains, canonical targets, relevant references, evidence, and the
+explicitly selected current task. Do not omit a required specialist to fit a budget.
+Factual inventory and status alone do not require authoring; status is never read authority.
+Interpret free text visibly; clarify uncertainty instead of claiming keyword recognition.
+Draft mode produces substantive draft material from a sufficient brief, including for
+empty targets. Drafted is not support, review, task completion, Apply, or write authority.
+Review mode requires concrete nonempty draft/candidate inputs and explicit criteria.
+A brief alone is not a review candidate. Request clarification when material is insufficient.
+Specialists return material to the Lead and never write files or perform Git operations.
+The Lead integrates drafts; all required specialists review the exact final artifact
+candidate before a separate Apply decision. Earlier drafts/reviews never authorize Apply.
+Recommendations bind the same substantive authoring task and complete specialist union.
+Preparing a recommendation grants no specialist, draft, review, or Apply authority.
+Only runtime-offered task identities, revisions, input aliases, and evidence IDs are valid.
+Legacy history remains context, never fresh routing or confirmation authority.
+"""
 
 
 class PromptAssembler:
@@ -183,7 +211,8 @@ class PromptAssembler:
             )
         system_prompt_file = PromptFileReference.from_bytes(
             policy_components[-1].path,
-            b"\n\n".join(component.content for component in policy_components),
+            b"\n\n".join(component.content for component in policy_components)
+            + b"\n\n" + _RUNTIME_BEHAVIOR_POLICY,
         )
         persona_file = self._reference(
             self.workspace.persona_path(resolved.persona).relative_to(
@@ -219,6 +248,7 @@ class PromptAssembler:
             context_document_files=context_document_file_tuple,
             provider_managed_context=not include_context_documents,
             behavior_policy_components=policy_components,
+            runtime_behavior_policy=_RUNTIME_BEHAVIOR_POLICY,
         )
 
     def build_request(
@@ -372,6 +402,9 @@ class PromptAssembler:
         )
         value = {
             "agent_id": agent_id,
+            "runtime_behavior_policy_sha256": hashlib.sha256(
+                _RUNTIME_BEHAVIOR_POLICY
+            ).hexdigest(),
             "backend": backend,
             "language": language,
             "components": [

@@ -37,6 +37,13 @@ class AgentPolicyCompositionTests(unittest.TestCase):
         }
 
     def test_policy_order_composition_and_role_isolation_are_exact(self) -> None:
+        from story_writing_agents import prompts
+
+        raw_policy_files = {
+            path: self.workspace.path(path).read_bytes()
+            for agent_id in ROSTER
+            for path in behavior_policy_files(agent_id)
+        }
         definitions = self._definitions()
         for agent_id, definition in definitions.items():
             expected = (
@@ -53,11 +60,19 @@ class AgentPolicyCompositionTests(unittest.TestCase):
                 for item in definition.behavior_policy_components
             )
             self.assertEqual(paths, expected)
+            expected_components = tuple(raw_policy_files[path] for path in expected)
+            if agent_id == LEAD_ORCHESTRATOR:
+                expected_components = (
+                    *expected_components[:-1],
+                    expected_components[-1] + b"\n\n" + prompts._LEAD_CONTEXTUAL_CONTRACT_OVERLAY,
+                )
+            self.assertEqual(
+                tuple(item.content for item in definition.behavior_policy_components),
+                expected_components,
+            )
             self.assertEqual(
                 definition.system_prompt_file.content,
-                b"\n\n".join(
-                    self.workspace.path(path).read_bytes() for path in expected
-                ),
+                b"\n\n".join(expected_components) + b"\n\n" + definition.runtime_behavior_policy,
             )
             other_domains = {
                 AGENT_SPECS[other].system_prompt_file
@@ -68,6 +83,10 @@ class AgentPolicyCompositionTests(unittest.TestCase):
         self.assertNotIn(
             SPECIALIST_COLLABORATION_POLICY_FILE,
             behavior_policy_files(LEAD_ORCHESTRATOR),
+        )
+        self.assertEqual(
+            {path: self.workspace.path(path).read_bytes() for path in raw_policy_files},
+            raw_policy_files,
         )
 
     def test_component_edits_have_exact_fingerprint_impact(self) -> None:
@@ -156,6 +175,27 @@ class AgentPolicyCompositionTests(unittest.TestCase):
                 len(provider_bytes),
                 sum(component.serialized_utf8_bytes for component in components),
             )
+
+
+    def test_runtime_policy_reaches_custom_prompts_without_overwriting_and_refreshes_binding(self):
+        from story_writing_agents import prompts as module
+        for agent_id in ROSTER:
+            self.workspace.path(AGENT_SPECS[agent_id].system_prompt_file).write_text(
+                "Custom workspace role guidance remains user-owned.\n", encoding="utf-8")
+        paths = {path for agent in ROSTER for path in behavior_policy_files(agent)}
+        before = {path:self.workspace.path(path).read_bytes() for path in paths}
+        definitions = self._definitions()
+        for definition in definitions.values():
+            self.assertTrue(definition.runtime_behavior_policy)
+            self.assertIn(definition.runtime_behavior_policy, definition.system_prompt_file.content)
+            self.assertIn(b"Custom workspace role guidance", definition.system_prompt_file.content)
+        with mock.patch.object(module, "_RUNTIME_BEHAVIOR_POLICY", module._RUNTIME_BEHAVIOR_POLICY + b"\nPolicy revision."):
+            revised = self._definitions()
+        self.assertTrue(all(revised[a].fingerprint != definitions[a].fingerprint for a in ROSTER))
+        self.assertEqual({p:self.workspace.path(p).read_bytes() for p in paths}, before)
+        definition = definitions[PLOT_ARCHITECT]
+        with self.assertRaisesRegex(ValueError, "requires composed behavior components"):
+            replace(definition, behavior_policy_components=())
 
 
 if __name__ == "__main__":

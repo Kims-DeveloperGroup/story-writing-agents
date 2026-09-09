@@ -7,6 +7,7 @@ from collections.abc import Mapping
 from dataclasses import dataclass, field
 from enum import StrEnum
 
+from ..specialist_routing import ArtifactReviewDomain, artifact_domain
 from .catalog import CORE_ARTIFACT_PATHS, ArtifactKind, canonical_artifact_kind
 from .change_sets import (
     ArtifactChangeSet,
@@ -102,14 +103,6 @@ class ArtifactRelationshipKind(StrEnum):
     """Closed canonical artifact relationship kinds."""
 
     INLINE_MARKDOWN_LINK = "inline_markdown_link"
-
-
-class ArtifactReviewDomain(StrEnum):
-    """Artifact-domain review facts consumed by later workflow routing."""
-
-    PLOT_STRUCTURE = "plot_structure"
-    CHARACTER_WORLD = "character_world"
-    TONE_EXECUTION = "tone_execution"
 
 
 class ArtifactReviewReason(StrEnum):
@@ -745,15 +738,10 @@ def _edge_key(edge: ArtifactRelationshipEdge) -> tuple[bytes, int, int, bytes, b
 
 
 def _core_review_domain(path: str) -> ArtifactReviewDomain:
-    if path in {
-        "core_documents/global_outline.md",
-        "core_documents/part_outlines.md",
-    }:
-        return ArtifactReviewDomain.PLOT_STRUCTURE
-    if path == "core_documents/character_sheets.md":
-        return ArtifactReviewDomain.CHARACTER_WORLD
-    if path == "core_documents/narrative_rules.md":
-        return ArtifactReviewDomain.TONE_EXECUTION
+    if path in _CORE_PATH_SET:
+        domain = artifact_domain(path)
+        if domain is not None:
+            return domain
     raise ArtifactRelationshipError(ArtifactRelationshipErrorCode.INVALID_SCHEMA)
 
 

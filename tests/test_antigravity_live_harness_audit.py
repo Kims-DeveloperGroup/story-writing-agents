@@ -14,6 +14,50 @@ from unittest import mock
 from tests import antigravity_live_harness as harness
 
 
+def scoped_proposal(agents=('plot_architect',), *, mode='review', proposal_id='scoped_proposal'):
+    from dataclasses import fields, replace
+    from story_writing_agents import conversations as contracts
+    from story_writing_agents.specialist_routing import (ArtifactReviewDomain, AuthoringActivity,
+        AuthoringScope, SpecialistAssignmentMode, ReviewBasis)
+    from tests import collaboration_contract_fixture as fixture
+    domains = dict(zip(harness.BUDGET_REVIEWERS, ArtifactReviewDomain))
+    assignment_mode = SpecialistAssignmentMode(mode)
+    inputs = (fixture.make_input('candidate', kind=contracts.CollaborationInputKind.USER_INPUT,
+        locator='Finished candidate: Nara arrives on day 1 and observes the door on day 3.',
+        start_line=None, end_line=None),)
+    assignments = tuple(replace(fixture.make_assignment('assignment_' + agent, specialist_id=agent,
+        input_ids=('candidate',)), mode=assignment_mode,
+        review_basis=ReviewBasis(('candidate',), 'Assess the supplied facts without inventing missing evidence.')
+        if mode == 'review' else None) for agent in agents)
+    # Build the legacy scaffold, then create one digest-bound current proposal.
+    legacy = fixture.make_proposal(proposal_id=proposal_id, inputs=inputs,
+        assignments=tuple(replace(a, mode=None, review_basis=None) for a in assignments))
+    values = {field.name: getattr(legacy, field.name) for field in fields(legacy)
+              if field.name not in {'proposal_digest', 'authoring_scope', 'assignments'}}
+    return contracts.CollaborationProposal.create(**values, assignments=assignments,
+        authoring_scope=AuthoringScope(AuthoringActivity(mode), (), tuple(domains[a] for a in agents),
+            'Finished supplied candidate.' if mode == 'review' else 'Requested draft.', proposal_id, 1))
+
+
+def scoped_executed_history(proposal, *, failed_assignment_id=None):
+    from story_writing_agents import conversations as contracts
+    from tests import collaboration_contract_fixture as fixture
+    by_id = {a.assignment_id: a for a in proposal.assignments}
+    def reply(*args, **kwargs):
+        assignment = by_id[args[4]]
+        if assignment.mode is harness.SpecialistAssignmentMode.DRAFT:
+            args = (*args[:6], contracts.CollaborationSpecialistAssessment.DRAFTED, *args[7:])
+        return contracts.CollaborationSpecialistReplyPayload(*args, **kwargs, mode=assignment.mode)
+    def synthesis(*args, **kwargs):
+        return contracts.CollaborationLeadSynthesisPayload(*args, **kwargs, authoring_scope=proposal.authoring_scope)
+    def judgment(*args, **kwargs):
+        return contracts.CollaborationLeadJudgmentPayload(*args, **kwargs, authoring_scope=proposal.authoring_scope)
+    with mock.patch.object(fixture, 'CollaborationSpecialistReplyPayload', side_effect=reply), \
+         mock.patch.object(fixture, 'CollaborationLeadSynthesisPayload', side_effect=synthesis), \
+         mock.patch.object(fixture, 'CollaborationLeadJudgmentPayload', side_effect=judgment):
+        return fixture.executed_history(proposal, failed_assignment_id=failed_assignment_id)
+
+
 class LiveHarnessAuditTests(unittest.TestCase):
     def setUp(self):
         temporary = tempfile.TemporaryDirectory()
@@ -159,6 +203,50 @@ class LiveHarnessAuditTests(unittest.TestCase):
                     AssertionError, "unambiguous durable REQUEST"):
                 audit(changed, selected_calls)
 
+    def test_unavailable_output_distinguishes_failure_response_from_cancellation(self):
+        call = copy.deepcopy(self.calls[0])
+        call.pop("delivered_returncode")
+        call["exception_type"] = "ProviderInvocationError"
+        request, response, terminal = copy.deepcopy(self.exchanges[:3])
+        response["content"] = json.dumps({"provider_failure": True})
+        terminal["content"] = json.dumps({"code": "provider_timed_out", "outcome": "provider_failure"})
+        failure_records = [request, response, terminal]
+        failure_audit = harness.audit_exchanges(failure_records, [call])
+        self.assertEqual(failure_audit[0]["outcome"], "provider_failure")
+        self.assertIs(failure_audit[0]["completed_output"], False)
+
+        cancelled_call = dict(call, exception_type="CancelledError")
+        cancelled_terminal = dict(terminal, content=json.dumps({"code": "cancelled", "outcome": "cancelled"}))
+        cancelled_records = [request, cancelled_terminal]
+        cancelled_audit = harness.audit_exchanges(cancelled_records, [cancelled_call])
+        self.assertEqual(cancelled_audit[0]["outcome"], "cancelled")
+        self.assertIs(cancelled_audit[0]["completed_output"], False)
+
+        for variant in ("missing_failure_response", "duplicate_failure_response", "extra_cancelled_response",
+                        "accepted_shape", "unverified_diagnostic", "nonboolean_marker", "missing_exception"):
+            records = copy.deepcopy(failure_records)
+            selected_call = dict(call)
+            if variant == "missing_failure_response":
+                records.pop(1)
+            elif variant == "duplicate_failure_response":
+                records.insert(1, copy.deepcopy(response))
+            elif variant == "extra_cancelled_response":
+                records = [request, response, cancelled_terminal]
+                selected_call = cancelled_call
+            elif variant == "accepted_shape":
+                records[1]["content"] = self.exchanges[1]["content"]
+            elif variant == "unverified_diagnostic":
+                records[1]["content"] = json.dumps({"provider_failure": True, "response_diagnostic": {
+                    "stdout": {"encoding": "utf-8", "data": "unverified"},
+                    "stderr": {"encoding": "utf-8", "data": ""}, "exit_code": 1}})
+            elif variant == "nonboolean_marker":
+                records[1]["content"] = json.dumps({"provider_failure": 1})
+            else:
+                selected_call.pop("exception_type")
+            with self.subTest(variant=variant), self.assertRaisesRegex(
+                    AssertionError, "RESPONSE count|exact synthetic marker|accepted or unexplained"):
+                harness.audit_exchanges(records, [selected_call])
+
     def test_typed_events_preserve_discriminators_through_complete_audit(self):
         from story_writing_agents import conversations as contracts
         from tests.collaboration_contract_fixture import LEAD, RUNTIME, USER, make_lead_evidence
@@ -195,6 +283,205 @@ class LiveHarnessAuditTests(unittest.TestCase):
         self.assertEqual(harness.canonical_history(typed), canonical)
         self.assertIs(harness.canonical_history([canonical[0]])[0], canonical[0])
         self.assertEqual(harness.audit_exchanges(self.exchanges, self.calls, typed), self.audit())
+
+
+    def test_current_scenario_review_bases_and_exact_domains(self):
+        from types import SimpleNamespace
+        from dataclasses import replace, fields
+        from story_writing_agents import conversations as contracts
+        from story_writing_agents.specialist_routing import artifact_domain, specialists_for_domains
+        selections = {**harness.AGENTS_BY_CASE, 'L08-DECISIONS': ('plot_architect',),
+            'L09-SECOND-ROUND': ('plot_architect',), 'F01-REFERENCE-DRIFT': ('plot_architect',),
+            'F02-LOST-AUTHORITY': ('plot_architect',),
+            'F03-CANCELLATION': ('plot_architect', 'character_custodian'),
+            'F04-FAILURE-RECOVERY': ('plot_architect', 'character_custodian'),
+            'F06-BUDGET-FINALIZATION': harness.BUDGET_REVIEWERS}
+        no_references = {'L08-DECISIONS', 'L09-SECOND-ROUND', 'F02-LOST-AUTHORITY',
+                         'F03-CANCELLATION', 'F04-FAILURE-RECOVERY'}
+        for case_id, agents in selections.items():
+            with self.subTest(case=case_id):
+                spec = harness.selected_spec(case_id)
+                proposal = scoped_proposal(agents)
+                turn = SimpleNamespace(kind=harness.LeadOutcomeKind.PROPOSAL,
+                    state=harness.CollaborationStepState.AWAITING_CONFIRMATION, proposal=proposal)
+                case = SimpleNamespace(spec=spec, observer=SimpleNamespace(calls=[]),
+                    lead=mock.AsyncMock(return_value=turn))
+                self.assertIs(asyncio.run(harness.ConversationCase.propose(
+                    case, agents, references=case_id not in no_references)), turn)
+                request = case.lead.await_args.args[0]
+                paths = re.findall(r'\$\{([^}]+)\}', request)
+                domains = tuple(dict.fromkeys(artifact_domain(path) for path in paths))
+                self.assertTrue(set(specialists_for_domains(domains)) <= set(agents))
+                if case_id in no_references or case_id == 'L02-PRO-LOW-ONE':
+                    self.assertIn(spec['candidate_text'], request)
+                if case_id == 'L02-PRO-LOW-ONE':
+                    self.assertNotIn('${manuscript/', request)
+                missing = replace(proposal.basis.inputs[0], state=contracts.CollaborationInputState.ABSENT)
+                values = {field.name: getattr(proposal, field.name) for field in fields(proposal)
+                          if field.name not in {'proposal_digest', 'basis'}}
+                unavailable = contracts.CollaborationProposal.create(**values,
+                    basis=replace(proposal.basis, inputs=(missing,)))
+                with self.assertRaisesRegex(AssertionError, 'unavailable'):
+                    harness.assert_review_proposal(unavailable, agents)
+                with self.assertRaisesRegex(AssertionError, 'REVIEW'):
+                    harness.assert_review_proposal(scoped_proposal(agents, mode='draft'), agents)
+        recovery = harness.selected_spec('F04-FAILURE-RECOVERY')
+        request = harness.consultation_request(recovery, ('character_custodian',),
+            text=recovery['recovery_instruction'], references=False)
+        self.assertNotIn(recovery['candidate_text'], request)
+        self.assertIn('finished character candidate', request)
+
+    def test_drafted_inputs_are_not_unresolved_review_failures(self):
+        from dataclasses import replace
+        from story_writing_agents import conversations as contracts
+        for mode in ('draft', 'review'):
+            proposal = scoped_proposal(mode=mode)
+            history, _, _ = scoped_executed_history(proposal)
+            replies = [e for e in history if isinstance(e.payload, contracts.CollaborationSpecialistReplyPayload)]
+            synthesis = next(e.payload for e in history if isinstance(e.payload, contracts.CollaborationLeadSynthesisPayload))
+            harness.assert_scoped_synthesis(proposal, replies, synthesis)
+            for assessment in ((contracts.CollaborationSpecialistAssessment.INSUFFICIENT_EVIDENCE,)
+                               if mode == 'draft' else
+                               (contracts.CollaborationSpecialistAssessment.CONCERN,
+                                contracts.CollaborationSpecialistAssessment.CONFLICT,
+                                contracts.CollaborationSpecialistAssessment.INSUFFICIENT_EVIDENCE)):
+                changed = [replace(replies[0], payload=replace(replies[0].payload, assessment=assessment))]
+                with self.assertRaisesRegex(AssertionError, 'unresolved'):
+                    harness.assert_scoped_synthesis(proposal, changed, synthesis)
+                harness.assert_scoped_synthesis(proposal, changed,
+                    replace(synthesis, unresolved_input_ids=proposal.assignments[0].input_ids))
+            with self.assertRaisesRegex(AssertionError, 'task scope'):
+                harness.assert_scoped_synthesis(proposal, replies,
+                    replace(synthesis, authoring_scope=replace(proposal.authoring_scope, task_id='wrong_task')))
+            wrong_mode = harness.SpecialistAssignmentMode.REVIEW if mode == 'draft' else harness.SpecialistAssignmentMode.DRAFT
+            wrong = replace(replies[0].payload, mode=wrong_mode,
+                assessment=contracts.CollaborationSpecialistAssessment.INSUFFICIENT_EVIDENCE)
+            with self.assertRaisesRegex(AssertionError, 'mode'):
+                harness.assert_scoped_synthesis(proposal, [replace(replies[0], payload=wrong)], synthesis)
+        # A DRAFTED payload cannot even be constructed in REVIEW mode.
+        with self.assertRaises(ValueError):
+            replace(replies[0].payload, mode=harness.SpecialistAssignmentMode.REVIEW,
+                    assessment=contracts.CollaborationSpecialistAssessment.DRAFTED)
+
+    def test_workflow_outcomes_keep_story_judgment_out_of_direct_cases(self):
+        from types import SimpleNamespace
+        from dataclasses import replace
+        from story_writing_agents import conversations as contracts
+        from story_writing_agents.specialist_routing import AuthoringScope, AuthoringActivity
+        from tests import collaboration_contract_fixture as fixture
+        scope = AuthoringScope(AuthoringActivity.WORKFLOW, (), (), 'Only workflow or literal lookup.', 'workflow_task', 1)
+        for kind in (harness.LeadOutcomeKind.ANSWER, harness.LeadOutcomeKind.QUESTION,
+                     harness.LeadOutcomeKind.CRITIQUE):
+            # Verified contextual receipts remain compatible with a fresh workflow scope.
+            judgment = contracts.CollaborationLeadJudgmentPayload(kind, 'Workflow result.',
+                fixture.make_lead_evidence(), authoring_scope=scope)
+            history = [SimpleNamespace(payload=judgment)]
+            result = SimpleNamespace(kind=kind, proposal=None)
+            harness.assert_workflow_judgment(history, result)
+            story = scoped_proposal().authoring_scope
+            with self.assertRaisesRegex(AssertionError, 'workflow-only'):
+                harness.assert_workflow_judgment([SimpleNamespace(payload=replace(judgment, authoring_scope=story))], result)
+            with self.assertRaisesRegex(AssertionError, 'reused'):
+                harness.assert_workflow_judgment([SimpleNamespace(payload=SimpleNamespace(authoring_scope=replace(story, task_id=scope.task_id))), *history], result)
+        for case_id, kind in (('L06A-QUESTION', harness.LeadOutcomeKind.QUESTION),):
+            judgment = contracts.CollaborationLeadJudgmentPayload(kind, 'Workflow result.',
+                fixture.make_lead_evidence(), authoring_scope=scope)
+            case = SimpleNamespace(spec=harness.selected_spec(case_id),
+                lead=mock.AsyncMock(return_value=SimpleNamespace(kind=kind, proposal=None)),
+                history=lambda: [SimpleNamespace(payload=judgment)])
+            asyncio.run(harness.ConversationCase.dispatch(case))
+            case.lead.assert_awaited_once_with(case.spec['instruction'])
+
+        recommendation = contracts.CollaborationLeadJudgmentPayload(
+            harness.LeadOutcomeKind.RECOMMENDATION, 'Legacy workflow recommendation.',
+            fixture.make_lead_evidence(), authoring_scope=scope)
+        with self.assertRaisesRegex(AssertionError, 'recommendation authority'):
+            harness.assert_workflow_judgment([SimpleNamespace(payload=recommendation)],
+                SimpleNamespace(kind=harness.LeadOutcomeKind.RECOMMENDATION))
+
+    def test_l06c_requires_exact_pending_plot_recommendation_without_execution(self):
+        from dataclasses import fields, replace
+        from types import SimpleNamespace
+        from story_writing_agents import conversations as contracts
+        from story_writing_agents.specialist_routing import ArtifactReviewDomain
+        from tests.recommendation_fixture import RecommendationCase, action, recommendation
+
+        runtime_case = RecommendationCase()
+        self.addCleanup(runtime_case.doCleanups)
+        runtime_case.setUp()
+        conversation_id = runtime_case.conversation('L06C pending Plot recommendation')
+        spec = harness.selected_spec('L06C-RECOMMENDATION')
+        runtime_case.backend.enqueue(recommendation(message=spec['candidate_text'],
+            recommended_action=action(kind='prepare_consultation',
+                purpose='Prepare a separately confirmed chronology review.',
+                instruction='Prepare a Plot REVIEW proposal for the supplied finished outline.')))
+        observer = SimpleNamespace(calls=[])
+        turns = []
+
+        async def lead(text):
+            turn = await runtime_case.runtime.lead_turn(runtime_case.session_id, conversation_id, text)
+            observer.calls[:] = [{'agent': agent} for agent, _ in runtime_case.backend.call_records]
+            turns.append(turn)
+            return turn
+
+        case = SimpleNamespace(spec=spec, lead=mock.AsyncMock(side_effect=lead), observer=observer,
+            history=lambda: runtime_case.history(conversation_id))
+        before = runtime_case.snapshots()
+        asyncio.run(harness.ConversationCase.dispatch(case))
+        case.lead.assert_awaited_once_with(spec['instruction'] + '\nFinished user-supplied outline:\n'
+                                          + spec['candidate_text'])
+        self.assertEqual(len(turns), 1)
+        turn = turns[0]
+        history = case.history()
+        request = turn.recommendation_request
+        self.assertIs(harness.assert_pending_plot_recommendation(history, turn, observer.calls), request)
+        self.assertEqual(runtime_case.snapshots(), before)
+        runtime_case.assert_no_downstream(conversation_id)
+        self.assertEqual(sum(type(e.payload) is contracts.CollaborationMessagePayload
+                             and e.direction is contracts.CollaborationDirection.USER_TO_LEAD for e in history), 1)
+        self.assertIs(runtime_case.projection(conversation_id).current_recommendation_state,
+                      contracts.LeadRecommendationState.PENDING)
+        scope = request.authoring_scope
+
+        def returned(**changes):
+            values = {field.name: getattr(turn, field.name) for field in fields(turn)}
+            values.update(changes)
+            return SimpleNamespace(**values)
+
+        profiles = tuple(replace(profile, agent_id='execution_specialist')
+                         if profile.agent_id == 'plot_architect' else profile
+                         for profile in request.basis.agent_profiles)
+        nonplot = replace(request, specialist_ids=('execution_specialist',),
+            basis=replace(request.basis, agent_profiles=profiles),
+            authoring_scope=replace(scope, target_paths=(), domains=(ArtifactReviewDomain.TONE_EXECUTION,)))
+        invalid = (
+            ('absent request', returned(recommendation_request=None), 'typed recommendation'),
+            ('absent scope', returned(recommendation_request=replace(request, authoring_scope=None)), 'REVIEW scope'),
+            ('missing Plot', returned(recommendation_request=nonplot), 'required Plot'),
+            ('foreign task', returned(recommendation_request=replace(request,
+                authoring_scope=replace(scope, task_id='foreign_task'))), 'durable tail'),
+            ('fabricated request', returned(recommendation_request=replace(request,
+                request_id='fabricated_request')), 'durable tail'),
+            ('foreign conversation', returned(conversation_id='foreign_conversation'), 'durable tail'),
+            ('fabricated proposal', returned(proposal=object()), 'downstream proposal'),
+            ('fabricated Apply', returned(artifact_application_request=object()), 'downstream proposal'),
+            ('fabricated Commit', returned(story_commit_request=object()), 'downstream proposal'),
+        )
+        for name, corrupted, message in invalid:
+            with self.subTest(case=name), self.assertRaisesRegex(AssertionError, message):
+                harness.assert_pending_plot_recommendation(history, corrupted, observer.calls)
+        with self.assertRaisesRegex(AssertionError, 'unconfirmed downstream'):
+            harness.assert_pending_plot_recommendation(history, turn,
+                [*observer.calls, {'agent': 'plot_architect'}])
+        source = next(e for e in history if e.event_id == request.source_recommendation_event_id)
+        for changes, message in (({'authoring_scope': replace(scope, task_id='foreign_task')}, 'task scope'),
+                                  ({'message': source.payload.message + 'changed'}, 'digest differs')):
+            changed_history = tuple(replace(e, payload=replace(source.payload, **changes))
+                                    if e.event_id == source.event_id else e for e in history)
+            with self.assertRaisesRegex(AssertionError, message):
+                harness.assert_pending_plot_recommendation(changed_history, turn, observer.calls)
+        self.assertEqual(case.history(), history)
+        self.assertEqual(runtime_case.snapshots(), before)
 
     def test_missing_marker_rejects(self):
         directory = Path(self.calls[3]["directory"])
@@ -367,17 +654,11 @@ class LiveRecoveryCoverageTests(unittest.IsolatedAsyncioTestCase):
         from story_writing_agents import conversations as contracts
         from tests import collaboration_contract_fixture as fixture
 
-        old_proposal = fixture.make_proposal(inputs=(fixture.make_input(),), assignments=(
-            fixture.make_assignment(),
-            fixture.make_assignment("assignment_character", specialist_id="character_custodian"),
-        ))
-        failed, _, _ = fixture.executed_history(
-            old_proposal, failed_assignment_id="assignment_character")
-        proposal = fixture.make_proposal(
-            proposal_id="recovery_proposal", inputs=(fixture.make_input(),),
-            assignments=(fixture.make_assignment("recovery_character", specialist_id="character_custodian"),),
-        )
-        recovered, proposal, _ = fixture.executed_history(proposal)
+        old_proposal = scoped_proposal(('plot_architect', 'character_custodian'), proposal_id='failed_proposal')
+        failed, _, _ = scoped_executed_history(
+            old_proposal, failed_assignment_id='assignment_character_custodian')
+        proposal = scoped_proposal(('character_custodian',), proposal_id='recovery_proposal')
+        recovered, proposal, _ = scoped_executed_history(proposal)
         recovered = tuple(replace(e, payload=replace(
             e.payload, assessment=contracts.CollaborationSpecialistAssessment.CONCERN))
             if isinstance(e.payload, contracts.CollaborationSpecialistReplyPayload) else
@@ -441,7 +722,8 @@ class LiveRecoveryCoverageTests(unittest.IsolatedAsyncioTestCase):
     async def test_failure_recovery_uses_new_lead_proposal_and_confirmation(self):
         from types import SimpleNamespace, MethodType
         failed, recovered, proposed, completed, faulted, fresh = self.recovery_fixture()
-        failed_turn = SimpleNamespace(step_id="failed-step", confirmation_request_id="old-confirm")
+        failed_turn = SimpleNamespace(step_id="failed-step", confirmation_request_id="old-confirm",
+            proposal=scoped_proposal(("plot_architect", "character_custodian"), proposal_id="failed_proposal"))
         for early_dispatch in (False, True):
             with self.subTest(early_dispatch=early_dispatch):
                 order = []
@@ -574,6 +856,8 @@ class LiveBudgetContinuationTests(unittest.TestCase):
             "scope": "story_specific", "reply_event_ids": ["reply-plot", "reply-character", "reply-execution"],
             "unresolved_input_ids": ["user_input", "reference_1"],
         }
+        from story_writing_agents.conversations.events import authoring_scope_to_dict
+        contract["authoring_scope"] = authoring_scope_to_dict(scoped_proposal(harness.BUDGET_REVIEWERS).authoring_scope)
         payload = {"c": "synthetic-synthesis-correlation", "i": {
             "workflow": "lead_synthesis", "answer_contract": contract,
             "inputs": [{"input_id": "user_input", "kind": "user_input"},
@@ -583,7 +867,7 @@ class LiveBudgetContinuationTests(unittest.TestCase):
             "status": "SUCCESS", "conversation_id": "synthetic-thread", "json_schema": {"type": "object"},
             "structured_output": {"correlation": payload["c"], "action": {
                 "kind": "answer", "used_handles": [], "result": {
-                    **copy.deepcopy(contract), "message": "A complete visible synthesis.", "next_intent": None,
+                    **copy.deepcopy(contract), "message": "A complete visible synthesis.", "next_intent": None, "recommended_action": None,
                 },
             }}, "usage": {"input_tokens": 13, "output_tokens": 7},
         }
@@ -601,6 +885,9 @@ class LiveBudgetContinuationTests(unittest.TestCase):
         self.assertEqual([a["agent_id"] for a in intent["assignments"]], list(harness.BUDGET_REVIEWERS))
         for assignment in intent["assignments"]:
             self.assertEqual(assignment["input_ids"], ["user_input", "reference_1", *contract["reply_event_ids"]])
+            self.assertEqual(assignment["mode"], "review")
+            self.assertEqual(assignment["review_basis"]["candidate_input_ids"], ["reference_1"])
+        self.assertEqual(intent["authoring_scope"], contract["authoring_scope"])
         actual["structured_output"]["action"]["result"]["next_intent"] = None
         self.assertEqual(actual, original)
         self.assertEqual(native, original)
@@ -625,7 +912,7 @@ class LiveBudgetContinuationTests(unittest.TestCase):
             wrong["i"]["workflow"] = workflow
             with self.subTest(workflow=workflow), self.assertRaises(AssertionError):
                 mutate(request=wrong)
-        for mutation in ("status", "correlation", "kind", "missing", "evidence", "unresolved"):
+        for mutation in ("status", "correlation", "kind", "missing", "evidence", "unresolved", "recommended_action"):
             wrong = copy.deepcopy(native)
             action = wrong["structured_output"]["action"]
             if mutation == "status":
@@ -638,6 +925,8 @@ class LiveBudgetContinuationTests(unittest.TestCase):
                 del action["result"]["message"]
             elif mutation == "evidence":
                 action["result"]["evidence_ids"] = []
+            elif mutation == "recommended_action":
+                action["result"]["recommended_action"] = {"kind": "prepare_artifact"}
             else:
                 action["result"]["unresolved_input_ids"] = []
             with self.subTest(native=mutation), self.assertRaises(AssertionError):

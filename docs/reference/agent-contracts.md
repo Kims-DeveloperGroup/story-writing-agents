@@ -25,7 +25,9 @@ AgentDefinition(agent_id: str, backend: str, fingerprint: str,
     system_prompt_file: PromptFileReference,
     persona_file: PromptFileReference, language: str,
     context_document_files: tuple[PromptFileReference, ...],
-    provider_managed_context: bool = False)
+    provider_managed_context: bool = False,
+    behavior_policy_components: tuple[PromptFileReference, ...] = (),
+    runtime_behavior_policy: bytes = b"")
 AgentDefinition.file_references() -> tuple[PromptFileReference, ...]
 ```
 
@@ -33,9 +35,21 @@ References are frozen content snapshots. Construction validates strict UTF-8
 and requires the SHA-256 to match the captured bytes; `content` is omitted from
 their representation. `path` is a lexical source identity, not continuing read
 authority: `read_text()` decodes the captured bytes, and provider binding does
-not reread the path. A definition's fingerprint covers the agent, backend,
-language, component identities, and hashes. Runtime bindings are cached by
+not reread the path. A built-in definition's fingerprint covers the agent,
+backend, language, ordered file-component identities/hashes, and runtime policy
+bytes. Runtime bindings are cached by
 `(agent_id, fingerprint)`.
+
+Built-in `system_prompt_file` contains effective composed bytes: common policy,
+specialist-family policy where applicable, role policy with the Lead contract
+overlay for the Lead, then runtime routing policy v1. Its path retains the
+role-policy source identity; its content/hash
+is not the on-disk role file alone. `behavior_policy_components` captures the
+ordered captured policies, with the Lead component including its in-memory
+contract overlay; `runtime_behavior_policy` is a separate trailing UTF-8 byte
+value, not a file component. The runtime preserves workspace files.
+Custom definitions may omit both trailing fields for compatibility; a nonempty
+runtime policy requires components and an exactly matching composed prompt.
 
 Collaboration proposals persist both a definition fingerprint and a separate
 content-free execution-profile fingerprint. The latter binds the selected
@@ -65,10 +79,10 @@ change the stable definition fingerprint. Role-prompt and persona references
 remain content-backed at definition construction.
 
 The runtime appends a deterministic Lead contract overlay to the retained
-common and Lead policy snapshots. It specifies the current nine-field
-`lead-outcome-v3` contract and contextual objectives without rewriting an
+common and Lead policy snapshots. It specifies the current ten-field
+`lead-outcome-v4` contract and contextual objectives without rewriting an
 existing workspace's policies. Fresh checked-in and embedded Lead defaults
-already describe v3. The overlay preserves the separate `lead_synthesis`
+already describe v4. The overlay preserves the separate `lead_synthesis`
 result schema. Ordinary synthesis has a nullable `recommended_action`;
 specialist replies and artifact-review synthesis retain their own schemas.
 
@@ -134,7 +148,7 @@ actions and bounds valid for that physical call:
 ```
 
 ```json
-{"correlation":"<exact-token>","action":{"kind":"answer","result":{"scope":"workflow_meta","evidence_status":"not_applicable","evidence_ids":[],"kind":"answer","message":"Hello. What would you like to work on?","artifact_intent":null,"proposal":null,"objective_intent":null,"recommended_action":null},"used_handles":[]}}
+{"correlation":"<exact-token>","action":{"kind":"answer","result":{"scope":"workflow_meta","authoring_scope":{"schema_version":1,"activity":"workflow","target_paths":[],"domains":[],"interpretation":"Answer the workflow question.","task_id":"task_demo","task_revision":1},"evidence_status":"not_applicable","evidence_ids":[],"kind":"answer","message":"Hello. What would you like to work on?","artifact_intent":null,"proposal":null,"objective_intent":null,"recommended_action":null},"used_handles":[]}}
 ```
 
 SEARCH has required `kind`, nullable `path_prefix`, and nonempty typed
@@ -149,9 +163,10 @@ Schema enforces uniqueness or canonical order.
 READ has required `kind` and nonempty typed `handles`. ANSWER has required
 `kind`, the exact invocation-specific object in `result`, and typed
 `used_handles`. The Lead front-channel result in the example is the complete
-`lead-outcome-v3` value: it always has exactly nine fields, `scope`,
-`evidence_status`, `evidence_ids`, `kind`, `message`, `artifact_intent`,
-`proposal`, `objective_intent`, and `recommended_action`, including explicit nulls.
+`lead-outcome-v4` value: it always has exactly ten fields, `scope`,
+`evidence_status`, `evidence_ids`, `kind`, `message`, `proposal`,
+`artifact_intent`, `objective_intent`, `recommended_action`, and
+`authoring_scope`, including explicit nulls for unused intents.
 
 No action or result object is encoded as JSON text. Runtime still checks the closed schema, exact
 correlation, issued handles, result-domain contract, and current source
@@ -178,6 +193,7 @@ CollaborationLeadJudgmentPayload(
     kind: LeadOutcomeKind,
     message: str,
     evidence: CollaborationLeadEvidence,
+    authoring_scope: AuthoringScope | None = None,
 )
 CollaborationLeadOutcomeFailurePayload(
     code: CollaborationLeadOutcomeFailureCode,
@@ -242,6 +258,13 @@ A fresh front-channel recommendation requires one `prepare_artifact` or
 `prepare_consultation` action and `objective_intent=null`. Other kinds require
 `recommended_action=null`. Runtime replaces source aliases with exact event or
 input identities and discloses the action, basis, impact, and call reservation.
+The request requires substantive scope; consultation preparation includes every
+affected specialist. Its optional Python `authoring_scope` is keyword-only and
+binds the canonical scope into `action_digest` when present. Legacy omission
+remains omitted in codecs and digests; an old pending unscoped request is stale
+and requires fresh planning. Confirm retains the exact current task/revision
+and scope. Revise offers the same task's next revision with existing obligations
+preserved and a fresh decision required.
 Confirm authorizes one preparation only. Review/execution, Apply, and Commit
 retain separate decisions. Ordinary contextual approval is a new instruction
 and can supersede the unconfirmed recommendation without a fabricated Confirm.
@@ -251,6 +274,45 @@ an existing objective preserves its immutable v1 or v2 facts independently of
 the preparation execution origin. See the
 [exact API](runtime-api.md#leadrecommendationdecision) and
 [versioned history](collaboration-history.md#recommendation-preparation-events).
+
+## Authoring scope and assignments
+
+Pure ownership values are direct-module APIs from
+`story_writing_agents.specialist_routing`:
+
+```python
+AuthoringScope(
+    activity: AuthoringActivity,  # workflow | draft | revise | review
+    target_paths: tuple[str, ...],
+    domains: tuple[ArtifactReviewDomain, ...],
+    interpretation: str,
+    task_id: str,
+    task_revision: int,
+    schema_version: int = 1,
+)
+ReviewBasis(candidate_input_ids: tuple[str, ...], criteria: str,
+            schema_version: int = 1)
+SpecialistAssignmentMode         # draft | review
+```
+
+Domains have canonical order `plot_structure`, `character_world`,
+`tone_execution`. Runtime unions semantic domains, affected canonical paths,
+and an explicitly selected current task; empty/missing targets still count.
+Workflow scopes have no domains or targets. Interpretation remains model-owned;
+these values confer no reads, execution, or write authority.
+
+Live `LeadAssignmentIntent` and `CollaborationAssignment` carry explicit `mode`
+and `review_basis`: draft requires a null basis, while review requires concrete
+nonempty candidate inputs and criteria. The conversations facade owns the exact
+`authoring_scope_to_dict`/`authoring_scope_from_dict` and
+`review_basis_to_dict`/`review_basis_from_dict` durable codecs.
+
+The strict provider contracts are `lead-outcome-v4`, `specialist-reply-v2`,
+`lead-synthesis-v3`, and `artifact-review-synthesis-v2`. Lead outcomes require
+scope; synthesis repeats the proposal's exact `authoring_scope`. Existing
+schema-v2 durable history retains optional omitted routing fields for historical
+compatibility; live output may not omit them. An old unscoped pending proposal
+needs fresh scope and confirmation, not reinterpretation as current authority.
 
 ## Specialist reply and lead synthesis
 
@@ -268,6 +330,7 @@ CollaborationSpecialistReplyPayload(
     assessment: CollaborationSpecialistAssessment,
     message: str,
     input_ids: tuple[str, ...],
+    mode: SpecialistAssignmentMode | None = None,
 )
 CollaborationLeadSynthesisPayload(
     proposal_id: str,
@@ -279,19 +342,23 @@ CollaborationLeadSynthesisPayload(
     unresolved_input_ids: tuple[str, ...],
     evidence: CollaborationLeadEvidence,
     next_intent: LeadProposalIntent | None = None,
+    authoring_scope: AuthoringScope | None = None,
 )
 ```
 
 The constructor above is the unchanged durable synthesis payload. The ordinary
-provider result uses `lead-synthesis-v2` and additionally requires nullable
+provider result uses `lead-synthesis-v3` and additionally requires nullable
 `recommended_action`, mutually exclusive with `next_intent`. Runtime stores an
 action in a separate versioned recommendation request; historical synthesis
 bytes and the artifact-review synthesis contract remain unchanged.
 
-Assessment is exactly `supports`, `concern`, `conflict`, or
-`insufficient_evidence`. The reply must repeat its assignment ID and exact
+Draft-mode assessment is `drafted` or `insufficient_evidence`; review-mode
+assessment is `supports`, `concern`, `conflict`, or `insufficient_evidence`.
+The reply must repeat its assignment mode, assignment ID, and exact
 ordered input IDs. Synthesis must cite every successful reply event in order
-and cannot omit an input from a non-supporting reply. A non-null `next_intent`
+and cannot omit an input from a concern, conflict, or insufficient-evidence
+reply. `drafted` contributes material without asserting support or final review.
+A non-null `next_intent`
 must be `continue_lineage`, cover the original and reply-event inputs exactly,
 and is accepted only after round one. Round two cannot continue again.
 Synthesis also preserves the proposal's exact story-specific evidence; reply

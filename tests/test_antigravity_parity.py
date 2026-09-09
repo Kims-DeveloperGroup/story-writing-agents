@@ -2318,6 +2318,7 @@ class AntigravityParityTests(unittest.IsolatedAsyncioTestCase):
                 "response_text",
                 "usage",
                 "actual_transport_utf8_bytes",
+                "response_diagnostic",
             ),
         )
         owner = WorkspaceProviderErrorArtifacts(self.workspace)

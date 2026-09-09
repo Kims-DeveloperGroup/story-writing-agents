@@ -566,7 +566,7 @@ class SessionLifecycleContractTests(unittest.TestCase):
             ]
         )
         source_files = tuple(source_root.rglob("*.py"))
-        self.assertEqual(len(source_files), 138)
+        self.assertEqual(len(source_files), 140)
         self.assertTrue(
             {
                 source_root / "artifact_proposals.py",
@@ -601,8 +601,8 @@ class SessionLifecycleContractTests(unittest.TestCase):
         index = (source_root.parents[1] / "PYTHON_MODULE_INDEX.md").read_text(
             encoding="utf-8"
         )
-        self.assertIn("Importable production units indexed: 138.", index)
-        self.assertIn("Direct internal dependency edges indexed: 549.", index)
+        self.assertIn("Importable production units indexed: 140.", index)
+        self.assertIn("Direct internal dependency edges indexed: 555.", index)
         self.assertIn("Directed internal dependency cycles indexed: 0.", index)
         headings = tuple(re.findall(r"^### `([^`]+)`$", index, flags=re.MULTILINE))
         expected_modules: set[str] = set()
@@ -612,13 +612,13 @@ class SessionLifecycleContractTests(unittest.TestCase):
             if parts[-1] == "__init__":
                 parts = parts[:-1]
             expected_modules.add(".".join(("story_writing_agents", *parts)))
-        self.assertEqual(len(headings), 138)
-        self.assertEqual(len(set(headings)), 138)
+        self.assertEqual(len(headings), 140)
+        self.assertEqual(len(set(headings)), 140)
         self.assertEqual(set(headings), expected_modules)
-        self.assertIn("facade contains exactly 154 exports", index)
-        self.assertIn("context and events owners contain 30 and 116 respectively", index)
+        self.assertIn("facade contains exactly 158 exports", index)
+        self.assertIn("context and events owners contain 30 and 120 respectively", index)
         self.assertIn("Exactly 30 owning-module names in `__all__`", index)
-        self.assertIn("Exactly 116 owning-module names in `__all__`", index)
+        self.assertIn("Exactly 120 owning-module names in `__all__`", index)
         self.assertIn(
             "`artifact_proposals` owner contains exactly 16 exports",
             index,

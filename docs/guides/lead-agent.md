@@ -2,16 +2,19 @@
 
 The Lead Orchestrator is the normal user-facing story agent in both the
 interactive shell and Python runtime. Users discuss story work with the lead; they do not need to choose an
-agent for every turn. The lead can answer directly, ask a focused question,
-critique or recommend, or propose a bounded consultation with one to three
-specialists. For a requested story-file change, the lead can also describe a
+agent for every turn. The lead answers workflow/status questions and asks
+focused clarification questions directly. Substantive story answers, critiques,
+drafting, revision, and review require a bounded proposal covering every
+affected specialist domain. The Lead may first recommend preparing that scoped
+proposal; preparation grants no specialist execution authority. For a requested
+story-file change, the lead can also describe a
 provider-neutral edit intent. Runtime code—not the lead provider—resolves that
 intent against the complete current artifact state, derives the required
 reviewers, and returns one exact candidate. An exact user confirmation starts
 review of that candidate.
 
 The lead makes the semantic choice: whether a turn is about the story or only
-the workflow, what evidence matters, whether specialist help is useful, which
+the workflow, what evidence matters, which
 specialist domains apply, and what the combined feedback means for the user.
 Every story-specific judgment must name current runtime-issued evidence. The
 runtime checks that evidence against a closed rule matrix before showing or
@@ -45,9 +48,10 @@ and recovery limits are in [Lead session memory](agent-context.md#lead-session-m
 
 The lead also interprets abbreviated approval after a visible draft from this
 context. Runtime retains a scoped authoring objective in its originating
-conversation. With enough information and current artifact evidence, the lead
-prepares an exact candidate; missing detail requires a question, and a need
-for advice can lead to an ordinary consultation. Other conversations can see
+conversation. With enough information, current artifact evidence, and all required
+current-task specialist drafts, the lead prepares an exact candidate. Missing
+detail requires a question; required drafting or review uses an ordinary
+consultation. Other conversations can see
 the objective through session memory, but only its owner conversation can
 continue or cancel it.
 
@@ -72,8 +76,9 @@ The lead is expected to:
   back into sync;
 - express an exact create, patch, replace, rename, or delete intent when the
   cited evidence is sufficient for runtime to construct a candidate;
-- answer directly when available evidence is sufficient;
-- select only the specialist domains that add value;
+- answer workflow/status questions or clarify missing requirements directly;
+- disclose authoring scope and select every affected specialist domain;
+- integrate all required current-task specialist drafts before final candidate review;
 - synthesize every successful specialist reply with exact attribution and keep
   disagreement visible; and
 - explain the next safe action and request confirmation before added work.
@@ -119,15 +124,15 @@ user -> lead_turn(text + optional ${references})
   runtime inventories the four core-document statuses
   runtime reads every explicit reference
   lead may SEARCH, then READ selected results
-  lead returns scope + evidence status + ordered evidence IDs
+  lead returns scope + authoring_scope + evidence status + ordered evidence IDs
   runtime validates the closed evidence matrix and current receipts
-  lead answers directly
+  lead answers workflow/status questions or clarifies directly
     OR recommends one preparation -> submit_recommendation_decision
        -> exact Confirm prepares a proposal or asks a material question
        -> proposal execution/review still requires its own Confirm
-    OR requests an ordinary consultation
+    OR requests a draft/review consultation for every affected domain
        -> runtime discloses consultation -> awaiting_confirmation
-    OR returns provider-neutral artifact intent
+    OR integrates required current-task drafts into a provider-neutral artifact intent
        -> runtime captures the complete canonical artifact state
        -> runtime constructs and relationship-validates one exact candidate
        -> runtime derives mandatory + explicitly added review domains
@@ -148,6 +153,10 @@ user -> decide_lead_step(exact Confirm)
     -> completed / failed / interrupted
     OR discloses a synthesis recommendation -> submit_recommendation_decision
     OR proposes same-step revision+1 -> awaiting_confirmation
+
+after draft synthesis, user -> lead_turn("Prepare the final candidate from these drafts")
+  lead integrates required drafts into an artifact intent
+  runtime discloses the exact candidate and a separate review confirmation
 
   for an artifact candidate, every reviewer receives the same immutable
   candidate and the lead synthesizes all replies without voting
@@ -174,6 +183,13 @@ which returns an exact artifact-review or consultation proposal, or a material
 clarifying question. It does not reconfirm that preparation or automatically
 execute the next step. Confirm review or consultation separately; Apply and
 Commit follow their own controls.
+
+The request binds the current substantive task and revision. Confirm preserves
+its exact scope; Revise offers the next revision of the same task while keeping
+all existing domains, targets, and drafting obligations. Fresh complete
+supplied candidates may proceed directly to the required specialists for
+review. Existing drafting or revision work still needs its specialist draft
+provenance. Old unscoped requests need fresh planning before preparation.
 
 Reject starts no preparation and leaves any authoring objective open. Revise
 requires nonempty instructions and permits only a revised recommendation with
@@ -217,9 +233,9 @@ The lead returns one `LeadTurnResult`:
 
 | `kind` | User meaning | `next_action` |
 | --- | --- | --- |
-| `answer` | Evidence supports a direct answer. | `continue_with_lead` |
+| `answer` | A workflow/status answer, without substantive story authoring. | `continue_with_lead` |
 | `question` | One material user choice is missing. | `reply_to_lead` |
-| `critique` | The lead can evaluate the direction without added work. | `continue_with_lead` |
+| `critique` | A non-authoring workflow critique; substantive story critique needs specialists. | `continue_with_lead` |
 | `recommendation` | A fresh preparation recommendation, or a runtime workflow/recovery notice. | `submit_recommendation_decision` for a fresh action; otherwise state-specific. |
 | `proposal` | Added specialist work is disclosed but has not started. | `submit_confirmation` |
 
@@ -233,7 +249,7 @@ LeadTurnResult:
   state: none
   next_action: continue_with_lead
   evidence: workflow_meta / not_applicable / no receipts
-Provider work: lead only; no story reference/SEARCH/READ; no specialist
+Provider work: lead only; required session memory; no added reference/SEARCH/READ or specialist
 ```
 
 The same front channel is available as ordinary input in the interactive
@@ -243,10 +259,9 @@ action are runtime-owned:
 ```text
 story[novel]> Does the opening conflict with ${core_documents/global_outline.md}?
 [Lead]
-  Outcome: critique
-  Lead: The referenced outline places the reveal after the opening, so the
-        current ordering needs revision.
-  Next action: continue_with_lead
+  Outcome: proposal
+  Lead: I propose a Plot review of the opening order against this outline.
+  Next action: submit_confirmation
 ```
 
 For a story-specific provider judgment, `result.evidence` identifies its
@@ -321,7 +336,7 @@ revision = LeadStepDecision(
     proposal_revision=proposal.proposal_revision,
     proposal_digest=proposal.proposal_digest,
     kind=CollaborationConfirmationDecision.REVISE,
-    revision_request="Limit the consultation to plot causality.",
+    revision_request="Focus each review on causal consequences while retaining all affected domains.",
 )
 replacement = (await runtime.decide_lead_step(revision)).turn
 ```
@@ -339,7 +354,8 @@ request is instead redisclosed unchanged without a provider call.
 | Character & World Custodian (`character_custodian`) | Character sheets, relationships, world facts, motivation, and continuity |
 | Tone & Execution Specialist (`execution_specialist`) | Narrative rules, manuscripts, prose, POV, tone, and writing execution |
 
-Runtime enforces mandatory reviewers for explicitly referenced core documents:
+Runtime derives mandatory specialists from disclosed semantic domains and
+every affected canonical path, including empty or missing targets:
 
 | Core document | Required specialist |
 | --- | --- |
@@ -347,10 +363,15 @@ Runtime enforces mandatory reviewers for explicitly referenced core documents:
 | `core_documents/part_outlines.md` | `plot_architect` |
 | `core_documents/character_sheets.md` | `character_custodian` |
 | `core_documents/narrative_rules.md` | `execution_specialist` |
+| Eligible `manuscript/**/*.md` reference paths | `execution_specialist` |
 
-The lead chooses semantic routing for user input and manuscripts. Runtime does
-not infer domains from prose, and a manuscript reference alone does not force a
-reviewer. It rejects proposals with unknown or duplicate specialists,
+The lead discloses its interpretation of free text in `AuthoringScope` schema 1:
+`activity` (`workflow`, `draft`, `revise`, or `review`), `target_paths`, canonical
+`domains`, `interpretation`, and the exact runtime-offered `task_id`/`task_revision`
+pair. Runtime unions those facts with relevant references, current evidence,
+and the explicitly selected active task. Unrelated inventory/history does not
+add domains; status never grants reads. Runtime does not infer story meaning
+from prose or promise perfect semantic routing. It rejects proposals with unknown or duplicate specialists,
 noncanonical order, missing mandatory reviewers, unassigned inputs, or an
 infeasible budget. It never adds undisclosed work.
 
@@ -360,12 +381,34 @@ sibling's artifact-only evidence. The lead synthesis receives all typed replies
 and the directly referenced story-artifact inputs; one agent's previous read
 receipt is never borrowed as another agent's evidence.
 
+Each assignment explicitly uses `draft` or `review`. Drafting can produce
+`drafted` material from an adequate brief even when its target is empty. Review
+requires `ReviewBasis` schema 1 with nonempty `candidate_input_ids` and visible
+`criteria`; a brief or status receipt alone is not a review candidate. When a
+user supplies a complete candidate, the Lead must disclose that interpretation.
+
+Active same-session tasks come from validated conversation catalog/events. The
+Lead explicitly selects a runtime-offered task/revision to continue it across
+conversations; its domains, targets, drafting obligations, and current revision
+cannot silently shrink. An unrelated request uses a fresh task. Archived
+history remains readable context, without routing authority; an applied task
+revision is no longer offered. No separate task database is introduced.
+
+A `completed` consultation records that round, not completion of the authoring
+objective. Draft synthesis returns material; ask the Lead in a subsequent
+`lead_turn()` to prepare the final candidate from those drafts. The synthesis
+contract does not itself emit an artifact intent. The Lead integrates all required current-task drafts, every required
+specialist reviews the exact immutable final artifact candidate, and Apply
+requires another structured confirmation. A draft or earlier supporting
+review cannot replace final candidate review.
+
 ## How a lead judgment is grounded
 
 The provider declares one semantic scope and one evidence status. Runtime does
 not use NLP to relabel either value. Ambiguous story/workflow requests are a
 prompt rule for the lead: classify them as story-specific and ask a grounded
-question. Runtime then accepts only these combinations:
+question. The evidence layer accepts only these combinations; authoring routing applies
+in addition, so evidence alone never permits substantive direct story work:
 
 | Declared scope and status | Minimum current evidence | Allowed visible kinds |
 | --- | --- | --- |
@@ -410,7 +453,8 @@ Next action: continue_with_lead
 
 This is a `workflow_meta` ANSWER with `not_applicable`, no evidence IDs, no
 specialist, no artifact intent, and no confirmation. Runtime may inventory
-content-free core status facts, but the greeting does not load story bodies.
+content-free core status facts, but those facts grant no story-body receipt. Required Lead session memory
+still includes current core bytes and retained history.
 
 ### 1. Incomplete or conflicting core evidence
 
@@ -419,8 +463,14 @@ User input
 The narrative rules file is missing. Propose a minimal close-third rule.
 
 Lead output
-I prepared an exact candidate for review. It creates
-core_documents/narrative_rules.md. Review requires execution_specialist.
+The target is absent. I propose Execution drafting from your close-third brief.
+Authoring activity: draft; required domain: tone_execution.
+User action: Confirm the exact draft assignment.
+Execution / drafted: returns proposed rule text; no file is written.
+Lead synthesis: presents the draft.
+User: Prepare the final candidate from this draft.
+Lead integrates the draft into one exact create candidate, then proposes review.
+Review requires execution_specialist against that immutable final candidate.
 Artifact state: awaiting_consultation_confirmation
 User impact now: no file has changed
 User choices: Confirm review, Reject, or Revise
@@ -442,8 +492,9 @@ Final artifact state: reviewed
 Final collaboration state: completed
 ```
 
-Internally, the lead cites the absent canonical-core status and returns a
-strict `create` intent. Runtime captures every canonical artifact, constructs
+Internally, the lead cites the absent canonical-core status and discloses the
+drafting assignment. After the required current-task draft is recorded and
+integrated, it returns a strict `create` intent. Runtime captures every canonical artifact, constructs
 and relationship-validates the candidate against that complete state, derives
 the tone/execution review domain, and discloses its reviewer. Confirm authorizes
 only that review. Runtime revalidates the candidate before calling the
@@ -463,9 +514,9 @@ The lead does not force every gap into the same operation:
 
 | Current evidence | Valid lead behavior | Candidate example |
 | --- | --- | --- |
-| Canonical core absent | Ask what minimum content is intended, recommend a direction, propose consultation, or form a `create` intent. | Create the missing core path. |
-| Existing core is zero bytes | Use the zero-byte whole reference, not an invented body; clarify or form a whole-file `replace` intent. | Replace the exact empty file. |
-| One core source is incomplete | Critique/recommend from that current source, consult its specialist, or propose an evidence-bound patch/replace. | Fill the exact missing section. |
+| Canonical core absent | Clarify the brief, confirm specialist drafting, then integrate a `create` candidate for review. | Create the missing core path. |
+| Existing core is zero bytes | Cite its empty status, clarify or confirm drafting, then integrate a whole-file `replace` candidate. | Replace the exact empty file. |
+| One core source is incomplete | Disclose status, then propose its specialist for substantive critique/revision before candidate review. | Fill the exact missing section. |
 | Two nonempty core sources conflict | Cite both sources, preserve both interpretations, and consult every affected domain before choosing a candidate. | Revise one source, or atomically revise both when consistency requires it. |
 
 For example, if `${core_documents/part_outlines.md}` schedules a reveal before
@@ -485,7 +536,9 @@ Check ${core_documents/character_sheets.md} and
 ${core_documents/narrative_rules.md} first.
 
 Lead output
-Exact replace candidate, grounded by both references.
+I interpret the quoted rule as your complete supplied replacement candidate,
+not a request for me to author missing material. I propose review of that exact
+replacement, grounded by both references.
 Runtime-derived required reviewers: character_custodian and
 execution_specialist.
 Artifact state: awaiting_consultation_confirmation.
@@ -506,7 +559,10 @@ gap.
 Artifact state: revision_required.
 ```
 
-The lead supplies semantic intent and may request any additional affected
+For authoring requests, specialist drafts must precede integration and review.
+The supplied complete-candidate example above discloses its separate review
+interpretation; a brief alone cannot take that path. The lead supplies semantic
+intent and may request any additional affected
 review domain. Runtime owns exact change-set construction, relationship validation,
 mandatory reviewer derivation, reviewer order, assignment/profile/budget
 facts, and digests. Every reviewer sees the identical serialized candidate;
@@ -533,9 +589,15 @@ ${core_documents/character_sheets.md}, and
 ${core_documents/narrative_rules.md}.
 
 Lead output
-Exact range patch candidate. The three attached core documents plus the
-manuscript operation make all three specialist domains mandatory.
-User action: Confirm the exact candidate review.
+I propose Plot, Character, and Execution draft/revision assignments for the
+causal beat, motivation, and prose. All three domains are affected.
+User action: Confirm the exact drafting proposal.
+Specialists: return drafted material without writing files.
+Lead synthesis: presents the draft material.
+User: Prepare the final candidate from these drafts.
+Lead: integrates every required current-task draft into one exact range patch.
+All three specialists must now review that same immutable final candidate.
+User action: Confirm the separate exact candidate review.
 
 Specialist replies
 - plot_architect / conflict: the reveal is scheduled for a later turning point
@@ -568,12 +630,11 @@ User: What does Reject do?
 Lead: Direct workflow/meta answer. No story evidence, proposal, or specialist.
 
 User: Is this beat structurally too early?
-Lead: Must first use current story evidence. It may answer directly when that
-      evidence is sufficient, or propose one plot_architect consultation;
-      after confirmation, it returns that reply through a lead synthesis.
+Lead: Uses current story evidence and proposes plot_architect review of the
+      concrete beat. After confirmation, it integrates the specialist reply.
 
 User: Would this reveal hurt both pacing and character credibility?
-Lead: May propose plot_architect + character_custodian in parallel; after all
+Lead: Proposes plot_architect + character_custodian in parallel; after all
       successful replies, synthesizes both with exact attribution.
 
 User: What color should the editor theme use?
@@ -592,18 +653,19 @@ materially change the work.
 
 Ordinary discussion does not construct an artifact candidate. A story-specific
 opinion still needs current evidence; a workflow/meta answer does not. The lead
-selects a specialist only when the domain adds value. If no specialist fits,
-runtime calls only the lead. In all cases the lead owns the final user-facing
+routes every affected story domain. Workflow/status and clarification can
+remain direct. In all cases the lead owns the final user-facing
 answer; specialists never become a competing front channel.
 
 ## Additional execution scenarios
 
 ### Disagreement is preserved
 
-Every specialist reply has exactly:
+A review-mode specialist reply has exactly:
 
 ```json
 {
+  "mode": "review",
   "assessment": "concern",
   "assignment_id": "<assignment-id>",
   "input_ids": ["user_input", "reference_1"],
@@ -611,10 +673,12 @@ Every specialist reply has exactly:
 }
 ```
 
-`assessment` is one of `supports`, `concern`, `conflict`, or
-`insufficient_evidence`. Synthesis must cite every reply event in order and
-must retain every input ID from non-supporting replies in
-`unresolved_input_ids`. The lead cannot erase disagreement by voting.
+In review mode, `assessment` is `supports`, `concern`, `conflict`, or
+`insufficient_evidence`. Draft mode instead permits `drafted` or
+`insufficient_evidence`. Synthesis cites every reply event in order and retains
+every input ID from concern/conflict/insufficient-evidence replies in
+`unresolved_input_ids`; drafted material is exempt from that unresolved-input
+requirement. The lead cannot erase disagreement by voting.
 
 ### Partial failure
 
@@ -708,6 +772,9 @@ restart performs no replay. The next user action follows that durable state;
 any later Lead request is a fresh turn rather than a continuation of the failed
 physical call. Noninteractive callers receive
 `ProviderAuthenticationRequiredError` without a native login handoff.
+Authentication recovery preserves the exact task/revision and assignment mode.
+It adds no drafting coverage, candidate-review approval, Apply, or Commit
+authority, and it does not satisfy an open authoring objective.
 
 Artifact candidates add two separate staleness checks. Before review starts,
 Confirm revalidates the candidate's evidence and complete base state; drift
@@ -754,25 +821,58 @@ An application can disclose a one-specialist proposal without first calling
 the lead provider:
 
 ```python
-proposal = await runtime.propose_specialist_advisory(
+from story_writing_agents.specialist_routing import (
+    ArtifactReviewDomain, AuthoringActivity, AuthoringScope, ReviewBasis,
+)
+
+# Synthetic complete outline candidate; runtime rebinds this fresh task ID.
+scope = AuthoringScope(
+    activity=AuthoringActivity.REVIEW,
+    target_paths=("core_documents/global_outline.md",),
+    domains=(ArtifactReviewDomain.PLOT_STRUCTURE,),
+    interpretation="Review the complete outline supplied in this message.",
+    task_id="outline_review",
+    task_revision=1,
+)
+advisory = await runtime.propose_specialist_advisory(
     "novel",
     conversation_id,
     "plot_architect",
-    "Advise on the immediate pacing question.",
+    "Review this complete outline: A courier loses a letter, retraces the route, "
+    "and returns the recovered letter. Assess causal order and pacing.",
+    authoring_scope=scope,
+    review_basis=ReviewBasis(
+        candidate_input_ids=("user_input",),
+        criteria="Check causal order and pacing of the supplied complete outline.",
+    ),
 )
 ```
+
+`authoring_scope` and `review_basis` are keyword-only on both facades. Missing
+scope or `activity=workflow` raises `ValueError`; the defaults do not preserve
+unscoped calls. The selected specialist must cover all semantic and known path
+domains. Use `lead_turn()` for interpretation or work spanning multiple domains.
+A new API task ID is rebound runtime-side; inspect `advisory.proposal.authoring_scope`
+for the actual identity. To continue an offered active task, pass its exact
+current identity/revision; stale or applied revisions are rejected.
+
+For drafting, use `activity=AuthoringActivity.DRAFT`, an adequate authoring brief,
+and omit `review_basis`. Review requires concrete nonempty material; the direct
+supplied-text alias is `user_input`. A status receipt or a request to write a
+candidate is insufficient review material. Confirm the exact returned proposal
+using the decision flow above; this call alone starts no specialist.
 
 The session-bound form omits `session_id`. Proposal construction is
 provider-free; exact confirmation runs one specialist, reserves zero synthesis
 calls, returns the specialist's message directly, and cannot chain to another
-round. Runtime rejects an advisory whose referenced core document requires a
-different specialist.
+round. Runtime rejects any semantic or known-path domain that the selected specialist
+cannot cover.
 
 ## What providers receive
 
 Applications do not call separate provider search/read/answer endpoints.
 Runtime binds the selected agent and drives one bounded contextual invocation.
-The samples below illustrate the current orchestration contract;
+The samples below are synthetic illustrations of the stabilized contracts;
 generated correlations, IDs, handles, digests, and compact planning counters
 vary.
 Initial-payload samples below omit the separate required `h` session-context
@@ -796,7 +896,7 @@ three action variants:
       "anyOf": [
         {"type":"object","additionalProperties":false,"properties":{"kind":{"type":"string","enum":["search"]},"path_prefix":{"type":["string","null"]},"queries":{"type":"array","minItems":1,"items":{"type":"object","additionalProperties":false,"properties":{"text":{"type":"string"},"source_kinds":{"type":"array","minItems":1,"items":{"type":"string","enum":["writing_artifact","conversation","active_debate","own_agent_state"]}}},"required":["text","source_kinds"]}}},"required":["kind","path_prefix","queries"]},
         {"type":"object","additionalProperties":false,"properties":{"kind":{"type":"string","enum":["read"]},"handles":{"type":"array","minItems":1,"items":{"type":"string"}}},"required":["kind","handles"]},
-        {"type":"object","additionalProperties":false,"properties":{"kind":{"type":"string","enum":["answer"]},"result":{"type":"object","additionalProperties":false,"properties":{"scope":{"type":"string","enum":["workflow_meta"]},"evidence_status":{"type":"string","enum":["not_applicable"]},"evidence_ids":{"type":"array","maxItems":0,"items":{"type":"string"}},"kind":{"type":"string","enum":["answer","question","critique"]},"message":{"type":"string"},"artifact_intent":{"type":"null"},"proposal":{"type":"null"},"recommended_action":{"type":"null"},"objective_intent":{"anyOf":[{"type":"null"},{"type":"object","additionalProperties":false,"properties":{"action":{"type":"string","enum":["start"]},"request":{"type":"string"},"target_paths":{"type":"array","items":{"type":"string"},"minItems":1},"next_step":{"type":"string","enum":["clarify","consult","prepare"]},"draft_source_event_ids":{"type":"array","items":{"type":"string"}}},"required":["action","request","target_paths","next_step","draft_source_event_ids"]},{"type":"object","additionalProperties":false,"properties":{"action":{"type":"string","enum":["continue"]},"objective_id":{"type":"string"},"next_step":{"type":"string","enum":["clarify","consult","prepare"]},"draft_source_event_ids":{"type":"array","items":{"type":"string"}}},"required":["action","objective_id","next_step","draft_source_event_ids"]},{"type":"object","additionalProperties":false,"properties":{"action":{"type":"string","enum":["cancel"]},"objective_id":{"type":"string"}},"required":["action","objective_id"]}]}},"required":["scope","evidence_status","evidence_ids","kind","message","artifact_intent","proposal","objective_intent","recommended_action"]},"used_handles":{"type":"array","items":{"type":"string"}}},"required":["kind","result","used_handles"]}
+        {"type":"object","additionalProperties":false,"properties":{"kind":{"type":"string","enum":["answer"]},"result":{"type":"object","additionalProperties":false,"properties":{"scope":{"type":"string","enum":["workflow_meta"]},"evidence_status":{"type":"string","enum":["not_applicable"]},"evidence_ids":{"type":"array","maxItems":0,"items":{"type":"string"}},"kind":{"type":"string","enum":["answer","question","critique"]},"message":{"type":"string"},"artifact_intent":{"type":"null"},"proposal":{"type":"null"},"recommended_action":{"type":"null"},"objective_intent":{"anyOf":[{"type":"null"},{"type":"object","additionalProperties":false,"properties":{"action":{"type":"string","enum":["start"]},"request":{"type":"string"},"target_paths":{"type":"array","items":{"type":"string"},"minItems":1},"next_step":{"type":"string","enum":["clarify","consult","prepare"]},"draft_source_event_ids":{"type":"array","items":{"type":"string"}}},"required":["action","request","target_paths","next_step","draft_source_event_ids"]},{"type":"object","additionalProperties":false,"properties":{"action":{"type":"string","enum":["continue"]},"objective_id":{"type":"string"},"next_step":{"type":"string","enum":["clarify","consult","prepare"]},"draft_source_event_ids":{"type":"array","items":{"type":"string"}}},"required":["action","objective_id","next_step","draft_source_event_ids"]},{"type":"object","additionalProperties":false,"properties":{"action":{"type":"string","enum":["cancel"]},"objective_id":{"type":"string"}},"required":["action","objective_id"]}]},"authoring_scope":{"type":"object","additionalProperties":false,"properties":{"schema_version":{"type":"integer","enum":[1]},"activity":{"type":"string","enum":["workflow"]},"target_paths":{"type":"array","items":{"type":"string"},"maxItems":0},"domains":{"type":"array","items":{"type":"string"},"maxItems":0},"interpretation":{"type":"string"},"task_id":{"type":"string","enum":["task_demo"]},"task_revision":{"type":"integer","enum":[1]}},"required":["schema_version","activity","target_paths","domains","interpretation","task_id","task_revision"]}},"required":["scope","evidence_status","evidence_ids","kind","message","artifact_intent","proposal","objective_intent","recommended_action","authoring_scope"]},"used_handles":{"type":"array","items":{"type":"string"}}},"required":["kind","result","used_handles"]}
       ]
     }
   },
@@ -804,9 +904,9 @@ three action variants:
 }
 ```
 
-The shown ANSWER branch is the complete nine-field `lead-outcome-v3`
-workflow-meta answer/question/critique variant; live schemas also include
-separate recommendation, story-specific, and proposal variants allowed by
+The shown ANSWER branch is a complete ten-field `lead-outcome-v4` workflow-meta
+answer/question/critique variant with illustrative offered pair `task_demo`/`1`.
+Live schemas also include separate recommendation, story-specific, and proposal variants allowed by
 that call. SEARCH
 finds locators, READ accepts only issued SEARCH handles, and ANSWER embeds its
 semantic result object directly plus only supporting successful READ handles.
@@ -822,7 +922,7 @@ than duplicated) has the same semantics for either provider:
   "schema": "<exact per-call schema shown above>",
   "payload": {
     "c": "<correlation-1>",
-    "q": ["lead", "sa", "wcdo", [4, 2, 2, 4, 8, 8, 16, 200], ["lead", "lead-outcome-v3"]],
+    "q": ["lead", "sa", "wcdo", [4, 2, 2, 4, 8, 8, 16, 200], ["lead", "lead-outcome-v4"]],
     "i": {"workflow": "lead_front_channel", "command": "Does the planned reveal conflict with the current opening?"}
   }
 }
@@ -866,21 +966,23 @@ SEARCH/READ; those bytes do not satisfy the current evidence contract.
 ```json
 {
   "c": "<correlation-1>",
-  "q": ["lead", "sa", "wcdo", [4, 2, 2, 4, 8, 8, 16, 200], ["lead", "lead-outcome-v3"]],
+  "q": ["lead", "sa", "wcdo", [4, 2, 2, 4, 8, 8, 16, 200], ["lead", "lead-outcome-v4"]],
   "i": {
     "workflow": "lead_front_channel",
-    "contract_version": "lead-outcome-v3",
+    "contract_version": "lead-outcome-v4",
     "command": "Does the planned reveal conflict with the current opening?",
     "identity": {"agent_id": "lead_orchestrator", "session_id": "novel", "conversation_id": "<conversation-id>", "turn_id": "<turn-id>", "step_id": "<step-id>"},
+    "authoring_tasks": [{"task_id":"task_demo","task_revision":1,"current_scope":null}],
     "input_aliases": [{"input_id": "user_input", "kind": "user_input", "locator": "conversation/<turn-id>/user_input", "revision_digest": "sha256:<digest>", "start_line": null, "end_line": null}],
     "answer_contract": {
-      "assignments": {"agent_id": "canonical specialist ID", "input_ids": "nonempty runtime-supplied aliases", "instruction": "complete visible assignment"},
+      "assignments": {"agent_id": "canonical specialist ID", "input_ids": "nonempty runtime-supplied aliases", "instruction": "complete visible assignment", "mode":"draft | review", "review_basis":"null for draft; schema 1 candidate_input_ids and criteria for review"},
       "scope": "story_specific | workflow_meta",
+      "authoring_scope": "required schema 1 activity, target_paths, domains, interpretation, and exact offered task_id/task_revision",
       "evidence_status": "not_applicable | verified | missing | empty | incomplete | conflicting",
       "evidence_ids": "ordered runtime-issued evidence IDs only",
       "kind": ["answer", "question", "critique", "recommendation", "proposal"],
       "message": "nonempty user-visible text",
-      "proposal": {"relation": "new_step", "purpose": "visible purpose", "assignments": "required only for ordinary consultation"},
+      "proposal": {"relation": "new_step", "purpose": "visible purpose", "authoring_scope":"same exact scope as this result", "assignments": "required only for ordinary consultation"},
       "artifact_intent": "null or create/patch/replace/rename/delete operations plus optional review domains",
       "objective_intent": "null or strict start/continue/cancel intent",
       "recommended_action": "null or strict prepare_artifact/prepare_consultation action"
@@ -896,8 +998,9 @@ SEARCH/READ; those bytes do not satisfy the current evidence contract.
 The sample abbreviates the remaining two status rows and the
 `runtime_contract_overlay` and `artifact_objectives` material. The latter
 contains the owner conversation, current objectives, and exact offered draft
-source IDs/digests. A provider that needs the manuscript can request a bounded
-lexical SEARCH:
+source IDs/digests. The illustrated review involves plot, motivation, and prose,
+and offers `task_demo`/`1`; real output must select an exact pair offered by that
+call. A provider that needs the manuscript can request a bounded lexical SEARCH:
 
 ```json
 {"correlation":"<correlation-1>","action":{"kind":"search","path_prefix":null,"queries":[{"text":"planned reveal opening","source_kinds":["writing_artifact"]}]}}
@@ -923,23 +1026,118 @@ and cite the evidence ID in its strict semantic result:
     "kind": "answer",
     "result": {
       "scope": "story_specific",
+      "authoring_scope": {
+        "schema_version": 1,
+        "activity": "review",
+        "target_paths": [
+          "core_documents/global_outline.md",
+          "manuscript/part-01/opening.md"
+        ],
+        "domains": [
+          "plot_structure",
+          "character_world",
+          "tone_execution"
+        ],
+        "interpretation": "Review the supplied opening for timing, motivation, and prose.",
+        "task_id": "task_demo",
+        "task_revision": 1
+      },
       "evidence_status": "conflicting",
-      "evidence_ids": ["read_2_1", "read_2_2"],
-      "kind": "critique",
-      "message": "The opening reveals the secret before the outline's turning point.",
+      "evidence_ids": [
+        "read_2_1",
+        "read_2_2"
+      ],
+      "kind": "proposal",
+      "message": "I propose reviews of opening order, motivation, and prose against these current sources.",
       "artifact_intent": null,
-      "proposal": null,
+      "proposal": {
+        "relation": "new_step",
+        "purpose": "Review the supplied opening.",
+        "authoring_scope": {
+          "schema_version": 1,
+          "activity": "review",
+          "target_paths": [
+            "core_documents/global_outline.md",
+            "manuscript/part-01/opening.md"
+          ],
+          "domains": [
+            "plot_structure",
+            "character_world",
+            "tone_execution"
+          ],
+          "interpretation": "Review the supplied opening for timing, motivation, and prose.",
+          "task_id": "task_demo",
+          "task_revision": 1
+        },
+        "assignments": [
+          {
+            "agent_id": "plot_architect",
+            "instruction": "Review opening order against the outline.",
+            "input_ids": [
+              "user_input",
+              "read_2_1",
+              "read_2_2"
+            ],
+            "mode": "review",
+            "review_basis": {
+              "schema_version": 1,
+              "candidate_input_ids": [
+                "read_2_2"
+              ],
+              "criteria": "Check causality and pacing."
+            }
+          },
+          {
+            "agent_id": "character_custodian",
+            "instruction": "Review motivation in the opening.",
+            "input_ids": [
+              "user_input",
+              "read_2_1",
+              "read_2_2"
+            ],
+            "mode": "review",
+            "review_basis": {
+              "schema_version": 1,
+              "candidate_input_ids": [
+                "read_2_2"
+              ],
+              "criteria": "Check motivation and continuity."
+            }
+          },
+          {
+            "agent_id": "execution_specialist",
+            "instruction": "Review the opening prose.",
+            "input_ids": [
+              "user_input",
+              "read_2_1",
+              "read_2_2"
+            ],
+            "mode": "review",
+            "review_basis": {
+              "schema_version": 1,
+              "candidate_input_ids": [
+                "read_2_2"
+              ],
+              "criteria": "Check prose and narrative execution."
+            }
+          }
+        ]
+      },
       "objective_intent": null,
       "recommended_action": null
     },
-    "used_handles": ["<handle-1>", "<handle-2>"]
+    "used_handles": [
+      "<handle-1>",
+      "<handle-2>"
+    ]
   }
 }
 ```
 
 Runtime maps only those current used READs to durable content-free receipts,
 checks that two distinct nonempty receipts can prove `conflicting`, persists a
-typed lead judgment, and returns its evidence to the caller. It does not
+typed scoped proposal, and returns its evidence and confirmation request to the
+caller. All affected specialists are disclosed before work starts. It does not
 independently decide that the two passages are semantically inconsistent.
 
 A complete, non-truncated zero-hit SEARCH instead includes a content-free
@@ -951,7 +1149,10 @@ or a READ omitted from final `action.used_handles` cannot ground the claim.
 For a story-file change, the lead ANSWER uses the same envelope but chooses
 `kind=proposal`, sets the ordinary `proposal` to `null`, and returns one strict
 provider-neutral `artifact_intent`. For example, a range reference might be
-resolved to `reference_1` by runtime:
+resolved to `reference_1` by runtime. This illustration assumes all required
+current-task specialist drafts are already recorded and integrated; it is not
+a shortcut from an authoring brief to review. The synthetic task pair below
+must match the offered active task:
 
 ```json
 {
@@ -960,6 +1161,7 @@ resolved to `reference_1` by runtime:
     "kind": "answer",
     "result": {
       "scope": "story_specific",
+      "authoring_scope": {"schema_version":1,"activity":"review","target_paths":["core_documents/global_outline.md","manuscript/part-01/opening.md"],"domains":["plot_structure","character_world","tone_execution"],"interpretation":"Review the supplied opening for timing, motivation, and prose.","task_id":"task_demo","task_revision":1},
       "evidence_status": "verified",
       "evidence_ids": ["reference_1", "reference_2"],
       "kind": "proposal",
@@ -987,7 +1189,7 @@ review failure event. A schema-valid intent that cannot satisfy runtime
 artifact semantics instead closes as `artifact_intent_rejected`. Both outcomes
 create no candidate and permit only `retry_lead_turn` as a fresh Lead turn.
 
-Every front-channel result supplies all nine fields, including explicit
+Every front-channel result supplies all ten fields, including explicit
 `objective_intent`. It may be null or a strict `start`, `continue`, or `cancel`
 object. CLARIFY requires `kind=question`; CONSULT requires an ordinary
 consultation proposal; PREPARE requires an artifact proposal with
@@ -996,8 +1198,8 @@ replace it with advice or a prose completion claim. Later ordinary user input
 remains contextual. A fresh recommendation instead requires `recommended_action`
 and null objective intent. Ordinary synthesis has its own nullable action;
 specialist and artifact-review synthesis contracts remain separate.
-Fresh Lead policies use v3, and retained workspace policies receive a runtime
-v3 overlay without file rewrites.
+Fresh Lead policies use v4, and retained workspace policies receive a runtime
+v4 overlay without file rewrites.
 
 ### Specialist assignment: initial input
 
@@ -1008,12 +1210,15 @@ strict answer contract. Authorized reference bytes are added separately under
 ```json
 {
   "c": "<correlation-1>",
-  "q": ["specialist_assignment", "sa", "wcdo", [4, 2, 2, 4, 8, 8, 16, 200], ["specialist_assignment", "outcome-v1"]],
+  "q": ["specialist_assignment", "sa", "wcdo", [4, 2, 2, 4, 8, 8, 16, 200], ["specialist_assignment", "specialist-reply-v2"]],
   "i": {
     "workflow": "lead_specialist_consultation",
+    "authoring_scope": {"schema_version":1,"activity":"review","target_paths":["core_documents/global_outline.md","manuscript/part-01/opening.md"],"domains":["plot_structure","character_world","tone_execution"],"interpretation":"Review the supplied opening for timing, motivation, and prose.","task_id":"task_demo","task_revision":1},
     "assignment": {
       "assignment_id": "<assignment-id>",
       "instruction": "Check the outline against the opening range.",
+      "mode": "review",
+      "review_basis": {"schema_version":1,"candidate_input_ids":["reference_3"],"criteria":"Check opening order against the outline."},
       "input_ids": ["user_input", "reference_1", "reference_3"],
       "round": 1
     },
@@ -1024,6 +1229,7 @@ strict answer contract. Authorized reference bytes are added separately under
     ],
     "answer_contract": {
       "assessment": ["supports", "concern", "conflict", "insufficient_evidence"],
+      "mode": "review",
       "assignment_id": "<assignment-id>",
       "input_ids": ["user_input", "reference_1", "reference_3"],
       "message": "nonempty visible specialist assessment"
@@ -1066,7 +1272,7 @@ objects with labels:
 
 Runtime derives `plot_architect`, `character_custodian`, and
 `execution_specialist` from those canonical domains. Reviewers cannot modify
-the candidate or delegate. Each returns only its exact assignment ID, exact
+the candidate or delegate. Each returns only its exact assignment mode and ID, exact
 input IDs, assessment, and visible message.
 
 ### Specialist SEARCH, READ, and ANSWER
@@ -1093,7 +1299,7 @@ names every READ handle it used:
   "correlation": "<correlation-3>",
   "action": {
     "kind": "answer",
-    "result": {"assessment":"concern","assignment_id":"<assignment-id>","input_ids":["user_input","reference_1","reference_3"],"message":"The opening advances the reveal before its outline cause."},
+    "result": {"mode":"review","assessment":"concern","assignment_id":"<assignment-id>","input_ids":["user_input","reference_1","reference_3"],"message":"The opening advances the reveal before its outline cause."},
     "used_handles": ["<handle>"]
   }
 }
@@ -1111,7 +1317,7 @@ replies and the exact attribution contract:
 ```json
 {
   "c": "<synthesis-correlation>",
-  "q": ["lead_synthesis", "sa", "wcdo", [4, 2, 2, 4, 8, 8, 16, 200], ["lead_synthesis", "lead-synthesis-v2"]],
+  "q": ["lead_synthesis", "sa", "wcdo", [4, 2, 2, 4, 8, 8, 16, 200], ["lead_synthesis", "lead-synthesis-v3"]],
   "i": {
     "workflow": "lead_synthesis",
     "inputs": [
@@ -1120,15 +1326,17 @@ replies and the exact attribution contract:
       {"input_id": "read_2_1", "kind": "manuscript", "locator": "${manuscript/part-01/opening.md}#L20-L32", "revision_digest": "sha256:<digest>", "start_line": 20, "end_line": 32}
     ],
     "replies": [
-      {"assessment": "concern", "assignment_id": "<assignment-1>", "input_ids": ["user_input", "reference_1", "read_2_1"], "message": "The reveal is too early.", "reply_event_id": "<reply-event-1>"},
-      {"assessment": "supports", "assignment_id": "<assignment-2>", "input_ids": ["user_input"], "message": "The character motivation is plausible.", "reply_event_id": "<reply-event-2>"}
+      {"mode":"review", "assessment": "concern", "assignment_id": "<assignment-1>", "input_ids": ["user_input", "reference_1", "read_2_1"], "message": "The reveal is too early.", "reply_event_id": "<reply-event-1>"},
+      {"mode":"review", "assessment": "supports", "assignment_id": "<assignment-2>", "input_ids": ["user_input", "reference_1", "read_2_1"], "message": "The character motivation is plausible.", "reply_event_id": "<reply-event-2>"},
+      {"mode":"review", "assessment":"supports", "assignment_id":"<assignment-3>", "input_ids":["user_input","reference_1","read_2_1"], "message":"The prose supports the intended scene form.", "reply_event_id":"<reply-event-3>"}
     ],
     "answer_contract": {
       "scope": "story_specific",
+      "authoring_scope": {"schema_version":1,"activity":"review","target_paths":["core_documents/global_outline.md","manuscript/part-01/opening.md"],"domains":["plot_structure","character_world","tone_execution"],"interpretation":"Review the supplied opening for timing, motivation, and prose.","task_id":"task_demo","task_revision":1},
       "evidence_status": "conflicting",
       "evidence_ids": ["reference_1", "read_2_1"],
       "message": "nonempty visible synthesis",
-      "reply_event_ids": ["<reply-event-1>", "<reply-event-2>"],
+      "reply_event_ids": ["<reply-event-1>", "<reply-event-2>", "<reply-event-3>"],
       "unresolved_input_ids": ["user_input", "reference_1", "read_2_1"],
       "next_intent": "null or an exact same-lineage proposal intent",
       "recommended_action": "null or one typed preparation action"
@@ -1144,33 +1352,71 @@ The terminal provider answer is exact JSON:
   "correlation": "<synthesis-correlation>",
   "action": {
     "kind": "answer",
-    "result": {"scope":"story_specific","evidence_status":"conflicting","evidence_ids":["reference_1","read_2_1"],"message":"Motivation is plausible, but the reveal still conflicts with the outline timing.","next_intent":null,"recommended_action":null,"reply_event_ids":["<reply-event-1>","<reply-event-2>"],"unresolved_input_ids":["user_input","reference_1","read_2_1"]},
+    "result": {
+      "scope": "story_specific",
+      "authoring_scope": {
+        "schema_version": 1,
+        "activity": "review",
+        "target_paths": [
+          "core_documents/global_outline.md",
+          "manuscript/part-01/opening.md"
+        ],
+        "domains": [
+          "plot_structure",
+          "character_world",
+          "tone_execution"
+        ],
+        "interpretation": "Review the supplied opening for timing, motivation, and prose.",
+        "task_id": "task_demo",
+        "task_revision": 1
+      },
+      "evidence_status": "conflicting",
+      "evidence_ids": [
+        "reference_1",
+        "read_2_1"
+      ],
+      "message": "Motivation is plausible, but the reveal still conflicts with the outline timing.",
+      "next_intent": null,
+      "reply_event_ids": [
+        "<reply-event-1>",
+        "<reply-event-2>",
+        "<reply-event-3>"
+      ],
+      "unresolved_input_ids": [
+        "user_input",
+        "reference_1",
+        "read_2_1"
+      ],
+      "recommended_action": null
+    },
     "used_handles": []
   }
 }
 ```
 
-Synthesis preserves the proposal's story-specific scope, evidence status, and
-ordered evidence IDs unchanged; specialist reply IDs remain separate
+Synthesis preserves the proposal's exact `authoring_scope`, story-specific scope,
+evidence status, and ordered evidence IDs unchanged; specialist reply IDs remain separate
 attribution. Synthesis may also use bounded SEARCH/READ before ANSWER, but new
 reads do not replace the proposal evidence lineage. It cannot dispatch another
 agent, write an artifact, or authorize Git. A strict `next_intent` is only a
 semantic request for runtime to construct a fresh round-two proposal. Ordinary
-synthesis uses `lead-synthesis-v2`: `recommended_action` is nullable and mutually
+synthesis uses `lead-synthesis-v3`: `recommended_action` is nullable and mutually
 exclusive with `next_intent`. Without either, the visible outcome is an answer.
 An action produces a separately confirmable recommendation while the historical
 durable synthesis payload remains unchanged.
 
 For artifact review, the synthesis input additionally includes the same exact
 `artifact_candidate`. Its independent answer contract omits `recommended_action`
-and adds `decision`, `rationale`, `user_impact`, and `limitations`, and requires `next_intent=null`:
+and adds `decision`, `rationale`, `user_impact`, and `limitations`, and requires
+`next_intent=null`. This uses `artifact-review-synthesis-v2`, independently of
+the candidate codec version:
 
 ```json
 {
   "correlation": "<synthesis-correlation>",
   "action": {
     "kind": "answer",
-    "result": {"scope":"story_specific","evidence_status":"verified","evidence_ids":["reference_1","reference_2"],"message":"The candidate is coherent after preserving the stated concern.","next_intent":null,"reply_event_ids":["<reply-event-1>","<reply-event-2>"],"unresolved_input_ids":["user_input","reference_1","reference_2","artifact_candidate"],"decision":"propose","rationale":"Every disclosed review is attributed and the candidate remains exact.","user_impact":"No artifact changed; the user may inspect the reviewed proposal.","limitations":"This result grants no Apply, write, commit, or Git authority."},
+    "result": {"scope":"story_specific","authoring_scope":{"schema_version":1,"activity":"review","target_paths":["core_documents/global_outline.md","manuscript/part-01/opening.md"],"domains":["plot_structure","character_world","tone_execution"],"interpretation":"Review the supplied opening for timing, motivation, and prose.","task_id":"task_demo","task_revision":1},"evidence_status":"verified","evidence_ids":["reference_1","reference_2"],"message":"The candidate is coherent after preserving the stated concern.","next_intent":null,"reply_event_ids":["<reply-event-1>","<reply-event-2>","<reply-event-3>"],"unresolved_input_ids":["user_input","reference_1","reference_2","artifact_candidate"],"decision":"propose","rationale":"Every disclosed review is attributed and the candidate remains exact.","user_impact":"No artifact changed; the user may inspect the reviewed proposal.","limitations":"This result grants no Apply, write, commit, or Git authority."},
     "used_handles": []
   }
 }

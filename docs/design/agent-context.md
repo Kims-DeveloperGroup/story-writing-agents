@@ -315,10 +315,11 @@ is one schema-selected closed variant:
 ```
 
 ```json
-{"correlation":"<exact-token>","action":{"kind":"answer","result":{"scope":"workflow_meta","evidence_status":"not_applicable","evidence_ids":[],"kind":"answer","message":"What would you like to work on?","proposal":null,"artifact_intent":null,"objective_intent":null,"recommended_action":null},"used_handles":[]}}
+{"correlation":"<exact-token>","action":{"kind":"answer","result":{"scope":"workflow_meta","authoring_scope":{"schema_version":1,"activity":"workflow","target_paths":[],"domains":[],"interpretation":"Ask what workflow help is needed.","task_id":"task_demo","task_revision":1},"evidence_status":"not_applicable","evidence_ids":[],"kind":"answer","message":"What would you like to work on?","proposal":null,"artifact_intent":null,"objective_intent":null,"recommended_action":null},"used_handles":[]}}
 ```
 
-The third example uses the complete workflow-meta `lead-outcome-v3` result;
+The third example uses the complete workflow-meta `lead-outcome-v4` result
+with illustrative offered task `task_demo` at revision `1`;
 the live ANSWER schema embeds the invocation-specific result schema at
 `action.result`. There is no JSON-in-string layer and no compatibility decoder
 for an older action envelope. `used_handles` contains only successful READ
@@ -328,18 +329,21 @@ boundary, digest, size, provenance, handle, and untrusted content required for
 provider reasoning, even though the input payload remains compact.
 
 For a lead initial call, `core_statuses` is an additional top-level list beside
-`c`, `q`, and `i`. The final `action.result` contains all nine
-`lead-outcome-v3` fields:
-`scope`, `evidence_status`, `evidence_ids`, `kind`, `message`,
-`artifact_intent`, `proposal`, `objective_intent`, and `recommended_action`.
-Null objective intent makes no transition; `start`, `continue`, and `cancel` follow the strict
+`c`, `q`, and `i`. The final `action.result` contains all ten
+`lead-outcome-v4` fields: `scope`, `evidence_status`, `evidence_ids`, `kind`,
+`message`, `proposal`, `artifact_intent`, `objective_intent`,
+`recommended_action`, and `authoring_scope`. Null objective intent makes no transition; `start`,
+`continue`, and `cancel` follow the strict
 [objective contract](../reference/runtime-api.md#contextual-authoring-objectives).
 Fresh recommendations require `recommended_action` and null objective intent;
 other kinds have a null action. Confirm permits one Lead preparation, returning
 a separately confirmable proposal or a material question. Ordinary contextual
 approval remains a new instruction and supersedes a pending recommendation.
-Those semantic fields are decoded by
-orchestration only after context ANSWER authorization. Invalid, invented,
+Those semantic fields are decoded by orchestration only after context ANSWER
+authorization. Specialist output uses `specialist-reply-v2` with explicit mode.
+The Lead selects an exact offered task/revision and discloses activity, targets,
+domains, and interpretation; current evidence validation and specialist routing
+are independent requirements. Invalid, invented,
 reordered, stale, or matrix-incompatible evidence rejects that physical
 response, which is never replayed. With fresh authority and remaining budget,
 runtime may request one bounded same-turn correction. A final deterministic
@@ -352,9 +356,9 @@ submitted outcome instead remains
 `outcome_unknown` with `inspect_and_resolve_outcome` and is never replayed.
 Uncertain cleanup or closure remains recovery-gated.
 
-The runtime supplies a deterministic Lead v3 overlay after retained workspace
-policies without rewriting those files. Fresh defaults already use v3. The
-context action envelope stays wire v7. Ordinary synthesis uses `lead-synthesis-v2`
+The runtime supplies a deterministic Lead v4 overlay after retained workspace
+policies without rewriting those files. Fresh defaults already use v4. The
+context action envelope stays wire v7. Ordinary synthesis uses `lead-synthesis-v3`
 with a nullable action, mutually exclusive with `next_intent`; its durable
 historical codec is unchanged. Specialist and artifact-review synthesis results
 retain their own contracts.

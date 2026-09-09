@@ -106,12 +106,12 @@ class PromptAssemblerTests(unittest.TestCase):
             "sole normal user-facing story agent",
             "front channel",
             "inspect the known workflow and artifacts",
-            "Give a direct answer",
-            "ask a focused question",
-            "offer a critique",
-            "recommend a next action",
-            "propose separately confirmable work",
-            "Route proposed work selectively by canonical role and domain",
+            "Answer workflow and factual status questions directly",
+            "Ask a focused clarification",
+            "Route every substantive story answer",
+            "recommendation, critique, draft, revision, and review",
+            "separately confirmed specialist work",
+            "Route every affected domain",
             "does not vote",
             "preserve material disagreement",
             "untrusted evidence",
@@ -149,7 +149,7 @@ class PromptAssemblerTests(unittest.TestCase):
                     "no access to a sibling's references",
                     "provides a scoped assessment for the lead",
                     "Return exactly one JSON object",
-                    '"assessment": "supports | concern | conflict | insufficient_evidence"',
+                    '"assessment": "drafted | supports | concern | conflict | insufficient_evidence"',
                     '"assignment_id": "runtime-supplied assignment ID"',
                     '"input_ids": ["runtime-supplied input IDs in exact order"]',
                 ):
@@ -165,7 +165,7 @@ class PromptAssemblerTests(unittest.TestCase):
         changed = {agent: PromptAssembler(self.workspace).build_definition(session_id="overlay", agent_id=agent).system_prompt_file.content for agent in ROSTER}
         lead = changed[LEAD_ORCHESTRATOR]
         self.assertIn(retained.strip(), lead)
-        self.assertIn(b"Runtime Lead contract overlay (lead-outcome-v3)", lead)
+        self.assertIn(b"Runtime Lead contract overlay (lead-outcome-v4)", lead)
         self.assertIn(b"objective_intent", lead)
         self.assertIn(b"recommended_action", lead)
         self.assertIn(b"objective_intent=null", lead)
@@ -530,6 +530,7 @@ class PromptAssemblerTests(unittest.TestCase):
                 "context_document_files",
                 "provider_managed_context",
                 "behavior_policy_components",
+                "runtime_behavior_policy",
             ),
         )
         self.assertEqual(definition.agent_id, PLOT_ARCHITECT)
@@ -552,7 +553,7 @@ class PromptAssemblerTests(unittest.TestCase):
                     b"\n\n".join(
                         component.content
                         for component in definition.behavior_policy_components
-                    )
+                    ) + b"\n\n" + definition.runtime_behavior_policy
                     if index == 0
                     else self.workspace.path(relative).read_bytes()
                 )

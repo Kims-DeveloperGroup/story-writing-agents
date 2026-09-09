@@ -56,6 +56,7 @@ from tests.test_lead_orchestration import (
     LeadOrchestrationTestCase,
     _LeadBackend,
     _decision,
+    _live_scope,
     _provider_envelope,
     _read_history_hit,
     _specialist_outcome,
@@ -496,17 +497,41 @@ class ArtifactProposalOrchestrationTests(LeadOrchestrationTestCase):
         )
         first_digest = first.artifact_proposal.candidate.candidate.candidate_digest
         before_revision_calls = len(self.backend.call_records)
+
+        def fresh_recommendation(call, _provider):
+            return _provider_envelope(
+                call,
+                {
+                    "recommended_action": {
+                        "kind": "prepare_artifact",
+                        "purpose": "Prepare a fresh candidate.",
+                        "instruction": "Prepare a new candidate for the narrative rules.",
+                        "expected_result": "An exact separately reviewable candidate.",
+                        "source_ids": ["current_response"],
+                        "target_paths": [_RULES],
+                        "specialist_ids": [],
+                        "objective_id": None,
+                    },
+                    "kind": "recommendation",
+                    "message": "The old candidate is superseded; request a fresh candidate.",
+                    "scope": "story_specific",
+                    "evidence_status": "missing",
+                    "evidence_ids": [_status_id(call, _RULES)],
+                    "proposal": None,
+                    "artifact_intent": None,
+                    "objective_intent": None,
+                    "authoring_scope": _live_scope(
+                        call,
+                        activity="review",
+                        paths=(_RULES,),
+                        domains=("tone_execution",),
+                    ),
+                },
+            )
+
         self.backend.enqueue_for(
             LEAD_ORCHESTRATOR,
-            _visible_outcome(
-                "recommendation",
-                "The old candidate is superseded; request a fresh candidate.",
-                recommended_action={"kind": "prepare_artifact", "purpose": "Prepare a fresh candidate.",
-                    "instruction": "Prepare a new candidate for the narrative rules.",
-                    "expected_result": "An exact separately reviewable candidate.",
-                    "source_ids": ["current_response"], "target_paths": [_RULES],
-                    "specialist_ids": [], "objective_id": None},
-            ),
+            fresh_recommendation,
         )
         revised = await self.runtime.decide_lead_step(
             _decision(first, CollaborationConfirmationDecision.REVISE)
@@ -1066,7 +1091,9 @@ class ArtifactProposalOrchestrationTests(LeadOrchestrationTestCase):
             self.addCleanup(cleanup, *args, **kwargs)
         case._cleanups.clear()
         conversation_id, turn = await case.start()
-        evidence = turn.evidence
+        proposal = next(e.payload for e in case.history(conversation_id)
+                        if type(e.payload) is c.CollaborationProposal)
+        evidence = proposal.basis.evidence
         receipt = evidence.receipts[0]
         empty_digest = "sha256:" + hashlib.sha256(b"").hexdigest()
         self.assertEqual(receipt.locator, _OUTLINE)
@@ -1136,8 +1163,11 @@ class ArtifactProposalOrchestrationTests(LeadOrchestrationTestCase):
                 self.assertEqual(converted.boundary_digest, selected.content_digest)
                 self.assertEqual((converted.start_line, converted.end_line), (selected.start_line, selected.end_line))
                 from story_writing_agents.artifact_proposals import ArtifactProposalIntent, ArtifactReplaceIntent, ArtifactPatchIntent
+                from story_writing_agents.specialist_routing import AuthoringActivity, AuthoringScope
                 intent = ArtifactReplaceIntent(selected.evidence_id, "Whole replacement.\n") if selected.boundary_kind == "whole" else ArtifactPatchIntent(selected.evidence_id, "Revised 민 line.\r\n")
-                candidate = self.runtime._construct_artifact_review_candidate(session_id=self.session_id, conversation_id=conversation_id, turn_id=result.turn_id, step_id=result.step_id, intent=ArtifactProposalIntent((intent,)), evidence=evidence)
+                review_scope = AuthoringScope(AuthoringActivity.REVIEW, (_OUTLINE,), (),
+                    "Review the exact synthetic whole or ranged candidate.", "synthetic_review", 1)
+                candidate = self.runtime._construct_artifact_review_candidate(session_id=self.session_id, conversation_id=conversation_id, turn_id=result.turn_id, step_id=result.step_id, intent=ArtifactProposalIntent((intent,)), evidence=evidence, authoring_scope=review_scope)
                 self.assertEqual("sha256:" + candidate.change_set.operations[0].base_digest, whole_sha)
                 for invalid in (replace(selected, revision_digest=objectives.digest("wrong metadata")), replace(selected, content_digest=objectives.digest("wrong bytes"))):
                     with self.assertRaises(ValueError):

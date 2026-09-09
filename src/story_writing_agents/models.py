@@ -659,6 +659,7 @@ class AgentDefinition:
     behavior_policy_components: tuple[PromptFileReference, ...] = field(
         default=(), repr=False
     )
+    runtime_behavior_policy: bytes = field(default=b"", repr=False)
 
     def __post_init__(self) -> None:
         if type(self.provider_managed_context) is not bool:
@@ -668,10 +669,17 @@ class AgentDefinition:
                 "provider-managed context cannot bind context documents"
             )
         components = self.behavior_policy_components
+        if type(self.runtime_behavior_policy) is not bytes:
+            raise TypeError("runtime behavior policy must be captured bytes")
+        if b"\x00" in self.runtime_behavior_policy:
+            raise ValueError("runtime behavior policy must be NUL-free")
+        self.runtime_behavior_policy.decode("utf-8", errors="strict")
         if type(components) is not tuple or any(
             type(item) is not PromptFileReference for item in components
         ):
             raise TypeError("behavior policy components must be prompt snapshots")
+        if self.runtime_behavior_policy and not components:
+            raise ValueError("runtime policy requires composed behavior components")
         if components:
             paths = tuple(item.path for item in components)
             if len(set(paths)) != len(paths):
@@ -679,6 +687,8 @@ class AgentDefinition:
             if self.system_prompt_file.path != components[-1].path:
                 raise ValueError("composed policy must retain the domain policy path")
             expected = b"\n\n".join(item.content for item in components)
+            if self.runtime_behavior_policy:
+                expected += b"\n\n" + self.runtime_behavior_policy
             if self.system_prompt_file.content != expected:
                 raise ValueError("system prompt does not match policy components")
 

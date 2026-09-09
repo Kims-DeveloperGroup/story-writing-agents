@@ -251,7 +251,7 @@ class GitSessionResourceLifecycleTests(GitSessionResourceGitTestCase):
             message, f"{GIT_SESSION_SEED_MESSAGE_PREFIX}Novel_01\n".encode()
         )
         empty_tree = self.run_git(
-            root, "hash-object", "-t", "tree", "--stdin"
+            root, "hash-object", "-t", "tree", "--stdin", input_bytes=b""
         ).stdout.strip()
         self.assertIn(b"tree " + empty_tree, header)
         self.assertEqual(

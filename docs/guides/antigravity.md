@@ -25,7 +25,9 @@ ID; **taint**—a marker that prevents continuing uncertain provider history.
 
 Configure `lead_orchestrator` for Antigravity in global `/settings` under
 Agents, then confirm **Apply Changes**. Create or attach a ready story session,
-focus a conversation, and enter ordinary non-command text:
+focus a conversation, and enter ordinary non-command text. This illustrative
+example supplies a finished outline candidate inline, so Plot can review it
+without an invented drafting round:
 
 ```text
 $ story chat --workspace /workspace
@@ -37,12 +39,14 @@ story[novel]> Hello. What can you help me do?
   Lead: I can discuss the story, inspect referenced canonical artifacts, and
         propose specialist review or a reviewed change for your confirmation.
   Next action: continue_with_lead
-story[novel]> Does this reveal conflict with ${core_documents/global_outline.md}?
+story[novel]> Review this finished outline for causal order: A courier loses a letter, retraces the route, and returns the recovered letter.
 [Lead]
-  Outcome: critique
-  Lead: The cited outline places the reveal later; revise the opening or the
-        governing outline before changing the manuscript.
-  Next action: continue_with_lead
+  Outcome: proposal
+  Lead: I propose Plot review of the supplied outline for causal order.
+  Next action: submit_confirmation
+You: structured Confirm for the exact Plot review proposal
+Plot: <review of the supplied outline>
+Lead: <synthesis and the next safe action>
 ```
 
 Exact Lead prose varies. The runtime owns the typed outcome, evidence receipts,
@@ -51,6 +55,17 @@ review, nothing starts until the shell presents the exact proposal and the user
 confirms it. A later write/Apply and a later Git commit each require their own
 separate confirmation; the provider never writes or commits directly. See the
 complete [Lead workflow](lead-agent.md#the-normal-workflow).
+
+For new material, provide a sufficient brief and ask for drafting instead. The
+Lead discloses `draft` assignments for every affected domain: Plot for outlines
+and structure, Character for motivation/world/continuity, and Execution for
+prose/POV/tone. Mixed work requires their affected union. Specialists return
+drafts without writing files; the Lead integrates all required drafts for the
+current task/revision before preparing an authored candidate. `review` requires
+concrete material and explicit criteria. Every required reviewer assesses the
+exact final candidate before a separate Apply decision and then a separate
+Commit decision. A completed consultation or sign-in does not satisfy an open
+authoring objective; only its exact successful Apply does.
 
 Interpret a failed turn by its displayed next action:
 
@@ -451,6 +466,15 @@ object supplied on argv, whose canonical bytes must match exactly.
       "kind": "answer",
       "result": {
         "scope": "workflow_meta",
+        "authoring_scope": {
+          "schema_version": 1,
+          "activity": "workflow",
+          "target_paths": [],
+          "domains": [],
+          "interpretation": "Answer the workflow question without story authoring.",
+          "task_id": "task_demo",
+          "task_revision": 1
+        },
         "evidence_status": "not_applicable",
         "evidence_ids": [],
         "kind": "answer",
@@ -468,12 +492,14 @@ object supplied on argv, whose canonical bytes must match exactly.
 }
 ```
 
-The example shows all nine fields of a `lead-outcome-v3` Lead ANSWER; other
-calls require their selected result type. `recommended_action` is null for this
-answer. Fresh recommendations require one typed preparation action and null
-objective intent, then offer Confirm/Reject/Revise. Confirm prepares one exact
-proposal or asks a material question; execution/review, Apply, and Commit need
-separate decisions. Ordinary contextual approval can supersede an unconfirmed
+The example shows all ten fields of a `lead-outcome-v4` Lead ANSWER. The
+illustrative fresh workflow task `task_demo` at revision `1` must be offered by
+the current invocation; other calls require their selected result type.
+`recommended_action` is null for this answer. Fresh recommendations require
+one typed preparation action and null objective intent, then offer
+Confirm/Reject/Revise. Confirm prepares an exact proposal or asks a material
+question; specialist execution/review, Apply, and Commit need separate
+decisions. Ordinary contextual approval can supersede an unconfirmed
 recommendation as a new instruction. `objective_intent` is null here;
 contextual authoring can instead select `start`, `continue`, or `cancel`
 under the [runtime contract](../reference/runtime-api.md#contextual-authoring-objectives).
@@ -486,13 +512,15 @@ completed-error recovery below. It never falls back to a string-valued
 `response` field.
 Usage comes only from the terminal object's recognized exact nonnegative
 integer counters; absent or invalid counters remain unavailable. The complete
-closed SEARCH, READ, and nine-field Lead ANSWER branches are shown in
+closed SEARCH, READ, and ten-field Lead ANSWER branches are shown in
 [What providers receive](lead-agent.md#what-providers-receive).
 
-Retained workspace Lead policies receive the runtime v3 overlay without being
-rewritten. Ordinary synthesis uses `lead-synthesis-v2` with nullable
-`recommended_action`, exclusive with `next_intent`. Its durable historical codec,
-specialist schema, and artifact-review synthesis contract remain separate. A known
+Retained workspace Lead policies receive the runtime v4 overlay without being
+rewritten. Ordinary synthesis uses `lead-synthesis-v3` with nine fields,
+including `authoring_scope` and nullable `recommended_action`; the action is
+exclusive with `next_intent`. Specialist replies use `specialist-reply-v2`,
+artifact-review synthesis uses `artifact-review-synthesis-v2`, and contextual
+transport remains wire v7. Historical durable codecs stay readable. A known
 read-only Lead failure after reference reads can expose `retry_lead_turn` once
 the exact attempt and reference accounting close. Its authoring objective
 stays open; explicit new input uses fresh evidence. Uncertain cleanup remains
@@ -732,24 +760,34 @@ component tests does not perform a live provider call.
 
 The repository-owned [case inventory](../../tests/fixtures/antigravity_live_cases.json)
 and [runner](../../tests/antigravity_live_harness.py) declare 17 complete cases.
+The dated results below describe earlier source snapshots; the current Lead v4
+contract has no renewed native run or resolved-model attestation. L06C stops at
+an exact pending recommendation to prepare a Plot consultation for a finished
+supplied outline. Recommendation Confirm would authorize only preparation;
+the resulting consultation would require its own separate structured Confirm
+before specialist execution. The scenario submits neither decision.
+
 The current routes are:
 
 | Cases | Actual route and required scenario |
 | --- | --- |
 | L01-PRO-HIGH-PTY | `gemini-3.1-pro-high`: shell consultation with two specialists, history/exchanges inspection, close and resume. |
-| L02-PRO-LOW-ONE | `gemini-3.1-pro-low`: one-specialist consultation and resume. |
+| L02-PRO-LOW-ONE | `gemini-3.1-pro-low`: Plot-only review of inline chronology against the outline, then resume. The request includes only the inline candidate and outline reference. |
 | L03-FLASH-THREE | `gemini-3.8-flash-low`: three-specialist consultation. |
 | L04-SONNET-ONE | `claude-sonnet-4-6`: one-specialist consultation and resume. |
 | L05-MIXED | Configured Codex Lead, Antigravity Pro High plot specialist, and Sonnet character specialist. |
-| L06A-QUESTION, L06B-CRITIQUE, L06C-RECOMMENDATION | Flash: each exact direct Lead outcome. |
-| L07-SEARCH-READ, L08-DECISIONS | Flash: observed SEARCH→READ→ANSWER; exact Reject/Revise, stale/forged decisions, and ordinary `Yes`. |
-| L09-SECOND-ROUND | Pro High: two actual rounds with separate confirmation. |
+| L06A-QUESTION | Flash: fresh workflow-only clarification. |
+| L06C-RECOMMENDATION | Flash: finished supplied outline, substantive Plot `REVIEW` scope, and an exact pending `prepare_consultation` recommendation for `plot_architect`. No preparation decision, consultation proposal, specialist execution, Apply, or Commit. |
+| L06B-CRITIQUE | Flash: critique unsafe workflow instructions about skipping confirmation. Whole-outline and ranged-manuscript reference preludes supply context; no story judgment is requested. |
+| L07-SEARCH-READ | Flash: fresh workflow-only literal scheduling lookup and citation through SEARCH→READ→ANSWER, without story interpretation. |
+| L08-DECISIONS | Flash: finished inline outline review; exact Reject/Revise, stale/forged decisions, and ordinary `Yes`. |
+| L09-SECOND-ROUND | Pro High: finished inline outline with chronology ambiguity, reviewed in two actual rounds with separate confirmation and the same task/candidate. |
 | F01-REFERENCE-DRIFT | Flash: named reference drift before confirmation. |
-| F02-LOST-AUTHORITY | Flash: crash after confirmation, restart with original proposal evidence, and fresh structured confirmation through specialist reply and synthesis. |
-| F03-CANCELLATION | Flash: named cancellation, completed sibling preservation, and inspection without replay. |
-| F04-FAILURE-RECOVERY | Flash: injected exit failure, then a new request, proposal, and Confirm for the same failed character specialist on a fresh thread, through terminal synthesis. |
+| F02-LOST-AUTHORITY | Flash: finished inline outline Plot review; crash after confirmation, restart with original scoped proposal/evidence, then fresh confirmation through reply and synthesis. |
+| F03-CANCELLATION | Flash: finished inline outline/character candidate reviewed by Plot and Character; named cancellation preserves the completed sibling, with inspection without replay. |
+| F04-FAILURE-RECOVERY | Flash: finished inline outline/character review with injected exit failure, then an independent character-only finished candidate, fresh task/proposal/Confirm and native thread through terminal synthesis. |
 | F05-DIAGNOSTICS-RECOVERY | Pro High: one unchanged completion plus five labeled mutations after real completion, including gated recovery. |
-| F06-BUDGET-FINALIZATION | Flash: three-specialist consultation, named `next_intent`-only injection after native synthesis, completed budget finalization, reopen without replay, and a fresh Lead answer. |
+| F06-BUDGET-FINALIZATION | Flash: three-specialist review; inject only `next_intent` after native synthesis, preserving its current scope and adding explicit review bases. Complete budget finalization, reopen without replay, then answer a fresh workflow request. |
 
 Run from the repository root in an installed development environment with
 already authenticated providers and access to the configured models. The runner
@@ -781,7 +819,10 @@ Missing steps, unexpected outcomes, missing cleanup, or exhausted budgets fail
 the case. The standalone matrix stops at the first failure, records remaining
 cases as unexecuted, and exits nonzero. A complete matrix also requires all five
 Lead outcomes and all four specialist assessment categories; one native result
-or one successful case is insufficient.
+or one successful case is insufficient. Positive `drafted` is draft material,
+not a review assessment or final approval. Draft-mode `insufficient_evidence`
+still contributes unresolved inputs; the audit must preserve them just as it
+preserves non-supporting review inputs.
 
 The declared ceiling is 312 reserved physical calls and 79,200 seconds from
 the original budget epoch, with a 180-second native timeout and per-case limits
@@ -800,9 +841,11 @@ checks that same baseline after reopening; it never treats reopened bytes as
 a new baseline. F02 preserves the original proposal and required evidence,
 rejects the consumed confirmation, and completes work only after a fresh
 structured Confirm. F04 checks actual recovery of the failed
-`character_custodian`: a fresh user request and proposal require a new Confirm,
-then the same specialist runs on a fresh native thread and the Lead synthesizes
-the result. The successful sibling and failed history remain intact.
+`character_custodian`: an independent character-only finished candidate uses
+a fresh task and proposal requiring a new Confirm. It does not continue the
+failed task or silently drop its Plot scope. The same specialist runs on a
+fresh native thread and the Lead synthesizes the result. The successful sibling
+and failed history remain intact.
 
 For identical request payloads, the exchange audit requires a unique match from
 the returned thread and structured response, or exact diagnostic stdout/stderr
@@ -829,13 +872,16 @@ when a requested continuation exceeds the remaining budget; see
 [A focused second round](lead-agent.md#a-focused-second-round).
 The matrix does not establish arbitrary conversation paths.
 
-**Evidence snapshot (2026-09-09):** 122 current deterministic tests pass,
-and all 17 declared complete cases pass across accepted actual-provider runs:
+### Historical evidence snapshot (2026-09-09)
+
+At that source revision, 122 deterministic tests passed, and all 17 then-declared
+complete cases passed across accepted actual-provider runs:
 the original 16 cases plus F06. The accepted cases include Pro High/Low, Flash,
 Sonnet, mixed Codex/Antigravity, and the actual PTY workflow.
 All five Lead outcomes and all four specialist assessment categories were
 observed. F03 passed cancellation, sibling preservation, and inspection without
-replay; F04 passed the separately confirmed failed-specialist recovery above.
+replay; F04 passed its then-declared separately confirmed failed-specialist
+recovery.
 The global ledger retains 228 charged reservations against the 312 ceiling,
 including failed attempts.
 

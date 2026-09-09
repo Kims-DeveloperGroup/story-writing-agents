@@ -198,7 +198,7 @@ class ConversationStorageTransferCliTests(unittest.TestCase):
         )
         self.assertFalse(workspace.path("debug_logs/runtime.jsonl").exists())
 
-    def test_authorized_workspace_exits_zero_one_two_and_rejects_fresh_reopen(
+    def test_authorized_workspace_exits_zero_one_two_and_accepts_fresh_reopen(
         self,
     ) -> None:
         workspace = transfer_workspace(self)
@@ -207,13 +207,13 @@ class ConversationStorageTransferCliTests(unittest.TestCase):
             ConversationStorageBackend.FILESYSTEM,
             representative_archive(),
         )
-        rejected_stdout = io.StringIO()
-        rejected_stderr = io.StringIO()
+        reopened_stdout = io.StringIO()
+        reopened_stderr = io.StringIO()
         with (
-            contextlib.redirect_stdout(rejected_stdout),
-            contextlib.redirect_stderr(rejected_stderr),
+            contextlib.redirect_stdout(reopened_stdout),
+            contextlib.redirect_stderr(reopened_stderr),
         ):
-            rejected = main(
+            reopened = main(
                 [
                     "storage",
                     "verify",
@@ -225,11 +225,11 @@ class ConversationStorageTransferCliTests(unittest.TestCase):
                     os.fspath(workspace.root),
                 ]
             )
-        self.assertEqual(rejected, 2)
-        self.assertEqual(rejected_stderr.getvalue(), "")
+        self.assertEqual(reopened, 1)
+        self.assertEqual(reopened_stderr.getvalue(), "")
         self.assertEqual(
-            json.loads(rejected_stdout.getvalue())["failure"],
-            "workspace_invalid",
+            json.loads(reopened_stdout.getvalue())["failure"],
+            "parity_mismatch",
         )
 
         def invoke(*arguments: str) -> tuple[int, dict]:

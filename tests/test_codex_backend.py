@@ -7966,15 +7966,16 @@ class CodexBackendTestCase(unittest.IsolatedAsyncioTestCase):
                     for record in _agent_exchange_records(self.workspace)
                     if record["session_id"] == session_id
                 ]
-                expected_types = (
-                    ["request", "outcome"]
-                    if case == "nonzero"
-                    else ["request", "response", "outcome"]
-                )
+                expected_types = ["request", "response", "outcome"]
                 self.assertEqual(
                     [record["request_type"] for record in reference_exchange],
                     expected_types,
                 )
+                if case == "nonzero":
+                    self.assertIs(
+                        json.loads(reference_exchange[1]["content"])["provider_failure"],
+                        True,
+                    )
                 expected_terminal = (
                     {
                         "code": "provider_invocation_failed",

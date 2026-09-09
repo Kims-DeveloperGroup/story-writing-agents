@@ -42,6 +42,7 @@ from tests.test_lead_orchestration import (
     _LeadBackend,
     _LeadContextProvider,
     _decision,
+    _live_scope,
     _provider_envelope,
     _specialist_outcome,
     _synthesis_outcome,
@@ -334,7 +335,10 @@ def _missing_outcome(*, proposal: bool = False):
             "evidence_status": "missing",
             "evidence_ids": [observation[2]["evidence_id"]],
             "artifact_intent": None,
-                "objective_intent": None,
+            "objective_intent": None,
+            "authoring_scope": _live_scope(
+                call, activity="review", domains=("plot_structure",)
+            ),
             "proposal": (
                 {
                     "relation": "new_step",
@@ -356,34 +360,22 @@ def _missing_outcome(*, proposal: bool = False):
     return respond
 
 
-def _referenced_outcome(*, status: str, evidence_ids: list[str]):
+def _referenced_outcome(*, status: str, evidence_ids: list[str], factual=False):
     def respond(call, _provider):
         aliases = call.payload["i"]["input_aliases"]
-        return _provider_envelope(
-            call,
-            {
-                "recommended_action": None,
-                "kind": "proposal",
-                "message": "The attached sources require specialist review.",
-                "scope": "story_specific",
-                "evidence_status": status,
-                "evidence_ids": evidence_ids,
-                "artifact_intent": None,
-                "objective_intent": None,
-                "proposal": {
-                    "relation": "new_step",
-                    "purpose": "Review the exact attached evidence.",
-                    "assignments": [
-                        {
-                            "agent_id": PLOT_ARCHITECT,
-                            "instruction": "Review only the attached evidence.",
-                            "input_ids": [item["input_id"] for item in aliases],
-                        }
-                    ],
-                },
+        return _provider_envelope(call, {
+            "kind": "question" if factual else "proposal",
+            "message": "The reference is empty. What candidate material should be reviewed?" if factual else "The supplied outline and manuscript candidates require review.",
+            "scope": "story_specific", "evidence_status": status, "evidence_ids": evidence_ids,
+            "artifact_intent": None, "objective_intent": None,
+            "proposal": None if factual else {
+                "relation": "new_step", "purpose": "Review the exact attached candidates.",
+                "assignments": [{"agent_id": agent, "instruction": "Review the supplied candidates for the assigned domain.",
+                                 "input_ids": [item["input_id"] for item in aliases], "mode":"review",
+                                 "review_basis":{"schema_version":1,"candidate_input_ids":evidence_ids,"criteria":"Assess the exact candidate references."}}
+                                for agent in (PLOT_ARCHITECT, "execution_specialist")],
             },
-        )
-
+        })
     return respond
 
 
@@ -406,7 +398,10 @@ class RuntimeLeadEvidenceGroundingTests(LeadOrchestrationTestCase):
                     "evidence_status": "missing",
                     "evidence_ids": ["invented"],
                     "artifact_intent": None,
-                "objective_intent": None,
+                    "objective_intent": None,
+                    "authoring_scope": _live_scope(
+                        call, activity="review", domains=("plot_structure",)
+                    ),
                     "proposal": None,
                 },
             )
@@ -455,10 +450,19 @@ class RuntimeLeadEvidenceGroundingTests(LeadOrchestrationTestCase):
             _search("private internal search phrase", ["w"]),
             _missing_outcome(),
         )
-        await self.runtime.lead_turn(
+        result = await self.runtime.lead_turn(
             self.session_id,
             conversation_id,
             "Check canonical artifacts.",
+        )
+        self.assertIs(result.kind, LeadOutcomeKind.RECOMMENDATION)
+        self.assertIsNotNone(result.recommendation_request)
+        self.assertIsNotNone(result.evidence)
+        assert result.evidence is not None
+        self.assertEqual(len(result.evidence.receipts), 1)
+        self.assertIs(
+            result.evidence.receipts[0].acquisition,
+            CollaborationEvidenceAcquisition.ZERO_HIT_SEARCH,
         )
         wire = b"\n".join(
             encode_collaboration_event(event) for event in self.history(conversation_id)
@@ -584,13 +588,16 @@ class RuntimeLeadEvidenceGroundingTests(LeadOrchestrationTestCase):
         empty.write_bytes(b"")
         conversation_id = self.conversation("Empty whole")
         self.backend.enqueue(
-            _referenced_outcome(status="empty", evidence_ids=["reference_1"])
+            _referenced_outcome(status="empty", evidence_ids=["reference_1"], factual=True)
         )
         result = await self.runtime.lead_turn(
             self.session_id,
             conversation_id,
-            "Review ${manuscript/part-01/empty.md}.",
+            "Report whether ${manuscript/part-01/empty.md} is empty.",
         )
+        self.assertIs(result.kind, LeadOutcomeKind.QUESTION)
+        self.assertIs(result.next_action, CollaborationNextAction.REPLY_TO_LEAD)
+        self.assertIsNotNone(result.evidence)
         assert result.evidence is not None
         self.assertEqual(result.evidence.receipts[0].utf8_bytes, 0)
         self.assertEqual(result.evidence.receipts[0].boundary_kind, "whole")

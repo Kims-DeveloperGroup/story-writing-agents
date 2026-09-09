@@ -1313,6 +1313,7 @@ class ControllerContractTests(ControllerTestCase):
                 "interactive_controller._conversation_policy",
                 "interactive_controller._exchange_policy",
                 "interactive_controller._exchange_viewer",
+                "interactive_controller._lead_policy",
                 "interactive_controller._runtime_policy",
                 "interactive_controller._session_policy",
                 "interactive_terminal",
@@ -1560,24 +1561,24 @@ class ControllerContractTests(ControllerTestCase):
             suffix = ".".join(relative_parts)
             return "story_writing_agents" + (f".{suffix}" if suffix else "")
 
+        def runtime_nodes(node: ast.AST):
+            yield node
+            if isinstance(node, ast.If) and (
+                isinstance(node.test, ast.Name) and node.test.id == "TYPE_CHECKING"
+                or isinstance(node.test, ast.Attribute) and node.test.attr == "TYPE_CHECKING"
+            ):
+                for child in node.orelse:
+                    yield from runtime_nodes(child)
+                return
+            for child in ast.iter_child_nodes(node):
+                yield from runtime_nodes(child)
+
         module_names = {path: import_name(path) for path in module_paths}
         modules = set(module_names.values())
         graph: dict[str, set[str]] = {name: set() for name in modules}
         for path, module_name in module_names.items():
             parsed = ast.parse(path.read_text(encoding="utf-8"))
-            pending = [parsed]
-            while pending:
-                node = pending.pop()
-                if isinstance(node, ast.If) and (
-                    isinstance(node.test, ast.Name) and node.test.id == "TYPE_CHECKING"
-                    or isinstance(node.test, ast.Attribute)
-                    and isinstance(node.test.value, ast.Name)
-                    and node.test.value.id == "typing"
-                    and node.test.attr == "TYPE_CHECKING"
-                ):
-                    pending.extend(node.orelse)
-                    continue
-                pending.extend(ast.iter_child_nodes(node))
+            for node in runtime_nodes(parsed):
                 if isinstance(node, ast.ImportFrom) and node.level > 0:
                     package_name = (
                         module_name
@@ -1613,8 +1614,8 @@ class ControllerContractTests(ControllerTestCase):
 
         for module_name in graph:
             visit(module_name)
-        self.assertEqual(len(modules), 138)
-        self.assertEqual(sum(len(dependencies) for dependencies in graph.values()), 549)
+        self.assertEqual(len(modules), 140)
+        self.assertEqual(sum(len(dependencies) for dependencies in graph.values()), 555)
         self.assertTrue(
             {
                 "story_writing_agents.artifact_proposals",
@@ -2049,6 +2050,7 @@ class ControllerStartupTests(ControllerTestCase):
         controller._picker_input = object()
         controller._prompt_input = object()
         controller._semantic_output = object()
+        controller._auth_coordinator = None
         controller._runtime = mock.Mock()
         controller._runtime.session.return_value = runtime_session
         adapter = mock.Mock()
@@ -2072,6 +2074,7 @@ class ControllerStartupTests(ControllerTestCase):
             controller._picker_input,
             controller._prompt_input,
             controller._semantic_output,
+            recover_authentication=None,
         )
         adapter.submit.assert_called_once_with(_UNIQUE_C, " literal request ")
 
@@ -3444,7 +3447,7 @@ class ControllerCommandTests(ControllerTestCase):
             "session lobby.\n"
         )
         self.assertEqual(rendered.count(unavailable), 0)
-        self.assertEqual(rendered.count("[error session_not_attached]"), 2)
+        self.assertEqual(rendered.count("[error session_not_attached]"), 3)
         self.assertIn("[session] No story sessions found.\n", rendered)
         self.assertIn(
             _error_record(InteractiveErrorCode.SESSION_NOT_ATTACHED),
@@ -9916,6 +9919,91 @@ class _RetiredSchemaV1ControllerSearchAndTranscriptExamples:
 
 class ControllerV2HistoryCommandTests(ControllerTestCase):
     """Verify provider-free structured search, transcript, and history commands."""
+
+    def test_status_renders_all_history_next_actions_without_execution(self) -> None:
+        from story_writing_agents.orchestrator import StoryRuntime
+
+        workspace, services, metadata, controller, callbacks = self.prepared_v2_controller()
+        observed = []
+        callback_failures = []
+
+        def inspect(_prompt):
+            records, projection = controller._read_focused_history_snapshot(metadata)
+            before_tree = _tree_snapshot(workspace.root)
+            before_history = services.event_store.read("session", metadata.conversation_id)
+            meanings = set()
+            self.assertEqual(len(CollaborationNextAction), 13)
+            with (
+                mock.patch.object(controller._backend, "bind") as bind,
+                mock.patch.object(StoryRuntime, "lead_turn") as lead_turn,
+                mock.patch.object(StoryRuntime, "decide_lead_step") as confirm,
+                mock.patch.object(StoryRuntime, "decide_lead_recommendation") as recommend,
+                mock.patch.object(StoryRuntime, "decide_artifact_application") as apply,
+                mock.patch.object(StoryRuntime, "decide_story_commit") as commit,
+            ):
+                for action in CollaborationNextAction:
+                    with self.subTest(action=action):
+                        mark = len(callbacks.records)
+                        controlled = replace(projection, next_safe_action=action)
+                        with mock.patch.object(InteractiveController, "_read_focused_history_snapshot",
+                                               autospec=True, return_value=(records, controlled)) as history_read:
+                            controller._write_runtime_status()
+                        history_read.assert_called_once_with(controller, metadata)
+                        rendered = "".join(callbacks.records[mark:])
+                        self.assertIn(f"Next safe action: {action.value}", rendered)
+                        meaning = next(line.split("Next action meaning:", 1)[1].strip()
+                                       for line in rendered.splitlines() if "Next action meaning:" in line)
+                        self.assertTrue(meaning)
+                        self.assertNotEqual(meaning, action.value)
+                        meanings.add(meaning)
+                        if action is CollaborationNextAction.RETRY_LEAD_TURN:
+                            self.assertIn("failed attempt will not be replayed", meaning)
+                        elif action is CollaborationNextAction.REPLY_TO_LEAD:
+                            self.assertIn("question", meaning)
+                        elif action is CollaborationNextAction.SUBMIT_RECOMMENDATION_DECISION:
+                            self.assertIn("exact Lead preparation", meaning)
+                            self.assertIn("Confirm, Reject, or Revise", meaning)
+                        elif action is CollaborationNextAction.FINALIZE_RECOMMENDATION:
+                            self.assertIn("known preparation result", meaning)
+                            self.assertIn("without replaying provider work", meaning)
+                        elif action is CollaborationNextAction.SUBMIT_APPLICATION_DECISION:
+                            self.assertIn("separate Apply decision", meaning)
+                        elif action is CollaborationNextAction.SUBMIT_COMMIT_DECISION:
+                            self.assertIn("separate Commit decision", meaning)
+                        self.assertNotIn("internal_error", rendered)
+                        observed.append(action)
+                for execution in (bind, lead_turn, confirm, recommend, apply, commit):
+                    execution.assert_not_called()
+            self.assertEqual(len(meanings), 13)
+            self.assertEqual(services.event_store.read("session", metadata.conversation_id), before_history)
+            self.assertEqual(_tree_snapshot(workspace.root), before_tree)
+            return "/quit"
+
+        def observable_inspect(prompt):
+            try:
+                return inspect(prompt)
+            except BaseException as failure:
+                callback_failures.append((failure, failure.__traceback__))
+                raise
+
+        callbacks.reads[:] = [observable_inspect]
+        exit_code = controller.run_session_lobby()
+        diagnostics = {}
+        for path in (workspace.root / "debug_logs").rglob("*.jsonl"):
+            try:
+                diagnostics[str(path.relative_to(workspace.root))] = path.read_text(errors="replace")
+            except OSError as failure:
+                diagnostics[str(path.relative_to(workspace.root))] = repr(failure)
+        failure_details = (
+            f"Controller exit: {exit_code}\nTerminal output:\n{''.join(callbacks.records)}"
+            f"\nRuntime diagnostics:\n{diagnostics!r}"
+        )
+        if callback_failures:
+            failure, captured_traceback = callback_failures[0]
+            failure.add_note(failure_details)
+            raise failure.with_traceback(captured_traceback)
+        self.assertEqual(exit_code, 0, failure_details)
+        self.assertEqual(observed, list(CollaborationNextAction))
 
     def prepared_v2_controller(
         self,

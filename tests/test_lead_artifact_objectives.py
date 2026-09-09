@@ -27,18 +27,23 @@ class LeadArtifactObjectiveTests(objectives.ObjectiveCase):
         binding = objective.candidate_binding
         event = next(e for e in self.history(conversation_id) if e.event_id == binding.candidate_event_id)
         operation = event.payload.candidate.change_set.operations[0]
+        selected = next(e for e in self.history(conversation_id)
+                        if e.event_id == objective.draft_sources[0].event_id)
+        self.assertIsInstance(selected.payload, c.CollaborationLeadSynthesisPayload)
+        self.assertEqual(selected.payload.message, objectives.DRAFT)
         self.assertEqual(operation.path, objectives.OUTLINE)
         self.assertEqual(operation.operation_kind.value, "replace")
-        self.assertEqual(operation.content, offered.message.encode("utf-8"))
-        self.assertEqual(objective.draft_sources[0].content_digest, objectives.digest(offered.message))
+        self.assertEqual(operation.content, selected.payload.message.encode("utf-8"))
+        self.assertEqual(objective.draft_sources[0].content_digest, objectives.digest(selected.payload.message))
+        self.assertNotEqual(offered.message, selected.payload.message)
         self.assertEqual(binding.candidate_digest, event.payload.candidate.candidate_digest)
         self.assertIs(objective.state, c.ArtifactObjectiveState.OPEN)
         user_texts = [e.payload.content for e in self.history(conversation_id) if e.direction is c.CollaborationDirection.USER_TO_LEAD and type(e.payload) is c.CollaborationMessagePayload]
         self.assertNotIn(objectives.OUTLINE, user_texts[-1])
-        self.assertNotIn(offered.message, user_texts[-1])
+        self.assertNotIn(selected.payload.message, user_texts[-1])
         self.assertEqual(self.snapshots(), before)
         self.assertIsNone(prepared.artifact_application_request)
-        self.assertEqual({a for a, _ in self.backend.call_records}, {lead.LEAD_ORCHESTRATOR})
+        self.assertEqual([a for a, _ in self.backend.call_records], [lead.LEAD_ORCHESTRATOR, PLOT_ARCHITECT, lead.LEAD_ORCHESTRATOR, lead.LEAD_ORCHESTRATOR])
 
     async def test_consultation_and_review_leave_objective_open(self):
         conversation_id, _ = await self.start()
@@ -46,7 +51,11 @@ class LeadArtifactObjectiveTests(objectives.ObjectiveCase):
         base = lead._proposal_outcome([{"agent_id": PLOT_ARCHITECT, "instruction": "Check the three-beat structure.", "input_ids": ["user_input"]}])
         def consult(call, provider):
             envelope = json.loads(base(call, provider))
-            envelope["action"]["result"]["objective_intent"] = {"action": "continue", "objective_id": objective_id, "next_step": "consult", "draft_source_event_ids": []}
+            intent = {"action": "continue", "objective_id": objective_id, "next_step": "consult", "draft_source_event_ids": []}
+            envelope["action"]["result"]["objective_intent"] = intent
+            scope = self.scope(call, intent=intent)
+            envelope["action"]["result"]["authoring_scope"] = scope
+            envelope["action"]["result"]["proposal"]["authoring_scope"] = scope
             return json.dumps(envelope)
         before = self.snapshots()
         self.backend.enqueue(consult)
@@ -122,6 +131,7 @@ class LeadArtifactObjectiveTests(objectives.ObjectiveCase):
 
     async def test_prepare_validation_cannot_downgrade_to_advice(self):
         from tests import test_artifact_proposal_orchestration as artifact
+        from story_writing_agents.artifact_proposals import ArtifactProposalError, ArtifactProposalErrorCode
         conversation_id, _ = await self.start()
         before = self.objective(conversation_id)
         snapshots = self.snapshots()
@@ -129,10 +139,28 @@ class LeadArtifactObjectiveTests(objectives.ObjectiveCase):
             operations=[{"kind": "replace", "evidence_id": "not_offered", "new_text": objectives.DRAFT}],
             evidence_status="empty", evidence_ids=lambda call, material: [artifact._status_id(call, objectives.OUTLINE)],
             objective_intent={"action": "continue", "objective_id": before.facts.objective_id, "next_step": "prepare", "draft_source_event_ids": [self.projection(conversation_id).offered_draft_sources[-1].event_id]})
-        self.backend.enqueue(invalid_prepare)
+        def current_task_prepare(call, provider):
+            envelope = json.loads(invalid_prepare(call, provider))
+            envelope["action"]["result"]["authoring_scope"] = self.scope(
+                call, intent={"objective_id": before.facts.objective_id})
+            return json.dumps(envelope)
+        self.backend.enqueue(current_task_prepare)
         self.backend.enqueue(lead._visible_outcome("answer", "The document is finished."))
         calls = len(self.backend.calls)
-        result = await self.runtime.lead_turn(self.session_id, conversation_id, "Prepare that draft now.")
+        construct = self.runtime._construct_artifact_review_candidate
+        attempted, rejected = [], []
+        def observe_construction(**kwargs):
+            attempted.append(kwargs["intent"])
+            try:
+                return construct(**kwargs)
+            except ArtifactProposalError as error:
+                rejected.append(error.code)
+                raise
+        with mock.patch.object(self.runtime, "_construct_artifact_review_candidate", side_effect=observe_construction):
+            result = await self.runtime.lead_turn(self.session_id, conversation_id, "Prepare that draft now.")
+        self.assertEqual(len(attempted), 1)
+        self.assertEqual(attempted[0].operations[0].evidence_id, "not_offered")
+        self.assertEqual(rejected, [ArtifactProposalErrorCode.INVALID_EVIDENCE])
         self.assertEqual(len(self.backend.calls) - calls, 2)
         self.assertEqual(self.objective(conversation_id), before)
         self.assertIs(self.objective(conversation_id).state, c.ArtifactObjectiveState.OPEN)
@@ -182,10 +210,11 @@ class LeadArtifactObjectiveTests(objectives.ObjectiveCase):
 
     async def test_pending_apply_and_commit_redisclose_exact_requests_without_calls(self):
         conversation_id, _ = await self.start()
-        reviewed = await self.review(await self.prepare(conversation_id))
+        prepared = await self.prepare(conversation_id)
+        reviewed = await self.review(prepared)
         for pending in (reviewed,):
             before, calls, history = self.snapshots(), len(self.backend.calls), self.history(conversation_id)
-            for invoke in (lambda: self.runtime.lead_turn(self.session_id, conversation_id, "Yes, apply it."), lambda: self.runtime.propose_specialist_advisory(self.session_id, conversation_id, PLOT_ARCHITECT, "Please inspect it.")):
+            for invoke in (lambda: self.runtime.lead_turn(self.session_id, conversation_id, "Yes, apply it."), lambda: self.runtime.propose_specialist_advisory(self.session_id, conversation_id, PLOT_ARCHITECT, "Please inspect it.", authoring_scope=prepared.proposal.authoring_scope, review_basis=prepared.proposal.assignments[0].review_basis)):
                 result = await invoke()
                 self.assertEqual(result.artifact_application_request, reviewed.artifact_application_request)
                 self.assertEqual(self.history(conversation_id), history)
@@ -193,7 +222,7 @@ class LeadArtifactObjectiveTests(objectives.ObjectiveCase):
                 self.assertEqual(self.snapshots(), before)
         applied = await self.apply(reviewed)
         before, calls, history = self.snapshots(), len(self.backend.calls), self.history(conversation_id)
-        for invoke in (lambda: self.runtime.lead_turn(self.session_id, conversation_id, "Commit it."), lambda: self.runtime.propose_specialist_advisory(self.session_id, conversation_id, PLOT_ARCHITECT, "Inspect it.")):
+        for invoke in (lambda: self.runtime.lead_turn(self.session_id, conversation_id, "Commit it."), lambda: self.runtime.propose_specialist_advisory(self.session_id, conversation_id, PLOT_ARCHITECT, "Inspect it.", authoring_scope=prepared.proposal.authoring_scope, review_basis=prepared.proposal.assignments[0].review_basis)):
             result = await invoke()
             self.assertEqual(result.story_commit_request, applied.commit_request)
             self.assertIsNone(result.artifact_application_request)
@@ -205,12 +234,13 @@ class LeadArtifactObjectiveTests(objectives.ObjectiveCase):
         for code, expected in ((ArtifactApplicationErrorCode.INVALID_SCHEMA, c.CollaborationNextAction.INSPECT_AND_RESOLVE_OUTCOME), (ArtifactApplicationErrorCode.RECOVERY_REQUIRED, c.CollaborationNextAction.REPAIR_AUTHORITATIVE_HISTORY)):
             with self.subTest(code=code):
                 conversation_id, _ = await self.start()
-                reviewed = await self.review(await self.prepare(conversation_id))
+                prepared = await self.prepare(conversation_id)
+                reviewed = await self.review(prepared)
                 with mock.patch.object(self.runtime.artifacts, "apply_artifact_changes", side_effect=ArtifactApplicationError(code)):
                     await self.apply(reviewed)
                 history, calls, before = self.history(conversation_id), len(self.backend.calls), self.snapshots()
                 for runtime in (self.runtime, StoryRuntime(self.workspace, self.backend)):
-                    for invoke in (lambda: runtime.lead_turn(self.session_id, conversation_id, "Prepare another one."), lambda: runtime.propose_specialist_advisory(self.session_id, conversation_id, PLOT_ARCHITECT, "Check again.")):
+                    for invoke in (lambda: runtime.lead_turn(self.session_id, conversation_id, "Prepare another one."), lambda: runtime.propose_specialist_advisory(self.session_id, conversation_id, PLOT_ARCHITECT, "Check again.", authoring_scope=prepared.proposal.authoring_scope, review_basis=prepared.proposal.assignments[0].review_basis)):
                         result = await invoke()
                         self.assertIs(result.next_action, expected)
                         self.assertIsNone(result.artifact_application_request)
@@ -229,14 +259,15 @@ class LeadArtifactObjectiveTests(objectives.ObjectiveCase):
                     self.addCleanup(cleanup, *args, **kwargs)
                 case._cleanups.clear()
                 conversation_id, _ = await case.start()
-                applied = await case.apply(await case.review(await case.prepare(conversation_id)))
+                prepared = await case.prepare(conversation_id)
+                applied = await case.apply(await case.review(prepared))
                 reviewed = applied.request.reviewed_proposal
                 service = case.runtime._story_commit_services[(case.session_id, conversation_id, reviewed.step_id)]
                 with mock.patch.object(type(service), "execute", side_effect=StoryCommitError(code)):
                     await case.runtime.decide_story_commit(commit._commit_decision(applied, commit.StoryCommitDecision.COMMIT))
                 history, calls, before = case.history(conversation_id), len(case.backend.calls), case.snapshots()
                 for runtime in (case.runtime, StoryRuntime(case.workspace, case.backend)):
-                    for invoke in (lambda: runtime.lead_turn(case.session_id, conversation_id, "Continue."), lambda: runtime.propose_specialist_advisory(case.session_id, conversation_id, PLOT_ARCHITECT, "Inspect.")):
+                    for invoke in (lambda: runtime.lead_turn(case.session_id, conversation_id, "Continue."), lambda: runtime.propose_specialist_advisory(case.session_id, conversation_id, PLOT_ARCHITECT, "Inspect.", authoring_scope=prepared.proposal.authoring_scope, review_basis=prepared.proposal.assignments[0].review_basis)):
                         result = await invoke()
                         self.assertIs(result.next_action, expected)
                         self.assertIsNone(result.story_commit_request)
@@ -341,3 +372,121 @@ class LeadArtifactObjectiveTests(objectives.ObjectiveCase):
         self.assertIs(prepared.kind, c.LeadOutcomeKind.PROPOSAL)
         self.assertEqual(self.objective(rename_conversation).facts.target_paths, (source, destination))
         self.assertEqual(self.snapshots(), before)
+
+    def current_prepare_response(self, intent, *, task_objective_id=None, mutate=None):
+        from tests import test_artifact_proposal_orchestration as artifact
+        base = artifact._artifact_outcome(
+            operations=lambda call, _material: [{"kind": "replace", "evidence_id": artifact._status_id(call, objectives.OUTLINE), "new_text": objectives.DRAFT}],
+            evidence_status="empty", evidence_ids=lambda call, _material: [artifact._status_id(call, objectives.OUTLINE)],
+            objective_intent=intent)
+        def respond(call, provider):
+            envelope = json.loads(base(call, provider))
+            value = envelope["action"]["result"]
+            value["authoring_scope"] = self.scope(call, intent={"objective_id": task_objective_id or intent.get("objective_id")})
+            if mutate is not None:
+                mutate(value)
+            return json.dumps(envelope)
+        return respond
+
+    async def test_clarification_requires_current_draft_before_prepare_review_apply(self):
+        conversation, _ = await self.clarify()
+        objective = self.objective(conversation)
+        source = self.projection(conversation).offered_draft_sources[-1]
+        intent = {"action": "continue", "objective_id": objective.facts.objective_id,
+                  "next_step": "prepare", "draft_source_event_ids": [source.event_id]}
+        before = self.snapshots()
+        invalid = self.current_prepare_response(intent)
+        self.backend.enqueue(invalid, invalid)
+        refused = await self.runtime.lead_turn(self.session_id, conversation, "Prepare it before drafting.")
+        self.assertIs(refused.next_action, c.CollaborationNextAction.RETRY_LEAD_TURN)
+        self.assertEqual(self.objective(conversation), objective)
+        self.assertFalse(any(isinstance(e.payload, c.ArtifactReviewCandidatePayload) for e in self.history(conversation)))
+        self.assertEqual(self.snapshots(), before)
+        await self.start(conversation, objective_id=objective.facts.objective_id)
+        prepared = await self.prepare(conversation)
+        self.assertEqual(prepared.proposal.authoring_scope.task_id, self.objective_tasks[objective.facts.objective_id])
+        self.assertEqual(prepared.proposal.participants, (PLOT_ARCHITECT,))
+        self.assertTrue(all(a.mode.value == "review" for a in prepared.proposal.assignments))
+        reviewed = await self.review(prepared)
+        self.assertIs(self.objective(conversation).state, c.ArtifactObjectiveState.OPEN)
+        self.assertEqual(self.snapshots(), before)
+        await self.apply(reviewed)
+        self.assertIs(self.objective(conversation).state, c.ArtifactObjectiveState.SATISFIED)
+        self.assertEqual(self.workspace.path(objectives.OUTLINE).read_text(), objectives.DRAFT)
+        self.assertEqual(self.snapshots()[1:], before[1:])
+
+    async def test_objective_prepare_rejects_other_task_source_and_wrong_revision(self):
+        conversation, _ = await self.start()
+        first = self.objective(conversation)
+        await self.start(conversation)
+        second = self.objective(conversation)
+        other_source = self.projection(conversation).offered_draft_sources[-1]
+        first_source = next(s for s in self.projection(conversation).offered_draft_sources
+                            if s.event_id in {e.event_id for e in self.history(conversation)
+                                if isinstance(e.payload, c.CollaborationLeadSynthesisPayload)
+                                and e.payload.authoring_scope.task_id == self.objective_tasks[first.facts.objective_id]})
+        base_intent = {"action": "continue", "objective_id": first.facts.objective_id, "next_step": "prepare"}
+        cases = (
+            self.current_prepare_response(dict(base_intent, draft_source_event_ids=[other_source.event_id]), task_objective_id=second.facts.objective_id),
+            self.current_prepare_response(dict(base_intent, draft_source_event_ids=[first_source.event_id]),
+                mutate=lambda value: value["authoring_scope"].update(task_revision=value["authoring_scope"]["task_revision"] + 1)),
+        )
+        before = self.snapshots()
+        objectives_before = self.projection(conversation).artifact_objectives
+        for invalid in cases:
+            self.backend.enqueue(invalid, invalid)
+            refused = await self.runtime.lead_turn(self.session_id, conversation, "Prepare the first objective using that selection.")
+            self.assertIs(refused.next_action, c.CollaborationNextAction.RETRY_LEAD_TURN)
+            self.assertIsNone(refused.artifact_proposal)
+            self.assertEqual(self.projection(conversation).artifact_objectives, objectives_before)
+            self.assertEqual(self.snapshots(), before)
+
+    async def test_supplied_finished_candidate_has_exact_review_without_fabricated_draft(self):
+        conversation = self.conversation()
+        intent = {"action": "start", "request": "Review this finished user candidate.",
+                  "target_paths": [objectives.OUTLINE], "next_step": "prepare", "draft_source_event_ids": []}
+        self.backend.enqueue(self.current_prepare_response(intent))
+        before = self.snapshots()
+        prepared = await self.runtime.lead_turn(self.session_id, conversation, "Review this finished outline candidate: " + objectives.DRAFT)
+        self.assertIs(prepared.kind, c.LeadOutcomeKind.PROPOSAL, prepared)
+        self.assertEqual(prepared.proposal.participants, (PLOT_ARCHITECT,))
+        self.assertTrue(all(a.mode.value == "review" for a in prepared.proposal.assignments))
+        self.assertFalse(any(isinstance(e.payload, c.CollaborationSpecialistReplyPayload) for e in self.history(conversation)))
+        self.assertIsNone(prepared.artifact_application_request)
+        self.assertEqual(self.snapshots(), before)
+        reviewed = await self.review(prepared)
+        self.assertIs(self.objective(conversation).state, c.ArtifactObjectiveState.OPEN)
+        self.assertEqual(self.snapshots(), before)
+        await self.apply(reviewed)
+        self.assertIs(self.objective(conversation).state, c.ArtifactObjectiveState.SATISFIED)
+
+    async def test_combined_live_ten_fields_preserve_objective_and_action_positional_contract(self):
+        from dataclasses import fields
+        from story_writing_agents.specialist_routing import AuthoringScope, AuthoringActivity
+        objective = c.LeadObjectiveIntent(c.LeadObjectiveAction.START, request="Clarify the outline.",
+            target_paths=(objectives.OUTLINE,), next_step=c.ArtifactObjectiveNextStep.CLARIFY)
+        scope = AuthoringScope(AuthoringActivity.DRAFT, (objectives.OUTLINE,), (), "Clarify the synthetic outline.", "task_fixture", 1)
+        outcome = c.LeadProviderOutcome(c.LeadOutcomeKind.QUESTION, "Which ending?", c.LeadOutcomeScope.STORY_SPECIFIC,
+            c.LeadEvidenceStatus.INCOMPLETE, (), None, None, objective, None, authoring_scope=scope)
+        self.assertIs(outcome.objective_intent, objective)
+        self.assertIsNone(outcome.recommended_action)
+        self.assertIs(outcome.authoring_scope, scope)
+        self.assertEqual(tuple((f.name, f.kw_only) for f in fields(outcome))[-3:],
+            (("objective_intent", False), ("recommended_action", False), ("authoring_scope", True)))
+        observed = []
+        original = self.question(intent={"action": "start", "request": "Clarify the outline.", "target_paths": [objectives.OUTLINE],
+            "next_step": "clarify", "draft_source_event_ids": []}, message="Which ending?")
+        def capture(call, provider):
+            material = lead._workflow_material(call.payload)
+            self.assertEqual(material["contract_version"], "lead-outcome-v4")
+            envelope = json.loads(original(call, provider))
+            observed.append(envelope["action"]["result"])
+            return json.dumps(envelope)
+        self.backend.enqueue(capture)
+        result = await self.runtime.lead_turn(self.session_id, self.conversation(), "Clarify the ending.")
+        self.assertIs(result.kind, c.LeadOutcomeKind.QUESTION)
+        self.assertEqual(set(observed[0]), {"scope", "authoring_scope", "evidence_status", "evidence_ids", "kind", "message", "artifact_intent", "proposal", "objective_intent", "recommended_action"})
+        for key in ("objective_intent", "recommended_action", "authoring_scope"):
+            malformed = dict(observed[0]); malformed.pop(key)
+            with self.assertRaises(lead.BackendProtocolError):
+                StoryRuntime._decode_lead_outcome(json.dumps(malformed))

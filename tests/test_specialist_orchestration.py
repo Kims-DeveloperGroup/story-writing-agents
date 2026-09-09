@@ -36,6 +36,7 @@ from story_writing_agents.conversations import (
     project_collaboration_history,
 )
 from story_writing_agents.models import AgentStateEntry
+from story_writing_agents.specialist_routing import AuthoringScope, AuthoringActivity, ArtifactReviewDomain, ReviewBasis
 
 from tests.test_lead_orchestration import (
     LeadOrchestrationTestCase,
@@ -490,9 +491,12 @@ class SpecialistExecutionAcceptanceTests(LeadOrchestrationTestCase):
                     "instruction": "Check the character sheet only.",
                     "input_ids": ["reference_2"],
                 },
+                {"agent_id": EXECUTION_SPECIALIST, "instruction": "Assess the supplied prose.",
+                 "input_ids": ["reference_3"]},
             ],
         )
         self.backend.enqueue_for(PLOT_ARCHITECT, _specialist_outcome())
+        self.backend.enqueue_for(EXECUTION_SPECIALIST, _specialist_outcome())
         self.backend.enqueue_for(CHARACTER_CUSTODIAN, _specialist_outcome("concern"))
         self.backend.enqueue_for(
             LEAD_ORCHESTRATOR,
@@ -618,8 +622,8 @@ class SpecialistExecutionAcceptanceTests(LeadOrchestrationTestCase):
         proposed = await self.proposal(
             conversation_id,
             text=(
-                "Check ${core_documents/global_outline.md} and "
-                "${manuscript/part-01/opening.md}."
+                "Check ${core_documents/global_outline.md}#L2-L2 and "
+                "${core_documents/global_outline.md}#L1-L1."
             ),
             assignments=[
                 {
@@ -751,7 +755,10 @@ class SpecialistExecutionAcceptanceTests(LeadOrchestrationTestCase):
         ).propose_specialist_advisory(
             conversation_id,
             PLOT_ARCHITECT,
-            "Advise on the immediate plot question.",
+            "Candidate: a choice precedes its consequence. Assess the plot chronology.",
+            authoring_scope=AuthoringScope(AuthoringActivity.REVIEW, (), (ArtifactReviewDomain.PLOT_STRUCTURE,),
+                                          "Assess the current user-supplied candidate.", "advisory_task", 1),
+            review_basis=ReviewBasis(("user_input",), "Assess chronology."),
         )
 
         self.assertEqual(len(self.backend.calls), calls_before)
@@ -786,12 +793,15 @@ class SpecialistExecutionAcceptanceTests(LeadOrchestrationTestCase):
         self.assertIsNone(decision.turn.proposal)
 
         mismatch_id = self.conversation("Advisory owner mismatch")
-        with self.assertRaisesRegex(ValueError, "owned by another reviewer"):
+        with self.assertRaisesRegex(ValueError, "required story specialist|owned by another reviewer"):
             await self.runtime.propose_specialist_advisory(
                 self.session_id,
                 mismatch_id,
                 CHARACTER_CUSTODIAN,
                 "Check ${core_documents/global_outline.md}.",
+                authoring_scope=AuthoringScope(AuthoringActivity.REVIEW, (), (ArtifactReviewDomain.CHARACTER_WORLD,),
+                                              "Assess the current candidate.", "advisory_other", 1),
+                review_basis=ReviewBasis(("user_input",), "Assess the supplied candidate."),
             )
         self.assertFalse(self.history(mismatch_id))
 
