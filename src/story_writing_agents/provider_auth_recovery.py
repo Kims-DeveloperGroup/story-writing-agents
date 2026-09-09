@@ -117,7 +117,7 @@ class ProviderAuthRecovery:
     def next_request(self) -> tuple[str, int]:
         if not self._ready.is_set() or self._active:
             raise RuntimeError("provider authentication handoff is not drained")
-        return next(iter(self._pending))
+        return min(self._pending)
 
     def resolve(self, key: tuple[str, int], authenticated: bool) -> None:
         future = self._pending.pop(key)

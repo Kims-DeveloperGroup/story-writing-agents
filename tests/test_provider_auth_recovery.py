@@ -427,6 +427,34 @@ class ContextRecoveryTests(context.ContextExecutionTestCase):
 
 
 class RecoveryCoordinationTests(lead.LeadOrchestrationTestCase):
+    async def test_next_request_order_is_stable_across_provider_insertions(self):
+        expected = (("antigravity", 1), ("antigravity", 2), ("codex", 0))
+        insertion = (expected[2], expected[1], expected[0])
+        for order in (insertion, tuple(reversed(insertion))):
+            with self.subTest(insertion_order=order):
+                recovery = ProviderAuthRecovery()
+                tasks = []
+                try:
+                    for provider, generation in order:
+                        for _ in range(2):
+                            failure = auth_failure(provider)
+                            failure.auth_generation = generation
+                            tasks.append(asyncio.create_task(recovery.request(failure)))
+                    await asyncio.sleep(0)
+                    for key in expected:
+                        await asyncio.wait_for(recovery.wait_ready(), 1)
+                        self.assertEqual(recovery.next_request(), key)
+                        recovery.resolve(key, key != ("antigravity", 2))
+                    self.assertEqual(
+                        await asyncio.wait_for(asyncio.gather(*tasks), 1),
+                        [key != ("antigravity", 2) for key in order for _ in range(2)],
+                    )
+                    with self.assertRaises(RuntimeError):
+                        recovery.next_request()
+                finally:
+                    recovery.close()
+                    await asyncio.gather(*tasks, return_exceptions=True)
+
     async def test_same_generation_auth_coalesces_after_all_activity_drains(self):
         recovery = ProviderAuthRecovery()
         with recovery.scope():
