@@ -5352,6 +5352,7 @@ class StoryRuntime:
                     CollaborationStepState.CONFIRMED,
                     None,
                     CollaborationNextAction.START_OR_RECONFIRM,
+                    evidence=proposal.basis.evidence,
                 )
             self._confirmed_capabilities.pop(key, None)
             request_id = self._new_id("c")
@@ -5385,6 +5386,7 @@ class StoryRuntime:
                 CollaborationStepState.RECONFIRMATION_REQUIRED,
                 request_id,
                 CollaborationNextAction.SUBMIT_CONFIRMATION,
+                evidence=proposal.basis.evidence,
             )
         if state is CollaborationStepState.RUNNING:
             if proposal is None or projection.execution_attempt_id is None:

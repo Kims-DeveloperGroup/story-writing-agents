@@ -2,7 +2,7 @@
   "schema_version": 1,
   "scope": "Lead conversation and specialist consultation only; artifact Apply/Commit excluded",
   "budget": {
-    "seconds": 45000,
+    "seconds": 79200,
     "max_calls": 312,
     "matrix_max_calls": 312,
     "unallocated_calls": 0,
@@ -11,8 +11,8 @@
     "parallelism": "scenarios sequential; specialist concurrency only actual runtime1/2/3 dispatch",
     "retry_policy": "No automatic retries; any retry requires separate root disposition within all existing caps.",
     "budget_stop": "count before spawn and record actual submission separately; no launch if per-case/global cap reached; finish/join submitted owned work; mark remaining steps unexecuted, never pass",
-    "configuration_id": "issue623-recovery-coverage-312",
-    "authorization_reason": "Root approved F02 original artifact baseline and F04 same-agent recovery coverage. All186 historical reservations remain charged; F01\u2013F05 require at most59 fresh calls (245 total) under unchanged312 global ceiling and original45000-second epoch. Fresh full inventory bound210. No automatic retry.",
+    "configuration_id": "issue623-completion-627-wall-79200",
+    "authorization_reason": "Root approved the September9 completion phase after the user scope decision: extend wall allowance to79200 seconds from original epoch1788851135.735063, preserving204 historical reservations and unchanged312 absolute call cap. F02 gets at most12 fresh calls; no automatic retry or epoch reset.",
     "fresh_inventory_max_calls": 210
   },
   "cases": [
@@ -336,8 +336,8 @@
       "steps": [
         "Obtain live proposal, confirm using exact public decision.",
         "Test-only delegating event-store append barrier stops owned test process after real CONFIRMED commit but before RUNNING/dispatch; no event fabrication.",
-        "Reopen real runtime: RECONFIRMATION_REQUIRED, same proposal digest/new request, zero provider calls until new exact confirmation.",
-        "Reconfirm then complete real specialist+synthesis."
+        "Reopen real runtime: RECONFIRMATION_REQUIRED, exact original proposal and evidence/new request, zero provider calls; reject the old confirmation without changing history or launching work.",
+        "Fresh exact confirmation then complete real specialist+synthesis; verify original artifact baseline, exact exchanges/accounting and process cleanup."
       ],
       "pass_assertions": [
         "Exact typed outcome and expected next_action; no successful-call-only pass.",
