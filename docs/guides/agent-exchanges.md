@@ -25,9 +25,9 @@ Or install the distribution normally:
 python -m pip install story-writing-agents
 ```
 
-Both forms install the required independent `jsonl-viewer` 0.2.0 from its exact
+Both forms install the required independent `jsonl-viewer` 0.3.0 from its exact
 HTTPS VCS requirement at
-`aa2e30b85cdcf14f1c444fa8fb77c2594cac76bc`. A first install normally needs
+`ce57f560f3ca1366ea69dfe15cb1c598513e2c82`. A first install normally needs
 Git, network access, and repository access. Installation does not invoke a
 story provider, open an exchange, or enable a service. The historical
 `story-writing-agents[viewer]` and editable `'.[viewer]'` forms remain accepted
@@ -41,8 +41,8 @@ pulling updated Story source, rerun the normal editable installation:
 python -m pip install --editable .
 ```
 
-That ordinary reinstall upgrades viewer 0.1.1 to required 0.2.0 without an
-uninstall, `--force-reinstall`, or `--ignore-installed`. Reserve a forced
+That ordinary reinstall upgrades older viewer installations to required 0.3.0
+without an uninstall, `--force-reinstall`, or `--ignore-installed`. Reserve a forced
 reinstall for a genuinely damaged same-version installation, as described in
 [Troubleshooting](troubleshooting.md#exchanges-does-not-open-the-expected-response).
 
@@ -63,9 +63,9 @@ the vendored repository, while installed metadata retains the required VCS
 dependency. The external package is Python 3.11+, MIT licensed, has no runtime
 dependencies, and has no Story import. Story loads and validates its exact
 three-name API and physical-input capability only when `/exchanges` prepares a
-view. Version 0.1.1 lacks that required capability and is rejected before Story
-opens the viewer terminal. Required installation does not create a static
-Story-to-viewer import.
+view. Versions 0.1.1 and 0.2.0 lack the required 0.3.0 contract and are
+rejected before Story opens the viewer terminal. Required installation does
+not create a static Story-to-viewer import.
 
 ## Open a recorded scope
 
@@ -135,8 +135,8 @@ Record 1/3 • source line 1 • JSON display 2 expanded, 0 skipped, 0 truncated
 This preview shows the renderer's topology, not a retained Story screenshot.
 The external repository owns the byte-tested renderer contract:
 
-- [Terminal design system and Story-hosted scenario](https://github.com/Kims-DeveloperGroup/jsonl-viewer/blob/aa2e30b85cdcf14f1c444fa8fb77c2594cac76bc/docs/design-system.md)
-- [Nine deterministic complete sample frames](https://github.com/Kims-DeveloperGroup/jsonl-viewer/tree/aa2e30b85cdcf14f1c444fa8fb77c2594cac76bc/docs/samples)
+- [Terminal design system and Story-hosted scenario](https://github.com/Kims-DeveloperGroup/jsonl-viewer/blob/ce57f560f3ca1366ea69dfe15cb1c598513e2c82/docs/design-system.md)
+- [Nine deterministic complete sample frames](https://github.com/Kims-DeveloperGroup/jsonl-viewer/tree/ce57f560f3ca1366ea69dfe15cb1c598513e2c82/docs/samples)
 
 Every body record is well-formatted multiline JSON. The left gutter repeats
 the physical JSONL source-record line on continuation rows, so `g` can move to
@@ -145,8 +145,8 @@ Down or `b`/Space pages within a large record and across record boundaries.
 
 Simple mode shows `timestamp`, `request_type`, and `content`, in that order.
 Verbose mode keeps those fields first, followed by every other top-level field.
-`m` toggles modes unless an active hidden-field search requires Verbose. Simple
-string leaves retain a visible complete-code-point preview through 4,096 UTF-8
+`m` toggles modes unless the active keyword occurrence needs hidden fields.
+Simple string leaves retain a visible complete-code-point preview through 4,096 UTF-8
 bytes; Verbose string leaves retain one through 65,536 bytes. Before applying
 that leaf limit, a complete strict JSON object or array stored inside a string
 is recursively expanded through bounded encoding layers. The visible
@@ -156,7 +156,8 @@ escaping required for valid JSON. Preview truncation applies independently to
 string leaves only—it never truncates a container, key, structural token, or
 child. A visible leaf marker and footer accounting distinguish preview
 truncation from terminal-width clipping. None of these derived projections
-changes the source snapshot or makes nested child fields searchable.
+changes the source snapshot. Full-text search independently includes bounded
+decoded nested keys and values, including text beyond these display previews.
 
 The capture store has an independent content bound: an outer `content` value
 retains the longest complete UTF-8 prefix through 262,144 bytes. In Verbose,
@@ -169,26 +170,21 @@ comparison differences but does not reveal or recover an omitted suffix.
 
 ### Search, results, and help
 
-`/` prompts for one enumerated top-level field and a nonempty query. Search is
-case-insensitive substring matching over only these 18 fields:
+Press `/`, enter a nonempty phrase at `Search query:`, and press Enter.
+Search is literal and case-insensitive across the entire retained snapshot:
+keys, values, hidden fields, and bounded decoded JSON inside strings. It does
+not recover content omitted by capture or retention. Queries are bounded to
+1,024 characters. Field selectors have been removed in viewer 0.3.0.
 
-```text
-schema_version, workspace_sequence, sequence, timestamp, request_type,
-session_id, scope_kind, scope_id, agent_id, provider, exchange_id, content,
-content_full_utf8_bytes, content_retained_utf8_bytes,
-content_full_characters, content_retained_characters, content_truncated,
-content_sha256
-```
-
-On a capable terminal, the isolated viewer owns the `Search field:` and
-`Search query:` drafts and the `Go to source line:` draft opened by `g`.
+On a capable terminal, the viewer owns one `Search query:` draft and the
+`Go to source line:` draft opened by `g`.
 Each appears in the frame footer with a printable `│` insertion cursor.
 Left/Right, Home/End or Ctrl-A/E, Backspace, and Delete edit the draft. Ctrl-U
 deletes before the cursor, Ctrl-K deletes after it, and Ctrl-W deletes the
 preceding word and intervening whitespace. Command letters such as `j`, `k`,
 `n`, and `q` insert literal text while a draft is open; Up/Down and Page keys
-leave the draft and viewer position unchanged. Enter submits the current
-stage; invalid input keeps the draft open with a visible error.
+leave the draft and viewer position unchanged. Enter submits the
+draft; invalid input keeps the draft open with a visible error.
 
 Escape discards only the unfinished draft. The viewer renders its prior
 committed selection, mode, active search, current match, and `current/total`
@@ -198,11 +194,23 @@ close the view and restore Story's terminal.
 Story owns the terminal lifecycle and transports physical input; the viewer
 owns editing, command interpretation, and cancellation.
 
-The footer reports transient `current/total` position. `n` moves to the next
-match and `N` to the previous match, wrapping in both directions. Searching a
-field hidden by Simple mode automatically promotes the first hit to Verbose and
-prevents Simple mode while that hidden-field search remains active. `c` clears
-search, and `h` or `?` opens transient help.
+The footer reports `current/total occurrences`. The active keyword is focused
+as `⟦keyword⟧`; `n` and `N` move to the next or previous occurrence,
+wrapping in both directions. Multiple matches within one value or record are
+separate stops. Matching uses nonoverlapping original-character spans, including
+Unicode casefold expansions. The active record has `@`; other matching
+records have `*`, without highlighting their whole JSON.
+
+Selecting an occurrence brings it into view with a bounded context window,
+even beyond normal leaf previews. A labeled raw, normalized, or decoded search
+excerpt supplies a match absent from the ordinary projection. At narrow widths,
+keyword focus takes priority over context and, when needed, its repeated
+gutter; geometry can still clip a long keyword. Manual paging remains available,
+and `n`/`N` reveals the next selected occurrence. Resizing recomputes the
+window. A selected hidden-field hit promotes to Verbose and prevents Simple
+while that occurrence needs hidden fields. More than 100,000 occurrences
+rejects the new search with a refine-query message and preserves the previous
+search and position. `c` clears search; `h` or `?` opens transient help.
 
 Escape dismisses help, then search, then a transient status; with nothing left
 to dismiss it closes. This main-view behavior begins after a prompt has
@@ -210,23 +218,26 @@ finished or been cancelled; draft Escape preserves the committed view.
 Ctrl-C applies the same cancel behavior in the main view and closes the view
 during a draft. EOF always closes; `q` closes from the main view. In
 ordinary-line fallback,
-use `g LINE`, `/ FIELD QUERY`, `j`/`down`, `k`/`up`, `pgdn`, `pgup`, `n`, `N`,
-`m`, `h`, `c`, and `q`/`quit`. The viewer interprets these complete literal
-lines; Story adds no command prompt of its own.
+use `g LINE`, `/ QUERY`, `j`/`down`, `k`/`up`, `pgdn`, `pgup`, `n`, `N`,
+`m`, `h`, `c`, and `q`/`quit`. `/ correlation token mismatch` searches that
+whole phrase; the space after `/` is required in line mode. `// QUERY` is an
+optional full-text alias with the same separator requirement. The viewer
+interprets these complete literal lines; Story adds no prompt of its own.
 
 ### Where color is used
 
 On eligible ANSI terminals, bold cyan marks the header/chrome, current record,
 and Help heading; a dim gray gutter separates source line numbers from JSON.
 JSON keys are blue, strings green, numbers magenta, and booleans or `null`
-yellow. The current search match uses black on yellow and `@`; other matches
-use underlined yellow and `*`. Warnings/status are yellow, errors red,
+yellow. Only the active keyword uses black on yellow, with printable
+`⟦keyword⟧` focus and an `@` record marker. Other matching records use an
+underlined yellow `*` gutter marker. Warnings/status are yellow, errors red,
 truncation or other muted text gray, and ordinary footer/help text dim cyan.
 JSON punctuation remains terminal-default text.
 
 Color never carries meaning alone. Plain and `NO_COLOR` views retain the same
-words, JSON, `>`, `@`, `*`, line numbers, result position, and help. The linked
-external design system is authoritative for exact SGR values and responsive
+words, JSON, `⟦keyword⟧`, `>`, `@`, `*`, line numbers, result position, and help.
+The linked external design system is authoritative for exact SGR values and responsive
 placement.
 
 ## Interpret request, response, and outcome
@@ -318,7 +329,7 @@ malformed`.
 
 ### Cancel an accidental search without losing your place
 
-1. While inspecting a match, press `/` and begin entering a field or query.
+1. While inspecting a match, press `/` and begin entering a query.
 2. Press Escape before Enter. The unfinished text disappears and the exact
    prior read-only frame returns, including its source line, mode, active
    search, selected match, result position, and footer.
@@ -342,8 +353,9 @@ or change which conversation or agent will receive the next story turn.
 
 Simple mode is not redaction, authorization, or access control. Request payloads
 and provider response text can contain story content or secrets. Verbose can
-display every outer field, and search enumeration limits search rather than
-visibility. Protect the workspace, process memory, terminal infrastructure,
+display every outer field, and full-text search includes all retained keys
+and values, including bounded decoded nested content. Protect the workspace,
+process memory, terminal infrastructure,
 fallback scrollback, copied frames, backups, and redirected output as plaintext
 provider-call data. The capable view uses one alternate screen, but terminal or
 remote-session software can retain its own copies.
@@ -361,9 +373,9 @@ Common bounded failures are:
 | --- | --- |
 | No attached session | Attach the intended session, then retry bare `/exchanges`. |
 | No records for the session | Run the intended provider work; do not invoke it merely to manufacture diagnostics. |
-| Viewer 0.1.1 remains after updating a checkout | Rerun the normal editable Story install to upgrade it to required 0.2.0; do not force or uninstall. |
+| Viewer 0.1.1 or 0.2.0 remains after updating a checkout | Rerun the normal editable Story install to upgrade it to required 0.3.0; do not force or uninstall. |
 | Required viewer unavailable | Rerun the normal Story installation, then retry. The compatibility extra is not a separate repair path. |
-| Viewer 0.2.0 is installed but incompatible or damaged | Verify the approved exact pin, then use the bounded forced-repair path in Troubleshooting. |
+| Viewer 0.3.0 is installed but incompatible or damaged | Verify the approved exact pin, then use the bounded forced-repair path in Troubleshooting. |
 | Store busy | Retry after the concurrent exchange write completes. |
 | Unsafe, corrupt, or uncorrelatable records | Preserve the workspace and inspect the content-safe runtime diagnostic before retrying. |
 | Selected stream disappeared | Rerun `/exchanges` to refresh retained inventory. |

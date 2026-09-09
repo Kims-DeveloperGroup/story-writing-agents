@@ -318,7 +318,7 @@ does not parse or restyle those frames: its host admits only printable text, LF,
 and SGR when color is eligible, rejects every other control, and rejects SGR in
 plain mode. Removing the renderer's allowed decoration preserves the exact
 plain text, gutter markers, JSON, search position, and help. The pinned external
-[design system](https://github.com/Kims-DeveloperGroup/jsonl-viewer/blob/aa2e30b85cdcf14f1c444fa8fb77c2594cac76bc/docs/design-system.md)
+[design system](https://github.com/Kims-DeveloperGroup/jsonl-viewer/blob/ce57f560f3ca1366ea69dfe15cb1c598513e2c82/docs/design-system.md)
 is authoritative for those roles.
 
 The controller constructs semantic components only from trusted roles/states
@@ -807,11 +807,11 @@ redaction of request or provider-response content.
 
 The controller lazily validates the exact required `jsonl_viewer` facade,
 constructor and callable signatures, host shape, immutable header/field
-projection, primary-field order, and the appended `input_protocol="semantic"`
+projection, primary-field order, and the `input_protocol="semantic"`
 constructor default before asking the terminal to open. It constructs and
-verifies the specification with `input_protocol="keys"`. The older 0.1.1 API
-lacks this required capability and is rejected. Missing or incompatible
-standard-install packages therefore acquire no raw
+verifies the specification with `input_protocol="keys"`. The exact 0.3.0
+constructor omits search-field presets; older 0.1.1 and 0.2.0 APIs are rejected.
+Missing or incompatible standard-install packages therefore acquire no raw
 mode or alternate screen and produce fixed repair/reinstall guidance. The
 renderer receives only immutable bytes and a generic specification; it opens no
 Story file and owns no Story scope, storage, provider, retry, replay, or focus

@@ -4778,16 +4778,17 @@ every intermediate arrow. The current runtime graph is acyclic.
   Story header facts, lazily imports only installed `jsonl_viewer`, validates
   its exact three-name facade, `ViewerSpec` constructor, `ViewerHost` method
   shapes, `view_jsonl(source, spec, host)` signature, and constructed spec
-  projection before returning an operation. The exact constructor must expose
-  appended `input_protocol="semantic"`; preparation supplies and verifies
+  projection before returning an operation. The exact 0.3 constructor omits
+  `searchable_fields` and exposes `input_protocol="semantic"`; preparation supplies and verifies
   `input_protocol="keys"`, rejecting older installations before terminal
   acquisition without consulting package-version metadata. Missing packages produce fixed
   installation guidance; opaque, missing, variadic, or incompatible API
   shapes produce the fixed incompatible category before terminal acquisition.
   The generic spec labels the full Conversation or Debate ID and subject,
   identifies the session and canonical agent, prioritizes timestamp, request
-  type, and content, and enumerates only the exact durable schema fields as
-  searchable. The returned operation accepts the internal borrowed host and
+  type, and content without defining a searchable-field allowlist. Full-text
+  search, per-occurrence focus and navigation, and query editing belong entirely
+  to the external viewer. The returned operation accepts the internal borrowed host and
   calls the viewer exactly once; runtime viewer exceptions become fixed
   viewer-failed errors without exposing external prose.
 - **Direct internal dependencies:** `agent_exchanges` and

@@ -50,26 +50,6 @@ from story_writing_agents.interactive_controller import _core as controller_core
 
 ROOT = Path(__file__).resolve().parents[1]
 VIEWER_SOURCE = ROOT / "vendor" / "jsonl-viewer" / "src"
-SEARCHABLE_FIELDS = (
-    "schema_version",
-    "workspace_sequence",
-    "sequence",
-    "timestamp",
-    "request_type",
-    "session_id",
-    "scope_kind",
-    "scope_id",
-    "agent_id",
-    "provider",
-    "exchange_id",
-    "content",
-    "content_full_utf8_bytes",
-    "content_retained_utf8_bytes",
-    "content_full_characters",
-    "content_retained_characters",
-    "content_truncated",
-    "content_sha256",
-)
 VIEWER_ERROR_MESSAGES = {
     "installation_required": (
         "Required agent exchange viewer is unavailable. Repair or reinstall "
@@ -133,7 +113,6 @@ class _ExactViewerSpec:
         session_id,
         conversation_id,
         agent_id,
-        searchable_fields,
         date_time_field="timestamp",
         request_type_field="request_type",
         content_field="content",
@@ -145,7 +124,6 @@ class _ExactViewerSpec:
         self.session_id = session_id
         self.conversation_id = conversation_id
         self.agent_id = agent_id
-        self.searchable_fields = searchable_fields
         self.date_time_field = date_time_field
         self.request_type_field = request_type_field
         self.content_field = content_field
@@ -442,7 +420,7 @@ class ExchangeProjectionTests(unittest.TestCase):
 
 
 class LazyViewerAdapterTests(unittest.TestCase):
-    def test_exact_spec_eighteen_search_fields_bytes_and_single_invocation(
+    def test_exact_full_text_spec_bytes_and_single_invocation(
         self,
     ) -> None:
         calls: list[tuple[object, object, object]] = []
@@ -478,7 +456,6 @@ class LazyViewerAdapterTests(unittest.TestCase):
                 spec.session_id,
                 spec.conversation_id,
                 spec.agent_id,
-                spec.searchable_fields,
                 spec.primary_fields,
                 spec.title,
                 spec.conversation_label,
@@ -489,7 +466,6 @@ class LazyViewerAdapterTests(unittest.TestCase):
                 "session_1",
                 "debate_full_id",
                 ROSTER[2],
-                SEARCHABLE_FIELDS,
                 ("timestamp", "request_type", "content"),
                 "Agent Exchanges",
                 "Debate",
@@ -497,6 +473,7 @@ class LazyViewerAdapterTests(unittest.TestCase):
                 "keys",
             ),
         )
+        self.assertFalse(hasattr(spec, "searchable_fields"))
         self.assertEqual(host.closed, 1)
         self.assertEqual(source, b'{"content":"PRIVATE","provider":"codex"}\n')
 
@@ -560,13 +537,15 @@ class LazyViewerAdapterTests(unittest.TestCase):
         def exact_view_jsonl(source, spec, host):
             raise AssertionError("view must not run during preparation")
 
-        class BadSpec(_ExactViewerSpec):
+        class Legacy02Spec(_ExactViewerSpec):
             def __init__(
-                self, session_id, conversation_id, agent_id, searchable_fields
+                self, session_id, conversation_id, agent_id, searchable_fields,
+                date_time_field="timestamp", request_type_field="request_type",
+                content_field="content", title="JSONL Viewer",
+                conversation_label="Conversation", conversation_subject=None,
+                input_protocol="semantic",
             ):
-                super().__init__(
-                    session_id, conversation_id, agent_id, searchable_fields
-                )
+                raise AssertionError("the legacy constructor must be rejected before invocation")
 
         class BadProjection(_ExactViewerSpec):
             @property
@@ -582,7 +561,7 @@ class LazyViewerAdapterTests(unittest.TestCase):
 
         variants = []
         for name, value in (
-            ("ViewerSpec", BadSpec),
+            ("ViewerSpec", Legacy02Spec),
             ("ViewerSpec", BadProjection),
             ("ViewerHost", BadHost),
             ("view_jsonl", bad_view_jsonl),
@@ -676,7 +655,7 @@ class LazyViewerAdapterTests(unittest.TestCase):
                 "content_sha256": "sha256:" + "0" * 64,
                 "content_truncated": False,
                 "exchange_id": "exchange_1",
-                "provider": "codex",
+                "provider": "codex codex",
                 "request_type": "request",
                 "schema_version": 1,
                 "scope_id": "debate_1",
@@ -690,10 +669,10 @@ class LazyViewerAdapterTests(unittest.TestCase):
 
             class Host:
                 def __init__(self):
-                    self.events = iter(("search\\tprovider\\tCODEX", "next_match", "previous_match", "clear_search", "close"))
+                    self.events = iter(("search\\tCODEX", "next_match", "previous_match", "clear_search", "close"))
                     self.frames = []
                     self.closed = 0
-                def terminal_size(self): return (100, 28)
+                def terminal_size(self): return (240, 28)
                 def color_enabled(self): return False
                 def present(self, frame): self.frames.append(frame)
                 def read_event(self): return next(self.events)
@@ -711,9 +690,12 @@ class LazyViewerAdapterTests(unittest.TestCase):
             operation(host)
             assert host.closed == 1
             assert "SIMPLE" in host.frames[0]
-            searched = [frame for frame in host.frames if "Search provider='CODEX'" in frame]
+            searched = [frame for frame in host.frames if "Search all text='CODEX'" in frame]
             assert searched and all("VERBOSE" in frame for frame in searched)
-            assert any("1/1" in frame for frame in searched)
+            assert ["1/2" in frame for frame in searched] == [True, False, True]
+            assert '"provider": "⟦codex⟧ codex"' in searched[0]
+            assert '"provider": "codex ⟦codex⟧"' in searched[1]
+            assert '"provider": "⟦codex⟧ codex"' in searched[2]
             assert "Search cleared" in host.frames[-1]
 
             second = Host()

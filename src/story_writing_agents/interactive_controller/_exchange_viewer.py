@@ -19,7 +19,6 @@ _VIEWER_SPEC_PARAMETERS = (
     ("session_id", _REQUIRED_PARAMETER),
     ("conversation_id", _REQUIRED_PARAMETER),
     ("agent_id", _REQUIRED_PARAMETER),
-    ("searchable_fields", _REQUIRED_PARAMETER),
     ("date_time_field", "timestamp"),
     ("request_type_field", "request_type"),
     ("content_field", "content"),
@@ -36,26 +35,6 @@ _VIEWER_HOST_METHODS = {
     "close_view": ("self",),
 }
 _VIEW_JSONL_PARAMETERS = ("source", "spec", "host")
-_SEARCHABLE_FIELDS = (
-    "schema_version",
-    "workspace_sequence",
-    "sequence",
-    "timestamp",
-    "request_type",
-    "session_id",
-    "scope_kind",
-    "scope_id",
-    "agent_id",
-    "provider",
-    "exchange_id",
-    "content",
-    "content_full_utf8_bytes",
-    "content_retained_utf8_bytes",
-    "content_full_characters",
-    "content_retained_characters",
-    "content_truncated",
-    "content_sha256",
-)
 _FAILURE_MESSAGES = {
     "installation_required": (
         "Required agent exchange viewer is unavailable. Repair or reinstall "
@@ -136,10 +115,7 @@ def _viewer_spec_projection_is_supported(
             observed = getattr(spec, attribute)
         except Exception:
             return False
-        if type(expected_value) is tuple:
-            if type(observed) is not tuple or observed != expected_value:
-                return False
-        elif expected_value is None:
+        if expected_value is None:
             if observed is not None:
                 return False
         elif type(observed) is not str or observed != expected_value:
@@ -209,7 +185,6 @@ def prepare_agent_exchange_view(
         ("session_id", session_id),
         ("conversation_id", scope_id),
         ("agent_id", agent_id),
-        ("searchable_fields", _SEARCHABLE_FIELDS),
         ("date_time_field", "timestamp"),
         ("request_type_field", "request_type"),
         ("content_field", "content"),
@@ -223,7 +198,6 @@ def prepare_agent_exchange_view(
             session_id=session_id,
             conversation_id=scope_id,
             agent_id=agent_id,
-            searchable_fields=_SEARCHABLE_FIELDS,
             date_time_field="timestamp",
             request_type_field="request_type",
             content_field="content",
