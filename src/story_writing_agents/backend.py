@@ -4421,7 +4421,7 @@ class AgentBackend:
 
     @staticmethod
     def _context_failure_timed_out(failure: BaseException) -> bool:
-        """Recognize only the backend's explicit bounded-process timeout."""
+        """Recognize explicit process or provider timeout facts in the cause chain."""
 
         current: BaseException | None = failure
         seen: set[int] = set()

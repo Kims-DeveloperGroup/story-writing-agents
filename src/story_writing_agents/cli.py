@@ -140,7 +140,10 @@ def build_parser() -> argparse.ArgumentParser:
         "--codex-timeout",
         metavar="SECONDS",
         default=DEFAULT_PROVIDER_TIMEOUT_SECONDS,
-        help="positive provider response timeout in seconds (default: 900)",
+        help=(
+            "positive provider response timeout in seconds "
+            f"(default: {DEFAULT_PROVIDER_TIMEOUT_SECONDS:g})"
+        ),
     )
 
     initialize = subcommands.add_parser(
