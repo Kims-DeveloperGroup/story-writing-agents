@@ -122,11 +122,11 @@ EXPECTED_COMMANDS = (
     ),
     CommandSpec(
         "Inspection",
-        "/transcript ID [COUNT] [--from SEQUENCE]",
+        "/transcript [ID [COUNT] [--from SEQUENCE]]",
         (),
         False,
         False,
-        "/transcript c_0123456789 24 --from 25",
+        "/transcript",
     ),
     CommandSpec(
         "Inspection",
@@ -434,6 +434,11 @@ class RetainedParserContractTests(unittest.TestCase):
         )
 
     def test_transcript_valid_and_invalid_forms_are_exact(self) -> None:
+        for line in ("/transcript", "/transcript   "):
+            with self.subTest(line=line):
+                self.assertEqual(
+                    parse_interactive_line(line), InteractiveAction(ActionKind.TRANSCRIPT)
+                )
         self.assertEqual(
             parse_interactive_line("/transcript c_0123456789 101 --from 00025"),
             InteractiveAction(
@@ -444,7 +449,7 @@ class RetainedParserContractTests(unittest.TestCase):
             ),
         )
         for line in (
-            "/transcript",
+            "/transcript --from 2",
             "/transcript id 0",
             "/transcript id +1",
             "/transcript id --from 0",

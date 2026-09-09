@@ -34,8 +34,13 @@ With a session attached:
 | `/inspect ID` | Safe facts for one exact debate. |
 | `/inspect last` | This process's most recent accepted legacy debate start, if any. Lead collaboration uses conversation history instead. |
 | `/history [COUNT]` | Focused schema-v2 collaboration records, durable state, user meaning, and next-safe-action meaning. |
-| `/transcript ID ...` | Bounded structured page without changing focus. |
+| `/transcript [ID [COUNT] [--from SEQUENCE]]` | Bounded structured page without changing focus; omit ID to pick an active or archived conversation in the attached session. |
 | `/exchanges` | Read-only viewer over an immutable stored exchange snapshot. |
+
+The transcript picker shows `Subject (conversation_id)` with full IDs in catalog
+order and resolves the selected ID again before reading. An empty catalog,
+cancellation, Ctrl-C, or EOF reads no transcript and leaves attachment, focus,
+and conversation history unchanged.
 
 Inspection is provider-free. Runtime inspection wrappers may best-effort append
 a bounded operational diagnostic, but they do not change session/debate state,

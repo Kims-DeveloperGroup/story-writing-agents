@@ -357,12 +357,19 @@ specialist, artifact, or Git effects.
 | Agents/configuration | `/agents`; `/auth`; `/settings`; `/override language LANG \| persona AGENT NAME \| reset` |
 | Sessions | `/session list \| create NAME \| resume [NAME] \| pause` |
 | Conversations | `/conversation new [SUBJECT] \| list [--all] [QUERY] \| resume [ID] \| subject SUBJECT \| archive [ID]` |
-| Inspection | `/search QUERY`; `/transcript ID [COUNT] [--from SEQUENCE]`; `/inspect [DEBATE\|last]`; `/exchanges`; `/history [COUNT]`; `/status` |
+| Inspection | `/search QUERY`; `/transcript [ID [COUNT] [--from SEQUENCE]]`; `/inspect [DEBATE\|last]`; `/exchanges`; `/history [COUNT]`; `/status` |
 | Help/exit | `/help [COMMAND]` (alias `/?`); `/quit` |
 
 `/search` and `/transcript` require an attachment. Conversation mutations also
 require attachment; history requires an active focus. Directives and debate
 inspection are session-scoped but do not require conversation focus.
+
+Bare `/transcript` opens a picker for active and archived conversations in the
+attached session, in catalog order. Each choice shows `Subject (conversation_id)`
+with the full ID, so duplicate subjects remain distinguishable. Selection resolves
+the ID again before reading a fresh page. An empty catalog, cancellation, Ctrl-C,
+or EOF reads no transcript and leaves attachment, focus, and conversation history unchanged.
+An explicit ID skips the picker and retains the optional count and start sequence.
 
 Ordinary non-slash text is literal Lead input. It requires an attached session
 and focused active conversation; no agent selector is accepted. The retired
