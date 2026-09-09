@@ -2,12 +2,17 @@
 
 from __future__ import annotations
 
+import base64
 import json
 import threading
 from enum import StrEnum
 from uuid import uuid4
 
-from ..provider_adapter import ProviderInvocation, ProviderResult
+from ..provider_adapter import (
+    ProviderInvocation,
+    ProviderResponseDiagnostic,
+    ProviderResult,
+)
 from ..workspace import Workspace
 from .contracts import (
     AgentExchangeOutcome,
@@ -102,22 +107,49 @@ def _response_content(result: ProviderResult) -> str:
     if type(result) is not ProviderResult:
         raise TypeError("result must be a ProviderResult")
     usage = result.usage
-    return _canonical_json(
-        {
-            "actual_transport_utf8_bytes": result.actual_transport_utf8_bytes,
-            "response_text": result.response_text,
-            "thread_id": result.thread_id,
-            "usage": (
-                None
-                if usage is None
-                else {
-                    "cached_input_tokens": usage.cached_input_tokens,
-                    "input_tokens": usage.input_tokens,
-                    "output_tokens": usage.output_tokens,
-                }
-            ),
-        }
-    )
+    content: dict[str, object] = {
+        "actual_transport_utf8_bytes": result.actual_transport_utf8_bytes,
+        "response_text": result.response_text,
+        "thread_id": result.thread_id,
+        "usage": (
+            None
+            if usage is None
+            else {
+                "cached_input_tokens": usage.cached_input_tokens,
+                "input_tokens": usage.input_tokens,
+                "output_tokens": usage.output_tokens,
+            }
+        ),
+    }
+    if result.response_diagnostic is not None:
+        content["response_diagnostic"] = _response_diagnostic(
+            result.response_diagnostic
+        )
+    return _canonical_json(content)
+
+
+def _response_diagnostic(
+    diagnostic: ProviderResponseDiagnostic,
+) -> dict[str, object]:
+    """Keep exact native bytes with an explicit reversible stream encoding."""
+
+    if type(diagnostic) is not ProviderResponseDiagnostic:
+        raise TypeError("provider response diagnostic has an invalid type")
+
+    def stream(value: bytes) -> dict[str, str]:
+        try:
+            return {"encoding": "utf-8", "data": value.decode("utf-8", "strict")}
+        except UnicodeDecodeError:
+            return {
+                "encoding": "base64",
+                "data": base64.b64encode(value).decode("ascii"),
+            }
+
+    return {
+        "exit_code": diagnostic.exit_code,
+        "stdout": stream(diagnostic.stdout),
+        "stderr": stream(diagnostic.stderr),
+    }
 
 
 def _terminal_content(
@@ -285,19 +317,46 @@ class AgentExchangeCaptureLifecycle:
             response_required=True,
         )
 
-    def provider_failure(self, code: AgentExchangeTerminalCode) -> None:
-        """Attempt one closed no-response provider-failure terminal."""
+    def provider_failure(
+        self,
+        code: AgentExchangeTerminalCode,
+        *,
+        response_diagnostic: ProviderResponseDiagnostic | None = None,
+    ) -> None:
+        """Attempt native failure output and its closed terminal exactly once."""
 
         if (
             type(code) is not AgentExchangeTerminalCode
             or code not in _PROVIDER_FAILURE_CODES
         ):
             return
-        self._terminal(
-            AgentExchangeOutcome.PROVIDER_FAILURE,
-            code,
-            response_required=False,
-        )
+        try:
+            with self._lock:
+                if self._state is not _CaptureState.REQUEST_RECORDED:
+                    return
+                # Failure bytes never authorize a normal response transition.
+                self._state = _CaptureState.TERMINAL_ATTEMPTED
+                if response_diagnostic is not None:
+                    try:
+                        self._record(
+                            AgentExchangeRequestType.RESPONSE,
+                            _canonical_json(
+                                {
+                                    "provider_failure": True,
+                                    "response_diagnostic": _response_diagnostic(
+                                        response_diagnostic
+                                    ),
+                                }
+                            ),
+                        )
+                    except BaseException:
+                        pass
+                self._record(
+                    AgentExchangeRequestType.OUTCOME,
+                    _terminal_content(AgentExchangeOutcome.PROVIDER_FAILURE, code),
+                )
+        except BaseException:
+            pass
 
     def cancelled(self) -> None:
         """Attempt one cancellation terminal before or after a response."""

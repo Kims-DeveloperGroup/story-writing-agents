@@ -207,8 +207,8 @@ story[novel]> Does the opening conflict with ${core_documents/global_outline.md}
 For a story-specific provider judgment, `result.evidence` identifies its
 declared `scope`, `status`, and ordered content-free receipts. A workflow/meta
 judgment also has an evidence value, but it is exactly
-`workflow_meta`/`not_applicable` with no receipts. Runtime-generated recovery
-notices instead have `evidence=None`.
+`workflow_meta`/`not_applicable` with no receipts. Proposal-free runtime-generated
+recovery notices instead have `evidence=None`.
 
 An artifact-intent outcome is still `kind=proposal` and carries the ordinary
 consultation proposal, state, confirmation request, and evidence. It also
@@ -639,11 +639,12 @@ new candidate in either case.
 ### A focused second round
 
 After all round-one assignments and synthesis succeed, the synthesis may
-propose one same-lineage continuation. Runtime creates proposal revision 2 on
-the same step, adds the round-one reply-event inputs, carries actual submitted
-call spend, and returns `awaiting_confirmation`. Nothing in round two starts
-until the user confirms the new request. Round-two synthesis cannot request a
-third round.
+request one same-lineage continuation. When it fits the remaining call budget,
+runtime creates proposal revision 2 on the same step, adds the round-one
+reply-event inputs, carries actual submitted call spend, and returns
+`awaiting_confirmation`. Nothing in round two starts until the user submits a
+fresh structured Confirm for the new request. Round-two synthesis cannot
+request a third round.
 
 ```text
 Round 1: concern remains -> completed result + revision 2 proposal
@@ -651,6 +652,20 @@ User: Confirm revision 2
 Round 2: focused specialist reassessment -> final completed result
 Maximum: 2 specialist rounds and 12 submitted physical calls
 ```
+
+If the requested second round cannot fit the remaining lineage budget, the
+successful consultation ends as `completed` with next action
+`continue_with_lead`. Finalization makes no extra provider call and creates no
+new proposal or confirmation authority. Durable history retains the full
+specialist replies, synthesis, evidence, and requested continuation.
+
+The visible result appends a budget notice to the synthesis. If the combined
+message would exceed the existing UTF-8 byte limit, it shows only the bounded
+notice, which points to the completed replies and full synthesis in history.
+Reopening preserves this terminal result without duplicate finalization or
+replaying the consultation. A new user request starts a normal fresh Lead
+turn. The two-round and 12-call limits are unchanged; an affordable second
+round still requires its own structured Confirm.
 
 ### Direct specialist advisory
 
@@ -1142,6 +1157,13 @@ Restart behavior follows durable facts:
 - unresolved `running` without a live owner/result becomes `outcome_unknown`
   and is never replayed; and
 - corrupt or ambiguous authority becomes `recovery_required`.
+
+For a consultation proposed by the Lead, the reconfirmation turn returns the
+unchanged original proposal with its existing evidence: the same scope, status,
+and ordered receipts. It issues a fresh confirmation request; the old
+confirmation authority is not revived. Returning this proposal makes no
+provider call and grants no artifact-write authority. Only a fresh structured
+Confirm can start the disclosed work after normal revalidation.
 
 ### Submitted Lead outcome unavailable after restart
 

@@ -30,7 +30,7 @@ the exact bytes of three inputs:
 1. the staged binding instruction, measured from the same snapshot written for
    the provider (`AGENTS.md` for Codex, or the selected custom-agent definition
    for Antigravity);
-2. the canonical output schema; and
+2. the canonical output schema actually prepared for that provider; and
 3. the canonical inner turn-prompt JSON.
 
 The exact formulas are:
@@ -51,6 +51,16 @@ prompts. It emits strict UTF-8 JSON in insertion order with no insignificant
 whitespace: `ensure_ascii=False`, `allow_nan=False`, and
 `separators=(",", ":")`. It does not sort keys. Rejected values produce a
 fixed content-free diagnostic that does not echo the rejected input.
+
+For Antigravity, vendor-specific preparation calls the adapter-owned schema
+renderer before constructing `ProviderInvocation`. It preserves domain
+constraints while rendering singleton null/integer enums for native function
+conversion. The invocation, request capture, output-schema accounting, argv,
+and schema echo all use those rendered bytes. The original domain/Codex schema
+is unchanged; its size is not a conservative transport bound (the captured
+canary grew from 1,314 to 1,326 bytes). This changes neither the shared accounting
+definitions nor payload encoding. See the exact
+[rendering rules](../guides/antigravity.md#shared-structured-output-contract).
 
 Codex sends the inner prompt itself on standard input, so its diagnostic
 transport byte count is the inner-prompt count. Antigravity passes that exact
@@ -316,14 +326,28 @@ closed terminal attempt then classifies the physical call as `accepted`,
 exception.
 
 The request diagnostic is canonical JSON containing only `call_kind`,
-`payload`, `prior_thread_id`, and `schema`. The completed-response diagnostic
-contains only `actual_transport_utf8_bytes`, `response_text`, `thread_id`, and
-nullable validated `usage`. The terminal diagnostic contains only `outcome`
-and one fixed code. These are exact provider-neutral inputs and evidence, not
-Codex standard streams or Antigravity raw JSON/tool/reasoning output. Storage
-may retain only the longest complete UTF-8 prefix at or below 262,144 bytes; its
-full byte/code-point counts and SHA-256 still describe the complete capture
-input.
+`payload`, `prior_thread_id`, and `schema`. A completed result contains
+`actual_transport_utf8_bytes`, `response_text`, `thread_id`, and nullable
+validated `usage`. A recovered Antigravity native `ERROR` also carries
+`response_diagnostic`: integer `exit_code` and `stdout`/`stderr` streams, each encoded as
+`{"encoding":"utf-8","data":"…"}` or, for invalid UTF-8 bytes,
+`{"encoding":"base64","data":"…"}`.
+
+A typed completed Antigravity invocation failure can attempt a response with
+only `provider_failure: true` and that same `response_diagnostic` before its
+fixed `provider_failure` outcome. This does not construct a valid semantic
+`ProviderResult` or authorize retry. Failures before process completion,
+timeouts, and cancellations supply no partial bytes through the shared runner;
+capture invents no response. The terminal diagnostic still contains only
+`outcome` and one fixed code. Normal Codex streams and the native proof
+transcript are not copied by this capture seam.
+
+Storage may retain only the longest complete UTF-8 prefix at or below 262,144
+bytes; its full byte/code-point counts and SHA-256 describe the complete capture
+input. Base64 is reversible encoding, not redaction. Native bytes remain private
+within the existing exchange rotation and retention limits. The independent
+`provider_error_responses` store still accepts only returned response bodies
+rejected by shared decoding; pre-result native failures do not enter that store.
 
 All records for a captured call share a fresh `exchange_<32 lowercase hex>`
 identity plus the exact supplied session, conversation/debate scope, agent, and
@@ -332,7 +356,7 @@ inherits the same outer logical scope as its substantive call. Capture has no
 retry or replay path, and any capture/storage failure is suppressed after its
 state transition. Missing records or sequence gaps therefore do not prove that
 no provider call occurred. See the exact
-[schema and nested shapes](../reference/configuration/session-storage.md#agent-exchange-storage)
+[storage envelope and bounds](../reference/configuration/session-storage.md#agent-exchange-storage)
 and [privacy boundary](../operations/privacy-and-provider.md#agent-exchange-privacy).
 
 ## Provider process boundaries
@@ -359,13 +383,20 @@ adapter-owned workspace. A fresh thread uses `--new-project`; exact resume uses
 `--conversation <id>`, whose associated project Antigravity reopens. Story
 does not register the canonical story workspace root or pass `--project`.
 Story passes the exact payload as one `--print` argument with empty stdin,
-selecting `--input-format text --output-format json`. The same canonical
-per-call schema is passed inline with `--json-schema`. Exactly one UTF-8 JSON
-object must report `SUCCESS`, a safe conversation ID matching the retained ID
+selecting `--input-format text --output-format json`. The adapter-rendered
+canonical per-call schema is passed inline with `--json-schema`. Exactly one
+UTF-8 JSON object must contain a safe conversation ID matching the retained ID
 on resume, object `structured_output`, and an object `json_schema` whose
-canonical bytes exactly echo the request. Duplicate fields, non-finite values,
-and trailing data are rejected; there is no string-response fallback. Only
-then does Story create `ProviderResult` for the shared runtime checks.
+canonical bytes exactly echo the rendered request schema. Duplicate fields,
+non-finite values, and trailing data are rejected; there is no string-response
+fallback. Native `SUCCESS` is the normal path. The known malformed-function-call
+`ERROR` is recoverable only after exit zero and matching current-call native
+request/finish/completion proof through the adapter's bounded, no-follow reader.
+Missing, unsafe, stale, or unknown evidence leaves the call failed. This
+format-dependent proof ignores private thinking and is not tool/security
+attestation. Recovery adds no model call; every returned result still passes
+shared correlation, domain, evidence, and authority validation. See the
+[recovery gates](../guides/antigravity.md#recover-a-completed-native-error).
 
 This output has no `init` or step metadata to attest agent, cwd, permission
 mode, or tool behavior. The selected custom agent, isolated state/cwd,
@@ -376,14 +407,41 @@ The full payload, schema, state path, optional model/effort, and conversation
 ID are process-visible arguments. Exact setup and privacy limits are in the
 [Antigravity guide](../guides/antigravity.md).
 
-Only Antigravity's staged `ROLE_SYSTEM_PROMPT` rendering changes the exact
+Antigravity's staged `ROLE_SYSTEM_PROMPT` rendering changes the exact
 common-policy clause `invoke another agent, provider subagent, tool, or model.`
 to `invoke another agent, provider subagent, or model.` before byte accounting.
-Its compact provider-managed constraints also omit the tool ban. Shared
-policy/configuration sources, workspace initialization, Codex rendering and
-stdin/JSONL transport, and provider-neutral request/schema contracts remain
-unchanged. Existing workspace prompt files are not migrated or rewritten;
-the Antigravity transformation applies to the staged definition.
+It also directs structured delivery through `finish` with the complete supplied
+outer schema. Contextual specialist instructions identify their assessment as
+`action.result`, inside the root `correlation` and `action` fields; they do not
+ask `finish` to receive the inner assessment alone. Its compact provider-managed
+constraints carry the same rule and omit the tool ban.
+
+The Antigravity staged Lead prompt additionally clarifies three existing
+contracts:
+
+- After mandatory reference reading, attached-reference aliases in
+  `i.input_aliases` are content evidence IDs, distinct from `core_statuses`
+  status IDs. A verified story judgment needs a supporting attached-reference
+  or completed READ evidence ID; status IDs alone are insufficient. Only
+  current, actually supplied IDs are eligible.
+- `evidence_ids` and proposal assignment `input_ids` have different roles.
+  Assignments collectively cover every input ID in `i.input_aliases`, including
+  `user_input`, and every cited READ evidence ID. The absence of a content
+  receipt for `user_input` does not remove it from the assignment inputs.
+- For `lead_synthesis`, `i.answer_contract` supplies required values. The Lead
+  copies `scope`, `evidence_status`, `evidence_ids`, and `reply_event_ids` exactly,
+  preserving the supplied order. Every required `unresolved_input_ids` entry
+  precedes any additional unresolved original inputs. A `concern`, `conflict`,
+  or `insufficient_evidence` assessment keeps its inputs unresolved even when
+  the synthesis explains a remedy or ends the consultation. Only an empty
+  required list permits an empty unresolved list. This applies to every
+  specialist consultation, including those without an artifact candidate.
+
+These clarifications change staged text only. Shared policy/prompt sources,
+workspace initialization, Codex rendering and stdin/JSONL transport, domain
+validation, confirmation authority, and process-launch controls remain
+unchanged. Existing workspace prompt files are not migrated or rewritten; these
+transformations apply to the Antigravity staged definition.
 
 Runtime-built contextual debate calls use typed wire v7 for task/input,
 candidate pointer/splice/full fallback, selected sources, and record changes.

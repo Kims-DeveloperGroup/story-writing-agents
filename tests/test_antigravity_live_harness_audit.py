@@ -1,0 +1,644 @@
+"""Offline contracts for live evidence acceptance; no provider execution."""
+from __future__ import annotations
+
+import asyncio
+import copy
+import json
+import os
+import re
+import tempfile
+import unittest
+from pathlib import Path
+from unittest import mock
+
+from tests import antigravity_live_harness as harness
+
+
+class LiveHarnessAuditTests(unittest.TestCase):
+    def setUp(self):
+        temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(temporary.cleanup)
+        self.root = Path(temporary.name)
+        self.identity = dict(session_id="session", conversation_id="conversation",
+                             turn_id="turn", step_id="step", agent_id="lead_orchestrator")
+        current = dict(identity=self.identity, workflow="lead_front_channel", command="Review once")
+        prelude = lambda ordinal: dict(operation="writing_artifact_reference_read", correlation={
+            "operation_id": "reference-operation", "invocation_ordinal": ordinal,
+            "agent_id": "lead_orchestrator", "phase": "lead"})
+        correction = dict(current, response_correction={
+            "rejection_code": "answer_validation_failed", "instruction": "Return ANSWER now"})
+        self.payloads = [prelude(1), dict(c="correlation", q=["lead", "sa", "wcdo"], i=current,
+                                       untrusted_writing_artifact_context=["reference"]),
+                         prelude(2), dict(c="correlation", q=["lead", "a", ""], i=correction,
+                                          untrusted_writing_artifact_context=["reference"])]
+        self.calls = []
+        self.exchanges = []
+        self.history = []
+        for index, payload in enumerate(self.payloads, 1):
+            directory = self.root / str(index)
+            directory.mkdir()
+            thread = "old-thread" if index <= 2 else "fresh-thread"
+            prior = thread if index in (2, 4) else None
+            schema = {"type": "object"}
+            content = {"correlation": "correlation", "action": {"kind": "answer", "result": {
+                "kind": "answer", "message": "Correct answer" if index == 4 else "Rejected answer"}}}
+            native = dict(status="SUCCESS", conversation_id=thread,
+                          json_schema=schema, structured_output=content)
+            argv = ["unused-agy", "--json-schema", harness.canonical_provider_json(schema).decode(), "--print", json.dumps(payload)]
+            (directory / "command.private.json").write_text(json.dumps({"argv": argv}))
+            raw = harness.canonical_provider_json(native)
+            for name in ("stdout.raw", "delivered.stdout"):
+                (directory / name).write_bytes(raw)
+            for name in ("stderr.raw", "delivered.stderr", "stdin.bin"):
+                (directory / name).write_bytes(b"")
+            call = dict(number=index, agent="lead_orchestrator", vendor="antigravity",
+                        directory=str(directory), fault=None, delivered_returncode=0,
+                        native_status="SUCCESS", thread_id=thread, prior_thread_id=prior,
+                        payload_bytes=len(argv[-1].encode()), payload_sha256=harness.digest(argv[-1].encode()),
+                        payload_semantic_sha256=harness.semantic_digest(payload),
+                        schema_semantic_sha256=harness.semantic_digest(schema))
+            self.calls.append(call)
+            outcome = {"outcome": "rejected", "code": "answer_validation_failed"} if index == 2 else {
+                "outcome": "accepted", "code": "accepted"}
+            values = [dict(payload=payload, schema=schema, prior_thread_id=prior),
+                      dict(response_text=json.dumps(content), thread_id=thread,
+                           actual_transport_utf8_bytes=call["payload_bytes"]), outcome]
+            for kind, value in zip(("request", "response", "outcome"), values):
+                self.exchanges.append(dict(exchange_id=str(index), agent="lead_orchestrator",
+                                           agent_id="lead_orchestrator", request_type=kind,
+                                           content=json.dumps(value)))
+            for state in ("prepared", "submitted"):
+                self.history.append(dict(self.identity, sequence=len(self.history) + 1, payload=dict(
+                    payload_type="provider_call", state=state, role="lead_orchestrator",
+                    invocation_kind="lead", invocation_id="logical-invocation", ordinal=index,
+                    call_id="physical-" + str(index),
+                    call_kind="reference_prelude" if index in (1, 3) else "initial")))
+        self.history.append(dict(self.identity, sequence=9, payload=dict(
+            payload_type="lead_judgment", kind="answer", message="Correct answer")))
+
+    def audit(self):
+        return harness.audit_exchanges(self.exchanges, self.calls, self.history)
+
+    def test_exact_validation_correction_remains_rejected_then_accepted(self):
+        result = self.audit()
+        self.assertEqual([r["outcome"] for r in result], ["accepted", "rejected", "accepted", "accepted"])
+        self.assertEqual(result[1]["correction_proof"]["physical_calls"], 4)
+        self.assertEqual(result[1]["correction_proof"]["corrected_call"], 4)
+
+    def test_duplicate_requests_require_unique_native_response_identity(self):
+        calls = []
+        groups = []
+        payload = {"question": "One synthetic diagnostic answer"}
+        schema = {"type": "object"}
+        for index in range(6):
+            directory = self.root / f"duplicate-{index}"
+            directory.mkdir()
+            thread = f"native-{index}"
+            content = {"action": {"kind": "answer", "result": f"answer-{index}"}}
+            native = {"status": "SUCCESS", "conversation_id": thread,
+                      "json_schema": schema, "structured_output": content}
+            raw = harness.canonical_provider_json(native)
+            failed = index >= 3
+            delivered = f"malformed-{index}".encode() if failed else raw
+            argv = ["unused-agy", "--json-schema", harness.canonical_provider_json(schema).decode(),
+                    "--print", json.dumps(payload)]
+            (directory / "command.private.json").write_text(json.dumps({"argv": argv}))
+            for name, value in (("stdout.raw", raw), ("delivered.stdout", delivered),
+                                ("stderr.raw", b""), ("delivered.stderr", b"")):
+                (directory / name).write_bytes(value)
+            call = dict(number=index + 1, agent="plot_architect", vendor="antigravity",
+                        directory=str(directory), fault="json" if failed else None,
+                        delivered_returncode=0, native_status="SUCCESS", thread_id=thread,
+                        prior_thread_id=None, payload_bytes=len(argv[-1].encode()),
+                        payload_sha256=harness.digest(argv[-1].encode()),
+                        payload_semantic_sha256=harness.semantic_digest(payload),
+                        schema_semantic_sha256=harness.semantic_digest(schema))
+            calls.append(call)
+            response = {"response_text": json.dumps(content), "thread_id": thread,
+                        "actual_transport_utf8_bytes": call["payload_bytes"]}
+            if failed:
+                response = {"provider_failure": True, "response_diagnostic": {
+                    "exit_code": 0, "stdout": {"encoding": "utf-8", "data": delivered.decode()},
+                    "stderr": {"encoding": "utf-8", "data": ""}}}
+            values = [{"payload": payload, "schema": schema, "prior_thread_id": None}, response,
+                      {"outcome": "provider_failure" if failed else "accepted",
+                       "code": "provider_invocation_failed" if failed else "accepted"}]
+            groups.append([dict(exchange_id=f"exchange-{index}", agent_id="plot_architect",
+                                request_type=kind, content=json.dumps(value))
+                           for kind, value in zip(("request", "response", "outcome"), values)])
+
+        def audit(selected_groups, selected_calls=calls):
+            return harness.audit_exchanges(
+                [record for group in reversed(selected_groups) for record in group], selected_calls)
+
+        self.assertEqual([row["outcome"] for row in audit(groups)],
+                         ["accepted"] * 3 + ["provider_failure"] * 3)
+        for variant in ("wrong_thread", "wrong_diagnostic", "duplicate", "missing_response",
+                        "unavailable_output"):
+            changed = copy.deepcopy(groups)
+            selected_calls = copy.deepcopy(calls)
+            if variant == "wrong_thread":
+                response = json.loads(changed[0][1]["content"])
+                response["thread_id"] = "wrong-native"
+                changed[0][1]["content"] = json.dumps(response)
+            elif variant == "wrong_diagnostic":
+                response = json.loads(changed[3][1]["content"])
+                response["response_diagnostic"]["stdout"]["data"] = "wrong-bytes"
+                changed[3][1]["content"] = json.dumps(response)
+            elif variant == "duplicate":
+                duplicate = copy.deepcopy(changed[0])
+                for record in duplicate:
+                    record["exchange_id"] = "indistinguishable"
+                changed.append(duplicate)
+            elif variant == "missing_response":
+                changed[0].pop(1)
+            else:
+                selected_calls[0].pop("delivered_returncode")
+                selected_calls[0]["exception_type"] = "CancelledError"
+            with self.subTest(variant=variant), self.assertRaisesRegex(
+                    AssertionError, "unambiguous durable REQUEST"):
+                audit(changed, selected_calls)
+
+    def test_typed_events_preserve_discriminators_through_complete_audit(self):
+        from story_writing_agents import conversations as contracts
+        from tests.collaboration_contract_fixture import LEAD, RUNTIME, USER, make_lead_evidence
+
+        typed = []
+        for record in self.history:
+            value = record["payload"]
+            provider = value["payload_type"] == "provider_call"
+            if provider:
+                payload = contracts.CollaborationProviderCallPayload(
+                    value["invocation_id"], value["call_id"], value["ordinal"], value["role"],
+                    contracts.CollaborationInvocationKind(value["invocation_kind"]),
+                    contracts.CollaborationProviderCallKind(value["call_kind"]),
+                    contracts.CollaborationProviderCallState(value["state"]),
+                )
+            else:
+                payload = contracts.CollaborationLeadJudgmentPayload(
+                    contracts.LeadOutcomeKind.ANSWER, value["message"], make_lead_evidence(),
+                )
+            typed.append(contracts.CollaborationEvent(
+                schema_version=contracts.COLLABORATION_EVENT_SCHEMA_VERSION,
+                event_id="event_" + str(record["sequence"]),
+                session_id=record["session_id"], conversation_id=record["conversation_id"],
+                turn_id=record["turn_id"], step_id=record["step_id"],
+                sequence=record["sequence"], timestamp="2026-09-01T00:00:00+00:00",
+                batch_id="batch_" + str(record["sequence"]), batch_ordinal=0,
+                batch_size=1, batch_digest="sha256:" + "a" * 64,
+                kind=(contracts.CollaborationEventKind.PROVIDER_CALL_ACCOUNTING if provider
+                      else contracts.CollaborationEventKind.MESSAGE),
+                sender=RUNTIME if provider else LEAD, recipient=LEAD if provider else USER,
+                payload=payload,
+            ))
+        canonical = [json.loads(contracts.encode_collaboration_event(event)) for event in typed]
+        self.assertEqual(harness.canonical_history(typed), canonical)
+        self.assertIs(harness.canonical_history([canonical[0]])[0], canonical[0])
+        self.assertEqual(harness.audit_exchanges(self.exchanges, self.calls, typed), self.audit())
+
+    def test_missing_marker_rejects(self):
+        directory = Path(self.calls[3]["directory"])
+        value = json.loads((directory / "command.private.json").read_text())
+        payload = json.loads(value["argv"][-1])
+        del payload["i"]["response_correction"]
+        value["argv"][-1] = json.dumps(payload)
+        (directory / "command.private.json").write_text(json.dumps(value))
+        self.calls[3]["payload_sha256"] = harness.digest(value["argv"][-1].encode())
+        self.calls[3]["payload_semantic_sha256"] = harness.semantic_digest(payload)
+        self.calls[3]["payload_bytes"] = len(value["argv"][-1].encode())
+        request = json.loads(self.exchanges[9]["content"])
+        request["payload"] = payload
+        self.exchanges[9]["content"] = json.dumps(request)
+        response = json.loads(self.exchanges[10]["content"])
+        response["actual_transport_utf8_bytes"] = self.calls[3]["payload_bytes"]
+        self.exchanges[10]["content"] = json.dumps(response)
+        with self.assertRaisesRegex(AssertionError, "Missing or multiple"):
+            self.audit()
+
+    def test_wrong_native_thread_rejects(self):
+        self.calls[3]["prior_thread_id"] = "wrong-thread"
+        value = json.loads(self.exchanges[9]["content"])
+        value["prior_thread_id"] = "wrong-thread"
+        self.exchanges[9]["content"] = json.dumps(value)
+        with self.assertRaisesRegex(AssertionError, "fresh prelude thread"):
+            self.audit()
+
+    def test_wrong_durable_invocation_rejects(self):
+        self.history[7]["payload"]["invocation_id"] = "other-invocation"
+        with self.assertRaisesRegex(AssertionError, "Wrong durable invocation"):
+            self.audit()
+
+    def test_extra_correction_rejects(self):
+        self.history.append(copy.deepcopy(self.history[-1]))
+        with self.assertRaisesRegex(AssertionError, "durable Lead judgment"):
+            self.audit()
+        self.history.pop()
+        extra = copy.deepcopy(self.calls[-1])
+        extra["number"] = 5
+        # Direct proof input isolates duplicate-correction rejection from capture matching.
+        entries = []
+        for call in [*self.calls, extra]:
+            payload, _ = harness.call_input(call)
+            entries.append(dict(call=call, payload=payload,
+                                outcome="rejected" if call["number"] == 2 else "accepted",
+                                code="answer_validation_failed" if call["number"] == 2 else "accepted",
+                                terminal=json.loads((Path(call["directory"]) / "stdout.raw").read_bytes())))
+        with self.assertRaisesRegex(AssertionError, "Missing or multiple"):
+            harness.prove_lead_corrections(entries, self.history)
+
+    def test_mismatched_native_bytes_reject(self):
+        (Path(self.calls[1]["directory"]) / "stdout.raw").write_bytes(b"changed")
+        with self.assertRaisesRegex(AssertionError, "native stream bytes differ"):
+            self.audit()
+
+    def test_rejected_action_and_correlation_must_match(self):
+        entries = []
+        for call in self.calls:
+            payload, _ = harness.call_input(call)
+            entries.append(dict(call=call, payload=payload,
+                                outcome="rejected" if call["number"] == 2 else "accepted",
+                                code="answer_validation_failed" if call["number"] == 2 else "accepted",
+                                terminal=json.loads((Path(call["directory"]) / "stdout.raw").read_bytes())))
+        for field in ("correlation", "kind"):
+            with self.subTest(field=field):
+                changed = copy.deepcopy(entries)
+                output = changed[1]["terminal"]["structured_output"]
+                if field == "correlation":
+                    output["correlation"] = "foreign"
+                else:
+                    output["action"]["kind"] = "search"
+                with self.assertRaisesRegex(AssertionError, "correlation or action"):
+                    harness.prove_lead_corrections(changed, self.history)
+
+    def test_resume_accepts_only_proven_fresh_handoff(self):
+        audit = self.audit()
+        calls = copy.deepcopy(self.calls[1:])
+        harness.assert_resumed_call_chain(calls, "old-thread", audit)
+        with self.assertRaisesRegex(AssertionError, "Unexplained fresh"):
+            harness.assert_resumed_call_chain(calls, "old-thread", [])
+        calls[0]["prior_thread_id"] = None
+        with self.assertRaisesRegex(AssertionError, "First resumed"):
+            harness.assert_resumed_call_chain(calls, "old-thread", audit)
+
+    def test_consultation_instructions_use_one_recall_marker(self):
+        marked_cases = set()
+        for spec in harness.load_inventory()["cases"]:
+            with self.subTest(case=spec["id"]):
+                markers = re.findall(r"FLOW623-[A-Z0-9-]+", spec["instruction"])
+                self.assertTrue(all(marker == harness.MARKER for marker in markers))
+                if markers:
+                    marked_cases.add(spec["id"])
+        self.assertEqual(
+            marked_cases,
+            {"L01-PRO-HIGH-PTY", "L02-PRO-LOW-ONE", "L04-SONNET-ONE"},
+        )
+
+    def test_fresh_cumulative_global_and_stage_bounds(self):
+        inventory = harness.load_inventory()
+        self.assertEqual(sum(s["max_calls"] for s in inventory["cases"]), 228)
+        self.assertEqual(harness.selected_spec("F04-FAILURE-RECOVERY")["max_calls"], 24)
+        self.assertEqual(inventory["budget"]["matrix_max_calls"], 312)
+        self.assertEqual(harness.stage_seconds(7), 1440)
+        self.assertEqual(harness.stage_seconds(12), 2340)
+        with mock.patch.dict(os.environ, {"STORY_LIVE_BUDGET_ROOT": str(self.root),
+                                          "STORY_LIVE_PRIOR_CASE_SUBMISSIONS": "8"}):
+            observer = harness.CallEvidence(self.root, harness.selected_spec("L04-SONNET-ONE"), self.root)
+            self.assertEqual(observer.effective_case_cap, 26)
+            observer.calls = [{}] * 17
+            observer.reserve()
+            observer.calls.append({})
+            with self.assertRaisesRegex(AssertionError, "Per-case"):
+                observer.reserve()
+        with mock.patch.dict(os.environ, {"STORY_LIVE_BUDGET_ROOT": str(self.root),
+                                          "STORY_LIVE_PRIOR_CASE_SUBMISSIONS": "0"}):
+            observer = harness.CallEvidence(self.root, harness.selected_spec("L06A-QUESTION"), self.root)
+            ledger = self.root / "call-budget.json"
+            ledger.write_text(json.dumps({"reserved": 311, "started_at": harness.time.time()}))
+            observer.reserve()
+            self.assertEqual(json.loads(ledger.read_text())["reserved"], 312)
+            with self.assertRaisesRegex(AssertionError, "matrix physical-call cap"):
+                observer.reserve()
+
+
+class LiveRecoveryCoverageTests(unittest.IsolatedAsyncioTestCase):
+    def setUp(self):
+        temporary = tempfile.TemporaryDirectory(prefix="live-recovery-coverage-")
+        self.addCleanup(temporary.cleanup)
+        self.root = Path(temporary.name)
+
+    def test_lost_authority_restores_exact_nonempty_artifact_baseline(self):
+        workspace = mock.Mock()
+        workspace.path.side_effect = lambda name: self.root / name
+        baseline = {}
+        for name in harness.SEEDED_ARTIFACT_PATHS:
+            path = self.root / name
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text("Original fixture " + name)
+            baseline[name] = harness.digest(path.read_bytes())
+        manifest = self.root / "initial-artifacts.private.json"
+        harness.save(manifest, baseline)
+        original = manifest.read_bytes()
+        checkpoint = {"artifact_baseline_sha256": harness.digest(original)}
+        restored = harness.restore_artifact_baseline(self.root, workspace, checkpoint)
+        self.assertEqual(restored, baseline)
+        for invalid in ({}, dict(list(baseline.items())[1:])):
+            with self.subTest(invalid_entries=len(invalid)):
+                harness.save(manifest, invalid)
+                matching = {"artifact_baseline_sha256": harness.digest(manifest.read_bytes())}
+                with self.assertRaisesRegex(AssertionError, "incomplete"):
+                    harness.restore_artifact_baseline(self.root, workspace, matching)
+        manifest.write_bytes(original + b" ")
+        with self.assertRaisesRegex(AssertionError, "checkpoint differs"):
+            harness.restore_artifact_baseline(self.root, workspace, checkpoint)
+        manifest.unlink()
+        with self.assertRaises(FileNotFoundError):
+            harness.restore_artifact_baseline(self.root, workspace, checkpoint)
+        manifest.write_bytes(original)
+        path = workspace.path(next(iter(baseline)))
+        path.write_text("Changed after original checkpoint")
+        with self.assertRaisesRegex(AssertionError, "artifact changed"):
+            harness.restore_artifact_baseline(self.root, workspace, checkpoint)
+        with self.assertRaisesRegex(AssertionError, "artifact changed"):
+            harness.assert_seeded_artifacts(workspace, restored)
+
+    def recovery_fixture(self):
+        from types import SimpleNamespace
+        from dataclasses import replace
+        from story_writing_agents import conversations as contracts
+        from tests import collaboration_contract_fixture as fixture
+
+        old_proposal = fixture.make_proposal(inputs=(fixture.make_input(),), assignments=(
+            fixture.make_assignment(),
+            fixture.make_assignment("assignment_character", specialist_id="character_custodian"),
+        ))
+        failed, _, _ = fixture.executed_history(
+            old_proposal, failed_assignment_id="assignment_character")
+        proposal = fixture.make_proposal(
+            proposal_id="recovery_proposal", inputs=(fixture.make_input(),),
+            assignments=(fixture.make_assignment("recovery_character", specialist_id="character_custodian"),),
+        )
+        recovered, proposal, _ = fixture.executed_history(proposal)
+        recovered = tuple(replace(e, payload=replace(
+            e.payload, assessment=contracts.CollaborationSpecialistAssessment.CONCERN))
+            if isinstance(e.payload, contracts.CollaborationSpecialistReplyPayload) else
+            replace(e, payload=replace(e.payload, unresolved_input_ids=proposal.assignments[0].input_ids))
+            if isinstance(e.payload, contracts.CollaborationLeadSynthesisPayload) else e
+            for e in recovered)
+        proposed = SimpleNamespace(step_id=recovered[0].step_id, proposal=proposal,
+                                   confirmation_request_id="new-confirm")
+        completed = SimpleNamespace(step_id=proposed.step_id,
+                                    state=harness.CollaborationStepState.COMPLETED)
+        for name in ("old-call", "new-call"):
+            directory = self.root / name
+            directory.mkdir(exist_ok=True)
+            harness.save(directory / "staged.sanitized.json", {"sha256": "same-definition", "bytes": 10})
+        faulted = dict(agent="character_custodian", vendor="antigravity", model="flash",
+                       fault="nonzero", thread_id="failed-native", directory=str(self.root / "old-call"))
+        fresh = dict(agent="character_custodian", vendor="antigravity", model="flash",
+                     fault=None, thread_id="fresh-native", prior_thread_id=None, resumed=False,
+                     native_status="SUCCESS", delivered_returncode=0,
+                     directory=str(self.root / "new-call"))
+        return failed, recovered, proposed, completed, faulted, fresh
+
+    def test_failed_character_recovery_requires_fresh_same_agent_and_complete_history(self):
+        from dataclasses import replace
+        failed, recovered, proposed, completed, faulted, fresh = self.recovery_fixture()
+        prefix = harness.canonical_history(failed)
+        history = failed + recovered
+        def audit(rows=None, events=None, saved_prefix=None):
+            return harness.assert_character_recovery(
+                history if events is None else events, prefix if saved_prefix is None else saved_prefix,
+                faulted, [fresh] if rows is None else rows, proposed, completed)
+        self.assertTrue(audit()["fresh_thread"])
+        # Metadata compatibility only; native recovery acceptance belongs to the adapter audit.
+        self.assertTrue(audit(rows=[dict(fresh, native_status="ERROR")])["fresh_thread"])
+        for changed in ([], [dict(fresh, agent="plot_architect")],
+                        [dict(fresh, prior_thread_id="failed-native", resumed=True)],
+                        [dict(fresh, thread_id="failed-native")], [dict(fresh, model="different")],
+                        [dict(fresh, delivered_returncode=17)]):
+            with self.subTest(calls=changed), self.assertRaises(AssertionError):
+                audit(rows=changed)
+        for payload_type in (harness.CollaborationSpecialistReplyPayload,
+                             harness.CollaborationLeadSynthesisPayload,
+                             harness.CollaborationExecutionResult):
+            with self.subTest(missing=payload_type.__name__), self.assertRaises(AssertionError):
+                audit(events=failed + tuple(e for e in recovered if not isinstance(e.payload, payload_type)))
+        no_confirm = failed + tuple(e for e in recovered
+                                    if getattr(e.payload, "state", None) is not harness.CollaborationStepState.CONFIRMED)
+        with self.assertRaisesRegex(AssertionError, "fresh Confirm"):
+            audit(events=no_confirm)
+        for field, value in (("unresolved_input_ids", ()), ("reply_event_ids", ("wrong-reply",)),
+                             ("proposal_id", "different-proposal")):
+            events = failed + tuple(replace(e, payload=replace(e.payload, **{field: value}))
+                if isinstance(e.payload, harness.CollaborationLeadSynthesisPayload) else e for e in recovered)
+            with self.subTest(field=field), self.assertRaises(AssertionError):
+                audit(events=events)
+        bad_prefix = copy.deepcopy(prefix)
+        bad_prefix[-1]["event_id"] = "rewritten-failure"
+        with self.assertRaisesRegex(AssertionError, "rewrote"):
+            audit(saved_prefix=bad_prefix)
+
+    async def test_failure_recovery_uses_new_lead_proposal_and_confirmation(self):
+        from types import SimpleNamespace, MethodType
+        failed, recovered, proposed, completed, faulted, fresh = self.recovery_fixture()
+        failed_turn = SimpleNamespace(step_id="failed-step", confirmation_request_id="old-confirm")
+        for early_dispatch in (False, True):
+            with self.subTest(early_dispatch=early_dispatch):
+                order = []
+                case = mock.Mock()
+                case.directory = self.root
+                case.spec = harness.selected_spec("F04-FAILURE-RECOVERY")
+                case.observer.calls = []
+                case.observer.fault_consumed = False
+                case.runtime._run_specialist_assignment = mock.AsyncMock()
+                events = []
+                case.history.side_effect = lambda: tuple(events)
+                async def propose(agents, **kwargs):
+                    order.append(("propose", agents))
+                    self.assertFalse(kwargs["references"])
+                    if len(order) == 1:
+                        return failed_turn
+                    self.assertEqual(kwargs["text"], case.spec["recovery_instruction"])
+                    case.observer.calls.append(dict(agent="character_custodian" if early_dispatch else "lead_orchestrator"))
+                    return proposed
+                async def confirm(turn):
+                    order.append(("confirm", turn.step_id))
+                    if turn is failed_turn:
+                        case.observer.calls.append(faulted)
+                        case.observer.fault_consumed = True
+                        events.extend(failed)
+                        return SimpleNamespace(state=harness.CollaborationStepState.FAILED)
+                    case.observer.calls.append(fresh)
+                    events.extend(recovered)
+                    return completed
+                case.propose = mock.AsyncMock(side_effect=propose)
+                case.confirm = mock.AsyncMock(side_effect=confirm)
+                case.recover_failed_character = MethodType(harness.ConversationCase.recover_failed_character, case)
+                with mock.patch.object(harness, "project_collaboration_history", return_value=SimpleNamespace(
+                        current_state=harness.CollaborationStepState.COMPLETED)):
+                    if early_dispatch:
+                        with self.assertRaisesRegex(AssertionError, "before Confirm"):
+                            await harness.ConversationCase.interrupted_or_failed(case, cancel=False)
+                        self.assertEqual(case.confirm.await_count, 1)
+                    else:
+                        await harness.ConversationCase.interrupted_or_failed(case, cancel=False)
+                        self.assertEqual([item[0] for item in order], ["propose", "confirm", "propose", "confirm"])
+                        self.assertEqual(order[2][1], ("character_custodian",))
+                        self.assertTrue((self.root / "character-recovery.sanitized.json").exists())
+                    self.assertEqual(case.observer.fault, None)
+
+
+class LiveReferenceDriftTests(unittest.IsolatedAsyncioTestCase):
+    async def test_reference_drift_accepts_only_exact_authority_rejection(self):
+        message = "lead proposal authority drift requires regeneration and confirmation"
+        errors = (
+            harness.BackendProtocolError(message),
+            harness.BackendProtocolError("unrelated backend failure"),
+            ValueError(message),
+        )
+        with tempfile.TemporaryDirectory(prefix="reference-drift-handler-") as directory:
+            outline = Path(directory) / "outline.md"
+            for index, error in enumerate(errors):
+                with self.subTest(error=type(error).__name__, exact=index == 0):
+                    case = mock.Mock()
+                    case.workspace.path.return_value = outline
+                    case.propose = mock.AsyncMock(return_value=mock.sentinel.proposal)
+                    case.observer.calls = []
+                    case.runtime.decide_lead_step = mock.AsyncMock(side_effect=error)
+                    with mock.patch.object(harness, "decision", return_value=mock.sentinel.decision):
+                        if index == 0:
+                            await harness.ConversationCase.reference_drift(case)
+                        else:
+                            with self.assertRaises(type(error)) as raised:
+                                await harness.ConversationCase.reference_drift(case)
+                            self.assertIs(raised.exception, error)
+                    case.propose.assert_awaited_once_with()
+                    case.runtime.decide_lead_step.assert_awaited_once_with(mock.sentinel.decision)
+                    self.assertEqual(case.observer.calls, [])
+                    self.assertEqual(outline.read_text(), harness.OUTLINE + "External fixture drift.\n")
+
+
+class LiveHarnessChildCleanupTests(unittest.IsolatedAsyncioTestCase):
+    async def test_fault_child_timeout_cancellation_and_success_are_joined(self):
+        for failure in (asyncio.TimeoutError(), asyncio.CancelledError()):
+            with self.subTest(failure=type(failure).__name__):
+                child = mock.Mock(pid=123456, returncode=None)
+                child.wait = mock.AsyncMock(return_value=-9)
+                async def waits(awaitable, timeout):
+                    await awaitable
+                    if timeout == 1:
+                        raise failure
+                    raise asyncio.TimeoutError()
+                with mock.patch.object(harness.asyncio, "wait_for", side_effect=waits), mock.patch.object(
+                    harness.os, "killpg", create=True
+                ) as killpg:
+                    with self.assertRaises(type(failure)):
+                        await harness.wait_owned_fault_child(child, 1)
+                self.assertEqual(child.wait.await_count, 3)
+                if os.name == "posix":
+                    self.assertEqual(killpg.call_count, 2)
+        child = mock.Mock(returncode=86)
+        child.wait = mock.AsyncMock(return_value=86)
+        self.assertEqual(await harness.wait_owned_fault_child(child, 1), 86)
+        child.wait.assert_awaited_once()
+
+
+class LiveTerminalCleanupTests(unittest.IsolatedAsyncioTestCase):
+    async def test_primary_failure_survives_cleanup_and_standalone_cleanup_fails(self):
+        import sys
+
+        with tempfile.TemporaryDirectory() as directory:
+            terminal = mock.Mock(label="owned", case=mock.Mock(directory=Path(directory)))
+            terminal.close = mock.AsyncMock(side_effect=RuntimeError("cleanup"))
+            original = ValueError("primary")
+            with self.assertRaises(ValueError) as caught:
+                try:
+                    raise original
+                finally:
+                    await harness.close_terminal(terminal, sys.exc_info()[1])
+            self.assertIs(caught.exception, original)
+            terminal.close.assert_awaited_once()
+            record = json.loads((Path(directory) / "owned.cleanup-error.sanitized.json").read_text())
+            self.assertEqual(record, {"primary_error_type": "ValueError", "cleanup_error_type": "RuntimeError"})
+            with self.assertRaises(RuntimeError):
+                await harness.close_terminal(terminal)
+            terminal.close = mock.AsyncMock()
+            await harness.close_terminal(terminal)
+            terminal.close.assert_awaited_once()
+
+
+class LiveBudgetContinuationTests(unittest.TestCase):
+    def test_budget_next_intent_injection_preserves_exact_completed_native_fields(self):
+        contract = {
+            "evidence_ids": ["evidence-reference"], "evidence_status": "verified",
+            "scope": "story_specific", "reply_event_ids": ["reply-plot", "reply-character", "reply-execution"],
+            "unresolved_input_ids": ["user_input", "reference_1"],
+        }
+        payload = {"c": "synthetic-synthesis-correlation", "i": {
+            "workflow": "lead_synthesis", "answer_contract": contract,
+            "inputs": [{"input_id": "user_input", "kind": "user_input"},
+                       {"input_id": "reference_1", "kind": "core_document"}],
+        }}
+        native = {
+            "status": "SUCCESS", "conversation_id": "synthetic-thread", "json_schema": {"type": "object"},
+            "structured_output": {"correlation": payload["c"], "action": {
+                "kind": "answer", "used_handles": [], "result": {
+                    **copy.deepcopy(contract), "message": "A complete visible synthesis.", "next_intent": None,
+                },
+            }}, "usage": {"input_tokens": 13, "output_tokens": 7},
+        }
+        original = copy.deepcopy(native)
+        original_payload = copy.deepcopy(payload)
+        stdout = json.dumps(native, indent=2).encode()
+        def mutate(value=stdout, request=payload, **changes):
+            kwargs = {"agent": "lead_orchestrator", "returncode": 0, "physical_calls_spent": 10}
+            kwargs.update(changes)
+            return harness.inject_budget_next_intent(value, request, **kwargs)
+
+        delivered, proof = mutate()
+        actual = json.loads(delivered)
+        intent = actual["structured_output"]["action"]["result"]["next_intent"]
+        self.assertEqual([a["agent_id"] for a in intent["assignments"]], list(harness.BUDGET_REVIEWERS))
+        for assignment in intent["assignments"]:
+            self.assertEqual(assignment["input_ids"], ["user_input", "reference_1", *contract["reply_event_ids"]])
+        actual["structured_output"]["action"]["result"]["next_intent"] = None
+        self.assertEqual(actual, original)
+        self.assertEqual(native, original)
+        self.assertEqual(payload, original_payload)
+        self.assertEqual(proof["minimum_required_calls"], 8)
+        self.assertEqual(proof["remaining_calls"], 2)
+        self.assertEqual(proof["path"], "structured_output.action.result.next_intent")
+        self.assertTrue(proof["changed"])
+        self.assertEqual(proof["original_stdout_sha256"], harness.digest(stdout))
+        self.assertEqual(proof["delivered_stdout_sha256"], harness.digest(delivered))
+        unchanged, observed = mutate(delivered)
+        self.assertEqual(unchanged, delivered)
+        self.assertFalse(observed["changed"])
+
+        for changes in ({"agent": "plot_architect"}, {"returncode": 1},
+                        {"physical_calls_spent": 4}, {"physical_calls_spent": 13},
+                        {"physical_calls_spent": True}):
+            with self.subTest(transport=changes), self.assertRaises(AssertionError):
+                mutate(**changes)
+        for workflow in ("lead_front_channel", "writing_artifact_reference_read"):
+            wrong = copy.deepcopy(payload)
+            wrong["i"]["workflow"] = workflow
+            with self.subTest(workflow=workflow), self.assertRaises(AssertionError):
+                mutate(request=wrong)
+        for mutation in ("status", "correlation", "kind", "missing", "evidence", "unresolved"):
+            wrong = copy.deepcopy(native)
+            action = wrong["structured_output"]["action"]
+            if mutation == "status":
+                wrong["status"] = "ERROR"
+            elif mutation == "correlation":
+                wrong["structured_output"]["correlation"] = "another-correlation"
+            elif mutation == "kind":
+                action["kind"] = "search"
+            elif mutation == "missing":
+                del action["result"]["message"]
+            elif mutation == "evidence":
+                action["result"]["evidence_ids"] = []
+            else:
+                action["result"]["unresolved_input_ids"] = []
+            with self.subTest(native=mutation), self.assertRaises(AssertionError):
+                mutate(json.dumps(wrong).encode())

@@ -918,6 +918,109 @@ class AntigravityParityTests(unittest.IsolatedAsyncioTestCase):
             await asyncio.sleep(0.01)
         self.fail(f"fake Antigravity did not record {count} invocations")
 
+
+    async def _assert_rendered_schema_accounting(self, *, contextual):
+        from story_writing_agents.antigravity_adapter import AntigravityAdapter
+        from story_writing_agents.provider_process import ProcessResult
+
+        schema = {
+            "type": "object", "properties": {
+                "round_number": {"type": "null", "enum": [None]},
+                "invocation_ordinal": {"type": "integer", "enum": [1]},
+                "attempt": {"type": "integer", "enum": [1]},
+            },
+        }
+        original_schema = canonical_provider_json(schema)
+        payload = {"q": "schema accounting 한🙂"}
+        original_payload = canonical_provider_json(payload)
+        output = {"round_number": None, "invocation_ordinal": 1, "attempt": 1}
+        for vendor in ("antigravity", "codex"):
+            with self.subTest(vendor=vendor, contextual=contextual):
+                session = "schema-" + vendor + ("-context" if contextual else "-standard")
+                backend = self.backend(backend_overrides={PLOT_ARCHITECT: vendor})
+                backend.create_session_with_access(session)
+                bound = await backend.bind(self.definition(backend=vendor))
+                adapter = backend._adapter_for(vendor)
+                expected = (AntigravityAdapter.native_output_schema(schema)
+                            if vendor == "antigravity" else schema)
+                expected_bytes = canonical_provider_json(expected)
+                self.assertEqual(len(expected_bytes) - len(original_schema),
+                                 12 if vendor == "antigravity" else 0)
+                captured = []
+                submitted = []
+                actual_invoke = adapter.invoke
+                actual_begin = backend._agent_exchange_capture.begin
+
+                def begin(_capture, **kwargs):
+                    captured.append(kwargs["invocation"])
+                    return actual_begin(**kwargs)
+
+                async def invoke(binding, invocation):
+                    submitted.append(invocation)
+                    return await actual_invoke(binding, invocation)
+
+                async def completed(request, **_kwargs):
+                    argv = request.command
+                    if vendor == "antigravity":
+                        self.assertEqual(argv[argv.index("--json-schema") + 1].encode(), expected_bytes)
+                        self.assertEqual(argv[argv.index("--print") + 1].encode(), original_payload)
+                        self.assertEqual(request.stdin, b"")
+                        stdout = canonical_provider_json({
+                            "status": "SUCCESS", "conversation_id": "schema-thread",
+                            "json_schema": expected, "structured_output": output})
+                    else:
+                        self.assertEqual(Path(argv[argv.index("--output-schema") + 1]).read_bytes(), expected_bytes)
+                        self.assertEqual(request.stdin, original_payload)
+                        Path(argv[argv.index("--output-last-message") + 1]).write_bytes(canonical_provider_json(output))
+                        stdout = canonical_provider_json({"type": "thread.started", "thread_id": "schema-thread"}) + b"\n"
+                    return ProcessResult(stdout=stdout, stderr=b"", returncode=0)
+
+                with mock.patch.object(adapter, "invoke", new=invoke), mock.patch.object(
+                    type(backend._agent_exchange_capture), "begin", new=begin
+                ), mock.patch("story_writing_agents." + vendor + "_adapter.run_process", new=completed):
+                    if contextual:
+                        provider = bound._context_provider()
+                        scope = ContextScope("workspace-schema", session, ContextSubjectKind.CONVERSATION,
+                                             "schema-conversation", PLOT_ARCHITECT)
+                        policy = "sha256:" + "7" * 64
+                        async with provider.invocation(scope, policy):
+                            result = await provider.invoke_context(ContextProviderCallRequest(
+                                scope, policy, "schema-call", ProviderCallKind.COLLABORATION_INITIAL,
+                                schema, payload))
+                        self.assertEqual(json.loads(result.response_text), output)
+                        self.assertEqual(result.accounting.payload.schema_utf8_bytes, len(expected_bytes))
+                        self.assertEqual(result.accounting.actual_transport_utf8_bytes, len(original_payload))
+                        self.assertIs(result.accounting.state, ProviderCallState.SUBMITTED)
+                    else:
+                        result = await backend._invoke_provider_structured(
+                            bound, session_id=session, conversation_id="schema-conversation",
+                            schema=schema, payload=payload, decode=json.loads)
+                        self.assertEqual(result, output)
+                self.assertEqual(len(captured), 1)
+                self.assertEqual(len(submitted), 1)
+                self.assertIs(captured[0], submitted[0])
+                invocation = submitted[0]
+                self.assertEqual(canonical_provider_json(invocation.schema), expected_bytes)
+                self.assertEqual(invocation.payload_json, original_payload)
+                self.assertEqual(invocation.payload_accounting.schema_utf8_bytes, len(expected_bytes))
+                self.assertEqual(invocation.payload_accounting.payload_utf8_bytes, len(original_payload))
+                self.assertEqual(sum(c.serialized_utf8_bytes for c in invocation.payload_accounting.components),
+                                 len(expected_bytes) + len(original_payload))
+                paths = list((self.workspace.path("debug_logs/agent_exchanges") / session).glob("*.jsonl"))
+                records = [json.loads(line) for path in paths for line in path.read_text().splitlines()]
+                requests = [json.loads(row["content"]) for row in records if row["request_type"] == "request"]
+                self.assertEqual(len(requests), 1)
+                self.assertEqual(requests[0]["schema"], expected)
+                self.assertEqual(requests[0]["payload"], payload)
+                self.assertEqual(canonical_provider_json(schema), original_schema)
+                self.assertEqual(canonical_provider_json(payload), original_payload)
+
+    async def test_standard_invocation_captures_and_accounts_rendered_schema_only_for_antigravity(self):
+        await self._assert_rendered_schema_accounting(contextual=False)
+
+    async def test_contextual_invocation_captures_and_accounts_rendered_schema_only_for_antigravity(self):
+        await self._assert_rendered_schema_accounting(contextual=True)
+
     async def test_contextual_thread_bootstrap_delta_restart_and_scope_isolation_match_codex(
         self,
     ) -> None:

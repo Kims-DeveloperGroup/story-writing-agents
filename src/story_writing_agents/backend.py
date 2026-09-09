@@ -4056,12 +4056,22 @@ class AgentBackend:
     def _capture_provider_failure_without_replacing(
         lifecycle: AgentExchangeCaptureLifecycle | None,
         code: AgentExchangeTerminalCode,
+        *,
+        failure: ProviderInvocationError | None = None,
     ) -> None:
         """Best-effort record one closed pre-response provider failure."""
 
         try:
             if lifecycle is not None:
-                lifecycle.provider_failure(code)
+                diagnostic = (
+                    failure.response_diagnostic
+                    if isinstance(failure, ProviderInvocationError)
+                    else None
+                )
+                if diagnostic is None:
+                    lifecycle.provider_failure(code)
+                else:
+                    lifecycle.provider_failure(code, response_diagnostic=diagnostic)
         except BaseException:
             pass
 
@@ -4224,7 +4234,11 @@ class AgentBackend:
         )
         invocation = ProviderInvocation(
             session_id=session,
-            schema=schema,
+            schema=(
+                AntigravityAdapter.native_output_schema(schema)
+                if bound_agent.vendor == "antigravity"
+                else schema
+            ),
             payload=payload,
             thread_id=thread_id,
             call_kind=call_kind,
@@ -4260,6 +4274,7 @@ class AgentBackend:
                         if self._context_failure_timed_out(exc)
                         else AgentExchangeTerminalCode.PROVIDER_INVOCATION_FAILED
                     ),
+                    failure=exc,
                 )
             provider_diagnostic = exc.diagnostic
             provider_cause = exc.__cause__
@@ -4487,7 +4502,11 @@ class AgentBackend:
         )
         invocation = ProviderInvocation(
             session_id=session,
-            schema=schema,
+            schema=(
+                AntigravityAdapter.native_output_schema(schema)
+                if bound_agent.vendor == "antigravity"
+                else schema
+            ),
             payload=payload,
             thread_id=expected_thread_id,
             call_kind=call_kind,
@@ -4550,6 +4569,7 @@ class AgentBackend:
                     if self._context_failure_timed_out(failure)
                     else AgentExchangeTerminalCode.PROVIDER_INVOCATION_FAILED
                 ),
+                failure=failure,
             )
             if failure.__cause__ is None:
                 raise translated from None
