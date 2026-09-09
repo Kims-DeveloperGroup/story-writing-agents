@@ -595,6 +595,21 @@ class SessionRecoveryReconcilerContractTests(unittest.TestCase):
 
 
 class SessionRecoveryLifecycleTests(unittest.TestCase):
+    def test_retryable_read_only_history_allows_reopen_but_keeps_uncertain_git_gated(self):
+        history = replace(_ordinary_lead_history(), next_safe_action=CollaborationNextAction.RETRY_LEAD_TURN)
+        observed = _observe(histories=(history, history), transition=True)
+        self.assertEqual(observed.result.allowed_operations, tuple(SessionTransitionOperation))
+        self.assertIs(observed.result.recovery_result.state, SessionRecoveryState.READY)
+        self.assertEqual(observed.store.trace.count("collaboration"), 2)
+        self.assertEqual(observed.repository_instances, [])
+        for state in (GitSessionHistoryState.RUNNING, GitSessionHistoryState.OUTCOME_UNKNOWN,
+                      GitSessionHistoryState.RECOVERY_REQUIRED):
+            with self.subTest(state=state):
+                snapshot = _snapshot(state)
+                blocked = _observe(histories=(history, history), snapshots=(snapshot, snapshot), transition=True)
+                self.assertNotIn(SessionTransitionOperation.ENTER_DESTINATION, blocked.result.allowed_operations)
+                self.assertIsNot(blocked.result.recovery_result.state, SessionRecoveryState.READY)
+
     def test_ordinary_lead_outcomes_allow_all_transitions_after_two_generations(self) -> None:
         for kind in (LeadOutcomeKind.ANSWER, LeadOutcomeKind.QUESTION,
                      LeadOutcomeKind.CRITIQUE, LeadOutcomeKind.RECOMMENDATION):

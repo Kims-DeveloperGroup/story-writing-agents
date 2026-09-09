@@ -139,6 +139,7 @@ from .interactive_settings import (
     reconcile_provider_route_generations,
 )
 from .provider_adapter import (
+    DEFAULT_PROVIDER_TIMEOUT_SECONDS,
     AgentExecutionProfile,
     ExecutionValueSource,
     ProviderAdapter,
@@ -1322,7 +1323,7 @@ class AgentBackend:
         *,
         executable: str = "codex",
         model: str | None = None,
-        timeout_seconds: float = 300,
+        timeout_seconds: float = DEFAULT_PROVIDER_TIMEOUT_SECONDS,
         backend_overrides: Mapping[str, str] | None = None,
         antigravity_executable: str = "agy",
         antigravity_model: str | None = None,
@@ -4420,12 +4421,14 @@ class AgentBackend:
 
     @staticmethod
     def _context_failure_timed_out(failure: BaseException) -> bool:
-        """Recognize only the backend's explicit bounded-process timeout."""
+        """Recognize explicit process or provider timeout facts in the cause chain."""
 
         current: BaseException | None = failure
         seen: set[int] = set()
         while current is not None and id(current) not in seen:
-            if isinstance(current, ProcessTimedOut):
+            if isinstance(current, ProcessTimedOut) or (
+                isinstance(current, ProviderInvocationError) and current.timed_out
+            ):
                 return True
             seen.add(id(current))
             current = current.__cause__

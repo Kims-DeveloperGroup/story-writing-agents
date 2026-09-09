@@ -104,8 +104,11 @@ input-token totals are reported only when every submitted physical call
 reports an exact count; the component does not estimate missing usage.
 
 For the Lead, bootstrap reconstructs exact retained session memory on the next
-safe authorized work. An unresolved submitted call still blocks its original
-conversation as `outcome_unknown`; a fresh thread cannot resolve or replay it.
+safe authorized work. An eligible failed read-only Lead attempt permits a fresh
+turn in the same conversation after explicit new input. Runtime preserves its
+request and failure, and retires only the matching unfinished native operation;
+a successful checkpoint from another conversation is retained. Uncertain
+specialist/synthesis and authoritative write outcomes remain recovery-gated.
 See [continuation recovery](../reference/backend-and-sessions.md#lead-session-continuation).
 
 ## Reference enforcement

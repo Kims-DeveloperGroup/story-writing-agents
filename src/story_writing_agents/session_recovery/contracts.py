@@ -787,6 +787,10 @@ def _is_unproposed_lead_history(history: CollaborationHistoryProjection) -> bool
         or history.current_step_id is None
     ):
         return False
+    if history.next_safe_action not in {
+        CollaborationNextAction.NONE, CollaborationNextAction.RETRY_LEAD_TURN,
+    }:
+        return False
     return history == CollaborationHistoryProjection(
         session_id=history.session_id,
         conversation_id=history.conversation_id,
@@ -800,7 +804,7 @@ def _is_unproposed_lead_history(history: CollaborationHistoryProjection) -> bool
         execution_attempt_id=None,
         execution_result_event_id=None,
         execution_result=None,
-        next_safe_action=CollaborationNextAction.NONE,
+        next_safe_action=history.next_safe_action,
         physical_calls_spent=history.physical_calls_spent,
     )
 

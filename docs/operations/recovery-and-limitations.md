@@ -700,7 +700,7 @@ infer authority from visible text or replay incomplete work.
 
 | Runtime result | User meaning | Safe response |
 | --- | --- | --- |
-| `retry_lead_turn` | The submitted provider response used invalid, invented, reordered, stale, or matrix-incompatible evidence. Runtime closed that exact call with `lead_outcome_failure`; no judgment/proposal was accepted. | Submit a fresh lead turn. Do not replay, repair, or reinterpret the rejected provider output. If failure closure could not be persisted, follow `recovery_required` instead. |
+| `retry_lead_turn` | An eligible read-only Lead attempt failed, timed out, was cancelled/interrupted, or returned rejected output/evidence. A typed failure closes it; exact legacy unstarted, prepared-only, or unmatched submitted attempts may await that closure. | Send a new message, revise the wording, or explicitly resubmit in the same conversation, including after restart. Runtime closes any pending prior attempt before appending the new turn and preserves its request and failure. Failed closure persistence still requires recovery. |
 | `reply_to_lead` or `continue_with_lead` | Continue the conversation; no work is authorized. | Send a new lead turn. Ordinary text while a proposal is pending supersedes it first. |
 | `submit_confirmation` | One exact proposal is waiting. | Submit `confirm`, `reject`, or `revise` with every returned identity/digest field. Text such as `Yes` is not confirmation. |
 | `start_or_reconfirm` | A confirmation is durable, but projection alone is not a reusable capability. A live `decide_lead_step()` normally crosses this boundary immediately. | Let the owning runtime use its private single-use start authority. After restart, collect the fresh `reconfirmation_required` request instead of reconstructing authority. |
@@ -710,6 +710,15 @@ infer authority from visible text or replay incomplete work.
 | `continue_with_lead` after `interrupted` | Cancellation/interruption and every knowable result are durable. | Continue with the lead; do not infer missing success or replay automatically. |
 | `outcome_unknown` | A running attempt has no authoritative terminal result. | Preserve it and investigate; never replay automatically. |
 | `recovery_required` | History is corrupt, dangling, or otherwise unsafe to interpret. | Stop mutation, preserve the workspace, and inspect canonical collaboration history. |
+
+Live read-only Lead failures attempt immediate durable closure. Inspection,
+history projection, and reopening never close or resubmit an unfinished legacy
+attempt. Explicit new input closes that pending attempt under the session and
+conversation leases before appending the fresh turn. A failed Revise attempt
+leaves its old proposal superseded and creates no replacement authority. Read-only retry excludes
+successful results, uncertain specialist/synthesis work, and pending or
+uncertain Apply/Commit outcomes. It neither replays a full turn or successful
+specialist automatically nor revives Apply or Commit authority.
 
 Confirmed consultations create `running` plus all ordered dispatches as one
 durable batch before any provider call. A complete result batch can be
@@ -730,10 +739,11 @@ The runtime joins all parallel assignment tasks before classifying a known
 partial failure. One failed peer does not cancel successful siblings, and no
 lead synthesis is attempted over an incomplete set. Outer cancellation cancels
 and joins every child, persists knowable terminal facts/result, removes the
-live marker, releases bound-agent resources, and re-raises. A submitted timeout
-or transport failure marked outcome-uncertain enters `outcome_unknown`; a
-PREPARED call that never crossed the provider boundary does not spend budget or
-justify that state.
+live marker, releases bound-agent resources, and re-raises. For those
+specialist/synthesis invocations, a submitted timeout or transport failure
+marked outcome-uncertain enters `outcome_unknown`; the read-only Lead retry
+path does not abandon them. A PREPARED call that never crossed the provider
+boundary does not spend budget or justify that state.
 
 <a id="conversation-archive-recovery"></a>
 
@@ -1456,10 +1466,12 @@ references, or erase provider-native conversations. Antigravity definitions,
 work directories, and isolated native state remain plaintext under its
 provider-state root. A transport or protocol failure can taint a compatible
 thread; the next safe authorized work can start fresh while preserving old
-native data. Lead recovery restores exact retained session context, but an
-unresolved submitted outcome still blocks its original conversation and is
-never replayed. There is no user-facing session-close command or secure-erasure
-workflow.
+native data. Lead recovery restores exact retained session context. Explicit
+new input can retry an eligible failed read-only attempt in its original
+conversation; only that attempt's matching unfinished native operation is
+retired, preserving successful checkpoints from other conversations. Uncertain
+specialist/synthesis or write outcomes remain gated. There is no user-facing
+session-close command or secure-erasure workflow.
 
 During a long-running process, a changed agent definition becomes current for
 new work without disrupting an operation already using the old immutable
@@ -1582,11 +1594,17 @@ workflow](privacy-and-provider.md#rejected-provider-response-artifacts).
 - Codex and Antigravity are supported. Nullable routes inherit the workspace
   default and final Codex fallback. The legacy backend name `gemini` is
   rejected with guidance to use `antigravity`.
-- Provider calls have a timeout but no general retry or rate-limit manager.
+- Provider calls default to a 900-second response timeout, overridable for both
+  providers with `story chat --codex-timeout SECONDS`. Antigravity has a
+  30-second outer watchdog grace; Codex's sole watchdog uses the configured
+  timeout without grace. This is per call, not per turn. There is no general
+  retry or rate-limit manager. Read-only Lead recovery requires explicit new
+  user input; bounded malformed-response correction remains available under
+  its existing authority and call budget.
   At most one typed continuation replacement requires deterministic
   pre-execution proof; current native Codex/Antigravity adapters do not provide
   it. Generic errors, timeouts, malformed responses, and thread mismatches
-  do not authorize automatic same-request replay.
+  do not by themselves authorize automatic full-turn replay.
 - Owner history has no compaction, expiry, or retention policy.
 - Agent-context planning, source inventory, SEARCH/READ rounds, observations,
   references, and non-session delta depth have independent finite limits.
@@ -1597,9 +1615,11 @@ workflow](privacy-and-provider.md#rejected-provider-response-artifacts).
   checked before provider work; generated observations are checked before
   their subsequent substantive submission. Checkpoint
   absence/corruption/mismatch/taint/thread loss selects bootstrap on the next
-  safe authorized work; corrupt canonical history fails closed, and unresolved
-  submitted work remains blocked. Provider usage is exact only when supplied
-  and otherwise unavailable. There is no semantic artifact RAG, free-form durable memory,
+  safe authorized work; corrupt canonical history fails closed, and uncertain
+  specialist/synthesis or authoritative write outcomes remain blocked. Eligible
+  read-only Lead attempts can retry after explicit new input. Provider usage is
+  exact only when supplied and otherwise unavailable. There is no semantic
+  artifact RAG, free-form durable memory,
   arbitrary filesystem discovery, or progress replay API. See
   [Bounded agent context](../guides/agent-context.md#c20-decisions-limits-and-user-impact).
 - Artifact publication is recoverable and catalog-last, but does not share one

@@ -17,7 +17,7 @@ thread state; **access claim**—temporary exclusive process ownership;
 
 ```python
 AgentBackend(workspace: Workspace | str | pathlib.Path, *, executable: str = "codex",
-             model: str | None = None, timeout_seconds: float = 300,
+             model: str | None = None, timeout_seconds: float = 900,
              backend_overrides: Mapping[str, str] | None = None,
              antigravity_executable: str = "agy",
              antigravity_model: str | None = None,
@@ -41,8 +41,13 @@ default; there is no constructor reasoning argument.
 For Antigravity, the executable defaults to `agy`. Constructor model and effort
 have precedence over per-agent `antigravity_model`/`antigravity_effort`, then
 workspace values, then provider defaults. Effort is `None`, `low`, `medium`, or
-`high`. Timeout is positive and bounds both adapters. Overrides map canonical
-agents to exactly `codex` or `antigravity`; omitted routes use workspace
+`high`. Timeout is positive and applies to each physical provider call, not the
+whole Lead turn. The shared default is 900 seconds. Antigravity receives native
+`--print-timeout 900s` and an outer process watchdog of 930 seconds; an explicit
+timeout `N` uses native `N` plus a 30-second watchdog grace. Codex has no native
+timer here: its sole process watchdog is `N`, or 900 seconds by default. Bounded
+subprocess cleanup still follows watchdog expiry or cancellation.
+Overrides map canonical agents to exactly `codex` or `antigravity`; omitted routes use workspace
 `default_backend`, then Codex. Legacy `gemini` raises
 `backend 'gemini' is no longer supported; use 'antigravity'`. A bound
 agent exposes `backend`, `definition`, `vendor`, and `staging_directory`.
@@ -107,10 +112,15 @@ bytes remain untouched. See [Lead session memory](../guides/agent-context.md#lea
 for exact history/current-state delivery and capacity limits.
 
 Missing, tainted, or incompatible continuation bootstraps on the next safe
-authorized work. An unmatched submitted call remains `outcome_unknown` and
-blocks its conversation; replacement cannot replay or resolve it. Separately
-authorized safe work in another conversation may recover session context while
-preserving that uncertainty.
+authorized work. An eligible failed read-only Lead attempt exposes
+`retry_lead_turn`, including an exact unstarted, prepared-only, or unmatched
+submitted request recovered after restart. Explicit new input in that same
+conversation closes any unclosed prior attempt before starting a fresh turn;
+inspection and reopening alone do not mutate history or replay provider work.
+Only an unfinished native operation matching that failed attempt is retired.
+A successful session checkpoint from another conversation remains intact.
+Uncertain specialist/synthesis or authoritative write outcomes retain their
+recovery gates. See [Lead retry recovery](../guides/lead-agent.md#submitted-lead-outcome-unavailable-after-restart).
 
 The typed continuation-rejection seam permits at most one same-request
 replacement only with deterministic proof that the rejected turn did not

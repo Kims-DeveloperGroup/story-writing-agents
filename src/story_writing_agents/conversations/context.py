@@ -29,6 +29,7 @@ from .events import (
     CollaborationExecutionResult,
     CollaborationLeadEvidence,
     CollaborationLeadJudgmentPayload,
+    CollaborationLeadOutcomeFailureCode,
     CollaborationLeadOutcomeFailurePayload,
     CollaborationInputKind,
     CollaborationInterruptionPayload,
@@ -1022,6 +1023,32 @@ class LeadDecisionResult:
 
     def _validate_revise_turn(self) -> None:
         replacement = self.turn.proposal
+        if self.turn.next_action is CollaborationNextAction.RETRY_LEAD_TURN:
+            artifact = self.turn.artifact_proposal
+            if (
+                self.turn.kind is not LeadOutcomeKind.RECOMMENDATION
+                or self.turn.state is not None
+                or replacement is not None
+                or self.turn.confirmation_request_id is not None
+                or self.turn.evidence is not None
+                or self.turn.artifact_application_request is not None
+                or (
+                    artifact is not None
+                    and (
+                        artifact.state is not ArtifactProposalState.SUPERSEDED
+                        or artifact.candidate.consultation_proposal_id
+                        != self.proposal.proposal_id
+                        or artifact.candidate.consultation_proposal_revision
+                        != self.proposal.proposal_revision
+                        or artifact.candidate.consultation_proposal_digest
+                        != self.proposal.proposal_digest
+                    )
+                )
+            ):
+                raise ValueError(
+                    "failed revise result must retain no replacement authority"
+                )
+            return
         if self.turn.state is CollaborationStepState.SUPERSEDED:
             expected_action = (
                 CollaborationNextAction.REPLY_TO_LEAD
@@ -2113,6 +2140,54 @@ def _artifact_candidate_key(
     )
 
 
+def _lead_abandonment_is_safe(
+    events: tuple[CollaborationEventV2, ...], turn_id: str, step_id: str,
+) -> bool:
+    """Exclude execution/write authority before exposing read-only retry."""
+
+    states: dict[str, CollaborationStepState] = {}
+    pending_writes: set[str] = set()
+    unsafe_write = False
+    has_proposal = False
+    for event in events:
+        payload = event.payload
+        if type(payload) is CollaborationStepStatePayload:
+            states[event.step_id] = payload.state
+        if type(payload) in {ArtifactApplicationRequestPayload, StoryCommitRequestPayload}:
+            pending_writes.add(payload.confirmation_request_id)
+        elif type(payload) in {ArtifactApplicationResultPayload, StoryCommitResultPayload}:
+            pending_writes.discard(payload.confirmation_request_id)
+            if payload.outcome.value in {"outcome_unknown", "recovery_required"}:
+                unsafe_write = True
+        if (event.turn_id == turn_id
+            and type(payload) is CollaborationProviderCallPayload
+            and payload.invocation_kind is not CollaborationInvocationKind.LEAD):
+            return False
+        if event.turn_id == turn_id and type(payload) not in {
+            CollaborationMessagePayload, CollaborationProviderCallPayload,
+            CollaborationLeadOutcomeFailurePayload,
+        } and not (
+            (type(payload) is CollaborationStepStatePayload
+             and payload.state is CollaborationStepState.SUPERSEDED)
+            or (type(payload) is CollaborationConfirmationPayload
+                and payload.decision is CollaborationConfirmationDecision.REVISE)
+            or (type(payload) is ArtifactProposalStatePayload
+                and payload.state is ArtifactProposalState.SUPERSEDED)
+        ):
+            return False
+        if event.step_id == step_id and type(payload) is CollaborationProposal:
+            has_proposal = True
+    if has_proposal and states.get(step_id) is not CollaborationStepState.SUPERSEDED:
+        return False
+    return not pending_writes and not unsafe_write and not any(
+        state in {
+            CollaborationStepState.CONFIRMED, CollaborationStepState.RUNNING,
+            CollaborationStepState.OUTCOME_UNKNOWN, CollaborationStepState.RECOVERY_REQUIRED,
+        }
+        for state in states.values()
+    )
+
+
 def _project_validated_collaboration_history(
     events: tuple[CollaborationEventV2, ...],
 ) -> CollaborationHistoryProjection:
@@ -2147,6 +2222,7 @@ def _project_validated_collaboration_history(
         tuple[CollaborationEventV2, CollaborationProviderCallPayload]
     ] = []
     completed_lead_invocations: set[str] = set()
+    completed_lead_turns: set[str] = set()
     blocked_lineages: set[str] = set()
     event_by_id: dict[str, CollaborationEventV2] = {}
     current_step_id: str | None = None
@@ -2253,13 +2329,18 @@ def _project_validated_collaboration_history(
                         "lead judgment evidence does not match its durable turn"
                     )
                 completed_lead_invocations.add(invocation_id)
+                completed_lead_turns.add(event.turn_id)
                 batch_judgments.append((event, payload))
                 continue
 
             if type(payload) is CollaborationProviderCallPayload:
                 if event.step_id in blocked_lineages:
                     raise ValueError("provider calls cannot continue a blocked lineage")
-                if payload.invocation_id in completed_lead_invocations:
+                if (
+                    payload.invocation_id in completed_lead_invocations
+                    or (payload.invocation_kind is CollaborationInvocationKind.LEAD
+                        and event.turn_id in completed_lead_turns)
+                ):
                     raise ValueError(
                         "provider calls cannot continue a closed lead invocation"
                     )
@@ -2320,16 +2401,11 @@ def _project_validated_collaboration_history(
                 continue
 
             if type(payload) is CollaborationLeadOutcomeFailurePayload:
-                matches = tuple(
-                    call
-                    for call_event, call in provider_call_events
-                    if call_event.step_id == event.step_id
-                    and call_event.turn_id == event.turn_id
-                    and call.invocation_id == payload.invocation_id
-                    and call.call_id == payload.call_id
-                    and call.invocation_kind is CollaborationInvocationKind.LEAD
-                    and call.state is CollaborationProviderCallState.SUBMITTED
-                )
+                rejection = payload.code in {
+                    CollaborationLeadOutcomeFailureCode.EVIDENCE_VALIDATION_REJECTED,
+                    CollaborationLeadOutcomeFailureCode.ARTIFACT_INTENT_REJECTED,
+                    CollaborationLeadOutcomeFailureCode.PROVIDER_RESULT_REJECTED,
+                }
                 invocation_calls = tuple(
                     call
                     for call_event, call in provider_call_events
@@ -2337,18 +2413,40 @@ def _project_validated_collaboration_history(
                     and call_event.turn_id == event.turn_id
                     and call.invocation_id == payload.invocation_id
                     and call.invocation_kind is CollaborationInvocationKind.LEAD
-                    and call.state is CollaborationProviderCallState.SUBMITTED
+                    and (not rejection or call.state is CollaborationProviderCallState.SUBMITTED)
                 )
-                if (
-                    len(matches) != 1
-                    or not invocation_calls
+                if event.turn_id in completed_lead_turns:
+                    raise ValueError("lead turn may close only once")
+                if not rejection and not _lead_abandonment_is_safe(
+                    tuple(event_by_id.values()), event.turn_id, event.step_id,
+                ):
+                    raise ValueError("only an isolated read-only Lead attempt may be abandoned")
+                if payload.code is CollaborationLeadOutcomeFailureCode.REQUEST_NOT_SUBMITTED:
+                    requests = tuple(
+                        item for item in event_by_id.values()
+                        if item.turn_id == event.turn_id
+                        and type(item.payload) is CollaborationMessagePayload
+                        and item.sender.kind.value == "user"
+                        and item.recipient.kind.value == "lead"
+                    )
+                    if len(requests) != 1 or any(
+                        item.turn_id == event.turn_id
+                        for item, _call in provider_call_events
+                    ):
+                        raise ValueError("unsubmitted closure requires one exact unstarted request")
+                elif (
+                    not invocation_calls
                     or invocation_calls[-1].call_id != payload.call_id
                     or payload.invocation_id in completed_lead_invocations
-                ):
-                    raise ValueError(
-                        "lead outcome failure does not close the exact submitted call"
+                    or (
+                        payload.code is CollaborationLeadOutcomeFailureCode.PROVIDER_TIMED_OUT
+                        and invocation_calls[-1].state is not CollaborationProviderCallState.SUBMITTED
                     )
-                completed_lead_invocations.add(payload.invocation_id)
+                ):
+                    raise ValueError("lead outcome failure does not close the exact call")
+                if payload.invocation_id is not None:
+                    completed_lead_invocations.add(payload.invocation_id)
+                completed_lead_turns.add(event.turn_id)
                 batch_lead_failures.append((event, payload))
                 continue
 
@@ -2793,7 +2891,26 @@ def _project_validated_collaboration_history(
         and call.invocation_id not in completed_lead_invocations
         for call_event, call in provider_call_events
     )
-    if current_proposal is None and state is None and unmatched_submitted_lead:
+    pending_lead_request = (
+        current_turn_id not in completed_lead_turns
+        and any(
+            event.turn_id == current_turn_id
+            and (
+                (type(event.payload) is CollaborationMessagePayload
+                 and event.sender.kind.value == "user"
+                 and event.recipient.kind.value == "lead")
+                or (type(event.payload) is CollaborationProviderCallPayload
+                    and event.payload.invocation_kind is CollaborationInvocationKind.LEAD)
+            )
+            for event in events
+        )
+    )
+    recoverable_lead = (
+        (state is None or state is CollaborationStepState.SUPERSEDED)
+        and (pending_lead_request or current_lead_outcome_failed)
+        and _lead_abandonment_is_safe(events, current_turn_id, current_step_id)
+    )
+    if current_proposal is None and state is None and unmatched_submitted_lead and not recoverable_lead:
         state = CollaborationStepState.OUTCOME_UNKNOWN
     request_event = request_events.get(current_step_id)
     request_id: str | None = None
@@ -2829,6 +2946,8 @@ def _project_validated_collaboration_history(
             and type(events[-1].payload) is StoryCommitRequestPayload
             else CollaborationNextAction.INSPECT_AND_RESOLVE_OUTCOME
             if commit_request is not None and commit_result is None
+            else CollaborationNextAction.RETRY_LEAD_TURN
+            if recoverable_lead
             else CollaborationNextAction.INSPECT_AND_RESOLVE_OUTCOME
             if unmatched_submitted_lead
             else CollaborationNextAction.RETRY_LEAD_TURN

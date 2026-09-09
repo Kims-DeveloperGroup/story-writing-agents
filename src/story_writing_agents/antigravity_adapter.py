@@ -31,6 +31,7 @@ from .agent_context import (
 )
 from .models import AgentDefinition
 from .provider_adapter import (
+    PROVIDER_TIMEOUT_GRACE_SECONDS,
     AgentExecutionProfile,
     ProviderBinding,
     ProviderInvocation,
@@ -59,6 +60,13 @@ _MALFORMED_FUNCTION_CALL = re.compile(
 _NATIVE_COMPLETED = re.compile(
     r"Created At: ([^\n]+)\nCompleted At: ([^\n]+)\n"
     r"Task is complete\. Summarize what you did and do not call any more tools\."
+)
+_NATIVE_PARTIAL_TIMEOUT = re.compile(
+    rb"^\[agy\] print timeout after [^\r\n]+ with turn in progress; "
+    rb"returning partial output\r?$", re.MULTILINE,
+)
+_NATIVE_TRUNCATED = re.compile(
+    rb"^error: [^\r\n]+ \(response may be truncated\)\r?$", re.MULTILINE,
 )
 _NATIVE_TRACE_MAX_BYTES = 4 * 1024 * 1024
 _NATIVE_TRACE_MAX_LINE_BYTES = 512 * 1024
@@ -1028,7 +1036,9 @@ class AntigravityAdapter:
                 ProcessRequest(
                     command=command,
                     stdin=b"",
-                    timeout_seconds=self.timeout_seconds,
+                    timeout_seconds=(
+                        self.timeout_seconds + PROVIDER_TIMEOUT_GRACE_SECONDS
+                    ),
                     cwd=working_directory,
                 ),
                 create_process=tracked_create_process,
@@ -1089,6 +1099,10 @@ class AntigravityAdapter:
             stderr=result.stderr,
             exit_code=result.returncode,
         )
+        partial_timeout = bool(_NATIVE_PARTIAL_TIMEOUT.search(result.stderr))
+        incomplete_output = partial_timeout or bool(
+            _NATIVE_TRUNCATED.search(result.stderr)
+        )
         try:
             if result.returncode != 0:
                 # This CLI envelope does not prove a rejection before execution.
@@ -1110,6 +1124,7 @@ class AntigravityAdapter:
                     error,
                 ),
                 response_diagnostic=response_diagnostic,
+                completion_required=incomplete_output,
             )
             return ProviderResult(
                 thread_id=provider_result.thread_id,
@@ -1120,6 +1135,8 @@ class AntigravityAdapter:
             )
         except BaseException as exc:
             if isinstance(exc, ProviderInvocationError):
+                if partial_timeout:
+                    exc.timed_out = True
                 exc.record_response_diagnostic(response_diagnostic)
             record_provider_failure_accounting(
                 exc,
@@ -1321,6 +1338,7 @@ class AntigravityAdapter:
         expected_schema: Mapping[str, Any],
         completion_check: Callable[[str, dict[str, Any], str], bool] | None = None,
         response_diagnostic: ProviderResponseDiagnostic | None = None,
+        completion_required: bool = False,
     ) -> ProviderResult:
         """Decode one Antigravity JSON result with fixed diagnostics."""
 
@@ -1373,9 +1391,9 @@ class AntigravityAdapter:
             cls._malformed_output()
         if echoed_schema_bytes != expected_schema_bytes:
             cls._malformed_output()
-        if recoverable_error and (
+        if (recoverable_error or completion_required) and (
             completion_check is None
-            or not completion_check(thread_id, structured_output, native_error)
+            or not completion_check(thread_id, structured_output, native_error or "")
         ):
             raise ProviderInvocationError(
                 "Antigravity CLI did not complete successfully",
@@ -1385,7 +1403,9 @@ class AntigravityAdapter:
             thread_id=thread_id,
             response_text=response_text,
             usage=cls.provider_usage(terminal.get("usage")),
-            response_diagnostic=response_diagnostic if recoverable_error else None,
+            response_diagnostic=(
+                response_diagnostic if recoverable_error or completion_required else None
+            ),
         )
 
     @staticmethod

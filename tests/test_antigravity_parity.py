@@ -2579,7 +2579,18 @@ class AntigravityParityTests(unittest.IsolatedAsyncioTestCase):
                     ]
                     self.assertEqual(
                         [record["request_type"] for record in malformed_exchange],
-                        ["request", "outcome"],
+                        ["request", "response", "outcome"],
+                    )
+                    self.assertEqual(
+                        json.loads(malformed_exchange[1]["content"]),
+                        {
+                            "provider_failure": True,
+                            "response_diagnostic": {
+                                "stdout": {"encoding": "utf-8", "data": '{"event":'},
+                                "stderr": {"encoding": "utf-8", "data": ""},
+                                "exit_code": 0,
+                            },
+                        },
                     )
                     self.assertEqual(
                         json.loads(malformed_exchange[-1]["content"]),
@@ -2595,7 +2606,6 @@ class AntigravityParityTests(unittest.IsolatedAsyncioTestCase):
                     for prohibited in (
                         "CONFIDENTIAL_PROVIDER",
                         "CONFIDENTIAL_CREDENTIAL",
-                        "stderr",
                         "authentication",
                         "environment",
                         "credentials",
