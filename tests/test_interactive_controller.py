@@ -9969,6 +9969,26 @@ class ControllerV2HistoryCommandTests(ControllerTestCase):
         self.assertNotIn("route_fingerprint", rendered)
         self.assertTrue(workspace.root.exists())
 
+    def test_transcript_picker_preparation_preserves_controller_abort(self) -> None:
+        controller = mock.Mock(spec=InteractiveController)
+        controller._attached_session_id = "session"
+        controller._picker_input = mock.Mock()
+        abort = controller_core_module._ControllerAbort(
+            controller_core_module.InteractiveError(InteractiveErrorCode.INTERNAL_ERROR)
+        )
+        controller._run_picker_preparation.side_effect = abort
+
+        with self.assertRaises(controller_core_module._ControllerAbort) as caught:
+            InteractiveController._read_attached_conversation_transcript(
+                controller, InteractiveAction(ActionKind.TRANSCRIPT)
+            )
+
+        self.assertIs(caught.exception, abort)
+        controller._run_picker_preparation.assert_called_once()
+        controller._present_memory_catalog_or_reference_failure.assert_not_called()
+        controller._picker_input.read_picker.assert_not_called()
+        controller._resolve_conversation_reference.assert_not_called()
+
     def test_transcript_picker_preserves_catalog_order_and_exact_archived_identity(self) -> None:
         workspace, services, focused, controller, callbacks = self.prepared_v2_controller(
             with_history=False,

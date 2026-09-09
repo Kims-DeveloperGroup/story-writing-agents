@@ -5873,6 +5873,8 @@ class InteractiveController:
                     entries = self._run_picker_preparation(
                         lambda: self._catalog_entries(session_id)
                     )
+                except _ControllerAbort:
+                    raise
                 except Exception as exc:
                     self._present_memory_catalog_or_reference_failure(exc)
                     return
