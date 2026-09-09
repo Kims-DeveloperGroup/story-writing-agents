@@ -39,7 +39,10 @@ from story_writing_agents.agents import (
     PLOT_ARCHITECT,
 )
 from story_writing_agents.conversations import (
+    COLLABORATION_VISIBLE_TEXT_MAX_UTF8_BYTES,
     CollaborationConfirmationDecision,
+    CollaborationExecutionResult,
+    CollaborationLeadSynthesisPayload,
     CollaborationEventKind,
     CollaborationInputKind,
     CollaborationInvocationKind,
@@ -2251,6 +2254,175 @@ class LeadRecoveryAndAccountingTests(LeadOrchestrationTestCase):
             capability.consume()
         self.assertFalse(hasattr(RuntimeSession, "execution_capability"))
         self.assertFalse(hasattr(StoryRuntime, "execution_capability"))
+
+
+class LeadBudgetFinalizationTests(LeadOrchestrationTestCase):
+    """Budget exhaustion preserves real completed work and closes authority."""
+
+    async def _budget_consultation(self, *, message="Completed budget-bound review.",
+                                   pause_before_finalization=False, build_failure=None):
+        previous_calls = len(self.backend.calls) + len(self.backend.reference_calls)
+        conversation_id = self.conversation("Budget finalization")
+        agents = (PLOT_ARCHITECT, CHARACTER_CUSTODIAN, EXECUTION_SPECIALIST)
+        aliases = ["user_input", "reference_1", "reference_2", "reference_3"]
+        proposed = await self.proposal(
+            conversation_id,
+            text=("Review once. ${core_documents/global_outline.md} "
+                  "${core_documents/character_sheets.md} ${manuscript/part-01/opening.md}"),
+            assignments=[{"agent_id": agent, "instruction": "Review every supplied input.",
+                          "input_ids": aliases} for agent in agents],
+        )
+        self.assertIs(proposed.kind, LeadOutcomeKind.PROPOSAL)
+        expected = {}
+        for agent in agents:
+            self.backend.enqueue_for(agent, _specialist_outcome("concern"))
+
+        def synthesis(call, _provider):
+            material = _workflow_material(call.payload)
+            contract = material["answer_contract"]
+            input_ids = [item["input_id"] for item in material["inputs"]]
+            value = {
+                "evidence_ids": contract["evidence_ids"],
+                "evidence_status": contract["evidence_status"],
+                "scope": contract["scope"], "message": message,
+                "reply_event_ids": contract["reply_event_ids"],
+                "unresolved_input_ids": input_ids,
+                "next_intent": {
+                    "relation": "continue_lineage", "purpose": "Review every unresolved input again.",
+                    "assignments": [
+                        {"agent_id": agent, "instruction": "Reconsider the original facts and replies.",
+                         "input_ids": [*input_ids, *contract["reply_event_ids"]]}
+                        for agent in agents
+                    ],
+                },
+            }
+            expected.update(value)
+            return _provider_envelope(call, value)
+
+        self.backend.enqueue_for(LEAD_ORCHESTRATOR, synthesis)
+        if pause_before_finalization:
+            with mock.patch.object(self.runtime, "_finalize_known_result_locked",
+                                   side_effect=RuntimeError("test result persisted before finalization")):
+                with self.assertRaisesRegex(RuntimeError, "test result persisted"):
+                    await self.runtime.decide_lead_step(
+                        _decision(proposed, CollaborationConfirmationDecision.CONFIRM)
+                    )
+            decision_result = None
+        elif build_failure is not None:
+            with mock.patch.object(self.runtime, "_build_continuation_proposal",
+                                   side_effect=build_failure):
+                with self.assertRaises(type(build_failure)) as raised:
+                    await self.runtime.decide_lead_step(
+                        _decision(proposed, CollaborationConfirmationDecision.CONFIRM)
+                    )
+                self.assertIs(raised.exception, build_failure)
+            decision_result = None
+        else:
+            decision_result = await self.runtime.decide_lead_step(
+                _decision(proposed, CollaborationConfirmationDecision.CONFIRM)
+            )
+        history = self.history(conversation_id)
+        self.assertEqual(sum(type(event.payload) is CollaborationProviderCallPayload
+                             and event.payload.state is CollaborationProviderCallState.SUBMITTED
+                             for event in history), 10)
+        self.assertEqual(
+            len(self.backend.calls) + len(self.backend.reference_calls) - previous_calls,
+            10,
+        )
+        syntheses = [event for event in history
+                     if type(event.payload) is CollaborationLeadSynthesisPayload]
+        results = [event for event in history if type(event.payload) is CollaborationExecutionResult]
+        self.assertEqual(len(syntheses), 1)
+        self.assertEqual(len(results), 1)
+        self.assertEqual(syntheses[0].payload.message, message)
+        self.assertEqual(syntheses[0].payload.evidence, proposed.proposal.basis.evidence)
+        self.assertEqual(syntheses[0].payload.reply_event_ids, tuple(expected["reply_event_ids"]))
+        self.assertEqual(syntheses[0].payload.unresolved_input_ids, tuple(expected["unresolved_input_ids"]))
+        self.assertIsNotNone(syntheses[0].payload.next_intent)
+        self.assertEqual(results[0].payload.overall_outcome.value, "succeeded")
+        return conversation_id, proposed, decision_result, history, syntheses[0], results[0]
+
+    async def test_unaffordable_continuation_finalizes_exact_result_without_authority(self):
+        artifacts = {path: path.read_bytes() for path in self.workspace.root.rglob("*.md")}
+        conversation, proposed, decision_result, history, synthesis, result = await self._budget_consultation()
+        turn = decision_result.turn
+        self.assertIs(turn.state, CollaborationStepState.COMPLETED)
+        self.assertIs(turn.next_action, CollaborationNextAction.CONTINUE_WITH_LEAD)
+        self.assertIsNone(turn.proposal)
+        self.assertIsNone(turn.confirmation_request_id)
+        self.assertIn(synthesis.payload.message, turn.message)
+        self.assertIn("exceeds its remaining call budget", turn.message)
+        self.assertEqual(len([e for e in history if type(e.payload) is CollaborationProposal]), 1)
+        self.assertEqual(project_collaboration_history(history).physical_calls_spent, 10)
+        self.assertEqual(history[-2].payload.content, turn.message)
+        self.assertIs(project_collaboration_history(history).current_state, CollaborationStepState.COMPLETED)
+        before = tuple(self.backend.calls)
+        with self.assertRaises(ValueError):
+            await self.runtime.decide_lead_step(_decision(proposed, CollaborationConfirmationDecision.CONFIRM))
+        self.assertEqual(tuple(self.backend.calls), before)
+        self.assertEqual(self.history(conversation), history)
+        self.assertEqual({path: path.read_bytes() for path in artifacts}, artifacts)
+
+    async def test_restart_and_repeated_known_result_finalization_are_idempotent(self):
+        conversation, proposed, _, known, synthesis, result = await self._budget_consultation(
+            pause_before_finalization=True)
+        projection = project_collaboration_history(known)
+        self.assertIs(projection.current_state, CollaborationStepState.RUNNING)
+        backend = _LeadBackend()
+        restarted = StoryRuntime(self.workspace, backend)  # type: ignore[arg-type]
+        restored = await restarted.lead_turn(self.session_id, conversation, "Recover completed work.")
+        self.assertIs(restored.state, CollaborationStepState.COMPLETED)
+        self.assertEqual(backend.calls, [])
+        complete = self.history(conversation)
+        self.assertEqual(complete[:len(known)], known)
+        self.assertEqual(len(complete), len(known) + 2)
+        repeated = restarted._finalize_known_result_locked(known, projection)
+        self.assertEqual(repeated, restored)
+        self.assertEqual(self.history(conversation), complete)
+        self.assertEqual(backend.calls, [])
+        backend.enqueue(_visible_outcome("answer", "A new independent answer."))
+        fresh = await restarted.lead_turn(self.session_id, conversation, "Answer a fresh question.")
+        self.assertIs(fresh.kind, LeadOutcomeKind.ANSWER)
+        self.assertEqual(len(backend.calls), 1)
+        self.assertEqual(self.history(conversation)[:len(complete)], complete)
+
+    async def test_budget_notice_preserves_maximum_utf8_synthesis(self):
+        notice = ("The consultation is complete. The requested second specialist "
+                  "round exceeds its remaining call budget. Start a new request "
+                  "with the lead to continue. The completed replies and synthesis "
+                  "remain in the conversation history.")
+        limit = COLLABORATION_VISIBLE_TEXT_MAX_UTF8_BYTES
+        boundary = limit - len(("\n\n" + notice).encode())
+        for byte_count in (boundary, boundary + 1, limit):
+            with self.subTest(synthesis_utf8_bytes=byte_count):
+                message = "한" * (byte_count // 3) + "x" * (byte_count % 3)
+                self.assertEqual(len(message.encode()), byte_count)
+                _, _, decision_result, _, synthesis, _ = await self._budget_consultation(message=message)
+                self.assertEqual(synthesis.payload.message.encode(), message.encode())
+                expected = message + "\n\n" + notice if byte_count == boundary else notice
+                self.assertEqual(decision_result.turn.message, expected)
+                self.assertLessEqual(len(decision_result.turn.message.encode()), limit)
+
+    async def test_only_budget_subtype_is_caught_after_successful_result(self):
+        for error in (BackendProtocolError("different continuation defect"), ValueError("malformed continuation")):
+            with self.subTest(error=type(error).__name__):
+                _, _, _, history, _, _ = await self._budget_consultation(build_failure=error)
+                self.assertIs(project_collaboration_history(history).current_state, CollaborationStepState.RUNNING)
+                self.assertEqual(len([e for e in history if type(e.payload) is CollaborationProposal]), 1)
+
+    async def test_initial_budget_rejection_remains_failure(self):
+        for spent in (11, 12):
+            with self.subTest(already_spent=spent):
+                with self.assertRaises(BackendProtocolError) as raised:
+                    self.runtime._proposal_call_reservations(
+                        inputs=(), assignment_input_ids=(("user_input",),),
+                        physical_calls_spent=spent,
+                    )
+                self.assertIs(type(raised.exception), orchestrator_module._LeadCallBudgetExceeded)
+        limits, synthesis, minimum = self.runtime._proposal_call_reservations(
+            inputs=(), assignment_input_ids=(("user_input",),), physical_calls_spent=10)
+        self.assertEqual((limits, synthesis, minimum), ((1,), 1, 2))
+        self.assertEqual(self.backend.calls, [])
 
 
 if __name__ == "__main__":

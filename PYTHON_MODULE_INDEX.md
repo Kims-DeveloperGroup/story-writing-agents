@@ -6276,9 +6276,19 @@ every intermediate arrow. The current runtime graph is acyclic.
   application, while Reject and Revise perform no artifact write. Candidate or
   snapshot drift invalidates prior review;
   confirmation and restart never replay an uncertain provider call. This
-  workflow creates no consensus action or Git authority. An optional typed
-  continuation intent creates only a same-step
-  second-round proposal requiring fresh confirmation. Restart normalization
+  workflow creates no consensus action or Git authority. An affordable optional
+  typed continuation intent creates only a same-step second-round proposal
+  requiring fresh confirmation. When a completed successful ordinary
+  consultation's requested continuation alone exceeds its remaining call
+  budget, known-result finalization catches only the private call-budget
+  reservation exception and uses the existing deterministic notice, terminal
+  COMPLETED state, and batch identities without another provider call. Original
+  replies, synthesis, and its continuation intent remain in durable history.
+  The visible message appends a concise budget notice when the combined UTF-8
+  text fits the existing visible-text limit; otherwise it returns that bounded
+  notice with guidance to the retained full synthesis. Other protocol and
+  authority errors still propagate; physical-call and round limits remain
+  unchanged. Restart normalization
   locally finalizes a result-backed RUNNING step without a provider call and
   converts unresolved or submission-uncertain work to outcome unknown without
   replay. Durable unmatched `SUBMITTED` Lead calls return the same typed

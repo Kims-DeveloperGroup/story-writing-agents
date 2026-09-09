@@ -104,3 +104,9 @@ class LiveConversationTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(root, "STORY_LIVE_EVIDENCE_DIR is required")
         result = await run_case("F05-DIAGNOSTICS-RECOVERY", Path(root))
         self.assertTrue(result["passed"], result)
+
+    async def test_f06_budget_finalization(self):
+        root = os.environ.get("STORY_LIVE_EVIDENCE_DIR")
+        self.assertTrue(root, "STORY_LIVE_EVIDENCE_DIR is required")
+        result = await run_case("F06-BUDGET-FINALIZATION", Path(root))
+        self.assertTrue(result["passed"], result)
