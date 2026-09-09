@@ -639,11 +639,12 @@ new candidate in either case.
 ### A focused second round
 
 After all round-one assignments and synthesis succeed, the synthesis may
-propose one same-lineage continuation. Runtime creates proposal revision 2 on
-the same step, adds the round-one reply-event inputs, carries actual submitted
-call spend, and returns `awaiting_confirmation`. Nothing in round two starts
-until the user confirms the new request. Round-two synthesis cannot request a
-third round.
+request one same-lineage continuation. When it fits the remaining call budget,
+runtime creates proposal revision 2 on the same step, adds the round-one
+reply-event inputs, carries actual submitted call spend, and returns
+`awaiting_confirmation`. Nothing in round two starts until the user submits a
+fresh structured Confirm for the new request. Round-two synthesis cannot
+request a third round.
 
 ```text
 Round 1: concern remains -> completed result + revision 2 proposal
@@ -651,6 +652,20 @@ User: Confirm revision 2
 Round 2: focused specialist reassessment -> final completed result
 Maximum: 2 specialist rounds and 12 submitted physical calls
 ```
+
+If the requested second round cannot fit the remaining lineage budget, the
+successful consultation ends as `completed` with next action
+`continue_with_lead`. Finalization makes no extra provider call and creates no
+new proposal or confirmation authority. Durable history retains the full
+specialist replies, synthesis, evidence, and requested continuation.
+
+The visible result appends a budget notice to the synthesis. If the combined
+message would exceed the existing UTF-8 byte limit, it shows only the bounded
+notice, which points to the completed replies and full synthesis in history.
+Reopening preserves this terminal result without duplicate finalization or
+replaying the consultation. A new user request starts a normal fresh Lead
+turn. The two-round and 12-call limits are unchanged; an affordable second
+round still requires its own structured Confirm.
 
 ### Direct specialist advisory
 

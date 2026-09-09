@@ -10,9 +10,9 @@
 > Focused deterministic tests cover the adapter contract. Earlier live acceptance with
 > CLI 1.1.27 verified fresh and resumed Lead turns for Pro, Flash, and Sonnet;
 > availability and results remain dependent on the environment and provider.
-> The new [16-case conversation matrix](#opt-in-live-conversation-matrix) is
-> still incomplete: fifteen complete cases pass; the F02 restart and
-> reconfirmation case remains failed.
+> The [17-case conversation matrix](#opt-in-live-conversation-matrix) includes
+> actual provider turns and explicitly labeled fault injections; see the dated
+> evidence snapshot below.
 
 Key terms: **backend name**—the configuration value `antigravity`;
 **executable**—the resolved Antigravity command, `agy` by default; **provider
@@ -615,7 +615,7 @@ component tests does not perform a live provider call.
 ## Opt-in live conversation matrix
 
 The repository-owned [case inventory](../../tests/fixtures/antigravity_live_cases.json)
-and [runner](../../tests/antigravity_live_harness.py) declare 16 complete cases.
+and [runner](../../tests/antigravity_live_harness.py) declare 17 complete cases.
 The current routes are:
 
 | Cases | Actual route and required scenario |
@@ -629,10 +629,11 @@ The current routes are:
 | L07-SEARCH-READ, L08-DECISIONS | Flash: observed SEARCH→READ→ANSWER; exact Reject/Revise, stale/forged decisions, and ordinary `Yes`. |
 | L09-SECOND-ROUND | Pro High: two actual rounds with separate confirmation. |
 | F01-REFERENCE-DRIFT | Flash: named reference drift before confirmation. |
-| F02-LOST-AUTHORITY | Flash: crash after confirmation and local reconfirmation after restart; full case remains failed. |
+| F02-LOST-AUTHORITY | Flash: crash after confirmation, restart with original proposal evidence, and fresh structured confirmation through specialist reply and synthesis. |
 | F03-CANCELLATION | Flash: named cancellation, completed sibling preservation, and inspection without replay. |
 | F04-FAILURE-RECOVERY | Flash: injected exit failure, then a new request, proposal, and Confirm for the same failed character specialist on a fresh thread, through terminal synthesis. |
 | F05-DIAGNOSTICS-RECOVERY | Pro High: one unchanged completion plus five labeled mutations after real completion, including gated recovery. |
+| F06-BUDGET-FINALIZATION | Flash: three-specialist consultation, named `next_intent`-only injection after native synthesis, completed budget finalization, reopen without replay, and a fresh Lead answer. |
 
 Run from the repository root in an installed development environment with
 already authenticated providers and access to the configured models. The runner
@@ -666,9 +667,9 @@ cases as unexecuted, and exits nonzero. A complete matrix also requires all five
 Lead outcomes and all four specialist assessment categories; one native result
 or one successful case is insufficient.
 
-The declared ceiling is 312 reserved physical calls and 45,000 seconds from
+The declared ceiling is 312 reserved physical calls and 79,200 seconds from
 the original budget epoch, with a 180-second native timeout and per-case limits
-in the inventory. The reusable fresh inventory totals at most 210 calls. F04's
+in the inventory. The reusable fresh inventory totals at most 228 calls. F04's
 24-call allowance covers two separately confirmed lineages of at most 12 calls
 each. Scenarios run sequentially; specialist concurrency comes only from runtime
 dispatch. Reservations precede process creation, so failed attempts remain
@@ -680,8 +681,9 @@ directories does not authorize a new budget. There is no automatic retry.
 
 The harness pins the original fixture-artifact baseline before a crash and
 checks that same baseline after reopening; it never treats reopened bytes as
-a new baseline. This protection is present in F02 even though its complete
-restart scenario remains failed. F04 checks actual recovery of the failed
+a new baseline. F02 preserves the original proposal and required evidence,
+rejects the consumed confirmation, and completes work only after a fresh
+structured Confirm. F04 checks actual recovery of the failed
 `character_custodian`: a fresh user request and proposal require a new Confirm,
 then the same specialist runs on a fresh native thread and the Lead synthesizes
 the result. The successful sibling and failed history remain intact.
@@ -704,20 +706,22 @@ sharing. See [exchange privacy](../operations/privacy-and-provider.md#agent-exch
 Fixture provisioning may execute the actual internal `StoryCommitService`.
 That setup does not cover the interactive artifact review, Apply, or Commit
 flow. One-round scenarios explicitly request a terminal synthesis; focused
-two-round coverage belongs to L09. Provider-neutral finalization when a proposed
-continuation exceeds the remaining budget remains separately tracked in
-Recommended Backlog [#624](https://github.com/Kims-DeveloperGroup/story-writing-agents/issues/624);
-this matrix does not establish arbitrary conversation
-paths or resolve that issue.
+two-round coverage belongs to L09. F06 covers the provider-neutral completed
+finalization added for
+[#624](https://github.com/Kims-DeveloperGroup/story-writing-agents/issues/624)
+when a requested continuation exceeds the remaining budget; see
+[A focused second round](lead-agent.md#a-focused-second-round).
+The matrix does not establish arbitrary conversation paths.
 
-**Draft evidence snapshot (2026-09-08):** 110 unique deterministic tests pass,
-and 15 of the 16 complete cases pass on actual provider evidence. The accepted
-cases include Pro High/Low, Flash, Sonnet, mixed Codex/Antigravity, and the actual
-PTY workflow.
+**Evidence snapshot (2026-09-09):** 122 current deterministic tests pass,
+and all 17 declared complete cases pass across accepted actual-provider runs:
+the original 16 cases plus F06. The accepted cases include Pro High/Low, Flash,
+Sonnet, mixed Codex/Antigravity, and the actual PTY workflow.
 All five Lead outcomes and all four specialist assessment categories were
 observed. F03 passed cancellation, sibling preservation, and inspection without
 replay; F04 passed the separately confirmed failed-specialist recovery above.
-The global ledger retains 204 charged reservations against the 312 ceiling.
+The global ledger retains 228 charged reservations against the 312 ceiling,
+including failed attempts.
 
 F05 used six actual completions: the unchanged completion and a named injected
 known `ERROR` were accepted; the four named invalid-UTF-8, invalid-JSON,
@@ -727,20 +731,33 @@ original evidence files. That accepted revalidation is separate from the
 historical failed audit. It does not establish naturally occurring native
 `ERROR` recovery.
 
-The first current Flash three-specialist attempt produced ten native `SUCCESS`
-responses but failed on the unaffordable continuation tracked in #624. One
-explicitly authorized repeat with identical input passed in eleven calls. Both
-attempts remain recorded; the bounded repeat does not fix #624 or establish
-reliable completion for arbitrary continuation paths. Earlier native 503/400
-failures and incomplete attempts also remain in private history.
+F06 passed in eleven actual Flash calls, all native `SUCCESS`, with all 33
+request/response/outcome rows audited. After the genuine native synthesis,
+the named `budget_next_intent` fault changed only the delivered `next_intent`;
+the original native result and every other delivered field were preserved.
+The case completed budget finalization with retained synthesis and evidence,
+rejected consumed authority, reopened without replay, and received a fresh
+actual Lead answer. This verifies the provider-backed flow under the named
+injection; it does not show that the model naturally requested that
+continuation. One earlier ten-call F06 attempt failed a harness count
+assertion after production had completed the consultation. That failed attempt
+remains preserved; the eleven-call pass followed a harness correction and a
+separately authorized retry.
 
-F02-LOST-AUTHORITY remains failed because the shared reconfirmation path is
-missing required proposal evidence, tracked in
-[#627](https://github.com/Kims-DeveloperGroup/story-writing-agents/issues/627).
-The proposed shared fix awaits scope confirmation; that code has not changed.
-The matrix has not passed all 16 cases, and
-[PR #625](https://github.com/Kims-DeveloperGroup/story-writing-agents/pull/625)
-remains a draft.
+The earlier Flash three-specialist attempt produced ten native `SUCCESS`
+responses but failed on the unaffordable continuation tracked in #624. One
+explicitly authorized repeat with identical input passed in eleven calls.
+Both historical attempts remain recorded; that repeat alone did not verify the
+#624 fix. F06 supplies the bounded finalization evidence above. The optional
+recovery check using a copy of the naturally failed session was not run.
+Earlier native 503/400 failures and incomplete attempts also remain in private
+history.
+
+F02 now passes after
+[#627](https://github.com/Kims-DeveloperGroup/story-writing-agents/issues/627)
+restored required proposal evidence on reconfirmation. Its earlier failure
+remains recorded. The current [Lead recovery contract](lead-agent.md#internal-durability-and-recovery)
+preserves the original evidence and requires fresh confirmation authority.
 
 ### Provider-free local checks
 

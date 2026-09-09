@@ -216,6 +216,76 @@ def prove_lead_corrections(entries, history):
     return proofs
 
 
+
+BUDGET_REVIEWERS = ('plot_architect', 'character_custodian', 'execution_specialist')
+
+
+def budget_synthesis_material(payload):
+    """Recognize only the runtime's current substantive synthesis request."""
+    material = payload.get('i') if type(payload) is dict else None
+    return (material if type(material) is dict
+            and material.get('workflow') == 'lead_synthesis' else None)
+
+
+def inject_budget_next_intent(stdout, payload, *, agent, returncode, physical_calls_spent):
+    """Named F06 fault: retain every completed native field except next_intent."""
+    require(agent == 'lead_orchestrator' and returncode == 0,
+            'Budget injection requires successful Lead transport')
+    material = budget_synthesis_material(payload)
+    require(material is not None and 'artifact_candidate' not in material,
+            'Budget injection requires ordinary Lead synthesis')
+    require(type(physical_calls_spent) is int and 0 <= physical_calls_spent <= 12,
+            'Budget injection requires an actual bounded lineage count')
+    native = json.loads(stdout)
+    require(native.get('status') == 'SUCCESS', 'Budget injection requires native SUCCESS')
+    answer = native['structured_output']
+    require(set(answer) == {'correlation', 'action'} and answer['correlation'] == payload['c'],
+            'Budget synthesis correlation differs')
+    action = answer['action']
+    require(set(action) == {'kind', 'result', 'used_handles'} and action['kind'] == 'answer'
+            and type(action['used_handles']) is list, 'Budget synthesis is not an ANSWER')
+    result = action['result']
+    require(set(result) == {'evidence_ids', 'evidence_status', 'scope', 'message',
+                           'reply_event_ids', 'unresolved_input_ids', 'next_intent'},
+            'Budget synthesis fields differ')
+    contract = material['answer_contract']
+    for name in ('evidence_ids', 'evidence_status', 'scope', 'reply_event_ids'):
+        require(result[name] == contract[name], 'Budget synthesis contract differs: ' + name)
+    inputs = material['inputs']
+    input_ids = [item['input_id'] for item in inputs]
+    reply_ids = contract['reply_event_ids']
+    require(len(reply_ids) == 3 and len(set(reply_ids)) == 3,
+            'Budget synthesis requires three actual replies')
+    require(type(result['message']) is str and bool(result['message'].strip()),
+            'Budget synthesis message absent')
+    required = contract['unresolved_input_ids']
+    unresolved = result['unresolved_input_ids']
+    order = [*required, *(item for item in input_ids if item not in required)]
+    require(type(unresolved) is list and set(required) <= set(unresolved)
+            and unresolved == [item for item in order if item in unresolved],
+            'Budget synthesis erased or reordered unresolved inputs')
+    references = [item for item in inputs if item['kind'] in
+                  {'core_document', 'manuscript', 'writing_artifact'}]
+    require(references, 'Budget synthesis has no genuine reference prelude basis')
+    minimum = 2 * len(BUDGET_REVIEWERS) + 2
+    require(minimum > 12 - physical_calls_spent,
+            'Requested next intent would fit the actual remaining budget')
+    intent = {'relation': 'continue_lineage', 'purpose': 'Reconsider every unresolved finding.',
+              'assignments': [
+                  {'agent_id': reviewer, 'instruction': 'Review the original inputs and all replies again.',
+                   'input_ids': [*input_ids, *reply_ids]}
+                  for reviewer in BUDGET_REVIEWERS]}
+    before = result['next_intent']
+    result['next_intent'] = intent
+    delivered = stdout if before == intent else canonical_provider_json(native)
+    proof = {'fault': 'budget_next_intent', 'path': 'structured_output.action.result.next_intent',
+             'physical_calls_spent': physical_calls_spent, 'minimum_required_calls': minimum,
+             'remaining_calls': 12 - physical_calls_spent,
+             'changed': before != intent, 'original_stdout_sha256': digest(stdout),
+             'delivered_stdout_sha256': digest(delivered)}
+    return delivered, proof
+
+
 def audit_exchanges(exchanges, calls, history=()):
     """Correlate actual transport, durable capture and exact diagnostic bytes."""
     import base64
@@ -306,6 +376,17 @@ def audit_exchanges(exchanges, calls, history=()):
                 require(native == (directory / 'stdout.raw').read_bytes()
                         and stderr == (directory / 'stderr.raw').read_bytes(),
                         'Unmodified native stream bytes differ')
+            if call['fault'] == 'budget_next_intent':
+                require(call['vendor'] == 'antigravity', 'Budget fault changed provider route')
+                proof = json.loads((directory / 'injected-delta.sanitized.json').read_text())
+                expected, actual_proof = inject_budget_next_intent(
+                    (directory / 'stdout.raw').read_bytes(), payload,
+                    agent=call['agent'], returncode=call['returncode'],
+                    physical_calls_spent=proof['physical_calls_spent'])
+                require(native == expected and proof == actual_proof
+                        and stderr == (directory / 'stderr.raw').read_bytes()
+                        and call['delivered_returncode'] == call['returncode'],
+                        'Budget fault changed fields outside the one declared next_intent')
             terminal = json.loads(native) if call['vendor'] == 'antigravity' and call['fault'] not in {'utf8', 'json'} else None
             if terminal is not None:
                 require(terminal.get('conversation_id') == call.get('thread_id'),
@@ -512,6 +593,7 @@ class CallEvidence:
         self.fault: str | None = None
         self.fault_agent: str | None = None
         self.fault_consumed = False
+        self.budget_history = None
         self.specialist_done = asyncio.Event()
         self.held_submission = asyncio.Event()
         self.release_held = asyncio.Event()
@@ -579,6 +661,8 @@ class CallEvidence:
             save(directory / 'staged.sanitized.json', {'sha256': digest(body), 'bytes': len(body)})
         native_create = kwargs.get('create_process', asyncio.create_subprocess_exec)
         selected_fault = self.fault if not self.fault_consumed and (self.fault_agent is None or self.fault_agent == agent) else None
+        if selected_fault == 'budget_next_intent' and budget_synthesis_material(json.loads(payload)) is None:
+            selected_fault = None
         if selected_fault is not None:
             self.fault_consumed = True
             record['fault'] = selected_fault
@@ -625,6 +709,15 @@ class CallEvidence:
             if output.exists():
                 (directory / 'codex-response.raw').write_bytes(output.read_bytes())
         delivered = actual
+        if selected_fault == 'budget_next_intent':
+            require(vendor == 'antigravity' and callable(self.budget_history),
+                    'Budget fault has no actual runtime history owner')
+            spent = project_collaboration_history(self.budget_history()).physical_calls_spent
+            stdout, proof = inject_budget_next_intent(
+                actual.stdout, json.loads(payload), agent=agent,
+                returncode=actual.returncode, physical_calls_spent=spent)
+            delivered = dataclasses.replace(actual, stdout=stdout)
+            save(directory / 'injected-delta.sanitized.json', proof)
         if selected_fault in {'nonzero', 'utf8', 'json', 'unrelated_error', 'schema', 'known_error'}:
             require(actual.returncode == 0, 'Actual call failed before the designated fault injection')
             if selected_fault == 'nonzero':
@@ -1153,6 +1246,73 @@ class ConversationCase:
                 outcomes.append({'fault': fault, 'accepted': True})
         save(self.directory / 'diagnostic-outcomes.sanitized.json', outcomes)
 
+    async def budget_finalization(self):
+        """Actual three-specialist round plus a named unaffordable intent delivery."""
+        from story_writing_agents.conversations import CollaborationNextAction, CollaborationProposal
+
+        proposed = await self.propose(BUDGET_REVIEWERS)
+        self.observer.fault = 'budget_next_intent'
+        self.observer.fault_agent = 'lead_orchestrator'
+        self.observer.budget_history = self.history
+        completed = await self.confirm(proposed)
+        require(self.observer.fault_consumed, 'Required completed synthesis fault was not reached')
+        require(completed.state is CollaborationStepState.COMPLETED
+                and completed.next_action is CollaborationNextAction.CONTINUE_WITH_LEAD
+                and completed.proposal is None and completed.confirmation_request_id is None,
+                'Budget completion retained or invented continuation authority')
+        history = self.history()
+        replies = [event for event in history if isinstance(event.payload, CollaborationSpecialistReplyPayload)]
+        syntheses = [event.payload for event in history if isinstance(event.payload, CollaborationLeadSynthesisPayload)]
+        results = [event.payload for event in history if isinstance(event.payload, CollaborationExecutionResult)]
+        proposals = [event.payload for event in history if isinstance(event.payload, CollaborationProposal)]
+        require(len(replies) == 3 and tuple(event.sender.agent_id for event in replies) == BUDGET_REVIEWERS,
+                'Budget case did not preserve all three actual specialist replies')
+        require(len(syntheses) == len(results) == len(proposals) == 1
+                and results[0].overall_outcome.value == 'succeeded',
+                'Budget case has missing completion or an additional proposal')
+        synthesis = syntheses[0]
+        require(synthesis.reply_event_ids == tuple(event.event_id for event in replies),
+                'Budget synthesis lost exact reply attribution')
+        for reply in replies:
+            if reply.payload.assessment.value != 'supports':
+                require(set(reply.payload.input_ids) <= set(synthesis.unresolved_input_ids),
+                        'Budget synthesis erased non-supporting inputs')
+        injected = [call for call in self.observer.calls if call['fault'] == 'budget_next_intent']
+        require(len(injected) == 1, 'Budget case changed more than one actual completion')
+        call = injected[0]
+        proof = json.loads((Path(call['directory']) / 'injected-delta.sanitized.json').read_text())
+        require(proof['physical_calls_spent'] + 1 == project_collaboration_history(history).physical_calls_spent
+                == len(self.observer.calls), 'Budget injection used a different durable lineage count')
+        delivered = json.loads((Path(call['directory']) / 'delivered.stdout').read_bytes())['structured_output']['action']['result']
+        require(synthesis.message == delivered['message']
+                and list(synthesis.unresolved_input_ids) == delivered['unresolved_input_ids']
+                and json.loads(json.dumps(dataclasses.asdict(synthesis.next_intent))) == delivered['next_intent']
+                and synthesis.evidence == proposed.proposal.basis.evidence,
+                'Durable budget synthesis differs from the exact delivered result')
+        require('exceeds its remaining call budget' in completed.message,
+                'Visible budget completion notice absent')
+        require(project_collaboration_history(history).current_state is CollaborationStepState.COMPLETED
+                and project_collaboration_history(history).physical_calls_spent <= 12,
+                'Budget lineage did not terminate within the runtime bound')
+        await self.rejects_decision(decision(proposed))
+        before = len(self.observer.calls)
+        self.backend.close()
+        self.open_backend()
+        require(self.history() == history and len(self.observer.calls) == before,
+                'Reopening replayed or changed completed budget work')
+        answer = await self.lead('Summarize the completed consultation in a direct answer. Do not request another specialist consultation.')
+        require(answer.kind is LeadOutcomeKind.ANSWER and answer.proposal is None,
+                'Fresh post-budget Lead answer was not observed')
+        require(self.history()[:len(history)] == history,
+                'Fresh input rewrote the completed budget history')
+        require(0 < len(self.observer.calls) - before <= 6,
+                'Fresh post-budget context exceeded its declared bound')
+        save(self.directory / 'budget-finalization.sanitized.json', {
+            'classification': 'live_fault_injection', 'lineage_calls': before,
+            'followup_calls': len(self.observer.calls) - before,
+            'terminal_history_sha256': semantic_digest(canonical_history(history)),
+            'next_intent_retained': True, 'fresh_authority_created': False})
+
     async def dispatch(self):
         id = self.spec['id']
         if id in AGENTS_BY_CASE:
@@ -1205,6 +1365,8 @@ class ConversationCase:
             await self.interrupted_or_failed(cancel=False)
         elif id == 'F05-DIAGNOSTICS-RECOVERY':
             await self.diagnostic_cases()
+        elif id == 'F06-BUDGET-FINALIZATION':
+            await self.budget_finalization()
         else:
             raise AssertionError('Unknown authorized live case')
 

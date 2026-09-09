@@ -126,6 +126,7 @@ from .conversations import (
     COLLABORATION_EVENT_SCHEMA_VERSION,
     COLLABORATION_PHYSICAL_CALL_LIMIT,
     COLLABORATION_ROUND_LIMIT,
+    COLLABORATION_VISIBLE_TEXT_MAX_UTF8_BYTES,
     CollaborationActor,
     CollaborationActorKind,
     CollaborationAgentProfile,
@@ -689,6 +690,10 @@ class _DuplicateJsonKey(ValueError):
 
 class _LeadOutcomeValidationError(BackendProtocolError):
     """Reject one submitted lead result without treating prose as evidence."""
+
+
+class _LeadCallBudgetExceeded(BackendProtocolError):
+    """Reject a proposal whose minimum calls exceed its lineage budget."""
 
 
 class _SupersededBindingSelection(Exception):
@@ -4349,18 +4354,24 @@ class StoryRuntime:
                 candidate=artifact_candidate,
                 turn_id=turn_id,
             )
+        next_proposal: CollaborationProposal | None = None
+        continuation_exceeds_budget = False
         if (
             result.overall_outcome is CollaborationExecutionOutcomeKind.SUCCEEDED
             and next_intent is not None
         ):
-            next_proposal = self._build_continuation_proposal(
-                session_id=projection.session_id or events[-1].session_id,
-                proposal=proposal,
-                result=result,
-                next_intent=next_intent,
-                events=events,
-                projection=projection,
-            )
+            try:
+                next_proposal = self._build_continuation_proposal(
+                    session_id=projection.session_id or events[-1].session_id,
+                    proposal=proposal,
+                    result=result,
+                    next_intent=next_intent,
+                    events=events,
+                    projection=projection,
+                )
+            except _LeadCallBudgetExceeded:
+                continuation_exceeds_budget = True
+        if next_proposal is not None:
             assert synthesis_event is not None
             request_id = self._deterministic_id(
                 "c", next_proposal.proposal_id, next_proposal.proposal_digest
@@ -4471,6 +4482,20 @@ class StoryRuntime:
             message = (
                 "The specialist consultation was interrupted after preserving every "
                 "known result. Continue with the lead when ready."
+            )
+        if continuation_exceeds_budget:
+            budget_notice = (
+                "The consultation is complete. The requested second specialist "
+                "round exceeds its remaining call budget. Start a new request "
+                "with the lead to continue. The completed replies and synthesis "
+                "remain in the conversation history."
+            )
+            combined_message = f"{message}\n\n{budget_notice}"
+            message = (
+                combined_message
+                if len(combined_message.encode("utf-8"))
+                <= COLLABORATION_VISIBLE_TEXT_MAX_UTF8_BYTES
+                else budget_notice
             )
         final_drafts: list[CollaborationEventDraft] = [
             self._draft_with_id(
@@ -7572,7 +7597,7 @@ class StoryRuntime:
         )
         minimum_required_calls = sum(assignment_call_limits) + synthesis_minimum
         if minimum_required_calls > remaining:
-            raise BackendProtocolError(
+            raise _LeadCallBudgetExceeded(
                 "lead proposal cannot fit the remaining physical-call budget"
             )
         allocated_limits = list(assignment_call_limits)

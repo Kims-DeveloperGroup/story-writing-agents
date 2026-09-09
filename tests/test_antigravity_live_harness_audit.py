@@ -295,7 +295,7 @@ class LiveHarnessAuditTests(unittest.TestCase):
 
     def test_fresh_cumulative_global_and_stage_bounds(self):
         inventory = harness.load_inventory()
-        self.assertEqual(sum(s["max_calls"] for s in inventory["cases"]), 210)
+        self.assertEqual(sum(s["max_calls"] for s in inventory["cases"]), 228)
         self.assertEqual(harness.selected_spec("F04-FAILURE-RECOVERY")["max_calls"], 24)
         self.assertEqual(inventory["budget"]["matrix_max_calls"], 312)
         self.assertEqual(harness.stage_seconds(7), 1440)
@@ -565,3 +565,80 @@ class LiveTerminalCleanupTests(unittest.IsolatedAsyncioTestCase):
             terminal.close = mock.AsyncMock()
             await harness.close_terminal(terminal)
             terminal.close.assert_awaited_once()
+
+
+class LiveBudgetContinuationTests(unittest.TestCase):
+    def test_budget_next_intent_injection_preserves_exact_completed_native_fields(self):
+        contract = {
+            "evidence_ids": ["evidence-reference"], "evidence_status": "verified",
+            "scope": "story_specific", "reply_event_ids": ["reply-plot", "reply-character", "reply-execution"],
+            "unresolved_input_ids": ["user_input", "reference_1"],
+        }
+        payload = {"c": "synthetic-synthesis-correlation", "i": {
+            "workflow": "lead_synthesis", "answer_contract": contract,
+            "inputs": [{"input_id": "user_input", "kind": "user_input"},
+                       {"input_id": "reference_1", "kind": "core_document"}],
+        }}
+        native = {
+            "status": "SUCCESS", "conversation_id": "synthetic-thread", "json_schema": {"type": "object"},
+            "structured_output": {"correlation": payload["c"], "action": {
+                "kind": "answer", "used_handles": [], "result": {
+                    **copy.deepcopy(contract), "message": "A complete visible synthesis.", "next_intent": None,
+                },
+            }}, "usage": {"input_tokens": 13, "output_tokens": 7},
+        }
+        original = copy.deepcopy(native)
+        original_payload = copy.deepcopy(payload)
+        stdout = json.dumps(native, indent=2).encode()
+        def mutate(value=stdout, request=payload, **changes):
+            kwargs = {"agent": "lead_orchestrator", "returncode": 0, "physical_calls_spent": 10}
+            kwargs.update(changes)
+            return harness.inject_budget_next_intent(value, request, **kwargs)
+
+        delivered, proof = mutate()
+        actual = json.loads(delivered)
+        intent = actual["structured_output"]["action"]["result"]["next_intent"]
+        self.assertEqual([a["agent_id"] for a in intent["assignments"]], list(harness.BUDGET_REVIEWERS))
+        for assignment in intent["assignments"]:
+            self.assertEqual(assignment["input_ids"], ["user_input", "reference_1", *contract["reply_event_ids"]])
+        actual["structured_output"]["action"]["result"]["next_intent"] = None
+        self.assertEqual(actual, original)
+        self.assertEqual(native, original)
+        self.assertEqual(payload, original_payload)
+        self.assertEqual(proof["minimum_required_calls"], 8)
+        self.assertEqual(proof["remaining_calls"], 2)
+        self.assertEqual(proof["path"], "structured_output.action.result.next_intent")
+        self.assertTrue(proof["changed"])
+        self.assertEqual(proof["original_stdout_sha256"], harness.digest(stdout))
+        self.assertEqual(proof["delivered_stdout_sha256"], harness.digest(delivered))
+        unchanged, observed = mutate(delivered)
+        self.assertEqual(unchanged, delivered)
+        self.assertFalse(observed["changed"])
+
+        for changes in ({"agent": "plot_architect"}, {"returncode": 1},
+                        {"physical_calls_spent": 4}, {"physical_calls_spent": 13},
+                        {"physical_calls_spent": True}):
+            with self.subTest(transport=changes), self.assertRaises(AssertionError):
+                mutate(**changes)
+        for workflow in ("lead_front_channel", "writing_artifact_reference_read"):
+            wrong = copy.deepcopy(payload)
+            wrong["i"]["workflow"] = workflow
+            with self.subTest(workflow=workflow), self.assertRaises(AssertionError):
+                mutate(request=wrong)
+        for mutation in ("status", "correlation", "kind", "missing", "evidence", "unresolved"):
+            wrong = copy.deepcopy(native)
+            action = wrong["structured_output"]["action"]
+            if mutation == "status":
+                wrong["status"] = "ERROR"
+            elif mutation == "correlation":
+                wrong["structured_output"]["correlation"] = "another-correlation"
+            elif mutation == "kind":
+                action["kind"] = "search"
+            elif mutation == "missing":
+                del action["result"]["message"]
+            elif mutation == "evidence":
+                action["result"]["evidence_ids"] = []
+            else:
+                action["result"]["unresolved_input_ids"] = []
+            with self.subTest(native=mutation), self.assertRaises(AssertionError):
+                mutate(json.dumps(wrong).encode())
