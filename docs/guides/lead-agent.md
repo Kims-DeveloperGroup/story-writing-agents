@@ -43,6 +43,22 @@ history remains eligible for provider disclosure. This memory grants no
 current receipt, confirmation, replay, write, or Git authority; exact capacity
 and recovery limits are in [Lead session memory](agent-context.md#lead-session-memory).
 
+The lead also interprets abbreviated approval after a visible draft from this
+context. Runtime retains a scoped authoring objective in its originating
+conversation. With enough information and current artifact evidence, the lead
+prepares an exact candidate; missing detail requires a question, and a need
+for advice can lead to an ordinary consultation. Other conversations can see
+the objective through session memory, but only its owner conversation can
+continue or cancel it.
+
+An objective remains `OPEN` through side discussion, consultation, review,
+rejection, staleness, and failure. Only a matching validated `APPLIED` or
+`UNCHANGED` result for its exact bound candidate makes it `SATISFIED`. Prose
+completion, null intent, and review do not close it; explicit cancellation
+makes it `CANCELLED`. Commit remains independent. See the
+[illustrative draft-to-artifact exchange](lead-agent-collaboration.md#follow-a-draft-through-to-an-artifact)
+and [exact objective contract](../reference/runtime-api.md#contextual-authoring-objectives).
+
 ## Lead responsibilities and limits
 
 The lead is expected to:
@@ -280,9 +296,10 @@ revision = LeadStepDecision(
 replacement = (await runtime.decide_lead_step(revision)).turn
 ```
 
-Free text is never confirmation. Calling `lead_turn(..., "Yes")` while a
-proposal is pending atomically supersedes that proposal before asking the lead
-for a new outcome.
+Free text is never structured confirmation. Calling `lead_turn(..., "Yes")`
+while a consultation proposal is pending atomically supersedes that proposal
+before asking the lead for a contextual outcome. A pending Apply or Commit
+request is instead redisclosed unchanged without a provider call.
 
 ## How specialist routing works
 
@@ -467,6 +484,14 @@ their views are evidence, not votes. One `supports` result cannot outvote one
 material concern. `revision_required` carries no reviewed proposal and grants
 no authority. The user can ask for a new candidate; the old candidate becomes
 `superseded` and cannot be confirmed again.
+
+An existing empty core document uses a replacement, not a create. A selected
+current zero-byte core-status receipt can ground that replacement only after
+runtime recaptures and revalidates it. Empty status proves the absence of
+content; it does not prove that the story direction is complete. Nonempty
+targets require attached-reference or READ evidence. Whole-message draft
+event IDs and digests preserve the drafting context but do not replace these
+artifact receipts or authorize review, Apply, or Commit.
 
 ### 3. Reviewing a manuscript edit against core documents
 
@@ -691,7 +716,7 @@ different specialist.
 
 Applications do not call separate provider search/read/answer endpoints.
 Runtime binds the selected agent and drives one bounded contextual invocation.
-The samples below are sanitized from the orchestration acceptance fixtures;
+The samples below illustrate the current orchestration contract;
 generated correlations, IDs, handles, digests, and compact planning counters
 vary.
 Initial-payload samples below omit the separate required `h` session-context
@@ -715,7 +740,7 @@ three action variants:
       "anyOf": [
         {"type":"object","additionalProperties":false,"properties":{"kind":{"type":"string","enum":["search"]},"path_prefix":{"type":["string","null"]},"queries":{"type":"array","minItems":1,"items":{"type":"object","additionalProperties":false,"properties":{"text":{"type":"string"},"source_kinds":{"type":"array","minItems":1,"items":{"type":"string","enum":["writing_artifact","conversation","active_debate","own_agent_state"]}}},"required":["text","source_kinds"]}}},"required":["kind","path_prefix","queries"]},
         {"type":"object","additionalProperties":false,"properties":{"kind":{"type":"string","enum":["read"]},"handles":{"type":"array","minItems":1,"items":{"type":"string"}}},"required":["kind","handles"]},
-        {"type":"object","additionalProperties":false,"properties":{"kind":{"type":"string","enum":["answer"]},"result":{"type":"object","additionalProperties":false,"properties":{"scope":{"type":"string","enum":["workflow_meta"]},"evidence_status":{"type":"string","enum":["not_applicable"]},"evidence_ids":{"type":"array","maxItems":0,"items":{"type":"string"}},"kind":{"type":"string","enum":["answer","question","critique","recommendation"]},"message":{"type":"string"},"artifact_intent":{"type":"null"},"proposal":{"type":"null"}},"required":["scope","evidence_status","evidence_ids","kind","message","artifact_intent","proposal"]},"used_handles":{"type":"array","items":{"type":"string"}}},"required":["kind","result","used_handles"]}
+        {"type":"object","additionalProperties":false,"properties":{"kind":{"type":"string","enum":["answer"]},"result":{"type":"object","additionalProperties":false,"properties":{"scope":{"type":"string","enum":["workflow_meta"]},"evidence_status":{"type":"string","enum":["not_applicable"]},"evidence_ids":{"type":"array","maxItems":0,"items":{"type":"string"}},"kind":{"type":"string","enum":["answer","question","critique","recommendation"]},"message":{"type":"string"},"artifact_intent":{"type":"null"},"proposal":{"type":"null"},"objective_intent":{"anyOf":[{"type":"null"},{"type":"object","additionalProperties":false,"properties":{"action":{"type":"string","enum":["start"]},"request":{"type":"string"},"target_paths":{"type":"array","items":{"type":"string"},"minItems":1},"next_step":{"type":"string","enum":["clarify","consult","prepare"]},"draft_source_event_ids":{"type":"array","items":{"type":"string"}}},"required":["action","request","target_paths","next_step","draft_source_event_ids"]},{"type":"object","additionalProperties":false,"properties":{"action":{"type":"string","enum":["continue"]},"objective_id":{"type":"string"},"next_step":{"type":"string","enum":["clarify","consult","prepare"]},"draft_source_event_ids":{"type":"array","items":{"type":"string"}}},"required":["action","objective_id","next_step","draft_source_event_ids"]},{"type":"object","additionalProperties":false,"properties":{"action":{"type":"string","enum":["cancel"]},"objective_id":{"type":"string"}},"required":["action","objective_id"]}]}},"required":["scope","evidence_status","evidence_ids","kind","message","artifact_intent","proposal","objective_intent"]},"used_handles":{"type":"array","items":{"type":"string"}}},"required":["kind","result","used_handles"]}
       ]
     }
   },
@@ -723,7 +748,8 @@ three action variants:
 }
 ```
 
-The shown ANSWER branch is the complete workflow-meta result variant; live
+The shown ANSWER branch is the complete eight-field `lead-outcome-v2`
+workflow-meta result variant; live
 schemas also include the exact story-specific and proposal variants allowed by
 that call. SEARCH
 finds locators, READ accepts only issued SEARCH handles, and ANSWER embeds its
@@ -740,7 +766,7 @@ than duplicated) has the same semantics for either provider:
   "schema": "<exact per-call schema shown above>",
   "payload": {
     "c": "<correlation-1>",
-    "q": ["lead", "sa", "wcdo", [4, 2, 2, 4, 8, 8, 16, 200], ["lead", "outcome-v1"]],
+    "q": ["lead", "sa", "wcdo", [4, 2, 2, 4, 8, 8, 16, 200], ["lead", "lead-outcome-v2"]],
     "i": {"workflow": "lead_front_channel", "command": "Does the planned reveal conflict with the current opening?"}
   }
 }
@@ -784,9 +810,10 @@ SEARCH/READ; those bytes do not satisfy the current evidence contract.
 ```json
 {
   "c": "<correlation-1>",
-  "q": ["lead", "sa", "wcdo", [4, 2, 2, 4, 8, 8, 16, 200], ["lead", "outcome-v1"]],
+  "q": ["lead", "sa", "wcdo", [4, 2, 2, 4, 8, 8, 16, 200], ["lead", "lead-outcome-v2"]],
   "i": {
     "workflow": "lead_front_channel",
+    "contract_version": "lead-outcome-v2",
     "command": "Does the planned reveal conflict with the current opening?",
     "identity": {"agent_id": "lead_orchestrator", "session_id": "novel", "conversation_id": "<conversation-id>", "turn_id": "<turn-id>", "step_id": "<step-id>"},
     "input_aliases": [{"input_id": "user_input", "kind": "user_input", "locator": "conversation/<turn-id>/user_input", "revision_digest": "sha256:<digest>", "start_line": null, "end_line": null}],
@@ -798,7 +825,8 @@ SEARCH/READ; those bytes do not satisfy the current evidence contract.
       "kind": ["answer", "question", "critique", "recommendation", "proposal"],
       "message": "nonempty user-visible text",
       "proposal": {"relation": "new_step", "purpose": "visible purpose", "assignments": "required only for ordinary consultation"},
-      "artifact_intent": "null or create/patch/replace/rename/delete operations plus optional review domains"
+      "artifact_intent": "null or create/patch/replace/rename/delete operations plus optional review domains",
+      "objective_intent": "null or strict start/continue/cancel intent"
     }
   },
   "core_statuses": [
@@ -808,8 +836,11 @@ SEARCH/READ; those bytes do not satisfy the current evidence contract.
 }
 ```
 
-The sample abbreviates the remaining two status rows. A provider that needs
-the manuscript can request a bounded lexical SEARCH:
+The sample abbreviates the remaining two status rows and the
+`runtime_contract_overlay` and `artifact_objectives` material. The latter
+contains the owner conversation, current objectives, and exact offered draft
+source IDs/digests. A provider that needs the manuscript can request a bounded
+lexical SEARCH:
 
 ```json
 {"correlation":"<correlation-1>","action":{"kind":"search","path_prefix":null,"queries":[{"text":"planned reveal opening","source_kinds":["writing_artifact"]}]}}
@@ -840,7 +871,8 @@ and cite the evidence ID in its strict semantic result:
       "kind": "critique",
       "message": "The opening reveals the secret before the outline's turning point.",
       "artifact_intent": null,
-      "proposal": null
+      "proposal": null,
+      "objective_intent": null
     },
     "used_handles": ["<handle-1>", "<handle-2>"]
   }
@@ -875,7 +907,8 @@ resolved to `reference_1` by runtime:
       "kind": "proposal",
       "message": "I prepared an exact manuscript patch candidate for review.",
       "artifact_intent": {"operations":[{"kind":"patch","evidence_id":"reference_1","replacement_text":"<proposed replacement>"}],"additional_review_domains":["plot_structure","character_world"]},
-      "proposal": null
+      "proposal": null,
+      "objective_intent": {"action":"start","request":"Prepare the manuscript patch.","target_paths":["manuscript/part-01/opening.md"],"next_step":"prepare","draft_source_event_ids":[]}
     },
     "used_handles": []
   }
@@ -894,6 +927,16 @@ a valid response, it closes as `provider_result_rejected` with no artifact-
 review failure event. A schema-valid intent that cannot satisfy runtime
 artifact semantics instead closes as `artifact_intent_rejected`. Both outcomes
 create no candidate and permit only `retry_lead_turn` as a fresh Lead turn.
+
+Every front-channel result supplies all eight fields, including explicit
+`objective_intent`. It may be null or a strict `start`, `continue`, or `cancel`
+object. CLARIFY requires `kind=question`; CONSULT requires an ordinary
+consultation proposal; PREPARE requires an artifact proposal with
+`proposal=null`. Once PREPARE is selected, bounded same-turn correction cannot
+replace it with advice or a prose completion claim. Later ordinary user input
+remains contextual. Specialist and synthesis schemas below are unchanged.
+Fresh Lead policies use v2, and retained workspace policies receive a runtime
+v2 overlay without file rewrites.
 
 ### Specialist assignment: initial input
 
@@ -1119,6 +1162,14 @@ The history projection may expose `none`, `finalize_result`,
 `repair_authoritative_history` as state-specific next actions. These describe
 what is safe; they do not themselves authorize execution.
 
+Apply and Commit have their own pending controls. Ordinary Lead or advisory
+input rediscloses the same exact request without a provider call or history
+append. A returned `LeadTurnResult.artifact_application_request` pairs with
+`submit_application_decision`; its trailing optional `story_commit_request`
+pairs with `submit_commit_decision`. Known terminal cycles allow fresh
+authoring and new exact requests. Unknown outcomes or recovery states block
+new work, and prior objective satisfaction remains durable.
+
 ## Internal durability and recovery
 
 The confirmation path enforces this order:
@@ -1173,6 +1224,11 @@ output or evidence, cancellation, interruption, and exact legacy unstarted,
 prepared-only, or unmatched submitted requests. Runtime preserves the original
 request and closes the failed attempt with `lead_outcome_failure`; it does not
 record a successful judgment or revive confirmation authority.
+
+This includes a known read-only failure after mandatory references when the
+exact attempt and reference accounting can be closed. The authoring objective
+stays open. Failed closure or uncertain reference cleanup retains the recovery
+gate; the next explicitly requested turn must acquire fresh evidence.
 
 For a response timeout, the returned recommendation is:
 
@@ -1240,16 +1296,18 @@ lineage has fewer calls left. Runtime constructs feasible allocations before
 confirmation, carries actual spend into round two, and makes round three and
 physical call thirteen unreachable.
 
-## Reviewed now versus Apply and Commit later
+<a id="reviewed-now-versus-apply-and-commit-later"></a>
+
+## Review, Apply, and Commit
 
 The implemented workflow constructs an exact complete-state-bound candidate,
-reviews it, and can persist an immutable `ArtifactReviewedProposal`. It never
-applies that candidate and never stages or commits Git. The immutable value
+reviews it, and persists an immutable `ArtifactReviewedProposal` before
+separate Apply and Commit decisions. The immutable reviewed value
 contains exact candidate/reviewer/evidence/synthesis identity plus rationale,
 user impact, limitations, and unresolved inputs; it hard-codes all side-effect
 and authority flags to false.
 
-The planned story-change workflow has two additional, independently confirmed
+The current story-change workflow then has two independently confirmed
 operations:
 
 ```text
@@ -1266,12 +1324,12 @@ The lead is the semantic trigger and user-facing coordinator at every step;
 runtime code is the only executor. Consultation confirmation never doubles as
 Apply or Commit confirmation.
 
-The staged responsibilities are recorded separately:
-
-- [#489 grounds lead judgments in canonical artifact evidence](https://github.com/Kims-DeveloperGroup/story-writing-agents/issues/489);
-- [#490 constructs exact lead-reviewed artifact change proposals](https://github.com/Kims-DeveloperGroup/story-writing-agents/issues/490) (this implemented stage);
-- [#491 applies a lead-triggered artifact change after exact confirmation](https://github.com/Kims-DeveloperGroup/story-writing-agents/issues/491); and
-- [#492 triggers a separately confirmed commit after lead-directed edits](https://github.com/Kims-DeveloperGroup/story-writing-agents/issues/492).
+Only a matching successful Apply satisfies the authoring objective. Before
+that result, rejection, revision, staleness, or failure leaves it open. A
+terminal Commit result preserves prior objective satisfaction and cannot
+authorize the next cycle. Pending Apply and Commit requests are redisclosed
+exactly, and each new cycle requires fresh decisions. No local Commit request
+authorizes remote push or merge.
 
 See the [runtime API](../reference/runtime-api.md),
 [collaboration-history reference](../reference/collaboration-history.md),

@@ -59,6 +59,49 @@ The runtime never treats a conversational “yes” as confirmation. A
 confirmation is a structured decision bound to the exact request, revision,
 and digest shown to you.
 
+### Follow a draft through to an artifact
+
+The lead interprets ordinary follow-ups in context; there are no required
+command words. For example, this is an illustrative exchange, not a recorded
+provider run:
+
+```text
+You: Draft the global outline for the direction we agreed on.
+Lead: <visible outline draft and a focused question about using it>
+You: Yes, use that.
+Lead: <exact replacement candidate for core_documents/global_outline.md>
+Runtime: discloses the candidate and required reviewers; no file changes.
+You: structured Confirm for review
+Lead synthesis: decision=propose; the reviewed candidate is ready.
+You: separate structured Apply
+Runtime: applies the exact candidate; the authoring objective is satisfied.
+You: separate structured Commit, if a local commit is requested
+Runtime: creates only the disclosed local session-branch commit.
+```
+
+If the target or intended change is unclear, the lead asks a focused question.
+It proposes consultation when additional advice is needed. Once the request
+and evidence are sufficient, it prepares the candidate. If an existing core
+document is empty, a freshly revalidated empty-status receipt can support a
+replacement; a nonempty target requires an attached reference or READ evidence.
+Empty status proves only that the file has no content.
+
+Runtime keeps the authoring objective in the conversation where it began.
+Other conversations in the same session can see it through retained session
+context, but continuation and cancellation belong to the originating
+conversation. Side discussion, a review, a rejected step, a stale candidate,
+or a failed attempt leaves the objective open. Only an exact matching Apply
+result of `applied` or `unchanged` satisfies it. A cancellation must explicitly
+close that objective; neither prose completion nor a null objective intent
+does so. Commit remains a separate decision after authoring completion.
+
+The visible drafting context is retained as whole messages with exact byte
+digests. A draft reference does not authorize a file read, review, or write.
+Pending Apply and Commit controls are shown again unchanged when you send
+ordinary input, without a new provider call or history append. Resolve that
+control first. Known terminal outcomes allow a new cycle with fresh requests;
+unknown or recovery outcomes remain blocked.
+
 ### Compose the next request while confirmed work runs
 
 The interactive controller uses the live-composer boundary. On a capable
@@ -175,7 +218,11 @@ omitted from the example:
     "scope": "story_specific | workflow_meta",
     "evidence_status": "not_applicable | verified | missing | empty | incomplete | conflicting",
     "evidence_ids": "ordered runtime-issued IDs only",
-    "kind": "answer | question | critique | recommendation | proposal"
+    "kind": "answer | question | critique | recommendation | proposal",
+    "message": "nonempty visible text",
+    "proposal": "null or ordinary consultation intent",
+    "artifact_intent": "null or exact artifact intent",
+    "objective_intent": "null or start/continue/cancel intent"
   }
 }
 ```
@@ -192,7 +239,8 @@ It then reads a returned opaque handle:
 {"action":"READ","handles":["<runtime-handle>"]}
 ```
 
-Its final answer cites the resulting receipt, not the handle alone:
+Its final `lead-outcome-v2` answer has all eight fields and cites the resulting
+receipt, not the handle alone:
 
 ```json
 {
@@ -202,7 +250,8 @@ Its final answer cites the resulting receipt, not the handle alone:
   "kind": "critique",
   "message": "The requested sequence is earlier than the outline permits.",
   "proposal": null,
-  "artifact_intent": null
+  "artifact_intent": null,
+  "objective_intent": null
 }
 ```
 
@@ -235,6 +284,10 @@ The runtime rejects invented, stale, duplicated, reordered, or unused IDs.
 It also rejects a SEARCH hit that was never READ when the lead cites its
 content.
 
+Only the front-channel schema adds `objective_intent`; specialist assessments
+and Lead synthesis keep their own contracts. The exact `start`, `continue`,
+and `cancel` objects are in the [runtime API](../reference/runtime-api.md#contextual-authoring-objectives).
+
 ## Confirming a proposed step
 
 When extra work is needed, the lead response displays its purpose, specialists,
@@ -262,9 +315,11 @@ The three decisions have distinct effects:
 | `reject` | Records that the step will not run; no specialist or artifact call occurs. |
 | `revise` | Requires a visible revision request, supersedes the old proposal, and asks for a fresh proposal. |
 
-Free-form input such as `Yes`, `go ahead`, or `confirm this` is ordinary lead
-conversation. If a proposal is pending, a new ordinary turn supersedes that
-proposal before asking the lead for a new outcome. It does not start work.
+Free-form input such as `Yes`, `go ahead`, or `confirm this` is contextual Lead
+conversation. If a consultation proposal is pending, a new ordinary turn
+supersedes it before asking the lead for a new outcome. It can express approval
+of a draft and lead to a candidate, but it does not start review or apply a
+change. Pending Apply/Commit controls are redisclosed unchanged instead.
 
 ## Scenario 1: direct answer
 
@@ -427,7 +482,7 @@ Each bound agent receives immutable policy components in this exact order:
 
 ```text
 lead_orchestrator
-  = common + lead
+  = common + lead + runtime Lead contract overlay
 
 plot_architect
   = common + specialist_collaboration + plot
@@ -443,6 +498,11 @@ The common component defines behavior true for every role: untrusted input,
 runtime assignment, authorized context actions, privacy, and strict output.
 The specialist-family component defines shared assignment and isolation rules.
 The lead and each specialist add only their own behavior and domain lens.
+
+Fresh Lead policies use `lead-outcome-v2`. Existing workspace policy files are
+retained byte-for-byte; the runtime appends a deterministic Lead overlay that
+supersedes older front-channel field lists. The overlay also applies during
+Lead synthesis while preserving that invocation's separate result schema.
 
 The runtime captures strict UTF-8, NUL-free snapshots before binding and
 fingerprints every ordered component. A changed common component invalidates
@@ -500,6 +560,9 @@ story[alpha]> Review ${core_documents/global_outline.md} and focus on pacing.
 ```
 
 This input starts a fresh turn with fresh reference and call identities.
+The same retry is available after references were read when runtime can close
+the exact failed attempt and its reference accounting. The authoring objective
+remains open; the new turn reacquires current evidence.
 Reopening, reading history, and projecting status do not submit provider work.
 For an exact legacy unstarted, prepared-only, or unmatched submitted read-only
 Lead attempt, the projection exposes retry without changing history. Explicit
@@ -512,7 +575,8 @@ replacement confirmation authority by itself. Only the matching unfinished
 native operation can be retired, so a successful checkpoint from another
 conversation remains intact. Failed closure writes, corrupt history, uncertain
 specialist/synthesis work, and pending or uncertain Apply/Commit outcomes
-retain their recovery gates. Successful specialists or full turns are not
+retain their gates. Uncertain reference cleanup also requires recovery.
+Successful specialists or full turns are not
 automatically replayed. Existing bounded malformed-response correction and
 proven pre-execution continuation replacement keep their separate constraints.
 

@@ -5,7 +5,7 @@ from __future__ import annotations
 import hashlib
 import json
 import re
-from dataclasses import dataclass, field
+from dataclasses import asdict, dataclass, field
 from datetime import UTC, datetime
 from enum import StrEnum
 from typing import Any, NoReturn, TypeVar
@@ -33,6 +33,7 @@ from ..writing_artifacts import (
     ArtifactApplicationRequest,
     ArtifactApplicationResult,
     ArtifactApplicationState,
+    canonical_artifact_kind,
     deserialize_artifact_application_request,
     deserialize_artifact_application_result,
     serialize_artifact_application_request,
@@ -77,6 +78,7 @@ class CollaborationEventKind(StrEnum):
     STORY_COMMIT_REQUEST = "story_commit_request"
     STORY_COMMIT_DECISION = "story_commit_decision"
     STORY_COMMIT_RESULT = "story_commit_result"
+    ARTIFACT_OBJECTIVE = "artifact_objective"
 
 
 class CollaborationActorKind(StrEnum):
@@ -732,6 +734,162 @@ class LeadProposalRelation(StrEnum):
     CONTINUE_LINEAGE = "continue_lineage"
 
 
+class LeadObjectiveAction(StrEnum):
+    """Semantic objective intent; no action grants execution authority."""
+
+    START = "start"
+    CONTINUE = "continue"
+    CANCEL = "cancel"
+
+
+class ArtifactObjectiveNextStep(StrEnum):
+    CLARIFY = "clarify"
+    CONSULT = "consult"
+    PREPARE = "prepare"
+
+
+class ArtifactObjectiveState(StrEnum):
+    OPEN = "open"
+    SATISFIED = "satisfied"
+    CANCELLED = "cancelled"
+
+
+def _validate_objective_paths(paths: tuple[str, ...]) -> None:
+    if type(paths) is not tuple or not paths:
+        raise TypeError("artifact objective requires exact target paths")
+    for path in paths:
+        if type(path) is not str or canonical_artifact_kind(path) is None:
+            raise ValueError("artifact objective target is not canonical")
+    _require_unique(paths, label="artifact objective targets")
+
+
+@dataclass(frozen=True, slots=True)
+class LeadObjectiveIntent:
+    """Untrusted contextual selection of one artifact objective transition."""
+
+    action: LeadObjectiveAction
+    objective_id: str | None = None
+    request: str | None = None
+    target_paths: tuple[str, ...] = ()
+    next_step: ArtifactObjectiveNextStep | None = None
+    draft_source_event_ids: tuple[str, ...] = ()
+
+    def __post_init__(self) -> None:
+        _require_enum(self.action, LeadObjectiveAction, "objective action")
+        _validate_identifier_tuple(
+            self.draft_source_event_ids, label="objective draft source event IDs",
+        )
+        if self.action is LeadObjectiveAction.START:
+            if self.objective_id is not None:
+                raise ValueError("only runtime assigns a new objective ID")
+            _validate_visible_text(self.request, label="artifact objective request")
+            _validate_objective_paths(self.target_paths)
+        else:
+            _validate_identifier(self.objective_id, label="artifact objective ID")
+            if self.request is not None or self.target_paths != ():
+                raise ValueError("objective continuation cannot replace origin facts")
+        if self.action is LeadObjectiveAction.CANCEL:
+            if self.next_step is not None or self.draft_source_event_ids:
+                raise ValueError("objective cancellation cannot select work")
+        else:
+            _require_enum(self.next_step, ArtifactObjectiveNextStep, "objective next step")
+
+
+@dataclass(frozen=True, slots=True)
+class ArtifactDraftSource:
+    """One exact runtime-offered visible draft source, never artifact evidence."""
+
+    conversation_id: str
+    event_id: str
+    content_digest: str
+
+    def __post_init__(self) -> None:
+        _validate_identifier(self.conversation_id, label="draft source conversation")
+        _validate_identifier(self.event_id, label="draft source event ID")
+        _validate_digest(self.content_digest, label="draft source content digest")
+
+
+@dataclass(frozen=True, slots=True)
+class ArtifactObjectiveFacts:
+    """Immutable runtime-owned origin and exact scope of one objective."""
+
+    objective_id: str
+    origin_conversation_id: str
+    origin_user_event_id: str
+    request: str = field(repr=False)
+    target_paths: tuple[str, ...]
+    offered_draft_sources: tuple[ArtifactDraftSource, ...]
+
+    def __post_init__(self) -> None:
+        _validate_identifier(self.objective_id, label="artifact objective ID")
+        _validate_identifier(self.origin_conversation_id, label="objective owner")
+        _validate_identifier(self.origin_user_event_id, label="objective origin user event")
+        _validate_visible_text(self.request, label="artifact objective request")
+        _validate_objective_paths(self.target_paths)
+        _validate_objective_sources(self.offered_draft_sources, self.origin_conversation_id)
+
+
+def _validate_objective_sources(
+    sources: tuple[ArtifactDraftSource, ...], conversation_id: str,
+) -> None:
+    _validate_exact_tuple(sources, ArtifactDraftSource, label="objective draft sources")
+    _require_unique(tuple(item.event_id for item in sources), label="objective draft sources")
+    if any(item.conversation_id != conversation_id for item in sources):
+        raise ValueError("objective draft source belongs to another conversation")
+
+
+@dataclass(frozen=True, slots=True)
+class ArtifactObjectiveCandidateBinding:
+    """Exact published candidate selected for this objective's current step."""
+
+    candidate_event_id: str
+    candidate_id: str
+    candidate_revision: int
+    candidate_digest: str
+
+    def __post_init__(self) -> None:
+        _validate_identifier(self.candidate_event_id, label="objective candidate event")
+        _validate_identifier(self.candidate_id, label="objective candidate ID")
+        _validate_positive_integer(self.candidate_revision, label="objective candidate revision")
+        _validate_digest(self.candidate_digest, label="objective candidate digest")
+
+
+@dataclass(frozen=True, slots=True)
+class ArtifactObjectivePayload:
+    """Version-one objective transition co-batched with its accepted Lead result."""
+
+    facts: ArtifactObjectiveFacts
+    action: LeadObjectiveAction
+    previous_objective_event_id: str | None
+    lead_result_event_id: str
+    next_step: ArtifactObjectiveNextStep | None
+    draft_sources: tuple[ArtifactDraftSource, ...]
+    candidate_binding: ArtifactObjectiveCandidateBinding | None = None
+
+    def __post_init__(self) -> None:
+        if type(self.facts) is not ArtifactObjectiveFacts:
+            raise TypeError("objective origin facts must be canonical")
+        _require_enum(self.action, LeadObjectiveAction, "objective action")
+        _validate_identifier(self.lead_result_event_id, label="objective Lead result event")
+        if self.action is LeadObjectiveAction.START:
+            if self.previous_objective_event_id is not None:
+                raise ValueError("new objective cannot have a predecessor")
+        else:
+            _validate_identifier(self.previous_objective_event_id, label="objective predecessor")
+        _validate_objective_sources(self.draft_sources, self.facts.origin_conversation_id)
+        if self.candidate_binding is not None and type(self.candidate_binding) is not ArtifactObjectiveCandidateBinding:
+            raise TypeError("objective candidate binding must be canonical")
+        if self.action is LeadObjectiveAction.CANCEL:
+            if self.next_step is not None or self.candidate_binding is not None:
+                raise ValueError("cancelled objective cannot select work")
+        else:
+            _require_enum(self.next_step, ArtifactObjectiveNextStep, "objective next step")
+            if (self.next_step is ArtifactObjectiveNextStep.PREPARE) is not (
+                type(self.candidate_binding) is ArtifactObjectiveCandidateBinding
+            ):
+                raise ValueError("prepare requires an exact candidate binding")
+
+
 @dataclass(frozen=True, slots=True)
 class LeadAssignmentIntent:
     """One visible, non-authoritative specialist assignment requested by the lead."""
@@ -791,6 +949,7 @@ class LeadProviderOutcome:
     evidence_ids: tuple[str, ...]
     proposal: LeadProposalIntent | None = None
     artifact_intent: ArtifactProposalIntent | None = None
+    objective_intent: LeadObjectiveIntent | None = None
 
     def __post_init__(self) -> None:
         _require_enum(self.kind, LeadOutcomeKind, "lead outcome kind")
@@ -816,6 +975,21 @@ class LeadProviderOutcome:
                 )
         elif self.proposal is not None or self.artifact_intent is not None:
             raise ValueError("non-proposal lead outcome cannot carry proposal intent")
+        if self.objective_intent is not None:
+            if type(self.objective_intent) is not LeadObjectiveIntent:
+                raise TypeError("lead objective intent must be canonical")
+            step = self.objective_intent.next_step
+            if step is ArtifactObjectiveNextStep.CLARIFY:
+                if self.kind is not LeadOutcomeKind.QUESTION:
+                    raise ValueError("objective clarification requires a question")
+            elif step is ArtifactObjectiveNextStep.CONSULT:
+                if self.kind is not LeadOutcomeKind.PROPOSAL or self.proposal is None:
+                    raise ValueError("objective consultation requires a consultation proposal")
+            elif step is ArtifactObjectiveNextStep.PREPARE:
+                if self.kind is not LeadOutcomeKind.PROPOSAL or self.artifact_intent is None:
+                    raise ValueError("objective preparation requires an artifact proposal")
+            elif self.kind is LeadOutcomeKind.PROPOSAL:
+                raise ValueError("objective cancellation cannot propose work")
 
 
 class CollaborationInvocationKind(StrEnum):
@@ -2663,6 +2837,7 @@ class CollaborationProviderCallPayload:
 
 CollaborationPayload = (
     CollaborationProposal
+    | ArtifactObjectivePayload
     | CollaborationMessagePayload
     | CollaborationLeadJudgmentPayload
     | CollaborationAssignmentDispatchPayload
@@ -3283,6 +3458,8 @@ def _artifact_reviewed_proposal_value(
 
 
 def _payload_value(payload: CollaborationPayload) -> dict[str, object]:
+    if type(payload) is ArtifactObjectivePayload:
+        return {"payload_type": "artifact_objective_v1", **asdict(payload)}
     if type(payload) is CollaborationProposal:
         return {"payload_type": "proposal", "proposal": _proposal_value(payload)}
     if type(payload) is CollaborationMessagePayload:
@@ -4209,10 +4386,52 @@ def _decode_artifact_reviewed_proposal(value: object) -> ArtifactReviewedProposa
     )
 
 
+def _decode_objective_sources(value: object) -> tuple[ArtifactDraftSource, ...]:
+    return tuple(
+        ArtifactDraftSource(**_object(item, {
+            "conversation_id", "event_id", "content_digest",
+        }, label="artifact draft source"))
+        for item in _array(value, label="artifact draft sources")
+    )
+
+
 def _decode_payload(value: object) -> CollaborationPayload:
     if type(value) is not dict:
         raise ValueError("collaboration payload must be an object")
     payload_type = value.get("payload_type")
+    if payload_type == "artifact_objective_v1":
+        item = _object(value, {
+            "payload_type", "facts", "action", "previous_objective_event_id",
+            "lead_result_event_id", "next_step", "draft_sources", "candidate_binding",
+        }, label="artifact objective payload")
+        facts = _object(item["facts"], {
+            "objective_id", "origin_conversation_id", "origin_user_event_id",
+            "request", "target_paths", "offered_draft_sources",
+        }, label="artifact objective origin")
+        binding = item["candidate_binding"]
+        if binding is not None:
+            binding = _object(binding, {
+                "candidate_event_id", "candidate_id", "candidate_revision", "candidate_digest",
+            }, label="artifact objective candidate")
+            binding = ArtifactObjectiveCandidateBinding(**binding)
+        return ArtifactObjectivePayload(
+            facts=ArtifactObjectiveFacts(
+                objective_id=_string(facts["objective_id"], label="objective ID"),
+                origin_conversation_id=_string(facts["origin_conversation_id"], label="objective owner"),
+                origin_user_event_id=_string(facts["origin_user_event_id"], label="objective origin"),
+                request=_string(facts["request"], label="objective request"),
+                target_paths=tuple(_array(facts["target_paths"], label="objective targets")),
+                offered_draft_sources=_decode_objective_sources(facts["offered_draft_sources"]),
+            ),
+            action=_enum(LeadObjectiveAction, item["action"], label="objective action"),
+            previous_objective_event_id=_optional_string(item["previous_objective_event_id"], label="objective predecessor"),
+            lead_result_event_id=_string(item["lead_result_event_id"], label="objective Lead result"),
+            next_step=(None if item["next_step"] is None else _enum(
+                ArtifactObjectiveNextStep, item["next_step"], label="objective next step",
+            )),
+            draft_sources=_decode_objective_sources(item["draft_sources"]),
+            candidate_binding=binding,
+        )
     if payload_type == "proposal":
         item = _object(value, {"payload_type", "proposal"}, label="proposal payload")
         return _decode_proposal(item["proposal"])
@@ -4987,6 +5206,7 @@ def _validate_collaboration_payload(
     payload: CollaborationPayload,
 ) -> None:
     allowed: dict[CollaborationEventKind, tuple[type[object], ...]] = {
+        CollaborationEventKind.ARTIFACT_OBJECTIVE: (ArtifactObjectivePayload,),
         CollaborationEventKind.MESSAGE: (
             CollaborationMessagePayload,
             CollaborationLeadJudgmentPayload,
@@ -5116,6 +5336,9 @@ def _validate_collaboration_direction(
         CollaborationEventKind,
         set[tuple[CollaborationActorKind, CollaborationActorKind]],
     ] = {
+        CollaborationEventKind.ARTIFACT_OBJECTIVE: {
+            (CollaborationActorKind.RUNTIME, CollaborationActorKind.USER),
+        },
         CollaborationEventKind.MESSAGE: {
             (CollaborationActorKind.USER, CollaborationActorKind.LEAD),
             (CollaborationActorKind.LEAD, CollaborationActorKind.USER),
@@ -5446,6 +5669,14 @@ def _raise_content_free_value_error(message: str) -> NoReturn:
 
 
 __all__ = [
+    "ArtifactDraftSource",
+    "ArtifactObjectiveCandidateBinding",
+    "ArtifactObjectiveFacts",
+    "ArtifactObjectiveNextStep",
+    "ArtifactObjectivePayload",
+    "ArtifactObjectiveState",
+    "LeadObjectiveAction",
+    "LeadObjectiveIntent",
     "ARTIFACT_REVIEW_SCHEMA_VERSION",
     "ArtifactApplicationDecisionKind",
     "ArtifactApplicationDecisionPayload",

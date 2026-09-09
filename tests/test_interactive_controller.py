@@ -13010,6 +13010,34 @@ class InteractiveLeadAdapterTests(unittest.TestCase):
                     self.assertEqual(calls, [(_UNIQUE_C, label)])
                     self.assertEqual(len(output.components), 1)
 
+    def test_pending_commit_redisclosure_reuses_exact_picker_without_apply(self):
+        digest = "sha256:" + "a" * 64
+        request = SimpleNamespace(confirmation_request_id="pending-commit", application_result_event_id="applied-event", candidate=SimpleNamespace(candidate_id="b" * 64), request_digest=digest)
+        turn = self._terminal_turn(CollaborationStepState.COMPLETED)
+        object.__setattr__(turn, "next_action", CollaborationNextAction.SUBMIT_COMMIT_DECISION)
+        object.__setattr__(turn, "story_commit_request", request)
+        session = RuntimeSession.__new__(RuntimeSession)
+        runner = asyncio.Runner()
+        self.addCleanup(runner.close)
+        calls = []
+        async def lead_turn(*args):
+            return turn
+        async def commit_decision(_session, decision):
+            calls.append(decision)
+            return self._raw(StoryCommitDecisionResult)
+        with mock.patch.object(RuntimeSession, "lead_turn", lead_turn), mock.patch.object(RuntimeSession, "decide_artifact_application", side_effect=AssertionError("Apply must not be re-entered")), mock.patch.object(RuntimeSession, "decide_story_commit", commit_decision), mock.patch.object(lead_policy_module, "project_lead_turn_result", return_value=SimpleNamespace()), mock.patch.object(lead_policy_module, "project_story_commit_decision_result", return_value=SimpleNamespace()):
+            for kind in (StoryCommitDecision.COMMIT, StoryCommitDecision.REJECT):
+                lead_policy_module.InteractiveLeadAdapter(session, runner, self._Progress(), self._Picker(self._commit(kind.value)), self._Prompt(), self._Output()).submit(_UNIQUE_C, "Continue.")
+                sent = calls[-1]
+                self.assertIs(sent.kind, kind)
+                self.assertEqual(sent.confirmation_request_id, request.confirmation_request_id)
+                self.assertEqual(sent.application_result_event_id, request.application_result_event_id)
+                self.assertEqual(sent.request_digest, digest)
+            before = list(calls)
+            lead_policy_module.InteractiveLeadAdapter(session, runner, self._Progress(), self._Picker(ControlOutcome(ControlOutcomeKind.CANCEL)), self._Prompt(), self._Output()).submit(_UNIQUE_C, "Continue.")
+            self.assertEqual(calls, before)
+
+
     def test_artifact_and_commit_controls_are_distinct_and_correlated(self) -> None:
         digest = "sha256:" + "a" * 64
         candidate_id = "b" * 64
@@ -13045,6 +13073,7 @@ class InteractiveLeadAdapterTests(unittest.TestCase):
             evidence=None,
             artifact_proposal=None,
             artifact_application_request=request,
+            story_commit_request=None,
         )
         commit_request = SimpleNamespace(
             confirmation_request_id="commit-confirmation",

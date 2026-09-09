@@ -6,7 +6,7 @@ import hashlib
 import json
 from typing import Mapping
 
-from .agents import AGENT_SPECS, ROSTER, behavior_policy_files
+from .agents import AGENT_SPECS, LEAD_ORCHESTRATOR, ROSTER, behavior_policy_files
 from .config import ConfigurationSnapshot, ConfigManager
 from .conversations import ConversationContextWindow
 from .errors import WorkspaceFormatError
@@ -26,6 +26,32 @@ from .models import (
 from .workspace import Workspace
 from .writing_artifacts import ArtifactContentSnapshot
 from .writing_artifacts.repository import WritingArtifactRepository
+
+
+_LEAD_CONTEXTUAL_CONTRACT_OVERLAY = (
+    "Runtime Lead contract overlay (lead-outcome-v2). This instruction supersedes "
+    "older lead_front_channel field lists in the retained workspace policies. "
+    "Every front-channel result has exactly scope, evidence_status, evidence_ids, "
+    "kind, message, proposal, artifact_intent, and objective_intent. Follow the "
+    "current invocation's strict schema. Interpret the user's intent from the "
+    "complete session context and runtime-owned artifact objectives, including "
+    "abbreviated approval of a visible draft. No exact command words are required "
+    "to prepare authoring work. When the request and evidence are sufficient, "
+    "select objective PREPARE and return an exact artifact proposal. A missing "
+    "detail requires a focused clarification; additional specialist advice is "
+    "appropriate only when needed. Keep the objective OPEN during consultation "
+    "and synthesis; advice, review, prose completion and null objective_intent "
+    "never satisfy or cancel it. Only the exact successful structured Apply "
+    "result satisfies an objective. Draft references are context, not artifact "
+    "evidence or confirmation. A selected exact status receipt for a currently "
+    "empty canonical core document can support replace after runtime "
+    "revalidation. Nonempty artifacts require attached-reference or READ "
+    "evidence. An existing empty core document requires replace, not create. "
+    "An empty status proves absence of content, not complete story knowledge; "
+    "obey the closed evidence matrix. Follow the separate review, Apply and "
+    "Commit boundaries. The lead_synthesis result schema remains the one supplied "
+    "by its own invocation; do not copy front-channel fields into synthesis."
+).encode("utf-8")
 
 
 class PromptAssembler:
@@ -137,6 +163,15 @@ class PromptAssembler:
         ):
             raise WorkspaceFormatError(
                 "behavior policy component must be nonempty and NUL-free"
+            )
+        if agent_id == LEAD_ORCHESTRATOR:
+            domain = policy_components[-1]
+            policy_components = (
+                *policy_components[:-1],
+                PromptFileReference.from_bytes(
+                    domain.path,
+                    domain.content + b"\n\n" + _LEAD_CONTEXTUAL_CONTRACT_OVERLAY,
+                ),
             )
         system_prompt_file = PromptFileReference.from_bytes(
             policy_components[-1].path,

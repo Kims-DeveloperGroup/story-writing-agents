@@ -443,6 +443,7 @@ def _visible_outcome(kind: str, message: str = "Visible lead response."):
                 "evidence_status": "not_applicable",
                 "evidence_ids": [],
                 "artifact_intent": None,
+                "objective_intent": None,
                 "proposal": None,
             },
         )
@@ -469,6 +470,7 @@ def _proposal_outcome(
                 "evidence_status": "incomplete",
                 "evidence_ids": [call.payload["core_statuses"][0]["evidence_id"]],
                 "artifact_intent": None,
+                "objective_intent": None,
                 "proposal": {
                     "relation": relation,
                     "purpose": purpose,
@@ -607,6 +609,7 @@ def _answer_from_history(
             "evidence_status": "verified",
             "evidence_ids": [observation[1][0][5]],
             "artifact_intent": None,
+            "objective_intent": None,
             "proposal": None,
         },
         used_handles=provider.used_handles,
@@ -1437,6 +1440,7 @@ class LeadRecoveryAndAccountingTests(LeadOrchestrationTestCase):
                 "evidence_status": "not_applicable",
                 "evidence_ids": [],
                 "artifact_intent": None,
+                "objective_intent": None,
                 "proposal": None,
             }
 
@@ -1505,6 +1509,7 @@ class LeadRecoveryAndAccountingTests(LeadOrchestrationTestCase):
                     "scope": "workflow_meta",
                     "evidence_status": "not_applicable",
                     "artifact_intent": None,
+                    "objective_intent": None,
                 },
             )
 
@@ -1848,6 +1853,7 @@ class LeadRecoveryAndAccountingTests(LeadOrchestrationTestCase):
                     "scope": "workflow_meta",
                     "evidence_status": "not_applicable",
                     "artifact_intent": None,
+                    "objective_intent": None,
                 },
             )
 
@@ -2305,6 +2311,243 @@ class LeadBudgetFinalizationTests(LeadOrchestrationTestCase):
             inputs=(), assignment_input_ids=(("user_input",),), physical_calls_spent=10)
         self.assertEqual((limits, synthesis, minimum), ((1,), 1, 2))
         self.assertEqual(self.backend.calls, [])
+
+
+class LeadReferenceFailurePrecedenceTests(LeadOrchestrationTestCase):
+    """Exercise retry precedence through real reference and Lead owner records."""
+
+    def reference_case(self, subject):
+        backend = _LeadBackend(persist_context_threads=True)
+        runtime = StoryRuntime(self.workspace, backend)
+        conversation_id = self.conversation(subject)
+        return runtime, backend, conversation_id
+
+    def enqueue_reference_correction(self, backend):
+        def incomplete(call, _provider):
+            return _provider_envelope(call, {
+                "kind": "answer", "message": "Incomplete referenced result.",
+                "scope": "workflow_meta", "evidence_status": "not_applicable",
+                "artifact_intent": None, "objective_intent": None,
+            })
+
+        # Correction creates a new provider, hence a separate queued script.
+        backend.enqueue(incomplete)
+
+    def assert_retry_closure(self, runtime, backend, conversation_id, result, code):
+        history = self.history(conversation_id)
+        failures = [event for event in history
+                    if type(event.payload) is CollaborationLeadOutcomeFailurePayload]
+        calls = [event for event in history
+                 if type(event.payload) is CollaborationProviderCallPayload]
+        self.assertEqual(len(failures), 1)
+        terminal = failures[0]
+        self.assertIs(terminal.payload.code, code)
+        self.assertEqual((terminal.turn_id, terminal.step_id),
+                         (result.turn_id, result.step_id))
+        self.assertEqual(terminal.payload.call_id, calls[-1].payload.call_id)
+        self.assertEqual(terminal.payload.invocation_id, calls[-1].payload.invocation_id)
+        self.assertEqual({event.payload.invocation_id for event in calls},
+                         {terminal.payload.invocation_id})
+        self.assertEqual(tuple(event.payload.state for event in calls),
+                         (CollaborationProviderCallState.PREPARED,
+                          CollaborationProviderCallState.SUBMITTED)
+                         * (len(backend.reference_calls) + len(backend.calls)))
+        self.assertIsNone(result.state)
+        self.assertIs(result.next_action, CollaborationNextAction.RETRY_LEAD_TURN)
+        self.assertIs(project_collaboration_history(history).next_safe_action,
+                      CollaborationNextAction.RETRY_LEAD_TURN)
+        for value in (result.proposal, result.confirmation_request_id,
+                      result.artifact_proposal, result.artifact_application_request,
+                      result.story_commit_request):
+            self.assertIsNone(value)
+        return history
+
+    async def test_reference_provider_failure_requires_exact_terminal_operation_and_invocations(self):
+        from story_writing_agents.writing_artifacts.authorization import (
+            ReferenceInvocationState, ReferenceOperationFailure, ReferenceOperationState,
+        )
+
+        for timed_out, correction in ((False, True), (True, False)):
+            with self.subTest(timed_out=timed_out, correction=correction):
+                runtime, backend, conversation_id = self.reference_case("Proven reference failure")
+                if correction:
+                    self.enqueue_reference_correction(backend)
+                failure = BackendProtocolError("Synthetic native invocation failure")
+                backend.enqueue(_SubmittedFailure(failure, timed_out=timed_out))
+                result = await runtime.lead_turn(self.session_id, conversation_id,
+                    "Read ${core_documents/global_outline.md} before answering.")
+                code = (CollaborationLeadOutcomeFailureCode.PROVIDER_TIMED_OUT if timed_out
+                        else CollaborationLeadOutcomeFailureCode.PROVIDER_FAILED)
+                self.assert_retry_closure(runtime, backend, conversation_id, result, code)
+                operation_id = backend.providers[-1].reference_operation_id
+                references = runtime.inspect_reference_operation(operation_id)
+                self.assertEqual(references.manifest.operation_id, operation_id)
+                self.assertIs(references.operation_events[-1].operation_state,
+                              ReferenceOperationState.TERMINATED)
+                self.assertEqual(len(references.invocation_events), 2 if correction else 1)
+                for events in references.invocation_events:
+                    self.assertIs(events[-1].invocation_state, ReferenceInvocationState.TERMINATED)
+                    self.assertEqual(events[-1].correlation.operation_id, operation_id)
+                    self.assertEqual(events[-1].correlation.agent_id, LEAD_ORCHESTRATOR)
+                    self.assertEqual(events[-1].correlation.phase, "lead")
+                    self.assertIsNone(events[-1].correlation.round_number)
+                self.assertIs(references.invocation_events[-1][-1].outcome,
+                              ReferenceAuthorizationErrorCode.PROVIDER_FAILURE)
+                self.assertEqual(len(backend.reference_calls), 2 if correction else 1)
+                self.assertEqual(len(backend.calls), 2 if correction else 1)
+
+        # A valid but contradictory durable closure must not turn a timeout into retry.
+        runtime, backend, conversation_id = self.reference_case("Mismatched timeout closure")
+        failure = BackendProtocolError("Synthetic native timeout")
+        backend.enqueue(_SubmittedFailure(failure, timed_out=True))
+        store_type = type(runtime.conversation_storage_services.event_store)
+        append = store_type.append_batch
+
+        def wrong_failure_code(store, batch):
+            events = tuple(replace(event, payload=replace(event.payload,
+                code=CollaborationLeadOutcomeFailureCode.PROVIDER_FAILED))
+                if type(event.payload) is CollaborationLeadOutcomeFailurePayload else event
+                for event in batch.events)
+            return append(store, replace(batch, events=events))
+
+        with mock.patch.object(store_type, "append_batch", new=wrong_failure_code):
+            with self.assertRaises(ReferenceOperationFailure) as raised:
+                await runtime.lead_turn(self.session_id, conversation_id,
+                    "Read ${core_documents/global_outline.md} before answering.")
+        self.assertIs(raised.exception.__cause__, failure)
+        self.assertIs(self.history(conversation_id)[-1].payload.code,
+                      CollaborationLeadOutcomeFailureCode.PROVIDER_FAILED)
+        self.assertEqual((len(backend.reference_calls), len(backend.calls)), (1, 1))
+
+    async def test_missing_corrupt_or_unfinished_reference_accounting_preserves_failure(self):
+        from contextlib import nullcontext
+        from story_writing_agents.writing_artifacts.authorization import (
+            ReferenceAuthorizationError, ReferenceOperationFailure,
+        )
+
+        for fault in ("missing", "corrupt", "foreign", "unfinished_operation",
+                      "unfinished_first_invocation", "foreign_phase", "workflow_terminal",
+                      "operation_cleanup_failure"):
+            with self.subTest(fault=fault):
+                runtime, backend, conversation_id = self.reference_case(fault)
+                self.enqueue_reference_correction(backend)
+                failure = BackendProtocolError("Synthetic native invocation failure")
+                backend.enqueue(_SubmittedFailure(failure))
+                repository_type = type(runtime.artifacts)
+                inspect_operation = repository_type.inspect_reference_operation
+                observed = []
+
+                def inspect_fault(repository, operation_id):
+                    history = inspect_operation(repository, operation_id)
+                    observed.append(history)
+                    if fault == "missing":
+                        return None
+                    if fault == "corrupt":
+                        raise ReferenceAuthorizationError(ReferenceAuthorizationErrorCode.EVIDENCE_CORRUPT)
+                    if fault == "foreign":
+                        foreign_id = "foreign_reference_operation"
+                        operations = tuple(replace(event, operation_id=foreign_id)
+                                           for event in history.operation_events)
+                        invocations = tuple(tuple(replace(event, operation_id=foreign_id,
+                            correlation=replace(event.correlation, operation_id=foreign_id))
+                            for event in events) for events in history.invocation_events)
+                        return replace(history, manifest=replace(history.manifest,
+                            operation_id=foreign_id), operation_events=operations,
+                            invocation_events=invocations)
+                    if fault == "unfinished_operation":
+                        return replace(history, operation_events=history.operation_events[:-1])
+                    if fault == "unfinished_first_invocation":
+                        return replace(history, invocation_events=(history.invocation_events[0][:-1],
+                                                                  *history.invocation_events[1:]))
+                    if fault == "foreign_phase":
+                        first = tuple(replace(event, correlation=replace(event.correlation,
+                            phase="specialist")) for event in history.invocation_events[0])
+                        return replace(history, invocation_events=(first, *history.invocation_events[1:]))
+                    if fault == "workflow_terminal":
+                        last = history.invocation_events[-1]
+                        last = (*last[:-1], replace(last[-1], outcome=ReferenceAuthorizationErrorCode.WORKFLOW_FAILURE))
+                        return replace(history, invocation_events=(*history.invocation_events[:-1], last))
+                    return history
+
+                with mock.patch.object(repository_type, "inspect_reference_operation", new=inspect_fault):
+                    with mock.patch.object(repository_type, "finish_reference_operation",
+                            side_effect=OSError("Synthetic reference cleanup failure")) if fault == "operation_cleanup_failure" else nullcontext():
+                        expected = ReferenceAuthorizationError if fault == "corrupt" else ReferenceOperationFailure
+                        with self.assertRaises(expected) as raised:
+                            await runtime.lead_turn(self.session_id, conversation_id,
+                                "Read ${core_documents/global_outline.md} before answering.")
+                self.assertTrue(observed, "The guard must inspect the public owner history")
+                if fault == "corrupt":
+                    self.assertIs(raised.exception.code, ReferenceAuthorizationErrorCode.EVIDENCE_CORRUPT)
+                else:
+                    self.assertIs(raised.exception.__cause__, failure)
+                self.assertEqual((len(backend.reference_calls), len(backend.calls)), (2, 2))
+                self.assertEqual(sum(type(event.payload) is CollaborationLeadOutcomeFailurePayload
+                                     for event in self.history(conversation_id)), 1)
+
+    async def test_primary_reference_and_capacity_errors_are_not_reclassified(self):
+        from story_writing_agents.conversations.session_context import SessionContextCapacityError
+        from story_writing_agents.writing_artifacts.authorization import (
+            ReferenceAuthorizationError, ReferenceOperationFailure,
+        )
+
+        class StopControl(BaseException):
+            pass
+
+        errors = [ReferenceAuthorizationError(code) for code in (
+            ReferenceAuthorizationErrorCode.DRIFT,
+            ReferenceAuthorizationErrorCode.CORRELATION_MISMATCH,
+            ReferenceAuthorizationErrorCode.CAPABILITY_CONSUMED,
+            ReferenceAuthorizationErrorCode.EVIDENCE_CORRUPT,
+        )]
+        errors.extend((SessionContextCapacityError(),
+                       asyncio.CancelledError(), StopControl()))
+        for failure in errors:
+            with self.subTest(failure=type(failure).__name__, code=getattr(failure, "code", None)):
+                runtime, backend, conversation_id = self.reference_case("Primary reference failure")
+                backend.enqueue(_SubmittedFailure(failure))
+                expected = (ReferenceOperationFailure if isinstance(failure, ReferenceAuthorizationError)
+                            else type(failure))
+                with self.assertRaises(expected) as raised:
+                    await runtime.lead_turn(self.session_id, conversation_id,
+                        "Read ${core_documents/global_outline.md} before answering.")
+                if isinstance(failure, ReferenceAuthorizationError):
+                    self.assertIs(raised.exception.__cause__, failure)
+                    self.assertIs(raised.exception.code, failure.code)
+                else:
+                    self.assertIs(raised.exception, failure)
+                self.assertEqual((len(backend.reference_calls), len(backend.calls)), (1, 1))
+                self.assertIsNotNone(runtime.inspect_reference_operation(
+                    backend.providers[-1].reference_operation_id))
+
+    async def test_reference_failure_with_unwritable_history_stays_recovery_required(self):
+        runtime, backend, conversation_id = self.reference_case("Unwritable reference closure")
+        backend.enqueue(_SubmittedFailure(BackendProtocolError("Synthetic native failure")))
+        store_type = type(runtime.conversation_storage_services.event_store)
+        append = store_type.append_batch
+
+        def fail_closure(store, batch):
+            if any(type(event.payload) is CollaborationLeadOutcomeFailurePayload for event in batch.events):
+                raise OSError("Synthetic unavailable authoritative history")
+            return append(store, batch)
+
+        with mock.patch.object(store_type, "append_batch", new=fail_closure):
+            result = await runtime.lead_turn(self.session_id, conversation_id,
+                "Read ${core_documents/global_outline.md} before answering.")
+            self.assertIs(result.state, CollaborationStepState.RECOVERY_REQUIRED)
+            self.assertIs(result.next_action, CollaborationNextAction.REPAIR_AUTHORITATIVE_HISTORY)
+            prefix = self.history(conversation_id)
+            restarted = StoryRuntime(self.workspace, backend)
+            blocked = await restarted.lead_turn(self.session_id, conversation_id,
+                "Wait until the failure can be recorded.")
+            self.assertIs(blocked.state, CollaborationStepState.RECOVERY_REQUIRED)
+            self.assertEqual(self.history(conversation_id), prefix)
+        self.assertEqual((len(backend.reference_calls), len(backend.calls)), (1, 1))
+        self.assertFalse(any(type(event.payload) is CollaborationLeadOutcomeFailurePayload
+                             for event in prefix))
+        for value in (result.proposal, result.artifact_proposal,
+                      result.artifact_application_request, result.story_commit_request):
+            self.assertIsNone(value)
 
 
 if __name__ == "__main__":

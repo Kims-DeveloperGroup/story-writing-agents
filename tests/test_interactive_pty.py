@@ -360,6 +360,7 @@ def lead_consultation_answer(value, _agent_id):
         ),
         "evidence_ids": evidence_ids,
         "artifact_intent": None,
+                "objective_intent": None,
         "proposal": {
             "relation": "new_step",
             "purpose": "Check outline consistency before answering.",
@@ -520,6 +521,7 @@ elif isinstance(query, list):
                 "evidence_status": "not_applicable",
                 "evidence_ids": [],
                 "artifact_intent": None,
+                "objective_intent": None,
                 "proposal": None,
             }
         elif nested_mapping_with(payload, "response_correction") is None:
@@ -529,6 +531,7 @@ elif isinstance(query, list):
                 "scope": "workflow_meta",
                 "evidence_status": "not_applicable",
                 "artifact_intent": None,
+                "objective_intent": None,
             }
         else:
             answer = {
@@ -538,6 +541,7 @@ elif isinstance(query, list):
                 "evidence_status": "not_applicable",
                 "evidence_ids": [],
                 "artifact_intent": None,
+                "objective_intent": None,
                 "proposal": None,
             }
         response = {
@@ -4699,7 +4703,14 @@ raise SystemExit(cli.main([]))
     def test_submitted_lead_failure_after_reference_is_stable_and_nonreplaying_on_pty(
         self,
     ) -> None:
-        """Keep a submitted referenced Lead call outcome-unknown across restart."""
+        """Keep the failed attempt and require fresh input for a read-only retry."""
+
+        from story_writing_agents.conversations import (
+            CollaborationLeadOutcomeFailureCode,
+            CollaborationLeadOutcomeFailurePayload,
+            CollaborationNextAction,
+            project_collaboration_history,
+        )
 
         defaults_path = self.workspace.path("config/system_defaults.json")
         defaults = json.loads(defaults_path.read_text(encoding="utf-8"))
@@ -4714,73 +4725,89 @@ raise SystemExit(cli.main([]))
         process.send_line("/session create alpha")
         process.wait_for_text("story[alpha]> ")
         conversation = self._create_conversation(process, subject="Submitted reference")
-
+        original = "Review ${core_documents/global_outline.md} before answering."
         mark = process.output_mark()
-        process.send_line(
-            "Review ${core_documents/global_outline.md} before answering."
-        )
-        rendered = process.wait_for_text("State: outcome_unknown", after=mark)
+        process.send_line(original)
+        rendered = process.wait_for_text("Next action: retry_lead_turn", after=mark)
         process.wait_for_text("story[alpha]> ", after=mark)
-        compact_rendered = " ".join(rendered.split())
-        self.assertIn("no reliable result", compact_rendered)
-        self.assertIn("Do not retry or replay", compact_rendered)
-        self.assertIn("inspect and recover", compact_rendered)
-        self.assertNotIn("Interactive error", rendered)
-        self.assertNotIn("internal_error", rendered)
-        self.assertNotIn("PRIVATE submitted provider diagnostic", rendered)
-        calls = [
-            record
-            for record in self._provider_records()
-            if record.get("event") == "started"
-        ]
+        compact_rendered = " ".join(rendered.replace("│", " ").split())
+        self.assertIn("provider attempt failed without a usable result", compact_rendered)
+        self.assertIn("original request and failure remain in history", compact_rendered)
+        self.assertIn("Send a new message or resubmit your request", compact_rendered)
+        for hidden in ("Interactive error", "internal_error",
+                       "PRIVATE submitted provider diagnostic", "State: outcome_unknown"):
+            self.assertNotIn(hidden, rendered)
+        calls = [record for record in self._provider_records()
+                 if record.get("event") == "started"]
         self.assertEqual(len(calls), 2)
         self.assertEqual(calls[0]["payload"]["operation"], "writing_artifact_reference_read")
         self.assertEqual(calls[1]["operation"], "agent_context_v7")
 
         store = FilesystemCollaborationEventStore(
-            self.workspace,
-            catalog=FilesystemConversationCatalog(self.workspace),
+            self.workspace, catalog=FilesystemConversationCatalog(self.workspace),
         )
         events = store.read("alpha", conversation.conversation_id)
-        call_states = tuple(
-            event.payload.state
-            for event in events
-            if event.kind is CollaborationEventKind.PROVIDER_CALL_ACCOUNTING
-            and isinstance(event.payload, CollaborationProviderCallPayload)
-        )
-        self.assertEqual(
-            call_states,
-            (
-                CollaborationProviderCallState.PREPARED,
-                CollaborationProviderCallState.SUBMITTED,
-                CollaborationProviderCallState.PREPARED,
-                CollaborationProviderCallState.SUBMITTED,
-            ),
-        )
+        accounting = tuple(event for event in events
+                           if type(event.payload) is CollaborationProviderCallPayload)
+        self.assertEqual(tuple(event.payload.state for event in accounting), (
+            CollaborationProviderCallState.PREPARED,
+            CollaborationProviderCallState.SUBMITTED,
+            CollaborationProviderCallState.PREPARED,
+            CollaborationProviderCallState.SUBMITTED,
+        ))
+        failures = tuple(event for event in events
+                         if type(event.payload) is CollaborationLeadOutcomeFailurePayload)
+        self.assertEqual(len(failures), 1)
+        failure = failures[0]
+        self.assertIs(failure.payload.code, CollaborationLeadOutcomeFailureCode.PROVIDER_FAILED)
+        self.assertEqual(failure.payload.call_id, accounting[-1].payload.call_id)
+        self.assertEqual(failure.payload.invocation_id, accounting[-1].payload.invocation_id)
+        self.assertEqual({event.payload.invocation_id for event in accounting},
+                         {failure.payload.invocation_id})
+        self.assertEqual(sum(type(event.payload) is CollaborationMessagePayload
+                             and event.payload.content == original for event in events), 1)
+        projection = project_collaboration_history(events)
+        self.assertIsNone(projection.current_state)
+        self.assertIs(projection.next_safe_action, CollaborationNextAction.RETRY_LEAD_TURN)
+        self.assertEqual(projection.physical_calls_spent, 2)
         process.send_line("/quit")
         self.assertEqual(process.wait_for_exit(), 0, process.normalized_text)
 
+        before = len(self._provider_records())
         reopened = self._spawn_cli(
             ("chat", "alpha", "--workspace", str(self.workspace.root)),
             terminal_columns=120,
         )
         reopened.wait_for_text("story[alpha]> ")
-        before = len(self._provider_records())
-        replay_mark = reopened.output_mark()
-        reopened.send_line("Do not replay the submitted call.")
-        replay = reopened.wait_for_text("State: outcome_unknown", after=replay_mark)
-        reopened.wait_for_text("story[alpha]> ", after=replay_mark)
-        self.assertIn("Do not retry or replay", replay)
         self.assertEqual(len(self._provider_records()), before)
-        self.assertEqual(
-            store.read("alpha", conversation.conversation_id),
-            events,
-        )
+        self.assertEqual(store.read("alpha", conversation.conversation_id), events)
+
+        self._set_provider_control(mode="lead_answer")
+        fresh = "Retry with a fresh Lead attempt."
+        retry_mark = reopened.output_mark()
+        reopened.send_line(fresh)
+        reopened.wait_for_text("Continued after confirmed review.", after=retry_mark)
+        reopened.wait_for_text("story[alpha]> ", after=retry_mark)
+        after_retry = store.read("alpha", conversation.conversation_id)
+        self.assertEqual(after_retry[:len(events)], events)
+        messages = [event for event in after_retry
+                    if type(event.payload) is CollaborationMessagePayload]
+        self.assertEqual(sum(event.payload.content == original for event in messages), 1)
+        fresh_events = [event for event in messages if event.payload.content == fresh]
+        self.assertEqual(len(fresh_events), 1)
+        self.assertNotEqual(fresh_events[0].turn_id, failure.turn_id)
+        self.assertEqual(tuple(event for event in after_retry
+                              if type(event.payload) is CollaborationLeadOutcomeFailurePayload), failures)
+        calls = [record for record in self._provider_records()
+                 if record.get("event") == "started"]
+        self.assertEqual(len(calls), 3)
+        self.assertEqual(calls[-1]["operation"], "agent_context_v7")
+        before_management = len(self._provider_records())
         create_mark = reopened.output_mark()
         reopened.send_line("/conversation new Distinct recovery work")
         reopened.wait_for_text("Subject: Distinct recovery work", after=create_mark)
         reopened.wait_for_text("story[alpha]> ", after=create_mark)
-        self.assertEqual(len(self._provider_records()), before)
+        self.assertEqual(len(self._provider_records()), before_management)
         reopened.send_line("/quit")
         self.assertEqual(reopened.wait_for_exit(), 0, reopened.normalized_text)
 

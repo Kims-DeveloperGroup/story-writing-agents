@@ -6,6 +6,8 @@ from collections.abc import Iterable, Mapping
 from enum import StrEnum
 
 from ..conversations import (
+    ArtifactObjectivePayload,
+    LeadObjectiveAction,
     ArtifactApplicationDecisionPayload,
     ArtifactApplicationDecisionResult,
     ArtifactApplicationRequestPayload,
@@ -175,6 +177,8 @@ def project_lead_turn_result(result: LeadTurnResult) -> Panel:
         items.extend(
             _payload_items(result.artifact_application_request, {}, {}, {})
         )
+    if result.story_commit_request is not None:
+        items.extend(_payload_items(result.story_commit_request, {}, {}, {}))
     return Panel("Lead", tuple(items), state=_event_state(result))
 
 
@@ -271,6 +275,21 @@ def _payload_items(
     candidate_paths: Mapping[str, tuple[str, ...]],
     proposals: Mapping[str, CollaborationProposal],
 ) -> tuple[Section | Field | Notice | Message | Record | ListView, ...]:
+    if type(payload) is ArtifactObjectivePayload:
+        return (
+            _message("Artifact objective", payload.facts.request),
+            Field("Action", payload.action.value),
+            Field("Target paths", _joined(payload.facts.target_paths)),
+            Field("Next step", payload.next_step.value if payload.next_step else "none"),
+            Field("Objective", payload.facts.objective_id),
+            Field("Owner conversation", payload.facts.origin_conversation_id),
+            Field("Draft sources", _joined(tuple(item.event_id for item in payload.draft_sources))),
+            Notice(
+                "Review, Apply, and Commit have separate decisions. "
+                "Only a successful Apply result completes this authoring task.",
+                label="objective state",
+            ),
+        )
     if type(payload) is CollaborationMessagePayload:
         return (_message("Message", payload.content),)
     if type(payload) is CollaborationLeadJudgmentPayload:
@@ -684,6 +703,8 @@ def _evidence_items(evidence: CollaborationLeadEvidence) -> tuple[Field, ...]:
 
 
 def _event_state(payload: object) -> ViewState:
+    if type(payload) is ArtifactObjectivePayload and payload.action is LeadObjectiveAction.CANCEL:
+        return ViewState.CANCELLED
     if isinstance(payload, (CollaborationLeadOutcomeFailurePayload, ArtifactReviewFailurePayload)):
         return ViewState.ERROR
     state = getattr(payload, "state", None)
