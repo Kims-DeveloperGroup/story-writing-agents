@@ -83,6 +83,28 @@ port. Both are intentionally absent from the `conversation_storage`,
 `workspace`, and project-root facades; active filesystem/SQLite composition
 places one behind the storage-neutral service bundle.
 
+An eligible read-only Lead attempt without a usable result is durably closed
+by `lead_outcome_failure`. It preserves the original user request and records
+only a closed reason and exact invocation/call identity. Both identities are
+null only for `request_not_submitted`, before any provider accounting exists.
+It does not create a successful judgment or execution result.
+
+Exact legacy unstarted, prepared-only, or unmatched submitted requests expose
+`retry_lead_turn` through pure projection. Inspection and reopening leave their
+bytes unchanged. On explicit new user input, the runtime holds session and
+conversation leases, closes the old attempt, verifies the authoritative tail,
+then appends the new turn in the same conversation. A failed Revise request
+leaves its old proposal superseded without replacement authority. Failed
+closure writes, corrupt history, uncertain specialist/synthesis outcomes, and
+pending or uncertain Apply/Commit writes remain recovery-gated.
+
+The continuation owner retires only the unfinished native operation matching
+an abandoned Lead attempt; successful checkpoints from other conversations
+remain intact. Cancellation attempts closure and is re-raised after resource
+release. This adds no automatic full-turn or successful-specialist replay. See
+the [failure payload](../reference/collaboration-history.md#ordered-actors-events-and-result-correlation)
+and [Lead recovery](../guides/lead-agent.md#submitted-lead-outcome-unavailable-after-restart).
+
 ```text
 discussion_logs/<session>/interactive/conversations/<conversation>/
 ├── metadata.json

@@ -24,6 +24,10 @@ from .errors import ProviderAuthenticationRequiredError
 from .models import AgentDefinition
 
 
+DEFAULT_PROVIDER_TIMEOUT_SECONDS = 900.0
+PROVIDER_TIMEOUT_GRACE_SECONDS = 30.0
+
+
 class ExecutionValueSource(StrEnum):
     """Authoritative origin of one effective provider execution value."""
 
@@ -251,6 +255,7 @@ class ProviderInvocationError(Exception):
         taint_existing_thread: bool,
         continuation_rejection: ProviderContinuationRejection | None = None,
         authentication_failure: ProviderAuthenticationRequiredError | None = None,
+        timed_out: bool = False,
     ) -> None:
         super().__init__(diagnostic)
         self.diagnostic = diagnostic
@@ -260,6 +265,9 @@ class ProviderInvocationError(Exception):
             raise TypeError("authentication failure must be a typed provider failure")
         self.authentication_failure = authentication_failure
         self.taint_existing_thread = taint_existing_thread
+        if type(timed_out) is not bool:
+            raise TypeError("provider timeout fact must be a boolean")
+        self.timed_out = timed_out
         if continuation_rejection is not None and type(continuation_rejection) is not ProviderContinuationRejection:
             raise TypeError("continuation rejection must be a closed provider code")
         self.continuation_rejection = continuation_rejection

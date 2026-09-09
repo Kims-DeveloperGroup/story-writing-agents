@@ -539,7 +539,86 @@ class CollaborationBudgetAndOutcomeTests(unittest.TestCase):
 
 
 class CollaborationConfirmationAndRecoveryTests(unittest.TestCase):
-    def test_unmatched_submitted_lead_projects_outcome_unknown_but_prepared_does_not(
+    def test_failed_read_only_attempt_closes_exactly_once_and_rejects_late_calls(self):
+        codes = (CollaborationLeadOutcomeFailureCode.REQUEST_NOT_SUBMITTED,
+                 CollaborationLeadOutcomeFailureCode.PROVIDER_FAILED,
+                 CollaborationLeadOutcomeFailureCode.PROVIDER_TIMED_OUT,
+                 CollaborationLeadOutcomeFailureCode.CANCELLED,
+                 CollaborationLeadOutcomeFailureCode.INTERRUPTED)
+        for code in codes:
+            with self.subTest(code=code):
+                message = make_draft("request", CollaborationEventKind.MESSAGE, USER, LEAD,
+                                     CollaborationMessagePayload("Retain this exact request."))
+                calls = provider_call_drafts(invocation_id="invocation", call_id="call",
+                                             role="lead_orchestrator", recipient=LEAD,
+                                             invocation_kind=CollaborationInvocationKind.LEAD)
+                bare = code is CollaborationLeadOutcomeFailureCode.REQUEST_NOT_SUBMITTED
+                prefix = store_batch((), make_batch((), "request_batch", message,
+                                                    *(() if bare else calls)))
+                failure = make_draft("closure", CollaborationEventKind.LEAD_OUTCOME_FAILURE, RUNTIME, USER,
+                                     CollaborationLeadOutcomeFailurePayload(
+                                         code, None if bare else "invocation", None if bare else "call"))
+                closed = store_batch(prefix, make_batch(prefix, "closure_batch", failure))
+                self.assertIs(project_collaboration_history(closed).next_safe_action,
+                              CollaborationNextAction.RETRY_LEAD_TURN)
+                _assert_invalid(self, closed, make_batch(closed, "duplicate_closure",
+                                                        replace(failure, event_id="second_closure")))
+                late = provider_call_drafts(invocation_id="late_invocation", call_id="late_call",
+                                            role="lead_orchestrator", recipient=LEAD,
+                                            invocation_kind=CollaborationInvocationKind.LEAD)
+                _assert_invalid(self, closed, make_batch(closed, "late_call_batch", *late))
+                wrong_turn = replace(failure, turn_id="foreign_turn")
+                _assert_invalid(self, prefix, make_batch(prefix, "wrong_turn_batch", wrong_turn))
+                if not bare:
+                    for field in ("invocation_id", "call_id"):
+                        with self.subTest(field=field):
+                            wrong = replace(failure, payload=replace(failure.payload, **{field: "other"}))
+                            _assert_invalid(self, prefix, make_batch(prefix, "wrong_identity_batch", wrong))
+                if code is CollaborationLeadOutcomeFailureCode.PROVIDER_TIMED_OUT:
+                    prepared = store_batch((), make_batch((), "prepared_only", message, calls[0]))
+                    _assert_invalid(self, prepared, make_batch(prepared, "unsubmitted_timeout", failure))
+                if bare:
+                    started = store_batch((), make_batch((), "started_request", message, calls[0]))
+                    _assert_invalid(self, started, make_batch(started, "false_unsubmitted", failure))
+
+    def test_failed_revision_result_cannot_carry_or_revive_confirmation_authority(self):
+        from story_writing_agents.artifact_proposals import artifact_review_specialists
+        from story_writing_agents.conversations import (
+            ArtifactProposalResult, ArtifactProposalState, ArtifactReviewCandidatePayload,
+            LeadDecisionResult, LeadOutcomeKind, LeadTurnResult,
+        )
+        from tests.test_artifact_proposals import _combined_candidate
+
+        proposal = make_proposal()
+        turn = LeadTurnResult(SESSION_ID, CONVERSATION_ID, "failed_revision", proposal.step_id,
+                              LeadOutcomeKind.RECOMMENDATION, "Explicit retry is available.",
+                              None, None, None, CollaborationNextAction.RETRY_LEAD_TURN)
+        result = LeadDecisionResult(SESSION_ID, CONVERSATION_ID, proposal.step_id,
+                                    CollaborationConfirmationDecision.REVISE, proposal, turn)
+        self.assertIsNone(result.turn.confirmation_request_id)
+        self.assertIsNone(result.turn.proposal)
+        for changes in ({"kind": LeadOutcomeKind.ANSWER}, {"state": CollaborationStepState.SUPERSEDED},
+                        {"proposal": proposal}, {"confirmation_request_id": "old_confirmation"},
+                        {"evidence": proposal.basis.evidence}):
+            with self.subTest(changes=tuple(changes)), self.assertRaises(ValueError):
+                replace(result, turn=replace(turn, **changes))
+        _, candidate, _ = _combined_candidate()
+        artifact = ArtifactProposalResult(ArtifactProposalState.SUPERSEDED, ArtifactReviewCandidatePayload(
+            candidate, "original_judgment", proposal.proposal_id, proposal.proposal_revision,
+            proposal.proposal_digest, artifact_review_specialists(candidate.mandatory_review_domains),
+            artifact_review_specialists(candidate.disclosed_review_domains)))
+        retained = replace(result, turn=replace(turn, artifact_proposal=artifact))
+        self.assertIs(retained.turn.artifact_proposal.state, ArtifactProposalState.SUPERSEDED)
+        for field, value in (("consultation_proposal_id", "other_proposal"),
+                             ("consultation_proposal_revision", proposal.proposal_revision + 1),
+                             ("consultation_proposal_digest", "sha256:" + "f" * 64)):
+            with self.subTest(field=field), self.assertRaisesRegex(ValueError, "no replacement authority"):
+                changed = replace(artifact, candidate=replace(artifact.candidate, **{field: value}))
+                replace(result, turn=replace(turn, artifact_proposal=changed))
+        with self.assertRaises(ValueError):
+            replace(result, turn=replace(turn, artifact_proposal=replace(artifact, state=ArtifactProposalState.STALE)))
+
+    def test_unmatched_read_only_lead_projects_retry_without_write_authority(
         self,
     ) -> None:
         message = make_draft(
@@ -562,9 +641,9 @@ class CollaborationConfirmationAndRecoveryTests(unittest.TestCase):
         )
         prepared_projection = project_collaboration_history(prepared)
         self.assertIsNone(prepared_projection.current_state)
-        self.assertIsNot(
+        self.assertIs(
             prepared_projection.next_safe_action,
-            CollaborationNextAction.INSPECT_AND_RESOLVE_OUTCOME,
+            CollaborationNextAction.RETRY_LEAD_TURN,
         )
 
         submitted = store_batch(
@@ -572,10 +651,10 @@ class CollaborationConfirmationAndRecoveryTests(unittest.TestCase):
             make_batch(prepared, "submitted_lead_batch", calls[1]),
         )
         projection = project_collaboration_history(submitted)
-        self.assertIs(projection.current_state, CollaborationStepState.OUTCOME_UNKNOWN)
+        self.assertIsNone(projection.current_state)
         self.assertIs(
             projection.next_safe_action,
-            CollaborationNextAction.INSPECT_AND_RESOLVE_OUTCOME,
+            CollaborationNextAction.RETRY_LEAD_TURN,
         )
         self.assertIsNone(projection.current_proposal)
         self.assertEqual(projection.current_turn_id, submitted[-1].turn_id)

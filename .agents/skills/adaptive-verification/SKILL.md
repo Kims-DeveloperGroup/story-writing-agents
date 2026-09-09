@@ -1,8 +1,7 @@
 ---
 name: adaptive-verification
 description: >-
-  Use for nontrivial-tracked-changes; selects/budgets/deduplicates/reuses/escalates evidence
-  for sufficiency; excludes conversation/story execution.
+  Use for nontrivial tracked changes; excludes conversation/story execution.
 ---
 
 [AGENTS.md](../../../AGENTS.md) governs. Root exclusively owns selection/authorization/budget/
@@ -17,7 +16,7 @@ residual risk,and root-decision alternatives: `split|narrow|defer|stop|approved-
 - `exact` covers changed acceptance and every known failure ID.
 - `semantic_cluster` covers a shared invariant/contract/fixture/failure family.
 - `affected_suite` covers a bounded subsystem only when narrower evidence is insufficient.
-- `full_suite` requires an objective trigger below.
+- `full_suite` requires an objective trigger.
 
 `complete` is terminal, not level six: mandatory/exact evidence is current green/accepted-skip, failures
 resolved, inventory sufficient, and root accepts risk. Passing never authorizes escalation.
@@ -32,13 +31,15 @@ resolved, inventory sufficient, and root accepts risk. Passing never authorizes 
 Criteria may override. Budgets never waive evidence/permit unsafe kills. Do not start work
 estimated above remaining budget; on overrun safely finish or runner-interrupt preserving results.
 
-## Plan, Provenance, and Reuse
+## Provenance
 
 Record class/rationale; each-criterion/`mandatory_evidence`; changed inputs; tests/consumers/helpers/fixtures/
 invariants/exclusions; API/packaging/persistence/migration/auth/security/concurrency/process/
 PTY/config/dynamic-coupling risks; exact-`authorized_selection`/rationale/owner; estimate/source/confidence;
 total/max/spent/remaining; triggers/stops/reuse/invalidation/risk. Unknown dependencies need
 inventory/diagnosis.
+
+Read [Evidence source](../../../.github/templates/evidence.md) before reader-facing authoring.
 
 Results record repository/absolute-worktree, baseline/HEAD, dirty fingerprint, environment-
 capabilities, purpose, level, exact-selection/IDs/command, outcome/duration/stable-failure-fingerprint. Conservative

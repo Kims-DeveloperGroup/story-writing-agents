@@ -83,9 +83,9 @@ worktree status.
 | Assessment shown to you | Allowed lifecycle operations | What to do next |
 | --- | --- | --- |
 | `idle_ready` / `begin_with_lead` | Enter, leave, pause | Continue through the lead. |
-| Active `ready`, `proposed`, `reviewed`, `awaiting_application`, `committed`, or `rejected` / `follow_active_recovery` | Enter, leave, pause | For `ready`, begin the first lead turn. Otherwise follow the nested recovery result's exact next action. |
+| Active `ready`, `proposed`, `reviewed`, `awaiting_application`, `committed`, or `rejected` / `follow_active_recovery` | Enter, leave, pause | Follow the nested recovery result and current history action. `ready` permits a first Lead turn or an eligible read-only Lead retry. |
 | Active `applied_not_committed` or `staged` / `follow_active_recovery` | Enter only | Attach to inspect; do not leave or pause the owner. |
-| `outcome_unknown` / `inspect_owner_outcome`, owner `collaboration_history`, failure `owner_outcome_unknown` | Enter only | Attach to inspect an unmatched submitted Lead call; do not replay it, leave the owner, or pause the session. |
+| `outcome_unknown` / `inspect_owner_outcome`, owner `collaboration_history`, failure `owner_outcome_unknown` | Enter only | Inspect the preserved uncertainty when this exact restricted result is returned; do not replay it, leave the owner, or pause the session. Eligible read-only Lead attempts instead expose `retry_lead_turn`. |
 | Other `outcome_unknown` / `inspect_owner_outcome` | None | Preserve evidence and inspect the named owner without entering. |
 | `recovery_required` / `operator_recovery` | None | Stop automated mutation and perform explicit operator recovery. |
 
@@ -95,11 +95,18 @@ An exact zero-event conversation is active `ready`, owned by the Lead, with
 `continue_with_lead`; it is not a missing predecessor. The runtime reaches that
 state only after the same stable resource, history, external-Git, status, and
 tip checks used for later active recovery.
-For uncertainty or recovery, the outer result copies the nested owner and
-failure code. It normally allows nothing. The only exception is the exact
-`collaboration_history` / `owner_outcome_unknown` result for a proposal-free,
-unmatched submitted Lead call: it allows `ENTER_DESTINATION` so the user can
-inspect that conversation. It does not allow leaving or pausing the owner.
+An eligible proposal-free read-only Lead history with `retry_lead_turn` is
+active `ready` under the Lead owner, subject to the same resource checks. This
+includes exact legacy unstarted, prepared-only, and unmatched submitted
+attempts. Reading history or reopening does not close or resubmit them; explicit
+new input closes the prior attempt before appending a fresh turn in the same
+conversation.
+
+For remaining uncertainty or recovery, the outer result copies the nested owner
+and failure code. It normally allows nothing. The exact
+`collaboration_history` / `owner_outcome_unknown` result, when returned, allows
+only `ENTER_DESTINATION` for inspection; it does not allow leaving or pausing
+the owner.
 Assessment invokes no story provider and does not reveal or recreate
 confirmation choices, content, or capability. An allowed entry is not replay,
 resolution, Apply, write, or Commit authority; those effects retain their
@@ -120,7 +127,7 @@ After attachment, these commands manage catalog metadata and local history:
 /conversation archive [ID]
 /history [COUNT]
 /search QUERY
-/transcript ID [COUNT] [--from SEQUENCE]
+/transcript [ID [COUNT] [--from SEQUENCE]]
 ```
 
 New creates and focuses an active conversation. Resume accepts an exact ID or
@@ -136,6 +143,13 @@ over readable event fields in active conversations. Subjects are display-only
 metadata and never create a hit. `/transcript` reads a fresh bounded structured
 page for an active or archived conversation without changing focus. These
 reads do not call a provider or mutate history.
+
+Use bare `/transcript` to choose from the attached session's active and archived
+conversations in catalog order. Each choice shows `Subject (conversation_id)`
+with the full ID to distinguish duplicate subjects. Selection resolves the ID
+again before reading. An empty catalog, cancellation, Ctrl-C, or EOF reads no
+transcript and leaves attachment, focus, and conversation history unchanged. An explicit ID
+skips the picker and accepts the optional count and start sequence.
 
 Example:
 
@@ -228,18 +242,21 @@ delivery can fail its finite capacity limit. See
 ## Recovery
 
 - Use `/status` after an interrupted lifecycle or settings operation.
+- For `retry_lead_turn`, send a new message, revise the wording, or resubmit the
+  original request in the same conversation. This also works after restart.
+  Runtime retains the original request and failure; it does not automatically
+  replay the turn. Failed closure writes or unsafe authoritative history still
+  require recovery.
 - When a transition record shows `outcome_unknown`, preserve all evidence and
   follow `inspect_owner_outcome` for the displayed owner. If that owner is
   `collaboration_history` with failure `owner_outcome_unknown`, the shell may
-  enter only to inspect the unmatched submitted Lead call. Ordinary input then
-  returns the same preserved `State: outcome_unknown` and
-  `Next action: inspect_and_resolve_outcome` without a provider replay or new
-  durable user event. Other outcome-unknown owners remain blocked from entry.
+  enter only for inspection. This restricted result differs from an eligible
+  read-only Lead retry. Other outcome-unknown owners remain blocked from entry.
   When the record shows `recovery_required`, stop automated mutation and
   follow `operator_recovery`.
 - Entry for inspection does not authorize replay, Apply, artifact writes,
-  Commit, leaving, pausing, or resolution of the uncertain call. Use
-  `/conversation new SUBJECT` for intentionally distinct work.
+  Commit, leaving, pausing, or resolution of an uncertain specialist or write
+  outcome. Use `/conversation new SUBJECT` for intentionally distinct work.
 - Do not use reset, abort, cleanup, claim deletion, or default removal to make
   an uncertain session appear idle or safe.
 - Use `/session list` and `/conversation list --all` to rediscover IDs.

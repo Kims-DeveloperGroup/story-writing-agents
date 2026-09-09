@@ -1903,7 +1903,7 @@ import sys
 from story_writing_agents.agent_exchanges import AgentExchangeScopeKind
 from story_writing_agents.interactive_controller._exchange_viewer import prepare_agent_exchange_view
 from story_writing_agents.interactive_terminal import InteractiveExternalViewer, build_stream_terminal
-source = b"".join((json.dumps({"content": "개요 " + str(i)}, ensure_ascii=False) + "\n").encode() for i in range(7))
+source = b"".join((json.dumps({"content": "개요 개요 " + str(i)}, ensure_ascii=False) + "\n").encode() for i in range(7))
 original = bytes(source)
 operation = prepare_agent_exchange_view(source, session_id="s", scope_kind=AgentExchangeScopeKind.CONVERSATION, scope_id="c", scope_subject="Subject", agent_id="lead_orchestrator")
 viewer = InteractiveExternalViewer(build_stream_terminal(input, sys.stdin, sys.stdout))
@@ -1922,17 +1922,18 @@ print(f"SHELL_VALUE={input('shell> ')}")
         self.assertFalse(termios.tcgetattr(process.master_fd)[3] & termios.ICANON)
         mark = process.output_mark()
         query = b"wrong\x15" + "개요".encode() if edit_query else "개요".encode()
-        process.send_bytes(b"/content\n" + query + b"\nn")
-        process.wait_for_text("Search content='개요' • 2/7", after=mark)
+        process.send_bytes(b"/" + query + b"\nn")
+        process.wait_for_text("2/14 occurrences • Search all text='개요'", after=mark)
         process.wait_for_text("h help • q close", after=mark)
         # Wait for the final selected-match frame, not an earlier search frame.
-        selected = process.normalized_text.rfind("Search content='개요' • 2/7")
+        selected = process.normalized_text.rfind("2/14 occurrences • Search all text='개요'")
         footer = process.normalized_text.find("h help • q close", selected)
         if footer < 0:
             process.wait_for_text("h help • q close", after=selected)
         active = process.normalized_text.rsplit("\x1b[H\x1b[2J", 1)[1]
         active = active[:active.index("h help • q close") + len("h help • q close")]
-        for draft, prompt in ((b"/draft", "Search field: draft│"), (b"/content\ndraft", "Search query: draft│"), (b"g999", "Go to source line: 999│")):
+        self.assertIn('"content": "개요 ⟦개요⟧ 0"', active)
+        for draft, prompt in ((b"/draft", "Search query: draft│"), (b"g999", "Go to source line: 999│")):
             mark = process.output_mark()
             process.send_bytes(draft)
             process.wait_for_text(prompt, after=mark)
@@ -1942,7 +1943,7 @@ print(f"SHELL_VALUE={input('shell> ')}")
             process.wait_for_text("\x1b[H\x1b[2J" + active, after=mark)
         mark = process.output_mark()
         process.send_bytes(b"n")
-        process.wait_for_text("Search content='개요' • 3/7", after=mark)
+        process.wait_for_text("3/14 occurrences • Search all text='개요'", after=mark)
         process.send_bytes(b"q")
         process.wait_for_text("shell> ")
         self.assertTrue(termios.tcgetattr(process.master_fd)[3] & termios.ICANON)

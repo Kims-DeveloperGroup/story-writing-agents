@@ -464,66 +464,57 @@ Runtime effect: the reply is stored and shown through the lead; no sibling
                 policy or authority is added.
 ```
 
-## Scenario 8: a submitted Lead result is unavailable
+<a id="scenario-8-a-submitted-lead-result-is-unavailable"></a>
 
-Suppose a referenced request passes its reference read, but the substantive
-Lead call is submitted and its response never becomes an authoritative
-result. The first shell does not expose provider stderr or report an ordinary
-retryable failure. It shows the typed uncertainty instead:
+## Scenario 8: a Lead attempt times out or has no usable result
+
+A read-only Lead request may stop before submission, time out, fail at the
+provider boundary, or return unusable output. When runtime can durably close
+that attempt, it preserves the original request and failure and exposes
+`retry_lead_turn`. For example, a response timeout produces:
 
 ```text
 story[alpha]> Review ${core_documents/global_outline.md} before answering.
 [Lead]
   Outcome: recommendation
-  Lead: The Lead provider call was submitted, but no reliable result was
-        recorded. Do not retry or replay it; authoritative state is preserved.
-        Inspect and resolve the outcome, or create and focus another
-        conversation for intentionally distinct work.
-  Next action: inspect_and_resolve_outcome
-  State: outcome_unknown
-  next action: External work may have happened. Do not replay it; inspect and recover.
+  Lead: The Lead provider attempt exceeded its response timeout.
+        Your original request and failure remain in history.
+        Send a new message or resubmit your request in this conversation.
+  Next action: retry_lead_turn
 story[alpha]>
 ```
 
-After quitting, reopen the same session and conversation:
+The default response timeout is 900 seconds per provider call. A turn can make
+several calls. Antigravity has a further 30-second outer watchdog grace;
+Codex's sole watchdog stays at 900 seconds. Use the existing
+`story chat --codex-timeout SECONDS` option to override either provider's call
+limit.
+
+Send a new message, revise the wording, or explicitly resubmit the request in
+that same conversation. After quitting, the same recovery is available when
+you reopen the session and focus the conversation:
 
 ```text
 $ story chat alpha --workspace /path/to/story
-story[alpha]> Do not replay the submitted call.
-[Lead]
-  Outcome: recommendation
-  Lead: The Lead provider call was submitted, but no reliable result was
-        recorded. Do not retry or replay it; authoritative state is preserved.
-        Inspect and resolve the outcome, or create and focus another
-        conversation for intentionally distinct work.
-  Next action: inspect_and_resolve_outcome
-  State: outcome_unknown
-  next action: External work may have happened. Do not replay it; inspect and recover.
-story[alpha]> /conversation new Distinct recovery work
-Subject: Distinct recovery work
+story[alpha]> Review ${core_documents/global_outline.md} and focus on pacing.
 ```
 
-The ordinary line after restart asks the runtime to continue, but the runtime
-returns the preserved result without a new provider call and does not append
-that line as a new durable user event. Creating and focusing a distinct
-conversation remains available for intentionally new work.
+This input starts a fresh turn with fresh reference and call identities.
+Reopening, reading history, and projecting status do not submit provider work.
+For an exact legacy unstarted, prepared-only, or unmatched submitted read-only
+Lead attempt, the projection exposes retry without changing history. Explicit
+new input first closes that prior attempt under the session and conversation
+leases, then appends the new turn. Both requests and the prior failure remain
+in history.
 
-Internally, the collaboration-history projection is the sole classifier. An
-exact proposal-free Lead call with `PREPARED` followed by unmatched
-`SUBMITTED` projects as `outcome_unknown` with
-`inspect_and_resolve_outcome`. A `PREPARED`-only call is different: it proves
-no submission, is not promoted to this state, and must follow its own returned
-recovery action. Session recovery accepts only the exact unmatched-submission
-shape as owner `collaboration_history` with failure
-`owner_outcome_unknown`; downstream proposal, review, Apply, or Commit facts
-make the shape invalid. Transition assessment permits only entry into that
-session for inspection (`ENTER_DESTINATION`). It still blocks leaving or
-pausing that owner, and other `outcome_unknown` owners remain blocked from
-entry too.
-
-Entry is inspection access, not permission to replay or resolve the uncertain
-call. It grants no provider call, Apply, artifact write, Commit, or other
-effect authority.
+A failed Revise attempt leaves its old proposal superseded; retry creates no
+replacement confirmation authority by itself. Only the matching unfinished
+native operation can be retired, so a successful checkpoint from another
+conversation remains intact. Failed closure writes, corrupt history, uncertain
+specialist/synthesis work, and pending or uncertain Apply/Commit outcomes
+retain their recovery gates. Successful specialists or full turns are not
+automatically replayed. Existing bounded malformed-response correction and
+proven pre-execution continuation replacement keep their separate constraints.
 
 ### Authentication during an active Lead operation
 

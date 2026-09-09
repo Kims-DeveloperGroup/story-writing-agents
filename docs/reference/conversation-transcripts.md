@@ -19,10 +19,15 @@ for content-bearing readable context; its default contains no record text.
 
 ## What users see
 
-`/history [COUNT]` reads the focused active conversation. `/transcript ID
-[COUNT] [--from SEQUENCE]` reads a bounded active or archived conversation
-without changing focus. Each row exposes semantic identity before readable
-fields:
+`/history [COUNT]` reads the focused active conversation.
+`/transcript [ID [COUNT] [--from SEQUENCE]]` reads a bounded active or archived
+conversation without changing focus. Bare `/transcript` opens a picker in the
+attached session; choices show `Subject (conversation_id)` with full IDs in
+catalog order. Selecting a choice resolves its ID again before reading. An
+explicit ID skips the picker. An empty catalog, cancellation, Ctrl-C, or EOF
+reads no transcript and preserves attachment, focus, and conversation history.
+
+Each row exposes semantic identity before readable fields:
 
 ```text
 History (1/2)

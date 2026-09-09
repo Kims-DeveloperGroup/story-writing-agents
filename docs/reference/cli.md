@@ -350,6 +350,19 @@ After attachment and conversation focus, ordinary non-slash input calls the
 Lead workflow. Startup authentication/configuration does not itself authorize
 specialist, artifact, or Git effects.
 
+`story chat --codex-timeout SECONDS` retains its legacy name and sets the
+positive response timeout for both Codex and Antigravity. The default is 900
+seconds, including bare `story` startup. This is a per-call limit; a Lead turn
+can make multiple calls. Antigravity uses native timeout `N` and an outer
+watchdog of `N + 30` seconds (900/930 by default). Codex uses only its watchdog
+at `N` (900 by default). The override is a `chat` option.
+
+When an eligible read-only Lead attempt fails or times out, follow
+`retry_lead_turn`: send a new message, revise the wording, or resubmit the
+request in the same conversation, including after restart. Runtime preserves
+the original request and failure and starts a fresh turn only after explicit
+input. See [Lead recovery](../guides/lead-agent.md#submitted-lead-outcome-unavailable-after-restart).
+
 ## Interactive command registry
 
 | Group | Grammar |
@@ -357,12 +370,19 @@ specialist, artifact, or Git effects.
 | Agents/configuration | `/agents`; `/auth`; `/settings`; `/override language LANG \| persona AGENT NAME \| reset` |
 | Sessions | `/session list \| create NAME \| resume [NAME] \| pause` |
 | Conversations | `/conversation new [SUBJECT] \| list [--all] [QUERY] \| resume [ID] \| subject SUBJECT \| archive [ID]` |
-| Inspection | `/search QUERY`; `/transcript ID [COUNT] [--from SEQUENCE]`; `/inspect [DEBATE\|last]`; `/exchanges`; `/history [COUNT]`; `/status` |
+| Inspection | `/search QUERY`; `/transcript [ID [COUNT] [--from SEQUENCE]]`; `/inspect [DEBATE\|last]`; `/exchanges`; `/history [COUNT]`; `/status` |
 | Help/exit | `/help [COMMAND]` (alias `/?`); `/quit` |
 
 `/search` and `/transcript` require an attachment. Conversation mutations also
 require attachment; history requires an active focus. Directives and debate
 inspection are session-scoped but do not require conversation focus.
+
+Bare `/transcript` opens a picker for active and archived conversations in the
+attached session, in catalog order. Each choice shows `Subject (conversation_id)`
+with the full ID, so duplicate subjects remain distinguishable. Selection resolves
+the ID again before reading a fresh page. An empty catalog, cancellation, Ctrl-C,
+or EOF reads no transcript and leaves attachment, focus, and conversation history unchanged.
+An explicit ID skips the picker and retains the optional count and start sequence.
 
 Ordinary non-slash text is literal Lead input. It requires an attached session
 and focused active conversation; no agent selector is accepted. The retired

@@ -4167,9 +4167,21 @@ class AgentContextService:
         continuation: ContextContinuationTransaction | None = None,
         session_history: SessionHistorySnapshot | None = None,
         publication_validator: Callable[[], bool] | None = None,
+        abandoned_operation_ids: tuple[str, ...] = (),
     ) -> ContextInvocationResult:
-        """Execute one complete contextual lifecycle under its exact scope lock."""
+        """Execute under the exact scope lock and active continuation lease.
 
+        Abandoned operations identify durable read-only failures. Only an exact
+        matching unfinished session attempt may retire its native continuation;
+        a successful checkpoint for another operation is preserved.
+        """
+
+        if type(abandoned_operation_ids) is not tuple:
+            raise _execution_error(ContextExecutionErrorCode.INVALID_VALUE)
+        for operation_id in abandoned_operation_ids:
+            _safe_identity(operation_id)
+        if abandoned_operation_ids and continuation is None:
+            raise _execution_error(ContextExecutionErrorCode.INVALID_VALUE)
         if type(request) is not ContextInvocationRequest:
             raise _execution_error(ContextExecutionErrorCode.INVALID_VALUE)
         physical_call_limit = (
@@ -4230,6 +4242,20 @@ class AgentContextService:
             raise _execution_error(ContextExecutionErrorCode.PROVIDER_CONTRACT)
         async with context_manager:
             async with lock:
+                if abandoned_operation_ids:
+                    assert continuation is not None
+                    key = ContextLedgerKey(continuation.identity.checkpoint_scope(), provider_id)
+                    inspection = self._ledger.inspect(key)
+                    record = inspection.record
+                    if (record is not None and record.attempt is not None
+                        and record.attempt.plan.operation_id in abandoned_operation_ids
+                        and record.attempt.outcome is not ContextLedgerAttemptOutcome.COMMITTED):
+                        # Invalidate first: a crash during native retirement must
+                        # still force the next owner to bootstrap, never resume.
+                        self._ledger.invalidate(key, expected_generation=inspection.generation)
+                        provider.taint_context_thread(scope, policy_fingerprint)
+                        if provider.inspect_context_thread(scope, policy_fingerprint) is not None:
+                            raise _execution_error(ContextExecutionErrorCode.PROVIDER_CONTRACT)
                 return await self._invoke_locked(
                     request,
                     provider,

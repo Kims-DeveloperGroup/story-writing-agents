@@ -1,4 +1,4 @@
-"""Structural contracts for repository-development policy and skills."""
+"""Structural contracts for repository-development policy, skills, and templates."""
 
 from __future__ import annotations
 
@@ -40,6 +40,71 @@ EXPECTED_AGENTS = {
     "runtime_implementer",
     "test_engineer",
 }
+WORK_TEMPLATE_HEADINGS = {
+    ROOT / ".github/ISSUE_TEMPLATE/work_item.md": (
+        "Objective",
+        "Use cases and expected results",
+        "Implementation summary",
+        "Acceptance criteria",
+        "Boundaries and dependencies",
+        "Related work and verification plan",
+        "Implementation plan",
+    ),
+    ROOT / ".github/pull_request_template.md": (
+        "What changed",
+        "Before and after",
+        "Implementation",
+        "Verification",
+        "Limitations and follow-ups",
+        "Related Issue",
+    ),
+    ROOT / ".github/templates/evidence.md": (
+        "What this demonstrates",
+        "Scenario results",
+        "Reproduction and environment",
+        "Failures and coverage gaps",
+        "Technical provenance and artifacts",
+        "Assessment",
+    ),
+    ROOT / ".github/templates/working-status-comment.md": (
+        "Current status",
+        "What works now",
+        "What remains",
+        "Blocker or decision",
+        "Next step",
+        "Evidence links",
+    ),
+}
+AUTHORING_PATH = (
+    SKILL_DIRECTORY / "github-task-lifecycle/references/issue-pr-authoring.md"
+)
+TEMPLATE_PLACEHOLDER = re.compile(r"\{\{[^{}\n]+\}\}")
+MARKDOWN_LINK = re.compile(r"\[[^\]\n]+\]\(<?([^\s)>]+)>?\)")
+
+
+def template_parts(source: str) -> tuple[str, list[str]]:
+    """Extract the reusable body, rejecting comments that can leak hidden text."""
+    visible: list[str] = []
+    comments: list[str] = []
+    comment_start: int | None = None
+    cursor = 0
+    for delimiter in re.finditer(r"<!--|-->", source):
+        if delimiter.group() == "<!--":
+            if comment_start is not None:
+                raise AssertionError("nested HTML comment")
+            visible.append(source[cursor:delimiter.start()])
+            comment_start = delimiter.end()
+        else:
+            if comment_start is None:
+                raise AssertionError("unmatched HTML comment close")
+            comments.append(source[comment_start:delimiter.start()])
+            comment_start = None
+            cursor = delimiter.end()
+    if comment_start is not None:
+        raise AssertionError("unclosed HTML comment")
+    visible.append(source[cursor:])
+    body = re.sub(r"\A---\n.*?\n---\n", "", "".join(visible), count=1, flags=re.DOTALL)
+    return body.strip(), comments
 
 
 def normalized(source: str) -> str:
@@ -683,8 +748,7 @@ class RepositoryAgentPolicyTests(unittest.TestCase):
     def test_agents_loads_skills_at_positive_and_negative_boundaries(self) -> None:
         descriptions = {
             "adaptive-verification": (
-                "Use for nontrivial-tracked-changes",
-                "selects/budgets/deduplicates/reuses/escalates evidence for sufficiency",
+                "Use for nontrivial tracked changes",
                 "excludes conversation/story execution",
             ),
             "github-task-lifecycle": (
@@ -705,6 +769,11 @@ class RepositoryAgentPolicyTests(unittest.TestCase):
         }
         for name, terms in descriptions.items():
             self.assertTerms(frontmatter(self.skill_sources[name])[1], *terms)
+        self.assertTerms(
+            self.verification_source,
+            "Root exclusively owns selection/authorization/budget/ concurrency/dedup/reuse/escalation/sufficiency",
+            "specialists propose, never broaden",
+        )
         self.assertTerms(
             self.agents_source,
             "For GitHub-tracked work load `$github-task-lifecycle`",
@@ -873,7 +942,18 @@ class RepositoryAgentPolicyTests(unittest.TestCase):
             "Release accepts only authorized leaf squashes at current tip and approved-main sync",
             "fast-forward clean parent `--ff-only`",
             "Never auto-merge/ close/clean or force-remove",
-            "Retain release until main integration",
+            "[completion](../../../GITHUB_WORKFLOW.md#completion-and-exceptions)",
+            "[cleanup](../../../GITHUB_WORKFLOW.md#worktree-disposition-and-cleanup)",
+        )
+        self.assertTerms(
+            markdown_section(self.workflow_source, "### Worktree Disposition and Cleanup"),
+            "Non-forced removal requires authorization, clean status, integration, and recoverability",
+            "Branch deletion is separate",
+            "Retain parent until `main`",
+        )
+        self.assertTerms(
+            markdown_section(self.workflow_source, "## Completion and Exceptions"),
+            "Reopening clears `Done`, returns `Backlog`, and replans",
         )
         self.assertNotIn("Child PRs target parent and squash", branches)
         self.assertNotIn(
@@ -882,6 +962,190 @@ class RepositoryAgentPolicyTests(unittest.TestCase):
         )
         self.assertNotIn("|Parent-PR|", self.lifecycle_source)
         self.assertNotIn("|Final-parent|", self.lifecycle_source)
+
+
+class RepositoryWorkTemplateTests(unittest.TestCase):
+    """Check reusable structure; prose quality and source accuracy need review."""
+
+    def readRequired(self, path: Path) -> str:
+        self.assertTrue(path.is_file(), f"missing authoring file: {path.relative_to(ROOT)}")
+        return path.read_text(encoding="utf-8")
+
+    def localTargets(self, path: Path, source: str) -> set[Path]:
+        targets = set()
+        for destination in MARKDOWN_LINK.findall(source):
+            if TEMPLATE_PLACEHOLDER.search(destination) or re.match(
+                r"[a-zA-Z][a-zA-Z0-9+.-]*:", destination
+            ):
+                continue
+            relative_path = destination.split("#", 1)[0]
+            target = (path.parent / relative_path).resolve() if relative_path else path
+            self.assertTrue(target.is_relative_to(ROOT), f"link leaves repository: {destination}")
+            self.assertTrue(target.exists(), f"broken link in {path.relative_to(ROOT)}: {destination}")
+            targets.add(target)
+        return targets
+
+    def test_comment_extraction_rejects_leaks_and_preserves_body(self) -> None:
+        source = "---\nname: Work\n---\n<!-- notes -->\n## Objective\n{{goal}}\n<!-- example -->"
+        self.assertEqual(template_parts(source), ("## Objective\n{{goal}}", [" notes ", " example "]))
+        for source in (
+            "<!-- example <!-- notes --> leaked example -->",
+            "<!-- unclosed example",
+            "unexpected --> example",
+        ):
+            with self.subTest(source=source), self.assertRaises(AssertionError):
+                template_parts(source)
+
+    def test_native_issue_template_has_discovery_frontmatter(self) -> None:
+        source = self.readRequired(ROOT / ".github/ISSUE_TEMPLATE/work_item.md")
+        metadata = re.match(r"\A---\n(.*?)\n---\n", source, re.DOTALL)
+        self.assertIsNotNone(metadata, "native Issue template needs YAML frontmatter")
+        assert metadata is not None
+        for field in ("name", "about"):
+            with self.subTest(field=field):
+                value = re.search(rf"^{field}:\s*([^\n]+)$", metadata[1], re.MULTILINE)
+                self.assertIsNotNone(value, f"missing native Issue template {field}")
+                assert value is not None
+                self.assertTrue(value[1].strip(" \"'"))
+
+    def test_reusable_bodies_contain_only_expected_sections_and_placeholders(self) -> None:
+        for path, headings in WORK_TEMPLATE_HEADINGS.items():
+            with self.subTest(template=path.relative_to(ROOT)):
+                body, _ = template_parts(self.readRequired(path))
+                self.assertTrue(body.startswith(f"## {headings[0]}\n"))
+                self.assertEqual(re.findall(r"^## (.+)$", body, re.MULTILINE), list(headings))
+                self.assertNotRegex(body, r"(?i)\b(?:historical|illustrative|worked) example\b")
+                self.assertNotRegex(body, r"https?://", "concrete example URLs belong in hidden comments")
+                for heading in headings:
+                    section = markdown_section(body, f"## {heading}")
+                    self.assertRegex(section, TEMPLATE_PLACEHOLDER, f"no placeholder in {heading}")
+
+    def test_templates_have_separate_hidden_guidance_for_every_section(self) -> None:
+        for path, headings in WORK_TEMPLATE_HEADINGS.items():
+            with self.subTest(template=path.relative_to(ROOT)):
+                _, comments = template_parts(self.readRequired(path))
+                guidance = "\n".join(
+                    comment for comment in comments
+                    if not re.search(r"^## ", comment, re.MULTILINE)
+                )
+                self.assertRegex(guidance, r"(?i)\bpurpose\b")
+                self.assertRegex(guidance, r"(?i)\bwhen to use\b")
+                for heading in headings:
+                    self.assertIn(heading.casefold(), guidance.casefold())
+
+    def test_templates_have_complete_qualified_examples_with_sources(self) -> None:
+        for path, headings in WORK_TEMPLATE_HEADINGS.items():
+            with self.subTest(template=path.relative_to(ROOT)):
+                _, comments = template_parts(self.readRequired(path))
+                examples = [
+                    comment for comment in comments
+                    if re.search(r"^## ", comment, re.MULTILINE)
+                ]
+                self.assertTrue(examples, "missing separate hidden complete example")
+                complete_examples = 0
+                for example in examples:
+                    self.assertRegex(example, r"(?i)\bexample\b")
+                    self.assertRegex(example, r"(?i)\b(?:historical|illustrative)\b")
+                    self.assertNotRegex(example, TEMPLATE_PLACEHOLDER)
+                    self.assertTrue(MARKDOWN_LINK.findall(example), "example needs a source link")
+                    starts = [
+                        match.start() for match in re.finditer(
+                            rf"^## {re.escape(headings[0])}$", example, re.MULTILINE
+                        )
+                    ]
+                    for start, end in zip(starts, [*starts[1:], len(example)]):
+                        variant = example[start:end]
+                        if re.findall(r"^## (.+)$", variant, re.MULTILINE) == list(headings):
+                            complete_examples += 1
+                            for heading in headings:
+                                self.assertTrue(markdown_section(variant, f"## {heading}").strip())
+                self.assertGreaterEqual(complete_examples, 1, "no example covers every body section")
+
+    def test_issue_example_use_cases_link_acceptance_and_plan(self) -> None:
+        """The illustrative example must connect its cases, criteria, and work."""
+        _, comments = template_parts(
+            self.readRequired(ROOT / ".github/ISSUE_TEMPLATE/work_item.md")
+        )
+        examples = [
+            comment for comment in comments
+            if re.search(r"^## Objective$", comment, re.MULTILINE)
+        ]
+        self.assertTrue(examples, "missing illustrative Issue example")
+        for number, example in enumerate(examples, start=1):
+            with self.subTest(example=number):
+                cases = markdown_section(example, "## Use cases and expected results")
+                definitions = re.findall(
+                    r"^(?:- )?(?:\*\*)?(UC\d+):[ \t]*(.+)$", cases, re.MULTILINE
+                )
+                self.assertTrue(definitions, "example needs labeled use-case definitions")
+                use_cases = {identifier for identifier, _ in definitions}
+                self.assertEqual(len(use_cases), len(definitions), "duplicate use-case ID")
+                for identifier, description in definitions:
+                    self.assertTrue(description.strip(" *"), f"empty definition for {identifier}")
+
+                criteria = markdown_section(example, "## Acceptance criteria")
+                entries = re.findall(
+                    r"^- \[[ xX]\] (?:\*\*)?(AC\d+):[ \t]*(.*?)"
+                    r"(?=^- \[[ xX]\] |\Z)",
+                    criteria,
+                    re.MULTILINE | re.DOTALL,
+                )
+                self.assertTrue(entries, "example needs labeled acceptance checkboxes")
+                self.assertEqual(
+                    len(entries), len(re.findall(r"^- \[[ xX]\] ", criteria, re.MULTILINE)),
+                    "each acceptance checkbox needs an AC label",
+                )
+                acceptance_cases = {}
+                for identifier, criterion in entries:
+                    self.assertNotIn(identifier, acceptance_cases, "duplicate acceptance ID")
+                    references = set(re.findall(r"\bUC\d+\b", criterion))
+                    self.assertTrue(references, f"{identifier} needs a related use case")
+                    self.assertLessEqual(references, use_cases, f"unknown use case in {identifier}")
+                    acceptance_cases[identifier] = references
+                self.assertEqual(
+                    set().union(*acceptance_cases.values()), use_cases,
+                    "every use case needs acceptance coverage",
+                )
+
+                plan = markdown_section(example, "## Implementation plan")
+                steps = re.findall(r"^\d+\. (.*?)(?=^\d+\. |\Z)", plan, re.MULTILINE | re.DOTALL)
+                self.assertTrue(steps, "example needs ordered implementation steps")
+                planned_cases = set()
+                for step_number, step in enumerate(steps, start=1):
+                    case_refs = set(re.findall(r"\bUC\d+\b", step))
+                    criterion_refs = set(re.findall(r"\bAC\d+\b", step))
+                    self.assertTrue(case_refs, f"plan step {step_number} needs a use case")
+                    self.assertTrue(criterion_refs, f"plan step {step_number} needs acceptance criteria")
+                    self.assertLessEqual(case_refs, use_cases, "unknown plan use case")
+                    self.assertLessEqual(criterion_refs, acceptance_cases.keys(), "unknown plan criterion")
+                    related_cases = set().union(*(acceptance_cases[ref] for ref in criterion_refs))
+                    self.assertLessEqual(
+                        case_refs, related_cases,
+                        "plan use cases must relate to its cited acceptance criteria",
+                    )
+                    planned_cases.update(case_refs)
+                self.assertEqual(planned_cases, use_cases, "every use case needs plan coverage")
+
+    def test_authoring_index_links_all_four_source_templates(self) -> None:
+        source = self.readRequired(AUTHORING_PATH)
+        self.assertTrue(set(WORK_TEMPLATE_HEADINGS) <= self.localTargets(AUTHORING_PATH, source))
+
+    def test_workflow_and_lifecycle_link_authoring_index(self) -> None:
+        for path in (WORKFLOW_PATH, SKILL_PATHS["github-task-lifecycle"]):
+            with self.subTest(entrypoint=path.relative_to(ROOT)):
+                self.assertIn(AUTHORING_PATH, self.localTargets(path, self.readRequired(path)))
+
+    def test_adaptive_verification_links_evidence_template(self) -> None:
+        path = SKILL_PATHS["adaptive-verification"]
+        self.assertIn(
+            ROOT / ".github/templates/evidence.md",
+            self.localTargets(path, self.readRequired(path)),
+        )
+
+    def test_template_and_authoring_local_links_resolve(self) -> None:
+        for path in (*WORK_TEMPLATE_HEADINGS, AUTHORING_PATH):
+            with self.subTest(source=path.relative_to(ROOT)):
+                self.localTargets(path, self.readRequired(path))
 
 
 if __name__ == "__main__":

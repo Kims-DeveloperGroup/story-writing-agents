@@ -414,7 +414,7 @@ class PublicApiTests(unittest.TestCase):
                 )
         self.assertEqual(signature.parameters["executable"].default, "codex")
         self.assertIsNone(signature.parameters["model"].default)
-        self.assertEqual(signature.parameters["timeout_seconds"].default, 300)
+        self.assertEqual(signature.parameters["timeout_seconds"].default, 900)
         self.assertIsNone(signature.parameters["backend_overrides"].default)
         self.assertEqual(
             signature.parameters["antigravity_executable"].default,
@@ -1341,13 +1341,13 @@ class CliTests(unittest.TestCase):
                 ],
                 "antigravity-session",
                 None,
-                300.0,
+                900.0,
                 {"plot_architect": "antigravity"},
                 "private-agy",
                 "agy-model",
                 "medium",
             ),
-            ([], None, None, 300.0, {}, "agy", None, None),
+            ([], None, None, 900.0, {}, "agy", None, None),
         )
         for (
             arguments,

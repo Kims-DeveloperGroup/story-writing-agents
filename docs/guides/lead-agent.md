@@ -612,7 +612,7 @@ Do not treat every provider-related failure as the same recovery case:
 
 | Observable fact | What it means | Safe next action |
 | --- | --- | --- |
-| An exchange closes with `provider_failure` / `provider_authentication_required`, but no valid `ProviderResult`. | The completed native result requires authentication. In interactive Lead work, Story offers provider-native sign-in. The diagnostic and sign-in result do not authorize replay. | Complete native sign-in. Story may replay only the exact Antigravity pre-execution rejection described below; it never automatically replays Codex 401 or an ambiguous/started call. |
+| An exchange closes with `provider_failure` / `provider_authentication_required`, but no valid `ProviderResult`. | The completed native result requires authentication. Authentication and timeout are independent facts; interactive Lead work still offers provider-native sign-in. | Complete native sign-in. Story may replay only the exact Antigravity pre-execution rejection when no timeout fact exists; a timeout defeats replay and continuation reuse and closes an eligible read-only Lead attempt as `provider_timed_out` with `retry_lead_turn`. |
 | An exchange has a request and `provider_failure` / `provider_invocation_failed`, but no valid `ProviderResult`. | The adapter did not return Story's provider-result contract. Configuration, output-schema rejection, transport, or another provider-side failure may be responsible. The fixed code does not prove whether the provider performed external work. | Diagnose the provider/configuration boundary. Do not infer that replay is safe from this diagnostic alone. |
 | A completed result is rejected and the durable Lead failure is `provider_result_rejected`. | Story received a result but deterministically rejected its structured action, correlation, semantics, action budget, or validated answer. The rejected call is closed. | Follow `retry_lead_turn`. This creates a fresh call; the tainted provider thread is not reused. |
 | Collaboration state is `outcome_unknown`. | Submission is durable, but no authoritative accepted or rejected result closes it. | Follow `inspect_and_resolve_outcome`; never replay the submitted call. |
@@ -637,6 +637,12 @@ new call ID. Payload, schema, correlation, expected thread, execution profile,
 and captured evidence remain identical, and any route, configuration, session,
 thread, workspace, or source drift vetoes submission. Both attempts consume the
 physical-call limit and have distinct exchanges.
+
+The fixed provider message contains the words `timed out`, but those words do
+not set Story's independent timeout fact. When that fact is present,
+authentication assistance and its exchange classification remain available,
+while timeout forbids replay and continuation reuse and controls durable Lead
+closure as `provider_timed_out` with `retry_lead_turn`.
 
 During a confirmed multi-specialist consultation, Story waits for active
 siblings before giving native sign-in the terminal. Completed sibling replies
@@ -1187,51 +1193,55 @@ Confirm can start the disclosed work after normal revalidation.
 
 ### Submitted Lead outcome unavailable after restart
 
-An exact unmatched `SUBMITTED` Lead call is a narrower case than corrupt
-history. It means runtime recorded submission but has neither a validated Lead
-judgment nor a typed outcome failure that closes that call. The visible result
-is stable across process restart:
+An eligible read-only Lead attempt without a usable result exposes
+`retry_lead_turn`. This includes timeout, provider failure, rejected final
+output or evidence, cancellation, interruption, and exact legacy unstarted,
+prepared-only, or unmatched submitted requests. Runtime preserves the original
+request and closes the failed attempt with `lead_outcome_failure`; it does not
+record a successful judgment or revive confirmation authority.
+
+For a response timeout, the returned recommendation is:
 
 ```text
 [Lead]
   Outcome: recommendation
-  Lead: The Lead provider call was submitted, but no reliable result was
-        recorded. Do not retry or replay it; authoritative state is preserved.
-        Inspect and resolve the outcome, or create and focus another
-        conversation for intentionally distinct work.
-  Next action: inspect_and_resolve_outcome
-  State: outcome_unknown
-  next action: External work may have happened. Do not replay it; inspect and recover.
+  Lead: The Lead provider attempt exceeded its response timeout.
+        Your original request and failure remain in history.
+        Send a new message or resubmit your request in this conversation.
+  Next action: retry_lead_turn
 ```
 
-For example, after a referenced request reads its required artifact and the
-substantive Lead response becomes unavailable, a user can quit and run:
+Send a new message, revise the wording, or explicitly resubmit the request in
+the same conversation, including after restarting and reopening the session.
+This starts a fresh turn. Reopening, reading history, and projection are
+provider-free and do not close or replay an attempt. For an eligible legacy
+request without a closure, explicit new input holds the session and
+conversation leases, closes the prior attempt, verifies the new tail, and only
+then appends the new user turn. Preparation without submission does not imply
+external execution or spend a submitted call.
 
-```text
-$ story chat alpha --workspace /path/to/story
-story[alpha]> Do not replay the submitted call.
-```
+The projection checks that the attempt is read-only and has no successful
+judgment, specialist/synthesis work, unresolved execution authority, or pending
+or uncertain Apply/Commit outcome. A failed Revise request leaves the old
+proposal superseded; there is no replacement proposal or confirmation request.
+If closure cannot be written or verified, or history is corrupt, normal work
+remains recovery-gated. An eligible proposal-free Lead retry is session
+`ready` after normal resource checks; other unresolved owner outcomes retain
+their restricted transition rules.
 
-The session attaches for inspection. The ordinary line receives the same
-preserved result without a new provider call and without becoming a new
-durable user event. `/conversation new Distinct recovery work` remains
-available when the user intentionally wants separate work.
+A fresh turn retires only the unfinished native operation matching an
+abandoned Lead attempt. It preserves a successful session checkpoint from
+another conversation. The original request and failure remain history, and
+fresh reference evidence is required for new work. No automatic full-turn or
+successful-specialist replay, Apply authority, or Commit authority is granted.
+The existing bounded malformed-response correction and proven pre-execution
+continuation replacement remain separate runtime paths. See the exact
+[failure payload and projection](../reference/collaboration-history.md#state-and-user-action-contract)
+and [provider continuation](../reference/backend-and-sessions.md#lead-session-continuation).
 
-This is enforced from the validated collaboration projection rather than a
-second raw-event interpretation. Only a proposal-free current Lead invocation
-whose `PREPARED` accounting is followed by unmatched `SUBMITTED` accounting is
-classified as `outcome_unknown` with
-`inspect_and_resolve_outcome`. `PREPARED` alone does not mean external work may
-have happened and is not promoted to this state. The session-recovery result
-names owner `collaboration_history` and failure `owner_outcome_unknown` only
-when no proposal, execution, artifact, Apply, or Commit successor exists.
-
-Transition assessment makes one precise exception for this owner and failure:
-`ENTER_DESTINATION` is allowed so the user can inspect the preserved state.
-`LEAVE_SOURCE` and `PAUSE_SESSION` remain denied, and outcome uncertainty owned
-by story commit, checkpoint, or another subsystem still permits no transition.
-Attaching or entering never authorizes replay, resolution, Apply, artifact
-write, Commit, or any other effect.
+Task cancellation attempts the same durable failure closure and is re-raised
+after bound resources and leases are released. Recovery never converts
+cancellation into a successful return.
 
 Outer cancellation cancels and joins all child tasks, persists every knowable
 result, clears the live marker, and re-raises cancellation to the caller.

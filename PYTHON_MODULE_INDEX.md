@@ -18,12 +18,12 @@ Package root: `src/story_writing_agents/`
 
 Importable production units indexed: 138.
 
-Direct internal dependency edges indexed: 547.
+Direct internal dependency edges indexed: 548.
 
 Directed internal dependency cycles indexed: 0.
 
 Edge and cycle totals exclude annotation-only `TYPE_CHECKING` imports. The
-all-import AST graph has 549 edges; its annotation-only workspace cycle was
+all-import AST graph has 550 edges; its annotation-only workspace cycle was
 already present in the 135-unit baseline (528 all-import / 526 runtime edges).
 
 ## Current Dependency Direction
@@ -788,6 +788,13 @@ every intermediate arrow. The current runtime graph is acyclic.
 ### `story_writing_agents.agent_context.service`
 
 - **Source:** `src/story_writing_agents/agent_context/service.py`
+- **Continuation retirement:** `invoke(..., abandoned_operation_ids=())`
+  accepts exact durable Lead failure operations only with an active session
+  continuation. Under the existing provider/scope lease it invalidates a
+  matching unfinished ledger attempt, retires its native thread through the
+  provider lifecycle API, and verifies retirement before new provider work.
+  Unrelated or committed session checkpoints remain intact; no replay is
+  authorized.
 - **Responsibility:** Coordinate workspace-scoped provider-neutral contextual
   invocation lifecycles.
 - **Supported surface:** No project-root or `agent_context`-facade-supported
@@ -926,7 +933,10 @@ every intermediate arrow. The current runtime graph is acyclic.
   through `authentication_replay` for final backend admission. A veto preserves
   the original failure/accounting without recording another submission;
   operation-local callbacks are cleared on submission or failure. Known safe
-  authentication rejection records FAILED rather than an ambiguous outcome.
+  authentication rejection records FAILED rather than an ambiguous outcome. A
+  simultaneous timeout fact makes submission uncertain, taints a submitted
+  continuation, and blocks replay even when stdout alone matches the exact
+  authentication envelope.
   Missing recovery scope returns a typed failure without native interaction.
 - **Direct internal dependencies:** `agent_context.accounting`,
   `agent_context.actions`, `agent_context.continuation`, `agent_context.ledger`,
@@ -972,6 +982,7 @@ every intermediate arrow. The current runtime graph is acyclic.
   `tests/test_provider_auth_recovery_live.py` with
   `tests/provider_auth_recovery_live_harness.py` (opt-in native execution),
   `tests/test_provider_auth_recovery.py`,
+  `tests/test_provider_timeout_recovery.py`,
   `tests/test_agent_context_service.py`,
   `tests/test_agent_context_execution.py`,
   `tests/test_agent_exchange_capture.py`,
@@ -1174,6 +1185,9 @@ every intermediate arrow. The current runtime graph is acyclic.
 ### `story_writing_agents.backend`
 
 - **Source:** `src/story_writing_agents/backend.py`
+- **Timeout contract:** Defaults to the shared 900-second response budget and
+  passes configured budgets unchanged to adapters. Context failure facts
+  recognize both owned-process deadlines and typed native partial timeouts.
 - **Responsibility:** Coordinate provider adapters under the provider-neutral
   session, lifecycle, retrieval, and reply contracts.
 - **Supported surface:** Package-supported `AgentBackend` and `BoundAgent`.
@@ -1224,9 +1238,11 @@ every intermediate arrow. The current runtime graph is acyclic.
   native failures and captures their physical exchange before propagation.
   Contextual failures retain exact accounting and distinguish known safe
   authentication rejection from uncertain submission when deciding thread
-  taint. Before each original contextual submission, it captures configuration
-  baseline, durable route values, workspace identity, active/binding adapter
-  generations, profile, and expected thread in an error-owned replay veto.
+  taint; a simultaneous timeout fact always selects the uncertain, tainted,
+  replay-ineligible form. Before each original contextual submission, it
+  captures configuration baseline, durable route values, workspace identity,
+  active/binding adapter generations, profile, and expected thread in an
+  error-owned replay veto.
   The veto checks current backend readiness/access and equality of those facts;
   final validation runs after activity admission and before exchange creation
   or adapter invocation. Source validation remains context-service-owned.
@@ -1466,6 +1482,11 @@ every intermediate arrow. The current runtime graph is acyclic.
 ### `story_writing_agents.antigravity_adapter`
 
 - **Source:** `src/story_writing_agents/antigravity_adapter.py`
+- **Timeout completion:** Native `--print-timeout` uses the configured response
+  budget; the outer owned-process watchdog adds the shared 30-second grace.
+  Partial-timeout and truncation warnings require exact current native finish
+  evidence even for exit-zero SUCCESS. Rejected partial timeout output carries
+  the typed timeout fact. Accepted output still undergoes runtime validation.
 - **Responsibility:** Adapt immutable agent bindings and structured turns to the
   Antigravity CLI protocol.
 - **Supported surface:** No package-supported API. Package-internal
@@ -1646,7 +1667,8 @@ every intermediate arrow. The current runtime graph is acyclic.
   validation still follows, with no retry or replay.
   Completed native failures attach exact stdout/stderr bytes and exit code as
   passive `ProviderResponseDiagnostic` data on `ProviderInvocationError`;
-  recovered ERROR results retain it on `ProviderResult`. Ordinary SUCCESS
+  recovered ERROR and independently completed warning-marked results retain
+  it on `ProviderResult`. Ordinary SUCCESS
   omits it. Unavailable partial timeout/cancellation output is not fabricated,
   and the shared process owner remains unchanged. This terminal envelope provides
   no init or step events, so the adapter does not attest the selected agent,
@@ -1743,6 +1765,10 @@ every intermediate arrow. The current runtime graph is acyclic.
 ### `story_writing_agents.provider_adapter`
 
 - **Source:** `src/story_writing_agents/provider_adapter.py`
+- **Timeout contract:** Shared immutable defaults are
+  `DEFAULT_PROVIDER_TIMEOUT_SECONDS=900` and `PROVIDER_TIMEOUT_GRACE_SECONDS=30`.
+  The optional validated `ProviderInvocationError.timed_out` fact carries native
+  timeout classification without exposing private diagnostics.
 - **Responsibility:** Define the private provider substitution contract.
 - **Supported surface:** No package-supported API. Package-internal frozen
   `ExecutionValueSource` and `AgentExecutionProfile` define the immutable
@@ -1767,12 +1793,15 @@ every intermediate arrow. The current runtime graph is acyclic.
   capacity rejection only when a trusted transport proves pre-execution
   rejection. `ProviderInvocationError` may carry that closed proof; current
   Codex and Antigravity native formats do not emit it. Generic exit failures,
-  timeouts, prose lookalikes, and uncertain submissions never authorize retry.
+  timeouts, prose lookalikes, and uncertain submissions never authorize
+  automatic retry.
 - **Authentication failure seam:** `ProviderInvocationError` additively accepts
   an exact optional `ProviderAuthenticationRequiredError` from the public error
   owner, independently of continuation-rejection proof and diagnostic bytes.
   Concrete adapters classify native authentication; the backend preserves and
-  enriches that same typed failure. This contract owns neither login nor replay.
+  enriches that same typed failure. The separately validated optional
+  `timed_out` fact can coexist with authentication and conservatively veto its
+  replay. This contract owns neither login nor replay.
 - **Direct internal dependencies:** `agent_context`, `errors`, and `models`.
 - **State, resources, and side effects:** Owns no mutable module state or
   external resource. Construction creates only immutable mappings, canonical
@@ -1983,6 +2012,9 @@ every intermediate arrow. The current runtime graph is acyclic.
 ### `story_writing_agents.cli`
 
 - **Source:** `src/story_writing_agents/cli.py`
+- **Timeout contract:** Explicit `chat` and the no-subcommand shell share the
+  900-second response default; `--codex-timeout` remains the compatible
+  provider-neutral override.
 - **Responsibility:** Parse and dispatch the retained CLI management,
   inspection, storage, provider-free RAG, smoke, and interactive-shell commands.
 - **Supported surface:** Script entry point `story_writing_agents.cli:main`
@@ -2000,7 +2032,7 @@ every intermediate arrow. The current runtime graph is acyclic.
   `debug_log`, `errors`, `interactive_auth`,
   `interactive_controller`, `interactive_settings`,
   `interactive_terminal`, `orchestrator`, `provider_auth`,
-  `provider_catalog`, `session_lifecycle`,
+  `provider_adapter`, `provider_catalog`, `session_lifecycle`,
   `session_recovery.transition_assessment`, `smoke`, and `workspace`.
 - **State, resources, and side effects:** Argument parsing is resource-free;
   retained dispatch delegates state and resources to the selected owner.
@@ -4407,12 +4439,18 @@ every intermediate arrow. The current runtime graph is acyclic.
 ### `story_writing_agents.conversations.context`
 
 - **Source:** `src/story_writing_agents/conversations/context.py`
-- **Responsibility note:** Projection is the sole classifier for an exact
-  unmatched PREPARED-to-SUBMITTED Lead invocation: it exposes proposal-free
-  `OUTCOME_UNKNOWN` with `INSPECT_AND_RESOLVE_OUTCOME`; PREPARED-only history
-  remains distinct and malformed accounting remains rejected. An exact
-  correlated Lead outcome-failure closure marks that invocation complete and
-  exposes `RETRY_LEAD_TURN` instead of synthesizing outcome unknown.
+- **Responsibility note:** Pure projection classifies unstarted, PREPARED, and
+  SUBMITTED read-only Lead attempts as `RETRY_LEAD_TURN` only without confirmed
+  execution, pending write/commit, or uncertain authoritative outcomes.
+  Superseded revision requests may close without reviving authority.
+  `LeadDecisionResult` admits a failed revision only as an evidence-free
+  recommendation with `RETRY_LEAD_TURN`, no replacement/confirmation/application
+  request, and at most the exact prior artifact candidate marked superseded.
+  Successful replacement and direct-response revision checks remain distinct.
+  Exact failure validation binds the last prepared/submitted call or one unsubmitted
+  user request, closes its Lead turn once, and rejects later Lead calls on that
+  turn. Other invocation kinds retain their separate lifecycle. Malformed
+  histories and uncertain authoritative effects remain blocked.
 - **Responsibility:** Define pure collaboration interaction and history-
   projection contracts.
 - **Supported surface:** Exactly 28 owning-module names in `__all__`: the five
@@ -4471,7 +4509,7 @@ every intermediate arrow. The current runtime graph is acyclic.
   exact active proposal revision, and admits exact start, typed reply/synthesis,
   result, terminal-finalization, known-fact outcome-unknown, second-round
   continuation, ordinary-message supersession, exact lead judgment/proposal,
-  and submitted-call validation-failure closure batches while preserving
+  and read-only attempt-failure closure batches while preserving
   structured confirmation for confirm, reject, and revise. Proposal judgments
   and lead synthesis must equal their proposal-basis evidence; reply event IDs
   remain attribution only. The conversations facade exposes
@@ -4486,7 +4524,7 @@ every intermediate arrow. The current runtime graph is acyclic.
   selection; and deterministic full-history, candidate,
   transition, correlation, provider-call PREPARED/SUBMITTED pairing,
   budget-lineage, evidence-order/scope/status/kind/proposal/synthesis closure,
-  exact-tail lead-decision, submitted lead-call failure/no-replay closure,
+  exact-tail lead-decision, exact read-only Lead failure/no-replay closure,
   reviewed-artifact lifecycle closure, and atomic co-batch validation
   including exact external-exchange/result closure and rejection of every late
   provider/execution event outside the exact active running attempt, and
@@ -4510,6 +4548,9 @@ every intermediate arrow. The current runtime graph is acyclic.
 ### `story_writing_agents.conversations.events`
 
 - **Source:** `src/story_writing_agents/conversations/events.py`
+- **Failure compatibility:** Invocation/call IDs may be null only for the
+  explicit request-not-submitted code. Existing rejection payload fields and
+  types remain unchanged; the strict codec admits the additive failure codes.
 - **Responsibility:** Define immutable visible conversation, lead-intent, and
   collaboration event schemas.
 - **Supported surface:** Exactly 98 owning-module names in `__all__`: the three
@@ -4519,8 +4560,9 @@ every intermediate arrow. The current runtime graph is acyclic.
   proposal, specialist assessment and exact reply, typed lead synthesis,
   closed semantic scope/evidence-status/acquisition values, content-free
   evidence receipts and ordered lead evidence, typed lead judgments and
-  submitted-outcome failure closure including the stable provider-result-
-  rejected classification, provider-call lifecycle, outcomes,
+  attempt-failure closure including existing rejection codes and new
+  request-not-submitted/provider-failed/provider-timed-out/cancelled/interrupted
+  codes, provider-call lifecycle, outcomes,
   payloads, events, batches,
   receipts, failures, and errors; `CollaborationPayload`; two canonical digest
   functions; and eight strict proposal/event/draft/batch encode/decode
@@ -4954,16 +4996,17 @@ every intermediate arrow. The current runtime graph is acyclic.
   Story header facts, lazily imports only installed `jsonl_viewer`, validates
   its exact three-name facade, `ViewerSpec` constructor, `ViewerHost` method
   shapes, `view_jsonl(source, spec, host)` signature, and constructed spec
-  projection before returning an operation. The exact constructor must expose
-  appended `input_protocol="semantic"`; preparation supplies and verifies
+  projection before returning an operation. The exact 0.3 constructor omits
+  `searchable_fields` and exposes `input_protocol="semantic"`; preparation supplies and verifies
   `input_protocol="keys"`, rejecting older installations before terminal
   acquisition without consulting package-version metadata. Missing packages produce fixed
   installation guidance; opaque, missing, variadic, or incompatible API
   shapes produce the fixed incompatible category before terminal acquisition.
   The generic spec labels the full Conversation or Debate ID and subject,
   identifies the session and canonical agent, prioritizes timestamp, request
-  type, and content, and enumerates only the exact durable schema fields as
-  searchable. The returned operation accepts the internal borrowed host and
+  type, and content without defining a searchable-field allowlist. Full-text
+  search, per-occurrence focus and navigation, and query editing belong entirely
+  to the external viewer. The returned operation accepts the internal borrowed host and
   calls the viewer exactly once; runtime viewer exceptions become fixed
   viewer-failed errors without exposing external prose.
 - **Direct internal dependencies:** `agent_exchanges` and
@@ -6390,9 +6433,12 @@ every intermediate arrow. The current runtime graph is acyclic.
   handling remains bounded. No path replays an unknown outcome, revives a
   confirmation, or duplicates the initiating user event. Specialist, debate,
   consensus, evidence, and reference scopes remain per invocation.
-- **Responsibility note:** Immediate and restart Lead recovery consume the
-  collaboration projection's submitted-call classification; only PREPARED-only
-  detection remains local for the established recovery-required path.
+- **Responsibility note:** Immediate and restart Lead recovery consume pure
+  projection retry eligibility. Under session/conversation leases the runtime
+  durably closes the exact failed read-only request before admitting explicit
+  new input. It supplies exact closed operation IDs to the context owner's
+  public continuation API. Original history and successful specialist results
+  remain intact; recovery never grants Apply/Commit authority.
 - **Responsibility:** Own the story runtime lifecycle and lead-front-channel
   orchestration.
 - **Supported surface:** Package-supported `StoryRuntime` and
@@ -6470,9 +6516,10 @@ every intermediate arrow. The current runtime graph is acyclic.
   unchanged. Restart normalization
   locally finalizes a result-backed RUNNING step without a provider call and
   converts unresolved or submission-uncertain work to outcome unknown without
-  replay. Durable unmatched `SUBMITTED` Lead calls return the same typed
-  outcome-unknown inspection guidance immediately and after restart, while
-  merely `PREPARED` calls retain recovery-required handling. A submitted lead
+  replay. Durable unmatched read-only Lead requests and PREPARED/SUBMITTED attempts
+  expose retry guidance; explicit new input abandons the prior attempt durably
+  before starting a fresh turn in the same conversation. Failed closure remains
+  recovery-required and never rewrites history. A submitted lead
   answer rejected by evidence validation is closed by one typed content-free
   failure event and returns retry authority without a successful judgment or
   replay. For one malformed, correlation-mismatched, semantically rejected, or
@@ -6487,8 +6534,10 @@ every intermediate arrow. The current runtime graph is acyclic.
   same-invocation submitted calls. If correction is unavailable or rejected,
   the exact failure closure uses the last submitted call and the stable
   provider-result-rejected code when applicable. Missing, cancelled, crashed,
-  timed-out, or submission-uncertain responses remain on the non-replay
-  outcome-unknown path and are never corrected internally.
+  timed-out, or submission-uncertain read-only attempts receive truthful failure
+  closure and are never corrected internally. Cancellation and process control
+  exceptions remain observable; source/preparation/reference errors preserve
+  their original exception after durable closure.
   A unique non-null artifact-intent declaration is classified as an
   artifact-intent failure even when its untrusted body fails strict decoding;
   no path retains the rejected body. A direct revised turn exposes the old exact
@@ -6516,12 +6565,15 @@ every intermediate arrow. The current runtime graph is acyclic.
   public package export.
 - **Authentication propagation:** The call-accounting wrapper does not record
   another SUBMITTED fact when final admission aborts replay using the original
-  failure. Known safe Lead authentication failure records the existing typed
-  rejected-outcome fact before propagating the module-supported authentication
-  exception. Confirmed specialist execution preserves sibling results and
-  persists/finalizes the collaboration outcome before raising an authentication
-  failure from assignments or synthesis. This retains submitted-call evidence
-  and does not mint another confirmation, dispatch, or collaboration run.
+  failure. Known safe, non-timeout Lead authentication failure records the
+  existing typed rejected-outcome fact before propagating the module-supported
+  authentication exception. A simultaneous timeout is instead durably closed
+  as `provider_timed_out` while the typed authentication failure remains
+  available for interactive assistance. Confirmed specialist execution
+  preserves sibling results and persists/finalizes the collaboration outcome
+  before raising an authentication failure from assignments or synthesis. This
+  retains submitted-call evidence and does not mint another confirmation,
+  dispatch, or collaboration run.
 - **Direct internal dependencies:** `agent_context.accounting`,
   `agent_context.continuation`, `agent_context.manifest`, `agent_context.planning`, `agent_context.service`,
   `agent_context.sources`, `agents`, `artifact_proposals`, `backend`, `config`,
@@ -6573,6 +6625,7 @@ every intermediate arrow. The current runtime graph is acyclic.
   `tests/test_provider_auth_recovery_live.py` with
   `tests/provider_auth_recovery_live_harness.py` (opt-in native execution),
   `tests/test_provider_auth_recovery.py`,
+  `tests/test_provider_timeout_recovery.py`,
   `tests/test_lead_orchestration.py`,
   `tests/test_artifact_proposal_orchestration.py`,
   `tests/test_lead_artifact_application.py`,
@@ -6687,7 +6740,8 @@ every intermediate arrow. The current runtime graph is acyclic.
 - **Source:** `src/story_writing_agents/session_recovery/contracts.py`
 - **Responsibility note:** Exact ordinary proposal-free Lead history projects
   `ready` only after correlation, lifecycle, repository, and unresolved-owner
-  safety checks. The package-internal
+  safety checks, including retry-safe failed or legacy unfinished read-only
+  Lead tails. It grants no replay or write authority. The package-internal
   `is_unmatched_submitted_lead_projection` predicate separately recognizes
   submitted Lead outcome uncertainty; both shapes reject downstream artifacts.
 - **Responsibility:** Define and deterministically classify immutable evidence
@@ -6721,8 +6775,8 @@ every intermediate arrow. The current runtime graph is acyclic.
 
 - **Source:** `src/story_writing_agents/session_recovery/reconciliation.py`
 - **Responsibility note:** Reconciliation admits exact ordinary proposal-free
-  Lead history after stable owner observations, including candidate/commit
-  mapping checks. The separate unmatched-submitted shape reports
+  Lead history, including retry-safe attempt tails, after stable owner
+  observations and candidate/commit mapping checks. The separate unmatched-submitted shape reports
   collaboration-history owner outcome uncertainty. Neither path reads raw
   events, repairs history, or replays work.
 - **Responsibility:** Observe authoritative owners and assemble one stable,
@@ -7773,13 +7827,19 @@ every intermediate arrow. The current runtime graph is acyclic.
 
 ## Consistency Notes
 
-- Runtime authentication recovery adds one internal module and eight inward
-  runtime edges over the 137-unit/539-edge baseline: 138 units, 547 runtime
-  edges, 549 all-import edges, and no runtime cycle. Source-path parity and
-  dependency direction were derived without importing production. No package
-  facade or persistent store schema changes; the new typed authentication
-  exception is supported at its owning `errors` module. Recovery state and
-  callbacks are operation-local and cannot revive authority after restart.
+- Provider timeout, Lead recovery, and runtime authentication recovery compose
+  over the 137-unit/539-edge baseline by adding the internal
+  `provider_auth_recovery` module, its eight inward runtime edges, and the
+  independent `cli -> provider_adapter` shared-timeout-default edge: 138 units,
+  548 runtime edges, 550 all-import edges, and no directed runtime cycle.
+  Whole-source path parity remains exact. Existing package facades and
+  persistent store schemas are unchanged; failure enum values and one optional
+  context-service lifecycle keyword extend their established owning contracts,
+  while the typed authentication exception remains supported at its owning
+  `errors` module. Recovery state and callbacks are operation-local and cannot
+  revive authority after restart. A simultaneous native authentication and
+  timeout classification remains eligible for interactive assistance but is
+  tainted, replay-ineligible, and durably closed as a timeout.
 - Session continuation adds two internal modules and 13 inward runtime edges
   over the accepted 135-unit/526-edge baseline: 137 units, 539 runtime edges,
   and no new or existing runtime cycle. Facade exports are unchanged. Source

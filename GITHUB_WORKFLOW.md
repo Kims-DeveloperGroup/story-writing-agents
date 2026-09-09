@@ -43,12 +43,13 @@ Keep-one-implementation/delivery-unit on current-Issue. Children require planned
 direct-child sets of >=2 independently-complete necessary units/slices/releases,
 created/verified together; never sole-child/wrapper/placeholder chains.
 
-Root records objective, non-goals, integration criteria, children/order, risks, evidence,
-base. Leaf records root/parent/Project, objective/context, in/out scope, testable completion,
-verification/docs/components/dependencies/constraints/risks. Use native sub-Issues and
-`blocked by`; never start unfinished prerequisites or expand scope without approval. Root
-closes after all `Must` releases/core integration; linked `Recommended`/`Optional` follow-ups are excluded
-from required children and never block closure. Child PR never closes its parent.
+Agents must read the [authoring guide](.agents/skills/github-task-lifecycle/references/issue-pr-authoring.md)
+and template source before creating or updating Issues, PRs, evidence, or status comments.
+
+Use native sub-Issues and `blocked by`; never start unfinished prerequisites or expand
+scope without approval. Root closes after all `Must` releases/core integration; linked
+`Recommended`/`Optional` follow-ups are excluded from required children and never block
+closure. Child PR never closes its parent.
 
 ## Planning Metadata
 

@@ -27,7 +27,8 @@ from story_writing_agents.config import ConfigManager
 from story_writing_agents.conversations import (
     CollaborationConfirmationDecision, CollaborationEventKind,
     CollaborationExecutionResult, CollaborationSpecialistReplyPayload,
-    CollaborationStepState,
+    CollaborationLeadOutcomeFailureCode, CollaborationLeadOutcomeFailurePayload,
+    CollaborationNextAction, CollaborationStepState,
 )
 from story_writing_agents.errors import ProviderAuthenticationRequiredError
 from story_writing_agents.interactive_controller._lead_policy import InteractiveLeadAdapter
@@ -108,6 +109,65 @@ class AuthClassificationTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(failure.provider, "antigravity")
         self.assertTrue(failure.replay_safe)
         self.assertFalse(failure.validate_replay())
+
+    async def test_antigravity_partial_timeout_auth_preserves_both_native_facts(self):
+        workspace = initialized_workspace(self)
+        adapter = AntigravityAdapter(
+            executable="synthetic-agy",
+            timeout_seconds=7,
+            state_root=workspace.path("auth-partial-timeout"),
+            explicit_model=None,
+            explicit_effort=None,
+        )
+        definition = replace(
+            PromptAssembler(workspace).build_definition(
+                session_id="auth-partial-timeout",
+                agent_id=PLOT_ARCHITECT,
+            ),
+            backend="antigravity",
+        )
+        binding = adapter.bind(definition)
+        self.addCleanup(adapter.release, binding)
+        invocation = ProviderInvocation(
+            session_id="auth-partial-timeout",
+            schema={"type": "object"},
+            payload={"synthetic": "unchanged"},
+            thread_id="existing-thread",
+        )
+        marker = (
+            b"[agy] print timeout after 7s with turn in progress; "
+            b"returning partial output\n"
+        )
+        native = ProcessResult(
+            stdout=incident_bytes(),
+            stderr=marker,
+            returncode=1,
+        )
+
+        with mock.patch(
+            "story_writing_agents.antigravity_adapter.run_process",
+            new=mock.AsyncMock(return_value=native),
+        ):
+            with self.assertRaises(ProviderInvocationError) as caught:
+                await adapter.invoke(binding, invocation)
+
+        failure = caught.exception
+        authentication = failure.authentication_failure
+        self.assertIs(type(authentication), ProviderAuthenticationRequiredError)
+        self.assertTrue(authentication.replay_safe)
+        self.assertTrue(failure.timed_out)
+        self.assertFalse(failure.taint_existing_thread)
+        self.assertTrue(AgentBackend._context_failure_timed_out(failure))
+        self.assertEqual(
+            failure.response_diagnostic,
+            ProviderResponseDiagnostic(native.stdout, marker, 1),
+        )
+        accounting = provider_failure_accounting(failure)
+        self.assertIs(accounting.state, ProviderCallState.SUBMITTED)
+        self.assertEqual(
+            accounting.actual_transport_utf8_bytes,
+            len(invocation.payload_json),
+        )
 
     async def test_antigravity_partial_and_malformed_shapes_never_grant_replay(self):
         original = json.loads(incident_bytes())
@@ -544,6 +604,76 @@ class RecoveryCoordinationTests(lead.LeadOrchestrationTestCase):
                     await restarted.decide_lead_step(lead._decision(proposed, CollaborationConfirmationDecision.CONFIRM))
                 self.assertEqual(self.backend.calls, before)
                 self.assertEqual(self.history(conversation), events)
+
+    async def test_partial_timeout_auth_is_assisted_without_replay_and_closes_lead(self):
+        from story_writing_agents.conversations import project_collaboration_history
+
+        self.backend = lead._LeadBackend(persist_context_threads=True)
+        self.runtime = StoryRuntime(self.workspace, self.backend)
+        conversation = self.conversation("Authentication and timeout")
+        with mock.patch.object(
+            lead._LeadContextProvider,
+            "provider_id",
+            "antigravity",
+        ):
+            self.backend.enqueue(lead._visible_outcome("answer"))
+            await self.runtime.lead_turn(
+                self.session_id,
+                conversation,
+                "Seed the existing provider thread.",
+            )
+            assert self.backend.context_threads is not None
+            retained_thread = next(iter(self.backend.context_threads.values()))
+            before_calls = len(self.backend.calls)
+
+            failure = auth_failure("antigravity", safe=True)
+            self.backend.enqueue(
+                lead._SubmittedFailure(
+                    failure,
+                    timed_out=True,
+                    submission_uncertain=True,
+                )
+            )
+            assisted = []
+            with self.assertRaises(ProviderAuthenticationRequiredError) as caught:
+                await drive_recovery(
+                    self.runtime.lead_turn(
+                        self.session_id,
+                        conversation,
+                        "Retain this timed-out request.",
+                    ),
+                    lambda key: assisted.append(key) or True,
+                )
+
+        self.assertIs(caught.exception, failure)
+        self.assertEqual(assisted, [("antigravity", 0)])
+        self.assertEqual(len(self.backend.calls), before_calls + 1)
+        facts = context_provider_failure_facts(failure)
+        self.assertTrue(facts.timed_out)
+        self.assertTrue(facts.submission_uncertain)
+        self.assertTrue(facts.taint_existing_thread)
+        self.assertFalse(failure.validate_replay())
+        self.assertEqual(self.backend.tainted_thread_ids, [retained_thread])
+        assert self.backend.context_threads is not None
+        self.assertNotIn(retained_thread, self.backend.context_threads.values())
+
+        events = self.history(conversation)
+        closures = [
+            event.payload
+            for event in events
+            if type(event.payload) is CollaborationLeadOutcomeFailurePayload
+        ]
+        self.assertEqual(len(closures), 1)
+        self.assertIs(
+            closures[0].code,
+            CollaborationLeadOutcomeFailureCode.PROVIDER_TIMED_OUT,
+        )
+        projection = project_collaboration_history(events)
+        self.assertIsNone(projection.current_state)
+        self.assertIs(
+            projection.next_safe_action,
+            CollaborationNextAction.RETRY_LEAD_TURN,
+        )
 
     async def test_parallel_specialists_resume_without_duplicate_dispatch_or_synthesis(self):
         conversation = self.conversation()

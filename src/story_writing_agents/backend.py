@@ -141,6 +141,7 @@ from .interactive_settings import (
 )
 from .provider_auth_recovery import provider_activity, validate_provider_replay
 from .provider_adapter import (
+    DEFAULT_PROVIDER_TIMEOUT_SECONDS,
     AgentExecutionProfile,
     ExecutionValueSource,
     ProviderAdapter,
@@ -1324,7 +1325,7 @@ class AgentBackend:
         *,
         executable: str = "codex",
         model: str | None = None,
-        timeout_seconds: float = 300,
+        timeout_seconds: float = DEFAULT_PROVIDER_TIMEOUT_SECONDS,
         backend_overrides: Mapping[str, str] | None = None,
         antigravity_executable: str = "agy",
         antigravity_model: str | None = None,
@@ -4265,9 +4266,10 @@ class AgentBackend:
                 )
             self._capture_provider_return_without_replacing(exchange, result)
         except ProviderInvocationError as exc:
+            timed_out = self._context_failure_timed_out(exc)
             try:
                 self._observe_provider_failure(invocation, exc)
-                if stored is not None and exc.taint_existing_thread:
+                if stored is not None and (exc.taint_existing_thread or timed_out):
                     taint_thread()
             finally:
                 self._capture_provider_failure_without_replacing(
@@ -4276,7 +4278,7 @@ class AgentBackend:
                         AgentExchangeTerminalCode.PROVIDER_AUTHENTICATION_REQUIRED
                         if exc.authentication_failure is not None
                         else AgentExchangeTerminalCode.PROVIDER_TIMED_OUT
-                        if self._context_failure_timed_out(exc)
+                        if timed_out
                         else AgentExchangeTerminalCode.PROVIDER_INVOCATION_FAILED
                     ),
                     failure=exc,
@@ -4428,12 +4430,14 @@ class AgentBackend:
 
     @staticmethod
     def _context_failure_timed_out(failure: BaseException) -> bool:
-        """Recognize only the backend's explicit bounded-process timeout."""
+        """Recognize explicit process or provider timeout facts in the cause chain."""
 
         current: BaseException | None = failure
         seen: set[int] = set()
         while current is not None and id(current) not in seen:
-            if isinstance(current, ProcessTimedOut):
+            if isinstance(current, ProcessTimedOut) or (
+                isinstance(current, ProviderInvocationError) and current.timed_out
+            ):
                 return True
             seen.add(id(current))
             current = current.__cause__
@@ -4599,8 +4603,11 @@ class AgentBackend:
                 and accounting.state is ProviderCallState.SUBMITTED
             )
             authentication = failure.authentication_failure
+            timed_out = self._context_failure_timed_out(failure)
             known_auth_rejection = (
-                authentication is not None and authentication.replay_safe
+                authentication is not None
+                and authentication.replay_safe
+                and not timed_out
             )
             taint = bool(
                 failure.taint_existing_thread or (submitted and not known_auth_rejection)
@@ -4620,7 +4627,7 @@ class AgentBackend:
                 translated,
                 ContextProviderFailureFacts(
                     accounting,
-                    timed_out=self._context_failure_timed_out(failure),
+                    timed_out=timed_out,
                     taint_existing_thread=taint,
                     submission_uncertain=(
                         authentication is not None and not known_auth_rejection
@@ -4629,7 +4636,7 @@ class AgentBackend:
                         ContextContinuationRejection(failure.continuation_rejection.value)
                         if expected_thread_id is not None
                         and failure.continuation_rejection is not None
-                        and not self._context_failure_timed_out(failure)
+                        and not timed_out
                         else None
                     ),
                 ),
@@ -4640,7 +4647,7 @@ class AgentBackend:
                     AgentExchangeTerminalCode.PROVIDER_AUTHENTICATION_REQUIRED
                     if failure.authentication_failure is not None
                     else AgentExchangeTerminalCode.PROVIDER_TIMED_OUT
-                    if self._context_failure_timed_out(failure)
+                    if timed_out
                     else AgentExchangeTerminalCode.PROVIDER_INVOCATION_FAILED
                 ),
                 failure=failure,

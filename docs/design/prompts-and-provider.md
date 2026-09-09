@@ -12,6 +12,22 @@ hash-derived identity; **binding**—the provider object for a definition;
 **visible context**—events explicitly sent in a request; **provider-private
 history**—state behind a provider thread ID.
 
+## Response timeout and completion
+
+The backend and interactive startup share a 900-second default per physical
+provider call. The existing `--codex-timeout` option overrides both providers.
+For timeout `N`, Antigravity receives native `--print-timeout <N>s` plus an outer
+watchdog at `N + 30` seconds. Codex has no native timer in this path and uses
+only the watchdog at `N`. A multi-call Lead turn has no single 900-second
+deadline; bounded process cleanup follows timeout or cancellation.
+
+Antigravity native timeout/truncation warnings can accompany exit zero and
+partial JSON output. Such a result requires independent native completion
+evidence for the exact current call in addition to the strict envelope,
+schema, identity, and domain checks. The existing malformed-function-call
+recovered-final path uses the same completion boundary. See the
+[native evidence rules](../guides/antigravity.md#recover-a-completed-native-error).
+
 <a id="exact-provider-context-accounting"></a>
 
 ## Exact provider-context accounting
@@ -328,7 +344,8 @@ exception.
 The request diagnostic is canonical JSON containing only `call_kind`,
 `payload`, `prior_thread_id`, and `schema`. A completed result contains
 `actual_transport_utf8_bytes`, `response_text`, `thread_id`, and nullable
-validated `usage`. A recovered Antigravity native `ERROR` also carries
+validated `usage`. A recovered Antigravity native `ERROR`, or a timeout/truncation
+warning accepted with exact current-call completion proof, also carries
 `response_diagnostic`: integer `exit_code` and `stdout`/`stderr` streams, each encoded as
 `{"encoding":"utf-8","data":"…"}` or, for invalid UTF-8 bytes,
 `{"encoding":"base64","data":"…"}`.
@@ -336,11 +353,13 @@ validated `usage`. A recovered Antigravity native `ERROR` also carries
 A typed completed Antigravity invocation failure can attempt a response with
 only `provider_failure: true` and that same `response_diagnostic` before its
 fixed `provider_failure` outcome. This does not construct a valid semantic
-`ProviderResult` or authorize retry. Failures before process completion,
+`ProviderResult` or authorize retry. Process-start failures, outer watchdog
 timeouts, and cancellations supply no partial bytes through the shared runner;
-capture invents no response. The terminal diagnostic still contains only
-`outcome` and one fixed code. Normal Codex streams and the native proof
-transcript are not copied by this capture seam.
+capture invents no response. A completed native print-timeout or truncation
+warning can instead retain `response_diagnostic`, even with exit zero; the
+adapter independently decides whether exact completion is proved. The terminal
+diagnostic still contains only `outcome` and one fixed code. Normal Codex streams
+and the native proof transcript are not copied by this capture seam.
 
 Storage may retain only the longest complete UTF-8 prefix at or below 262,144
 bytes; its full byte/code-point counts and SHA-256 describe the complete capture

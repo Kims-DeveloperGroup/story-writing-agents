@@ -9110,7 +9110,7 @@ class ConcreteBackendCliTests(unittest.TestCase):
         self.assertEqual(arguments.antigravity_executable, "agy")
         self.assertIsNone(arguments.antigravity_model)
         self.assertIsNone(arguments.antigravity_effort)
-        self.assertEqual(arguments.codex_timeout, 300)
+        self.assertEqual(arguments.codex_timeout, 900)
         with self.assertRaises(ConfigurationError) as caught:
             _parse_backend_overrides(["plot_architect=gemini"])
         self.assertEqual(

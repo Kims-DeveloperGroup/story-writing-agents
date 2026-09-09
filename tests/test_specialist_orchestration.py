@@ -432,6 +432,42 @@ class SpecialistExecutionAcceptanceTests(LeadOrchestrationTestCase):
                 decision = await task
                 self.assertIs(decision.turn.state, CollaborationStepState.COMPLETED)
 
+    async def test_synthesis_cancellation_preserves_specialist_result_and_never_reruns_it(self):
+        conversation = self.conversation("Cancelled synthesis")
+        proposed = await self.proposal(conversation)
+        entered = asyncio.Event()
+
+        async def blocked(_call, _provider):
+            entered.set()
+            await asyncio.Future()
+
+        self.backend.enqueue_for(PLOT_ARCHITECT, _specialist_outcome())
+        self.backend.enqueue_for(LEAD_ORCHESTRATOR, blocked)
+        task = asyncio.create_task(self.runtime.decide_lead_step(
+            _decision(proposed, CollaborationConfirmationDecision.CONFIRM)))
+        try:
+            await asyncio.wait_for(entered.wait(), timeout=2)
+            task.cancel()
+            with self.assertRaises(asyncio.CancelledError):
+                await task
+        finally:
+            if not task.done():
+                task.cancel()
+                await asyncio.gather(task, return_exceptions=True)
+        self.assertEqual(self.runtime._live_execution_markers, set())
+        history = self.history(conversation)
+        execution = _payloads(history, CollaborationExecutionResult)[0]
+        self.assertIs(execution.synthesis_outcome, CollaborationSynthesisOutcomeKind.CANCELLED)
+        self.assertEqual(execution.synthesis_submitted_physical_calls, 1)
+        self.assertIs(execution.assignment_outcomes[0].outcome, CollaborationAssignmentOutcomeKind.SUCCEEDED)
+        self.assertEqual(len(_payloads(history, CollaborationSpecialistReplyPayload)), 1)
+        backend = _LeadBackend()
+        restarted = StoryRuntime(self.workspace, backend)
+        result = await restarted.lead_turn(self.session_id, conversation, "Inspect the cancelled result.")
+        self.assertIs(result.state, CollaborationStepState.INTERRUPTED)
+        self.assertEqual(backend.calls, [])
+        self.assertEqual(len(_payloads(self.history(conversation), CollaborationExecutionResult)), 1)
+
     async def test_execution_delivers_only_each_assignments_ordered_reference_subset(
         self,
     ) -> None:

@@ -5866,15 +5866,67 @@ class InteractiveController:
         """
 
         assert action.kind is ActionKind.TRANSCRIPT
-        assert action.argument is not None
         session_id = self._attached_session_id
         assert session_id is not None
 
         try:
+            reference = action.argument
+            if reference is None:
+                try:
+                    entries = self._run_picker_preparation(
+                        lambda: self._catalog_entries(session_id)
+                    )
+                except _ControllerAbort:
+                    raise
+                except Exception as exc:
+                    self._present_memory_catalog_or_reference_failure(exc)
+                    return
+                if not entries:
+                    self._write_notice(
+                        "No conversations found.",
+                        label="conversation",
+                        role=SemanticRole.MUTED,
+                        state=ViewState.EMPTY,
+                    )
+                    return
+                outcome = self._picker_input.read_picker(
+                    Prompt(
+                        "View transcript",
+                        instruction="Choose a conversation.",
+                    ),
+                    tuple(
+                        Choice(
+                            entry.conversation_id,
+                            f"{entry.subject} ({entry.conversation_id})",
+                        )
+                        for entry in entries
+                    ),
+                    transient=True,
+                )
+                if outcome.kind in {
+                    ControlOutcomeKind.CANCEL,
+                    ControlOutcomeKind.INTERRUPT,
+                    ControlOutcomeKind.EOF,
+                }:
+                    self._write_conversation_cancelled_status(
+                        "Transcript read cancelled; attached state is unchanged."
+                    )
+                    return
+                if (
+                    outcome.kind is not ControlOutcomeKind.COMMIT
+                    or outcome.text is None
+                    or outcome.text not in {
+                        entry.conversation_id for entry in entries
+                    }
+                ):
+                    raise _ControllerAbort(
+                        InteractiveError(InteractiveErrorCode.INTERNAL_ERROR)
+                    )
+                reference = outcome.text
             try:
                 metadata, entries = self._resolve_conversation_reference(
                     session_id,
-                    action.argument,
+                    reference,
                 )
             except Exception as exc:
                 self._present_memory_catalog_or_reference_failure(exc)
