@@ -197,19 +197,19 @@ then the canonical agent. It does not require or change conversation focus.
 The viewer is part of every normal Story installation. First distinguish an
 ordinary version upgrade from damaged same-version files. Pulling updated Story
 source does not update installed dependencies. If the active environment still
-has viewer 0.1.1 after the checkout is updated, rerun the normal editable
+has viewer 0.1.1 or 0.2.0 after the checkout is updated, rerun the normal editable
 installation:
 
 ```bash
 python -m pip install --editable .
 ```
 
-That ordinary reinstall upgrades viewer 0.1.1 to required 0.2.0. It needs no
-uninstall, `--force-reinstall`, or `--ignore-installed`. A missing required
+That ordinary reinstall upgrades older viewer installations to required 0.3.0.
+It needs no uninstall, `--force-reinstall`, or `--ignore-installed`. A missing required
 viewer should likewise be repaired by rerunning the normal Story installation
 first; the `viewer` extra is not a separate fix.
 
-Use a forced reinstall only when viewer 0.2.0 is already selected at the exact
+Use a forced reinstall only when viewer 0.3.0 is already selected at the exact
 required pin but its installed files or three-name API are genuinely damaged.
 Use the applicable Story form so dependency parity is restored together:
 
@@ -221,10 +221,10 @@ python -m pip install --force-reinstall --editable .
 The historical `story-writing-agents[viewer]` and editable `'.[viewer]'` forms
 remain accepted empty compatibility aliases but add no capability. An
 incompatible-viewer result means the installed API or required physical-input
-capability does not match the exact required pin. Viewer 0.1.1 is rejected
-before raw mode or an alternate screen opens; use the ordinary upgrade path
+capability does not match the exact required pin. Viewers 0.1.1 and 0.2.0
+are rejected before raw mode or an alternate screen opens; use the ordinary upgrade path
 above. Verify the project requirement and lock identify
-`aa2e30b85cdcf14f1c444fa8fb77c2594cac76bc`. Checkout maintainers can also
+`ce57f560f3ca1366ea69dfe15cb1c598513e2c82`. Checkout maintainers can also
 initialize the matching submodule for audit or testing; runtime imports never
 come from `vendor/jsonl-viewer`.
 

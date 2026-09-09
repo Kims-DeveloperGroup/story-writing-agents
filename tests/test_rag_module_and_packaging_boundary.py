@@ -37,8 +37,8 @@ _GENERIC_RAG_REQUIREMENT = (
     f"generic-rag @ git+{_GENERIC_RAG_REPOSITORY}@{_GENERIC_RAG_PIN}"
 )
 _OLD_JSONL_VIEWER_PIN = "1d4f5f86ccb4ebd2f458f046df7a0b99b9fbeaec"
-_JSONL_VIEWER_PIN = "aa2e30b85cdcf14f1c444fa8fb77c2594cac76bc"
-_JSONL_VIEWER_VERSION = "0.2.0"
+_JSONL_VIEWER_PIN = "ce57f560f3ca1366ea69dfe15cb1c598513e2c82"
+_JSONL_VIEWER_VERSION = "0.3.0"
 _JSONL_VIEWER_REPOSITORY = "https://github.com/Kims-DeveloperGroup/jsonl-viewer.git"
 _JSONL_VIEWER_REQUIREMENT = (
     f"jsonl-viewer @ git+{_JSONL_VIEWER_REPOSITORY}@{_JSONL_VIEWER_PIN}"
@@ -1876,13 +1876,13 @@ class RagPackagingBoundaryTests(unittest.TestCase):
             upgraded_probe += textwrap.dedent(
                 """
                 searched_source = b"".join(
-                    (json.dumps({"content": "개요 " + str(index)}, ensure_ascii=False) + "\\n").encode()
+                    (json.dumps({"content": "개요 개요 " + str(index)}, ensure_ascii=False) + "\\n").encode()
                     for index in range(7)
                 )
                 class SearchHost(Host):
                     def __init__(self):
                         super().__init__()
-                        self.events = iter(("text\\t/", "text\\tcontent", "key\\tenter", "text\\twrong", "key\\tctrl_u", "text\\t개요", "key\\tenter", "close"))
+                        self.events = iter(("text\\t/", "text\\twrong", "key\\tctrl_u", "text\\t개요", "key\\tenter", "next_match", "previous_match", "close"))
                     def read_event(self): return next(self.events)
                 searched_host = SearchHost()
                 prepare_agent_exchange_view(
@@ -1892,7 +1892,9 @@ class RagPackagingBoundaryTests(unittest.TestCase):
                     agent_id="lead_orchestrator",
                 )(searched_host)
                 assert searched_host.closed == 1
-                assert "Search content='개요' • 1/7" in searched_host.frames[-1]
+                assert "1/14 occurrences • Search all text='개요'" in searched_host.frames[-1]
+                assert '"content": "개요 ⟦개요⟧ 0"' in searched_host.frames[-2]
+                assert '"content": "⟦개요⟧ 개요 0"' in searched_host.frames[-1]
                 assert "U0015" not in searched_host.frames[-1]
                 assert "wrong" not in searched_host.frames[-1]
                 """

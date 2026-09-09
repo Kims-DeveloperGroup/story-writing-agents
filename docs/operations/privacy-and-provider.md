@@ -839,9 +839,9 @@ The viewer header deliberately exposes the attached session, exact
 Conversation or Debate full ID and subject, and exact agent ID. Simple mode
 shows timestamp, request type, and content, so it is an orientation view rather
 than redaction, authorization, or access control. Verbose may display every
-outer field. Search enumeration constrains which top-level fields can be
-queried, not which retained values can be seen. Preview limits and responsive
-clipping constrain rendering but do not redact the immutable snapshot; the
+outer field. Full-text search includes all retained keys and values, including
+hidden fields and bounded decoded JSON inside strings. Preview limits and
+responsive clipping constrain rendering but do not redact the immutable snapshot; the
 outer full/retained counts, truncation flag, and full-input digest must be
 checked separately.
 
@@ -856,7 +856,7 @@ logical cursor, mode, search, match position, footer result/index, and help
 state are process-local and discarded on close;
 that does not erase exchange files, process memory, scrollback, screenshots, or
 copied frames. See [Inspect agent exchanges](../guides/agent-exchanges.md) and
-the pinned external [design system](https://github.com/Kims-DeveloperGroup/jsonl-viewer/blob/aa2e30b85cdcf14f1c444fa8fb77c2594cac76bc/docs/design-system.md).
+the pinned external [design system](https://github.com/Kims-DeveloperGroup/jsonl-viewer/blob/ce57f560f3ca1366ea69dfe15cb1c598513e2c82/docs/design-system.md).
 
 Retention is bounded but not secure erasure. Per-stream rotation and global
 oldest-record pruning use ordinary unlink or replacement. User deletion,
