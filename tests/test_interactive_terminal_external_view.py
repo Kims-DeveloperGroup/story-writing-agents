@@ -364,12 +364,13 @@ class RawExternalViewLifecycleTests(unittest.TestCase):
 
     def test_real_library_raw_and_line_fallback_have_equal_search_behavior(self) -> None:
         import io
+        import re
         from jsonl_viewer import ViewerSpec, view_jsonl
         from jsonl_viewer._standalone import _TerminalHost
 
-        source = ('{"content":"개요 one"}\n{"content":"개요 two"}\n').encode()
-        spec = ViewerSpec("s", "c", "a", ("content",), input_protocol="keys")
-        command = "/ content 개요\nn\nesc\nq\n"
+        source = ('{"content":"개요 one 개요 one"}\n{"content":"other"}\n').encode()
+        spec = ViewerSpec("s", "c", "a", input_protocol="keys")
+        command = "/ 개요 one\nn\nesc\nq\n"
         standalone_output = io.StringIO()
         with _TerminalHost(io.StringIO(command), standalone_output, no_color=True) as host:
             view_jsonl(source, spec, host)
@@ -377,16 +378,18 @@ class RawExternalViewLifecycleTests(unittest.TestCase):
         story_output = []
         viewer = InteractiveExternalViewer(InteractiveTerminal(lambda prompt: next(lines), story_output.append, width=80))
         viewer.open(lambda host: view_jsonl(source, spec, host))
-        self.assertIn("Search content='개요' • 2/2", "".join(story_output))
-        self.assertIn("Search content='개요' • 2/2", standalone_output.getvalue())
-        driver, _input, output, fallback, termios = _raw_driver("/content\nwrong\x15개요\nnq")
+        self.assertIn("2/2 occurrences • Search all text='개요 one'", "".join(story_output))
+        self.assertIn("2/2 occurrences • Search all text='개요 one'", standalone_output.getvalue())
+        driver, _input, output, fallback, termios = _raw_driver("/wrong\x15개요 one\nnq")
         driver.open_external_view(lambda host: view_jsonl(source, spec, host))
-        self.assertIn("Search content='개요' • 2/2", "".join(output.records))
+        self.assertIn("2/2 occurrences • Search all text='개요 one'", "".join(output.records))
+        self.assertIn("개요 one ⟦개요 one⟧", re.sub(r"\x1b\[[0-9;]*m", "", "".join(output.records)))
+        self.assertIn("개요 one ⟦개요 one⟧", "".join(story_output))
         self.assertNotIn("U0015", "".join(output.records))
         self.assertEqual(termios.events.count("activate"), 1)
         self.assertEqual(termios.events.count("restore"), 1)
         fallback.assert_not_called()
-        self.assertEqual(source, ('{"content":"개요 one"}\n{"content":"개요 two"}\n').encode())
+        self.assertEqual(source, ('{"content":"개요 one 개요 one"}\n{"content":"other"}\n').encode())
 
     def test_fallback_never_acquires_raw_or_ansi_and_maps_interrupt_eof(self) -> None:
         driver, _input, output, fallback, termios = _raw_driver(
