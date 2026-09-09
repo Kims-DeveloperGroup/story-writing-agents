@@ -446,11 +446,11 @@ class CollaborationLeadJudgmentPayload:
 
 @dataclass(frozen=True, slots=True)
 class CollaborationLeadOutcomeFailurePayload:
-    """Content-free closure for one submitted lead outcome rejection."""
+    """Content-free closure of one read-only Lead attempt, never a success."""
 
     code: CollaborationLeadOutcomeFailureCode
-    invocation_id: str
-    call_id: str
+    invocation_id: str | None
+    call_id: str | None
 
     def __post_init__(self) -> None:
         _require_enum(
@@ -458,6 +458,10 @@ class CollaborationLeadOutcomeFailurePayload:
             CollaborationLeadOutcomeFailureCode,
             "lead outcome failure code",
         )
+        if self.code is CollaborationLeadOutcomeFailureCode.REQUEST_NOT_SUBMITTED:
+            if self.invocation_id is not None or self.call_id is not None:
+                raise ValueError("unsubmitted request cannot identify a provider call")
+            return
         _validate_identifier(self.invocation_id, label="lead failure invocation ID")
         _validate_identifier(self.call_id, label="lead failure call ID")
 
@@ -708,11 +712,16 @@ class CollaborationEvidenceAcquisition(StrEnum):
 
 
 class CollaborationLeadOutcomeFailureCode(StrEnum):
-    """Closed reason a submitted lead result was rejected before persistence."""
+    """Closed reason a read-only Lead attempt ended without a usable result."""
 
     EVIDENCE_VALIDATION_REJECTED = "evidence_validation_rejected"
     ARTIFACT_INTENT_REJECTED = "artifact_intent_rejected"
     PROVIDER_RESULT_REJECTED = "provider_result_rejected"
+    REQUEST_NOT_SUBMITTED = "request_not_submitted"
+    PROVIDER_FAILED = "provider_failed"
+    PROVIDER_TIMED_OUT = "provider_timed_out"
+    CANCELLED = "cancelled"
+    INTERRUPTED = "interrupted"
 
 
 class LeadProposalRelation(StrEnum):
@@ -4364,10 +4373,16 @@ def _decode_payload(value: object) -> CollaborationPayload:
                 item["code"],
                 label="lead outcome failure code",
             ),
-            invocation_id=_string(
-                item["invocation_id"], label="lead failure invocation ID"
+            invocation_id=(
+                None if item["invocation_id"] is None else _string(
+                    item["invocation_id"], label="lead failure invocation ID"
+                )
             ),
-            call_id=_string(item["call_id"], label="lead failure call ID"),
+            call_id=(
+                None if item["call_id"] is None else _string(
+                    item["call_id"], label="lead failure call ID"
+                )
+            ),
         )
     if payload_type == "step_state":
         item = _object(

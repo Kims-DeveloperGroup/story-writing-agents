@@ -1999,205 +1999,87 @@ class LeadRecoveryAndAccountingTests(LeadOrchestrationTestCase):
         self.assertEqual(len(restart_backend.calls), 1)
 
     async def test_unstarted_prepared_and_submitted_requests_never_replay(self) -> None:
-        unstarted_id = self.conversation("Unstarted")
-        failing_backend = _LeadBackend(bind_failure=RuntimeError("bind failed"))
-        failing_runtime = StoryRuntime(self.workspace, failing_backend)  # type: ignore[arg-type]
-        with self.assertRaises(RuntimeError):
-            await failing_runtime.lead_turn(
-                self.session_id,
-                unstarted_id,
-                "Persist before bind.",
-            )
-        recovered = await self.runtime.lead_turn(
-            self.session_id,
-            unstarted_id,
-            "Do not replay.",
-        )
-        self.assertIs(recovered.state, CollaborationStepState.RECOVERY_REQUIRED)
-
-        prepared_id = self.conversation("Prepared")
-        self.backend.enqueue(RuntimeError("failed before submission"))
-        with self.assertRaises(RuntimeError):
-            await self.runtime.lead_turn(
-                self.session_id,
-                prepared_id,
-                "Leave PREPARED durable.",
-            )
-        prepared_calls = len(self.backend.calls)
-        prepared_recovery = await self.runtime.lead_turn(
-            self.session_id,
-            prepared_id,
-            "Do not replay PREPARED.",
-        )
-        self.assertIs(prepared_recovery.state, CollaborationStepState.RECOVERY_REQUIRED)
-        self.assertEqual(len(self.backend.calls), prepared_calls)
-        self.assertEqual(
-            project_collaboration_history(
-                self.history(prepared_id)
-            ).physical_calls_spent,
-            0,
-        )
-
-        submitted_cases = (
-            ("missing", _SubmittedFailure(EOFError("missing response"))),
-            ("cancelled", _SubmittedFailure(asyncio.CancelledError())),
-            (
-                "timed_out",
-                _SubmittedFailure(TimeoutError("provider timed out"), timed_out=True),
-            ),
-            ("crashed", _SubmittedFailure(ConnectionError("provider crashed"))),
-            (
-                "submission_uncertain",
-                _SubmittedFailure(
-                    RuntimeError("submission uncertain"),
-                    submission_uncertain=True,
-                ),
-            ),
-        )
-        for label, submitted_failure in submitted_cases:
-            with self.subTest(initial_submitted=label):
-                backend = _LeadBackend()
-                runtime = StoryRuntime(self.workspace, backend)  # type: ignore[arg-type]
-                submitted_id = self.conversation(f"Initial submitted {label}")
-                original = f"Leave initial {label} SUBMITTED durable."
-                backend.enqueue(submitted_failure)
-                submitted_result = await runtime.lead_turn(
-                    self.session_id,
-                    submitted_id,
-                    original,
-                )
-                submitted_events = self.history(submitted_id)
-                self.assertIs(
-                    submitted_result.state,
-                    CollaborationStepState.OUTCOME_UNKNOWN,
-                )
-                self.assertIs(
-                    submitted_result.next_action,
-                    CollaborationNextAction.INSPECT_AND_RESOLVE_OUTCOME,
-                )
-                for fragment in (
-                    "submitted",
-                    "no reliable result",
-                    "Do not retry or replay",
-                    "state is preserved",
-                    "another conversation",
-                ):
-                    self.assertIn(fragment, submitted_result.message)
-                restart_backend = _LeadBackend()
-                restarted = StoryRuntime(
-                    self.workspace,
-                    restart_backend,  # type: ignore[arg-type]
-                )
-                submitted_recovery = await restarted.lead_turn(
-                    self.session_id,
-                    submitted_id,
-                    f"Do not replay initial {label}.",
-                )
-                self.assertEqual(
-                    (
-                        submitted_recovery.state,
-                        submitted_recovery.next_action,
-                        submitted_recovery.message,
-                        submitted_recovery.step_id,
-                        submitted_recovery.turn_id,
-                    ),
-                    (
-                        submitted_result.state,
-                        submitted_result.next_action,
-                        submitted_result.message,
-                        submitted_result.step_id,
-                        submitted_result.turn_id,
-                    ),
-                )
-                self.assertEqual(len(backend.calls), 1)
-                self.assertEqual(restart_backend.calls, [])
-                self.assertEqual(self.history(submitted_id), submitted_events)
-                self.assertEqual(
-                    sum(
-                        event.kind is CollaborationEventKind.MESSAGE
-                        and isinstance(event.payload, CollaborationMessagePayload)
-                        and event.payload.content == original
-                        for event in submitted_events
-                    ),
-                    1,
-                )
-                self.assertEqual(
-                    project_collaboration_history(
-                        submitted_events
-                    ).physical_calls_spent,
-                    1,
-                )
+        for stage in ("unstarted", "prepared"):
+            with self.subTest(stage=stage):
+                conversation = self.conversation(stage)
+                backend = _LeadBackend(bind_failure=RuntimeError("bind failed") if stage == "unstarted" else None)
+                runtime = StoryRuntime(self.workspace, backend)
+                if stage == "unstarted":
+                    with self.assertRaisesRegex(RuntimeError, "bind failed"):
+                        await runtime.lead_turn(self.session_id, conversation, "Retain the original request.")
+                else:
+                    backend.enqueue(RuntimeError("failed before submission"))
+                    result = await runtime.lead_turn(self.session_id, conversation, "Retain the original request.")
+                    self.assertIs(result.next_action, CollaborationNextAction.RETRY_LEAD_TURN)
+                prefix = self.history(conversation)
+                closure = [event.payload for event in prefix if type(event.payload) is CollaborationLeadOutcomeFailurePayload]
+                self.assertEqual(len(closure), 1)
+                self.assertIs(closure[0].code, CollaborationLeadOutcomeFailureCode.REQUEST_NOT_SUBMITTED
+                              if stage == "unstarted" else CollaborationLeadOutcomeFailureCode.PROVIDER_FAILED)
+                self.assertEqual(project_collaboration_history(prefix).physical_calls_spent, 0)
+                restarted_backend = _LeadBackend()
+                restarted_backend.enqueue(_visible_outcome("answer"))
+                restarted = StoryRuntime(self.workspace, restarted_backend)
+                result = await restarted.lead_turn(self.session_id, conversation, "Explicit new request.")
+                self.assertIs(result.kind, LeadOutcomeKind.ANSWER)
+                self.assertEqual(len(restarted_backend.calls), 1)
+                self.assertEqual(self.history(conversation)[:len(prefix)], prefix)
 
         def malformed(call: ContextProviderCallRequest, _provider: object) -> str:
-            return json.dumps(
-                {
-                    "correlation": call.payload["c"],
-                    "action": {
-                        "kind": "answer",
-                        "result": [],
-                        "used_handles": [],
-                    },
-                },
-                separators=(",", ":"),
-            )
+            return _provider_envelope(call, [])
 
-        for label, submitted_failure in submitted_cases:
-            with self.subTest(corrective_submitted=label):
-                backend = _LeadBackend(persist_context_threads=True)
-                runtime = StoryRuntime(self.workspace, backend)  # type: ignore[arg-type]
-                submitted_id = self.conversation(f"Corrective submitted {label}")
-                original = f"Correct once before corrective {label}."
-                backend.enqueue(malformed)
-                backend.enqueue(submitted_failure)
-                submitted_result = await runtime.lead_turn(
-                    self.session_id,
-                    submitted_id,
-                    original,
-                )
-                submitted_events = self.history(submitted_id)
-                self.assertIs(
-                    submitted_result.state,
-                    CollaborationStepState.OUTCOME_UNKNOWN,
-                )
-                self.assertIs(
-                    submitted_result.next_action,
-                    CollaborationNextAction.INSPECT_AND_RESOLVE_OUTCOME,
-                )
-                self.assertEqual(len(backend.calls), 2)
-                self.assertEqual(len(backend.providers), 2)
-                self.assertEqual(
-                    backend.finalizers[0].calls,
-                    [
-                        (
-                            "rejected",
-                            ContextProviderTerminalCode.MALFORMED_STRUCTURED_RESPONSE,
-                        )
-                    ],
-                )
-                self.assertEqual(backend.tainted_thread_ids, ["thread-lead-1"])
-                self.assertFalse(
-                    any(
-                        type(event.payload) is CollaborationLeadOutcomeFailurePayload
-                        for event in submitted_events
-                    )
-                )
-                restart_backend = _LeadBackend()
-                restarted = StoryRuntime(
-                    self.workspace,
-                    restart_backend,  # type: ignore[arg-type]
-                )
-                recovered = await restarted.lead_turn(
-                    self.session_id,
-                    submitted_id,
-                    f"Do not replay corrective {label}.",
-                )
-                self.assertIs(recovered.state, CollaborationStepState.OUTCOME_UNKNOWN)
-                self.assertIs(
-                    recovered.next_action,
-                    CollaborationNextAction.INSPECT_AND_RESOLVE_OUTCOME,
-                )
-                self.assertEqual(restart_backend.calls, [])
-                self.assertEqual(self.history(submitted_id), submitted_events)
+        cases = (
+            ("missing", lambda: _SubmittedFailure(EOFError("missing response"))),
+            ("cancelled", lambda: _SubmittedFailure(asyncio.CancelledError())),
+            ("timed_out", lambda: _SubmittedFailure(TimeoutError("provider timed out"), timed_out=True)),
+            ("crashed", lambda: _SubmittedFailure(ConnectionError("provider crashed"))),
+            ("submission_uncertain", lambda: _SubmittedFailure(RuntimeError("submission uncertain"), submission_uncertain=True)),
+        )
+        for corrective in (False, True):
+            for label, failure_factory in cases:
+                with self.subTest(corrective=corrective, failure=label):
+                    backend = _LeadBackend(persist_context_threads=True)
+                    runtime = StoryRuntime(self.workspace, backend)
+                    conversation = self.conversation(f"{corrective}-{label}")
+                    original = f"Retain original {corrective}-{label} request."
+                    if corrective:
+                        backend.enqueue(malformed)
+                    backend.enqueue(failure_factory())
+                    if label == "cancelled":
+                        with self.assertRaises(asyncio.CancelledError):
+                            await runtime.lead_turn(self.session_id, conversation, original)
+                    else:
+                        result = await runtime.lead_turn(self.session_id, conversation, original)
+                        self.assertIsNone(result.state)
+                        self.assertIs(result.next_action, CollaborationNextAction.RETRY_LEAD_TURN)
+                    prefix = self.history(conversation)
+                    submitted = [event.payload for event in prefix
+                                 if type(event.payload) is CollaborationProviderCallPayload
+                                 and event.payload.state is CollaborationProviderCallState.SUBMITTED]
+                    closure = [event.payload for event in prefix
+                               if type(event.payload) is CollaborationLeadOutcomeFailurePayload]
+                    self.assertEqual(len(backend.calls), 2 if corrective else 1)
+                    self.assertEqual(len(submitted), len(backend.calls))
+                    self.assertEqual(len(closure), 1)
+                    self.assertEqual(closure[0].call_id, submitted[-1].call_id)
+                    self.assertEqual(closure[0].invocation_id, submitted[-1].invocation_id)
+                    self.assertIs(closure[0].code, {
+                        "cancelled": CollaborationLeadOutcomeFailureCode.CANCELLED,
+                        "timed_out": CollaborationLeadOutcomeFailureCode.PROVIDER_TIMED_OUT,
+                    }.get(label, CollaborationLeadOutcomeFailureCode.PROVIDER_FAILED))
+                    if corrective:
+                        self.assertEqual(backend.finalizers[0].calls, [
+                            ("rejected", ContextProviderTerminalCode.MALFORMED_STRUCTURED_RESPONSE)])
+                        self.assertEqual(backend.tainted_thread_ids, ["thread-lead-1"])
+                    restarted_backend = _LeadBackend()
+                    restarted_backend.enqueue(_visible_outcome("answer"))
+                    restarted = StoryRuntime(self.workspace, restarted_backend)
+                    result = await restarted.lead_turn(self.session_id, conversation, "Explicit retry after failure.")
+                    self.assertIs(result.kind, LeadOutcomeKind.ANSWER)
+                    self.assertEqual(len(restarted_backend.calls), 1)
+                    self.assertEqual(self.history(conversation)[:len(prefix)], prefix)
+                    self.assertEqual(sum(type(event.payload) is CollaborationMessagePayload
+                                         and event.payload.content == original for event in self.history(conversation)), 1)
 
     async def test_unresolved_running_becomes_outcome_unknown_without_provider(
         self,

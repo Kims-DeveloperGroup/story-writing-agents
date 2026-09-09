@@ -253,7 +253,15 @@ prose or an assumed cause:
 | --- | --- | --- |
 | Agent exchange ends with `provider_failure` / `provider_invocation_failed` and has no response record. | No exact valid `ProviderResult` crossed the adapter boundary. The fixed code covers such causes as provider rejection of a request/output schema, authentication, configuration, transport, and nonzero provider exit; it does not expose the underlying diagnostic or prove whether external work occurred. | Check `/auth`, the selected backend/model/effort, executable and timeout, then inspect the correlated content-safe runtime record and provider-native diagnostics under their own policy. Do not infer that replay is safe from this code alone. |
 | Agent exchange has a completed response and a deterministic `rejected` outcome; Lead history closes it as `provider_result_rejected`. | The provider returned a result, but Story rejected one of five closed classes: malformed structured response, correlation mismatch, semantic rejection, action exhaustion, or answer-validation failure. | Follow `retry_lead_turn`. Runtime starts a fresh call and does not reuse the tainted provider thread or replay the rejected result. |
-| Lead history projects `outcome_unknown` and `inspect_and_resolve_outcome`. | Submission is durable, but neither an accepted result nor a deterministic rejected-result closure is authoritative. | Inspect and resolve the preserved outcome. Never replay the submitted call merely to make the conversation advance. |
+| Read-only Lead history exposes `retry_lead_turn` after failure, timeout, cancellation/interruption, or an exact legacy request without closure. | The attempt is eligible for durable failure closure without treating provider work as successful. | Send a new message, revise the wording, or explicitly resubmit in the same conversation, including after restart. Runtime preserves the original request and failure and closes any prior pending attempt before the fresh turn. Reading/reopening alone does not retry. |
+| History projects `outcome_unknown` and `inspect_and_resolve_outcome`, or reports `recovery_required`. | Specialist/synthesis or authoritative write outcomes may be uncertain, history may be corrupt, or failure closure could not be persisted safely. | Follow the displayed recovery action. Do not treat a diagnostic code or a new provider thread as authority to replay successful work or revive Apply/Commit. |
+
+The default response timeout is 900 seconds per call. Override either provider
+with `story chat --codex-timeout SECONDS`; a whole Lead turn may contain several
+calls. Antigravity uses a further 30-second outer watchdog grace, while Codex
+uses only the configured watchdog timeout. An Antigravity native timeout or
+truncation warning can accompany exit zero: Story requires independent exact
+current-call finish evidence plus normal validation before accepting it.
 
 One fixed Codex defect produced the first row when the compact output schema
 contained an array `items` node without an explicit supported type. Codex

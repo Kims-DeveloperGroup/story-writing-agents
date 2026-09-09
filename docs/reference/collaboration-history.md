@@ -251,8 +251,16 @@ bytes and cannot contain surrogate code points. A lead-authored message uses a
 typed visible kind/message plus exact `CollaborationLeadEvidence`. That
 evidence holds only ordered receipts for attached references, canonical-core
 statuses, complete zero-hit searches, or final-answer-used READs. A
-`lead_outcome_failure` instead stores the closed failure code and submitted
-invocation/call IDs. Payloads contain visible facts, not hidden reasoning.
+`lead_outcome_failure` instead closes one read-only Lead attempt without a
+usable result. Its closed codes are `evidence_validation_rejected`,
+`artifact_intent_rejected`, `provider_result_rejected`, `request_not_submitted`,
+`provider_failed`, `provider_timed_out`, `cancelled`, and `interrupted`.
+`invocation_id` and `call_id` must both be null only for
+`request_not_submitted`, which requires one exact user request with no provider
+accounting. Every other code requires both exact non-null call identities;
+`provider_timed_out` requires submitted accounting. A closure preserves the
+original user event and never creates a successful judgment or execution
+result. Payloads contain visible facts, not hidden reasoning.
 
 `provider_call_accounting` contains no request or response content. It records
 one invocation/call identity, contiguous ordinal, canonical agent role,
@@ -733,11 +741,20 @@ proposal are present in the typed event payload/history codec, but they are not
 search fields and are not automatically selected into bounded provider
 context.
 
-`retry_lead_turn` is a next action without a durable step state. It appears
-when runtime rejected a submitted lead result's evidence and successfully
-appended `lead_outcome_failure`. The visible result is a recommendation with no
-proposal, confirmation request, or evidence. If failure closure itself cannot
-be appended safely, runtime returns `recovery_required` instead.
+`retry_lead_turn` is a next action, not a new durable step state. It covers
+eligible read-only Lead failures and rejected results closed by
+`lead_outcome_failure`, and exact legacy unstarted, prepared-only, or unmatched
+submitted attempts awaiting closure. Projection and reads remain pure. Only
+explicit new user input lets runtime close a pending attempt under the session
+and conversation leases, re-read its closure, then append a fresh turn in the
+same conversation. Restart does not change this behavior.
+
+The failure result is a recommendation without new proposal, confirmation
+request, or evidence. If a Revise attempt fails, its old proposal remains
+superseded and no replacement authority is created. Successful results,
+uncertain specialist/synthesis work, and pending or uncertain Apply/Commit
+outcomes are excluded from read-only abandonment. A closure that cannot be
+appended safely returns `recovery_required`.
 
 ## Restart and no-replay cases
 

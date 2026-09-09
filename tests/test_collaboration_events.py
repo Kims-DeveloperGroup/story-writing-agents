@@ -968,6 +968,28 @@ class CollaborationValueContractTests(unittest.TestCase):
 
 
 class CollaborationWireContractTests(unittest.TestCase):
+    def test_failure_closure_codes_round_trip_with_null_only_for_unsubmitted_request(self):
+        for code in CollaborationLeadOutcomeFailureCode:
+            with self.subTest(code=code):
+                unsubmitted = code is CollaborationLeadOutcomeFailureCode.REQUEST_NOT_SUBMITTED
+                invocation, call = (None, None) if unsubmitted else ("invocation", "call")
+                draft = make_draft("failure", CollaborationEventKind.LEAD_OUTCOME_FAILURE,
+                                   RUNTIME, USER,
+                                   CollaborationLeadOutcomeFailurePayload(code, invocation, call))
+                wire = encode_collaboration_event_draft(draft)
+                self.assertEqual(decode_collaboration_event_draft(wire), draft)
+                value = json.loads(wire)
+                self.assertEqual(value["payload"], {
+                    "payload_type": "lead_outcome_failure", "code": code.value,
+                    "invocation_id": invocation, "call_id": call,
+                })
+                for bad_invocation, bad_call in ((None, "call"), ("invocation", None),
+                                                  ("invocation", "call") if unsubmitted else (None, None)):
+                    with self.subTest(invocation=bad_invocation, call=bad_call):
+                        value["payload"].update(invocation_id=bad_invocation, call_id=bad_call)
+                        with self.assertRaises((TypeError, ValueError)):
+                            decode_collaboration_event_draft(json.dumps(value).encode())
+
     def test_provider_result_rejected_failure_payload_round_trips_exactly(
         self,
     ) -> None:

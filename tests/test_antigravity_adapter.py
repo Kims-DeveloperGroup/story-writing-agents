@@ -2277,7 +2277,7 @@ class AntigravityAdapterTests(unittest.IsolatedAsyncioTestCase):
         self.assertNotIn("--new-project", requests[1].command)
         for request in requests:
             self.assertEqual(request.cwd, working_directory)
-            self.assertEqual(request.timeout_seconds, 7)
+            self.assertEqual(request.timeout_seconds, 37)
             self.assertIsNone(request.env)
             self.assertEqual(request.stdin, b"")
             self.assertEqual(request.command.count("--print"), 1)
@@ -2881,14 +2881,14 @@ class AntigravityAdapterTests(unittest.IsolatedAsyncioTestCase):
 
                 if communication_failure is None:
                     self.assertEqual(events, ["launch", "communicate"])
-                    self.assertEqual(timeouts, [4])
+                    self.assertEqual(timeouts, [34])
                     self.assertFalse(communication.cancelled())
                 else:
                     self.assertEqual(
                         events,
                         ["launch", "communicate", "terminate", "wait"],
                     )
-                    self.assertEqual(timeouts, [4, 2])
+                    self.assertEqual(timeouts, [34, 2])
                     self.assertTrue(communication.cancelled())
                     process.terminate.assert_called_once_with()
                     process.wait.assert_called_once_with()
@@ -3347,6 +3347,112 @@ class AntigravityAdapterTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(json.loads(result.response_text), terminal['structured_output'])
         self.assertEqual(result.response_diagnostic.stdout, canonical_provider_json(terminal))
         self.assertEqual(result.actual_transport_utf8_bytes, len(invocation.payload_json))
+
+    async def test_shared_default_and_explicit_timeouts_keep_native_and_outer_deadlines_distinct(self):
+        from story_writing_agents.provider_process import ProcessTimedOut
+
+        for configured in (None, 12.5):
+            with self.subTest(configured=configured):
+                expected = 900 if configured is None else configured
+                for vendor in ("codex", "antigravity"):
+                    with self.subTest(vendor=vendor):
+                        backend = AgentBackend(self.workspace, backend_overrides={PLOT_ARCHITECT: vendor},
+                                               **({} if configured is None else {"timeout_seconds": configured}))
+                        self.addCleanup(backend.close)
+                        adapter = backend._codex_adapter if vendor == "codex" else backend._antigravity_adapter
+                        self.assertEqual(adapter.timeout_seconds, expected)
+                        binding = adapter.bind(replace(self.definition, backend=vendor))
+                        label = "default" if configured is None else "explicit"
+                        invocation = self.provider_invocation(f"deadline-{vendor}-{label}")
+
+                        async def expire(request, **_kwargs):
+                            self.assertEqual(request.timeout_seconds, expected + (30 if vendor == "antigravity" else 0))
+                            if vendor == "antigravity":
+                                self.assertEqual(request.command[request.command.index("--print-timeout") + 1], f"{expected:g}s")
+                            else:
+                                self.assertNotIn("--print-timeout", request.command)
+                            raise ProcessTimedOut()
+
+                        with mock.patch(f"story_writing_agents.{vendor}_adapter.run_process", new=expire):
+                            with self.assertRaises(ProviderInvocationError) as caught:
+                                await adapter.invoke(binding, invocation)
+                        self.assertIn(f"after {expected:g} seconds", str(caught.exception))
+                        self.assertTrue(AgentBackend._context_failure_timed_out(caught.exception))
+
+    async def test_partial_exit_zero_requires_independent_current_finish_for_fresh_and_resumed_calls(self):
+        fixtures = Path(__file__).parent / "fixtures/antigravity_recovered_finish"
+        captured = json.loads((fixtures / "terminal.json").read_text())
+        steps = [json.loads(line) for line in (fixtures / "transcript.jsonl").read_text().splitlines()]
+        clean_steps = [steps[0], steps[-2], steps[-1]]
+        terminal = dict(captured, status="SUCCESS")
+        terminal.pop("error")
+        markers = (
+            ("timeout", b"[agy] print timeout after 900s with turn in progress; returning partial output\n"),
+            ("truncated", b"error: native failure (response may be truncated)\n"),
+        )
+        for label, marker in markers:
+            for resumed in (False, True):
+                for trace_kind in ("complete", "missing", "incomplete", "stale", "wrong_request", "wrong_finish"):
+                    with self.subTest(marker=label, resumed=resumed, trace=trace_kind):
+                        adapter = self.adapter(f"partial-{label}-{resumed}-{trace_kind}")
+                        binding = adapter.bind(self.definition)
+                        invocation = ProviderInvocation(session_id="partial", schema=terminal["json_schema"],
+                                                        payload=json.loads((fixtures / "request.json").read_text()),
+                                                        thread_id="synthetic-thread" if resumed else None)
+                        trace = self.runtime_root(adapter, "partial") / "provider/antigravity-cli/brain/synthetic-thread/.system_generated/logs/transcript_full.jsonl"
+
+                        def encoded(items, offset=0):
+                            return b"".join(canonical_provider_json(dict(item, step_index=offset + i)) + b"\n"
+                                            for i, item in enumerate(items))
+
+                        prefix = encoded(clean_steps) if resumed or trace_kind == "stale" else b""
+                        if prefix:
+                            trace.parent.mkdir(parents=True)
+                            trace.write_bytes(prefix)
+
+                        async def partial(_request, **_kwargs):
+                            current = json.loads(json.dumps(clean_steps))
+                            if trace_kind == "incomplete":
+                                current.pop()
+                            elif trace_kind == "wrong_request":
+                                current[0]["content"] = "<USER_REQUEST>\nother input\n</USER_REQUEST>"
+                            elif trace_kind == "wrong_finish":
+                                current[-2]["tool_calls"][0]["args"] = {"unrelated": True}
+                            if trace_kind not in {"missing", "stale"}:
+                                trace.parent.mkdir(parents=True, exist_ok=True)
+                                trace.write_bytes(prefix + encoded(current, len(clean_steps) if resumed else 0))
+                            return ProcessResult(stdout=canonical_provider_json(terminal), stderr=marker, returncode=0)
+
+                        with mock.patch("story_writing_agents.antigravity_adapter.run_process", new=partial):
+                            if trace_kind == "complete":
+                                result = await adapter.invoke(binding, invocation)
+                                self.assertEqual(json.loads(result.response_text), terminal["structured_output"])
+                                self.assertEqual(result.response_diagnostic.stderr, marker)
+                            else:
+                                with self.assertRaises(ProviderInvocationError) as caught:
+                                    await adapter.invoke(binding, invocation)
+                                self.assertEqual(caught.exception.timed_out, label == "timeout")
+                                self.assertEqual(AgentBackend._context_failure_timed_out(caught.exception), label == "timeout")
+                                self.assertTrue(caught.exception.taint_existing_thread)
+                                self.assertIs(provider_failure_accounting(caught.exception).state, ProviderCallState.SUBMITTED)
+                                self.assertEqual(caught.exception.response_diagnostic.exit_code, 0)
+
+    async def test_partial_timeout_rejects_incomplete_envelopes_and_preserves_failure_facts(self):
+        adapter = self.adapter("partial-envelope")
+        binding = adapter.bind(self.definition)
+        invocation = self.provider_invocation("partial-envelope")
+        marker = b"[agy] print timeout after 7s with turn in progress; returning partial output\r\n"
+        for stdout, exit_code in ((b"", 0), (b"{", 0), (b"\xff", 0),
+                                   (_json_result("thread", structured_output={}), 7)):
+            with self.subTest(stdout=stdout, exit_code=exit_code):
+                with mock.patch("story_writing_agents.antigravity_adapter.run_process", new=mock.AsyncMock(
+                    return_value=ProcessResult(stdout=stdout, stderr=marker, returncode=exit_code))):
+                    with self.assertRaises(ProviderInvocationError) as caught:
+                        await adapter.invoke(binding, invocation)
+                self.assertTrue(caught.exception.timed_out)
+                self.assertTrue(AgentBackend._context_failure_timed_out(caught.exception))
+                self.assertIs(provider_failure_accounting(caught.exception).state, ProviderCallState.SUBMITTED)
+                self.assertEqual(caught.exception.response_diagnostic, ProviderResponseDiagnostic(stdout, marker, exit_code))
 
     async def test_unavailable_process_output_is_not_invented(self) -> None:
         from story_writing_agents.provider_process import ProcessTimedOut, ProcessExecutableNotFound

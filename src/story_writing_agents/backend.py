@@ -139,6 +139,7 @@ from .interactive_settings import (
     reconcile_provider_route_generations,
 )
 from .provider_adapter import (
+    DEFAULT_PROVIDER_TIMEOUT_SECONDS,
     AgentExecutionProfile,
     ExecutionValueSource,
     ProviderAdapter,
@@ -1322,7 +1323,7 @@ class AgentBackend:
         *,
         executable: str = "codex",
         model: str | None = None,
-        timeout_seconds: float = 300,
+        timeout_seconds: float = DEFAULT_PROVIDER_TIMEOUT_SECONDS,
         backend_overrides: Mapping[str, str] | None = None,
         antigravity_executable: str = "agy",
         antigravity_model: str | None = None,
@@ -4425,7 +4426,9 @@ class AgentBackend:
         current: BaseException | None = failure
         seen: set[int] = set()
         while current is not None and id(current) not in seen:
-            if isinstance(current, ProcessTimedOut):
+            if isinstance(current, ProcessTimedOut) or (
+                isinstance(current, ProviderInvocationError) and current.timed_out
+            ):
                 return True
             seen.add(id(current))
             current = current.__cause__

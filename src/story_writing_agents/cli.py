@@ -82,6 +82,7 @@ from .session_lifecycle import (
     SessionLifecycleState,
     provider_work_is_ready,
 )
+from .provider_adapter import DEFAULT_PROVIDER_TIMEOUT_SECONDS
 from .session_recovery.transition_assessment import (
     SessionTransitionAssessment,
     SessionTransitionOperation,
@@ -138,8 +139,8 @@ def build_parser() -> argparse.ArgumentParser:
     chat.add_argument(
         "--codex-timeout",
         metavar="SECONDS",
-        default=300,
-        help="positive provider timeout in seconds (default: 300)",
+        default=DEFAULT_PROVIDER_TIMEOUT_SECONDS,
+        help="positive provider response timeout in seconds (default: 900)",
     )
 
     initialize = subcommands.add_parser(
@@ -810,7 +811,7 @@ def _run_interactive_cli(arguments: argparse.Namespace) -> int:
         antigravity_executable = "agy"
         antigravity_model = None
         antigravity_effort = None
-        timeout_value = 300
+        timeout_value = DEFAULT_PROVIDER_TIMEOUT_SECONDS
         requested_session = None
 
     try:

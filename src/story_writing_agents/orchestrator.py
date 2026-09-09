@@ -2058,7 +2058,25 @@ class StoryRuntime:
                 projection,
             )
             if normalized is not None:
-                return normalized
+                if normalized.next_action is not CollaborationNextAction.RETRY_LEAD_TURN:
+                    return normalized
+                # The explicitly supplied new input is still pending admission.
+                # Re-read after durably abandoning the prior read-only request.
+                events, projection, failure = self._read_lead_history(
+                    session_id, conversation_id,
+                )
+                if failure is not None or events is None or projection is None:
+                    return self._blocking_lead_result(
+                        session_id, conversation_id,
+                        CollaborationStepState.RECOVERY_REQUIRED,
+                        "Lead recovery could not be verified in authoritative history.",
+                    )
+
+            remaining_recovery = self._normalize_lead_history(
+                session_id, conversation_id, events, projection,
+            ) if normalized is not None else None
+            if remaining_recovery is not None:
+                return remaining_recovery
 
             turn_id = self._new_id("t")
             provider_step_id = self._new_id("s")
@@ -2109,16 +2127,25 @@ class StoryRuntime:
             else:
                 self._append_drafts(projection.last_sequence, (user_event,))
 
-            return await self._run_lead_provider_locked(
-                session_id=session_id,
-                conversation_id=conversation_id,
-                turn_id=turn_id,
-                step_id=provider_step_id,
-                text=text,
-                expected_relation=LeadProposalRelation.NEW_STEP,
-                previous_proposal=None,
-                context_event_sink=context_event_sink,
-            )
+            try:
+                return await self._run_lead_provider_locked(
+                    session_id=session_id,
+                    conversation_id=conversation_id,
+                    turn_id=turn_id,
+                    step_id=provider_step_id,
+                    text=text,
+                    expected_relation=LeadProposalRelation.NEW_STEP,
+                    previous_proposal=None,
+                    context_event_sink=context_event_sink,
+                )
+            except BaseException as failure:
+                # Preparation and cancellation may stop before the provider seam
+                # exists. Preserve the original exception after recording closure.
+                self._close_failed_lead_attempt(
+                    session_id, conversation_id, failure=failure,
+                    turn_id=turn_id, step_id=provider_step_id,
+                )
+                raise
 
     async def propose_specialist_advisory(
         self,
@@ -2632,17 +2659,24 @@ class StoryRuntime:
             provider_text = decision.revision_request
             if retained_references:
                 provider_text = f"{provider_text}\n{retained_references}"
-            revised_turn = await self._run_lead_provider_locked(
-                session_id=decision.session_id,
-                conversation_id=decision.conversation_id,
-                turn_id=turn_id,
-                step_id=decision.step_id,
-                text=provider_text,
-                expected_relation=LeadProposalRelation.REVISE_PENDING,
-                previous_proposal=proposal,
-                context_event_sink=None,
-                user_source_text=decision.revision_request,
-            )
+            try:
+                revised_turn = await self._run_lead_provider_locked(
+                    session_id=decision.session_id,
+                    conversation_id=decision.conversation_id,
+                    turn_id=turn_id,
+                    step_id=decision.step_id,
+                    text=provider_text,
+                    expected_relation=LeadProposalRelation.REVISE_PENDING,
+                    previous_proposal=proposal,
+                    context_event_sink=None,
+                    user_source_text=decision.revision_request,
+                )
+            except BaseException as failure:
+                self._close_failed_lead_attempt(
+                    decision.session_id, decision.conversation_id, failure=failure,
+                    turn_id=turn_id, step_id=decision.step_id,
+                )
+                raise
             if (
                 artifact_candidate is not None
                 and revised_turn.artifact_proposal is None
@@ -5308,6 +5342,14 @@ class StoryRuntime:
         events: tuple[CollaborationEvent, ...],
         projection: CollaborationHistoryProjection,
     ) -> LeadTurnResult | None:
+        if (
+            projection.next_safe_action is CollaborationNextAction.RETRY_LEAD_TURN
+            and (self._has_unstarted_lead_request(events)
+                 or self._unmatched_lead_call_state(events) is not None)
+        ):
+            recovered = self._close_failed_lead_attempt(session_id, conversation_id)
+            if recovered is not None:
+                return recovered
         if self._has_unstarted_lead_request(events):
             return self._blocking_lead_result(
                 session_id,
@@ -5996,28 +6038,18 @@ class StoryRuntime:
                         CollaborationLeadOutcomeFailureCode.PROVIDER_RESULT_REJECTED
                     ),
                 )
-            _events, projection, history_failure = self._read_lead_history(
-                session_id,
-                conversation_id,
+            recovered = self._close_failed_lead_attempt(
+                session_id, conversation_id, failure=failure,
+                turn_id=turn_id, step_id=step_id,
             )
-            if (
-                history_failure is None
-                and projection is not None
-                and projection.current_proposal is None
-                and projection.current_state
-                is CollaborationStepState.OUTCOME_UNKNOWN
-                and projection.next_safe_action
-                is CollaborationNextAction.INSPECT_AND_RESOLVE_OUTCOME
-            ):
-                return self._submitted_lead_outcome_unknown_result(
-                    session_id,
-                    conversation_id,
-                    step_id=step_id,
-                    turn_id=turn_id,
-                )
+            if not isinstance(failure, Exception):
+                raise
             if reference_failure is not None:
                 raise reference_failure from failure
+            if recovered is not None:
+                return recovered
             raise
+
         finally:
             await self._release_bound_agent_use(bound_agent)
 
@@ -6449,6 +6481,58 @@ class StoryRuntime:
             ),
         )
 
+    def _close_failed_lead_attempt(
+        self, session_id: str, conversation_id: str, *,
+        failure: BaseException | None = None,
+        turn_id: str | None = None, step_id: str | None = None,
+    ) -> LeadTurnResult | None:
+        """Close only the projection-authorized read-only attempt under its lease."""
+
+        events, projection, history_failure = self._read_lead_history(
+            session_id, conversation_id,
+        )
+        if history_failure is not None or events is None or projection is None:
+            return self._blocking_lead_result(
+                session_id, conversation_id, CollaborationStepState.RECOVERY_REQUIRED,
+                "The Lead attempt could not be closed in authoritative history.",
+                turn_id=turn_id, step_id=step_id,
+            )
+        turn_id = turn_id or projection.current_turn_id
+        step_id = step_id or projection.current_step_id
+        if turn_id is None or step_id is None or any(
+            event.turn_id == turn_id and type(event.payload) in {
+                CollaborationLeadOutcomeFailurePayload, CollaborationLeadJudgmentPayload,
+            }
+            for event in events
+        ):
+            return None
+        if projection.next_safe_action is not CollaborationNextAction.RETRY_LEAD_TURN:
+            return None
+        calls = tuple(
+            event.payload for event in events
+            if event.turn_id == turn_id and event.step_id == step_id
+            and type(event.payload) is CollaborationProviderCallPayload
+            and event.payload.invocation_kind is CollaborationInvocationKind.LEAD
+        )
+        if not calls:
+            code = CollaborationLeadOutcomeFailureCode.REQUEST_NOT_SUBMITTED
+        elif isinstance(failure, asyncio.CancelledError):
+            code = CollaborationLeadOutcomeFailureCode.CANCELLED
+        elif failure is None or not isinstance(failure, Exception):
+            code = CollaborationLeadOutcomeFailureCode.INTERRUPTED
+        elif (context_provider_failure_facts(failure).timed_out
+              and calls[-1].state is CollaborationProviderCallState.SUBMITTED):
+            code = CollaborationLeadOutcomeFailureCode.PROVIDER_TIMED_OUT
+        else:
+            code = CollaborationLeadOutcomeFailureCode.PROVIDER_FAILED
+        return self._lead_outcome_failure_result(
+            session_id=session_id, conversation_id=conversation_id,
+            turn_id=turn_id, step_id=step_id,
+            invocation_id=calls[-1].invocation_id if calls else None,
+            call_id=calls[-1].call_id if calls else None,
+            failure_code=code,
+        )
+
     def _lead_outcome_failure_result(
         self,
         *,
@@ -6456,11 +6540,11 @@ class StoryRuntime:
         conversation_id: str,
         turn_id: str,
         step_id: str,
-        invocation_id: str,
-        call_id: str,
+        invocation_id: str | None,
+        call_id: str | None,
         failure_code: CollaborationLeadOutcomeFailureCode,
     ) -> LeadTurnResult:
-        """Durably close one rejected submitted outcome without replay authority."""
+        """Durably close a failed read-only Lead attempt without replaying it."""
 
         artifact_intent = (
             failure_code
@@ -6474,6 +6558,24 @@ class StoryRuntime:
             else "The lead result failed runtime evidence validation. Retry the "
             "lead turn; the rejected provider call will not be replayed."
         )
+        attempt_messages = {
+            CollaborationLeadOutcomeFailureCode.REQUEST_NOT_SUBMITTED:
+                "The Lead request stopped before a provider call was recorded.",
+            CollaborationLeadOutcomeFailureCode.PROVIDER_FAILED:
+                "The Lead provider attempt failed without a usable result.",
+            CollaborationLeadOutcomeFailureCode.PROVIDER_TIMED_OUT:
+                "The Lead provider attempt exceeded its response timeout.",
+            CollaborationLeadOutcomeFailureCode.CANCELLED:
+                "The Lead provider attempt was cancelled.",
+            CollaborationLeadOutcomeFailureCode.INTERRUPTED:
+                "The prior Lead provider attempt ended without a recorded result.",
+        }
+        if failure_code in attempt_messages:
+            message = (
+                attempt_messages[failure_code]
+                + " Your original request and failure remain in history. "
+                "Send a new message or resubmit your request in this conversation."
+            )
         try:
             projection = self.conversation_storage_services.event_store.read_context(
                 session_id,
@@ -6516,12 +6618,12 @@ class StoryRuntime:
                 projection.last_sequence,
                 failure_drafts,
             )
-        except BaseException:
+        except Exception:
             return self._blocking_lead_result(
                 session_id,
                 conversation_id,
                 CollaborationStepState.RECOVERY_REQUIRED,
-                "The rejected lead result could not be closed in authoritative "
+                "The failed Lead attempt could not be closed in authoritative "
                 "history. Repair history before continuing.",
                 step_id=step_id,
                 turn_id=turn_id,
@@ -8531,6 +8633,11 @@ class StoryRuntime:
             )
 
         return {
+            "abandoned_operation_ids": tuple(dict.fromkeys(
+                f"lead_{event.turn_id}"
+                for event in services.event_store.read(session_id, conversation_id)
+                if type(event.payload) is CollaborationLeadOutcomeFailurePayload
+            )),
             "continuation": self._lead_continuations[session_id],
             "session_history": SessionHistorySourceAdapter(
                 services.catalog, services.event_store, session_id,

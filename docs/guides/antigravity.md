@@ -55,7 +55,7 @@ Interpret a failed turn by its displayed next action:
 | Visible result | User action |
 | --- | --- |
 | A normal answer, question, critique, recommendation, or confirmation request | Continue with the Lead or decide the exact displayed proposal. |
-| `provider_result_rejected` / `retry_lead_turn` | Start a fresh user turn after correcting the request or provider behavior. Runtime never reuses or replays the rejected physical response. |
+| `retry_lead_turn` after a read-only Lead failure or rejection | Send a new message, revise the wording, or resubmit the request in the same conversation, including after restart. Runtime preserves the original request and failure and starts a fresh turn. |
 | `outcome_unknown` / `inspect_and_resolve_outcome` | Inspect the preserved outcome. Do not submit the same call again: external work may have occurred. |
 | `provider_invocation_failed` with no valid provider result | Check authentication, selected route/model/effort, executable, schema support, and provider-native diagnostics. This code alone cannot establish whether replay is safe. |
 
@@ -208,7 +208,11 @@ story chat draft \
 
 `--antigravity-executable EXECUTABLE` defaults to `agy`. Use it only when the
 binary is not resolved through ordinary `PATH`. The legacy-named
-`--codex-timeout SECONDS` bounds provider subprocess work. These options are
+`--codex-timeout SECONDS` sets the positive per-call response timeout for both
+providers, with a shared default of 900 seconds. Antigravity receives native
+timeout `N` and an outer watchdog of `N + 30` seconds (900/930 by default).
+Codex uses its sole watchdog at `N`, without the extra 30 seconds. A Lead turn
+can make several calls, so this is not a whole-turn deadline. These options are
 available on `story chat`, not on bare `story` or standalone session lifecycle
 commands.
 
@@ -301,11 +305,15 @@ body as hostile plaintext and follow the inspection workflow in
 
 Separately, `debug_logs/agent_exchanges/` can retain completed Antigravity
 failure stdout, stderr, and exit status before its fixed `provider_failure`
-outcome. A recovered native `ERROR` retains the same private diagnostic envelope
-alongside its returned structured result. These bytes use strict UTF-8 or
+outcome. A recovered native `ERROR`, or a timeout/truncation warning accepted
+with exact current-call completion proof, retains the same private diagnostic
+envelope alongside its returned structured result. These bytes use strict UTF-8 or
 explicit base64 encoding within the existing capture bounds and retention.
-Timeout, cancellation, and failures before a completed process supply no partial
-bytes through the shared process runner, so capture invents no response. Capture
+Outer watchdog timeout, cancellation, and process-start failure supply no
+partial bytes through the shared process runner, so capture invents no
+response. A completed native timeout/truncation envelope can instead be
+retained, including on exit zero; acceptance still requires exact completion
+proof and normal validation. Capture
 remains best effort and at most once; gaps never establish replay safety. See
 [agent-exchange privacy](../operations/privacy-and-provider.md#agent-exchange-privacy).
 
@@ -341,7 +349,7 @@ agy --gemini_dir=<runtime-root>/provider \
   --input-format text --output-format json \
   --json-schema '<exact Antigravity-rendered wire-v7 schema>' \
   --agent lead_orchestrator --sandbox --mode plan \
-  --disable-slash-commands --print-timeout 300s --new-project \
+  --disable-slash-commands --print-timeout 900s --new-project \
   --print '<exact confidential wire-v7 payload JSON, one argument>'
 ```
 
@@ -425,6 +433,16 @@ oversized traces, and unknown native formats leave the call failed. The reader
 is coupled to Antigravity's native transcript format. It ignores private
 `thinking` fields and does not copy the transcript into exchanges or story
 history. This completion check does not attest tool containment or permissions.
+
+Antigravity 1.1.28 can emit a native print-timeout or truncation warning and
+exit zero with partial output. For either warning, even a `SUCCESS` JSON
+envelope requires the same independent native completion proof for the exact
+current call, plus the strict schema, identity, correlation, and domain checks.
+Exit zero, structured output, or a finish marker from an earlier call is
+insufficient. If completion cannot be proved, the call fails; a native
+print-timeout failure is classified as timed out. The timeout/truncation path
+has controlled-test coverage and native-binary marker inspection; no live
+partial-output envelope verification is claimed.
 
 Recovery adds no model retry and preserves the native error envelope in private
 exchange diagnostics. The recovered semantic result still undergoes ordinary
@@ -513,7 +531,7 @@ projected as `outcome_unknown` during recovery.
 | --- | --- |
 | Provider default agent and project could be selected from the outer story Git root. | Runtime selects its bound custom Lead agent in an isolated nested workspace and creates or resumes only that provider project. |
 | An attempted `ListDir` could end in request-review denial without a valid terminal result. | A successful JSON object must contain object `structured_output` and an exact schema echo; this output cannot attest tool behavior. |
-| The user saw a coarse invocation failure and recovery could find a submitted unknown outcome. | Deterministic returned rejections close with `retry_lead_turn`; only a genuinely unresolved submitted call stays `outcome_unknown` and non-replayable. |
+| The user saw a coarse invocation failure and recovery could find a submitted unknown outcome. | Eligible read-only Lead failures and rejected results expose `retry_lead_turn`; uncertain specialist/synthesis or authoritative write outcomes retain their recovery gates. |
 
 That failure is different from a deterministic returned-result rejection. An
 invalid request/output schema, authentication or launch error, transport
@@ -523,9 +541,11 @@ failure, nonzero exit, or missing terminal result also fails before a valid
 history closes such a call as `provider_result_rejected` and offers
 `retry_lead_turn`; one bounded same-turn correction may be attempted when fresh
 authority and budget remain, but normal success must not depend on correction.
-Only a submitted call without an authoritative accepted or deterministic
-rejected closure becomes `outcome_unknown`; follow
-`inspect_and_resolve_outcome` and never replay it. See the
+Provider failure, timeout, cancellation, and interruption can also close an
+eligible read-only Lead attempt with a typed failure. An exact legacy request
+without closure exposes retry; explicit new input closes it before starting the
+new turn. Inspection and reopening do not submit work. If authoritative history
+or write outcomes remain uncertain, follow their recovery action. See the
 [recovery table](troubleshooting.md#distinguish-lead-provider-failure-from-result-rejection).
 
 ## Sessions, provider conversations, and retention

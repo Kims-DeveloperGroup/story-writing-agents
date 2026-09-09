@@ -393,12 +393,22 @@ invalid non-null artifact intent produces both an
 `artifact_intent_rejected` lead failure and `intent_rejected` artifact-review
 failure, then returns `retry_lead_turn` with no candidate.
 
-If semantic evidence validation rejects a submitted response, runtime appends
-one typed `lead_outcome_failure`, returns a recommendation with
-`next_action=retry_lead_turn`, and supplies no state, proposal, request, or
-evidence. Retry starts a fresh turn; the rejected physical call is never
-replayed. If that closure cannot be persisted, the result is
-`recovery_required` instead.
+Eligible read-only Lead failures, including provider timeout/failure and
+rejected final output or evidence, close through typed `lead_outcome_failure`.
+The returned failure recommendation has `next_action=retry_lead_turn` and no
+new proposal, confirmation request, or evidence. Submit explicit new text to
+`lead_turn()` in the same conversation to start a fresh turn; the original
+request and failure remain in history. Exact legacy unstarted, prepared-only,
+or unmatched submitted requests are closed before that new turn is appended,
+including after restart. Reading history or reopening does not mutate or retry.
+
+Cancellation/interruption also attempts durable closure; task cancellation is
+re-raised after resource release. Failed closure persistence, corrupt history,
+and uncertain authoritative writes remain recovery-gated. A failed Revise
+attempt leaves the old proposal superseded, with no replacement authority.
+Specialist/synthesis uncertainty and successful results cannot be abandoned by
+this path. See the [failure contract](collaboration-history.md#state-and-user-action-contract)
+and [Lead recovery](../guides/lead-agent.md#submitted-lead-outcome-unavailable-after-restart).
 
 ### `LeadStepDecision`
 

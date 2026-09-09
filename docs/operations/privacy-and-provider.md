@@ -677,10 +677,14 @@ consensus retain their exact scopes and do not share that Lead session thread.
 Cache/history/compaction may retain previously disclosed content under provider
 policy, but never grant current authority. Missing or tainted native history
 selects exact recovery from local retained history/current state on the next
-safe authorized work. An unresolved submitted outcome remains blocked in its
-conversation. Switching provider routes starts a fresh target thread without
-deleting older native data. Exact delivery has a finite capacity and never
-silently summarizes or omits required history; see
+safe authorized work. An eligible failed read-only Lead attempt can be closed
+and followed by explicit new input in the same conversation. Its original
+request and content-free failure remain in history; only the matching
+unfinished native operation is retired, preserving a successful checkpoint
+from another conversation. Uncertain specialist/synthesis and authoritative
+write outcomes remain recovery-gated. Switching provider routes starts a fresh
+target thread without deleting older native data. Exact delivery has a finite
+capacity and never silently summarizes or omits required history; see
 [Lead session memory](../guides/agent-context.md#lead-session-memory).
 
 The backend-selected provider/model/effort profile and provider argv are the
@@ -785,7 +789,8 @@ origin authentication, or a way to reconstruct truncated text.
 Automatic request content is canonical JSON of only `call_kind`, `payload`,
 `prior_thread_id`, and `schema`. A normal returned response contains
 `actual_transport_utf8_bytes`, `response_text`, `thread_id`, and nullable
-validated usage. A recovered Antigravity native `ERROR` adds
+validated usage. A recovered Antigravity native `ERROR`, or a timeout/truncation
+warning accepted with exact current-call completion proof, adds
 `response_diagnostic`, preserving its completed stdout, stderr, and exit code.
 A completed Antigravity failure instead uses a response object containing only
 `provider_failure: true` and `response_diagnostic`, followed by a fixed
@@ -875,9 +880,13 @@ prove a record is absent. Do not retry provider work merely to fill diagnostics.
 Completed Antigravity nonzero exits, malformed UTF-8/JSON, unknown error status,
 or failed schema/identity checks can now retain a diagnostic response before
 the fixed failure outcome. A response-append failure still permits the terminal
-attempt and can leave a gap. Failures before a completed process, timeouts, and
-cancellations supply no partial bytes through the shared process runner, so no
-response is invented. Earlier records without this diagnostic channel can
+attempt and can leave a gap. Process-start failures, outer watchdog timeouts,
+and cancellations supply no partial bytes through the shared process runner,
+so no response is invented. A completed Antigravity process with a native
+print-timeout or truncation warning can instead retain its diagnostic envelope,
+including on exit zero. That envelope does not establish a usable result;
+acceptance requires independent completion evidence for the exact current call
+plus ordinary validation. Earlier records without this diagnostic channel can
 contain only request and outcome.
 
 The narrowly recovered malformed-function-call `ERROR` retains its native
@@ -898,9 +907,14 @@ another provider-side condition caused the missing result. When a completed
 Lead result falls into one of the five deterministic rejection classes,
 collaboration history instead stores the content-free
 `provider_result_rejected` closure and exposes `retry_lead_turn`; it does not
-copy the raw result. A genuinely unmatched submitted call remains
-`outcome_unknown` with `inspect_and_resolve_outcome`, because neither
-diagnostic classification authorizes replay.
+copy the raw result. Eligible read-only Lead provider failures, timeouts,
+cancellations, and interruptions likewise close with a typed content-free
+failure. Exact legacy requests without closure expose retry, but only explicit
+new user input closes them and starts a fresh turn. The original request and
+failure remain history; projection, inspection, and reopening never retry.
+Uncertain specialist/synthesis or authoritative write outcomes and failed
+closure persistence retain their recovery gates. Diagnostic classification
+alone never authorizes provider replay.
 
 This store is independent of `debug_logs/runtime.jsonl` and
 `debug_logs/provider_error_responses/`. It never imports, validates, counts,

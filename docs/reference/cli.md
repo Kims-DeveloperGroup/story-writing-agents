@@ -350,6 +350,19 @@ After attachment and conversation focus, ordinary non-slash input calls the
 Lead workflow. Startup authentication/configuration does not itself authorize
 specialist, artifact, or Git effects.
 
+`story chat --codex-timeout SECONDS` retains its legacy name and sets the
+positive response timeout for both Codex and Antigravity. The default is 900
+seconds, including bare `story` startup. This is a per-call limit; a Lead turn
+can make multiple calls. Antigravity uses native timeout `N` and an outer
+watchdog of `N + 30` seconds (900/930 by default). Codex uses only its watchdog
+at `N` (900 by default). The override is a `chat` option.
+
+When an eligible read-only Lead attempt fails or times out, follow
+`retry_lead_turn`: send a new message, revise the wording, or resubmit the
+request in the same conversation, including after restart. Runtime preserves
+the original request and failure and starts a fresh turn only after explicit
+input. See [Lead recovery](../guides/lead-agent.md#submitted-lead-outcome-unavailable-after-restart).
+
 ## Interactive command registry
 
 | Group | Grammar |
