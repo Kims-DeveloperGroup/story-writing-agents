@@ -44,7 +44,7 @@ output path, direct RAG query, or legacy direct-run payload.
 | Session overrides | `/override language LANG \| persona AGENT NAME \| reset` |
 | Sessions | `/session list \| create NAME \| resume [NAME] \| pause` |
 | Conversations | `/conversation new [SUBJECT] \| list [--all] [QUERY] \| resume [ID] \| subject SUBJECT \| archive [ID]` |
-| Inspection | `/search QUERY`; `/transcript ID [COUNT] [--from SEQUENCE]`; `/inspect [DEBATE\|last]`; `/exchanges`; `/history [COUNT]`; `/status`; `/help [COMMAND]` |
+| Inspection | `/search QUERY`; `/transcript [ID [COUNT] [--from SEQUENCE]]`; `/inspect [DEBATE\|last]`; `/exchanges`; `/history [COUNT]`; `/status`; `/help [COMMAND]` |
 | Exit | `/quit` |
 
 `/?` aliases `/help`. Parsing performs no scope check or I/O; the controller
@@ -89,8 +89,10 @@ no quoting, shell expansion, provider call, file read, or network access.
   the controller may open a dynamic picker. Explicit identities remain direct.
 - `/conversation list --all` must place `--all` first and at most once.
 - `/search QUERY` requires a nonblank remainder.
-- `/transcript ID [COUNT] [--from SEQUENCE]` requires the ID first; optional
-  count precedes one final `--from`; numeric values are positive ASCII digits.
+- Bare `/transcript` returns an argument-free action for the controller to open
+  an attached-session conversation picker. With arguments, the ID comes first;
+  optional count precedes one final `--from`; numeric values are positive ASCII
+  digits. Count and start sequence cannot be supplied without an ID.
 - `/history [COUNT]` accepts one positive bounded ASCII count.
 - `/inspect` accepts no argument or one control-free debate ID/`last`.
 - `/auth`, `/settings`, `/agents`, `/exchanges`, `/status`, `/quit`, and

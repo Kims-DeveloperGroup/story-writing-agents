@@ -257,7 +257,7 @@ _ACTION_FIELD_RULES: dict[ActionKind, tuple[frozenset[str], frozenset[str]]] = {
     ActionKind.SEARCH: (frozenset({"text"}), frozenset({"text"})),
     ActionKind.TRANSCRIPT: (
         frozenset({"argument", "count", "start_sequence"}),
-        frozenset({"argument"}),
+        _NO_FIELDS,
     ),
     ActionKind.INSPECT: (frozenset({"argument"}), _NO_FIELDS),
     ActionKind.EXCHANGES: (_NO_FIELDS, _NO_FIELDS),
@@ -394,11 +394,11 @@ COMMANDS: tuple[CommandSpec, ...] = (
     ),
     CommandSpec(
         "Inspection",
-        "/transcript ID [COUNT] [--from SEQUENCE]",
+        "/transcript [ID [COUNT] [--from SEQUENCE]]",
         (),
         False,
         False,
-        "/transcript c_0123456789 24 --from 25",
+        "/transcript",
     ),
     CommandSpec(
         "Inspection",
@@ -970,7 +970,7 @@ def _parse_transcript(tail: str | None) -> InteractiveAction:
 
     tokens = _tokens(tail)
     if not tokens:
-        return _parse_error("/transcript requires a conversation ID")
+        return InteractiveAction(ActionKind.TRANSCRIPT)
 
     conversation_id = tokens[0]
     if conversation_id.startswith("--"):

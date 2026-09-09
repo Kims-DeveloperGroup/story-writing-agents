@@ -135,7 +135,7 @@ Capable-terminal decoration varies; the semantic fields and empty-history
 meaning do not.
 
 You can also use `/conversation resume [ID]`, `/conversation subject SUBJECT`,
-`/conversation archive [ID]`, `/transcript ID [COUNT] [--from SEQUENCE]`,
+`/conversation archive [ID]`, `/transcript [ID [COUNT] [--from SEQUENCE]]`,
 `/inspect [DEBATE|last]`, `/exchanges`, and `/status`. `/help` shows the exact
 installed registry.
 

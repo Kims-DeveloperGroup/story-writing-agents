@@ -9969,6 +9969,167 @@ class ControllerV2HistoryCommandTests(ControllerTestCase):
         self.assertNotIn("route_fingerprint", rendered)
         self.assertTrue(workspace.root.exists())
 
+    def test_transcript_picker_preserves_catalog_order_and_exact_archived_identity(self) -> None:
+        workspace, services, focused, controller, callbacks = self.prepared_v2_controller(
+            with_history=False,
+        )
+        selected = services.catalog.create("session", focused.subject)
+        services.catalog.archive("session", selected.conversation_id)
+        services.catalog.create("other-session", "Other session")
+        entries = services.catalog.list("session", include_archived=True)
+        selection_number = next(
+            i for i, entry in enumerate(entries, 1)
+            if entry.conversation_id == selected.conversation_id
+        )
+
+        def inspect(_prompt):
+            before = _tree_snapshot(workspace.root)
+            original_picker = terminal_module.InteractivePickerInput.read_picker
+            original_read = controller_core_module.CollaborationHistoryService.read_history
+            with (
+                mock.patch.object(terminal_module.InteractivePickerInput, "read_picker",
+                                  autospec=True, side_effect=original_picker) as picker,
+                mock.patch.object(controller_core_module.CollaborationHistoryService,
+                                  "read_history", autospec=True,
+                                  side_effect=original_read) as history,
+                mock.patch.object(controller._backend, "bind") as bind,
+            ):
+                controller._dispatch_session_lobby_action_unlogged(
+                    controller_core_module.parse_interactive_line("/transcript"), "/transcript"
+                )
+            self.assertEqual(picker.call_args.args[2], tuple(
+                terminal_module.Choice(entry.conversation_id,
+                                      f"{entry.subject} ({entry.conversation_id})")
+                for entry in entries
+            ))
+            self.assertTrue(picker.call_args.kwargs["transient"])
+            self.assertEqual(history.call_args.args[1], selected.conversation_id)
+            self.assertEqual(history.call_count, 1)
+            bind.assert_not_called()
+            self.assertEqual(controller._focused_conversation.conversation_id,
+                             focused.conversation_id)
+            self.assertEqual(controller._attached_session_id, "session")
+            self.assertEqual(_tree_snapshot(workspace.root), before)
+            return "/quit"
+
+        callbacks.reads[:] = [inspect, str(selection_number)]
+        self.assertEqual(controller.run_session_lobby(), 0)
+
+    def test_transcript_picker_empty_and_cancellation_never_read_or_mutate(self) -> None:
+        for kind in (None, ControlOutcomeKind.CANCEL, ControlOutcomeKind.INTERRUPT,
+                     ControlOutcomeKind.EOF):
+            with self.subTest(outcome=kind):
+                workspace, services, focused, controller, callbacks = (
+                    self.prepared_v2_controller(with_history=False)
+                )
+
+                def inspect(_prompt):
+                    before = _tree_snapshot(workspace.root)
+                    entries = (() if kind is None else
+                               services.catalog.list("session", include_archived=True))
+                    with (
+                        mock.patch.object(services.catalog, "list", return_value=entries),
+                        mock.patch.object(terminal_module.InteractivePickerInput,
+                                          "read_picker", return_value=ControlOutcome(
+                                              kind or ControlOutcomeKind.CANCEL)) as picker,
+                        mock.patch.object(controller_core_module.CollaborationHistoryService,
+                                          "read_history") as history,
+                        mock.patch.object(controller._backend, "bind") as bind,
+                    ):
+                        controller._dispatch_session_lobby_action_unlogged(
+                            controller_core_module.parse_interactive_line("/transcript"),
+                            "/transcript",
+                        )
+                    self.assertEqual(picker.call_count, 0 if kind is None else 1)
+                    history.assert_not_called()
+                    bind.assert_not_called()
+                    self.assertEqual(controller._focused_conversation.conversation_id,
+                                     focused.conversation_id)
+                    self.assertEqual(controller._attached_session_id, "session")
+                    self.assertEqual(_tree_snapshot(workspace.root), before)
+                    return "/quit"
+
+                callbacks.reads[:] = [inspect]
+                self.assertEqual(controller.run_session_lobby(), 0)
+                rendered = "".join(callbacks.records)
+                self.assertIn("No conversations found." if kind is None else
+                              "Transcript read cancelled", rendered)
+
+    def test_transcript_picker_fresh_resolution_rejects_stale_selection(self) -> None:
+        workspace, services, focused, controller, callbacks = self.prepared_v2_controller(
+            with_history=False,
+        )
+
+        def inspect(_prompt):
+            before = _tree_snapshot(workspace.root)
+            with (
+                mock.patch.object(services.catalog, "list",
+                                  side_effect=((focused,), ())) as catalog,
+                mock.patch.object(terminal_module.InteractivePickerInput, "read_picker",
+                                  return_value=ControlOutcome(ControlOutcomeKind.COMMIT,
+                                                              text=focused.conversation_id)),
+                mock.patch.object(controller_core_module.CollaborationHistoryService,
+                                  "read_history") as history,
+                mock.patch.object(controller._backend, "bind") as bind,
+            ):
+                controller._dispatch_session_lobby_action_unlogged(
+                    controller_core_module.parse_interactive_line("/transcript"), "/transcript"
+                )
+            self.assertEqual(catalog.call_args_list, [
+                mock.call("session", include_archived=True),
+                mock.call("session", include_archived=True),
+            ])
+            history.assert_not_called()
+            bind.assert_not_called()
+            self.assertEqual(controller._focused_conversation.conversation_id,
+                             focused.conversation_id)
+            self.assertEqual(_tree_snapshot(workspace.root), before)
+            return "/quit"
+
+        callbacks.reads[:] = [inspect]
+        self.assertEqual(controller.run_session_lobby(), 0)
+        self.assertIn("[error conversation_not_found]", "".join(callbacks.records))
+
+    def test_explicit_transcript_paging_bypasses_picker(self) -> None:
+        _workspace, _services, focused, controller, callbacks = self.prepared_v2_controller()
+        callbacks.reads[:] = [
+            f"/transcript {focused.conversation_id} 1",
+            f"/transcript {focused.conversation_id[:12]} 2 --from 2",
+            "/quit",
+        ]
+        original_read = controller_core_module.CollaborationHistoryService.read_history
+        with (
+            mock.patch.object(terminal_module.InteractivePickerInput, "read_picker") as picker,
+            mock.patch.object(controller_core_module.CollaborationHistoryService,
+                              "read_history", autospec=True, side_effect=original_read) as history,
+            mock.patch.object(controller._backend, "bind") as bind,
+        ):
+            self.assertEqual(controller.run_session_lobby(), 0)
+        picker.assert_not_called()
+        bind.assert_not_called()
+        self.assertEqual([(call.args[1], call.kwargs) for call in history.call_args_list], [
+            (focused.conversation_id, {"start_sequence": 1, "max_records": 1}),
+            (focused.conversation_id, {"start_sequence": 2, "max_records": 2}),
+        ])
+        rendered = "".join(callbacks.records)
+        self.assertIn("Continue with /transcript", rendered)
+        self.assertNotIn("[error", rendered)
+
+    def test_bare_transcript_requires_an_attached_session(self) -> None:
+        workspace = self.make_workspace()
+        controller, backend, callbacks = self.make_controller(workspace, "/transcript", "/quit")
+        with (
+            mock.patch.object(terminal_module.InteractivePickerInput, "read_picker") as picker,
+            mock.patch.object(controller_core_module.CollaborationHistoryService,
+                              "read_history") as history,
+            mock.patch.object(backend, "bind") as bind,
+        ):
+            self.assertEqual(controller.run_session_lobby(), 0)
+        picker.assert_not_called()
+        history.assert_not_called()
+        bind.assert_not_called()
+        self.assertIn("[error session_not_attached]", "".join(callbacks.records))
+
     def test_subject_text_alone_never_creates_a_history_search_hit(self) -> None:
         _workspace, _services, _metadata, controller, callbacks = (
             self.prepared_v2_controller(

@@ -120,7 +120,7 @@ After attachment, these commands manage catalog metadata and local history:
 /conversation archive [ID]
 /history [COUNT]
 /search QUERY
-/transcript ID [COUNT] [--from SEQUENCE]
+/transcript [ID [COUNT] [--from SEQUENCE]]
 ```
 
 New creates and focuses an active conversation. Resume accepts an exact ID or
@@ -136,6 +136,13 @@ over readable event fields in active conversations. Subjects are display-only
 metadata and never create a hit. `/transcript` reads a fresh bounded structured
 page for an active or archived conversation without changing focus. These
 reads do not call a provider or mutate history.
+
+Use bare `/transcript` to choose from the attached session's active and archived
+conversations in catalog order. Each choice shows `Subject (conversation_id)`
+with the full ID to distinguish duplicate subjects. Selection resolves the ID
+again before reading. An empty catalog, cancellation, Ctrl-C, or EOF reads no
+transcript and leaves attachment, focus, and conversation history unchanged. An explicit ID
+skips the picker and accepts the optional count and start sequence.
 
 Example:
 

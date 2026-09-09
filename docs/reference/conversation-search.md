@@ -12,7 +12,7 @@ With a session attached:
 
 ```text
 /search QUERY
-/transcript CONVERSATION [COUNT] [--from SEQUENCE]
+/transcript [ID [COUNT] [--from SEQUENCE]]
 /history [COUNT]
 ```
 
@@ -20,6 +20,12 @@ With a session attached:
 archived conversation and does not change focus. `/history` reads the active
 focus. All three read local storage without binding or calling a provider and
 without appending an event.
+
+Bare `/transcript` opens the attached session's active and archived conversation
+picker; an explicit ID reads directly. Choices show `Subject (conversation_id)`
+with full IDs in catalog order. Selection resolves the ID again before reading.
+An empty catalog, cancellation, Ctrl-C, or EOF reads no transcript and preserves
+attachment, focus, and conversation history.
 
 A search hit has this semantic shape (IDs and subject vary):
 
