@@ -44,10 +44,11 @@ WORK_TEMPLATE_HEADINGS = {
     ROOT / ".github/ISSUE_TEMPLATE/work_item.md": (
         "Objective",
         "Use cases and expected results",
-        "Implementation plan",
+        "Implementation summary",
         "Acceptance criteria",
         "Boundaries and dependencies",
         "Related work and verification plan",
+        "Implementation plan",
     ),
     ROOT / ".github/pull_request_template.md": (
         "What changed",
@@ -1059,6 +1060,71 @@ class RepositoryWorkTemplateTests(unittest.TestCase):
                             for heading in headings:
                                 self.assertTrue(markdown_section(variant, f"## {heading}").strip())
                 self.assertGreaterEqual(complete_examples, 1, "no example covers every body section")
+
+    def test_issue_example_use_cases_link_acceptance_and_plan(self) -> None:
+        """The illustrative example must connect its cases, criteria, and work."""
+        _, comments = template_parts(
+            self.readRequired(ROOT / ".github/ISSUE_TEMPLATE/work_item.md")
+        )
+        examples = [
+            comment for comment in comments
+            if re.search(r"^## Objective$", comment, re.MULTILINE)
+        ]
+        self.assertTrue(examples, "missing illustrative Issue example")
+        for number, example in enumerate(examples, start=1):
+            with self.subTest(example=number):
+                cases = markdown_section(example, "## Use cases and expected results")
+                definitions = re.findall(
+                    r"^(?:- )?(?:\*\*)?(UC\d+):[ \t]*(.+)$", cases, re.MULTILINE
+                )
+                self.assertTrue(definitions, "example needs labeled use-case definitions")
+                use_cases = {identifier for identifier, _ in definitions}
+                self.assertEqual(len(use_cases), len(definitions), "duplicate use-case ID")
+                for identifier, description in definitions:
+                    self.assertTrue(description.strip(" *"), f"empty definition for {identifier}")
+
+                criteria = markdown_section(example, "## Acceptance criteria")
+                entries = re.findall(
+                    r"^- \[[ xX]\] (?:\*\*)?(AC\d+):[ \t]*(.*?)"
+                    r"(?=^- \[[ xX]\] |\Z)",
+                    criteria,
+                    re.MULTILINE | re.DOTALL,
+                )
+                self.assertTrue(entries, "example needs labeled acceptance checkboxes")
+                self.assertEqual(
+                    len(entries), len(re.findall(r"^- \[[ xX]\] ", criteria, re.MULTILINE)),
+                    "each acceptance checkbox needs an AC label",
+                )
+                acceptance_cases = {}
+                for identifier, criterion in entries:
+                    self.assertNotIn(identifier, acceptance_cases, "duplicate acceptance ID")
+                    references = set(re.findall(r"\bUC\d+\b", criterion))
+                    self.assertTrue(references, f"{identifier} needs a related use case")
+                    self.assertLessEqual(references, use_cases, f"unknown use case in {identifier}")
+                    acceptance_cases[identifier] = references
+                self.assertEqual(
+                    set().union(*acceptance_cases.values()), use_cases,
+                    "every use case needs acceptance coverage",
+                )
+
+                plan = markdown_section(example, "## Implementation plan")
+                steps = re.findall(r"^\d+\. (.*?)(?=^\d+\. |\Z)", plan, re.MULTILINE | re.DOTALL)
+                self.assertTrue(steps, "example needs ordered implementation steps")
+                planned_cases = set()
+                for step_number, step in enumerate(steps, start=1):
+                    case_refs = set(re.findall(r"\bUC\d+\b", step))
+                    criterion_refs = set(re.findall(r"\bAC\d+\b", step))
+                    self.assertTrue(case_refs, f"plan step {step_number} needs a use case")
+                    self.assertTrue(criterion_refs, f"plan step {step_number} needs acceptance criteria")
+                    self.assertLessEqual(case_refs, use_cases, "unknown plan use case")
+                    self.assertLessEqual(criterion_refs, acceptance_cases.keys(), "unknown plan criterion")
+                    related_cases = set().union(*(acceptance_cases[ref] for ref in criterion_refs))
+                    self.assertLessEqual(
+                        case_refs, related_cases,
+                        "plan use cases must relate to its cited acceptance criteria",
+                    )
+                    planned_cases.update(case_refs)
+                self.assertEqual(planned_cases, use_cases, "every use case needs plan coverage")
 
     def test_authoring_index_links_all_four_source_templates(self) -> None:
         source = self.readRequired(AUTHORING_PATH)

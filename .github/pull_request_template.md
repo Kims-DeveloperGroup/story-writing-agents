@@ -15,14 +15,15 @@ Before and after: Show the same realistic input or contributor action before and
 the change. Label constructed wording and never present it as observed output. An
 internal task can show a repository or policy result without inventing a UI.
 
-Implementation: Explain the actual changes and why they produce the result. Name only
-the files, boundaries, or tradeoffs useful to review. Distinguish delivered work from
-plans or follow-ups.
+Implementation: Connect each actual mechanism or change to the named use case it
+enables. Explain why it produces the requested result, using only review-relevant
+components and tradeoffs. Distinguish delivered work from plans or follow-ups.
 
-Verification: Summarize the relevant checks, results, and coverage limits. Link the
-detailed Evidence record for exact commands, selections, source identity, environment,
-artifacts, and reuse decisions. Distinguish completed checks from planned or unavailable
-checks. A timeout is not a pass; absent CI is not success.
+Verification: State which named scenario or acceptance criterion each result supports
+and what remains unestablished. Link Evidence for exact commands, selections, source
+identity, environment, artifacts, and reuse decisions. An aggregate count does not prove
+every criterion. Distinguish completed checks from planned or unavailable checks; a
+timeout is not a pass, and absent CI is not success.
 
 Limitations and follow-ups: Keep material compatibility limits, unverified behavior, and
 deferred work visible. Link follow-ups and state whether they block acceptance. Say when
@@ -48,11 +49,11 @@ the delivered behavior, concrete example, actual implementation, and unverified 
 
 ## Implementation
 
-{{Actual changes, their purpose, and review-relevant tradeoffs.}}
+{{Actual mechanisms and how they enable the named scenarios, with useful tradeoffs.}}
 
 ## Verification
 
-{{Completed checks and results, with a descriptive link to detailed evidence and any unverified cases.}}
+{{Results mapped to scenarios or criteria, linked Evidence, and unestablished cases.}}
 
 ## Limitations and follow-ups
 
@@ -97,31 +98,38 @@ results remain errors.
 
 ## Implementation
 
-The Antigravity adapter requests `--output-format json`. Discovery probes in that mode
-ignored text on standard input, so the adapter supplies the complete prompt through
-`--print`. The probe finding does not describe the original Story transport failure.
+The Antigravity adapter reads the completed JSON result so a valid final success can
+supply the user's reply despite intermediate errors. It requests `--output-format json`
+and passes the complete prompt through `--print` so the requested input reaches the CLI.
+JSON-mode probes ignored text on standard input; that discovery is distinct from the
+original rejected-reply failure.
 
-Strict response validation remains in place. Codex and shared implementation bytes
-remain unchanged in the source report.
+Strict validation keeps final errors and invalid results from becoming successful
+replies. Existing conversation handling supports reopening the same thread; Codex and
+shared implementation bytes remain unchanged in the source report.
 
 ## Verification
 
-The
+For the “receive a valid final reply” and “reopen and recall” scenarios, the
 [Issue #621 verification report](https://github.com/Kims-DeveloperGroup/story-writing-agents/issues/621#issuecomment-5578471359)
-reports 51 focused tests with zero skips: 25 adapter, 18 parity, three common, and five
-Codex tests.
+records replies, marker recall, and same-thread continuity as passed. Its exchange,
+schema, accounting, and exit checks support the metadata criterion for successful turns.
+These results came from three actual adapter calls and six fresh/reopened Story turns
+across Pro, Flash, and Sonnet.
 
-It also reports three actual adapter calls and six fresh/reopened Story turns across
-Pro, Flash, and Sonnet. Marker recall, same-thread continuity, replies, exchanges,
-schema, accounting, and exit checks were reported passed. The raw private manifest and
-exact 51-ID commands cannot be retrieved from that comment, so they are unavailable for
-independent reproduction here.
+The report also records 51 focused tests with zero skips: 25 adapter, 18 parity, three
+common, and five Codex tests. Exact 51-ID commands and the raw private manifest are
+inaccessible from the comment. Separate results for a valid final success after
+intermediate errors and for final-result rejection are unavailable. Reported successful
+replies and the aggregate count do not establish those specific conditions or provide
+an exact rerun selection.
 
 ## Limitations and follow-ups
 
-Prompts passed through process arguments remain subject to argument inspection and
-operating-system size limits. Final JSON omits initialization and step attestation and
-does not independently establish the resolved model.
+Prompt text can be visible to someone able to inspect process arguments, and large
+prompts remain subject to operating-system argument-size limits. Final JSON omits
+initialization and step attestation, so it cannot independently confirm that the
+requested model handled the conversation.
 
 The historical report supports the stated local checks. It does not establish a separate
 CI result or eliminate the missing-provenance limitation.
@@ -163,9 +171,11 @@ rule, not observed GitHub operations.
 
 ## Implementation
 
-The workflow guidance ties subdivision to independently complete work and applies the
-same rule to direct child sets. If a plan cannot produce at least two necessary
-siblings, its owner updates or enlarges the current Issue's approved scope instead.
+The direct-child gate requires at least two independently complete, necessary siblings.
+A single workflow update does not meet that gate, so its owner updates or enlarges the
+current Issue's approved scope. This keeps the single delivery unit scenario on one
+owning
+Issue while allowing a complete sibling set for the two-release scenario.
 
 ## Verification
 
@@ -176,8 +186,9 @@ this command with 44 tests passed:
 python -m unittest tests.test_repository_agent_policy -v
 ```
 
-This is historical policy-test evidence. It does not demonstrate live GitHub hierarchy
-creation or Project transitions.
+This is reported repository-policy evidence for the illustrated planning rule. It does
+not establish individual scenario results or demonstrate live GitHub hierarchy creation
+or Project transitions.
 
 ## Limitations and follow-ups
 

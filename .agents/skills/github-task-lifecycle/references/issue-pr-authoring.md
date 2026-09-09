@@ -1,9 +1,10 @@
 # Authoring Issues, PRs, evidence, and status comments
 
-Write each record so a reader can understand the useful result before inspecting
-technical details. An Issue explains the intended behavior and implementation plan. A PR
-explains the delivered behavior and actual changes. A status comment explains progress
-and the next action. Evidence makes the supporting checks and their limits inspectable.
+Write each record so a reader understands the useful result and how the work achieves
+it. An Issue connects scenarios, intended changes, and completion conditions. A PR
+explains the delivered mechanisms and results. A status comment explains what works,
+what affects the remaining scenarios, and the next action. Evidence connects
+observations to the criteria they support.
 
 These templates govern reader-facing records. They do not change the internal task or
 result packets, the development-role boundaries, or the runtime's story-agent roles.
@@ -41,9 +42,10 @@ authorized record or comment; they do not require a new GitHub integration.
 1. Read the current scope, relevant sources, and template instructions. Treat worked
   examples as demonstrations of writing, not facts or authority for the new task.
 2. Copy the reusable body and replace every `{{double-brace placeholder}}` with
-  task-specific content. Keep the six sections in their given order. Omit only genuinely
-  optional empty sections; never remove a material limitation, dependency, or
-  verification gap because it is inconvenient.
+   task-specific content. Keep that template's sections in order: the Issue has seven,
+   and the other templates have six. Omit only genuinely optional empty sections; never
+   remove a material limitation, dependency, or verification gap because it is
+   inconvenient.
 3. Remove HTML comments, frontmatter, worked examples, and unused placeholder material
   from the submitted body. Do not paste a hidden example into the actual record. The
   native Issue selector can supply the body, but CLI and API authors must do this
@@ -51,10 +53,10 @@ authorized record or comment; they do not require a new GitHub integration.
 4. Link a detailed Evidence record from the Issue, PR, or status comment when the
   technical record would interrupt the explanation. Give the link a useful label, such
   as “Focused adapter checks and conversation results.”
-5. Re-read the finished draft, not only the template. Confirm that a reader can find the
-  goal, realistic example, intended plan or delivered behavior, and anything still
-  unverified. Check links, lists, tables, and fenced examples in both source and
-  rendered views when available.
+5. Re-read the finished draft, not only the template. Follow a scenario through its
+   criterion, planned mechanism or actual change, and available evidence. Check that no
+   scenario is orphaned, no step is unrelated, and gaps remain visible. Check links,
+   lists, tables, and fenced examples in source and rendered views when available.
 6. Publish only within the authorization already granted under workflow policy. Re-read
   the resulting record and verify its native relationships or status separately when the
   task requires those operations.
@@ -92,11 +94,18 @@ Descriptive link labels should tell the reader what evidence or decision they wi
 
 ## Describe scope and delivery
 
-An Issue's implementation plan must be visible. Explain the intended changes and how
-they produce the objective, including tests and documentation. Acceptance criteria must
-describe observable completion, including relevant failure and compatibility cases.
-Update the plan when approved scope changes; a template never bypasses the planning
-gate.
+An Issue places a brief Implementation summary after its use cases. Use one short
+paragraph or a few bullets for planned mechanisms and changes; keep workflow, test, and
+log detail out of that summary. Put the detailed Implementation plan last, after scope
+and verification context.
+
+Each ordered plan step names the affected logic or component, necessary details, and the
+scenario and criterion it enables. Include necessary tests and documentation. Each
+acceptance checkbox names its scenario and an observable success or failure condition.
+Cover every use case in both criteria and the plan. Scenario names work; short IDs are
+optional. If used, define IDs once, reference only defined IDs, and keep each step's use
+cases consistent with its cited criteria. Update the plan when approved scope changes;
+the planning gate still applies.
 
 For an initiative or parent Issue, include the objective, non-goals, integration
 criteria, children and their order, risks, evidence plan, and approved base. For a leaf,
@@ -113,9 +122,10 @@ can be created and verified together. Follow the
 not create native relationships or authorize subdivision.
 
 A PR describes actual changes. Use explicit Before and After wording for the same input
-or action, then explain the implementation that accounts for the difference. Rewrite the
-title and description around the final scope when it changes. Include only
-review-relevant history and tradeoffs.
+or action, then connect the implementation mechanism to that difference. Map
+verification results to the relevant scenario or criterion and name any unestablished
+case. Rewrite the title and description around the final scope when it changes,
+retaining only review-relevant history and tradeoffs.
 
 Use `Refs #N` for partial or child work and `Closes #N` only for a completing PR
 targeting `main`, as workflow policy requires. These references do not replace native
@@ -134,16 +144,17 @@ execution ownership, budgets, deduplication, reuse, and sufficiency. The templat
 documents those decisions and results; it grants no new authority to run checks or
 accept risk.
 
-Summaries should name the checked behavior, result, and material gaps. The detailed
-record retains applicable commands and case manifests, source and environment identity,
-relevant digests, selected and completed outcome sets, timing, budgets, artifacts, and
-reuse or invalidation decisions. Keep the exact details available through descriptive
-links when they are too large for the body.
+Summaries name the checked scenario or criterion, its expected and observed result, and
+material gaps. Status updates connect remaining work and blockers to that scenario's
+practical impact and identify the next action that resolves it. The detailed Evidence
+record retains applicable commands, case manifests, source and environment identity,
+digests, outcome sets, timing, budgets, artifacts, and reuse decisions. Use descriptive
+links when those details are too large for the body.
 
-If provenance is unavailable, say which fact is missing and how that limits reproduction
-or reuse. A historical aggregate count is useful as a sourced report; it does not supply
-the missing exact IDs. A final adapter hash is not automatically a digest of its tests,
-fixtures, runner, transitive inputs, and environment.
+If provenance is unavailable, name the missing fact and its effect on reproduction or
+reuse. An aggregate test count supplies neither missing exact IDs nor a separate pass
+for every criterion or variant. A final adapter hash is not automatically a digest of
+its tests, fixtures, runner, transitive inputs, and environment.
 
 Distinguish failed assertions, accepted skips, interruptions, and unexecuted work. A
 timeout is not a pass. An absent CI run does not establish success. Partial or
@@ -157,9 +168,11 @@ The Antigravity examples draw on
 [PR #622](https://github.com/Kims-DeveloperGroup/story-writing-agents/pull/622) and the
 [Issue #621 verification report](https://github.com/Kims-DeveloperGroup/story-writing-agents/issues/621#issuecomment-5578471359).
 They distinguish a valid final reply rejected after intermediate errors from the later
-JSON-mode probe finding that standard-input text was ignored. Their marker interaction
-is constructed; their verification counts and durations are attributed to the historical
-report. Missing exact commands and private manifests remain explicitly unavailable.
+JSON-mode probe finding that standard-input text was ignored. The marker interaction and
+Issue UC/AC labels are illustrative, not retrieved transcripts or original Issue
+identifiers. Related examples use scenario names. Counts and durations come from the
+historical report; missing commands, manifest contents, and distinct results for the
+intermediate-error and rejection cases remain unestablished.
 
 The contributor-workflow examples draw on
 [PR #604](https://github.com/Kims-DeveloperGroup/story-writing-agents/pull/604). They
@@ -167,6 +180,5 @@ show how one delivery unit stays on one Issue and how the reported policy-test c
 supports the wording without proving live GitHub behavior.
 
 The status template includes progress, blocked, and completion variants. Its sequence
-and blocker are hypothetical. The completion variant separates implemented and verified
-work from the integration and native-state checks still needed to declare the entire
-task complete.
+and blocker are hypothetical. The completion variant separates implemented work and
+reported checks from unresolved acceptance evidence and publication gates.

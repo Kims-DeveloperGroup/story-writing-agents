@@ -10,16 +10,16 @@ Read the authoring guide and this entire source, including the examples, before 
 Follow [adaptive verification](../../.agents/skills/adaptive-verification/SKILL.md);
 AGENTS remains canonical for ownership and authorization.
 
-What this demonstrates: State the behavior or acceptance condition under examination,
-the purpose and evidence level, and the result supported by this record. Distinguish a
-current observation, a historical report, and an inference. Never describe a planned
-check as executed.
+What this demonstrates: Name the use case and acceptance condition under examination,
+the purpose and evidence level, and the supported result. Use scenario names or existing
+optional IDs. Distinguish current observations, historical reports, and inferences;
+never describe a planned check as executed.
 
-Scenario results: Give the input or action, expected result, observed result, and
-outcome. Quote actual outputs only when available and safe to share. Label constructed
-interaction wording as illustrative; never substitute it for an observed transcript.
-Summarize counts and link detailed case results rather than adding a column for every
-technical field.
+Scenario results: For each named scenario or criterion, show the input or action,
+expected result, observed result, and outcome. Mark a missing case result unestablished;
+an aggregate count does not prove it passed. Quote actual outputs only when available
+and safe to share. Label constructed wording as illustrative, not an observed
+transcript. Link detailed case results instead of adding columns for technical fields.
 
 Reproduction and environment: Record the repository, absolute worktree, baseline and
 HEAD, dirty fingerprint, environment class and relevant capabilities or versions.
@@ -70,13 +70,13 @@ reproducibility, and an honest assessment.
 
 ## What this demonstrates
 
-{{Behavior or acceptance condition, verification purpose and level, and supported result.}}
+{{Named scenario and criterion, verification purpose and level, and supported result.}}
 
 ## Scenario results
 
 | Scenario or input | Expected and observed result | Outcome |
 | --- | --- | --- |
-| {{Concrete action or case.}} | {{Expected result; actual observation or its source.}} | {{Passed, failed, skipped, or unexecuted.}} |
+| {{Named scenario or criterion.}} | {{Expected result; actual observation or its source.}} | {{Outcome or not established.}} |
 
 {{Result counts and a descriptive link to detailed case results when needed.}}
 
@@ -132,12 +132,16 @@ independently attest the resolved model.
 | Scenario | Expected and reported result | Outcome |
 | --- | --- | --- |
 | Receive a valid final reply. | Story displays the completed assistant reply; the report records successful replies. | Reported passed. |
+| Receive a valid final success after intermediate errors. | The final reply should still appear; a distinct result for this variant is unavailable. | Not established. |
 | Reopen the conversation and ask for its earlier marker. | The same thread retains context; the report records marker recall and continuity. | Reported passed. |
+| Reject a final error or invalid result. | The turn should remain unsuccessful; a distinct result for this case is unavailable from the report. | Not established. |
 
-The report also records exchanges, schema, accounting, and exit checks as passed. It
-reports 51 focused tests with zero skips: 25 adapter, 18 parity, three common, and five
-Codex tests. The actual-call selection comprised three adapter calls and six
-fresh/reopened Story turns.
+For successful fresh and reopened turns, the report also records exchange, schema,
+accounting, and exit checks as passed, supporting the metadata criterion. It reports
+51 focused tests with zero skips: 25 adapter, 18 parity, three common, and five Codex
+tests. The actual-call selection comprised three adapter calls and six fresh/reopened
+Story turns. Neither successful replies nor the aggregate count separately establish
+the intermediate-error variant or rejection condition.
 
 ## Reproduction and environment
 
@@ -160,9 +164,10 @@ limit independent reproduction and current reuse; the published manifest digest 
 does not reveal its contents.
 
 The report claims zero focused-test skips; no separate CI outcome is established.
-Prompts in process arguments retain inspection exposure and operating-system size
-limits. Final JSON omits initialization and step attestation, so model labels remain
-report selections rather than independent proof of the resolved model.
+Prompt text remains visible to process-argument inspection, and large prompts are
+constrained by operating-system argument-size limits. Final JSON omits initialization
+and step attestation, so the report cannot independently confirm that the requested
+model handled each conversation.
 
 ## Technical provenance and artifacts
 
@@ -189,10 +194,11 @@ summary.
 
 ## Assessment
 
-The report supports the stated historical functional checks. It does not supply a
-reproducible exact selection or independently establish current evidence sufficiency. A
-current assessment needs the missing records or newly authorized evidence, while
-retaining the argument and model-attestation limits.
+The report supports the historical successful-reply, reopening, and metadata outcomes.
+The intermediate-error variant and rejection criterion remain unestablished. A current
+assessment needs the missing
+case results and reproducible selection, or newly authorized evidence, while retaining
+the argument and model-attestation limits.
 -->
 
 <!--
@@ -208,9 +214,10 @@ verified together.
 
 ## Scenario results
 
-For the illustrative action “Plan one complete workflow update,” the expected result is
-one owning Issue without a sole child or wrapper. The historical PR reports 44 policy
-tests passed; it does not report a live GitHub operation for that example.
+The “one owning Issue” scenario uses the illustrative action “Plan one complete workflow
+update.” Expected: one owning Issue without a sole child or wrapper. Reported: 44
+repository-policy tests passed. Individual scenario outcomes and a live GitHub operation
+are not established by that aggregate result.
 
 ## Reproduction and environment
 

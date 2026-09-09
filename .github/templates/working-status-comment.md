@@ -11,21 +11,22 @@ Current status: State the meaningful status and its scope in one or two sentence
 Distinguish implementation complete, verification complete, and task complete. Use
 workflow policy for actual Project transitions; a comment does not change native status.
 
-What works now: Describe delivered or verified behavior in familiar language. Give a
-concrete result when it helps, and say whether it was observed, reported by another
-record, or still inferred.
+What works now: Name the scenario that is delivered or verified and its useful result.
+Say whether the behavior was observed, reported by another record, or only implemented
+and awaiting observation.
 
-What remains: Name unfinished implementation, verification, review, integration, or
-cleanup steps relevant to completion. Do not turn an unexecuted check into a pass or
-hide it behind a percentage.
+What remains: Name unfinished work or checks and explain which user scenario cannot yet
+be delivered or relied on. Do not turn an unexecuted check into a pass or hide it behind
+a percentage.
 
-Blocker or decision: State the cause, impact, decision or unblock condition, owner, and
-next action. If there is no blocker, say so briefly. A timeout is incomplete evidence;
-lack of CI is not success. Do not invent a blocker merely to fill a section.
+Blocker or decision: State the cause, affected scenario, unblock condition, and decision
+owner. Explain the practical impact. If there is no blocker, say so briefly. A timeout
+is incomplete evidence; lack of CI is not success. Do not invent a blocker to fill a
+section.
 
-Next step: Name one concrete next action and its owner. Include a useful completion
-condition rather than an unsupported time promise. For completed work, state the handoff
-or follow-up owner when one remains.
+Next step: Name one concrete action and its owner, then state which scenario outcome or
+evidence gap it resolves. Use a completion condition rather than an unsupported time
+promise. For completed work, identify any remaining handoff or follow-up owner.
 
 Evidence links: Link the relevant Issue, PR, or detailed Evidence record with
 descriptive labels. Keep logs, hashes, command manifests, and budget details in Evidence
@@ -44,19 +45,19 @@ The illustrative sequence below is not a record of actual historical status tran
 
 ## What works now
 
-{{Delivered or verified behavior and a useful concrete result.}}
+{{Named scenario, delivered or verified behavior, and a useful result.}}
 
 ## What remains
 
-{{Work and checks still needed for completion.}}
+{{Remaining work and how it affects the user scenario or acceptance condition.}}
 
 ## Blocker or decision
 
-{{Blocker, impact, unblock condition, and decision owner, or no current blocker.}}
+{{Blocker, scenario impact, unblock condition, and owner, or no current blocker.}}
 
 ## Next step
 
-{{Next action, its owner, and the condition that completes it.}}
+{{Next action, its owner, and the scenario outcome or gap it resolves.}}
 
 ## Evidence links
 
@@ -84,8 +85,10 @@ errors. That behavior still awaits observation in this illustrative stage.
 
 ## What remains
 
-Run the selected adapter and compatibility checks, then verify actual replies and
-conversation continuity after reopening. Record material limits for review.
+Verify valid replies after intermediate errors, reopening with marker recall, and
+rejection of unsuccessful final results. These checks are needed to establish that users
+can continue the same conversation without an invalid result appearing as a successful
+reply.
 
 ## Blocker or decision
 
@@ -93,7 +96,8 @@ No current blocker. Verification remains pending.
 
 ## Next step
 
-The test owner runs the selected checks and records their results in Evidence.
+The test owner checks reply delivery, continuity, and rejection, then records the
+observed outcomes against those criteria in Evidence.
 
 ## Evidence links
 
@@ -117,20 +121,20 @@ continuity in actual Story conversations remain unobserved.
 
 ## What remains
 
-Verify actual replies, same-thread continuity, and marker recall across the selected
-fresh and reopened Story turns. Preserve the local results while arranging the missing
-checks.
+Observe actual replies and marker recall on the same thread after reopening. Whether
+users can retain earlier context after reopening remains unverified. Preserve the
+completed local results.
 
 ## Blocker or decision
 
-Hypothetical blocker: the test owner lacks a ready provider environment, so actual
-conversation checks cannot run. The root needs to arrange that environment before this
-coverage gap can close.
+Hypothetical blocker: the test owner lacks a ready provider environment. This prevents
+checking whether reopening preserves the user's earlier context. The root needs to
+arrange that environment to close the gap.
 
 ## Next step
 
-The root arranges the missing environment. The test owner then resumes the remaining
-checks and updates the Evidence record.
+The root arranges the provider environment. The test owner then checks a fresh reply and
+a reopened marker answer on the same thread, resolving the missing continuity evidence.
 
 ## Evidence links
 
@@ -139,12 +143,12 @@ the repair context. No historical source is claimed for this invented blocker. T
 [later verification report](https://github.com/Kims-DeveloperGroup/story-writing-agents/issues/621#issuecomment-5578471359)
 illustrates the kind of linked result needed to close the coverage gap.
 
-Completion variant: implementation/verification complete; publication pending
+Completion variant: implementation and reported checks complete; publication pending
 
 ## Current status
 
-Implementation is complete. Local verification is reported passed. Publication is
-pending in this hypothetical update.
+Implementation is complete. The reported local checks passed. Publication is pending in
+this hypothetical update.
 
 ## What works now
 
@@ -154,20 +158,23 @@ six Story turns.
 
 ## What remains
 
-Complete review and integration, then verify Issue closure and Project completion. The
-missing exact historical selection remains an evidence limit for the review.
+Resolve the missing intermediate-error and rejection-case evidence before calling the
+criteria complete. Review and integration also remain pending, so publication of the
+repair is not yet confirmed. Then verify Issue closure and Project completion.
 
 ## Blocker or decision
 
-No implementation blocker is identified in the supplied report. The reviewer still needs
-to assess the evidence gaps and the argument and model-attestation limits.
+No implementation blocker is identified in the supplied report. The reviewer needs to
+assess the uncovered intermediate-error and rejection conditions and limits on prompt
+visibility, size, and model confirmation before accepting the result.
 
 ## Next step
 
-The root completes the publication checks. Once confirmed, a fully published update
-would state: “Implementation complete; verification accepted; PR merged, owning Issue
-closed, and Project Done,” with links to those confirmed records. This wording is
-illustrative, not a claim about the historical records.
+The root resolves the missing case evidence and completes publication checks. Once
+confirmed, a fully published update would state: “Implementation complete; verification
+accepted; PR merged, owning Issue closed, and Project Done,” with links to those
+confirmed records. This wording is illustrative, not a claim about the historical
+records.
 
 ## Evidence links
 
