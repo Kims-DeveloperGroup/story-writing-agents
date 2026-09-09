@@ -211,7 +211,7 @@ class ProviderAuthService:
             statuses=tuple(self.probe(provider) for provider in AUTH_PROVIDERS)
         )
 
-    def login(self, provider: str) -> ProviderLoginResult:
+    def login(self, provider: str, *, recovery: bool = False) -> ProviderLoginResult:
         """Run one native login until exit or fresh authentication succeeds.
 
         The login child inherits stdin, stdout, stderr, the environment, and
@@ -220,6 +220,11 @@ class ProviderAuthService:
         """
 
         spec = self._spec_for(provider)
+        observed_unauthenticated = not recovery
+        if recovery:
+            observed_unauthenticated = (
+                self.probe(provider).state is ProviderAuthState.UNAUTHENTICATED
+            )
         try:
             process = self._process_factory(
                 spec.login_command,
@@ -246,7 +251,9 @@ class ProviderAuthService:
                     break
                 except subprocess.TimeoutExpired:
                     status = self.probe(provider)
-                    if not status.authenticated:
+                    if status.state is ProviderAuthState.UNAUTHENTICATED:
+                        observed_unauthenticated = True
+                    if not status.authenticated or not observed_unauthenticated:
                         continue
                     return ProviderLoginResult(
                         provider=provider,
@@ -264,10 +271,13 @@ class ProviderAuthService:
             _stop_process(process)
             raise
 
+        status = self.probe(provider)
+        if recovery and returncode != 0:
+            status = ProviderAuthStatus(provider, ProviderAuthState.INDETERMINATE)
         return ProviderLoginResult(
             provider=provider,
             returncode=returncode,
-            status=self.probe(provider),
+            status=status,
         )
 
     def _spec_for(self, provider: str) -> ProviderAuthSpec:

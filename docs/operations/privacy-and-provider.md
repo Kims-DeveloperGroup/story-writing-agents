@@ -366,6 +366,14 @@ root. The runtime keeps only one of four content-free states in memory:
 authenticated, unauthenticated, unavailable, or indeterminate. It does not
 scan, decode, retain, display, or log status output.
 
+The same native commands handle a call-time authentication challenge during
+interactive Lead work. This recovery path starts `codex login` or bare `agy`
+even when the preceding status probe still reports authenticated. Story first
+blocks new provider activity and waits for already active calls to finish, then
+returns the real terminal to one native login owner. Same-provider challenges
+from one authentication generation share that handoff; provider handoffs are
+serialized. Python and other noninteractive calls launch no login process.
+
 Native sign-in runs at the same workspace root and inherits the real stdin,
 stdout, stderr, process environment, and process group. The provider CLI may
 therefore display prompts in terminal scrollback and open a
@@ -383,6 +391,15 @@ is the sole completion authority. Story then boundedly stops and reaps only the
 exact login child if it remains open and returns to the calling startup,
 `/auth`, or Settings flow; it does not require provider `/exit`, Ctrl-C, EOF,
 extra Enter, confirmation, or a second paste.
+
+Call-time recovery is deliberately stricter when the baseline already reported
+authenticated. An unchanged authenticated probe does not stop a still-running
+native login child. Recovery can complete after native exit status zero plus a
+fresh authenticated status, or after an observed unauthenticated-to-authenticated
+transition. A nonzero native exit and indeterminate or non-authenticated fresh
+status fail closed. If the provider interface stays open after the user
+finishes sign-in, the user exits that native interface normally; Story neither
+sends nor records the exit input.
 
 Story never copies, parses, synthesizes, displays, persists, or logs an
 authorization code. Local browser-capable provider flows may need no code.
@@ -768,9 +785,9 @@ story agent, provider, and physical-call exchange ID. `AgentBackend` now
 automatically offers every established or contextual physical structured call
 to this channel: request before invocation, valid `ProviderResult` before
 accounting/decode/thread persistence, then one closed terminal attempt. A typed
-completed Antigravity failure can also offer a diagnostic response before its
-failure outcome, even though it has no valid `ProviderResult`. Direct store use
-remains possible.
+completed Codex or Antigravity failure can also offer a diagnostic response
+before its failure outcome, even though it has no valid `ProviderResult`.
+Direct store use remains possible.
 
 Each content value is plaintext strict UTF-8. The retained value is the longest
 complete prefix at or below 262,144 bytes; its retained/full UTF-8 byte counts
@@ -787,8 +804,8 @@ Automatic request content is canonical JSON of only `call_kind`, `payload`,
 `actual_transport_utf8_bytes`, `response_text`, `thread_id`, and nullable
 validated usage. A recovered Antigravity native `ERROR` adds
 `response_diagnostic`, preserving its completed stdout, stderr, and exit code.
-A completed Antigravity failure instead uses a response object containing only
-`provider_failure: true` and `response_diagnostic`, followed by a fixed
+A completed provider failure instead uses a response object containing
+`provider_failure: true` and, when available, `response_diagnostic`, followed by a fixed
 `provider_failure` outcome. Inside `response_diagnostic`, `exit_code` is the
 native integer status; `stdout` and `stderr` each contain `encoding` and `data`.
 Each stream uses strict `utf-8` when possible, otherwise reversible `base64`.
@@ -800,13 +817,16 @@ existing prefix bound and retention. Encoding does not remove sensitive data;
 inspect the outer full/retained counts, truncation flag, and full-input digest
 before treating nested JSON or a base64 stream as complete.
 
-Automatic capture consumes only these typed completed-process diagnostics; it
-does not import Codex raw streams, Antigravity's native proof transcript or its
-private thinking, authentication/catalog output, browser/OAuth facts, or
-environment values. Authentication and discovery probes retain their existing
-output exclusions. This is not semantic redaction: payload/schema, returned
-text, and native stdout/stderr may contain secrets or other provider-controlled
-content, and a direct caller can place arbitrary material inside `content`.
+Automatic capture consumes only these typed completed-process diagnostics. It
+does not import partial timed-out or cancelled streams, Antigravity's native
+proof transcript or private thinking, or native login/status/catalog output.
+Native login terminal bytes are never recorded. Authentication and discovery
+probes retain their existing output exclusions. Invocation diagnostics receive
+no semantic redaction: exact native stdout/stderr may contain provider-emitted
+OAuth URLs or status, credentials, tokens, story content, environment values,
+or other secrets. Capture does not independently inspect the environment,
+browser, or credential store. A direct caller can also place arbitrary material
+inside `content`.
 
 Sequence values, millisecond timestamps, provider/agent/scope identities,
 exchange correlation, byte counts, truncation, and digests remain sensitive
@@ -872,13 +892,17 @@ Consequently, a missing store, gap, exchange, response, or outcome never proves
 that no provider call or result occurred. Conversely, `io_failed` does not
 prove a record is absent. Do not retry provider work merely to fill diagnostics.
 
-Completed Antigravity nonzero exits, malformed UTF-8/JSON, unknown error status,
-or failed schema/identity checks can now retain a diagnostic response before
-the fixed failure outcome. A response-append failure still permits the terminal
-attempt and can leave a gap. Failures before a completed process, timeouts, and
-cancellations supply no partial bytes through the shared process runner, so no
-response is invented. Earlier records without this diagnostic channel can
-contain only request and outcome.
+Completed Codex or Antigravity nonzero exits, malformed UTF-8/JSON, unknown
+error status, or failed schema/identity checks can retain a diagnostic response
+before the fixed failure outcome. A response-append failure still permits the
+terminal attempt and can leave a gap. Failures before a completed process and
+timeouts supply no partial bytes through the shared process runner; their
+provider-failure response contains only `provider_failure: true` when that
+append succeeds. Cancellation uses its separate `cancelled` terminal and
+receives no provider-failure response marker; depending on prior capture state,
+it can leave a request plus outcome or an already recorded response plus
+outcome. Earlier records without this response channel can contain only request
+and outcome.
 
 The narrowly recovered malformed-function-call `ERROR` retains its native
 diagnostic envelope alongside the structured result, which still undergoes
@@ -895,7 +919,10 @@ These exchange codes are diagnostic boundaries, not durable story-history
 prose. `provider_invocation_failed` is intentionally coarse and does not expose
 whether output-schema rejection, authentication, configuration, transport, or
 another provider-side condition caused the missing result. When a completed
-Lead result falls into one of the five deterministic rejection classes,
+native response meets the authentication classifier, the narrower terminal
+code is `provider_authentication_required`; its diagnostic still grants no
+replay authority. When a completed Lead result falls into one of the five
+deterministic rejection classes,
 collaboration history instead stores the content-free
 `provider_result_rejected` closure and exposes `retry_lead_turn`; it does not
 copy the raw result. A genuinely unmatched submitted call remains
@@ -987,13 +1014,13 @@ Concrete `AgentBackend` keeps exception text and runtime JSONL diagnostics fixed
 and content-safe. For example, Codex nonzero exit raises
 `BackendProtocolError` with exact `Codex CLI exited with status N`;
 Antigravity uses fixed provider-specific diagnostics for capability, transport,
-protocol, and timeout failures. Codex native stderr remains unavailable by
-default. A completed Antigravity `ProviderInvocationError` can carry a private
-typed `response_diagnostic` with stdout/stderr bytes and exit status for the optional
-agent-exchange capture path. Those bytes do not enter exception text, semantic
-collaboration history, or `debug_logs/runtime.jsonl`; inspect retained exchanges
-for available native detail without replaying the failed call. Absence of a
-record does not prove that no output existed.
+protocol, and timeout failures. A completed Codex or Antigravity
+`ProviderInvocationError` can carry a private typed `response_diagnostic` with
+stdout/stderr bytes and exit status for the optional agent-exchange capture
+path. Those bytes do not enter exception text, semantic collaboration history,
+or `debug_logs/runtime.jsonl`; inspect retained exchanges for available native
+detail without replaying the failed call. Absence of a record does not prove
+that no output existed.
 
 If a completed response instead reaches and fails the shared decoder, its body
 may be available through the separate

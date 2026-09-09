@@ -17,6 +17,8 @@ from enum import StrEnum
 from types import MappingProxyType
 from typing import AsyncContextManager, Protocol, cast, runtime_checkable
 
+from ..errors import ProviderAuthenticationRequiredError
+from ..provider_auth_recovery import authentication_replay, request_authentication
 from ..workspace import Workspace
 from ..conversations.session_context import (
     MAX_SESSION_CONTEXT_UTF8_BYTES,
@@ -4094,6 +4096,11 @@ class AgentContextService:
             return ContextLedgerAttemptOutcome.CANCELLED
         if facts.timed_out:
             return ContextLedgerAttemptOutcome.TIMED_OUT
+        if (
+            isinstance(failure, ProviderAuthenticationRequiredError)
+            and failure.replay_safe
+        ):
+            return ContextLedgerAttemptOutcome.FAILED
         if isinstance(failure, ContextSourceError):
             return ContextLedgerAttemptOutcome.SOURCE_INVALID
         if stage == "decode":
@@ -4531,39 +4538,82 @@ class AgentContextService:
             )
             generation = reserved.generation
 
+            def replay_sources_unchanged() -> bool:
+                """Recheck captured source identity before replaying held payload bytes."""
+
+                try:
+                    if request.include_core_statuses and (
+                        registry.canonical_core_statuses(manifest_digest, self._source_policy)
+                        != core_statuses
+                    ):
+                        return False
+                    return self._manifest_from_descriptors(
+                        request, scope, registry.inventory(self._source_policy),
+                    ) == manifest
+                except Exception:
+                    return False
+
             current_thread_id = active_thread_id
             reference_context: tuple[Mapping[str, object], ...] = ()
             if request.mandatory_references:
                 stage = "reference"
                 reference_started = True
-                call_id = f"{attempt_id}_call_{len(calls) + 1}"
-                try:
-                    prelude = await provider.prepare_references(
-                        ContextReferencePreludeRequest(
-                            scope,
-                            policy_fingerprint,
-                            call_id,
-                            request.reference_operation_id,
-                            current_thread_id,
-                            None if continuation is None else continuation.identity,
+                prelude_request = ContextReferencePreludeRequest(
+                    scope, policy_fingerprint,
+                    f"{attempt_id}_call_{len(calls) + 1}",
+                    request.reference_operation_id, current_thread_id,
+                    None if continuation is None else continuation.identity,
+                )
+                for auth_attempt in range(2):
+                    call_id = prelude_request.call_id
+                    try:
+                        if auth_attempt:
+                            with authentication_replay(auth_failure, replay_sources_unchanged):
+                                prelude = await provider.prepare_references(prelude_request)
+                        else:
+                            prelude = await provider.prepare_references(prelude_request)
+                        break
+                    except BaseException as failure:
+                        if (
+                            isinstance(failure, ProviderAuthenticationRequiredError)
+                            and failure.replay_aborted
+                        ):
+                            raise
+                        facts = context_provider_failure_facts(failure)
+                        recorded_before = len(calls)
+                        if facts.accounting is not None:
+                            if facts.accounting.state is ProviderCallState.SUBMITTED:
+                                submitted_accountings.append(facts.accounting)
+                            generation = self._append_failure_call_without_replacing(
+                                self._ledger, key, generation, attempt_id,
+                                calls, call_id, facts.accounting,
+                            )
+                        provider_failure = True
+                        if (
+                            not isinstance(failure, ProviderAuthenticationRequiredError)
+                            or auth_attempt
+                        ):
+                            raise
+                        try:
+                            authenticated = await request_authentication(failure)
+                        except BaseException:
+                            failure.clear_replay_validator()
+                            raise
+                        if not (
+                            authenticated and failure.replay_safe
+                            and not facts.timed_out and not facts.submission_uncertain
+                            and not facts.taint_existing_thread
+                            and len(calls) == recorded_before + 1
+                            and len(calls) + 1 < physical_call_limit
+                        ):
+                            raise
+                        if not failure.validate_replay() or not replay_sources_unchanged():
+                            raise
+                        auth_failure = failure
+                        prelude_request = replace(
+                            prelude_request,
+                            call_id=f"{attempt_id}_call_{len(calls) + 1}",
                         )
-                    )
-                except BaseException as failure:
-                    facts = context_provider_failure_facts(failure)
-                    if facts.accounting is not None:
-                        if facts.accounting.state is ProviderCallState.SUBMITTED:
-                            submitted_accountings.append(facts.accounting)
-                        generation = self._append_failure_call_without_replacing(
-                            self._ledger,
-                            key,
-                            generation,
-                            attempt_id,
-                            calls,
-                            call_id,
-                            facts.accounting,
-                        )
-                    provider_failure = True
-                    raise
                 stage = "reference_result"
                 terminal_provider_succeeded = True
                 if type(prelude) is not ContextReferencePreludeResult:
@@ -4644,10 +4694,10 @@ class AgentContextService:
             previous_action: str | None = None
             previous_search_had_hits = False
             phase_contract = _invocation_phase_contract(request)
-            substantive_call_limit = physical_call_limit - int(
-                bool(request.mandatory_references)
-            )
+            substantive_call_limit = physical_call_limit - len(calls)
             for _round in range(substantive_call_limit):
+                if len(calls) >= physical_call_limit:
+                    break
                 action_index = action_session.next_action_index
                 allowed_actions = action_session.allowed_actions(
                     after=previous_action,
@@ -4733,23 +4783,55 @@ class AgentContextService:
                     raise SessionContextCapacityError()
                 stage = "provider"
                 provider_failure = True
-                try:
-                    result = await provider.invoke_context(call_request)
-                except BaseException as failure:
-                    facts = context_provider_failure_facts(failure)
-                    if facts.accounting is not None:
-                        if facts.accounting.state is ProviderCallState.SUBMITTED:
-                            submitted_accountings.append(facts.accounting)
-                        generation = self._append_failure_call_without_replacing(
-                            self._ledger,
-                            key,
-                            generation,
-                            attempt_id,
-                            calls,
-                            call_id,
-                            facts.accounting,
+                for auth_attempt in range(2):
+                    call_id = call_request.call_id
+                    try:
+                        if auth_attempt:
+                            with authentication_replay(auth_failure, replay_sources_unchanged):
+                                result = await provider.invoke_context(call_request)
+                        else:
+                            result = await provider.invoke_context(call_request)
+                        break
+                    except BaseException as failure:
+                        if (
+                            isinstance(failure, ProviderAuthenticationRequiredError)
+                            and failure.replay_aborted
+                        ):
+                            raise
+                        facts = context_provider_failure_facts(failure)
+                        recorded_before = len(calls)
+                        if facts.accounting is not None:
+                            if facts.accounting.state is ProviderCallState.SUBMITTED:
+                                submitted_accountings.append(facts.accounting)
+                            generation = self._append_failure_call_without_replacing(
+                                self._ledger, key, generation, attempt_id,
+                                calls, call_id, facts.accounting,
+                            )
+                        if (
+                            not isinstance(failure, ProviderAuthenticationRequiredError)
+                            or auth_attempt
+                        ):
+                            raise
+                        try:
+                            authenticated = await request_authentication(failure)
+                        except BaseException:
+                            failure.clear_replay_validator()
+                            raise
+                        if not (
+                            authenticated and failure.replay_safe
+                            and not facts.timed_out and not facts.submission_uncertain
+                            and not facts.taint_existing_thread
+                            and len(calls) == recorded_before + 1
+                            and len(calls) < physical_call_limit
+                        ):
+                            raise
+                        if not failure.validate_replay() or not replay_sources_unchanged():
+                            raise
+                        auth_failure = failure
+                        call_request = replace(
+                            call_request,
+                            call_id=f"{attempt_id}_call_{len(calls) + 1}",
                         )
-                    raise
                 terminal_provider_succeeded = True
                 if type(result) is not ContextProviderCallResult:
                     failure = _execution_error(
@@ -5247,6 +5329,8 @@ class AgentContextService:
                     ),
                 ),
             )
+            if isinstance(failure, ProviderAuthenticationRequiredError):
+                failure.clear_replay_validator()
             existing_facts = context_provider_failure_facts(failure)
             cumulative = list(submitted_accountings)
             if (

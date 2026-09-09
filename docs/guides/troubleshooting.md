@@ -61,7 +61,8 @@ require one provider-controlled code paste; Story does not add a second paste,
 exit command, confirmation, extra Enter, Ctrl-C, or EOF step. Once a fresh
 silent status probe reports authenticated, Story stops and reaps that exact
 login child if it is still open and automatically returns to startup, `/auth`,
-or Settings. You do not need to exit the Codex or Antigravity interface.
+or Settings. During those initial authentication flows, you do not need to exit
+the Codex or Antigravity interface.
 
 The status probes are individually bounded and use null input and output, so
 they cannot consume pasted input or capture provider output while native login
@@ -75,6 +76,35 @@ pending route, and stale authentication at a full-path Apply Changes prevents
 the file update; Message-details-only and Conversation-RAG-only Apply Changes
 never authenticate. See
 [authentication recovery](../operations/recovery-and-limitations.md#authentication-recovery).
+
+### A provider call requires authentication after startup succeeded
+
+Startup status and a later provider-call result are different observations. A
+provider can report a native authentication challenge even when `codex login
+status` or `agy models` previously reported authenticated. In interactive Lead
+work, wait for Story to return the real terminal to the provider-native sign-in:
+`codex login` for Codex or bare `agy` for Antigravity. Complete that interaction
+and, if its interface stays open, exit it normally. Story does not read native
+login output or force a browser flow.
+
+While the handoff is pending, Story admits no new provider call and waits for
+already active calls to finish. A fresh authenticated status is required before
+the operation can continue. For call-time recovery, an unchanged authenticated
+status does not close a still-running native sign-in process; this avoids
+mistaking the stale startup state for renewed authentication.
+
+Do not infer replay from the sign-in result. Story automatically retries only
+the exact Antigravity exit-1 authentication-timeout envelope that proves zero
+turns, zero duration, empty conversation/response, and zero usage. That retry
+uses a new physical call ID and consumes call budget. Codex 401 events and other
+Antigravity 401 or authentication shapes receive sign-in assistance but are not
+automatically replayed. If authentication remains indeterminate or the original
+request may have started, inspect the durable collaboration state and
+`/exchanges`; follow its next action instead of resubmitting the same call.
+
+Python and other noninteractive callers receive
+`ProviderAuthenticationRequiredError` and must arrange native authentication
+outside that operation. Reopening the workspace never replays the failed call.
 
 ## Interactive mode requires a terminal
 
@@ -230,11 +260,12 @@ come from `vendor/jsonl-viewer`.
 
 `No agent exchanges are recorded` is not proof that no provider call occurred.
 Capture and storage are fail-open and never retry. Likewise, a correlated
-request plus `provider_failure` outcome with no response means no exact valid
-`ProviderResult` crossed Story's adapter boundary; it does not prove that the
-native process emitted no stdout, stderr, tool/reasoning, or NDJSON data. A
-completed valid result rejected by Story normally has request, response, and
-`rejected` outcome under one `exchange_id`.
+request plus `provider_failure` outcome means no exact valid `ProviderResult`
+crossed Story's adapter boundary. When capture succeeds, the intervening
+response is `{"provider_failure":true}` and may also contain completed native
+stdout, stderr, and exit status. It still does not prove what external work
+occurred. A completed valid result rejected by Story normally has request,
+response, and `rejected` outcome under one `exchange_id`.
 
 For `storage is busy`, wait for the current exchange write and retry. Preserve
 the workspace on unsafe, corrupt, uncorrelatable, or viewer failures; inspect
@@ -251,7 +282,8 @@ prose or an assumed cause:
 
 | Recorded fact | What Story knows | What to do |
 | --- | --- | --- |
-| Agent exchange ends with `provider_failure` / `provider_invocation_failed` and has no response record. | No exact valid `ProviderResult` crossed the adapter boundary. The fixed code covers such causes as provider rejection of a request/output schema, authentication, configuration, transport, and nonzero provider exit; it does not expose the underlying diagnostic or prove whether external work occurred. | Check `/auth`, the selected backend/model/effort, executable and timeout, then inspect the correlated content-safe runtime record and provider-native diagnostics under their own policy. Do not infer that replay is safe from this code alone. |
+| Agent exchange ends with `provider_failure` / `provider_authentication_required`. | A completed native provider response met the authentication classifier. Its private response diagnostic and the sign-in result do not grant replay. | In interactive Lead work, complete the native handoff. Trust an automatic retry only when Story's stricter pre-execution gate accepts it; otherwise follow the preserved failure state. |
+| Agent exchange ends with `provider_failure` / `provider_invocation_failed` and has no valid provider result. | No exact valid `ProviderResult` crossed the adapter boundary. The fixed code covers such causes as provider rejection of a request/output schema, configuration, transport, and nonzero provider exit; it does not expose the underlying diagnostic or prove whether external work occurred. | Check `/auth`, the selected backend/model/effort, executable and timeout, then inspect the correlated content-safe runtime record and provider-native diagnostics under their own policy. Do not infer that replay is safe from this code alone. |
 | Agent exchange has a completed response and a deterministic `rejected` outcome; Lead history closes it as `provider_result_rejected`. | The provider returned a result, but Story rejected one of five closed classes: malformed structured response, correlation mismatch, semantic rejection, action exhaustion, or answer-validation failure. | Follow `retry_lead_turn`. Runtime starts a fresh call and does not reuse the tainted provider thread or replay the rejected result. |
 | Lead history projects `outcome_unknown` and `inspect_and_resolve_outcome`. | Submission is durable, but neither an accepted result nor a deterministic rejected-result closure is authoritative. | Inspect and resolve the preserved outcome. Never replay the submitted call merely to make the conversation advance. |
 

@@ -89,7 +89,7 @@ class _ProviderAuth(Protocol):
     def probe_all(self) -> ProviderAuthSnapshot:
         """Return one ordered status for each supported provider."""
 
-    def login(self, provider: str) -> ProviderLoginResult:
+    def login(self, provider: str, *, recovery: bool = False) -> ProviderLoginResult:
         """Run native login and return its fresh post-login status."""
 
 
@@ -280,9 +280,20 @@ class InteractiveAuthCoordinator:
             return _provider_result(refreshed_snapshot, refreshed)
         raise RuntimeError("unavailable auth provider was selected")
 
+    def recover(self, provider: str) -> bool:
+        """Run native sign-in for a failed request even if a status probe succeeds."""
+
+        _require_provider(provider)
+        return (
+            self._login(provider, recovery=True).kind
+            is InteractiveAuthResultKind.AUTHENTICATED
+        )
+
     def _login(
         self,
         provider: str,
+        *,
+        recovery: bool = False,
     ) -> InteractiveAuthResult:
         """Clear guidance, run native login, then fully refresh both providers."""
 
@@ -292,19 +303,31 @@ class InteractiveAuthCoordinator:
                 (
                     f"Opening {label} native sign-in. Complete its prompt, "
                     "then return here."
+                    + (
+                        " If sign-in completes silently and the native prompt stays open, "
+                        "exit it normally to continue."
+                        if recovery else ""
+                    )
                 ),
                 label="authentication",
                 role=SemanticRole.INFO,
                 state=ViewState.LOADING,
             )
         )
-        login_result = self._auth.login(provider)
+        login_result = (
+            self._auth.login(provider, recovery=True)
+            if recovery else self._auth.login(provider)
+        )
         if not isinstance(login_result, ProviderLoginResult):
             raise TypeError("auth service must return a ProviderLoginResult")
         if login_result.provider != provider:
             raise ValueError("auth service returned a different provider")
         _require_status(login_result.status, provider)
-        refreshed_snapshot = self.probe_all()
+        refreshed_snapshot = self._auth.probe_all() if recovery else self.probe_all()
+        if recovery and not login_result.authenticated:
+            refreshed_snapshot = _snapshot_with_status(
+                refreshed_snapshot, login_result.status,
+            )
         refreshed_status = refreshed_snapshot.status_for(provider)
         self._presentation.show_result(_result_notice(refreshed_status))
         return _provider_result(refreshed_snapshot, refreshed_status)

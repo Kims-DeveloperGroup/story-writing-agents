@@ -30,6 +30,7 @@ from .agent_context import (
     canonical_provider_json,
 )
 from .models import AgentDefinition
+from .errors import ProviderAuthenticationRequiredError
 from .provider_adapter import (
     AgentExecutionProfile,
     ProviderBinding,
@@ -1090,9 +1091,16 @@ class AntigravityAdapter:
             exit_code=result.returncode,
         )
         try:
+            authentication = self._authentication_failure(
+                result.stdout, result.returncode,
+            )
+            if authentication is not None:
+                raise ProviderInvocationError(
+                    str(authentication),
+                    taint_existing_thread=not authentication.replay_safe,
+                    authentication_failure=authentication,
+                )
             if result.returncode != 0:
-                # This CLI envelope does not prove a rejection before execution.
-                # Never turn diagnostic prose or exit status into retry authority.
                 raise ProviderInvocationError(
                     f"Antigravity CLI exited with status {result.returncode}",
                     taint_existing_thread=True,
@@ -1127,6 +1135,49 @@ class AntigravityAdapter:
                 actual_transport_utf8_bytes=transport_utf8_bytes,
             )
             raise
+
+    @classmethod
+    def _authentication_failure(
+        cls, stdout: bytes, returncode: int,
+    ) -> ProviderAuthenticationRequiredError | None:
+        """Recognize native auth errors; only the supported exit-1 shape proves rejection."""
+
+        try:
+            terminal = cls._parse_result(stdout)
+        except ProviderInvocationError:
+            return None
+        error = terminal.get("error")
+        if terminal.get("status") != "ERROR":
+            return None
+        message = error.get("message") if type(error) is dict else error
+        native_401 = (
+            type(error) is dict
+            and any(type(error.get(key)) is int and error[key] == 401
+                    for key in ("status", "status_code", "code"))
+        ) or (
+            type(message) is str
+            and re.search(r"\b(?:HTTP(?: status)?|status(?: code)?)\s*:?\s*401\b|\b401 Unauthorized\b", message, re.IGNORECASE)
+            is not None
+        )
+        if message != "authentication failed or timed out" and not native_401:
+            return None
+        usage = terminal.get("usage")
+        counters = {"input_tokens", "output_tokens", "thinking_tokens",
+                    "cache_read_tokens", "total_tokens"}
+        replay_safe = (
+            returncode == 1
+            and set(terminal) == {"conversation_id", "status", "response", "error",
+                                  "duration_seconds", "num_turns", "usage"}
+            and terminal["error"] == "authentication failed or timed out"
+            and terminal["conversation_id"] == ""
+            and terminal["response"] == ""
+            and type(terminal["duration_seconds"]) is int
+            and terminal["duration_seconds"] == 0
+            and type(terminal["num_turns"]) is int and terminal["num_turns"] == 0
+            and type(usage) is dict and set(usage) == counters
+            and all(type(value) is int and value == 0 for value in usage.values())
+        )
+        return ProviderAuthenticationRequiredError("antigravity", replay_safe=replay_safe)
 
     @staticmethod
     def _validate_invocation(

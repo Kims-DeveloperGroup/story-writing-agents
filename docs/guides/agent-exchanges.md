@@ -234,9 +234,9 @@ placement.
 Automatic capture attempts one sequence for each physical provider call:
 
 1. `request` immediately before provider invocation;
-2. `response` immediately after an exact valid `ProviderResult` returns, before
-   accounting, structured decoding, rejected-response storage, or provider
-   thread persistence; and
+2. `response` immediately after an exact valid `ProviderResult` returns, or a
+   content-free provider-failure marker with any available completed-process
+   diagnostic, before the terminal outcome; and
 3. one terminal `outcome` when Story can classify the call.
 
 The shared `exchange_id` correlates these records. The request content is the
@@ -247,19 +247,25 @@ and fixed code, never arbitrary exception prose.
 
 A completed result that structured or semantic validation rejects therefore
 normally appears as adjacent request, response, and `rejected` outcome records.
-A provider exception, timeout, invalid provider contract, cancellation, or
-fail-open diagnostic write can produce a shorter sequence. In particular, a
-malformed Antigravity no-result flow has request plus
-`provider_failure`/`provider_invocation_failed` and no response when both
-diagnostic appends succeed: no valid `ProviderResult` crossed the adapter
-boundary.
+A provider invocation failure or timeout normally has a response containing
+`{"provider_failure":true}` followed by a `provider_failure` outcome. When a
+Codex or Antigravity process completed, that response can also carry a private
+`response_diagnostic` with exact stdout, stderr, and exit status. This response
+is diagnostic and is never a valid `ProviderResult`. Cancellation uses its
+separate `cancelled` terminal and receives no provider-failure response marker.
+A cancellation or fail-open append failure can produce a shorter sequence.
 
-The exchange channel never captures provider stderr, raw stdout or NDJSON,
-native tool/reasoning streams, authentication or model-catalog output,
-environment values, browser/OAuth facts, tokens, credentials, or arbitrary
-exception text. A missing response is not proof that the provider produced no
-native output, and a missing record is not proof that no call occurred. Capture
-is fail-open, advances before each append, and never retries.
+The exchange channel can capture completed provider stdout and stderr only
+through that typed response diagnostic. Those exact invocation streams receive
+no semantic redaction and can contain provider-emitted OAuth URLs or status,
+credentials, tokens, story content, or other secrets. Capture does not
+independently inspect the environment, browser, or credential store. It never
+imports a partial timed-out or cancelled stream, native login/status/model-
+catalog output, or Antigravity proof transcripts/private thinking. Native
+sign-in terminal bytes are never copied into exchanges. A missing response is
+not proof that the provider produced no native output, and a missing record is
+not proof that no call occurred. Capture is fail-open, advances before each
+append, and never retries.
 
 ## User scenarios
 

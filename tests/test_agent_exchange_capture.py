@@ -129,6 +129,7 @@ class AgentExchangeCaptureContractTests(unittest.TestCase):
             (
                 "accepted",
                 "provider_invocation_failed",
+                "provider_authentication_required",
                 "provider_timed_out",
                 "provider_contract_invalid",
                 "cancelled",
@@ -351,6 +352,7 @@ class AgentExchangeCaptureLifecycleTests(unittest.TestCase):
     def test_no_response_failures_and_cancellation_matrix_are_exact(self) -> None:
         for code in (
             AgentExchangeTerminalCode.PROVIDER_INVOCATION_FAILED,
+            AgentExchangeTerminalCode.PROVIDER_AUTHENTICATION_REQUIRED,
             AgentExchangeTerminalCode.PROVIDER_TIMED_OUT,
             AgentExchangeTerminalCode.PROVIDER_CONTRACT_INVALID,
         ):
@@ -362,11 +364,16 @@ class AgentExchangeCaptureLifecycleTests(unittest.TestCase):
                     [record.request_type for record in store.records],
                     [
                         AgentExchangeRequestType.REQUEST,
+                        AgentExchangeRequestType.RESPONSE,
                         AgentExchangeRequestType.OUTCOME,
                     ],
                 )
                 self.assertEqual(
                     _decoded(store.records)[1],
+                    {"provider_failure": True},
+                )
+                self.assertEqual(
+                    _decoded(store.records)[2],
                     {"code": code.value, "outcome": "provider_failure"},
                 )
 

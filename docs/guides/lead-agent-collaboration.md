@@ -525,6 +525,30 @@ Entry is inspection access, not permission to replay or resolve the uncertain
 call. It grants no provider call, Apply, artifact write, Commit, or other
 effect authority.
 
+### Authentication during an active Lead operation
+
+The native provider can require authentication after the shell's startup gate
+has already succeeded. Story pauses new provider calls, lets active sibling
+calls finish, and returns the terminal to `codex login` or bare `agy`. Complete
+the provider-owned interaction and exit its interface normally if it stays open.
+Story does not read or retain the native login terminal bytes.
+
+A successful sign-in does not by itself authorize the submitted call to run
+again. Story makes one automatic replacement only for Antigravity's exact
+zero-turn authentication-timeout rejection. That replacement keeps the request,
+schema, correlation, expected provider thread, execution profile, and captured
+evidence unchanged, but uses a new physical call ID and exchange. Both attempts
+count against the operation's physical-call budget. Any Codex 401, ambiguous
+Antigravity 401, started call, or source/configuration drift remains
+non-replayable.
+
+In a consultation, completed specialist siblings stay preserved while the
+failed assignment is handled. If recovery cannot safely resume, runtime stores
+the known replies and terminal failure state. Reopening the session never
+replays that provider call; follow the displayed `failed` or `outcome_unknown`
+next action. Python and other noninteractive callers receive the typed
+authentication error without a terminal handoff.
+
 ## Scenario 9: interruption, restart, and recovery
 
 The visible state tells you what happened and what is safe next. Runtime stores

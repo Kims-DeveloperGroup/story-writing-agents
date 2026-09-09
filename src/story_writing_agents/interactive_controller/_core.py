@@ -2012,6 +2012,9 @@ class InteractiveController:
                 self._picker_input,
                 self._prompt_input,
                 self._semantic_output,
+                recover_authentication=(
+                    getattr(self._auth_coordinator, "recover", None)
+                ),
             )
             return adapter.submit(
                 self._focused_conversation.conversation_id,

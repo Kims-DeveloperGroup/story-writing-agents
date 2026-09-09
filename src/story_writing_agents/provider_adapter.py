@@ -20,6 +20,7 @@ from .agent_context import (
     ProviderUsage,
     account_provider_payload,
 )
+from .errors import ProviderAuthenticationRequiredError
 from .models import AgentDefinition
 
 
@@ -249,9 +250,15 @@ class ProviderInvocationError(Exception):
         *,
         taint_existing_thread: bool,
         continuation_rejection: ProviderContinuationRejection | None = None,
+        authentication_failure: ProviderAuthenticationRequiredError | None = None,
     ) -> None:
         super().__init__(diagnostic)
         self.diagnostic = diagnostic
+        if authentication_failure is not None and (
+            type(authentication_failure) is not ProviderAuthenticationRequiredError
+        ):
+            raise TypeError("authentication failure must be a typed provider failure")
+        self.authentication_failure = authentication_failure
         self.taint_existing_thread = taint_existing_thread
         if continuation_rejection is not None and type(continuation_rejection) is not ProviderContinuationRejection:
             raise TypeError("continuation rejection must be a closed provider code")

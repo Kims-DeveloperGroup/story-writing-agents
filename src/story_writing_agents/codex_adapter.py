@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import math
 import re
 import shutil
 import tempfile
@@ -21,7 +22,7 @@ from .agent_context import (
 )
 from .agents import ROSTER
 from .config import ConfigurationSnapshot
-from .errors import ConfigurationError
+from .errors import ConfigurationError, ProviderAuthenticationRequiredError
 from .models import AgentDefinition
 from .provider_adapter import (
     AgentExecutionProfile,
@@ -29,6 +30,7 @@ from .provider_adapter import (
     ProviderInvocation,
     ProviderInvocationError,
     ProviderResult,
+    ProviderResponseDiagnostic,
     record_provider_failure_accounting,
 )
 from .provider_process import (
@@ -396,8 +398,21 @@ class CodexAdapter:
                 raise
 
             submitted = True
+            response_diagnostic = ProviderResponseDiagnostic(
+                result.stdout, result.stderr, result.returncode,
+            )
 
             try:
+                authentication = (
+                    None if result.returncode == 0 and output_path.is_file()
+                    else self._authentication_failure(result.stdout)
+                )
+                if authentication is not None:
+                    raise ProviderInvocationError(
+                        str(authentication),
+                        taint_existing_thread=True,
+                        authentication_failure=authentication,
+                    )
                 if result.returncode != 0:
                     raise ProviderInvocationError(
                         f"Codex CLI exited with status {result.returncode}",
@@ -443,6 +458,8 @@ class CodexAdapter:
                     actual_transport_utf8_bytes=len(stdin),
                 )
             except BaseException as exc:
+                if isinstance(exc, ProviderInvocationError):
+                    exc.record_response_diagnostic(response_diagnostic)
                 record_provider_failure_accounting(
                     exc,
                     state=ProviderCallState.SUBMITTED,
@@ -548,8 +565,42 @@ class CodexAdapter:
         )
         return model, reasoning_effort
 
+    @classmethod
+    def _authentication_failure(
+        cls, stdout: bytes,
+    ) -> ProviderAuthenticationRequiredError | None:
+        """Classify only native terminal error fields, never model item text."""
+
+        try:
+            events = cls.parse_events(stdout, strict=True)
+        except ProviderInvocationError:
+            return None
+        if any(event.get("type") == "turn.completed" for event in events):
+            return None
+        for event in events:
+            if event.get("type") not in {"error", "turn.failed"}:
+                continue
+            error = event.get("error", event)
+            if type(error) is not dict:
+                continue
+            native_401 = any(
+                type(error.get(key)) is int and error[key] == 401
+                for key in ("status", "status_code", "code")
+            )
+            message = error.get("message")
+            native_401 = native_401 or (
+                type(message) is str
+                and re.search(r"\b(?:HTTP(?: status)?|status(?: code)?)\s*:?\s*401\b|\b401 Unauthorized\b", message, re.IGNORECASE)
+                is not None
+            )
+            if native_401:
+                return ProviderAuthenticationRequiredError("codex")
+        return None
+
     @staticmethod
-    def parse_events(stdout: bytes) -> tuple[dict[str, Any], ...]:
+    def parse_events(
+        stdout: bytes, *, strict: bool = False,
+    ) -> tuple[dict[str, Any], ...]:
         """Decode the Codex JSONL event envelope with fixed diagnostics."""
 
         try:
@@ -559,13 +610,36 @@ class CodexAdapter:
                 "Codex CLI event stream is not valid UTF-8",
                 taint_existing_thread=True,
             ) from exc
+        def strict_fields(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
+            value: dict[str, Any] = {}
+            for key, item in pairs:
+                if key in value:
+                    raise ValueError("duplicate JSON field")
+                value[key] = item
+            return value
+
+        def reject_constant(value: str) -> None:
+            raise ValueError("nonfinite JSON value")
+
+        def finite_float(value: str) -> float:
+            number = float(value)
+            if not math.isfinite(number):
+                raise ValueError("nonfinite JSON value")
+            return number
+
         events: list[dict[str, Any]] = []
         for line_number, line in enumerate(text.splitlines(), 1):
             if not line:
                 continue
             try:
-                value = json.loads(line)
-            except json.JSONDecodeError as exc:
+                value = (
+                    json.loads(
+                        line, object_pairs_hook=strict_fields,
+                        parse_constant=reject_constant, parse_float=finite_float,
+                    )
+                    if strict else json.loads(line)
+                )
+            except (ValueError, RecursionError) as exc:
                 raise ProviderInvocationError(
                     f"Codex CLI emitted malformed JSONL at line {line_number}",
                     taint_existing_thread=True,

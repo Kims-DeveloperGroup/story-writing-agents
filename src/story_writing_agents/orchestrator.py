@@ -238,7 +238,9 @@ from .debug_log import (
     WorkspaceDebugLog,
 )
 from .directives import apply_directive as persist_directive
-from .errors import BackendProtocolError, ConversationNotFoundError
+from .errors import (
+    BackendProtocolError, ConversationNotFoundError, ProviderAuthenticationRequiredError,
+)
 from .prompts import PromptAssembler
 from .workspace import Workspace
 from .workspace.initialization import compose_story_commit_service
@@ -876,6 +878,11 @@ class _AccountingContextProvider:
         try:
             result = await getattr(self._delegate, "prepare_references")(request)
         except BaseException as failure:
+            if (
+                isinstance(failure, ProviderAuthenticationRequiredError)
+                and failure.replay_aborted
+            ):
+                raise
             self._record_failure_submission(
                 failure,
                 request.call_id,
@@ -910,6 +917,11 @@ class _AccountingContextProvider:
         try:
             result = await getattr(self._delegate, "invoke_context")(request)
         except BaseException as failure:
+            if (
+                isinstance(failure, ProviderAuthenticationRequiredError)
+                and failure.replay_aborted
+            ):
+                raise
             self._record_failure_submission(
                 failure,
                 request.call_id,
@@ -3345,15 +3357,30 @@ class StoryRuntime:
                 conversation_id,
             )
             finalized_projection = project_collaboration_history(persisted)
+            authentication_failure = next(
+                (
+                    item.failure for item in (
+                        *results,
+                        *((synthesis_result,) if synthesis_result is not None else ()),
+                    )
+                    if isinstance(item.failure, ProviderAuthenticationRequiredError)
+                ),
+                None,
+            )
             if finalized_projection.current_state is CollaborationStepState.RUNNING:
-                return self._finalize_known_result_locked(
+                finalized = self._finalize_known_result_locked(
                     persisted,
                     finalized_projection,
                 )
+                if authentication_failure is not None:
+                    raise authentication_failure
+                return finalized
             if finalized_projection.current_state is not (
                 CollaborationStepState.OUTCOME_UNKNOWN
             ):
                 raise BackendProtocolError("execution did not reach a durable result")
+            if authentication_failure is not None:
+                raise authentication_failure
             return LeadTurnResult(
                 session_id,
                 conversation_id,
@@ -5978,6 +6005,22 @@ class StoryRuntime:
                 # context failure, including preflight before any submission.
                 raise
             facts = context_provider_failure_facts(failure)
+            if isinstance(failure, ProviderAuthenticationRequiredError):
+                if (
+                    failure.replay_safe and not facts.submission_uncertain
+                    and provider is not None
+                    and provider.last_submitted_call_id is not None
+                ):
+                    self._lead_outcome_failure_result(
+                        session_id=session_id, conversation_id=conversation_id,
+                        turn_id=turn_id, step_id=step_id,
+                        invocation_id=provider.invocation_id,
+                        call_id=provider.last_submitted_call_id,
+                        failure_code=(
+                            CollaborationLeadOutcomeFailureCode.PROVIDER_RESULT_REJECTED
+                        ),
+                    )
+                raise
             if (
                 (facts.response_rejection_code is not None
                  or facts.continuation_rejection is not None)

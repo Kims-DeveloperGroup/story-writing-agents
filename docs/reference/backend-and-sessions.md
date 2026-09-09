@@ -303,10 +303,14 @@ The nested canonical content shapes are:
 ```
 
 The request shape has exactly `call_kind`, `payload`, `prior_thread_id`, and
-`schema`. The response shape has exactly `actual_transport_utf8_bytes`,
+`schema`. The normal response shape has `actual_transport_utf8_bytes`,
 `response_text`, `thread_id`, and `usage`; non-null usage has exactly
-`input_tokens`, `output_tokens`, and `cached_input_tokens`. The outcome shape
-has exactly `code` and `outcome`. These JSON values are stored in the outer
+`input_tokens`, `output_tokens`, and `cached_input_tokens`. A narrowly recovered
+Antigravity result also has `response_diagnostic`. A provider failure response
+has `provider_failure: true` and an optional `response_diagnostic`. That
+diagnostic contains integer `exit_code` plus `stdout` and `stderr` objects whose
+exact completed bytes use `utf-8` or `base64` encoding. The outcome shape has
+exactly `code` and `outcome`. These JSON values are stored in the outer
 schema-v1 record's string `content`, subject to the 262,144-byte complete-code-
 point prefix. Full UTF-8 byte and Python Unicode-code-point counts plus SHA-256
 describe the complete capture input, so a truncated record is not the complete
@@ -317,7 +321,7 @@ The terminal vocabulary is closed:
 | Outcome | Fixed code |
 | --- | --- |
 | `accepted` | `accepted` |
-| `provider_failure` | `provider_invocation_failed`, `provider_timed_out`, `provider_contract_invalid` |
+| `provider_failure` | `provider_invocation_failed`, `provider_authentication_required`, `provider_timed_out`, `provider_contract_invalid` |
 | `cancelled` | `cancelled` |
 | `rejected` | `malformed_structured_response`, `response_correlation_mismatch`, `response_semantic_rejected`, `action_exhausted`, `answer_validation_failed` |
 | `post_response_runtime_failure` | `thread_persistence_failed`, `reference_runtime_failed`, `context_runtime_failed` |
@@ -361,11 +365,21 @@ request, exact valid raw `ProviderResult` projection, and terminal outcome.
 The request append is attempted before invocation. A valid raw
 `ProviderResult` is appended immediately on return, before accounting,
 decode/domain validation, the separate rejected-response artifact, and thread
-persistence. Exactly one terminal append is then attempted when the relevant
-backend/context owner knows the outcome. Capture state advances before append;
-all capture failures are suppressed and never retried. Missing files, records,
-outcomes, or sequence values therefore do not prove that no physical provider
-call or result existed.
+persistence. A provider invocation failure or timeout instead attempts a
+failure response even when no native diagnostic is available, then its terminal
+outcome. Completed Codex and Antigravity failures can attach native stdout,
+stderr, and exit status;
+native login bytes never enter this lifecycle. Exactly one terminal append is
+attempted when the relevant backend/context owner knows the outcome. Capture
+state advances before append; all capture failures are suppressed and never
+retried. Missing files, records, outcomes, or sequence values therefore do not
+prove that no physical provider call or result existed.
+
+Authentication assistance does not mutate an exchange. The narrowly authorized
+Antigravity retry is a second physical call with a new `call_id` and exchange
+ID; the first failed exchange remains complete and consumes its normal call
+accounting. Codex 401 and ambiguous Antigravity authentication failures do not
+create an automatic retry.
 
 The user-facing correlation, header, preview, search, and privacy behavior is
 documented in [Inspect agent exchanges](../guides/agent-exchanges.md). The

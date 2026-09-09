@@ -106,6 +106,7 @@ from .debug_log import (
 )
 from .errors import (
     BackendProtocolError,
+    ProviderAuthenticationRequiredError,
     ConfigurationError,
     ConversationRetrievalSemanticError,
     ManuscriptExistsError,
@@ -138,6 +139,7 @@ from .interactive_settings import (
     read_provider_route_generations,
     reconcile_provider_route_generations,
 )
+from .provider_auth_recovery import provider_activity, validate_provider_replay
 from .provider_adapter import (
     AgentExecutionProfile,
     ExecutionValueSource,
@@ -4256,10 +4258,11 @@ class AgentBackend:
             invocation=invocation,
         )
         try:
-            result = await adapter.invoke(
-                bound_agent._provider_binding,
-                invocation,
-            )
+            async with provider_activity(bound_agent.vendor) as auth_generation:
+                result = await adapter.invoke(
+                    bound_agent._provider_binding,
+                    invocation,
+                )
             self._capture_provider_return_without_replacing(exchange, result)
         except ProviderInvocationError as exc:
             try:
@@ -4270,12 +4273,17 @@ class AgentBackend:
                 self._capture_provider_failure_without_replacing(
                     exchange,
                     (
-                        AgentExchangeTerminalCode.PROVIDER_TIMED_OUT
+                        AgentExchangeTerminalCode.PROVIDER_AUTHENTICATION_REQUIRED
+                        if exc.authentication_failure is not None
+                        else AgentExchangeTerminalCode.PROVIDER_TIMED_OUT
                         if self._context_failure_timed_out(exc)
                         else AgentExchangeTerminalCode.PROVIDER_INVOCATION_FAILED
                     ),
                     failure=exc,
                 )
+            if exc.authentication_failure is not None:
+                exc.authentication_failure.auth_generation = auth_generation
+                raise exc.authentication_failure from None
             provider_diagnostic = exc.diagnostic
             provider_cause = exc.__cause__
         except asyncio.CancelledError as exc:
@@ -4450,6 +4458,54 @@ class AgentBackend:
         except BaseException:
             pass
 
+    def _context_replay_validator(
+        self,
+        bound_agent: BoundAgent,
+        scope: ContextScope,
+        policy_fingerprint: str,
+        expected_thread_id: str | None,
+    ) -> Callable[[], bool]:
+        """Capture provider-owned replay inputs before the original submission."""
+
+        try:
+            baseline = ConfigManager(self.workspace).load_configuration_baseline()
+            routes = read_provider_route_generations(
+                self.workspace, baseline.configuration,
+                provider_overrides=self.backend_overrides,
+            )
+            generation = self._active_adapter_generation
+            binding_generation = bound_agent._adapter_generation
+            profile = bound_agent.execution_profile
+            root_stat = self.workspace.root.stat()
+            root_identity = (root_stat.st_dev, root_stat.st_ino)
+        except Exception:
+            return lambda: False
+
+        def unchanged() -> bool:
+            self._ensure_open()
+            self._assert_provider_work_ready(scope.session_id)
+            current_root = self.workspace.root.stat()
+            return bool(
+                (current_root.st_dev, current_root.st_ino) == root_identity
+                and ConfigManager(self.workspace).load_configuration_baseline() == baseline
+                and baseline.configuration == generation.configuration
+                and read_provider_route_generations(
+                    self.workspace, baseline.configuration,
+                    provider_overrides=self.backend_overrides,
+                ) == routes
+                and self._active_adapter_generation is generation
+                and bound_agent._adapter_generation is binding_generation
+                and not generation.retired and not generation.closed
+                and bound_agent.execution_profile == profile
+                and self._load_context_thread(
+                    scope, bound_agent.vendor,
+                    f"sha256:{bound_agent.definition.fingerprint}",
+                    policy_fingerprint,
+                ) == expected_thread_id
+            )
+
+        return unchanged
+
     async def _invoke_context_physical(
         self,
         bound_agent: BoundAgent,
@@ -4523,13 +4579,17 @@ class AgentBackend:
             raise SessionContextCapacityError()
 
         definition_fingerprint = f"sha256:{bound_agent.definition.fingerprint}"
-        exchange = self._begin_context_agent_exchange(
-            bound_agent,
-            scope=scope,
-            invocation=invocation,
+        replay_validator = self._context_replay_validator(
+            bound_agent, storage_scope, policy_fingerprint, expected_thread_id,
         )
+        exchange = None
         try:
-            result = await adapter.invoke(bound_agent._provider_binding, invocation)
+            async with provider_activity(bound_agent.vendor) as auth_generation:
+                validate_provider_replay()
+                exchange = self._begin_context_agent_exchange(
+                    bound_agent, scope=scope, invocation=invocation,
+                )
+                result = await adapter.invoke(bound_agent._provider_binding, invocation)
             self._capture_provider_return_without_replacing(exchange, result)
         except ProviderInvocationError as failure:
             accounting = self._context_failure_accounting(invocation, failure)
@@ -4538,7 +4598,13 @@ class AgentBackend:
                 accounting is not None
                 and accounting.state is ProviderCallState.SUBMITTED
             )
-            taint = bool(failure.taint_existing_thread or submitted)
+            authentication = failure.authentication_failure
+            known_auth_rejection = (
+                authentication is not None and authentication.replay_safe
+            )
+            taint = bool(
+                failure.taint_existing_thread or (submitted and not known_auth_rejection)
+            )
             if taint:
                 self._taint_context_thread_without_replacing(
                     storage_scope,
@@ -4546,13 +4612,19 @@ class AgentBackend:
                     definition_fingerprint,
                     policy_fingerprint,
                 )
-            translated = BackendProtocolError(failure.diagnostic)
+            translated = authentication or BackendProtocolError(failure.diagnostic)
+            if authentication is not None:
+                authentication.auth_generation = auth_generation
+                authentication.attach_replay_validator(replay_validator)
             record_context_provider_failure(
                 translated,
                 ContextProviderFailureFacts(
                     accounting,
                     timed_out=self._context_failure_timed_out(failure),
                     taint_existing_thread=taint,
+                    submission_uncertain=(
+                        authentication is not None and not known_auth_rejection
+                    ),
                     continuation_rejection=(
                         ContextContinuationRejection(failure.continuation_rejection.value)
                         if expected_thread_id is not None
@@ -4565,7 +4637,9 @@ class AgentBackend:
             self._capture_provider_failure_without_replacing(
                 exchange,
                 (
-                    AgentExchangeTerminalCode.PROVIDER_TIMED_OUT
+                    AgentExchangeTerminalCode.PROVIDER_AUTHENTICATION_REQUIRED
+                    if failure.authentication_failure is not None
+                    else AgentExchangeTerminalCode.PROVIDER_TIMED_OUT
                     if self._context_failure_timed_out(failure)
                     else AgentExchangeTerminalCode.PROVIDER_INVOCATION_FAILED
                 ),
@@ -4574,6 +4648,9 @@ class AgentBackend:
             if failure.__cause__ is None:
                 raise translated from None
             raise translated from failure.__cause__
+        except ProviderAuthenticationRequiredError:
+            # A replay veto carries the already-recorded original physical facts.
+            raise
         except asyncio.CancelledError as failure:
             accounting = self._context_failure_accounting(invocation, failure)
             self._observe_context_accounting(accounting)
