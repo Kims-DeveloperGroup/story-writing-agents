@@ -8,10 +8,12 @@ from enum import StrEnum
 from typing import NoReturn
 
 from ..conversations import (
+    ArtifactApplicationOutcomeKind,
     CollaborationConfirmationDecision,
     CollaborationHistoryProjection,
     CollaborationNextAction,
     CollaborationStepState,
+    StoryCommitOutcomeKind,
 )
 from ..git import (
     GitChangeKind,
@@ -407,6 +409,42 @@ def reconcile_session_recovery(
             SessionRecoveryFailureCode.NONE,
         )
 
+    if (
+        history.current_artifact_application_request is not None
+        and history.next_safe_action
+        is CollaborationNextAction.SUBMIT_APPLICATION_DECISION
+    ):
+        return _result(
+            evidence,
+            SessionRecoveryState.AWAITING_APPLICATION,
+            SessionRecoveryOwner.ARTIFACT_APPLICATION,
+            SessionRecoveryFailureCode.NONE,
+        )
+    if (
+        history.current_story_commit_request is not None
+        and history.next_safe_action is CollaborationNextAction.SUBMIT_COMMIT_DECISION
+    ):
+        return _result(
+            evidence,
+            SessionRecoveryState.APPLIED_NOT_COMMITTED,
+            SessionRecoveryOwner.STORY_COMMIT,
+            SessionRecoveryFailureCode.NONE,
+        )
+    if (
+        history.current_artifact_application_request is not None
+        and _has_terminal_artifact_operations(history)
+        and history.current_step_id
+        == history.current_artifact_application_request.reviewed_proposal.step_id
+        and history.current_state is CollaborationStepState.COMPLETED
+        and all(value is None for value in (reviewed, application, commit))
+    ):
+        return _result(
+            evidence,
+            SessionRecoveryState.READY,
+            SessionRecoveryOwner.LEAD,
+            SessionRecoveryFailureCode.NONE,
+        )
+
     if commit is not None and commit.state is GitSessionHistoryState.COMMITTED:
         return _result(
             evidence,
@@ -483,6 +521,24 @@ def _recovery_failure(
         return (
             SessionRecoveryFailureCode.OWNER_RECOVERY_REQUIRED,
             SessionRecoveryOwner.COLLABORATION_HISTORY,
+        )
+    if (
+        history.current_artifact_application_result is not None
+        and history.current_artifact_application_result.outcome
+        is ArtifactApplicationOutcomeKind.RECOVERY_REQUIRED
+    ):
+        return (
+            SessionRecoveryFailureCode.OWNER_RECOVERY_REQUIRED,
+            SessionRecoveryOwner.ARTIFACT_APPLICATION,
+        )
+    if (
+        history.current_story_commit_result is not None
+        and history.current_story_commit_result.outcome
+        is StoryCommitOutcomeKind.RECOVERY_REQUIRED
+    ):
+        return (
+            SessionRecoveryFailureCode.OWNER_RECOVERY_REQUIRED,
+            SessionRecoveryOwner.STORY_COMMIT,
         )
     for operation, owner in (
         (commit, SessionRecoveryOwner.STORY_COMMIT),
@@ -785,6 +841,7 @@ def _is_unproposed_lead_history(history: CollaborationHistoryProjection) -> bool
         or history.last_sequence < 1
         or history.current_turn_id is None
         or history.current_step_id is None
+        or not _has_terminal_artifact_operations(history)
     ):
         return False
     if history.next_safe_action not in {
@@ -806,6 +863,12 @@ def _is_unproposed_lead_history(history: CollaborationHistoryProjection) -> bool
         execution_result=None,
         next_safe_action=history.next_safe_action,
         physical_calls_spent=history.physical_calls_spent,
+        current_artifact_application_request=history.current_artifact_application_request,
+        current_artifact_application_result=history.current_artifact_application_result,
+        current_story_commit_request=history.current_story_commit_request,
+        current_story_commit_result=history.current_story_commit_result,
+        artifact_objectives=history.artifact_objectives,
+        offered_draft_sources=history.offered_draft_sources,
     )
 
 
@@ -832,10 +895,36 @@ def is_unmatched_submitted_lead_projection(
         and history.current_artifact_candidate is None
         and history.current_artifact_state is None
         and history.current_reviewed_artifact_proposal is None
-        and history.current_artifact_application_request is None
-        and history.current_artifact_application_result is None
-        and history.current_story_commit_request is None
-        and history.current_story_commit_result is None
+        and _has_terminal_artifact_operations(history)
+    )
+
+
+def _has_terminal_artifact_operations(history: CollaborationHistoryProjection) -> bool:
+    application = history.current_artifact_application_result
+    commit = history.current_story_commit_result
+    if (
+        (history.current_artifact_application_request is None) != (application is None)
+        or (history.current_story_commit_request is None) != (commit is None)
+    ):
+        return False
+    return bool(
+        (history.current_artifact_application_request is None or (
+            application is not None and application.outcome in {
+                ArtifactApplicationOutcomeKind.APPLIED,
+                ArtifactApplicationOutcomeKind.UNCHANGED,
+                ArtifactApplicationOutcomeKind.REJECTED,
+                ArtifactApplicationOutcomeKind.SUPERSEDED,
+                ArtifactApplicationOutcomeKind.STALE,
+            }
+        ))
+        and (history.current_story_commit_request is None or (
+            commit is not None and commit.outcome in {
+                StoryCommitOutcomeKind.COMMITTED,
+                StoryCommitOutcomeKind.REJECTED,
+                StoryCommitOutcomeKind.SUPERSEDED,
+                StoryCommitOutcomeKind.STALE,
+            }
+        ))
     )
 
 
@@ -915,6 +1004,17 @@ def _unresolved_owner(evidence: SessionRecoveryEvidence) -> SessionRecoveryOwner
         in {GitSessionHistoryState.RUNNING, GitSessionHistoryState.OUTCOME_UNKNOWN}
     ):
         return SessionRecoveryOwner.CHECKPOINT
+    history = evidence.collaboration_history
+    if (
+        history.current_artifact_application_request is not None
+        and history.next_safe_action
+        is CollaborationNextAction.INSPECT_AND_RESOLVE_OUTCOME
+    ):
+        return (
+            SessionRecoveryOwner.STORY_COMMIT
+            if history.current_story_commit_request is not None
+            else SessionRecoveryOwner.ARTIFACT_APPLICATION
+        )
     return None
 
 
@@ -983,11 +1083,15 @@ def _result(
     candidate = evidence.story_commit_candidate
     commit = evidence.story_commit_operation
     checkpoint = evidence.checkpoint_operation
+    application_request = history.current_artifact_application_request
+    commit_request = history.current_story_commit_request
     proposal_id = (
         reviewed.proposal_id
         if reviewed is not None
         else (
-            history.current_proposal.proposal_id
+            application_request.reviewed_proposal.proposal_id
+            if application_request is not None
+            else history.current_proposal.proposal_id
             if history.current_proposal is not None
             else None
         )
@@ -1021,11 +1125,17 @@ def _result(
         confirmation_request_id=(
             reviewed.application_confirmation_request_id
             if reviewed is not None
+            else commit_request.confirmation_request_id
+            if commit_request is not None
+            else application_request.confirmation_request_id
+            if application_request is not None
             else history.confirmation_request_id
         ),
         application_id=(
             application.application_result.application_id
             if application is not None
+            else application_request.application_request.application_id
+            if application_request is not None
             else None
         ),
         reviewed_candidate_id=(

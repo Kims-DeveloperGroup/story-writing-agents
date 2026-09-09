@@ -18,6 +18,7 @@ from ..conversations import (
     StoryCommitDecision,
     StoryCommitDecisionRequest,
     StoryCommitDecisionResult,
+    StoryCommitRequestPayload,
 )
 from ..interactive_terminal import (
     Choice,
@@ -163,6 +164,8 @@ class InteractiveLeadAdapter:
                 return False
             if turn.artifact_application_request is not None:
                 return self._decide_artifact_application(turn)
+            if turn.story_commit_request is not None:
+                return self._decide_story_commit(turn, turn.story_commit_request)
             if turn.proposal is None or turn.confirmation_request_id is None:
                 return False
             outcome = self._picker.read_picker(
@@ -304,17 +307,15 @@ class InteractiveLeadAdapter:
         )
         if result.commit_request is None:
             return False
-        return self._decide_story_commit(turn, result)
+        return self._decide_story_commit(turn, result.commit_request)
 
     def _decide_story_commit(
         self,
         turn: LeadTurnResult,
-        application_result: ArtifactApplicationDecisionResult,
+        request: StoryCommitRequestPayload,
     ) -> bool:
         """Apply one separately selected exact local commit decision."""
 
-        request = application_result.commit_request
-        assert request is not None
         outcome = self._picker.read_picker(
             Prompt(
                 "Local commit decision",

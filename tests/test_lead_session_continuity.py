@@ -111,8 +111,14 @@ class LeadSessionContinuityTests(lead.LeadOrchestrationTestCase):
         lead_calls = [call for agent, call in self.backend.call_records if agent == LEAD_ORCHESTRATOR]
         self.assertEqual(lead_calls[-1].expected_thread_id, "thread-lead-1")
         self.assertEqual(lead_calls[0].continuation_identity, lead_calls[-1].continuation_identity)
+        from tests.test_lead_artifact_application import _application_decision
+        before = len(self.backend.calls)
+        pending = await self.runtime.lead_turn(self.session_id, conversation, "Recall the proposed edit and its limitations.")
+        self.assertEqual(pending.artifact_application_request, decided.turn.artifact_application_request)
+        self.assertEqual(len(self.backend.calls), before)
+        await self.runtime.decide_artifact_application(_application_decision(decided.turn, ArtifactApplicationDecisionKind.REJECT))
         self.backend.context_threads.clear()
-        await self.say(conversation, "Recall the proposed edit and its limitations.")
+        await self.say(conversation, "Recall the rejected edit and its limitations.")
         delivery = self.backend.calls[-1].payload["h"]
         self.assertEqual(delivery["delivery_mode"], "bootstrap")
         details = [record["details"] for record in _records(delivery)]
@@ -182,7 +188,12 @@ class LeadSessionContinuityTests(lead.LeadOrchestrationTestCase):
         def changed(owner):
             snapshot = capture(owner)
             history = snapshot.conversations[0]
-            records = (replace(history.records[0], batch_digest="sha256:" + "9" * 64),) + history.records[1:]
+            from story_writing_agents.conversations import CollaborationEventBatch, project_collaboration_readable_history
+            events = self.history(conversation)
+            first = events[:events[0].batch_size]
+            batch = CollaborationEventBatch("changed_valid_batch", 0, tuple(event.to_draft() for event in first))
+            changed_events = tuple(replace(event, batch_id=batch.batch_id, batch_digest=batch.batch_digest) for event in first) + events[len(first):]
+            records = project_collaboration_readable_history(changed_events)
             return replace(snapshot, conversations=(replace(history, records=records),) + snapshot.conversations[1:])
 
         with mock.patch.object(SessionHistorySourceAdapter, "capture", new=changed):
@@ -407,37 +418,34 @@ class LeadSessionContinuityTests(lead.LeadOrchestrationTestCase):
 
 class SessionHistoryContractTests(unittest.TestCase):
     def test_application_and_commit_revision_text_and_timestamps_survive_projection(self):
-        workspace = initialized_workspace(self)
-        storage = compose_filesystem_conversation_storage(workspace)
-        conversation = storage.catalog.create("session_a", "Visible user revisions")
-        storage.event_store.append_batch(contract_batches(conversation.conversation_id)["proposal"])
-        snapshot = SessionHistorySourceAdapter(storage.catalog, storage.event_store, "session_a").capture()
-        history = snapshot.conversations[0]
-        template = history.records[0]
-        digest = "sha256:" + "a" * 64
+        from tests import test_artifact_objectives as objectives
+        from tests.test_lead_artifact_application import _application_decision
+        from tests.test_lead_story_commit import _commit_decision
         application_text = "Preserve the current tense.\r\nKeep this exact clause. 한🙂"
         commit_text = "Use a narrower commit message.\nKeep the quoted wording."
-        payloads = (
-            (CollaborationEventKind.ARTIFACT_APPLICATION_DECISION, ArtifactApplicationDecisionPayload(
-                "application_confirmation", "application_request_event", "reviewed_proposal", 1, digest,
-                "artifact_candidate", 1, digest, "application", digest,
-                ArtifactApplicationDecisionKind.REVISE, application_text,
-            )),
-            (CollaborationEventKind.STORY_COMMIT_DECISION, StoryCommitDecisionPayload(
-                "commit_request", "commit_request_event", "application_result_event", "a" * 64,
-                digest, "commit_confirmation", StoryCommitDecision.REVISE, commit_text,
-            )),
-        )
-        records = tuple(replace(
-            template, sequence=index, event_id=f"revision_{index}", kind=kind, payload=payload,
-            sender=CollaborationActor(CollaborationActorKind.USER),
-            recipient=CollaborationActor(CollaborationActorKind.RUNTIME),
-            direction=CollaborationDirection.USER_TO_RUNTIME, fields=(),
-        ) for index, (kind, payload) in enumerate(payloads, 1))
-        recovered = replace(snapshot, conversations=(replace(history, records=records),)).delivery()
-        self.assertEqual([item["details"]["revision_request"] for item in _records(recovered)], [application_text, commit_text])
-        self.assertEqual([item["timestamp"] for item in _records(recovered)], [template.timestamp] * 2)
-        self.assertEqual([item["details"]["decision"] for item in _records(recovered)], ["revise", "revise"])
+        case = objectives.ObjectiveCase()
+        case.setUp()
+        # Adopt synchronous cleanup from this setup-only async fixture.
+        for cleanup, args, kwargs in case._cleanups:
+            self.addCleanup(cleanup, *args, **kwargs)
+        case._cleanups.clear()
+        async def exact_history():
+            conversation_id, _ = await case.start()
+            reviewed = await case.review(await case.prepare(conversation_id))
+            await case.runtime.decide_artifact_application(_application_decision(reviewed, ArtifactApplicationDecisionKind.REVISE, revision_request=application_text))
+            applied = await case.apply(await case.review(await case.prepare(conversation_id, select=False)))
+            await case.runtime.decide_story_commit(_commit_decision(applied, StoryCommitDecision.REVISE, revision_request=commit_text))
+            return conversation_id
+        conversation_id = asyncio.run(exact_history())
+        storage = case.runtime.conversation_storage_services
+        events = storage.event_store.read(case.session_id, conversation_id)
+        decisions = [event for event in events if type(event.payload) in (ArtifactApplicationDecisionPayload, StoryCommitDecisionPayload) and event.payload.revision_request is not None]
+        snapshot = SessionHistorySourceAdapter(storage.catalog, storage.event_store, case.session_id).capture()
+        recovered = snapshot.delivery()
+        selected = [item for item in _records(recovered) if item["event_id"] in {event.event_id for event in decisions}]
+        self.assertEqual([item["details"]["revision_request"] for item in selected], [application_text, commit_text])
+        self.assertEqual([item["timestamp"] for item in selected], [event.timestamp for event in decisions])
+        self.assertEqual([item["details"]["decision"] for item in selected], ["revise", "revise"])
 
     def test_filesystem_and_sqlite_full_history_and_archives_have_equal_delivery(self):
         workspace = initialized_workspace(self)
@@ -480,16 +488,16 @@ class SessionHistoryContractTests(unittest.TestCase):
         original = CollaborationReadableField(CollaborationReadableFieldKey.MESSAGE_CONTENT, "capacity fixture")
 
         def extended(text):
-            records = tuple(
-                replace(record, sequence=index + 1, event_id=f"capacity_event_{index}",
-                        kind=CollaborationEventKind.MESSAGE,
-                        sender=CollaborationActor(CollaborationActorKind.USER),
-                        recipient=CollaborationActor(CollaborationActorKind.LEAD, LEAD_ORCHESTRATOR),
-                        direction=CollaborationDirection.USER_TO_LEAD,
-                        payload=CollaborationMessagePayload(value),
-                        fields=(replace(original, text=value),))
+            from story_writing_agents.conversations import project_collaboration_readable_history
+            from tests.collaboration_contract_fixture import make_batch, make_draft, store_batch, USER, LEAD
+            drafts = tuple(
+                replace(make_draft(f"capacity_event_{index}", CollaborationEventKind.MESSAGE,
+                                  USER, LEAD, CollaborationMessagePayload(value)),
+                        conversation_id=conversation.conversation_id)
                 for index, value in enumerate(["x" * 30_000] * 8 + [text])
             )
+            events = store_batch((), make_batch((), "capacity_batch", *drafts))
+            records = project_collaboration_readable_history(events)
             return replace(snapshot, conversations=(replace(history, records=records),))
 
         prefix = "한🙂\r\nExact content.\n"

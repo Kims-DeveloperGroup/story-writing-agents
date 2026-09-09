@@ -54,6 +54,19 @@ confirmation, sends every reviewer the same immutable candidate. A successful
 lead `propose` synthesis records a reviewed proposal whose Apply/write/Git
 flags are all false.
 
+The lead interprets short follow-ups such as “Use that draft” from the session
+context. With a clear target and current evidence, it can prepare the exact
+candidate for separately confirmed review. Runtime retains the authoring
+objective in its originating conversation across discussion, consultation,
+conversation switches, and restart. Only a matching successful Apply result
+(`applied` or `unchanged`) satisfies it; review, prose approval, and Commit do
+not. An explicit objective cancellation closes it without writing.
+
+Pending Apply or Commit requests are shown again with their exact identities
+when ordinary input arrives. After a known terminal Apply/Commit result, another
+authoring cycle can begin with fresh review, Apply, and Commit requests.
+Unknown outcomes and recovery states require resolution first.
+
 After a session is attached and an active conversation is focused, every
 ordinary non-slash line is sent literally to the Lead Orchestrator. The lead
 can answer directly or disclose a specialist or artifact-review proposal.
@@ -152,8 +165,9 @@ story[novel]> Does this opening conflict with ${core_documents/global_outline.md
 
 Exact wording comes from the configured provider; the typed fields and
 authority boundaries are stable. If the lead proposes specialist work, the
-shell opens a Confirm/Reject/Revise picker. Free-form `Yes` is a new lead turn,
-not confirmation.
+shell opens a Confirm/Reject/Revise picker. Free-form `Yes` is contextual Lead
+input. It can express approval of a visible draft, but it never confirms
+review, Apply, or Commit.
 
 ## Provider-free smoke
 

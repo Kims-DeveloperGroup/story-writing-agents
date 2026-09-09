@@ -305,6 +305,8 @@ LeadTurnResult(
     next_action: CollaborationNextAction,
     evidence: CollaborationLeadEvidence | None = None,
     artifact_proposal: ArtifactProposalResult | None = None,
+    artifact_application_request: ArtifactApplicationRequestPayload | None = None,
+    story_commit_request: StoryCommitRequestPayload | None = None,
 )
 ```
 
@@ -328,6 +330,13 @@ state is `awaiting_consultation_confirmation`. After confirmed review it may be
 `artifact_write_occurred`, `apply_authority_granted`, and
 `git_action_occurred` fixed to false.
 
+`artifact_application_request` carries the separate exact Apply request after
+successful review, with `next_action=submit_application_decision`. The trailing
+optional `story_commit_request` carries an existing local Commit request when
+redisclosed, with `next_action=submit_commit_decision`. It defaults to `None`,
+preserving existing construction that omits it. These requests still need
+their respective structured decisions; neither is consultation authority.
+
 A fresh provider judgment also returns exact durable `evidence`. It contains
 the provider-declared `scope` (`story_specific` or `workflow_meta`), declared
 status (`not_applicable`, `verified`, `missing`, `empty`, `incomplete`, or
@@ -335,9 +344,9 @@ status (`not_applicable`, `verified`, `missing`, `empty`, `incomplete`, or
 identical to `proposal.basis.evidence`. Runtime-generated recovery and evidence-
 rejection notices use `evidence=None`.
 
-The provider must return one strict JSON object with exactly `scope`,
-`evidence_status`, `evidence_ids`, `kind`, `message`, `proposal`, and
-`artifact_intent`:
+The provider's `lead-outcome-v2` result is one strict JSON object with exactly
+eight fields: `scope`, `evidence_status`, `evidence_ids`, `kind`, `message`,
+`proposal`, `artifact_intent`, and `objective_intent`:
 
 ```json
 {
@@ -347,7 +356,8 @@ The provider must return one strict JSON object with exactly `scope`,
   "kind": "recommendation",
   "message": "The referenced outline supports the existing sequence.",
   "proposal": null,
-  "artifact_intent": null
+  "artifact_intent": null,
+  "objective_intent": null
 }
 ```
 
@@ -358,6 +368,12 @@ or `delete` requests. Patch/replace/rename/delete target current runtime-issued
 artifact evidence IDs; create suggests a canonical path. The provider cannot
 supply candidate identity, reviewer identity, digests, authority flags, or
 side-effect claims.
+
+For an existing empty canonical core file, a selected zero-byte core-status
+receipt can support `replace` only after runtime recaptures and exactly
+revalidates it. Nonempty targets require current attached-reference or READ
+evidence. Status identity is not file-content authority; runtime resolves the
+whole-source and selected-range digests before constructing a candidate.
 
 Runtime inventories content-free statuses for the four canonical core
 documents and issues evidence IDs for explicit references, complete zero-hit
@@ -401,14 +417,77 @@ new proposal, confirmation request, or evidence. Submit explicit new text to
 request and failure remain in history. Exact legacy unstarted, prepared-only,
 or unmatched submitted requests are closed before that new turn is appended,
 including after restart. Reading history or reopening does not mutate or retry.
+An eligible known failure after mandatory references is also retryable once
+the exact attempt and reference accounting close. Its authoring objective
+remains open, and retry acquires new evidence rather than reusing the old read.
 
 Cancellation/interruption also attempts durable closure; task cancellation is
 re-raised after resource release. Failed closure persistence, corrupt history,
-and uncertain authoritative writes remain recovery-gated. A failed Revise
-attempt leaves the old proposal superseded, with no replacement authority.
+uncertain reference cleanup, and uncertain authoritative writes remain
+recovery-gated. A failed Revise attempt leaves the old proposal superseded,
+with no replacement authority.
 Specialist/synthesis uncertainty and successful results cannot be abandoned by
 this path. See the [failure contract](collaboration-history.md#state-and-user-action-contract)
 and [Lead recovery](../guides/lead-agent.md#submitted-lead-outcome-unavailable-after-restart).
+
+### Contextual authoring objectives
+
+`objective_intent` is required in every front-channel result. `null` makes no
+objective transition. The three non-null shapes are:
+
+```json
+{"action":"start","request":"Prepare the agreed outline.","target_paths":["core_documents/global_outline.md"],"next_step":"clarify","draft_source_event_ids":[]}
+```
+
+```json
+{"action":"continue","objective_id":"<offered-open-owner-objective-id>","next_step":"prepare","draft_source_event_ids":["<offered-draft-event-id>"]}
+```
+
+```json
+{"action":"cancel","objective_id":"<offered-open-owner-objective-id>"}
+```
+
+`start` requires a nonempty exact canonical target scope and a visible request;
+runtime assigns the objective ID and origin event. If the target is unresolved,
+the Lead asks a question with `objective_intent=null` first. `continue` and
+`cancel` can name only an `OPEN` objective owned by the current conversation.
+They cannot replace its origin request or target paths. Complete same-session
+history exposes these facts across conversation switches without transferring
+ownership or authority.
+
+For `start` and `continue`, `next_step` is one of:
+
+| Value | Required Lead outcome |
+| --- | --- |
+| `clarify` | `kind=question`; both proposal fields are null. |
+| `consult` | `kind=proposal`; ordinary `proposal` populated, `artifact_intent=null`. |
+| `prepare` | `kind=proposal`; `artifact_intent` populated, `proposal=null`; candidate operations cover the frozen target scope exactly. |
+
+After PREPARE is selected, the bounded same-turn correction cannot downgrade
+it to advice. A failed preparation does not satisfy the objective. Existing
+validation, retry, and recovery rules determine its outcome. Later ordinary
+user direction is still interpreted in context. `cancel` selects no work and
+cannot accompany a proposal.
+
+Draft IDs select only runtime-offered visible messages from the owner
+conversation. `ArtifactDraftSource` identifies the conversation, event, and
+SHA-256 of the complete exact UTF-8 message, including its original whitespace
+and line endings. There is no extracted-draft or normalized-text identity.
+An empty `continue` source list retains the previous selection. Draft sources
+supply context, never artifact evidence or confirmation authority.
+
+`CollaborationHistoryProjection.artifact_objectives` retains these objectives;
+`offered_draft_sources` supplies the current selectable source identities.
+Advice, consultation, review, rejection, staleness, failure, and null intent
+leave an objective `OPEN`. Only a matching validated `APPLIED` or `UNCHANGED`
+result for its bound candidate makes it `SATISFIED`. Explicit cancellation
+makes it `CANCELLED`; Commit is independent of objective completion. See the
+[persisted contract](collaboration-history.md#contextual-artifact-objectives).
+
+The public objective values are additive exports of
+`story_writing_agents.conversations`; the package-root facade is unchanged.
+Retained workspace policies receive a runtime v2 overlay without file rewrites.
+Specialist and synthesis schemas remain separate from `lead-outcome-v2`.
 
 ### `LeadStepDecision`
 
@@ -537,10 +616,16 @@ vote, and synthesis cannot discard a concern because more peers returned
 
 ### Free text and recovery
 
-Calling `lead_turn(..., "Yes")` is ordinary conversation, never confirmation.
-When a proposal is pending, runtime atomically appends the user message and
-`superseded` state before any next provider call. Idle application exit makes
-no call and leaves the pending request unchanged.
+Calling `lead_turn(..., "Yes")` is contextual conversation, never structured
+confirmation. When a consultation proposal is pending, runtime atomically
+appends the user message and `superseded` state before any next provider call.
+Idle application exit makes no call and leaves the pending request unchanged.
+
+Pending Apply or Commit takes precedence: `lead_turn()` and
+`propose_specialist_advisory()` return the unchanged exact request without a
+provider call or history append. After a known terminal Apply/Commit cycle,
+fresh authoring can create new requests while retaining previous correlations
+and objective completion. Unknown or recovery outcomes block new work.
 
 Before accepting new text, `lead_turn` normalizes authoritative state:
 

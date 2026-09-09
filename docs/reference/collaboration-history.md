@@ -156,6 +156,51 @@ records `rejected`; incomplete review records `failed`; invalid non-null intent
 records `artifact_review_failure=intent_rejected`. None is filesystem or Git
 authority.
 
+### Contextual artifact objectives
+
+An `artifact_objective` event carries the strict `artifact_objective_v1`
+payload inside the existing schema-v2 event envelope. This is additive: older
+event payload bytes remain unchanged, and the outer history version stays v2.
+Filesystem/SQLite history, archive, and transfer retain the same objective
+records; projection itself appends nothing.
+
+`ArtifactObjectiveFacts` freezes the runtime objective ID, origin conversation
+and user event, visible request, exact canonical target paths, and the offered
+draft-source snapshot. `ArtifactObjectivePayload` records `start`, `continue`,
+or `cancel` beside its accepted Lead judgment in the same atomic batch. A
+continuation names the exact previous objective event and preserves the origin
+facts. A PREPARE transition also binds its co-batched candidate by event ID,
+candidate ID, revision, and digest; its operations must cover the frozen target
+scope exactly.
+
+`CollaborationHistoryProjection.artifact_objectives` exposes the retained
+objectives; `offered_draft_sources` exposes exact owner-conversation visible
+messages available as drafting context. Sources include story-specific direct
+Lead judgments (including questions) and ordinary Lead synthesis messages.
+Each `ArtifactDraftSource` binds the whole original strict-UTF-8 message digest,
+including whitespace and line endings. It does not extract a draft fragment
+or grant artifact evidence. An empty continuation selection retains the prior
+selected sources.
+
+| Objective state | Meaning |
+| --- | --- |
+| `open` | Authoring remains outstanding through clarification, advice, consultation, review, rejection, staleness, and failure. |
+| `satisfied` | A validated `APPLIED` or `UNCHANGED` result matches the exact bound candidate and reviewed-proposal lineage. |
+| `cancelled` | An explicit cancellation closed this owner-conversation objective without proposing work. |
+
+Null objective intent, prose completion, and a step rejection do not close an
+objective. Commit does not satisfy it. Satisfaction remains recorded through
+later Apply/Commit cycles. Complete same-session Lead context includes
+objective facts across conversation switches and restart, while continuation
+and cancellation remain restricted to the originating conversation.
+
+Readable projection exposes the closed fields `artifact_objective.request`,
+`artifact_objective.action`, and, when present,
+`artifact_objective.next_step`. Full facts and bindings remain in the typed
+payload and required session context. No projection reconstructs confirmation
+authority from them. See the
+[front-channel contract](runtime-api.md#contextual-authoring-objectives).
+
 ## Proposal closure and limits
 
 `CollaborationProposal` discloses every one of these fields:
@@ -237,12 +282,16 @@ Actors have one of the exact kinds `user`, `lead`, `specialist`, `runtime`,
 ID; other actor kinds cannot. Sender/recipient pairs derive one of the closed
 directions, so direction is not a second stored claim.
 
-The sixteen event kinds are `message`, `lead_outcome_failure`,
+The event kinds are `message`, `lead_outcome_failure`,
 `assignment_dispatch`, `specialist_reply`, `lead_synthesis`, `step_state`,
 `confirmation`, `execution_result`, `interruption`, `terminal_outcome`, and
 `provider_call_accounting`, plus `artifact_review_candidate`,
 `artifact_review_synthesis`, `artifact_reviewed_proposal`,
-`artifact_proposal_state`, and `artifact_review_failure`. Each stored
+`artifact_proposal_state`, and `artifact_review_failure`; the separate effect
+events are `artifact_application_request`, `artifact_application_decision`,
+`artifact_application_result`, `story_commit_request`, `story_commit_decision`,
+and `story_commit_result`. `artifact_objective` records contextual authoring
+transitions. Each stored
 event carries schema,
 event/session/conversation/turn/step identity, contiguous sequence, canonical
 UTC timestamp, atomic-batch metadata, typed actors, and its kind-specific
@@ -449,6 +498,12 @@ conversations; it still sends zero eager history records and adds bodies only
 after SEARCH and READ. Confirmed specialist and synthesis invocations use the
 same bounded component with assignment-local source restrictions. #454 owns
 whole-workspace unsupported-history rejection.
+
+Required Lead session memory is a separate complete retained-history
+projection. It includes objective facts and current directives/core bytes
+across active and archived conversations even when the bounded selector sends
+zero records. It supplies context without current artifact receipts or
+confirmation authority; see [Lead session memory](../guides/agent-context.md#lead-session-memory).
 
 ## Atomic batch flow
 
@@ -755,6 +810,19 @@ superseded and no replacement authority is created. Successful results,
 uncertain specialist/synthesis work, and pending or uncertain Apply/Commit
 outcomes are excluded from read-only abandonment. A closure that cannot be
 appended safely returns `recovery_required`.
+
+Known read-only failures after references may expose retry once the exact
+attempt and its reference accounting are durably closed. An open authoring
+objective remains unchanged. Uncertain reference cleanup or failed closure
+keeps the recovery gate; new input acquires fresh evidence and never replays
+the failed call automatically.
+
+Apply and Commit requests/results project independently of consultation state.
+While either exact decision is pending, ordinary Lead/advisory input rediscloses
+the same request without appending history or calling a provider. Known
+terminal Apply/Commit outcomes permit later cycles with fresh requests and
+preserved earlier correlations. `outcome_unknown` and `recovery_required`
+continue to block new work.
 
 ## Restart and no-replay cases
 

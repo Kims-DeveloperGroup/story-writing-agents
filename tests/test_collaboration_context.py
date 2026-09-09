@@ -247,6 +247,8 @@ class CollaborationTransitionTests(unittest.TestCase):
                 "current_artifact_application_result",
                 "current_story_commit_request",
                 "current_story_commit_result",
+                "artifact_objectives",
+                "offered_draft_sources",
             ),
         )
 
@@ -1319,6 +1321,9 @@ class CollaborationReadableProjectionTests(unittest.TestCase):
         all_records += project_collaboration_readable_history(failure_history)
         observed_keys = {field.key for record in all_records for field in record.fields}
         artifact_keys = {
+            CollaborationReadableFieldKey.ARTIFACT_OBJECTIVE_REQUEST,
+            CollaborationReadableFieldKey.ARTIFACT_OBJECTIVE_ACTION,
+            CollaborationReadableFieldKey.ARTIFACT_OBJECTIVE_NEXT_STEP,
             CollaborationReadableFieldKey.ARTIFACT_REVIEW_MESSAGE,
             CollaborationReadableFieldKey.ARTIFACT_REVIEW_DECISION,
             CollaborationReadableFieldKey.ARTIFACT_PROPOSAL_STATE,
@@ -1365,6 +1370,9 @@ class CollaborationReadableProjectionTests(unittest.TestCase):
                 "artifact_review.decision",
                 "artifact_proposal.state",
                 "artifact_review.failure",
+                "artifact_objective.request",
+                "artifact_objective.action",
+                "artifact_objective.next_step",
             ),
         )
         searchable_names = " ".join(item.value for item in observed_keys)

@@ -2,14 +2,22 @@
 
 from __future__ import annotations
 
+import hashlib
 import re
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass, replace
 from enum import StrEnum
 from types import MappingProxyType
 from typing import Mapping, Protocol
 
 from ..errors import SessionIdError
 from .events import (
+    ArtifactDraftSource,
+    ArtifactObjectiveCandidateBinding,
+    ArtifactObjectiveFacts,
+    ArtifactObjectiveNextStep,
+    ArtifactObjectivePayload,
+    ArtifactObjectiveState,
+    LeadObjectiveAction,
     COLLABORATION_EVENT_SCHEMA_VERSION,
     COLLABORATION_PHYSICAL_CALL_LIMIT,
     CollaborationActor,
@@ -65,11 +73,13 @@ from .events import (
     StoryCommitRequestPayload,
     StoryCommitResultPayload,
     LeadOutcomeKind,
+    LeadOutcomeScope,
     collaboration_batch_digest,
     ConversationEvent,
     ConversationEventKind,
 )
 from ..git.story_commit_contracts import StoryCommitDecision
+from ..writing_artifacts import ArtifactRenameOperation
 
 
 _SAFE_IDENTIFIER = re.compile(r"[A-Za-z0-9][A-Za-z0-9_-]{0,63}")
@@ -418,6 +428,51 @@ class CollaborationNextAction(StrEnum):
 
 
 @dataclass(frozen=True, slots=True)
+class ArtifactObjective:
+    """Current objective facts derived from one complete owner conversation."""
+
+    facts: ArtifactObjectiveFacts
+    latest_event_id: str
+    state: ArtifactObjectiveState
+    next_step: ArtifactObjectiveNextStep | None
+    draft_sources: tuple[ArtifactDraftSource, ...]
+    candidate_binding: ArtifactObjectiveCandidateBinding | None = None
+    satisfied_by_event_id: str | None = None
+
+    def __post_init__(self) -> None:
+        if type(self.facts) is not ArtifactObjectiveFacts:
+            raise TypeError("projected objective facts are invalid")
+        _validate_identifier(self.latest_event_id, label="objective event ID")
+        if type(self.state) is not ArtifactObjectiveState:
+            raise TypeError("projected objective state is invalid")
+        if self.next_step is not None and type(self.next_step) is not ArtifactObjectiveNextStep:
+            raise TypeError("projected objective next step is invalid")
+        if type(self.draft_sources) is not tuple or any(
+            type(item) is not ArtifactDraftSource
+            or item.conversation_id != self.facts.origin_conversation_id
+            for item in self.draft_sources
+        ) or len({item.event_id for item in self.draft_sources}) != len(self.draft_sources):
+            raise ValueError("projected objective draft sources are invalid")
+        if self.candidate_binding is not None and type(self.candidate_binding) is not ArtifactObjectiveCandidateBinding:
+            raise TypeError("projected objective candidate binding is invalid")
+        if self.state is ArtifactObjectiveState.CANCELLED:
+            if self.next_step is not None or self.candidate_binding is not None:
+                raise ValueError("cancelled objective cannot select work")
+        elif self.next_step is None or (
+            self.next_step is ArtifactObjectiveNextStep.PREPARE
+        ) is not (self.candidate_binding is not None):
+            raise ValueError("projected objective step binding is inconsistent")
+        if (self.state is ArtifactObjectiveState.SATISFIED) is not (
+            self.satisfied_by_event_id is not None
+        ):
+            raise ValueError("objective satisfaction requires the exact Apply event")
+        if self.satisfied_by_event_id is not None:
+            _validate_identifier(self.satisfied_by_event_id, label="objective Apply event ID")
+            if self.candidate_binding is None:
+                raise ValueError("satisfied objective requires its candidate")
+
+
+@dataclass(frozen=True, slots=True)
 class CollaborationHistoryProjection:
     """Pure deterministic summary of one complete authoritative v2 history."""
 
@@ -443,6 +498,8 @@ class CollaborationHistoryProjection:
     current_artifact_application_result: ArtifactApplicationResultPayload | None = None
     current_story_commit_request: StoryCommitRequestPayload | None = None
     current_story_commit_result: StoryCommitResultPayload | None = None
+    artifact_objectives: tuple[ArtifactObjective, ...] = ()
+    offered_draft_sources: tuple[ArtifactDraftSource, ...] = ()
 
     def __post_init__(self) -> None:
         _validate_non_negative_integer(self.last_sequence, label="last sequence")
@@ -498,6 +555,40 @@ class CollaborationHistoryProjection:
             raise TypeError("projected story commit request is invalid")
         if self.current_story_commit_result is not None and type(self.current_story_commit_result) is not StoryCommitResultPayload:
             raise TypeError("projected story commit result is invalid")
+        if type(self.artifact_objectives) is not tuple or any(
+            type(item) is not ArtifactObjective
+            or item.facts.origin_conversation_id != self.conversation_id
+            for item in self.artifact_objectives
+        ) or len({item.facts.objective_id for item in self.artifact_objectives}) != len(self.artifact_objectives):
+            raise ValueError("projected artifact objectives are inconsistent")
+        if type(self.offered_draft_sources) is not tuple or any(
+            type(item) is not ArtifactDraftSource
+            or item.conversation_id != self.conversation_id
+            for item in self.offered_draft_sources
+        ) or len({item.event_id for item in self.offered_draft_sources}) != len(self.offered_draft_sources):
+            raise ValueError("projected offered draft sources are inconsistent")
+
+
+def artifact_objective_context(
+    projection: CollaborationHistoryProjection,
+) -> dict[str, object]:
+    """Expose exact objective and draft facts without any execution capability."""
+
+    if type(projection) is not CollaborationHistoryProjection:
+        raise TypeError("objective context requires a canonical history projection")
+    return {
+        "conversation_id": projection.conversation_id,
+        "objectives": [asdict(item) for item in projection.artifact_objectives],
+        "offered_draft_sources": [asdict(item) for item in projection.offered_draft_sources],
+        "instruction": (
+            "Only the origin conversation can continue or cancel its objective. "
+            "Draft source event IDs identify exact visible drafting context, never "
+            "artifact evidence or confirmation. Use current READ/attached evidence "
+            "for artifact operations. OPEN remains open after advice, consultation, "
+            "review, rejection or failure. Only exact successful structured Apply "
+            "makes it SATISFIED; prose and null objective_intent make no transition."
+        ),
+    }
 
 
 @dataclass(frozen=True, slots=True)
@@ -722,6 +813,7 @@ class LeadTurnResult:
     evidence: CollaborationLeadEvidence | None = None
     artifact_proposal: ArtifactProposalResult | None = None
     artifact_application_request: ArtifactApplicationRequestPayload | None = None
+    story_commit_request: StoryCommitRequestPayload | None = None
 
     def __post_init__(self) -> None:
         for value, label in (
@@ -843,6 +935,18 @@ class LeadTurnResult:
                 is not CollaborationNextAction.SUBMIT_APPLICATION_DECISION
             ):
                 raise ValueError("lead result application request is inconsistent")
+        if self.story_commit_request is not None:
+            if (
+                type(self.story_commit_request) is not StoryCommitRequestPayload
+                or self.artifact_application_request is not None
+                or self.proposal is not None or self.confirmation_request_id is not None
+                or self.artifact_proposal is not None
+                or self.kind is not LeadOutcomeKind.RECOMMENDATION
+                or self.next_action is not CollaborationNextAction.SUBMIT_COMMIT_DECISION
+                or self.state not in {None, CollaborationStepState.COMPLETED}
+                or self.story_commit_request.candidate.session_id != self.session_id
+            ):
+                raise ValueError("lead result Commit request is inconsistent")
         provider_judgment = (
             self.proposal is not None
             and self.proposal.step_kind
@@ -909,7 +1013,7 @@ class LeadTurnResult:
                 raise ValueError(
                     "running result must wait or require known-result finalization"
                 )
-        elif self.artifact_application_request is not None:
+        elif self.artifact_application_request is not None or self.story_commit_request is not None:
             pass
         elif self.kind is not LeadOutcomeKind.PROPOSAL and (
             self.next_action is not CollaborationNextAction.CONTINUE_WITH_LEAD
@@ -1136,6 +1240,9 @@ class CollaborationReadableFieldKey(StrEnum):
     ARTIFACT_REVIEW_DECISION = "artifact_review.decision"
     ARTIFACT_PROPOSAL_STATE = "artifact_proposal.state"
     ARTIFACT_REVIEW_FAILURE = "artifact_review.failure"
+    ARTIFACT_OBJECTIVE_REQUEST = "artifact_objective.request"
+    ARTIFACT_OBJECTIVE_ACTION = "artifact_objective.action"
+    ARTIFACT_OBJECTIVE_NEXT_STEP = "artifact_objective.next_step"
 
 
 _ASSIGNMENT_ORDINAL_FIELD_KEYS = frozenset(
@@ -2194,11 +2301,8 @@ def _project_validated_collaboration_history(
     artifact_candidates, artifact_states, artifact_reviewed = (
         _project_artifact_review_history(events)
     )
-    application_request, application_result = _project_artifact_application_history(
-        events, artifact_reviewed
-    )
-    commit_request, commit_result = _project_story_commit_history(
-        events, application_result
+    application_request, application_result, commit_request, commit_result = (
+        _project_artifact_operation_history(events)
     )
     proposals: dict[str, CollaborationProposal] = {}
     states: dict[str, CollaborationStepState] = {}
@@ -2451,6 +2555,7 @@ def _project_validated_collaboration_history(
                 continue
 
             if type(payload) in {
+                ArtifactObjectivePayload,
                 ArtifactReviewCandidatePayload,
                 ArtifactReviewSynthesisPayload,
                 ArtifactReviewedProposal,
@@ -2926,6 +3031,10 @@ def _project_validated_collaboration_history(
     projection_result: CollaborationExecutionResult | None = (
         result_pair[1] if result_pair is not None else None
     )
+    artifact_objectives, offered_draft_sources = _project_artifact_objective_history(events)
+    operation_next_action = _artifact_operation_next_action(
+        events[-1], application_request, application_result, commit_request, commit_result,
+    )
     return CollaborationHistoryProjection(
         session_id=events[0].session_id,
         conversation_id=events[0].conversation_id,
@@ -2940,12 +3049,14 @@ def _project_validated_collaboration_history(
         execution_result_event_id=result_event_id,
         execution_result=projection_result,
         next_safe_action=(
-            CollaborationNextAction.SUBMIT_COMMIT_DECISION
-            if commit_request is not None
-            and commit_result is None
-            and type(events[-1].payload) is StoryCommitRequestPayload
+            CollaborationNextAction.REPAIR_AUTHORITATIVE_HISTORY
+            if state is CollaborationStepState.RECOVERY_REQUIRED
+            or operation_next_action is CollaborationNextAction.REPAIR_AUTHORITATIVE_HISTORY
             else CollaborationNextAction.INSPECT_AND_RESOLVE_OUTCOME
-            if commit_request is not None and commit_result is None
+            if state is CollaborationStepState.OUTCOME_UNKNOWN
+            or operation_next_action is CollaborationNextAction.INSPECT_AND_RESOLVE_OUTCOME
+            else operation_next_action
+            if operation_next_action is not None
             else CollaborationNextAction.RETRY_LEAD_TURN
             if recoverable_lead
             else CollaborationNextAction.INSPECT_AND_RESOLVE_OUTCOME
@@ -2963,142 +3074,372 @@ def _project_validated_collaboration_history(
         current_artifact_application_result=application_result,
         current_story_commit_request=commit_request,
         current_story_commit_result=commit_result,
+        artifact_objectives=artifact_objectives,
+        offered_draft_sources=offered_draft_sources,
     )
 
 
-def _project_artifact_application_history(
+def _project_artifact_objective_history(
     events: tuple[CollaborationEventV2, ...],
-    reviewed: Mapping[str, ArtifactReviewedProposal],
-) -> tuple[ArtifactApplicationRequestPayload | None, ArtifactApplicationResultPayload | None]:
+) -> tuple[tuple[ArtifactObjective, ...], tuple[ArtifactDraftSource, ...]]:
+    """Validate same-owner objectives after the existing authority projections."""
+
+    objectives: dict[str, ArtifactObjective] = {}
+    sources: dict[str, ArtifactDraftSource] = {}
+    by_id = {event.event_id: event for event in events}
+    applications: dict[str, ArtifactApplicationRequestPayload] = {}
+    invalid_candidates: set[tuple[str, int, str]] = set()
+    offset = 0
+    while offset < len(events):
+        batch = events[offset:offset + events[offset].batch_size]
+        offered = tuple(sources.values())
+        transitions = [event for event in batch if type(event.payload) is ArtifactObjectivePayload]
+        if len(transitions) > 1:
+            raise ValueError("one Lead result may select only one objective transition")
+        for event in batch:
+            payload = event.payload
+            if type(payload) is ArtifactObjectivePayload:
+                facts = payload.facts
+                previous = objectives.get(facts.objective_id)
+                judgment = by_id.get(payload.lead_result_event_id)
+                if (
+                    facts.origin_conversation_id != event.conversation_id
+                    or judgment is None or judgment not in batch
+                    or judgment.sequence >= event.sequence
+                    or judgment.turn_id != event.turn_id
+                    or judgment.step_id != event.step_id
+                    or type(judgment.payload) is not CollaborationLeadJudgmentPayload
+                ):
+                    raise ValueError("objective must co-batch its accepted owner Lead result")
+                if payload.action is LeadObjectiveAction.START:
+                    origin = by_id.get(facts.origin_user_event_id)
+                    if (
+                        previous is not None
+                        or origin is None or origin.sequence >= judgment.sequence
+                        or origin.turn_id != judgment.turn_id
+                        or origin.direction is not CollaborationDirection.USER_TO_LEAD
+                        or type(origin.payload) is not CollaborationMessagePayload
+                        or facts.offered_draft_sources != offered
+                    ):
+                        raise ValueError("objective origin or offered draft snapshot is invalid")
+                elif (
+                    previous is None
+                    or previous.state is not ArtifactObjectiveState.OPEN
+                    or previous.latest_event_id != payload.previous_objective_event_id
+                    or previous.facts != facts
+                ):
+                    raise ValueError("objective predecessor is foreign, superseded or closed")
+                if any(source not in offered for source in payload.draft_sources):
+                    raise ValueError("objective draft source was not exactly offered")
+                if payload.action is LeadObjectiveAction.CANCEL:
+                    if judgment.payload.kind is LeadOutcomeKind.PROPOSAL or (
+                        previous is not None and payload.draft_sources != previous.draft_sources
+                    ):
+                        raise ValueError("objective cancellation cannot change its selected draft")
+                elif payload.next_step is ArtifactObjectiveNextStep.CLARIFY:
+                    if judgment.payload.kind is not LeadOutcomeKind.QUESTION:
+                        raise ValueError("objective clarification requires its exact question")
+                else:
+                    proposals = [item for item in batch if type(item.payload) is CollaborationProposal]
+                    candidates = [item for item in batch if type(item.payload) is ArtifactReviewCandidatePayload]
+                    if judgment.payload.kind is not LeadOutcomeKind.PROPOSAL or len(proposals) != 1:
+                        raise ValueError("objective work requires one exact consultation disclosure")
+                    if payload.next_step is ArtifactObjectiveNextStep.CONSULT:
+                        if candidates:
+                            raise ValueError("objective consultation cannot bind artifact preparation")
+                    else:
+                        binding = payload.candidate_binding
+                        assert binding is not None
+                        if len(candidates) != 1:
+                            raise ValueError("objective preparation requires one co-batched candidate")
+                        candidate_event = candidates[0]
+                        candidate_payload = candidate_event.payload
+                        candidate = candidate_payload.candidate
+                        paths = {
+                            path
+                            for operation in candidate.change_set.operations
+                            for path in (
+                                (operation.source_path, operation.destination_path)
+                                if type(operation) is ArtifactRenameOperation else (operation.path,)
+                            )
+                        }
+                        if (
+                            candidate_event.event_id != binding.candidate_event_id
+                            or candidate_event.sequence >= event.sequence
+                            or candidate_event.step_id != event.step_id
+                            or candidate_event.turn_id != event.turn_id
+                            or candidate_payload.lead_judgment_event_id != judgment.event_id
+                            or candidate.candidate_id != binding.candidate_id
+                            or candidate.candidate_revision != binding.candidate_revision
+                            or candidate.candidate_digest != binding.candidate_digest
+                            or paths != set(facts.target_paths)
+                        ):
+                            raise ValueError("objective candidate binding or exact target scope drifted")
+                objectives[facts.objective_id] = ArtifactObjective(
+                    facts=facts, latest_event_id=event.event_id,
+                    state=(ArtifactObjectiveState.CANCELLED if payload.action is LeadObjectiveAction.CANCEL else ArtifactObjectiveState.OPEN),
+                    next_step=payload.next_step, draft_sources=payload.draft_sources,
+                    candidate_binding=payload.candidate_binding,
+                )
+            elif type(payload) is ArtifactProposalStatePayload and payload.state in {
+                ArtifactProposalState.SUPERSEDED, ArtifactProposalState.STALE,
+                ArtifactProposalState.REJECTED, ArtifactProposalState.FAILED,
+                ArtifactProposalState.REVISION_REQUIRED, ArtifactProposalState.RECOVERY_REQUIRED,
+            }:
+                invalid_candidates.add((payload.candidate_id, payload.candidate_revision, payload.candidate_digest))
+            elif type(payload) is ArtifactApplicationRequestPayload:
+                applications[payload.application_request.application_id] = payload
+            elif type(payload) is ArtifactApplicationResultPayload and payload.outcome in {
+                ArtifactApplicationOutcomeKind.APPLIED, ArtifactApplicationOutcomeKind.UNCHANGED,
+            }:
+                request = applications.get(payload.application_id)
+                if request is None or payload.result is None:
+                    raise ValueError("objective Apply result lacks its validated boundary")
+                candidate = request.reviewed_proposal.candidate
+                key = (candidate.candidate_id, candidate.candidate_revision, candidate.candidate_digest)
+                for objective_id, objective in tuple(objectives.items()):
+                    binding = objective.candidate_binding
+                    bound_event = None if binding is None else by_id[binding.candidate_event_id]
+                    bound_candidate = None if bound_event is None else bound_event.payload
+                    if (
+                        objective.state is ArtifactObjectiveState.OPEN
+                        and binding is not None and key not in invalid_candidates
+                        and key == (binding.candidate_id, binding.candidate_revision, binding.candidate_digest)
+                        and bound_event is not None
+                        and type(bound_candidate) is ArtifactReviewCandidatePayload
+                        and bound_candidate.candidate == candidate
+                        and bound_event.step_id == request.reviewed_proposal.step_id
+                        and bound_candidate.lead_judgment_event_id
+                        == request.reviewed_proposal.lead_judgment_event_id
+                        and bound_candidate.consultation_proposal_id
+                        == request.reviewed_proposal.consultation_proposal_id
+                        and bound_candidate.consultation_proposal_revision
+                        == request.reviewed_proposal.consultation_proposal_revision
+                        and bound_candidate.consultation_proposal_digest
+                        == request.reviewed_proposal.consultation_proposal_digest
+                    ):
+                        objectives[objective_id] = replace(
+                            objective, state=ArtifactObjectiveState.SATISFIED,
+                            satisfied_by_event_id=event.event_id,
+                        )
+            text = None
+            if type(payload) is CollaborationLeadJudgmentPayload and (
+                payload.evidence.scope is LeadOutcomeScope.STORY_SPECIFIC
+                and payload.kind in {
+                    LeadOutcomeKind.ANSWER, LeadOutcomeKind.QUESTION,
+                    LeadOutcomeKind.CRITIQUE, LeadOutcomeKind.RECOMMENDATION,
+                }
+            ):
+                text = payload.message
+            elif type(payload) is CollaborationLeadSynthesisPayload:
+                text = payload.message
+            if text is not None:
+                sources[event.event_id] = ArtifactDraftSource(
+                    event.conversation_id, event.event_id,
+                    "sha256:" + hashlib.sha256(text.encode("utf-8")).hexdigest(),
+                )
+        offset += len(batch)
+    return tuple(objectives.values()), tuple(sources.values())
+
+
+def _artifact_operation_next_action(
+    tail: CollaborationEventV2,
+    application_request: ArtifactApplicationRequestPayload | None,
+    application_result: ArtifactApplicationResultPayload | None,
+    commit_request: StoryCommitRequestPayload | None,
+    commit_result: StoryCommitResultPayload | None,
+) -> CollaborationNextAction | None:
+    if (
+        application_result is not None
+        and application_result.outcome is ArtifactApplicationOutcomeKind.RECOVERY_REQUIRED
+    ) or (
+        commit_result is not None
+        and commit_result.outcome is StoryCommitOutcomeKind.RECOVERY_REQUIRED
+    ):
+        return CollaborationNextAction.REPAIR_AUTHORITATIVE_HISTORY
+    if (
+        application_result is not None
+        and application_result.outcome is ArtifactApplicationOutcomeKind.OUTCOME_UNKNOWN
+    ) or (
+        commit_result is not None
+        and commit_result.outcome is StoryCommitOutcomeKind.OUTCOME_UNKNOWN
+    ):
+        return CollaborationNextAction.INSPECT_AND_RESOLVE_OUTCOME
+    if commit_request is not None and commit_result is None:
+        return (
+            CollaborationNextAction.SUBMIT_COMMIT_DECISION
+            if type(tail.payload) is StoryCommitRequestPayload and tail.payload == commit_request
+            else CollaborationNextAction.INSPECT_AND_RESOLVE_OUTCOME
+        )
+    if application_request is not None and application_result is None:
+        return (
+            CollaborationNextAction.SUBMIT_APPLICATION_DECISION
+            if type(tail.payload) is ArtifactApplicationRequestPayload and tail.payload == application_request
+            else CollaborationNextAction.INSPECT_AND_RESOLVE_OUTCOME
+        )
+    return None
+
+
+def _project_artifact_operation_history(
+    events: tuple[CollaborationEventV2, ...],
+) -> tuple[
+    ArtifactApplicationRequestPayload | None,
+    ArtifactApplicationResultPayload | None,
+    StoryCommitRequestPayload | None,
+    StoryCommitResultPayload | None,
+]:
+    """Replay every exact Apply/Commit cycle and retain only the current pair."""
+
+    reviewed: dict[str, ArtifactReviewedProposal] = {}
     request: ArtifactApplicationRequestPayload | None = None
     request_event: CollaborationEventV2 | None = None
     decision: ArtifactApplicationDecisionPayload | None = None
     decision_event: CollaborationEventV2 | None = None
     result: ArtifactApplicationResultPayload | None = None
+    result_event: CollaborationEventV2 | None = None
+    commit_request: StoryCommitRequestPayload | None = None
+    commit_request_event: CollaborationEventV2 | None = None
+    commit_decision: StoryCommitDecisionPayload | None = None
+    commit_decision_event: CollaborationEventV2 | None = None
+    commit_result: StoryCommitResultPayload | None = None
+    request_ids: set[str] = set()
+    application_ids: set[str] = set()
+    application_terminals = {
+        ArtifactApplicationOutcomeKind.APPLIED,
+        ArtifactApplicationOutcomeKind.UNCHANGED,
+        ArtifactApplicationOutcomeKind.REJECTED,
+        ArtifactApplicationOutcomeKind.SUPERSEDED,
+        ArtifactApplicationOutcomeKind.STALE,
+    }
+    commit_terminals = {
+        StoryCommitOutcomeKind.COMMITTED, StoryCommitOutcomeKind.REJECTED,
+        StoryCommitOutcomeKind.SUPERSEDED, StoryCommitOutcomeKind.STALE,
+    }
     for event in events:
         payload = event.payload
-        if type(payload) is ArtifactApplicationRequestPayload:
-            proposal = reviewed.get(event.step_id)
+        if type(payload) is ArtifactReviewedProposal:
+            reviewed[event.step_id] = payload
+        elif type(payload) is ArtifactApplicationRequestPayload:
             if (
-                request is not None
-                or proposal != payload.reviewed_proposal
-                or payload.base_tail_sequence
-                != event.sequence - event.batch_ordinal - 1
+                (request is not None and (
+                    result is None or result.outcome not in application_terminals
+                ))
+                or (commit_request is not None and (
+                    commit_result is None or commit_result.outcome not in commit_terminals
+                ))
+                or reviewed.get(event.step_id) != payload.reviewed_proposal
+                or payload.base_tail_sequence != event.sequence - event.batch_ordinal - 1
+                or payload.confirmation_request_id in request_ids
+                or payload.application_request.application_id in application_ids
             ):
-                raise ValueError("artifact application request is not current review tail")
-            request = payload
-            request_event = event
+                raise ValueError("artifact application request is not an eligible exact review tail")
+            request_ids.add(payload.confirmation_request_id)
+            application_ids.add(payload.application_request.application_id)
+            request, request_event = payload, event
+            decision = decision_event = result = result_event = None
+            # Only a known terminal cycle can be retired by the next Apply request.
+            commit_request = commit_request_event = None
+            commit_decision = commit_decision_event = commit_result = None
         elif type(payload) is ArtifactApplicationDecisionPayload:
             if (
-                request is None
-                or request_event is None
-                or decision is not None
+                request is None or request_event is None or decision is not None
                 or event.sequence != request_event.sequence + 1
+                or event.step_id != request_event.step_id
                 or payload.confirmation_request_event_id != request_event.event_id
                 or payload.confirmation_request_id != request.confirmation_request_id
-                or payload.reviewed_proposal_id
-                != request.reviewed_proposal.proposal_id
-                or payload.reviewed_proposal_revision
-                != request.reviewed_proposal.proposal_revision
-                or payload.reviewed_proposal_digest
-                != request.reviewed_proposal.proposal_digest
+                or payload.reviewed_proposal_id != request.reviewed_proposal.proposal_id
+                or payload.reviewed_proposal_revision != request.reviewed_proposal.proposal_revision
+                or payload.reviewed_proposal_digest != request.reviewed_proposal.proposal_digest
                 or payload.candidate_id != request.application_request.candidate_id
-                or payload.candidate_revision
-                != request.application_request.candidate_revision
-                or payload.candidate_digest
-                != request.application_request.candidate_digest
+                or payload.candidate_revision != request.application_request.candidate_revision
+                or payload.candidate_digest != request.application_request.candidate_digest
                 or payload.application_id != request.application_request.application_id
-                or payload.application_request_digest
-                != request.application_request_digest
+                or payload.application_request_digest != request.application_request_digest
             ):
                 raise ValueError("artifact application decision does not match request")
-            decision = payload
-            decision_event = event
+            decision, decision_event = payload, event
         elif type(payload) is ArtifactApplicationResultPayload:
             if (
-                request is None
-                or decision is None
-                or decision_event is None
+                request is None or decision is None or decision_event is None
                 or result is not None
                 or event.sequence != decision_event.sequence + 1
+                or event.step_id != decision_event.step_id
                 or payload.decision_event_id != decision_event.event_id
                 or payload.confirmation_request_id != request.confirmation_request_id
-                or payload.reviewed_proposal_id
-                != request.reviewed_proposal.proposal_id
-                or payload.reviewed_proposal_digest
-                != request.reviewed_proposal.proposal_digest
+                or payload.reviewed_proposal_id != request.reviewed_proposal.proposal_id
+                or payload.reviewed_proposal_digest != request.reviewed_proposal.proposal_digest
                 or payload.application_id != request.application_request.application_id
-                or payload.application_request_digest
-                != request.application_request_digest
-                or (
-                    payload.result is not None
-                    and payload.result.provenance
-                    != request.application_request.provenance
-                )
-                or (
-                    decision.decision is ArtifactApplicationDecisionKind.REJECT
-                    and payload.outcome
-                    is not ArtifactApplicationOutcomeKind.REJECTED
-                )
-                or (
-                    decision.decision is ArtifactApplicationDecisionKind.REVISE
-                    and payload.outcome
-                    is not ArtifactApplicationOutcomeKind.SUPERSEDED
-                )
-                or (
-                    decision.decision is ArtifactApplicationDecisionKind.APPLY
-                    and payload.outcome
-                    in {
+                or payload.application_request_digest != request.application_request_digest
+                or (payload.result is not None and (
+                    payload.result.provenance != request.application_request.provenance
+                ))
+                or (decision.decision is ArtifactApplicationDecisionKind.REJECT
+                    and payload.outcome is not ArtifactApplicationOutcomeKind.REJECTED)
+                or (decision.decision is ArtifactApplicationDecisionKind.REVISE
+                    and payload.outcome is not ArtifactApplicationOutcomeKind.SUPERSEDED)
+                or (decision.decision is ArtifactApplicationDecisionKind.APPLY
+                    and payload.outcome in {
                         ArtifactApplicationOutcomeKind.REJECTED,
                         ArtifactApplicationOutcomeKind.SUPERSEDED,
-                    }
-                )
+                    })
             ):
                 raise ValueError("artifact application result does not match decision")
-            result = payload
-    return request, result
-
-
-def _project_story_commit_history(
-    events: tuple[CollaborationEventV2, ...],
-    application_result: ArtifactApplicationResultPayload | None,
-) -> tuple[StoryCommitRequestPayload | None, StoryCommitResultPayload | None]:
-    request: StoryCommitRequestPayload | None = None
-    request_event: CollaborationEventV2 | None = None
-    decision: StoryCommitDecisionPayload | None = None
-    decision_event: CollaborationEventV2 | None = None
-    result: StoryCommitResultPayload | None = None
-    by_id = {event.event_id: event for event in events}
-    for event in events:
-        payload = event.payload
-        if type(payload) is StoryCommitRequestPayload:
-            source = by_id.get(payload.application_result_event_id)
+            result, result_event = payload, event
+        elif type(payload) is StoryCommitRequestPayload:
             if (
-                request is not None
-                or application_result is None
-                or source is None
-                or source.payload != application_result
-                or source.sequence + 1 != event.sequence
-                or application_result.result is None
-                or application_result.outcome not in {
+                commit_request is not None or result is None or result_event is None
+                or result_event.sequence + 1 != event.sequence
+                or event.step_id != result_event.step_id
+                or payload.application_result_event_id != result_event.event_id
+                or result.result is None
+                or result.outcome not in {
                     ArtifactApplicationOutcomeKind.APPLIED,
                     ArtifactApplicationOutcomeKind.UNCHANGED,
                 }
-                or payload.candidate.application_id != application_result.application_id
-                or payload.candidate.proposal_id != application_result.reviewed_proposal_id
-                or payload.candidate.correlation_id != application_result.application_request_digest
+                or payload.candidate.application_id != result.application_id
+                or payload.candidate.proposal_id != result.reviewed_proposal_id
+                or payload.candidate.correlation_id != result.application_request_digest
+                or payload.confirmation_request_id in request_ids
             ):
-                raise ValueError("story commit request does not follow application")
-            request, request_event = payload, event
+                raise ValueError("story commit request does not follow its exact application")
+            request_ids.add(payload.confirmation_request_id)
+            commit_request, commit_request_event = payload, event
         elif type(payload) is StoryCommitDecisionPayload:
-            if request is None or request_event is None or decision is not None or event.sequence != request_event.sequence + 1 or payload.confirmation_request_event_id != request_event.event_id or payload.confirmation_request_id != request.confirmation_request_id or payload.application_result_event_id != request.application_result_event_id or payload.candidate_id != request.candidate.candidate_id or payload.request_digest != request.request_digest:
+            if (
+                commit_request is None or commit_request_event is None
+                or commit_decision is not None
+                or event.sequence != commit_request_event.sequence + 1
+                or event.step_id != commit_request_event.step_id
+                or payload.confirmation_request_event_id != commit_request_event.event_id
+                or payload.confirmation_request_id != commit_request.confirmation_request_id
+                or payload.application_result_event_id != commit_request.application_result_event_id
+                or payload.candidate_id != commit_request.candidate.candidate_id
+                or payload.request_digest != commit_request.request_digest
+            ):
                 raise ValueError("story commit decision does not match request")
-            decision, decision_event = payload, event
+            commit_decision, commit_decision_event = payload, event
         elif type(payload) is StoryCommitResultPayload:
-            if request is None or decision is None or decision_event is None or result is not None or event.sequence != decision_event.sequence + 1 or payload.decision_event_id != decision_event.event_id or payload.confirmation_request_id != request.confirmation_request_id or payload.candidate_id != request.candidate.candidate_id or payload.request_digest != request.request_digest or (decision.decision is StoryCommitDecision.COMMIT and payload.outcome in {StoryCommitOutcomeKind.REJECTED, StoryCommitOutcomeKind.SUPERSEDED}) or (decision.decision is StoryCommitDecision.REJECT and payload.outcome is not StoryCommitOutcomeKind.REJECTED) or (decision.decision is StoryCommitDecision.REVISE and payload.outcome is not StoryCommitOutcomeKind.SUPERSEDED):
+            if (
+                commit_request is None or commit_decision is None
+                or commit_decision_event is None or commit_result is not None
+                or event.sequence != commit_decision_event.sequence + 1
+                or event.step_id != commit_decision_event.step_id
+                or payload.decision_event_id != commit_decision_event.event_id
+                or payload.confirmation_request_id != commit_request.confirmation_request_id
+                or payload.candidate_id != commit_request.candidate.candidate_id
+                or payload.request_digest != commit_request.request_digest
+                or (commit_decision.decision is StoryCommitDecision.COMMIT
+                    and payload.outcome in {
+                        StoryCommitOutcomeKind.REJECTED, StoryCommitOutcomeKind.SUPERSEDED,
+                    })
+                or (commit_decision.decision is StoryCommitDecision.REJECT
+                    and payload.outcome is not StoryCommitOutcomeKind.REJECTED)
+                or (commit_decision.decision is StoryCommitDecision.REVISE
+                    and payload.outcome is not StoryCommitOutcomeKind.SUPERSEDED)
+            ):
                 raise ValueError("story commit result does not match decision")
-            result = payload
-    return request, result
+            commit_result = payload
+    return request, result, commit_request, commit_result
 
 
 def _validate_collaboration_execution_result(
@@ -3486,6 +3827,21 @@ def _collaboration_readable_fields(
 ) -> tuple[CollaborationReadableField, ...]:
     """Project the closed searchable field set for one typed public payload."""
 
+    if type(payload) is ArtifactObjectivePayload:
+        return (
+            CollaborationReadableField(
+                key=CollaborationReadableFieldKey.ARTIFACT_OBJECTIVE_REQUEST,
+                text=payload.facts.request,
+            ),
+            CollaborationReadableField(
+                key=CollaborationReadableFieldKey.ARTIFACT_OBJECTIVE_ACTION,
+                text=payload.action.value,
+            ),
+            *((CollaborationReadableField(
+                key=CollaborationReadableFieldKey.ARTIFACT_OBJECTIVE_NEXT_STEP,
+                text=payload.next_step.value,
+            ),) if payload.next_step is not None else ()),
+        )
     if type(payload) is CollaborationMessagePayload:
         return (
             CollaborationReadableField(
@@ -3755,6 +4111,8 @@ def _validate_identifier(value: str, *, label: str) -> str:
 
 
 __all__ = [
+    "ArtifactObjective",
+    "artifact_objective_context",
     "COLLABORATION_READABLE_CONTEXT_POLICY",
     "CONVERSATION_CONTEXT_POLICY",
     "CollaborationContextBootstrap",

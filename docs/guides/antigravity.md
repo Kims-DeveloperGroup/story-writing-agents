@@ -385,7 +385,8 @@ object supplied on argv, whose canonical bytes must match exactly.
         "kind": "answer",
         "message": "<sanitized reply>",
         "artifact_intent": null,
-        "proposal": null
+        "proposal": null,
+        "objective_intent": null
       },
       "used_handles": []
     }
@@ -395,7 +396,10 @@ object supplied on argv, whose canonical bytes must match exactly.
 }
 ```
 
-The example shows a Lead ANSWER; other calls require their selected result type.
+The example shows all eight fields of a `lead-outcome-v2` Lead ANSWER; other
+calls require their selected result type. `objective_intent` is null here;
+contextual authoring can instead select `start`, `continue`, or `cancel`
+under the [runtime contract](../reference/runtime-api.md#contextual-authoring-objectives).
 Story rejects invalid UTF-8, duplicate fields, non-finite numbers, additional
 JSON objects, and trailing non-whitespace data. It requires a safe
 `conversation_id` matching the retained ID on resume, object
@@ -405,8 +409,15 @@ completed-error recovery below. It never falls back to a string-valued
 `response` field.
 Usage comes only from the terminal object's recognized exact nonnegative
 integer counters; absent or invalid counters remain unavailable. The complete
-closed SEARCH, READ, and seven-field Lead ANSWER branches are shown in
+closed SEARCH, READ, and eight-field Lead ANSWER branches are shown in
 [What providers receive](lead-agent.md#what-providers-receive).
+
+Retained workspace Lead policies receive the runtime v2 overlay without being
+rewritten. Specialist and synthesis results keep their own schemas. A known
+read-only Lead failure after reference reads can expose `retry_lead_turn` once
+the exact attempt and reference accounting close. Its authoring objective
+stays open; explicit new input uses fresh evidence. Uncertain cleanup remains
+recovery-gated, and neither adapter nor runtime automatically replays the turn.
 
 ### Recover a completed native error
 

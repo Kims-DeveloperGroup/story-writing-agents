@@ -10,6 +10,8 @@ from .catalog import (
     normalize_conversation_subject,
 )
 from .context import (
+    ArtifactObjective,
+    artifact_objective_context,
     COLLABORATION_READABLE_CONTEXT_POLICY,
     CONVERSATION_CONTEXT_POLICY,
     CollaborationContextBootstrap,
@@ -40,6 +42,14 @@ from .context import (
     validate_conversation_context_window,
 )
 from .events import (
+    ArtifactDraftSource,
+    ArtifactObjectiveCandidateBinding,
+    ArtifactObjectiveFacts,
+    ArtifactObjectiveNextStep,
+    ArtifactObjectivePayload,
+    ArtifactObjectiveState,
+    LeadObjectiveAction,
+    LeadObjectiveIntent,
     ARTIFACT_REVIEW_SCHEMA_VERSION,
     COLLABORATION_EVENT_SCHEMA_VERSION,
     COLLABORATION_PHYSICAL_CALL_LIMIT,
@@ -143,6 +153,15 @@ from ..git.story_commit_contracts import StoryCommitDecision
 
 
 _PUBLIC_TYPES = (
+    ArtifactObjective,
+    ArtifactDraftSource,
+    ArtifactObjectiveCandidateBinding,
+    ArtifactObjectiveFacts,
+    ArtifactObjectiveNextStep,
+    ArtifactObjectivePayload,
+    ArtifactObjectiveState,
+    LeadObjectiveAction,
+    LeadObjectiveIntent,
     ArtifactApplicationDecision,
     ArtifactApplicationDecisionKind,
     ArtifactApplicationDecisionPayload,
@@ -262,6 +281,7 @@ encode_collaboration_event.__module__ = __name__
 encode_collaboration_event_draft.__module__ = __name__
 encode_collaboration_proposal.__module__ = __name__
 project_collaboration_history.__module__ = __name__
+artifact_objective_context.__module__ = __name__
 project_collaboration_readable_history.__module__ = __name__
 select_bounded_collaboration_context.__module__ = __name__
 validate_collaboration_candidate_batch.__module__ = __name__
@@ -270,6 +290,16 @@ del _public_type
 
 
 __all__ = [
+    "ArtifactObjective",
+    "ArtifactDraftSource",
+    "ArtifactObjectiveCandidateBinding",
+    "ArtifactObjectiveFacts",
+    "ArtifactObjectiveNextStep",
+    "ArtifactObjectivePayload",
+    "ArtifactObjectiveState",
+    "LeadObjectiveAction",
+    "LeadObjectiveIntent",
+    "artifact_objective_context",
     "ARTIFACT_REVIEW_SCHEMA_VERSION",
     "COLLABORATION_EVENT_SCHEMA_VERSION",
     "COLLABORATION_PHYSICAL_CALL_LIMIT",

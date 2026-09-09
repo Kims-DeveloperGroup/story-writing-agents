@@ -100,6 +100,7 @@ def _artifact_outcome(
     evidence_ids: object = None,
     additional_review_domains: tuple[str, ...] = (),
     message: str = "I prepared an exact candidate for specialist review.",
+    objective_intent: object = None,
 ):
     def respond(call, _provider):
         material = _workflow_material(call.payload)
@@ -126,6 +127,10 @@ def _artifact_outcome(
                 "message": message,
                 "proposal": None,
                 "scope": "story_specific",
+                "objective_intent": (
+                    objective_intent(call, material)
+                    if callable(objective_intent) else objective_intent
+                ),
             },
         )
 
@@ -937,6 +942,7 @@ class ArtifactProposalOrchestrationTests(LeadOrchestrationTestCase):
                     "message": "The read context supports an exact candidate.",
                     "proposal": None,
                     "scope": "story_specific",
+                "objective_intent": None,
                 },
                 used_handles=provider.used_handles,
             )
@@ -1035,6 +1041,103 @@ class ArtifactProposalOrchestrationTests(LeadOrchestrationTestCase):
             ArtifactReviewFailurePayload,
         )
         self.assertEqual(artifact_failure, ())
+
+
+    async def test_empty_core_status_evidence_requires_selected_fresh_zero_byte_source(self):
+        import hashlib
+        from story_writing_agents import BackendProtocolError
+        from dataclasses import replace
+        from story_writing_agents import conversations as c
+        from tests import test_artifact_objectives as objectives
+        case = objectives.ObjectiveCase()
+        case.setUp()
+        # Adopt synchronous cleanup from this setup-only async fixture.
+        for cleanup, args, kwargs in case._cleanups:
+            self.addCleanup(cleanup, *args, **kwargs)
+        case._cleanups.clear()
+        conversation_id, turn = await case.start()
+        evidence = turn.evidence
+        receipt = evidence.receipts[0]
+        empty_digest = "sha256:" + hashlib.sha256(b"").hexdigest()
+        self.assertEqual(receipt.locator, _OUTLINE)
+        self.assertEqual(receipt.content_digest, empty_digest)
+        self.assertNotEqual(receipt.revision_digest, receipt.content_digest)
+        def translated(selected):
+            return case.runtime._artifact_intent_evidence(selected, session_id=case.session_id, conversation_id=conversation_id)
+        valid = translated(evidence)
+        self.assertEqual(len(valid), 1)
+        self.assertEqual((valid[0].source_digest, valid[0].boundary_digest), (empty_digest, empty_digest))
+        self.assertEqual(translated(replace(evidence, receipts=())), ())
+        for changed in (
+            replace(receipt, source_state=c.CollaborationInputState.ABSENT, revision_digest=None, content_digest=None),
+            replace(receipt, utf8_bytes=1, content_digest=objectives.digest("x")),
+            replace(receipt, content_digest=objectives.digest("wrong")),
+        ):
+            with self.subTest(receipt=changed):
+                self.assertEqual(translated(replace(evidence, receipts=(changed,))), ())
+        for changed in (replace(receipt, source_id="foreign_source"), replace(receipt, revision_digest=objectives.digest("wrong metadata")), replace(receipt, evidence_id="status_99")):
+            with self.subTest(receipt=changed), self.assertRaises(BackendProtocolError):
+                translated(replace(evidence, receipts=(changed,)))
+        path = case.workspace.path(_OUTLINE)
+        replacement = path.with_suffix(".replacement")
+        replacement.write_bytes(b"")
+        replacement.replace(path)
+        self.assertEqual(path.read_bytes(), b"")
+        with self.assertRaises(BackendProtocolError):
+            translated(evidence)
+        # Repeating an artifact path or attaching a reference is unnecessary at A1.
+        prepared = await case.prepare(conversation_id)
+        self.assertEqual(prepared.artifact_proposal.candidate.candidate.change_set.operations[0].operation_kind.value, "replace")
+
+    async def test_read_evidence_translates_whole_content_and_range_boundary_digests(self):
+        from dataclasses import replace
+        from story_writing_agents import conversations as c
+        from story_writing_agents.agent_context.sources import WritingArtifactSourceAdapter
+        from story_writing_agents.agent_context.manifest import ContextSubjectKind
+        from story_writing_agents.orchestrator import CONTEXT_SOURCE_POLICY
+        from tests import test_artifact_objectives as objectives
+        text = "첫째 beat\r\nneedle 민\r\n마지막 beat\n"
+        self.workspace.path(_OUTLINE).write_bytes(text.encode("utf-8"))
+        conversation_id = self.conversation("Genuine READ evidence")
+        def search(call, _provider):
+            return json.dumps({"correlation": call.payload["c"], "action": {"kind": "search", "path_prefix": "core_documents/", "queries": [{"text": "needle", "source_kinds": ["writing_artifact"]}]}})
+        def answer(call, provider):
+            evidence_id = call.payload["o"][1][0][5]
+            return _provider_envelope(call, {"scope": "story_specific", "evidence_status": "verified", "evidence_ids": [evidence_id], "kind": "answer", "message": "The selected line is visible.", "proposal": None, "artifact_intent": None, "objective_intent": None}, used_handles=provider.used_handles)
+        self.backend.enqueue(search, _read_history_hit, answer)
+        result = await self.runtime.lead_turn(self.session_id, conversation_id, "Search and read the needle line before deciding.")
+        self.assertIs(result.kind, c.LeadOutcomeKind.ANSWER)
+        receipt = result.evidence.receipts[0]
+        self.assertIs(receipt.acquisition, c.CollaborationEvidenceAcquisition.READ)
+        scope = self.runtime._agent_context_service.scope(self.session_id, ContextSubjectKind.CONVERSATION, conversation_id, LEAD_ORCHESTRATOR)
+        snapshot = WritingArtifactSourceAdapter(self.runtime.artifacts, scope).capture(_OUTLINE, CONTEXT_SOURCE_POLICY)
+        whole_sha = snapshot.descriptor.content_digest
+        self.assertEqual(whole_sha, objectives.digest(text))
+        self.assertNotEqual(snapshot.descriptor.revision, whole_sha)
+        # Whole READ is another legal READ boundary over the same owner-captured source.
+        whole = replace(receipt, boundary_kind="whole", boundary_start=None, boundary_end=None, start_line=None, end_line=None, content_digest=whole_sha, utf8_bytes=len(text.encode("utf-8")))
+        ranged = replace(receipt, boundary_kind="artifact_lines", boundary_start=2, boundary_end=2, start_line=2, end_line=2, content_digest=objectives.digest("needle 민\r\n"), utf8_bytes=len("needle 민\r\n".encode("utf-8")))
+        for selected in (whole, ranged):
+            with self.subTest(boundary=selected.boundary_kind):
+                evidence = replace(result.evidence, receipts=(selected,))
+                converted, = self.runtime._artifact_intent_evidence(evidence, session_id=self.session_id, conversation_id=conversation_id)
+                self.assertEqual(converted.source_digest, whole_sha)
+                self.assertEqual(converted.boundary_digest, selected.content_digest)
+                self.assertEqual((converted.start_line, converted.end_line), (selected.start_line, selected.end_line))
+                from story_writing_agents.artifact_proposals import ArtifactProposalIntent, ArtifactReplaceIntent, ArtifactPatchIntent
+                intent = ArtifactReplaceIntent(selected.evidence_id, "Whole replacement.\n") if selected.boundary_kind == "whole" else ArtifactPatchIntent(selected.evidence_id, "Revised 민 line.\r\n")
+                candidate = self.runtime._construct_artifact_review_candidate(session_id=self.session_id, conversation_id=conversation_id, turn_id=result.turn_id, step_id=result.step_id, intent=ArtifactProposalIntent((intent,)), evidence=evidence)
+                self.assertEqual("sha256:" + candidate.change_set.operations[0].base_digest, whole_sha)
+                for invalid in (replace(selected, revision_digest=objectives.digest("wrong metadata")), replace(selected, content_digest=objectives.digest("wrong bytes"))):
+                    with self.assertRaises(ValueError):
+                        self.runtime._artifact_intent_evidence(replace(evidence, receipts=(invalid,)), session_id=self.session_id, conversation_id=conversation_id)
+        # Byte-identical physical replacement is stale despite equal whole/boundary hashes.
+        path = self.workspace.path(_OUTLINE)
+        replacement = path.with_suffix(".replacement")
+        replacement.write_bytes(path.read_bytes())
+        replacement.replace(path)
+        with self.assertRaises(ValueError):
+            self.runtime._artifact_intent_evidence(result.evidence, session_id=self.session_id, conversation_id=conversation_id)
 
 
 if __name__ == "__main__":

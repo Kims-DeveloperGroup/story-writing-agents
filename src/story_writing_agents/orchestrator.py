@@ -123,6 +123,14 @@ from .conversation_rag_runtime import ConversationRagRuntimeService
 from .conversation_storage.composition import compose_filesystem_conversation_storage
 from .conversation_storage.contracts import ConversationStorageServices
 from .conversations import (
+    ArtifactObjectiveCandidateBinding,
+    ArtifactObjectiveFacts,
+    ArtifactObjectiveNextStep,
+    ArtifactObjectivePayload,
+    ArtifactObjectiveState,
+    LeadObjectiveAction,
+    LeadObjectiveIntent,
+    artifact_objective_context,
     COLLABORATION_EVENT_SCHEMA_VERSION,
     COLLABORATION_PHYSICAL_CALL_LIMIT,
     COLLABORATION_ROUND_LIMIT,
@@ -246,6 +254,7 @@ from .writing_artifacts import (
     MAX_REFERENCE_TOTAL_BYTES,
     MAX_REFERENCE_UTF8_BYTES,
     ArtifactChangeSetError,
+    ArtifactRenameOperation,
     ArtifactReviewDomain,
     ArtifactReviewReason,
     ArtifactApplicationError,
@@ -253,7 +262,11 @@ from .writing_artifacts import (
     build_artifact_application_request,
     serialize_artifact_application_request,
     validate_artifact_relationships,
+    ReferenceAuthorizationErrorCode,
+    ReferenceInvocationState,
+    ReferenceOperationFailure,
     ReferenceOperationHistory,
+    ReferenceOperationState,
     parse_artifact_references,
     project_artifact_change_set,
 )
@@ -289,11 +302,41 @@ _LEAD_CORRECTABLE_RESPONSE_REJECTION_CODES = frozenset(
 )
 _LEAD_RESPONSE_CORRECTION_INSTRUCTION = (
     "Return ANSWER now without SEARCH or READ. Encode exactly one complete "
-    "lead_front_channel object in action.result with all seven fields: scope, "
-    "evidence_status, evidence_ids, kind, message, artifact_intent, and proposal. "
+    "lead_front_channel lead-outcome-v2 object in action.result with all eight "
+    "fields: scope, evidence_status, evidence_ids, kind, message, artifact_intent, "
+    "proposal, and objective_intent. This supersedes older retained field lists. "
     "Follow the original answer_contract and evidence rules exactly. For answer, "
     "question, critique, or recommendation, set artifact_intent and proposal "
-    "explicitly to null."
+    "explicitly to null. Preserve a selected objective PREPARE as an exact "
+    "artifact proposal; do not downgrade it into advice or claim completion."
+)
+_LEAD_OBJECTIVE_INSTRUCTION = (
+    "Runtime contract overlay: lead-outcome-v2 supersedes every older retained "
+    "lead_front_channel field list, including seven-field instructions in "
+    "workspace prompts. Return exactly the eight named fields with explicit "
+    "objective_intent (null when no objective transition is selected). Interpret "
+    "the user's instruction contextually with current artifact objectives and "
+    "offered draft sources, including abbreviated Korean or English approval "
+    "after a visible draft. Selecting PREPARE creates an exact artifact proposal "
+    "for separately confirmed review, never Apply or Commit authority. "
+    "START requires request and nonempty exact canonical target_paths; if target "
+    "scope is unresolved ask a focused question with objective_intent=null first. "
+    "CONTINUE uses an OPEN objective ID from this origin conversation. Both use "
+    "next_step clarify (question only), consult (ordinary consultation proposal), "
+    "or prepare (kind=proposal, artifact_intent populated, proposal=null). "
+    "draft_source_event_ids must name this conversation's offered exact visible "
+    "sources; continue with an empty list retains the previous selected sources. "
+    "CANCEL explicitly names the objective and proposes no work. Null, prose, "
+    "consultation/review success and step rejection never complete or cancel an "
+    "objective. Only runtime's exact successful structured Apply result satisfies "
+    "it. A selected exact status receipt for a currently empty canonical core "
+    "document can support replace after runtime revalidation. Nonempty artifacts "
+    "require attached-reference or READ evidence. An existing empty core document "
+    "requires replace, not create. An empty status proves absence of content, not "
+    "complete story knowledge; obey the closed evidence matrix. If required "
+    "evidence is unavailable select a focused clarification before PREPARE. "
+    "Once PREPARE is selected, "
+    "return the exact candidate or the established validation failure, not advice."
 )
 _LEAD_PROPOSAL_USER_IMPACT = (
     "Specialist advice and durable collaboration records only. "
@@ -459,7 +502,31 @@ def _lead_result_properties(
         "message": {"type": "string"},
         "artifact_intent": artifact_intent,
         "proposal": proposal,
+        "objective_intent": _objective_intent_result_schema(),
     }
+
+
+def _objective_intent_result_schema() -> dict[str, object]:
+    steps = {"enum": [item.value for item in ArtifactObjectiveNextStep], "type": "string"}
+    sources = _string_array_result_schema()
+    return {"anyOf": [
+        {"type": "null"},
+        _closed_result_object({
+            "action": {"enum": ["start"], "type": "string"},
+            "request": {"type": "string"},
+            "target_paths": _string_array_result_schema(min_items=1),
+            "next_step": steps, "draft_source_event_ids": sources,
+        }),
+        _closed_result_object({
+            "action": {"enum": ["continue"], "type": "string"},
+            "objective_id": {"type": "string"},
+            "next_step": steps, "draft_source_event_ids": sources,
+        }),
+        _closed_result_object({
+            "action": {"enum": ["cancel"], "type": "string"},
+            "objective_id": {"type": "string"},
+        }),
+    ]}
 
 
 def _lead_front_result_contract(
@@ -581,7 +648,7 @@ def _lead_front_result_contract(
         ),
     ]
     return ContextJsonObjectResultContract(
-        "lead-outcome-v1",
+        "lead-outcome-v2",
         {"anyOf": variants},
     )
 
@@ -2355,6 +2422,18 @@ class StoryRuntime:
             projection = project_collaboration_history(events)
             proposal = projection.current_proposal
             if (
+                projection.current_artifact_application_request is not None
+                and projection.next_safe_action in {
+                    CollaborationNextAction.SUBMIT_APPLICATION_DECISION,
+                    CollaborationNextAction.SUBMIT_COMMIT_DECISION,
+                    CollaborationNextAction.INSPECT_AND_RESOLVE_OUTCOME,
+                    CollaborationNextAction.REPAIR_AUTHORITATIVE_HISTORY,
+                }
+            ):
+                raise ValueError(
+                    "lead decision is blocked by an unresolved artifact or Commit boundary"
+                )
+            if (
                 proposal is None
                 or projection.current_state
                 not in {
@@ -3545,6 +3624,13 @@ class StoryRuntime:
         )
         required_unresolved_input_ids = self._required_unresolved_input_ids(replies)
         value = {
+            "artifact_objectives": artifact_objective_context(project_collaboration_history(events)),
+            "objective_instruction": (
+                "This consultation/review synthesis leaves its artifact objective OPEN. "
+                "Use the originating request and selected draft sources when synthesizing. "
+                "State the remaining authoring step when useful; never report objective "
+                "completion unless its runtime state is SATISFIED by exact Apply."
+            ),
             "answer_contract": {
                 "evidence_ids": [
                     item.evidence_id
@@ -5387,6 +5473,11 @@ class StoryRuntime:
                 step_id=projection.current_step_id,
                 turn_id=projection.current_turn_id,
             )
+        operation_result = self._pending_artifact_operation_result(
+            session_id, conversation_id, events, projection,
+        )
+        if operation_result is not None:
+            return operation_result
         state = projection.current_state
         proposal = projection.current_proposal
         if state is CollaborationStepState.CONFIRMED:
@@ -5554,6 +5645,58 @@ class StoryRuntime:
             )
         return None
 
+    def _pending_artifact_operation_result(
+        self,
+        session_id: str,
+        conversation_id: str,
+        events: tuple[CollaborationEvent, ...],
+        projection: CollaborationHistoryProjection,
+    ) -> LeadTurnResult | None:
+        if projection.current_artifact_application_request is None:
+            return None
+        action = projection.next_safe_action
+        if action in {
+            CollaborationNextAction.INSPECT_AND_RESOLVE_OUTCOME,
+            CollaborationNextAction.REPAIR_AUTHORITATIVE_HISTORY,
+        }:
+            return self._blocking_lead_result(
+                session_id, conversation_id,
+                (CollaborationStepState.RECOVERY_REQUIRED
+                 if action is CollaborationNextAction.REPAIR_AUTHORITATIVE_HISTORY
+                 else CollaborationStepState.OUTCOME_UNKNOWN),
+                "An artifact or Commit boundary needs inspection before ordinary "
+                "work can continue. Its existing records will not be replayed.",
+                turn_id=projection.current_turn_id, step_id=projection.current_step_id,
+            )
+        if action is CollaborationNextAction.SUBMIT_COMMIT_DECISION:
+            return LeadTurnResult(
+                session_id, conversation_id, events[-1].turn_id, events[-1].step_id,
+                LeadOutcomeKind.RECOMMENDATION,
+                "The exact local Commit request is still awaiting your structured decision.",
+                None, CollaborationStepState.COMPLETED, None, action,
+                story_commit_request=projection.current_story_commit_request,
+            )
+        if action is CollaborationNextAction.SUBMIT_APPLICATION_DECISION:
+            request = projection.current_artifact_application_request
+            candidate = projection.current_artifact_candidate
+            if candidate is None:
+                return self._blocking_lead_result(
+                    session_id, conversation_id, CollaborationStepState.RECOVERY_REQUIRED,
+                    "The pending Apply request has no exact current candidate.",
+                    turn_id=projection.current_turn_id, step_id=projection.current_step_id,
+                )
+            return LeadTurnResult(
+                session_id, conversation_id, events[-1].turn_id, events[-1].step_id,
+                LeadOutcomeKind.RECOMMENDATION,
+                "The exact artifact Apply request is still awaiting your structured decision.",
+                None, CollaborationStepState.COMPLETED, None, action,
+                artifact_proposal=ArtifactProposalResult(
+                    ArtifactProposalState.REVIEWED, candidate, request.reviewed_proposal,
+                ),
+                artifact_application_request=request,
+            )
+        return None
+
     def _blocking_lead_result(
         self,
         session_id: str,
@@ -5656,6 +5799,10 @@ class StoryRuntime:
             }
             for item in inputs
         ]
+        objective_events = self.conversation_storage_services.event_store.read(
+            session_id, conversation_id,
+        )
+        objective_projection = project_collaboration_history(objective_events)
         definition = self.prompts.build_contextual_definition(
             session_id=session_id,
             agent_id=LEAD_ORCHESTRATOR,
@@ -5711,6 +5858,9 @@ class StoryRuntime:
                 reference_operation
             )
             current_value: dict[str, object] = {
+                "contract_version": "lead-outcome-v2",
+                "runtime_contract_overlay": _LEAD_OBJECTIVE_INSTRUCTION,
+                "artifact_objectives": artifact_objective_context(objective_projection),
                 "answer_contract": {
                     "assignments": {
                         "agent_id": "canonical specialist ID",
@@ -5734,6 +5884,7 @@ class StoryRuntime:
                         "null or provider-neutral create/patch/replace/rename/"
                         "delete operations with optional review domains"
                     ),
+                    "objective_intent": _objective_intent_result_schema(),
                 },
                 "command": reference_operation.provider_text,
                 "identity": {
@@ -5792,15 +5943,24 @@ class StoryRuntime:
             decoded_evidence: CollaborationLeadEvidence | None = None
             decoded_artifact_candidate: ArtifactReviewCandidate | None = None
             declared_artifact_intent = False
+            prepare_selected = False
 
             def validate(
                 answer: str,
                 authorization: ContextAnswerAuthorization,
             ) -> None:
                 nonlocal decoded, decoded_artifact_candidate, decoded_evidence
-                nonlocal declared_artifact_intent
+                nonlocal declared_artifact_intent, prepare_selected
                 declared_artifact_intent = self._declares_artifact_intent(answer)
+                prepare_selected = prepare_selected or self._declares_artifact_intent(
+                    answer, objective_prepare_only=True,
+                )
                 decoded = self._decode_lead_outcome(answer)
+                if prepare_selected and (
+                    decoded.objective_intent is None
+                    or decoded.objective_intent.next_step is not ArtifactObjectiveNextStep.PREPARE
+                ):
+                    raise _LeadOutcomeValidationError("selected objective preparation cannot be downgraded")
                 decoded_evidence = self._durable_lead_evidence(
                     decoded,
                     authorization,
@@ -5834,17 +5994,22 @@ class StoryRuntime:
                         try:
                             decoded_artifact_candidate = (
                                 self._construct_artifact_review_candidate(
+                                    session_id=session_id,
+                                    conversation_id=conversation_id,
                                     turn_id=turn_id,
                                     step_id=step_id,
                                     intent=decoded.artifact_intent,
                                     evidence=decoded_evidence,
                                 )
                             )
-                        except ArtifactProposalError:
+                        except (ArtifactProposalError, ValueError):
                             raise _LeadOutcomeValidationError(
                                 "artifact intent could not form an exact review "
                                 "candidate"
                             ) from None
+                self._validate_objective_selection(
+                    decoded, objective_projection, decoded_artifact_candidate,
+                )
 
             result = None
             correction_call_limit = 1 + int(bool(reservations))
@@ -5881,7 +6046,7 @@ class StoryRuntime:
                 if not correction_available:
                     raise
                 if isinstance(first_failure, _LeadOutcomeValidationError):
-                    artifact_failure = declared_artifact_intent or (
+                    artifact_failure = prepare_selected or declared_artifact_intent or (
                         decoded is not None and decoded.artifact_intent is not None
                     )
                     correction_failure_code = (
@@ -6005,6 +6170,7 @@ class StoryRuntime:
                     CollaborationLeadOutcomeFailureCode.ARTIFACT_INTENT_REJECTED
                     if (
                         declared_artifact_intent
+                        or prepare_selected
                         or (
                             decoded is not None
                             and decoded.artifact_intent is not None
@@ -6045,6 +6211,19 @@ class StoryRuntime:
             if not isinstance(failure, Exception):
                 raise
             if reference_failure is not None:
+                preferred = self._recovered_lead_reference_failure(
+                    session_id=session_id,
+                    conversation_id=conversation_id,
+                    turn_id=turn_id,
+                    step_id=step_id,
+                    failure=failure,
+                    reference_failure=reference_failure,
+                    reference_operation=reference_operation,
+                    provider=provider,
+                    recovered=recovered,
+                )
+                if preferred is not None:
+                    return preferred
                 raise reference_failure from failure
             if recovered is not None:
                 return recovered
@@ -6072,6 +6251,8 @@ class StoryRuntime:
                             conversation_id,
                         ),
                         lead_definition=definition,
+                        objective_events=objective_events,
+                        objective_projection=objective_projection,
                     )
                 except _LeadOutcomeValidationError:
                     assert provider is not None
@@ -6146,7 +6327,13 @@ class StoryRuntime:
             )
             self._append_drafts(
                 refreshed.last_sequence,
-                (message_event, proposal_event, state_event),
+                (
+                    message_event, proposal_event,
+                    *self._objective_drafts(
+                        outcome, objective_projection, objective_events, message_event,
+                    ),
+                    state_event,
+                ),
             )
             return LeadTurnResult(
                 session_id,
@@ -6166,25 +6353,16 @@ class StoryRuntime:
             session_id,
             conversation_id,
         )
-        self._append_drafts(
-            refreshed.last_sequence,
-            (
-                self._draft(
-                    session_id=session_id,
-                    conversation_id=conversation_id,
-                    turn_id=turn_id,
-                    step_id=step_id,
-                    kind=CollaborationEventKind.MESSAGE,
-                    sender=_LEAD_ACTOR,
-                    recipient=_USER_ACTOR,
-                    payload=CollaborationLeadJudgmentPayload(
-                        outcome.kind,
-                        outcome.message,
-                        evidence,
-                    ),
-                ),
-            ),
+        judgment = self._draft(
+            session_id=session_id, conversation_id=conversation_id,
+            turn_id=turn_id, step_id=step_id, kind=CollaborationEventKind.MESSAGE,
+            sender=_LEAD_ACTOR, recipient=_USER_ACTOR,
+            payload=CollaborationLeadJudgmentPayload(outcome.kind, outcome.message, evidence),
         )
+        self._append_drafts(refreshed.last_sequence, (
+            judgment,
+            *self._objective_drafts(outcome, objective_projection, objective_events, judgment),
+        ))
         return LeadTurnResult(
             session_id,
             conversation_id,
@@ -6221,6 +6399,8 @@ class StoryRuntime:
         previous_proposal: CollaborationProposal | None,
         projection: CollaborationHistoryProjection,
         lead_definition: object,
+        objective_events: tuple[CollaborationEvent, ...],
+        objective_projection: CollaborationHistoryProjection,
     ) -> LeadTurnResult:
         """Construct and disclose one exact candidate without mutating artifacts."""
 
@@ -6301,19 +6481,21 @@ class StoryRuntime:
             ),
             disclosed_specialist_ids=reviewers,
         )
+        candidate_event = self._draft(
+            session_id=session_id, conversation_id=conversation_id,
+            turn_id=turn_id, step_id=step_id,
+            kind=CollaborationEventKind.ARTIFACT_REVIEW_CANDIDATE,
+            sender=_RUNTIME_ACTOR, recipient=_USER_ACTOR,
+            payload=candidate_payload,
+        )
         self._append_drafts(
             projection.last_sequence,
             (
                 judgment,
-                self._draft(
-                    session_id=session_id,
-                    conversation_id=conversation_id,
-                    turn_id=turn_id,
-                    step_id=step_id,
-                    kind=CollaborationEventKind.ARTIFACT_REVIEW_CANDIDATE,
-                    sender=_RUNTIME_ACTOR,
-                    recipient=_USER_ACTOR,
-                    payload=candidate_payload,
+                candidate_event,
+                *self._objective_drafts(
+                    outcome, objective_projection, objective_events, judgment,
+                    candidate_event=candidate_event,
                 ),
                 self._draft(
                     session_id=session_id,
@@ -6375,9 +6557,110 @@ class StoryRuntime:
             ),
         )
 
+    @staticmethod
+    def _validate_objective_selection(
+        outcome: LeadProviderOutcome,
+        projection: CollaborationHistoryProjection,
+        candidate: ArtifactReviewCandidate | None,
+    ) -> None:
+        intent = outcome.objective_intent
+        if intent is None:
+            return
+        objective = next((
+            item for item in projection.artifact_objectives
+            if item.facts.objective_id == intent.objective_id
+        ), None)
+        if intent.action is not LeadObjectiveAction.START and (
+            objective is None or objective.state is not ArtifactObjectiveState.OPEN
+            or objective.facts.origin_conversation_id != projection.conversation_id
+        ):
+            raise _LeadOutcomeValidationError("objective ID is not an offered OPEN owner objective")
+        offered = {item.event_id: item for item in projection.offered_draft_sources}
+        if any(event_id not in offered for event_id in intent.draft_source_event_ids):
+            raise _LeadOutcomeValidationError("objective draft source is not offered by this conversation")
+        if intent.next_step is ArtifactObjectiveNextStep.PREPARE:
+            if candidate is None:
+                raise _LeadOutcomeValidationError("objective preparation requires an exact candidate")
+            target_paths = intent.target_paths if objective is None else objective.facts.target_paths
+            paths = {
+                path for operation in candidate.change_set.operations
+                for path in (
+                    (operation.source_path, operation.destination_path)
+                    if type(operation) is ArtifactRenameOperation else (operation.path,)
+                )
+            }
+            if paths != set(target_paths):
+                raise _LeadOutcomeValidationError("objective candidate must match its complete frozen target scope")
+
+    def _objective_drafts(
+        self,
+        outcome: LeadProviderOutcome,
+        projection: CollaborationHistoryProjection,
+        events: tuple[CollaborationEvent, ...],
+        judgment: CollaborationEventDraft,
+        *,
+        candidate_event: CollaborationEventDraft | None = None,
+    ) -> tuple[CollaborationEventDraft, ...]:
+        intent = outcome.objective_intent
+        if intent is None:
+            return ()
+        candidate = None if candidate_event is None else candidate_event.payload.candidate
+        self._validate_objective_selection(outcome, projection, candidate)
+        previous = next((
+            item for item in projection.artifact_objectives
+            if item.facts.objective_id == intent.objective_id
+        ), None)
+        if previous is None:
+            origin = next((
+                event for event in reversed(events)
+                if event.turn_id == judgment.turn_id
+                and event.sender.kind is CollaborationActorKind.USER
+                and event.recipient.kind is CollaborationActorKind.LEAD
+                and type(event.payload) is CollaborationMessagePayload
+            ), None)
+            if origin is None:
+                raise _LeadOutcomeValidationError("new objective lacks its exact origin user event")
+            assert intent.request is not None
+            facts = ArtifactObjectiveFacts(
+                objective_id=self._new_id("obj"),
+                origin_conversation_id=judgment.conversation_id,
+                origin_user_event_id=origin.event_id,
+                request=intent.request, target_paths=intent.target_paths,
+                offered_draft_sources=projection.offered_draft_sources,
+            )
+        else:
+            facts = previous.facts
+        offered = {item.event_id: item for item in projection.offered_draft_sources}
+        selected = (
+            tuple(offered[event_id] for event_id in intent.draft_source_event_ids)
+            if intent.draft_source_event_ids else
+            (() if previous is None else previous.draft_sources)
+        )
+        binding = None
+        if candidate_event is not None:
+            assert candidate is not None
+            binding = ArtifactObjectiveCandidateBinding(
+                candidate_event.event_id, candidate.candidate_id,
+                candidate.candidate_revision, candidate.candidate_digest,
+            )
+        return (self._draft(
+            session_id=judgment.session_id, conversation_id=judgment.conversation_id,
+            turn_id=judgment.turn_id, step_id=judgment.step_id,
+            kind=CollaborationEventKind.ARTIFACT_OBJECTIVE,
+            sender=_RUNTIME_ACTOR, recipient=_USER_ACTOR,
+            payload=ArtifactObjectivePayload(
+                facts=facts, action=intent.action,
+                previous_objective_event_id=None if previous is None else previous.latest_event_id,
+                lead_result_event_id=judgment.event_id, next_step=intent.next_step,
+                draft_sources=selected, candidate_binding=binding,
+            ),
+        ),)
+
     def _construct_artifact_review_candidate(
         self,
         *,
+        session_id: str,
+        conversation_id: str,
         turn_id: str,
         step_id: str,
         intent: ArtifactProposalIntent,
@@ -6387,7 +6670,11 @@ class StoryRuntime:
 
         snapshots = self.artifacts.capture_complete_state()
         base_state = {item.path: item.content for item in snapshots}
-        artifact_evidence = self._artifact_intent_evidence(evidence)
+        artifact_evidence = self._artifact_intent_evidence(
+            evidence,
+            session_id=session_id,
+            conversation_id=conversation_id,
+        )
         attached_core_paths = tuple(
             item.path
             for item in artifact_evidence
@@ -6406,12 +6693,60 @@ class StoryRuntime:
             attached_core_paths=attached_core_paths,
         )
 
-    @staticmethod
     def _artifact_intent_evidence(
+        self,
         evidence: CollaborationLeadEvidence,
+        *,
+        session_id: str,
+        conversation_id: str,
     ) -> tuple[ArtifactIntentEvidence, ...]:
+        """Validate current selected receipts before resolving artifact content."""
+
+        scope = self._agent_context_service.scope(
+            session_id,
+            ContextSubjectKind.CONVERSATION,
+            conversation_id,
+            LEAD_ORCHESTRATOR,
+        )
+        writing_adapter = WritingArtifactSourceAdapter(self.artifacts, scope)
+        current_statuses: dict[str, CollaborationEvidenceReceipt] | None = None
+        empty_digest = "sha256:" + hashlib.sha256(b"").hexdigest()
         result: list[ArtifactIntentEvidence] = []
         for receipt in evidence.receipts:
+            if receipt.acquisition is CollaborationEvidenceAcquisition.CORE_STATUS:
+                if (
+                    receipt.source_kind is not CollaborationInputKind.CORE_DOCUMENT
+                    or receipt.locator not in CORE_ARTIFACT_PATHS
+                    or receipt.source_state is not CollaborationInputState.PRESENT
+                    or receipt.utf8_bytes != 0
+                    or receipt.content_digest != empty_digest
+                ):
+                    continue
+                if current_statuses is None:
+                    current_statuses = {
+                        item.evidence_id: self._durable_core_status_receipt(
+                            item,
+                            operation_id=receipt.operation_id,
+                            result_correlation_id=receipt.result_correlation_id,
+                        )
+                        for item in writing_adapter.canonical_core_statuses(
+                            receipt.manifest_digest,
+                            CONTEXT_SOURCE_POLICY,
+                        )
+                    }
+                if current_statuses.get(receipt.evidence_id) != receipt:
+                    raise _LeadOutcomeValidationError(
+                        "artifact empty-core status evidence is no longer current"
+                    )
+                assert receipt.locator is not None
+                assert receipt.content_digest is not None
+                result.append(ArtifactIntentEvidence(
+                    evidence_id=receipt.evidence_id,
+                    path=receipt.locator,
+                    source_digest=receipt.content_digest,
+                    boundary_digest=receipt.content_digest,
+                ))
+                continue
             if receipt.source_kind not in {
                 CollaborationInputKind.CORE_DOCUMENT,
                 CollaborationInputKind.MANUSCRIPT,
@@ -6440,13 +6775,22 @@ class StoryRuntime:
                         "artifact reference evidence is ambiguous"
                     )
                 path = batch.references[0].path
+                source_digest = receipt.revision_digest
             else:
                 path = locator
+                snapshot = self._current_lead_read_snapshot(
+                    session_id=session_id,
+                    conversation_id=conversation_id,
+                    scope=scope,
+                    receipt=receipt,
+                    writing_adapter=writing_adapter,
+                )
+                source_digest = snapshot.descriptor.content_digest
             result.append(
                 ArtifactIntentEvidence(
                     evidence_id=receipt.evidence_id,
                     path=path,
-                    source_digest=receipt.revision_digest,
+                    source_digest=source_digest,
                     boundary_digest=receipt.content_digest,
                     start_line=receipt.start_line,
                     end_line=receipt.end_line,
@@ -6480,6 +6824,160 @@ class StoryRuntime:
                 None if reviewed_proposal is None else reviewed_proposal.proposal_digest
             ),
         )
+
+    def _recovered_lead_reference_failure(
+        self,
+        *,
+        session_id: str,
+        conversation_id: str,
+        turn_id: str,
+        step_id: str,
+        failure: Exception,
+        reference_failure: ReferenceOperationFailure,
+        reference_operation: RuntimeReferenceOperation,
+        provider: _AccountingContextProvider | None,
+        recovered: LeadTurnResult | None,
+    ) -> LeadTurnResult | None:
+        """Prefer a proven Lead result only over its derivative reference failure."""
+
+        derivative_codes = {
+            ReferenceAuthorizationErrorCode.WORKFLOW_FAILURE,
+            ReferenceAuthorizationErrorCode.PROVIDER_FAILURE,
+        }
+        facts = context_provider_failure_facts(failure)
+        operation_id = reference_operation.operation_id
+        if (
+            # Native invocation failures use this exact translation. Primary
+            # reference, validation, ownership, and I/O errors retain precedence.
+            type(failure) is not BackendProtocolError
+            or type(reference_failure) is not ReferenceOperationFailure
+            or reference_failure.code not in derivative_codes
+            or operation_id is None
+            or reference_failure.reference_operation_id != operation_id
+            or reference_operation.session_id != session_id
+            or not reference_operation_belongs_to_session(operation_id, session_id)
+            or provider is None
+            or provider.reference_operation_id != operation_id
+            or provider.last_submitted_call_id is None
+            or facts.accounting is None
+            or facts.accounting.state is not ProviderCallState.SUBMITTED
+            or facts.submission_uncertain
+            or facts.response_rejection_code is not None
+            or facts.continuation_rejection is not None
+            or type(recovered) is not LeadTurnResult
+            or (recovered.session_id, recovered.conversation_id,
+                recovered.turn_id, recovered.step_id)
+            != (session_id, conversation_id, turn_id, step_id)
+            or recovered.kind is not LeadOutcomeKind.RECOMMENDATION
+            or recovered.proposal is not None
+            or recovered.confirmation_request_id is not None
+            or recovered.artifact_proposal is not None
+            or recovered.artifact_application_request is not None
+            or recovered.story_commit_request is not None
+        ):
+            return None
+        if (
+            recovered.state is CollaborationStepState.RECOVERY_REQUIRED
+            and recovered.next_action
+            is CollaborationNextAction.REPAIR_AUTHORITATIVE_HISTORY
+        ):
+            # Failed history closure is still a blocker, never proof of retry.
+            return recovered
+        if (
+            recovered.state is not None
+            or recovered.next_action is not CollaborationNextAction.RETRY_LEAD_TURN
+        ):
+            return None
+
+        # failure() can swallow cleanup I/O and mark its in-memory operation
+        # finished. Only the repository's validated terminal history is proof.
+        references = self.artifacts.inspect_reference_operation(operation_id)
+        if (
+            type(references) is not ReferenceOperationHistory
+            or references.manifest.operation_id != operation_id
+            or references.operation_events[-1].operation_state not in {
+                ReferenceOperationState.ACCEPTED,
+                ReferenceOperationState.TERMINATED,
+            }
+            or references.operation_events[-1].outcome
+            not in {None, *derivative_codes}
+            or not references.invocation_events
+        ):
+            return None
+        for invocation in references.invocation_events:
+            reference_terminal = invocation[-1]
+            correlation = reference_terminal.correlation
+            if (
+                correlation is None
+                or correlation.operation_id != operation_id
+                or correlation.agent_id != LEAD_ORCHESTRATOR
+                or correlation.phase != ContextInvocationKind.LEAD.value
+                or correlation.round_number is not None
+                or reference_terminal.invocation_state not in {
+                    ReferenceInvocationState.ACCEPTED,
+                    ReferenceInvocationState.TERMINATED,
+                }
+                or reference_terminal.outcome not in {None, *derivative_codes}
+            ):
+                return None
+        if (
+            references.invocation_events[-1][-1].outcome
+            is not ReferenceAuthorizationErrorCode.PROVIDER_FAILURE
+        ):
+            # A reference handler or completion fault can carry submitted call
+            # accounting too; it is not the provider failure being recovered.
+            return None
+
+        events, projection, history_failure = self._read_lead_history(
+            session_id, conversation_id,
+        )
+        if history_failure is not None or events is None or projection is None:
+            return self._blocking_lead_result(
+                session_id, conversation_id, CollaborationStepState.RECOVERY_REQUIRED,
+                "The failed Lead attempt could not be verified in authoritative history.",
+                turn_id=turn_id, step_id=step_id,
+            )
+        if (
+            not events
+            or projection.current_turn_id != turn_id
+            or projection.current_step_id != step_id
+            or projection.current_state is not None
+            or projection.next_safe_action is not CollaborationNextAction.RETRY_LEAD_TURN
+        ):
+            return None
+        terminal = events[-1]
+        expected_code = (
+            CollaborationLeadOutcomeFailureCode.PROVIDER_TIMED_OUT
+            if facts.timed_out else CollaborationLeadOutcomeFailureCode.PROVIDER_FAILED
+        )
+        if (
+            terminal.turn_id != turn_id or terminal.step_id != step_id
+            or type(terminal.payload) is not CollaborationLeadOutcomeFailurePayload
+            or terminal.payload.code is not expected_code
+            or terminal.payload.invocation_id != provider.invocation_id
+            or terminal.payload.call_id != provider.last_submitted_call_id
+        ):
+            return None
+        calls = tuple(
+            event.payload for event in events[:-1]
+            if event.turn_id == turn_id and event.step_id == step_id
+            and type(event.payload) is CollaborationProviderCallPayload
+        )
+        if (
+            not calls
+            or any(
+                call.invocation_kind is not CollaborationInvocationKind.LEAD
+                or call.role != LEAD_ORCHESTRATOR
+                or call.invocation_id != provider.invocation_id
+                for call in calls
+            )
+            or calls[-1].call_id != terminal.payload.call_id
+            or calls[-1].state is not CollaborationProviderCallState.SUBMITTED
+            or sum(call.state is CollaborationProviderCallState.SUBMITTED for call in calls)
+            != provider.submitted_physical_calls
+        ):
+            return None
+        return recovered
 
     def _close_failed_lead_attempt(
         self, session_id: str, conversation_id: str, *,
@@ -6643,8 +7141,10 @@ class StoryRuntime:
         )
 
     @staticmethod
-    def _declares_artifact_intent(answer: object) -> bool:
-        """Return only whether one unique top-level artifact intent is non-null."""
+    def _declares_artifact_intent(
+        answer: object, *, objective_prepare_only: bool = False,
+    ) -> bool:
+        """Inspect explicit intent fields for correction/failure classification."""
 
         if type(answer) is not str:
             return False
@@ -6665,11 +7165,11 @@ class StoryRuntime:
             )
         except (_DuplicateJsonKey, json.JSONDecodeError, TypeError, ValueError):
             return False
-        return (
-            type(value) is dict
-            and "artifact_intent" in value
-            and value["artifact_intent"] is not None
-        )
+        if type(value) is not dict:
+            return False
+        objective = value.get("objective_intent")
+        prepare = type(objective) is dict and objective.get("next_step") == "prepare"
+        return prepare if objective_prepare_only else prepare or value.get("artifact_intent") is not None
 
     @staticmethod
     def _decode_lead_outcome(answer: str) -> LeadProviderOutcome:
@@ -6694,6 +7194,7 @@ class StoryRuntime:
             )
             if type(value) is not dict or set(value) != {
                 "artifact_intent",
+                "objective_intent",
                 "evidence_ids",
                 "evidence_status",
                 "kind",
@@ -6714,6 +7215,7 @@ class StoryRuntime:
             evidence_ids = tuple(raw_evidence_ids)
             proposal_value = value["proposal"]
             artifact_value = value["artifact_intent"]
+            objective_intent = StoryRuntime._decode_objective_intent(value["objective_intent"])
             if kind is not LeadOutcomeKind.PROPOSAL:
                 if proposal_value is not None or artifact_value is not None:
                     raise ValueError
@@ -6725,6 +7227,7 @@ class StoryRuntime:
                     evidence_ids,
                     None,
                     None,
+                    objective_intent,
                 )
             if (proposal_value is None) is (artifact_value is None):
                 raise ValueError
@@ -6738,6 +7241,7 @@ class StoryRuntime:
                     evidence_ids,
                     None,
                     artifact_intent,
+                    objective_intent,
                 )
             if type(proposal_value) is not dict or set(proposal_value) != {
                 "assignments",
@@ -6778,6 +7282,7 @@ class StoryRuntime:
                 evidence_ids,
                 proposal,
                 None,
+                objective_intent,
             )
         except (
             ArtifactProposalError,
@@ -6791,6 +7296,33 @@ class StoryRuntime:
             raise _LeadOutcomeValidationError(
                 "lead returned a noncanonical evidence outcome"
             ) from exc
+
+    @staticmethod
+    def _decode_objective_intent(value: object) -> LeadObjectiveIntent | None:
+        if value is None:
+            return None
+        if type(value) is not dict:
+            raise ValueError("objective intent must be an exact object")
+        action = LeadObjectiveAction(value["action"])
+        fields = {
+            LeadObjectiveAction.START: {"action", "request", "target_paths", "next_step", "draft_source_event_ids"},
+            LeadObjectiveAction.CONTINUE: {"action", "objective_id", "next_step", "draft_source_event_ids"},
+            LeadObjectiveAction.CANCEL: {"action", "objective_id"},
+        }[action]
+        if set(value) != fields:
+            raise ValueError("objective intent fields are noncanonical")
+        if action is LeadObjectiveAction.CANCEL:
+            return LeadObjectiveIntent(action=action, objective_id=value["objective_id"])
+        if type(value["draft_source_event_ids"]) is not list:
+            raise ValueError("objective draft sources must be a list")
+        if action is LeadObjectiveAction.START and type(value["target_paths"]) is not list:
+            raise ValueError("objective target paths must be a list")
+        return LeadObjectiveIntent(
+            action=action, objective_id=value.get("objective_id"),
+            request=value.get("request"), target_paths=tuple(value.get("target_paths", ())),
+            next_step=ArtifactObjectiveNextStep(value["next_step"]),
+            draft_source_event_ids=tuple(value["draft_source_event_ids"]),
+        )
 
     @staticmethod
     def _decode_artifact_intent(value: object) -> ArtifactProposalIntent:
@@ -7312,6 +7844,46 @@ class StoryRuntime:
     ) -> CollaborationInputRevision:
         """Capture and compare one cited READ boundary through its source owner."""
 
+        self._current_lead_read_snapshot(
+            session_id=session_id,
+            conversation_id=conversation_id,
+            scope=scope,
+            receipt=receipt,
+            writing_adapter=writing_adapter,
+        )
+        assert receipt.source_kind is not None
+        assert receipt.locator is not None
+        assert receipt.content_digest is not None
+        locator = (
+            self._artifact_evidence_locator(receipt)
+            if receipt.source_kind in {
+                CollaborationInputKind.CORE_DOCUMENT,
+                CollaborationInputKind.MANUSCRIPT,
+                CollaborationInputKind.WRITING_ARTIFACT,
+            }
+            else receipt.locator
+        )
+        return CollaborationInputRevision(
+            input_id=receipt.evidence_id,
+            kind=receipt.source_kind,
+            locator=locator,
+            state=CollaborationInputState.PRESENT,
+            revision_digest=receipt.content_digest,
+            start_line=receipt.start_line,
+            end_line=receipt.end_line,
+        )
+
+    def _current_lead_read_snapshot(
+        self,
+        *,
+        session_id: str,
+        conversation_id: str,
+        scope: ContextScope,
+        receipt: CollaborationEvidenceReceipt,
+        writing_adapter: WritingArtifactSourceAdapter,
+    ) -> ContextSourceSnapshot:
+        """Revalidate READ identity and boundary bytes, retaining the whole source."""
+
         if (
             receipt.source_kind is None
             or receipt.source_id is None
@@ -7330,7 +7902,6 @@ class StoryRuntime:
                 receipt.locator,
                 CONTEXT_SOURCE_POLICY,
             )
-            locator = self._artifact_evidence_locator(receipt)
         elif receipt.source_kind is CollaborationInputKind.CONVERSATION_EVENT:
             services = self.conversation_storage_services
             snapshot = FocusedConversationSourceAdapter(
@@ -7341,7 +7912,6 @@ class StoryRuntime:
                 include_same_session_active=True,
                 include_searchable_history=True,
             ).capture(receipt.locator, CONTEXT_SOURCE_POLICY)
-            locator = receipt.locator
         elif (
             receipt.source_kind is CollaborationInputKind.AGENT_STATE
             and receipt.locator == f"agent-state/{LEAD_ORCHESTRATOR}"
@@ -7350,7 +7920,6 @@ class StoryRuntime:
                 self.workspace,
                 scope,
             ).capture(receipt.locator, CONTEXT_SOURCE_POLICY)
-            locator = receipt.locator
         else:
             raise ValueError("lead READ evidence source is not re-readable")
         descriptor = snapshot.descriptor
@@ -7372,15 +7941,7 @@ class StoryRuntime:
         digest = "sha256:" + hashlib.sha256(selected).hexdigest()
         if digest != receipt.content_digest or len(selected) != receipt.utf8_bytes:
             raise ValueError("lead READ evidence content has drifted")
-        return CollaborationInputRevision(
-            input_id=receipt.evidence_id,
-            kind=receipt.source_kind,
-            locator=locator,
-            state=CollaborationInputState.PRESENT,
-            revision_digest=digest,
-            start_line=receipt.start_line,
-            end_line=receipt.end_line,
-        )
+        return snapshot
 
     @staticmethod
     def _current_context_boundary_bytes(

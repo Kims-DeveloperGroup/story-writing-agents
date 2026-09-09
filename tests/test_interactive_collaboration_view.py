@@ -277,5 +277,45 @@ class ArtifactAndGitCollaborationViewTests(unittest.IsolatedAsyncioTestCase):
             case.temporary.cleanup()
 
 
+    async def test_objective_event_discloses_transition_without_claiming_current_state(self):
+        from tests import test_artifact_objectives as objectives
+        from story_writing_agents.conversations import ArtifactObjectivePayload
+        case = objectives.ObjectiveCase()
+        case.setUp()
+        # Adopt synchronous cleanup from this setup-only async fixture.
+        for cleanup, args, kwargs in case._cleanups:
+            self.addCleanup(cleanup, *args, **kwargs)
+        case._cleanups.clear()
+        conversation_id, _ = await case.start()
+        await case.prepare(conversation_id)
+        event = next(e for e in case.history(conversation_id) if isinstance(e.payload, ArtifactObjectivePayload))
+        rendered = render_component(_collaboration_view.project_collaboration_event(event), _capability(CapabilityProfile.LINE, width=120)).text
+        for exact in (event.payload.facts.objective_id, event.payload.facts.origin_conversation_id, objectives.OUTLINE, "Action: start", "Next step: clarify", "Only a successful Apply result completes"):
+            self.assertIn(exact, rendered)
+        self.assertNotIn("State: open", rendered)
+        self.assertNotIn("State: satisfied", rendered)
+        self.assertNotIn(objectives.DRAFT, rendered)
+
+    async def test_pending_commit_lead_result_discloses_exact_request(self):
+        from tests import test_artifact_objectives as objectives
+        case = objectives.ObjectiveCase()
+        case.setUp()
+        # Adopt synchronous cleanup from this setup-only async fixture.
+        for cleanup, args, kwargs in case._cleanups:
+            self.addCleanup(cleanup, *args, **kwargs)
+        case._cleanups.clear()
+        conversation_id, _ = await case.start()
+        applied = await case.apply(await case.review(await case.prepare(conversation_id)))
+        pending = await case.runtime.lead_turn(case.session_id, conversation_id, "Continue.")
+        self.assertEqual(pending.story_commit_request, applied.commit_request)
+        rendered = render_component(_collaboration_view.project_lead_turn_result(pending), _capability(CapabilityProfile.LINE, width=160)).text
+        candidate = applied.commit_request.candidate
+        for exact in (applied.commit_request.confirmation_request_id, candidate.candidate_id,
+                      candidate.branch, candidate.proposed_message,
+                      *(item.path for item in candidate.paths), "local commit only"):
+            self.assertIn(exact, rendered)
+        self.assertNotIn("Changes awaiting application", rendered)
+
+
 if __name__ == "__main__":
     unittest.main()

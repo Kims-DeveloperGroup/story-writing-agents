@@ -500,6 +500,33 @@ from story_writing_agents.conversations import (
 )
 ```
 
+Contextual authoring adds these exports to the same conversations facade:
+
+```python
+from story_writing_agents.conversations import (
+    ArtifactDraftSource,
+    ArtifactObjective,
+    ArtifactObjectiveCandidateBinding,
+    ArtifactObjectiveFacts,
+    ArtifactObjectiveNextStep,
+    ArtifactObjectivePayload,
+    ArtifactObjectiveState,
+    LeadObjectiveAction,
+    LeadObjectiveIntent,
+    artifact_objective_context,
+)
+```
+
+These additions do not change the package-root facade. They describe the
+owner-conversation objective, whole-message draft-source digests, exact
+candidate binding, and `open`/`satisfied`/`cancelled` projection. Only matching
+successful Apply satisfies an objective; no value grants execution authority.
+`LeadTurnResult` also has a trailing optional `story_commit_request=None` for
+exact pending Commit redisclosure. Its preceding optional
+`artifact_application_request` carries Apply disclosure. The eight-field
+provider `lead-outcome-v2` contract is distinct from these Python result values;
+see [Runtime API](runtime-api.md#contextual-authoring-objectives).
+
 The lead and specialist values are strict public inputs and results. Every
 fresh provider lead judgment carries exact runtime-issued evidence; the runtime
 persists a typed judgment or a content-free validation-failure closure. Scope
@@ -662,17 +689,18 @@ collaboration event. The installed lead workflow does not invoke it.
 
 ## Ownership of collaboration and later story writes
 
-The public shell is inspection-only for collaboration history. The Python lead
-workflow owns proposal, confirmation, rejection, revision, supersession,
+Ordinary focused shell input uses the Python Lead workflow, which owns
+proposal, confirmation, rejection, revision, supersession,
 reconfirmation, confirmed specialist execution, typed synthesis,
 artifact-candidate/review records, result, finalization, and outcome-unknown
 history writes. Confirmation is authority only for the disclosed read-only
 consultation.
 
-Artifact Apply and Git Commit remain separate future operations with separate
-exact confirmations. The lead is their planned semantic trigger and
-user-facing coordinator; runtime code, not the provider, will execute the
-filesystem and Git effects.
+Artifact Apply and local Git Commit have separate exact confirmations in the
+current workflow. The lead coordinates the requested change; runtime code
+executes the disclosed filesystem and Git effects. An authoring objective is
+completed only by its matching successful Apply result. It grants no
+confirmation or remote-publication authority.
 
 ## Reference map
 
