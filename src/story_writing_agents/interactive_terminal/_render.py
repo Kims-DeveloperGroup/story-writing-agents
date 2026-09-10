@@ -431,6 +431,9 @@ def format_agent_reply_content(content: str) -> str:
 def _normalize_agent_reply_newlines(content: str) -> str:
     """Decode only common singly escaped newline spellings in model prose."""
 
+    if "\\" not in content:
+        return content
+
     normalized: list[str] = []
     replaced = False
     position = 0
