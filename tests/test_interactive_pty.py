@@ -364,10 +364,10 @@ def lead_consultation_answer(value, _agent_id):
             "relation": "new_step",
             "purpose": "Check outline consistency before answering.",
             "assignments": [{
-                "agent_id": "plot_architect",
+                "agent_id": specialist,
                 "instruction": "Check the user request against the outline.",
                 "input_ids": ["user_input"],
-            }],
+            } for specialist in control.get("specialists", ["plot_architect"])],
         },
     }
 
@@ -775,6 +775,12 @@ if operation == "probe":
         if state["antigravity"] == "unauthenticated"
         else 7
     )
+if state.get("antigravity_login") == "wait_for_exit":
+    sys.stdout.write("FAKE_AGY_AUTH_EXIT> ")
+    sys.stdout.flush()
+    if sys.stdin.readline().strip() != "exit":
+        raise SystemExit(2)
+    append_record({"provider": "antigravity", "operation": "native_exit", "pid": os.getpid()})
 if state.get("antigravity_login") in {"authenticate", "code_then_stay"}:
     if state.get("antigravity_login") == "code_then_stay":
         signal.signal(signal.SIGTERM, terminate_auth)
@@ -794,6 +800,85 @@ if state.get("antigravity_login") == "code_then_stay":
         signal.pause()
 raise SystemExit(int(state.get("antigravity_login_returncode", 0)))
 '''
+
+
+# Reuse the existing strict Lead/specialist response builders in an opt-in
+# executable. Ordinary PTY tests keep their original auth-only Agy stand-in.
+_AUTH_RECOVERY_AGY = r'''#!/usr/bin/env python3
+import fcntl
+import json
+import os
+import sys
+import time
+from pathlib import Path
+
+argv = sys.argv[1:]
+if "--help" in argv:
+    print("--agent --conversation --disable-slash-commands --effort "
+          "--input-format --json-schema --mode --model --new-project "
+          "--output-format --print --print-timeout --sandbox")
+    raise SystemExit(0)
+
+''' + "def nested_mapping_with" + _FAKE_CODEX.split(
+    "def nested_mapping_with", 1
+)[1].split("def compact_answer", 1)[0] + r'''
+if "--print" in argv:
+    def option(name):
+        return argv[argv.index(name) + 1] if name in argv else None
+
+    control_path = Path(os.environ["STORY_PTY_CODEX_CONTROL"])
+    control = json.loads(control_path.read_text())
+    auth_path = Path(os.environ["STORY_PTY_AUTH_STATE"])
+    agent = option("--agent")
+    payload_text = option("--print")
+    payload = json.loads(payload_text)
+    targets = control.get("auth_reject_agents", [])
+    marker = control_path.parent / ("auth-rejected-" + agent)
+    rejected = False
+    if agent in targets:
+        try:
+            descriptor = os.open(marker, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
+        except FileExistsError:
+            pass
+        else:
+            os.close(descriptor)
+            rejected = True
+    record = {"event": "auth-model", "agent": agent, "pid": os.getpid(),
+              "payload_text": payload_text, "rejected": rejected,
+              "thread": option("--conversation")}
+    with Path(os.environ["STORY_PTY_CODEX_LOG"]).open("a") as log:
+        fcntl.flock(log, fcntl.LOCK_EX)
+        log.write(json.dumps(record) + "\n")
+        log.flush()
+    if rejected:
+        if control.get("auth_parallel"):
+            deadline = time.monotonic() + 5
+            while not all((control_path.parent / ("auth-rejected-" + name)).exists() for name in targets):
+                if time.monotonic() > deadline:
+                    raise SystemExit(91)
+                time.sleep(0.01)
+        state = json.loads(auth_path.read_text())
+        state["antigravity"] = control.get("auth_baseline", "unauthenticated")
+        staged = auth_path.with_name(auth_path.name + "." + str(os.getpid()))
+        staged.write_text(json.dumps(state))
+        os.replace(staged, auth_path)
+        print(json.dumps({"conversation_id": "", "status": "ERROR", "response": "",
+            "error": "authentication failed or timed out", "duration_seconds": 0,
+            "num_turns": 0, "usage": {"input_tokens": 0, "output_tokens": 0,
+            "thinking_tokens": 0, "cache_read_tokens": 0, "total_tokens": 0}}), flush=True)
+        raise SystemExit(1)
+    if agent == "lead_orchestrator":
+        answer = {"kind": "answer", "message": "AUTH631 exact request recovered.",
+            "scope": "workflow_meta", "evidence_status": "not_applicable",
+            "evidence_ids": [], "artifact_intent": None, "proposal": None}
+    else:
+        answer = lead_consultation_answer(payload, agent)
+    print(json.dumps({"conversation_id": option("--conversation") or ("auth-thread-" + agent),
+        "status": "SUCCESS", "json_schema": json.loads(option("--json-schema")),
+        "structured_output": {"correlation": payload["c"],
+            "action": {"kind": "answer", "result": answer, "used_handles": []}}}), flush=True)
+    raise SystemExit(0)
+''' + _FAKE_AGY
 
 
 _REFERENCE_PROBE_PREAMBLE = r"""
@@ -4133,6 +4218,136 @@ print(
         """Need no native exit command after one bare-Agy authorization code."""
 
         self._assert_auth_code_returns_to_story("antigravity")
+
+    def _start_auth_recovery_case(self, *, parallel=False, baseline=False):
+        """Start the actual CLI with only disposable fake native executables."""
+
+        self.fake_antigravity_executable.write_text(
+            _AUTH_RECOVERY_AGY.replace("#!/usr/bin/env python3", f"#!{sys.executable}", 1),
+            encoding="utf-8",
+        )
+        defaults_path = self.workspace.path("config/system_defaults.json")
+        defaults = json.loads(defaults_path.read_text())
+        defaults["default_backend"] = "codex" if parallel else "antigravity"
+        defaults_path.write_text(json.dumps(defaults) + "\n")
+        targets = ["plot_architect", "character_custodian"] if parallel else ["lead_orchestrator"]
+        self._set_provider_control(
+            mode="lead_consultation" if parallel else "lead_answer",
+            specialists=targets,
+            auth_reject_agents=targets,
+            auth_parallel=parallel,
+            auth_baseline="authenticated" if baseline else "unauthenticated",
+        )
+        self._set_auth_state(antigravity="authenticated",
+            antigravity_login="wait_for_exit" if baseline else "code_then_stay")
+        args = ("chat",) + tuple(value for agent in targets for value in ("--backend", agent + "=antigravity")) if parallel else ()
+        process = self._spawn_cli(args, terminal_columns=120)
+        process.wait_for_text("story[lobby]> ")
+        process.send_line("/session create alpha")
+        process.wait_for_text("story[alpha]> ")
+        conversation = self._create_conversation(process, subject="Synthetic auth recovery")
+        mark = process.output_mark()
+        process.send_line("AUTH631 preserve this exact request and its confirmation.")
+        if parallel:
+            process.wait_for_text("Lead proposal decision", after=mark)
+            self.assertEqual(self._auth_model_records(), [])
+            process.send_line("1")
+        process.wait_for_text("FAKE_AGY_AUTH_EXIT> " if baseline else "FAKE_AGY_AUTH_CODE> ", after=mark)
+        logins = [row for row in self._auth_records() if row["operation"] == "login"]
+        self.assertEqual(len(logins), 1)
+        login = logins[0]
+        self.assertEqual(login["provider"], "antigravity")
+        self.assertEqual(login["argv"], [])
+        self.assertEqual((login["stdin_tty"], login["stdout_tty"], login["stderr_tty"]), (True, True, True))
+        self.assertEqual(login["environment_marker"], "inherited-auth-environment")
+        self.assertEqual(Path(login["cwd"]).resolve(), self.workspace.root.resolve())
+        return process, conversation, mark, login
+
+    def _auth_model_records(self):
+        return [row for row in self._provider_records() if row.get("event") == "auth-model"]
+
+    def _assert_exact_auth_replays(self, targets):
+        records = self._auth_model_records()
+        self.assertEqual(len(records), 2 * len(targets))
+        for agent in targets:
+            calls = [row for row in records if row["agent"] == agent]
+            self.assertEqual([row["rejected"] for row in calls], [True, False])
+            self.assertEqual(calls[0]["payload_text"], calls[1]["payload_text"])
+            self.assertEqual(calls[0]["thread"], calls[1]["thread"])
+            self.assertNotEqual(calls[0]["pid"], calls[1]["pid"])
+        self.assertEqual(sum(row["operation"] == "login" for row in self._auth_records()), 1)
+
+    def _finish_auth_recovery_case(self, process, mark, *, parallel=False):
+        process.wait_for_text("The specialist confirms the proposed direction." if parallel
+                              else "AUTH631 exact request recovered.", after=mark)
+        process.wait_for_text("story[alpha]> ", after=mark)
+        process.send_line("/quit")
+        self.assertEqual(process.wait_for_exit(), 0, process.normalized_text)
+        self.assertEqual(process.final_terminal_attributes, process.original_terminal_attributes)
+        self.assertNotIn("PTY_TEST_CREDENTIAL_MUST_NOT_APPEAR", process.normalized_text)
+
+    def test_midoperation_auth_recovery_restores_terminal_and_exact_request(self):
+        process, conversation, mark, login = self._start_auth_recovery_case()
+        self.assertEqual(len(self._auth_model_records()), 1)
+        process.send_line("SYNTHETIC-AUTH-CODE")
+        self._finish_auth_recovery_case(process, mark)
+        self._assert_exact_auth_replays(["lead_orchestrator"])
+        with self.assertRaises(ProcessLookupError):
+            os.kill(login["pid"], 0)
+        store = FilesystemCollaborationEventStore(self.workspace,
+            catalog=FilesystemConversationCatalog(self.workspace))
+        events = store.read("alpha", conversation.conversation_id)
+        self.assertEqual(sum(isinstance(event.payload, CollaborationMessagePayload) for event in events), 1)
+        records = [json.loads(line) for path in self.workspace.path("debug_logs/agent_exchanges/alpha").glob("*.jsonl")
+                   for line in path.read_text().splitlines()]
+        groups = {}
+        for row in records:
+            groups.setdefault(row["exchange_id"], []).append(row["request_type"])
+        self.assertEqual(len(groups), 2)
+        self.assertEqual(list(groups.values()), [["request", "response", "outcome"]] * 2)
+
+    def test_recovery_authenticated_baseline_waits_for_native_exit(self):
+        process, _, mark, login = self._start_auth_recovery_case(baseline=True)
+        before_probes = len(self._auth_records())
+        self._wait_for_auth_record(process,
+            lambda row: row["provider"] == "antigravity" and row["operation"] == "probe",
+            after_count=before_probes)
+        self.assertEqual(len(self._auth_model_records()), 1)
+        self.assertNotIn("AUTH631 exact request recovered.", process.text_after(mark))
+        os.kill(login["pid"], 0)
+        process.send_line("exit")
+        self._finish_auth_recovery_case(process, mark)
+        self._assert_exact_auth_replays(["lead_orchestrator"])
+        self.assertTrue(any(row["operation"] == "native_exit" for row in self._auth_records()))
+
+    def test_parallel_specialist_auth_recovery_coalesces_on_pty(self):
+        process, conversation, mark, _ = self._start_auth_recovery_case(parallel=True)
+        self.assertEqual(len(self._auth_model_records()), 2)
+        self.assertTrue(all(row["rejected"] for row in self._auth_model_records()))
+        process.send_line("SYNTHETIC-AUTH-CODE")
+        self._finish_auth_recovery_case(process, mark, parallel=True)
+        self._assert_exact_auth_replays(["plot_architect", "character_custodian"])
+        store = FilesystemCollaborationEventStore(self.workspace,
+            catalog=FilesystemConversationCatalog(self.workspace))
+        events = store.read("alpha", conversation.conversation_id)
+        self.assertEqual(sum(event.kind is CollaborationEventKind.ASSIGNMENT_DISPATCH for event in events), 2)
+        self.assertEqual(sum(event.kind is CollaborationEventKind.SPECIALIST_REPLY for event in events), 2)
+        self.assertEqual(sum(event.kind is CollaborationEventKind.LEAD_SYNTHESIS for event in events), 1)
+
+    def test_recovery_interrupt_joins_native_process_and_restores_prompt(self):
+        process, _, mark, login = self._start_auth_recovery_case(baseline=True)
+        process.send_interrupt()
+        process.wait_for_text("interrupted", after=mark)
+        process.wait_for_text("story[alpha]> ", after=mark)
+        self.assertEqual(len(self._auth_model_records()), 1)
+        with self.assertRaises(ProcessLookupError):
+            os.kill(login["pid"], 0)
+        status_mark = process.output_mark()
+        process.send_line("/status")
+        process.wait_for_text("story[alpha]> ", after=status_mark)
+        process.send_line("/quit")
+        self.assertEqual(process.wait_for_exit(), 0, process.normalized_text)
+        self.assertEqual(process.final_terminal_attributes, process.original_terminal_attributes)
 
     def test_auth_command_and_settings_save_use_fresh_native_status(
         self,

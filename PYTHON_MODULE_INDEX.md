@@ -16,14 +16,14 @@ Source root: `src/`
 
 Package root: `src/story_writing_agents/`
 
-Importable production units indexed: 137.
+Importable production units indexed: 138.
 
-Direct internal dependency edges indexed: 540.
+Direct internal dependency edges indexed: 548.
 
 Directed internal dependency cycles indexed: 0.
 
 Edge and cycle totals exclude annotation-only `TYPE_CHECKING` imports. The
-all-import AST graph has 541 edges; its annotation-only workspace cycle was
+all-import AST graph has 550 edges; its annotation-only workspace cycle was
 already present in the 135-unit baseline (528 all-import / 526 runtime edges).
 
 ## Current Dependency Direction
@@ -54,7 +54,7 @@ __main__ -> cli -> conversation_rag_cli
                  -> backend -> agent_context/agent_context.manifest/agent_context.service
                  |          -> conversations.session_context
                  |          -> agent_exchanges/agent_exchanges.capture
-                 |          -> antigravity_adapter -> agent_context/models
+                 |          -> antigravity_adapter -> agent_context/errors/models
                  |          |                        -> provider_adapter
                  |          |                        -> provider_process
                  |          -> codex_adapter -> agent_context/agents/config
@@ -64,7 +64,7 @@ __main__ -> cli -> conversation_rag_cli
                  |          -> git.session_contracts
                  |          -> interactive_settings
                  |          -> workspace/models/errors/agents
-                 |          -> provider_adapter/provider_error_artifacts/provider_process
+                 |          -> provider_adapter/provider_auth_recovery/provider_error_artifacts/provider_process
                  |          -> conversations/session_lifecycle
                  |          -> session_recovery
                  |          -> session_recovery.transition_assessment
@@ -102,8 +102,9 @@ interactive_controller._exchange_policy -> agent_exchanges/agents/models
 interactive_controller._exchange_viewer -> agent_exchanges
                                         -> interactive_terminal._external_view
                                         -> jsonl-viewer (required exact-pinned base package, lazy import)
-interactive_controller._lead_policy -> conversations/interactive_terminal
+interactive_controller._lead_policy -> conversations/errors/interactive_terminal
                                     -> interactive_terminal._collaboration_view/orchestrator
+                                    -> provider_auth_recovery
 interactive_controller._runtime_policy -> errors/interactive_terminal/models/workspace
 
 smoke -> agents/conversation_search/conversation_storage.contracts
@@ -208,7 +209,8 @@ agent_context.ledger -> agent_context.accounting/manifest/planning
                      -> runtime_state_paths/workspace
 agent_context.manifest -> (standard library only)
 agent_context.planning -> agent_context.manifest
-agent_context.service -> agent_context.accounting/actions/continuation/ledger
+agent_context.service -> errors/provider_auth_recovery
+                      -> agent_context.accounting/actions/continuation/ledger
                       -> agent_context.manifest/planning/sources
                       -> conversations.session_context/workspace
 agent_context.sources -> agent_context.actions/manifest
@@ -223,7 +225,8 @@ agent_exchanges.capture -> agent_exchanges.contracts/storage
 agent_exchanges.contracts -> agents/errors
 agent_exchange_paths -> agents
 agent_exchanges.storage -> agent_exchange_paths/agents/agent_exchanges.contracts/workspace
-provider_adapter -> agent_context/models
+provider_adapter -> agent_context/errors/models
+provider_auth_recovery -> errors
 provider_error_artifacts -> agents/workspace
 provider_auth -> (standard library only)
 provider_catalog -> (standard library only)
@@ -491,10 +494,11 @@ every intermediate arrow. The current runtime graph is acyclic.
   binds the durable store; `begin(...)` requires exact session, conversation or
   debate scope, canonical agent, provider, and `ProviderInvocation` values and
   records the request before returning a shared `exchange_<uuidhex>` lifecycle.
-  That lifecycle admits at most one exact `ProviderResult` response or typed
-  native failure diagnostic response, and one
+  That lifecycle admits at most one exact `ProviderResult` response or
+  provider-failure response, with an optional typed native diagnostic, and one
   closed accepted, rejected, provider-failure, cancelled, or post-response
-  runtime-failure terminal attempt. The 13 terminal codes are fixed enums; no
+  runtime-failure terminal attempt. The 14 terminal codes include
+  `provider_authentication_required`; no
   arbitrary exception or metadata enters the contract. Optional
   `ProviderResponseDiagnostic` values carry completed native stdout/stderr
   bytes and exit code through this private seam.
@@ -508,12 +512,13 @@ every intermediate arrow. The current runtime graph is acyclic.
   response text, result thread, exact-or-null usage, and exact-or-null
   transport bytes, plus a diagnostic only when supplied. Diagnostic streams
   use explicit UTF-8 or reversible base64 encoding. `provider_failure(...)`
-  may attempt one diagnostic RESPONSE marked `provider_failure: true` before
-  the closed PROVIDER_FAILURE outcome, without entering a validated response
-  state; failed diagnostic serialization or append still permits the outcome
-  attempt. Recovered results retain the normal response and accepted-outcome
-  path. Absent diagnostics preserve the established response content and
-  no-response failure path. A terminal projects only outcome and fixed code. Response
+  attempts one RESPONSE marked `provider_failure: true` before the closed
+  PROVIDER_FAILURE outcome, without entering a validated response state.
+  Available completed-process diagnostics are included; otherwise that response
+  is a content-free failure placeholder and invents no native bytes. Failed
+  response serialization or append still permits the outcome attempt. Recovered
+  results retain the normal response and accepted-outcome path. No store schema
+  changes. A terminal projects only outcome and fixed code. Response
   and terminal state advances before append, so duplicate or failed attempts
   are never retried. Every begin, response, or terminal serialization,
   validation, or storage `BaseException` is fail-open; a failed begin returns a
@@ -521,6 +526,8 @@ every intermediate arrow. The current runtime graph is acyclic.
   `WorkspaceAgentExchangeStore` remains the sole filesystem, locking, rotation,
   pruning, sequence, timestamp, truncation, and snapshot owner.
 - **Primary verification/documentation:**
+  `tests/test_provider_auth_recovery_live.py` with
+  `tests/provider_auth_recovery_live_harness.py` (opt-in native execution),
   `tests/test_agent_exchange_capture.py`,
   `tests/test_agent_exchange_contracts.py`,
   `tests/test_agent_context_execution.py`, `tests/test_codex_backend.py`, and
@@ -913,10 +920,29 @@ every intermediate arrow. The current runtime graph is acyclic.
   constraints. The service still treats source inventory as authoritative,
   rejects every unmatched strict classification, and omits only an unmatched
   classification carrying that explicit conditional-presence fact.
+- **Authentication recovery:** Reference preludes and substantive calls retain
+  the pending request and action/evidence session while awaiting the scoped
+  authentication hook. Only a proven safe authentication rejection with
+  recorded submitted accounting, untainted continuation, successful native
+  assistance, and remaining physical capacity permits one replay of that exact
+  call. Replay changes only the physical call ID; schema, payload, correlation,
+  and expected thread remain fixed. Every failed attempt consumes the same
+  physical budget; a prelude replay also reserves a substantive slot. The
+  service revalidates captured manifest/core statuses and the backend-owned
+  veto before replay, then lends the original failure and source validator
+  through `authentication_replay` for final backend admission. A veto preserves
+  the original failure/accounting without recording another submission;
+  operation-local callbacks are cleared on submission or failure. Known safe
+  authentication rejection records FAILED rather than an ambiguous outcome. A
+  simultaneous timeout fact makes submission uncertain, taints a submitted
+  continuation, and blocks replay even when stdout alone matches the exact
+  authentication envelope.
+  Missing recovery scope returns a typed failure without native interaction.
 - **Direct internal dependencies:** `agent_context.accounting`,
   `agent_context.actions`, `agent_context.continuation`, `agent_context.ledger`,
   `agent_context.manifest`, `agent_context.planning`, `agent_context.sources`,
-  `conversations.session_context`, and `workspace`.
+  `conversations.session_context`, `errors`, `provider_auth_recovery`, and
+  `workspace`.
 - **State, resources, and side effects:** A workspace-scoped service retains
   immutable planning/action/source policies, one ledger collaborator, the
   content-free workspace digest, and process-local async locks keyed by exact
@@ -953,6 +979,10 @@ every intermediate arrow. The current runtime graph is acyclic.
   continuation. Importing performs no I/O, entropy acquisition, registration,
   or mutation; service construction performs no filesystem mutation.
 - **Primary verification/documentation:**
+  `tests/test_provider_auth_recovery_live.py` with
+  `tests/provider_auth_recovery_live_harness.py` (opt-in native execution),
+  `tests/test_provider_auth_recovery.py`,
+  `tests/test_provider_timeout_recovery.py`,
   `tests/test_agent_context_service.py`,
   `tests/test_agent_context_execution.py`,
   `tests/test_agent_exchange_capture.py`,
@@ -1202,6 +1232,21 @@ every intermediate arrow. The current runtime graph is acyclic.
   typed synthesis next-phase/deadlock metadata and finalization references to
   an existing reviewed proposal; duplicate JSON fields and prose-derived
   authority are rejected before orchestration.
+- **Authentication boundary:** Both legacy and contextual physical calls enter
+  the scoped provider activity gate; this backend does not replay a provider
+  call itself. It attaches the admitted authentication generation to typed
+  native failures and captures their physical exchange before propagation.
+  Contextual failures retain exact accounting and distinguish known safe
+  authentication rejection from uncertain submission when deciding thread
+  taint; a simultaneous timeout fact always selects the uncertain, tainted,
+  replay-ineligible form. Before each original contextual submission, it
+  captures configuration baseline, durable route values, workspace identity,
+  active/binding adapter generations, profile, and expected thread in an
+  error-owned replay veto.
+  The veto checks current backend readiness/access and equality of those facts;
+  final validation runs after activity admission and before exchange creation
+  or adapter invocation. Source validation remains context-service-owned.
+  A veto propagates the original typed failure without new transport accounting.
 - **Direct internal dependencies:** `agent_context`, `agent_context.manifest`,
   `agent_context.service`,
   the supported `agent_exchanges` facade, the internal
@@ -1209,7 +1254,8 @@ every intermediate arrow. The current runtime graph is acyclic.
   `codex_adapter`, `config`, `conversations`, `conversations.session_context`,
   `conversation_retrieval`, `debug_log`, `errors`, `git.session_contracts`,
   `interactive_settings`,
-  `models`, `provider_adapter`, `provider_error_artifacts`, `provider_process`,
+  `models`, `provider_adapter`, `provider_auth_recovery`,
+  `provider_error_artifacts`, `provider_process`,
   `runtime_state_paths`,
   `session_lifecycle`, `session_recovery`,
   `session_recovery.transition_assessment`, `workspace`, and
@@ -1414,6 +1460,9 @@ every intermediate arrow. The current runtime graph is acyclic.
   exception, or cancellation flow; `debug_log` retains ownership of its files,
   locks, schema, and rotation.
 - **Primary verification/documentation:**
+  `tests/test_provider_auth_recovery_live.py` with
+  `tests/provider_auth_recovery_live_harness.py` (opt-in native execution),
+  `tests/test_provider_auth_recovery.py`,
   `tests/test_agent_context_execution.py`,
   `tests/test_agent_exchange_capture.py`,
   `tests/test_agent_context_runtime_adoption.py`, `tests/test_codex_backend.py`,
@@ -1444,7 +1493,16 @@ every intermediate arrow. The current runtime graph is acyclic.
   `AntigravityAdapter` implements the private provider-adapter contract.
   Its pure package-internal `native_output_schema(schema)` preparation method
   supplies the backend's native transport schema without a facade export.
-- **Direct internal dependencies:** `agent_context`, `models`,
+- **Authentication classification:** Strict native ERROR parsing recognizes
+  the fixed authentication-timeout text or native 401 error fields separately
+  from replay safety. The sole safe classifier requires exit 1 and exactly the
+  supported terminal keys, the fixed timeout error, empty conversation/response,
+  integer-zero duration and turn count, and the exact five integer-zero usage
+  counters. Extra or contradictory fields, including structured output, cannot
+  grant replay. It carries `ProviderAuthenticationRequiredError` through the
+  adapter failure seam and retains the completed diagnostic; the adapter owns
+  no login or replay loop. Generic submitted failures remain tainted.
+- **Direct internal dependencies:** `agent_context`, `errors`, `models`,
   `provider_adapter`, and `provider_process`.
 - **State, resources, and side effects:** Owns the Antigravity executable,
   defensive immutable copies of explicit/system/per-agent model and effort
@@ -1621,7 +1679,11 @@ every intermediate arrow. The current runtime graph is acyclic.
   retains definitions, session
   workspaces, and provider-native conversation state for later backend
   instances. Importing performs no I/O.
-- **Primary verification/documentation:** `tests/test_antigravity_adapter.py`
+- **Primary verification/documentation:**
+  `tests/test_provider_auth_recovery_live.py` with
+  `tests/provider_auth_recovery_live_harness.py` (opt-in native execution),
+  `tests/test_provider_auth_recovery.py`,
+  `tests/test_antigravity_adapter.py`
   and `tests/test_antigravity_parity.py`; shared adapter and subprocess
   contracts are also verified by `tests/test_codex_backend.py`.
   `docs/guides/antigravity.md` is the dedicated setup, transport, lifecycle,
@@ -1638,6 +1700,16 @@ every intermediate arrow. The current runtime graph is acyclic.
   Codex CLI protocol.
 - **Supported surface:** No package-supported API. Package-internal
   `CodexAdapter` implements the private provider-adapter contract.
+- **Authentication and error diagnostics:** A separate strict JSONL inspection
+  recognizes native `error`/`turn.failed` 401 fields or status text without
+  interpreting model item text. Duplicate/nonfinite envelopes are rejected by
+  that inspection, a `turn.completed` event prevents classification, and a
+  zero-exit call with its final-response file follows the established success
+  path. Authentication failures remain replay-ineligible and taint existing
+  threads. Completed invocation/parsing failures attach exact stdout/stderr and
+  exit code through `ProviderResponseDiagnostic`; unfinished process failures
+  retain no fabricated native output. Default event parsing and argv remain
+  unchanged. Native login and any recovery decision belong to other owners.
 - **Direct internal dependencies:** `agent_context`, `agents`, `config`,
   `errors`, `models`, `provider_adapter`, and `provider_process`.
 - **State, resources, and side effects:** Owns construction-time Codex
@@ -1681,7 +1753,11 @@ every intermediate arrow. The current runtime graph is acyclic.
   retained binding directories idempotently. Optional `--model` and `--config
   model_reasoning_effort="LEVEL"` arguments retain their exact order after
   `exec` and before any resume marker. Importing performs no I/O.
-- **Primary verification/documentation:** `tests/test_codex_backend.py`,
+- **Primary verification/documentation:**
+  `tests/test_provider_auth_recovery_live.py` with
+  `tests/provider_auth_recovery_live_harness.py` (opt-in native execution),
+  `tests/test_provider_auth_recovery.py`,
+  `tests/test_codex_backend.py`,
   `docs/reference/backend-and-sessions.md`,
   `docs/design/prompts-and-provider.md`, and
   `docs/operations/privacy-and-provider.md`.
@@ -1707,8 +1783,7 @@ every intermediate arrow. The current runtime graph is acyclic.
   bytes and integer exit code, hiding raw streams from repr. The optional
   `ProviderInvocationError.record_response_diagnostic(...)` attachment and
   validated `response_diagnostic` property form a passive completed-process
-  data seam; safe error text, taint, retry authority, and absent-default Codex
-  behavior remain unchanged. `ProviderFailureAccounting`,
+  data seam; diagnostic bytes alone confer no taint or retry decision. `ProviderFailureAccounting`,
   `record_provider_failure_accounting`, and `provider_failure_accounting`
   provide the coordinator and concrete adapters one validated package-internal
   prepared/submitted failure seam. `ProviderInvocationError` and the
@@ -1720,7 +1795,14 @@ every intermediate arrow. The current runtime graph is acyclic.
   Codex and Antigravity native formats do not emit it. Generic exit failures,
   timeouts, prose lookalikes, and uncertain submissions never authorize
   automatic retry.
-- **Direct internal dependencies:** `agent_context` and `models`.
+- **Authentication failure seam:** `ProviderInvocationError` additively accepts
+  an exact optional `ProviderAuthenticationRequiredError` from the public error
+  owner, independently of continuation-rejection proof and diagnostic bytes.
+  Concrete adapters classify native authentication; the backend preserves and
+  enriches that same typed failure. The separately validated optional
+  `timed_out` fact can coexist with authentication and conservatively veto its
+  replay. This contract owns neither login nor replay.
+- **Direct internal dependencies:** `agent_context`, `errors`, and `models`.
 - **State, resources, and side effects:** Owns no mutable module state or
   external resource. Construction creates only immutable mappings, canonical
   call-local bytes, content-free accounting, and optional immutable diagnostic
@@ -1730,6 +1812,9 @@ every intermediate arrow. The current runtime graph is acyclic.
   process capture, diagnostic serialization, nor storage. Importing performs
   no I/O.
 - **Primary verification/documentation:**
+  `tests/test_provider_auth_recovery_live.py` with
+  `tests/provider_auth_recovery_live_harness.py` (opt-in native execution),
+  `tests/test_provider_auth_recovery.py`,
   `tests/test_agent_context_accounting.py`, `tests/test_codex_backend.py`,
   `tests/test_antigravity_adapter.py`, `tests/test_antigravity_parity.py`, and
   `docs/design/overview.md`.
@@ -1796,7 +1881,10 @@ every intermediate arrow. The current runtime graph is acyclic.
   joining when necessary; completed children are not signaled. Optional cwd
   and environment are explicit request values. The module owns no persistent
   or import-time state and emits no provider-specific diagnostic.
-- **Primary verification/documentation:** `tests/test_codex_backend.py`,
+- **Primary verification/documentation:**
+  `tests/test_provider_auth_recovery_live.py` with
+  `tests/provider_auth_recovery_live_harness.py` (opt-in native execution),
+  `tests/test_codex_backend.py`,
   `tests/test_antigravity_parity.py`,
   `docs/reference/backend-and-sessions.md`, and
   `docs/operations/privacy-and-provider.md`.
@@ -1844,7 +1932,8 @@ every intermediate arrow. The current runtime graph is acyclic.
   `ProviderLoginResult` values, the exact `ProviderAuthState` vocabulary
   `authenticated`, `unauthenticated`, `unavailable`, and `indeterminate`, and
   `ProviderAuthService` support interactive composition without entering the
-  project-root facade.
+  project-root facade. `login(provider, recovery=False)` preserves ordinary
+  login defaults and additively selects the native recovery lifecycle.
 - **Direct internal dependencies:** None.
 - **State, resources, and side effects:** Construction validates and retains one
   existing workspace-root directory, exact Codex and Antigravity executable
@@ -1856,19 +1945,69 @@ every intermediate arrow. The current runtime graph is acyclic.
   `codex login` or bare `agy` in the same CWD with inherited real terminal
   streams and environment. While that exact child remains open, the service
   waits in bounded intervals and runs the same silent selected-provider status
-  probe; a fresh authenticated state boundedly stops and reaps the still-open
-  child before returning control. If the child exits first, the service runs
-  one final fresh probe. It also performs bounded terminate/kill/reap cleanup
+  probe; ordinary login stops and reaps the still-open child after a fresh
+  authenticated state. Recovery first probes status but always launches the
+  native login command. It stops a live child on authenticated status only
+  after observing UNAUTHENTICATED before or during that recovery. An initially
+  authenticated or indeterminate status therefore cannot prematurely stop the
+  child; normal native exit or interruption returns control if no transition
+  is observed. After native exit it runs a final fresh probe; a nonzero recovery
+  exit reports INDETERMINATE even if that probe succeeds. Bare `agy` has no
+  added forced-login flag, and this handoff does not guarantee browser launch. It also performs bounded terminate/kill/reap cleanup
   after Python-side failure or interruption, and only a probe's exact
   authenticated state reports success. It owns no credential, token, account,
   URL, browser, keyring, configuration, workspace persistence, provider turn,
   or import-time resource.
-- **Primary verification/documentation:** `tests/test_provider_auth.py` verifies
+- **Primary verification/documentation:**
+  `tests/test_provider_auth_recovery_live.py` with
+  `tests/provider_auth_recovery_live_harness.py` (opt-in native execution),
+  `tests/test_provider_auth_recovery.py`,
+  `tests/test_provider_auth.py` verifies
   the native authentication contract, `tests/test_interactive_pty.py` verifies
   exact-child and terminal reclamation for both providers, and
   `tests/test_public_api_and_cli.py` verifies the unchanged package facade.
   `docs/operations/privacy-and-provider.md` documents the native authentication
   process and credential boundary.
+
+### `story_writing_agents.provider_auth_recovery`
+
+- **Source:** `src/story_writing_agents/provider_auth_recovery.py`
+- **Responsibility:** Coordinate operation-scoped authentication handoff and
+  provider admission without owning terminal or provider processes.
+- **Supported surface:** No package-supported exports; `__all__` is empty.
+  Package-internal `ProviderAuthRecovery`, `provider_activity`,
+  `request_authentication`, `authentication_replay`, and
+  `validate_provider_replay` connect interactive composition, backend transport,
+  and the context service. Missing recovery scope makes assistance unavailable
+  without launching login; ordinary provider activity proceeds unchanged.
+- **Direct internal dependencies:** `errors`.
+- **State, resources, and side effects:** Two default-empty ContextVars lend
+  scoped coordinator/replay values and reset their tokens on exit. Each
+  coordinator owns async activity counters, admission/readiness events,
+  provider-generation-keyed pending Futures, and completed authentication
+  results. A pending request blocks new admissions; existing provider activity
+  drains before synchronous terminal handoff. Same-generation failures share a
+  shielded Future/result. Resolution advances that provider's generation and
+  reopens admission after all pending requests resolve. Close settles pending
+  requests false and releases admission waiters. A replay scope borrows the
+  original typed failure and source-owner validator; final backend admission
+  checks both owner vetoes, preserves the failure on rejection, and clears the
+  backend callback before submission. Scope cleanup also clears the callback.
+  No credentials, URLs, native streams, story payloads, persistent recovery
+  authority, UI imports, subprocesses, or filesystem resources are owned here.
+  Import creates only resource-free ContextVars; constructors acquire no I/O.
+- **Primary verification/documentation:**
+  `tests/test_provider_auth_recovery_live.py` with
+  `tests/provider_auth_recovery_live_harness.py` (opt-in native execution),
+  `tests/test_provider_auth_recovery.py`,
+  `tests/test_provider_auth.py`, `tests/test_interactive_auth.py`,
+  `tests/test_interactive_controller.py`, `tests/test_interactive_pty.py`,
+  `tests/test_agent_context_execution.py`, and `tests/test_codex_backend.py`;
+  `docs/guides/lead-agent.md`, `docs/reference/backend-and-sessions.md`, and
+  `docs/operations/privacy-and-provider.md`.
+  The live recovery case injects a synthetic authentication rejection before
+  native spawn, then exercises native login and the held request. Mixed
+  provider cases remain separate; fresh browser OAuth is not established.
 
 ### `story_writing_agents.cli`
 
@@ -4592,9 +4731,26 @@ every intermediate arrow. The current runtime graph is acyclic.
   whole-turn budget, and synchronous progress-observer failures.
   `WorkspaceVersionUnsupportedError` specializes `WorkspaceFormatError`; all
   three session transition/access failures specialize `BackendProtocolError`.
+- **Authentication contract:** Module-supported
+  `ProviderAuthenticationRequiredError` specializes `BackendProtocolError` and
+  is absent from the package-root exports. It exposes fixed provider-safe text,
+  provider identity, independent `replay_safe`, authentication generation, and
+  replay-aborted facts. Its attach-once `attach_replay_validator`, synchronous
+  strict-boolean `validate_replay`, `clear_replay_validator`, and `abort_replay`
+  methods retain backend ownership behind an explicit callback contract.
+  Validation failures veto replay; control exceptions propagate. The callback
+  grants no authentication or submission authority.
 - **Direct internal dependencies:** None.
-- **State, resources, and side effects:** None.
-- **Primary verification/documentation:** `tests/test_public_api_and_cli.py`,
+- **State, resources, and side effects:** No module-owned resource or import I/O.
+  A pending authentication exception may transiently retain the backend replay
+  callback and its captured resources; the recovery/context owners clear it
+  before submission or public propagation. Explicit validation may perform the
+  callback owner's local state reads; no error constructor performs I/O.
+- **Primary verification/documentation:**
+  `tests/test_provider_auth_recovery_live.py` with
+  `tests/provider_auth_recovery_live_harness.py` (opt-in native execution),
+  `tests/test_provider_auth_recovery.py`,
+  `tests/test_public_api_and_cli.py`,
   `tests/test_conversation_catalog.py`, `tests/test_session_lifecycle.py`,
   `tests/test_interactive_commands.py`, failure-path tests, and
   `docs/reference/configuration/identifiers-and-errors.md` plus
@@ -4612,6 +4768,13 @@ every intermediate arrow. The current runtime graph is acyclic.
   facade. The coordinator's additive internal picker-presentation keyword
   defaults to the standard layout and accepts the terminal's validated form
   layout without changing authentication, selection, or native-login results.
+- **Runtime recovery:** `recover(provider)` bypasses the authenticated-picker
+  shortcut and invokes native login with `recovery=True` for the exact failed
+  provider. Guidance completes before synchronous native terminal ownership;
+  post-login recovery probes are synchronous without a nested Runner. A failed
+  login result cannot become success merely because the following probe works.
+  Recovery returns a boolean to its caller and changes no route/default,
+  invocation, confirmation, replay budget, or provider credential.
 - **Direct internal dependencies:** `interactive_terminal` and `provider_auth`.
 - **State, resources, and side effects:** The coordinator retains borrowed
   authentication and terminal collaborators plus a resource-free picker and
@@ -4619,7 +4782,7 @@ every intermediate arrow. The current runtime graph is acyclic.
   call-local presentation to that picker and retains none of it afterward; the
   global authentication flow omits it and therefore remains standard, while
   Settings explicitly supplies form presentation. Each full or selected
-  native-status probe runs
+  ordinary native-status probe runs
   in a bounded local Runner/default-executor span under terminal-owned progress;
   callback and incapable terminals remain silent. It projects stable Codex and Antigravity rows
   with explicit authenticated, unauthenticated, unavailable, and indeterminate
@@ -4634,7 +4797,9 @@ every intermediate arrow. The current runtime graph is acyclic.
   both are authenticated, and otherwise no default. The module owns no native
   process, credential, terminal mode, workspace configuration write, provider
   route, backend, session, network, or import-time I/O.
-- **Primary verification/documentation:** `tests/test_interactive_auth.py`
+- **Primary verification/documentation:**
+  `tests/test_provider_auth_recovery.py`,
+  `tests/test_interactive_auth.py`
   verifies authentication presentation and coordination, and
   `tests/test_public_api_and_cli.py` verifies the unchanged package facade.
   `docs/design/interactive-cli-design-system.md` documents the provider-state
@@ -4700,6 +4865,10 @@ every intermediate arrow. The current runtime graph is acyclic.
   policy's exact transition values and
   fixed content-safe denial projection without adding a direct assessor-module
   dependency.
+- **Authentication composition:** Focused Lead input passes the existing auth
+  coordinator's optional `recover` callback to `InteractiveLeadAdapter`. The
+  controller retains shell/session composition; the lead adapter owns the live
+  operation pump and the native service retains login-process ownership.
 - **Direct internal dependencies:** `agent_exchanges`, `agents`, `backend`,
   `cli_context`, `conversation_search`,
   `conversation_storage.contracts`, `conversation_storage.selection`,
@@ -4761,15 +4930,30 @@ every intermediate arrow. The current runtime graph is acyclic.
   authority. Recovery-required and outcome-unknown results are rendered without
   replay or decision controls. Package-internal `project_lead_reference_scope`
   limits reference activation to the complete ordinary non-command input span.
-- **Direct internal dependencies:** `conversations`, `interactive_terminal`,
-  `interactive_terminal._collaboration_view`, and `orchestrator`.
+- **Direct internal dependencies:** `conversations`, `errors`, `interactive_terminal`,
+  `interactive_terminal._collaboration_view`, `orchestrator`, and
+  `provider_auth_recovery`.
 - **State, resources, and side effects:** Borrows one runtime session, controller
   runner, terminal progress lifecycle, picker, prompt, and semantic writer. It
-  owns no provider, store, artifact, Git, or filesystem resource. It can request
+  owns no provider process, store, artifact, Git, or filesystem resource. It can
+  request
   artifact application and local commit only through the runtime's exact typed
-  decisions. Provider and decision coroutines finish together with progress
-  cleanup before rendering.
-- **Primary verification/documentation:** `tests/test_interactive_controller.py`,
+  decisions. Lead turns and consultation decisions optionally create one
+  operation-scoped `ProviderAuthRecovery` and retain the original operation
+  Task across authentication. A separate progress-owned waiter returns on
+  operation completion or drained authentication readiness; the borrowed Runner
+  and progress span both return before the synchronous login callback runs.
+  Repeated pumping resumes the same Task. Cleanup cancels/joins that Task,
+  closes the recovery scope, and closes an unstarted coroutine when necessary.
+  Typed authentication failures and interruption render fixed guidance and
+  return control to the shell. Without a recovery callback, the established
+  direct Runner/progress path remains. Artifact/commit decisions retain their
+  separate ordinary progress and confirmation paths.
+- **Primary verification/documentation:**
+  `tests/test_provider_auth_recovery_live.py` with
+  `tests/provider_auth_recovery_live_harness.py` (opt-in native execution),
+  `tests/test_provider_auth_recovery.py`,
+  `tests/test_interactive_controller.py`,
   `tests/test_interactive_pty.py`, `docs/guides/lead-agent.md`, and
   `docs/reference/interactive-terminal.md`.
 
@@ -6241,8 +6425,11 @@ every intermediate arrow. The current runtime graph is acyclic.
   history plus current overrides/core state; every safe replacement bootstraps
   exact complete history. A transport-proven rejection permits at most one
   replacement within the original physical-call budget and accounting lineage;
-  current native CLIs cannot prove that rejection, so ambiguous failures end
-  the call and the next safe user turn bootstraps. Existing corrective-answer
+  current native CLIs do not prove those continuation-replacement codes, so
+  ambiguous failures end the call and the next safe user turn bootstraps. The
+  separate narrow Antigravity authentication rejection may replay the exact
+  physical request through the context service without replacing its thread.
+  Existing corrective-answer
   handling remains bounded. No path replays an unknown outcome, revives a
   confirmation, or duplicates the initiating user event. Specialist, debate,
   consensus, evidence, and reference scopes remain per invocation.
@@ -6376,6 +6563,17 @@ every intermediate arrow. The current runtime graph is acyclic.
   next-phase, and deadlock-continuation operations; `RuntimeSession` provides
   session-bound wrappers for those operations without adding another owner or
   public package export.
+- **Authentication propagation:** The call-accounting wrapper does not record
+  another SUBMITTED fact when final admission aborts replay using the original
+  failure. Known safe, non-timeout Lead authentication failure records the
+  existing typed rejected-outcome fact before propagating the module-supported
+  authentication exception. A simultaneous timeout is instead durably closed
+  as `provider_timed_out` while the typed authentication failure remains
+  available for interactive assistance. Confirmed specialist execution
+  preserves sibling results and persists/finalizes the collaboration outcome
+  before raising an authentication failure from assignments or synthesis. This
+  retains submitted-call evidence and does not mint another confirmation,
+  dispatch, or collaboration run.
 - **Direct internal dependencies:** `agent_context.accounting`,
   `agent_context.continuation`, `agent_context.manifest`, `agent_context.planning`, `agent_context.service`,
   `agent_context.sources`, `agents`, `artifact_proposals`, `backend`, `config`,
@@ -6423,7 +6621,12 @@ every intermediate arrow. The current runtime graph is acyclic.
   critiques as unpublished immutable material, and provide verified
   continuation ruling/conflict material to every later phase. It cancels only
   tasks owned by the exact phase request.
-- **Primary verification/documentation:** `tests/test_lead_orchestration.py`,
+- **Primary verification/documentation:**
+  `tests/test_provider_auth_recovery_live.py` with
+  `tests/provider_auth_recovery_live_harness.py` (opt-in native execution),
+  `tests/test_provider_auth_recovery.py`,
+  `tests/test_provider_timeout_recovery.py`,
+  `tests/test_lead_orchestration.py`,
   `tests/test_artifact_proposal_orchestration.py`,
   `tests/test_lead_artifact_application.py`,
   `tests/test_lead_evidence_grounding.py`,
@@ -7624,12 +7827,19 @@ every intermediate arrow. The current runtime graph is acyclic.
 
 ## Consistency Notes
 
-- Provider timeout and Lead recovery retain 137 production units and add only
-  the inward `cli -> provider_adapter` shared-default edge: 540 runtime edges,
-  with no directed runtime cycle. Whole-source path parity remains exact.
-  Existing facade exports are unchanged; failure enum values and one optional
-  context-service lifecycle keyword extend their established owning contracts.
-
+- Provider timeout, Lead recovery, and runtime authentication recovery compose
+  over the 137-unit/539-edge baseline by adding the internal
+  `provider_auth_recovery` module, its eight inward runtime edges, and the
+  independent `cli -> provider_adapter` shared-timeout-default edge: 138 units,
+  548 runtime edges, 550 all-import edges, and no directed runtime cycle.
+  Whole-source path parity remains exact. Existing package facades and
+  persistent store schemas are unchanged; failure enum values and one optional
+  context-service lifecycle keyword extend their established owning contracts,
+  while the typed authentication exception remains supported at its owning
+  `errors` module. Recovery state and callbacks are operation-local and cannot
+  revive authority after restart. A simultaneous native authentication and
+  timeout classification remains eligible for interactive assistance but is
+  tainted, replay-ineligible, and durably closed as a timeout.
 - Session continuation adds two internal modules and 13 inward runtime edges
   over the accepted 135-unit/526-edge baseline: 137 units, 539 runtime edges,
   and no new or existing runtime cycle. Facade exports are unchanged. Source
