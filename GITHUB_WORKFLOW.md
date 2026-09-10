@@ -81,7 +81,7 @@ without a user/maintainer decision.
 |Oversize|Split-oversized-work-into-complete-slices/releases;indivisible-over-cap-needs-capacity-exception;preserve-all-`Must`|
 |Iteration|One-per-release;leaves-inherit-Iteration/waves;active-statuses-require-it;`Backlog`-may-omit;root-tracks-current-`Must`;completed-releases-retain-theirs|
 |Closure|Each-release-has-publishable-`main`-PR-and-closes-on-publication;root-closes-after-all-`Must`/integration;other-tiers-stay-linked/nonblocking|
-|Topology|Single-release=current/root-Issue;feature-leaf-PR-targets-release-branch-and-squashes;numbered-release-PR-targets-`main`-and-closes-release;umbrella-normally-planning-only/administrative-close-after-`Must`/core-verification;distinct-diff-uses-own-Development-linked-branch/PR-targeting-`main`,starts-after-all-`Must`-release-PRs/core-integration,and-may-close-root|
+|Topology|Single-release=current/root-Issue;feature-leaf-PR-targets-release-branch;numbered-release-PR-targets-`main`-and-closes-release;all-PRs-use-GitHub-squash-merge;umbrella-normally-planning-only/administrative-close-after-`Must`/core-verification;distinct-diff-uses-own-Development-linked-branch/PR-targeting-`main`,starts-after-all-`Must`-release-PRs/core-integration,and-may-close-root|
 
 ## Project Status
 
@@ -99,21 +99,22 @@ remains `In progress` unless reprioritized; blocked never becomes `Done`.
 
 ## Branches, Commits, and Pull Requests
 
-One accountable owner per branch/worktree and one parent integrator; one active writer.
-Bind writers to [AGENTS identity](AGENTS.md#role-mode-and-control-gate); mismatches never
-authorize destructive cleanup.
+One branch/worktree owner, parent integrator, and active writer. Writers match
+[AGENTS identity](AGENTS.md#role-mode-and-control-gate); mismatches forbid
+destructive cleanup.
 
 Use `issue-<number>-<slug>`. Link every branch/PR through its owning Issue's Development
-field; names, URLs, comments, or `Refs` are insufficient. Ordinary child-to-parent squashes
-apply only to feature leaves, never release PRs; follow Requirement Topology above. Verify Development and
-Project `Linked pull requests`; retain a branch/PR link through `In progress`, merged PR for
-`Done`.
+field; names/URLs/comments/`Refs` are insufficient. Use GitHub's **Squash and merge**
+method for every PR, including feature, release, and distinct-diff PRs; never use a merge
+commit or rebase merge. Every resulting squash commit message must include the owning issue
+number (for example, `#123`). Verify Development/Project `Linked pull requests`; retain links
+through `In progress`; merged PRs through `Done`.
 
-Follow commit policy: coherent, functional, tested, reviewable commits. Draft PRs hold
-incomplete work/evidence. Ready requires scope/criteria, checks, docs, diff/base review.
-Use `Refs #N` for partial/child work; close child manually after squash/integration. Use
-`Closes #N` only for completing `main` PRs. Merge needs authorization. Issue closure triggers
-`Done`; verify Issue/PR/Project afterward.
+Commit policy requires coherent/functional/tested/reviewable commits. Draft PRs hold
+incomplete work/evidence; readiness requires scope/criteria/checks/docs/diff/base review.
+Use `Refs #N` for partial/child work; manually close child after squash/integration. Use
+`Closes #N` only for completing `main` PRs. Merge requires authorization. Closure triggers
+`Done`; verify Issue/PR/Project.
 
 ### Worktree Disposition and Cleanup
 
