@@ -637,7 +637,8 @@ Do not treat every provider-related failure as the same recovery case:
 
 | Observable fact | What it means | Safe next action |
 | --- | --- | --- |
-| An exchange has a request and `provider_failure` / `provider_invocation_failed`, but no valid `ProviderResult`. | The adapter did not return Story's provider-result contract. Configuration, output-schema rejection, authentication, transport, or another provider-side failure may be responsible. The fixed code does not prove whether the provider performed external work. | Diagnose the provider/configuration boundary. Do not infer that replay is safe from this diagnostic alone. |
+| An exchange closes with `provider_failure` / `provider_authentication_required`, but no valid `ProviderResult`. | The completed native result requires authentication. Authentication and timeout are independent facts; interactive Lead work still offers provider-native sign-in. | Complete native sign-in. Story may replay only the exact Antigravity pre-execution rejection when no timeout fact exists; a timeout defeats replay and continuation reuse and closes an eligible read-only Lead attempt as `provider_timed_out` with `retry_lead_turn`. |
+| An exchange has a request and `provider_failure` / `provider_invocation_failed`, but no valid `ProviderResult`. | The adapter did not return Story's provider-result contract. Configuration, output-schema rejection, transport, or another provider-side failure may be responsible. The fixed code does not prove whether the provider performed external work. | Diagnose the provider/configuration boundary. Do not infer that replay is safe from this diagnostic alone. |
 | A completed result is rejected and the durable Lead failure is `provider_result_rejected`. | Story received a result but deterministically rejected its structured action, correlation, semantics, action budget, or validated answer. The rejected call is closed. | Follow `retry_lead_turn`. This creates a fresh call; the tainted provider thread is not reused. |
 | Collaboration state is `outcome_unknown`. | Submission is durable, but no authoritative accepted or rejected result closes it. | Follow `inspect_and_resolve_outcome`; never replay the submitted call. |
 
@@ -652,6 +653,31 @@ READ, or omits required nullable Lead fields, is a
 returned-result rejection and becomes `provider_result_rejected`, not
 `outcome_unknown`. These examples contain no provider-native diagnostic or
 story content; durable user history also keeps only the fixed classifications.
+
+The replay exception is deliberately narrow. Antigravity must exit 1 with its
+exact zero-turn, zero-duration, empty conversation/response authentication-
+timeout envelope and five zero usage counters. After successful interactive
+sign-in and fresh status, Story may make one replacement physical call with a
+new call ID. Payload, schema, correlation, expected thread, execution profile,
+and captured evidence remain identical, and any route, configuration, session,
+thread, workspace, or source drift vetoes submission. Both attempts consume the
+physical-call limit and have distinct exchanges.
+
+The fixed provider message contains the words `timed out`, but those words do
+not set Story's independent timeout fact. When that fact is present,
+authentication assistance and its exchange classification remain available,
+while timeout forbids replay and continuation reuse and controls durable Lead
+closure as `provider_timed_out` with `retry_lead_turn`.
+
+During a confirmed multi-specialist consultation, Story waits for active
+siblings before giving native sign-in the terminal. Completed sibling replies
+remain durable and are not dispatched again. If authentication or replay fails,
+the runtime persists every known reply and the applicable `failed` or
+`outcome_unknown` result before returning the typed authentication error. A
+restart performs no replay. The next user action follows that durable state;
+any later Lead request is a fresh turn rather than a continuation of the failed
+physical call. Noninteractive callers receive
+`ProviderAuthenticationRequiredError` without a native login handoff.
 
 Artifact candidates add two separate staleness checks. Before review starts,
 Confirm revalidates the candidate's evidence and complete base state; drift

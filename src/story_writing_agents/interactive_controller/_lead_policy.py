@@ -3,8 +3,9 @@
 from __future__ import annotations
 
 import asyncio
+import inspect
 import uuid
-from collections.abc import Awaitable
+from collections.abc import Awaitable, Callable
 
 from ..conversations import (
     ArtifactApplicationDecision,
@@ -38,7 +39,9 @@ from ..interactive_terminal._collaboration_view import (
     project_lead_turn_result,
     project_story_commit_decision_result,
 )
+from ..errors import ProviderAuthenticationRequiredError
 from ..orchestrator import RuntimeSession
+from ..provider_auth_recovery import ProviderAuthRecovery
 
 
 _DECISION_CHOICES = tuple(
@@ -124,6 +127,7 @@ class InteractiveLeadAdapter:
         "_runner",
         "_semantic_output",
         "_session",
+        "_recover_authentication",
     )
 
     def __init__(
@@ -134,6 +138,8 @@ class InteractiveLeadAdapter:
         picker: InteractivePickerInput,
         prompt: InteractivePromptInput,
         semantic_output: InteractiveSemanticOutput,
+        *,
+        recover_authentication: Callable[[str], bool] | None = None,
     ) -> None:
         if not isinstance(session, RuntimeSession):
             raise TypeError("session must be a RuntimeSession")
@@ -145,12 +151,35 @@ class InteractiveLeadAdapter:
         self._picker = picker
         self._prompt = prompt
         self._semantic_output = semantic_output
+        self._recover_authentication = recover_authentication
 
     def submit(self, conversation_id: str, text: str) -> bool:
         """Run one literal lead turn; return true only for call-local EOF."""
 
-        turn = self._run_turn(self._session.lead_turn(conversation_id, text))
-        return self._present_and_decide(turn)
+        try:
+            turn = self._run_turn(self._session.lead_turn(conversation_id, text))
+            return self._present_and_decide(turn)
+        except ProviderAuthenticationRequiredError:
+            self._semantic_output.write_component(
+                Notice(
+                    "Authentication recovery could not safely continue this request. "
+                    "Inspect /history and /exchanges before continuing.",
+                    label="authentication required",
+                    role=SemanticRole.ERROR,
+                    state=ViewState.ERROR,
+                )
+            )
+            return False
+        except (asyncio.CancelledError, KeyboardInterrupt):
+            self._semantic_output.write_component(
+                Notice(
+                    "The active Lead request was interrupted. Inspect /history "
+                    "and /exchanges before continuing.",
+                    label="interrupted", role=SemanticRole.WARNING,
+                    state=ViewState.CANCELLED,
+                )
+            )
+            return False
 
     def _present_and_decide(self, turn: LeadTurnResult) -> bool:
         """Render typed turns and consume only explicit structured controls."""
@@ -407,10 +436,54 @@ class InteractiveLeadAdapter:
             )
         )
 
+    def _run_operation(self, operation: Awaitable[object]) -> object:
+        """Keep the operation pending while progress yields terminal ownership."""
+
+        if self._recover_authentication is None:
+            return self._runner.run(self._progress.run(operation))
+        recovery = ProviderAuthRecovery()
+
+        async def scoped_operation() -> object:
+            with recovery.scope():
+                return await operation
+
+        task = self._runner.get_loop().create_task(scoped_operation())
+
+        async def wait_for_operation_or_auth() -> None:
+            ready = asyncio.create_task(recovery.wait_ready())
+            try:
+                await asyncio.wait((task, ready), return_when=asyncio.FIRST_COMPLETED)
+            finally:
+                ready.cancel()
+                await asyncio.gather(ready, return_exceptions=True)
+
+        async def join_operation() -> None:
+            await asyncio.gather(task, return_exceptions=True)
+
+        try:
+            while True:
+                self._runner.run(self._progress.run(wait_for_operation_or_auth()))
+                if task.done():
+                    return task.result()
+                key = recovery.next_request()
+                # Runner and progress have both returned before native TTY use.
+                authenticated = self._recover_authentication(key[0])
+                recovery.resolve(key, authenticated)
+        finally:
+            if not task.done():
+                task.cancel()
+            recovery.close()
+            self._runner.run(join_operation())
+            if (
+                inspect.iscoroutine(operation)
+                and inspect.getcoroutinestate(operation) == inspect.CORO_CREATED
+            ):
+                operation.close()
+
     def _run_turn(self, operation: Awaitable[LeadTurnResult]) -> LeadTurnResult:
         """Complete one lead turn and progress cleanup before returning."""
 
-        result = self._runner.run(self._progress.run(operation))
+        result = self._run_operation(operation)
         if type(result) is not LeadTurnResult:
             raise TypeError("lead turn returned an invalid result")
         return result
@@ -421,7 +494,7 @@ class InteractiveLeadAdapter:
     ) -> LeadDecisionResult:
         """Complete one decision and progress cleanup before returning."""
 
-        result = self._runner.run(self._progress.run(operation))
+        result = self._run_operation(operation)
         if type(result) is not LeadDecisionResult:
             raise TypeError("lead decision returned an invalid result")
         return result

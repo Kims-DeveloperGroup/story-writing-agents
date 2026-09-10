@@ -1,5 +1,7 @@
 """Public exception hierarchy for the story-writing runtime."""
 
+from collections.abc import Callable
+
 
 class StoryWritingAgentsError(Exception):
     """Base class for expected runtime errors."""
@@ -43,6 +45,53 @@ class ManuscriptExistsError(StoryWritingAgentsError):
 
 class BackendProtocolError(StoryWritingAgentsError):
     """Raised when a backend returns a reply that violates the public protocol."""
+
+
+class ProviderAuthenticationRequiredError(BackendProtocolError):
+    """Native authentication failure with a separate physical replay decision."""
+
+    def __init__(self, provider: str, *, replay_safe: bool = False) -> None:
+        if provider not in {"codex", "antigravity"}:
+            raise ValueError("authentication provider is unsupported")
+        if type(replay_safe) is not bool:
+            raise TypeError("authentication replay decision must be boolean")
+        super().__init__(f"{provider} authentication is required; use native sign-in")
+        self.provider = provider
+        self.replay_safe = replay_safe
+        self.auth_generation = 0
+        self.replay_aborted = False
+        self._replay_validator: Callable[[], bool] | None = None
+        self._validator_attached = False
+
+    def attach_replay_validator(self, validator: Callable[[], bool]) -> None:
+        """Attach one operation-local backend veto before offering recovery."""
+
+        if self._validator_attached or not callable(validator):
+            raise ValueError("authentication replay validator is invalid")
+        self._validator_attached = True
+        self._replay_validator = validator
+
+    def validate_replay(self) -> bool:
+        """Require an exact synchronous true; validation never grants replay."""
+
+        validator = self._replay_validator
+        if validator is None:
+            return False
+        try:
+            return validator() is True
+        except Exception:
+            return False
+
+    def clear_replay_validator(self) -> None:
+        """Release the callback before submission or public failure propagation."""
+
+        self._replay_validator = None
+
+    def abort_replay(self) -> None:
+        """Retain original physical facts when a prepared retry was vetoed."""
+
+        self.replay_aborted = True
+        self.clear_replay_validator()
 
 
 class SessionExistsError(BackendProtocolError):

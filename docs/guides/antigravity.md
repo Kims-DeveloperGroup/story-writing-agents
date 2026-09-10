@@ -7,9 +7,11 @@
 > configured route fallback.
 > Settings Model/Effort editors also use bounded `agy models` discovery for a
 > pending Antigravity route without persisting the catalog.
-> Focused deterministic tests cover the adapter contract. Earlier live acceptance with
-> CLI 1.1.27 verified fresh and resumed Lead turns for Pro, Flash, and Sonnet;
-> availability and results remain dependent on the environment and provider.
+> Focused deterministic tests cover the adapter contract and call-time
+> authentication recovery. Live acceptance with CLI 1.1.27 verified fresh and
+> resumed Lead turns for Pro, Flash, and Sonnet; availability and results remain
+> dependent on the environment and provider. The current call-time authentication
+> evidence limitation is recorded with the dated snapshot below.
 > The [17-case conversation matrix](#opt-in-live-conversation-matrix) includes
 > actual provider turns and explicitly labeled fault injections; see the dated
 > evidence snapshot below.
@@ -55,6 +57,7 @@ Interpret a failed turn by its displayed next action:
 | Visible result | User action |
 | --- | --- |
 | A normal answer, question, critique, recommendation, or confirmation request | Continue with the Lead or decide the exact displayed proposal. |
+| Native authentication opens during an active Lead operation | Complete the provider-owned sign-in. If the native interface remains open after sign-in, exit it normally so Story can perform its fresh status check. |
 | `retry_lead_turn` after a read-only Lead failure or rejection | Send a new message, revise the wording, or resubmit the request in the same conversation, including after restart. Runtime preserves the original request and failure and starts a fresh turn. |
 | `outcome_unknown` / `inspect_and_resolve_outcome` | Inspect the preserved outcome. Do not submit the same call again: external work may have occurred. |
 | `provider_invocation_failed` with no valid provider result | Check authentication, selected route/model/effort, executable, schema support, and provider-native diagnostics. This code alone cannot establish whether replay is safe. |
@@ -113,8 +116,9 @@ one authorization-code paste back into its prompt. Story cannot remove that
 remote provider requirement, but it never asks for the code again. Once the
 silent probe reports authenticated, Story boundedly stops and reaps that exact
 bare-`agy` login child if it is still interactive and automatically resumes the
-startup, `/auth`, or Settings flow. Do not enter `/exit`, Ctrl-C, EOF, another
-Enter, or a second code to return to Story. If status is not authenticated,
+startup, `/auth`, or Settings flow. In those initial authentication flows, do
+not enter `/exit`, Ctrl-C, EOF, another Enter, or a second code to return to
+Story. If status is not authenticated,
 native interaction continues with no overall Story login deadline. See
 Antigravity's official
 [Installation & auth guide](https://antigravity.google/docs/cli/install/).
@@ -122,6 +126,70 @@ Antigravity's official
 Keep credentials out of story configuration, prompts, drafts, filenames, and
 logs. Provider subprocesses inherit the story process environment, so treat
 environment variables as visible to the selected local provider executable.
+
+### Recover authentication during a Lead operation
+
+A successful startup or `/auth` probe does not guarantee that every later
+provider call will remain authenticated. The provider can reject a specific
+call after the shell has already admitted the session. In interactive Lead
+work, Story treats that native challenge as a fresh authentication event. It
+blocks new provider calls, lets already active sibling calls reach a terminal
+result, and coalesces challenges from the same Antigravity authentication
+generation before returning terminal ownership for one provider-native sign-in.
+
+Antigravity recovery invokes the same resolved bare `agy` command as ordinary
+sign-in, even when the immediately preceding status probe still says
+authenticated. Story does not add an OAuth flag, synthesize a browser URL, or
+interpret native terminal output. Complete the native provider interaction. If
+the Antigravity interface remains open after authentication, exit it normally.
+Recovery proceeds only after native sign-in and a fresh provider status agree
+that Antigravity is authenticated. An unchanged authenticated status while the
+native process remains open does not end call-time recovery by itself.
+
+Authentication assistance and provider-call replay are separate decisions. The
+only Antigravity response that can authorize one automatic physical replay is
+the supported exit-1, pre-execution rejection below, with no additional fields:
+
+```json
+{
+  "conversation_id": "",
+  "status": "ERROR",
+  "response": "",
+  "error": "authentication failed or timed out",
+  "duration_seconds": 0,
+  "num_turns": 0,
+  "usage": {
+    "input_tokens": 0,
+    "output_tokens": 0,
+    "thinking_tokens": 0,
+    "cache_read_tokens": 0,
+    "total_tokens": 0
+  }
+}
+```
+
+After successful sign-in, Story may submit that exact logical request once
+more at the physical-call boundary. The retry has a new `call_id` and exchange
+identity while retaining the exact payload, schema, correlation, expected
+thread, execution profile, and captured evidence. It is cancelled before
+submission if the route, configuration, workspace, session, thread, or source
+identity changed. The failed attempt and retry each consume physical-call
+budget and remain separately inspectable.
+
+The words `timed out` in that fixed provider message do not themselves set
+Story's independent timeout fact. If the same failure also has a timeout fact,
+authentication assistance and its exchange classification remain available,
+but timeout defeats replay and continuation reuse and controls an eligible
+read-only Lead closure as `provider_timed_out` with `retry_lead_turn`.
+
+Any Antigravity 401 that lacks this complete pre-execution proof still receives
+interactive authentication assistance, but Story does not replay it. Codex 401
+events follow the same assistance path and are never automatically replayed;
+a later valid `turn.completed` result remains a normal success despite an
+earlier 401 event in the same native stream. Python and other noninteractive
+paths raise `ProviderAuthenticationRequiredError` without launching native
+sign-in. Restart never supplies replay authority for a prior authentication
+failure.
 
 ## Choose Antigravity for an agent
 
@@ -303,18 +371,21 @@ absent artifact does not change or narrow the original failure. Treat any saved
 body as hostile plaintext and follow the inspection workflow in
 [Privacy](../operations/privacy-and-provider.md#rejected-provider-response-artifacts).
 
-Separately, `debug_logs/agent_exchanges/` can retain completed Antigravity
-failure stdout, stderr, and exit status before its fixed `provider_failure`
-outcome. A recovered native `ERROR`, or a timeout/truncation warning accepted
+Separately, `debug_logs/agent_exchanges/` can retain completed Antigravity or
+Codex failure stdout, stderr, and exit status before its fixed
+`provider_failure` outcome. A recovered Antigravity native `ERROR`, or a
+timeout/truncation warning accepted
 with exact current-call completion proof, retains the same private diagnostic
 envelope alongside its returned structured result. These bytes use strict UTF-8 or
 explicit base64 encoding within the existing capture bounds and retention.
-Outer watchdog timeout, cancellation, and process-start failure supply no
-partial bytes through the shared process runner, so capture invents no
-response. A completed native timeout/truncation envelope can instead be
+Failures before a completed process, including outer-watchdog timeout and
+process-start failure, supply no partial bytes through the shared process
+runner; their response carries only the provider-failure marker when capture
+succeeds. A completed native timeout/truncation envelope can instead be
 retained, including on exit zero; acceptance still requires exact completion
-proof and normal validation. Capture
-remains best effort and at most once; gaps never establish replay safety. See
+proof and normal validation. Cancellation uses its separate terminal without a
+failure marker. Capture remains best effort and at most once; gaps never
+establish replay safety. See
 [agent-exchange privacy](../operations/privacy-and-provider.md#agent-exchange-privacy).
 
 The command line contains the full request, including any story input, drafts,
@@ -753,6 +824,15 @@ observed. F03 passed cancellation, sibling preservation, and inspection without
 replay; F04 passed the separately confirmed failed-specialist recovery above.
 The global ledger retains 228 charged reservations against the 312 ceiling,
 including failed attempts.
+
+Issue #631 added focused deterministic classification, replay, accounting,
+concurrency, restart, and real-PTY recovery coverage. Separate live checks
+completed full Lead proposal, specialist consultation, synthesis, restart, and
+follow-up flows with `gemini-3.1-pro-low`, `gemini-3.8-flash-low`, and
+`claude-sonnet-4-6`. The native authentication-to-replay live case did not
+complete: fresh authentication remained indeterminate, so the runtime correctly
+withheld the real Pro replay. This evidence does not claim a browser OAuth
+completion or a live successful automatic replay.
 
 F05 used six actual completions: the unchanged completion and a named injected
 known `ERROR` were accepted; the four named invalid-UTF-8, invalid-JSON,

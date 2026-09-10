@@ -29,6 +29,7 @@ class AgentExchangeTerminalCode(StrEnum):
 
     ACCEPTED = "accepted"
     PROVIDER_INVOCATION_FAILED = "provider_invocation_failed"
+    PROVIDER_AUTHENTICATION_REQUIRED = "provider_authentication_required"
     PROVIDER_TIMED_OUT = "provider_timed_out"
     PROVIDER_CONTRACT_INVALID = "provider_contract_invalid"
     CANCELLED = "cancelled"
@@ -61,6 +62,7 @@ _REJECTED_CODES = frozenset(
 _PROVIDER_FAILURE_CODES = frozenset(
     {
         AgentExchangeTerminalCode.PROVIDER_INVOCATION_FAILED,
+        AgentExchangeTerminalCode.PROVIDER_AUTHENTICATION_REQUIRED,
         AgentExchangeTerminalCode.PROVIDER_TIMED_OUT,
         AgentExchangeTerminalCode.PROVIDER_CONTRACT_INVALID,
     }
@@ -336,21 +338,18 @@ class AgentExchangeCaptureLifecycle:
                     return
                 # Failure bytes never authorize a normal response transition.
                 self._state = _CaptureState.TERMINAL_ATTEMPTED
-                if response_diagnostic is not None:
-                    try:
-                        self._record(
-                            AgentExchangeRequestType.RESPONSE,
-                            _canonical_json(
-                                {
-                                    "provider_failure": True,
-                                    "response_diagnostic": _response_diagnostic(
-                                        response_diagnostic
-                                    ),
-                                }
-                            ),
+                try:
+                    content: dict[str, object] = {"provider_failure": True}
+                    if response_diagnostic is not None:
+                        content["response_diagnostic"] = _response_diagnostic(
+                            response_diagnostic
                         )
-                    except BaseException:
-                        pass
+                    self._record(
+                        AgentExchangeRequestType.RESPONSE,
+                        _canonical_json(content),
+                    )
+                except BaseException:
+                    pass
                 self._record(
                     AgentExchangeRequestType.OUTCOME,
                     _terminal_content(AgentExchangeOutcome.PROVIDER_FAILURE, code),
