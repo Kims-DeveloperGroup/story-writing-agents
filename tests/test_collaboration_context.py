@@ -1321,6 +1321,16 @@ class CollaborationReadableProjectionTests(unittest.TestCase):
         all_records += project_collaboration_readable_history(failure_history)
         observed_keys = {field.key for record in all_records for field in record.fields}
         artifact_keys = {
+            CollaborationReadableFieldKey.LEAD_RECOMMENDATION_PURPOSE,
+            CollaborationReadableFieldKey.LEAD_RECOMMENDATION_INSTRUCTION,
+            CollaborationReadableFieldKey.LEAD_RECOMMENDATION_RESULT,
+            CollaborationReadableFieldKey.LEAD_RECOMMENDATION_IMPACT,
+            CollaborationReadableFieldKey.LEAD_RECOMMENDATION_DECISION,
+            CollaborationReadableFieldKey.LEAD_RECOMMENDATION_REVISION,
+            CollaborationReadableFieldKey.LEAD_RECOMMENDATION_STATE,
+            CollaborationReadableFieldKey.LEAD_RECOMMENDATION_SOURCES,
+            CollaborationReadableFieldKey.LEAD_RECOMMENDATION_TARGETS,
+            CollaborationReadableFieldKey.LEAD_RECOMMENDATION_COST,
             CollaborationReadableFieldKey.ARTIFACT_OBJECTIVE_REQUEST,
             CollaborationReadableFieldKey.ARTIFACT_OBJECTIVE_ACTION,
             CollaborationReadableFieldKey.ARTIFACT_OBJECTIVE_NEXT_STEP,
@@ -1373,6 +1383,16 @@ class CollaborationReadableProjectionTests(unittest.TestCase):
                 "artifact_objective.request",
                 "artifact_objective.action",
                 "artifact_objective.next_step",
+                "lead_recommendation.purpose",
+                "lead_recommendation.instruction",
+                "lead_recommendation.result",
+                "lead_recommendation.impact",
+                "lead_recommendation.decision",
+                "lead_recommendation.revision",
+                "lead_recommendation.state",
+                "lead_recommendation.sources",
+                "lead_recommendation.targets",
+                "lead_recommendation.cost",
             ),
         )
         searchable_names = " ".join(item.value for item in observed_keys)

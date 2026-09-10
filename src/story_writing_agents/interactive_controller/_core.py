@@ -972,6 +972,29 @@ class InteractiveController:
             CollaborationNextAction.REPAIR_AUTHORITATIVE_HISTORY: (
                 "Repair authoritative history before continuing."
             ),
+            CollaborationNextAction.REPLY_TO_LEAD: (
+                "Reply to the lead agent's question."
+            ),
+            CollaborationNextAction.RETRY_LEAD_TURN: (
+                "Submit new input for a fresh Lead turn; the failed attempt "
+                "will not be replayed."
+            ),
+            CollaborationNextAction.SUBMIT_APPLICATION_DECISION: (
+                "Review the exact artifact application request and submit "
+                "its separate Apply decision."
+            ),
+            CollaborationNextAction.SUBMIT_COMMIT_DECISION: (
+                "Review the exact local commit request and submit "
+                "its separate Commit decision."
+            ),
+            CollaborationNextAction.SUBMIT_RECOMMENDATION_DECISION: (
+                "Review the exact Lead preparation and choose Confirm, "
+                "Reject, or Revise."
+            ),
+            CollaborationNextAction.FINALIZE_RECOMMENDATION: (
+                "Finalize the known preparation result locally without "
+                "replaying provider work."
+            ),
         }[action]
 
     @staticmethod

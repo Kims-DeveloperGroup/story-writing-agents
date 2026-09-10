@@ -8,6 +8,7 @@ from enum import StrEnum
 from typing import NoReturn
 
 from ..conversations import (
+    LeadRecommendationState,
     ArtifactApplicationOutcomeKind,
     CollaborationConfirmationDecision,
     CollaborationHistoryProjection,
@@ -846,7 +847,21 @@ def _is_unproposed_lead_history(history: CollaborationHistoryProjection) -> bool
         return False
     if history.next_safe_action not in {
         CollaborationNextAction.NONE, CollaborationNextAction.RETRY_LEAD_TURN,
+        CollaborationNextAction.CONTINUE_WITH_LEAD,
+        CollaborationNextAction.SUBMIT_RECOMMENDATION_DECISION,
+        CollaborationNextAction.FINALIZE_RECOMMENDATION,
     }:
+        return False
+    if history.current_state is not None and not (
+        history.current_state is CollaborationStepState.RUNNING
+        and history.current_recommendation_state is LeadRecommendationState.RUNNING
+        and history.next_safe_action is CollaborationNextAction.FINALIZE_RECOMMENDATION
+    ):
+        return False
+    if history.next_safe_action in {
+        CollaborationNextAction.CONTINUE_WITH_LEAD, CollaborationNextAction.SUBMIT_RECOMMENDATION_DECISION,
+        CollaborationNextAction.FINALIZE_RECOMMENDATION,
+    } and history.current_recommendation_request is None:
         return False
     return history == CollaborationHistoryProjection(
         session_id=history.session_id,
@@ -855,7 +870,7 @@ def _is_unproposed_lead_history(history: CollaborationHistoryProjection) -> bool
         current_turn_id=history.current_turn_id,
         current_step_id=history.current_step_id,
         current_proposal=None,
-        current_state=None,
+        current_state=history.current_state,
         confirmation_request_id=None,
         confirmation_decision=None,
         execution_attempt_id=None,
@@ -869,6 +884,11 @@ def _is_unproposed_lead_history(history: CollaborationHistoryProjection) -> bool
         current_story_commit_result=history.current_story_commit_result,
         artifact_objectives=history.artifact_objectives,
         offered_draft_sources=history.offered_draft_sources,
+        current_recommendation_request=history.current_recommendation_request,
+        current_recommendation_decision=history.current_recommendation_decision,
+        current_recommendation_start=history.current_recommendation_start,
+        current_recommendation_result=history.current_recommendation_result,
+        current_recommendation_state=history.current_recommendation_state,
     )
 
 
@@ -976,7 +996,11 @@ def _unresolved_owner(evidence: SessionRecoveryEvidence) -> SessionRecoveryOwner
     if evidence.collaboration_history.current_state in {
         CollaborationStepState.RUNNING,
         CollaborationStepState.OUTCOME_UNKNOWN,
-    }:
+    } and not (
+        evidence.collaboration_history.current_recommendation_state is LeadRecommendationState.RUNNING
+        and evidence.collaboration_history.next_safe_action is CollaborationNextAction.FINALIZE_RECOMMENDATION
+        and _is_unproposed_lead_history(evidence.collaboration_history)
+    ):
         return SessionRecoveryOwner.COLLABORATION_HISTORY
     if any(
         state in {

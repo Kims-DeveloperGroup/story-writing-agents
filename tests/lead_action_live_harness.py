@@ -1,4 +1,4 @@
-"""Opt-in A641 provider evidence; imports are inert and every call is reserved.
+"""Opt-in contextual and recommendation provider evidence with reserved calls.
 
 The manifest authorizes one case on pinned source and an explicit Codex model.
 The release ledger is separate from historical live harness budgets. This runner
@@ -22,6 +22,8 @@ import time
 from unittest import mock
 
 CASE = "A641-CONTEXT-DRAFT"
+RECOMMENDATION_CASE = "B642-RECOMMEND-PREPARE"
+CASES = (CASE, RECOMMENDATION_CASE)
 OUTLINE = "core_documents/global_outline.md"
 MARKER = "A641-LIVE-SYNTHETIC"
 DRAFT = "1. A lantern vanishes.\n2. Min finds its keeper.\n3. The lantern returns.\n[" + MARKER + "]\n"
@@ -74,12 +76,13 @@ def source_closure(root: Path | None = None):
     return {p.relative_to(root).as_posix(): sha(p.read_bytes()) for p in sorted(files)}
 
 
-def load_authorization(path: Path | None):
+def load_authorization(path: Path | None, *, case=None):
     require(os.environ.get("STORY_RUN_LIVE") == "1", "Explicit live opt-in is required")
     require(path is not None and path.is_file(), "A fresh authorization manifest is required")
     value = json.loads(path.read_bytes())
     require(value.get("schema") == "lead-action-live-authorization-v1", "Unsupported authorization schema")
-    require(value.get("case") == CASE and value.get("authorized") is True, "This exact case is not authorized")
+    require(value.get("case") in CASES and value.get("authorized") is True, "This exact case is not authorized")
+    require(case is None or value["case"] == case, "Authorization names a different case")
     require(value.get("limits") == LIMITS, "Fresh release and case limits must match")
     require(isinstance(value.get("authorization_id"), str) and bool(value["authorization_id"]), "Authorization identity is required")
     require(isinstance(value.get("release_id"), str) and bool(value["release_id"]), "Release identity is required")
@@ -123,7 +126,8 @@ class CallGuard:
             require(self.ledger.get("schema") == "lead-action-release-ledger-v1" and self.ledger.get("release_id") == self.authorization["release_id"] and self.ledger.get("limits") == LIMITS, "Foreign or historical ledger")
             require(all(a.get("status") in {"passed", "failed"} for a in self.ledger["attempts"]), "A prior interrupted case needs explicit accounting resolution")
             require(self.authorization["authorization_id"] not in [a["authorization_id"] for a in self.ledger["attempts"]], "A case attempt must never retry automatically")
-            self.ledger["attempts"].append({"authorization_id": self.authorization["authorization_id"], "case": CASE, "status": "running", "reserved": 0, "seconds": 0})
+            require(self.authorization["case"] in CASES, "Unknown live case")
+            self.ledger["attempts"].append({"authorization_id": self.authorization["authorization_id"], "case": self.authorization["case"], "status": "running", "reserved": 0, "seconds": 0})
             save(self.ledger_path, self.ledger)
             save(self.evidence / "authorization.json", self.authorization)
             return self
@@ -223,19 +227,29 @@ def snapshot(runtime, workspace):
 
 
 async def contextual_case(guard):
+    return await _authoring_case(guard, case=CASE)
+
+
+async def recommendation_case(guard):
+    return await _authoring_case(guard, case=RECOMMENDATION_CASE)
+
+
+async def _authoring_case(guard, *, case):
     from story_writing_agents import (
         AgentBackend, SessionAccessState, SessionDurableState, StoryRuntime,
         Workspace, codex_adapter,
     )
     from story_writing_agents.agents import LEAD_ORCHESTRATOR
     from story_writing_agents import conversations as c
+    require(guard.authorization["case"] == case, "Authorization names a different case")
+    structured = case == RECOMMENDATION_CASE
     temporary = tempfile.TemporaryDirectory(prefix="a641-owned-", dir=guard.evidence)
     backend = None
     runtime = None
     conversation_id = None
     try:
         workspace = Workspace(Path(temporary.name) / "main").initialize()
-        session_id = "synthetic_a641"
+        session_id = "synthetic_b642" if structured else "synthetic_a641"
         defaults = workspace.read_json("config/system_defaults.json")
         defaults.update(codex_model=MODEL, codex_reasoning_effort=EFFORT)
         workspace.write_json("config/system_defaults.json", defaults)
@@ -265,8 +279,14 @@ async def contextual_case(guard):
         async def capture(request, **kwargs):
             return await guard.invoke(original, request, **kwargs)
         with mock.patch.object(codex_adapter, "run_process", capture):
-            first = await runtime.lead_turn(session_id, conversation_id,
-                f"This is disposable synthetic test content. Prepare an outline for {OUTLINE}. First offer exactly the following complete tiny draft as your whole visible message, and wait for my approval before preparing a candidate.\n{DRAFT}")
+            instruction = (f"This is disposable synthetic test content. Prepare an outline for {OUTLINE}. "
+                "First offer exactly the following complete tiny draft as your whole visible message, "
+                "and wait for my approval before preparing a candidate.")
+            if structured:
+                instruction += (" Return a RECOMMENDATION with one prepare_artifact recommended_action for "
+                    f"{OUTLINE}, source_ids=[current_response], and objective_intent=null. "
+                    "Only a later structured Confirm may authorize preparing the exact supplied draft.")
+            first = await runtime.lead_turn(session_id, conversation_id, instruction + "\n" + DRAFT)
             save(guard.evidence / "first-result.json", {
                 "session_id": first.session_id, "conversation_id": first.conversation_id,
                 "turn_id": first.turn_id, "step_id": first.step_id,
@@ -278,6 +298,7 @@ async def contextual_case(guard):
                 "artifact_proposal_present": first.artifact_proposal is not None,
                 "apply_request_present": first.artifact_application_request is not None,
                 "commit_request_present": first.story_commit_request is not None,
+                "recommendation_request_present": first.recommendation_request is not None,
             })
             require(first.message.rstrip("\n") == DRAFT.rstrip("\n"), "Provider did not offer the supplied tiny draft (apart from final newline)")
             observed_draft = first.message.encode("utf-8")
@@ -286,13 +307,33 @@ async def contextual_case(guard):
             projection = c.project_collaboration_history(history)
             require(len(projection.artifact_objectives) <= 1, "Draft offer created multiple objectives")
             objective = projection.artifact_objectives[0] if projection.artifact_objectives else None
+            recommendation = first.recommendation_request
+            if structured or first.kind is c.LeadOutcomeKind.RECOMMENDATION:
+                require(first.kind is c.LeadOutcomeKind.RECOMMENDATION and recommendation is not None,
+                        "Recommendation lacks its typed action request")
+                require(objective is None, "Unconfirmed recommendation started an objective")
             if objective is not None:
                 require(objective.state is c.ArtifactObjectiveState.OPEN and objective.facts.origin_conversation_id == conversation_id, "Initial objective is not OPEN and owned")
                 require(objective.facts.target_paths == (OUTLINE,), "Initial objective target mismatch")
             offered = next((s for s in projection.offered_draft_sources if s.content_digest == "sha256:" + sha(observed_draft)), None)
             require(offered is not None, "Exact whole-message draft reference is absent")
-            second = await runtime.lead_turn(session_id, conversation_id, "네, 그 초안 그대로 문서로 준비해 줘.")
-            require(second.kind is c.LeadOutcomeKind.PROPOSAL and second.artifact_proposal is not None, "Abbreviated approval did not prepare a candidate")
+            require(snapshot(runtime, workspace) == baseline, "Draft offer changed artifact or Git state")
+            if structured:
+                require(recommendation.kind is c.LeadRecommendationActionKind.PREPARE_ARTIFACT
+                        and recommendation.target_paths == (OUTLINE,)
+                        and recommendation.draft_sources == (offered,)
+                        and recommendation.source_recommendation_event_id == offered.event_id
+                        and recommendation.source_recommendation_digest == offered.content_digest,
+                        "Recommendation disclosure changed the exact action or whole draft")
+                choice = c.LeadRecommendationDecision(session_id, conversation_id,
+                    recommendation.request_event_id, recommendation.tail_sequence,
+                    recommendation.request_id, recommendation.action_id, recommendation.action_revision,
+                    recommendation.action_digest, c.CollaborationConfirmationDecision.CONFIRM)
+                save(guard.evidence / "decision.json", dataclasses.asdict(choice))
+                second = await runtime.decide_lead_recommendation(choice)
+            else:
+                second = await runtime.lead_turn(session_id, conversation_id, "네, 그 초안 그대로 문서로 준비해 줘.")
+            require(second.kind is c.LeadOutcomeKind.PROPOSAL and second.artifact_proposal is not None, "Approval did not prepare a candidate")
             candidate = second.artifact_proposal.candidate.candidate
             require(len(candidate.change_set.operations) == 1, "Candidate scope expanded")
             operation = candidate.change_set.operations[0]
@@ -302,20 +343,48 @@ async def contextual_case(guard):
             require(len(projection.artifact_objectives) == 1, "Approval must select exactly one objective")
             continued = projection.artifact_objectives[0]
             require(continued.state is c.ArtifactObjectiveState.OPEN and continued.facts.origin_conversation_id == conversation_id and continued.facts.target_paths == (OUTLINE,), "Review request lacks its OPEN exact owner objective")
-            if objective is not None:
+            if structured:
+                require(type(continued.facts) is c.ArtifactObjectiveFactsV2, "Structured Confirm did not preserve its v2 origin")
+                decisions = [e for e in history if type(e.payload) is c.LeadRecommendationDecisionPayload]
+                starts = [e for e in history if type(e.payload) is c.LeadRecommendationStartedPayload]
+                closures = [e for e in history if type(e.payload) is c.LeadRecommendationResultPayload]
+                require(len(decisions) == len(starts) == len(closures) == 1, "Structured preparation did not close exactly once")
+                require(decisions[0].payload.decision == choice and starts[0].payload.decision_event_id == decisions[0].event_id
+                        and starts[0].payload.request_event_id == recommendation.request_event_id,
+                        "Preparation execution origin changed")
+                require(continued.facts.origin_recommendation_request_event_id == recommendation.request_event_id
+                        and continued.facts.origin_recommendation_decision_event_id == decisions[0].event_id,
+                        "Objective does not bind the exact Confirm")
+                require(closures[0].payload.state is c.LeadRecommendationState.COMPLETED
+                        and closures[0].sequence < history[-1].sequence,
+                        "Action closure must precede the final review control")
+                require(sum(type(e.payload) is c.CollaborationMessagePayload and e.direction is c.CollaborationDirection.USER_TO_LEAD
+                            for e in history) == 1, "Structured Confirm fabricated ordinary user input")
+            elif objective is not None:
                 require(continued.facts == objective.facts, "Initial objective origin changed")
             else:
                 approval = next(e for e in history if e.turn_id == second.turn_id and e.direction is c.CollaborationDirection.USER_TO_LEAD and isinstance(e.payload, c.CollaborationMessagePayload))
                 require(continued.facts.origin_user_event_id == approval.event_id, "New objective did not originate at the actual approval")
+                if recommendation is not None:
+                    closure = next(e for e in history if type(e.payload) is c.LeadRecommendationResultPayload)
+                    require(closure.payload.state is c.LeadRecommendationState.SUPERSEDED
+                            and closure.payload.superseding_user_event_id == approval.event_id
+                            and closure.batch_id == approval.batch_id,
+                            "Ordinary approval did not supersede the exact recommendation")
+            if not structured:
+                require(not any(type(e.payload) in {c.LeadRecommendationDecisionPayload, c.LeadRecommendationStartedPayload}
+                                for e in history), "Ordinary approval fabricated recommendation authority")
             require(continued.draft_sources == (offered,), "Candidate selected another draft")
             require(continued.candidate_binding.candidate_digest == candidate.candidate_digest, "Candidate binding drift")
-            require(second.confirmation_request_id is not None and second.artifact_application_request is None and second.story_commit_request is None, "Review/Apply/Commit authority boundary failed")
+            require(second.confirmation_request_id is not None and second.artifact_application_request is None
+                    and second.story_commit_request is None and second.recommendation_request is None,
+                    "Review/Apply/Commit authority boundary failed")
             require(not any(isinstance(e.payload, (c.CollaborationSpecialistReplyPayload, c.ArtifactApplicationRequestPayload, c.ArtifactApplicationResultPayload, c.StoryCommitRequestPayload)) for e in history), "Unauthorized downstream workflow appeared")
             require(snapshot(runtime, workspace) == baseline, "Artifact or Git state changed after fixture initialization")
-            save(guard.evidence / "case-assertions.json", {"case": CASE, "passed": True, "source_event_id": offered.event_id, "source_digest": offered.content_digest, "candidate_digest": candidate.candidate_digest, "objective_id": continued.facts.objective_id, "state": continued.state, "initial_objective_present": objective is not None, "observed_draft_sha256": sha(observed_draft), "cleanup_margin_seconds": CLEANUP_MARGIN_SECONDS, "abbreviated_input": "네, 그 초안 그대로 문서로 준비해 줘."})
+            save(guard.evidence / "case-assertions.json", {"case": case, "passed": True, "source_event_id": offered.event_id, "source_digest": offered.content_digest, "candidate_digest": candidate.candidate_digest, "objective_id": continued.facts.objective_id, "state": continued.state, "initial_objective_present": objective is not None, "observed_draft_sha256": sha(observed_draft), "cleanup_margin_seconds": CLEANUP_MARGIN_SECONDS, "structured_confirm": structured, "abbreviated_input": None if structured else "네, 그 초안 그대로 문서로 준비해 줘."})
     finally:
         if runtime is not None and conversation_id is not None:
-            history = runtime.conversation_storage_services.event_store.read("synthetic_a641", conversation_id)
+            history = runtime.conversation_storage_services.event_store.read(session_id, conversation_id)
             (guard.evidence / "events.jsonl").write_bytes(b"\n".join(c.encode_collaboration_event(e) for e in history) + b"\n")
         await guard.join_owned()
         if backend is not None:
@@ -324,16 +393,17 @@ async def contextual_case(guard):
         save(guard.evidence / "cleanup.json", {"workspace_removed": not Path(temporary.name).exists(), "owned_children_remaining": list(guard.children)})
 
 
-async def run_authorized(manifest: Path, evidence: Path):
-    authorization = load_authorization(manifest)
+async def run_authorized(manifest: Path, evidence: Path, *, case=None):
+    authorization = load_authorization(manifest, case=case)
     from story_writing_agents.provider_auth import ProviderAuthService
     version = subprocess.check_output([EXECUTABLE, "--version"], timeout=10, text=True).strip()
     require(version.endswith(VERSION), "Codex version drift")
     auth = ProviderAuthService(Path(authorization["source_root"]), codex_executable=EXECUTABLE).probe("codex")
     require(auth.authenticated, "Native authentication is unavailable; zero model submissions")
-    with CallGuard(authorization, evidence, validate=lambda: load_authorization(manifest)) as guard:
+    with CallGuard(authorization, evidence, validate=lambda: load_authorization(manifest, case=authorization["case"])) as guard:
         try:
-            await asyncio.wait_for(contextual_case(guard), timeout=LIMITS["case_seconds"] - CLEANUP_MARGIN_SECONDS)
+            selected = contextual_case if authorization["case"] == CASE else recommendation_case
+            await asyncio.wait_for(selected(guard), timeout=LIMITS["case_seconds"] - CLEANUP_MARGIN_SECONDS)
         finally:
             await guard.join_owned()
 
@@ -341,10 +411,10 @@ async def run_authorized(manifest: Path, evidence: Path):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--manifest", required=True, type=Path)
-    parser.add_argument("--case", required=True, choices=[CASE])
+    parser.add_argument("--case", required=True, choices=CASES)
     parser.add_argument("--evidence", required=True, type=Path)
     args = parser.parse_args()
-    asyncio.run(run_authorized(args.manifest, args.evidence))
+    asyncio.run(run_authorized(args.manifest, args.evidence, case=args.case))
 
 
 if __name__ == "__main__":

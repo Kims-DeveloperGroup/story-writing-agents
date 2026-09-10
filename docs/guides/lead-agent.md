@@ -122,6 +122,9 @@ user -> lead_turn(text + optional ${references})
   lead returns scope + evidence status + ordered evidence IDs
   runtime validates the closed evidence matrix and current receipts
   lead answers directly
+    OR recommends one preparation -> submit_recommendation_decision
+       -> exact Confirm prepares a proposal or asks a material question
+       -> proposal execution/review still requires its own Confirm
     OR requests an ordinary consultation
        -> runtime discloses consultation -> awaiting_confirmation
     OR returns provider-neutral artifact intent
@@ -143,6 +146,7 @@ user -> decide_lead_step(exact Confirm)
   runtime atomically records replies/outcomes/result
   runtime locally finalizes ordinary consultation
     -> completed / failed / interrupted
+    OR discloses a synthesis recommendation -> submit_recommendation_decision
     OR proposes same-step revision+1 -> awaiting_confirmation
 
   for an artifact candidate, every reviewer receives the same immutable
@@ -159,6 +163,31 @@ authoritative `turn`. If the durable start append fails, no specialist call is
 made. If the process restarts after confirmation but before start authority can
 be used, the proposal becomes `reconfirmation_required` instead of being
 silently executed.
+
+## Confirm recommendation preparation
+
+A fresh recommendation carries `recommendation_request` and
+`next_action=submit_recommendation_decision`. It discloses purpose, instruction,
+artifact targets or specialists, selected sources, expected result, user impact,
+and physical-call budget. Confirm authorizes one bounded Lead preparation,
+which returns an exact artifact-review or consultation proposal, or a material
+clarifying question. It does not reconfirm that preparation or automatically
+execute the next step. Confirm review or consultation separately; Apply and
+Commit follow their own controls.
+
+Reject starts no preparation and leaves any authoring objective open. Revise
+requires nonempty instructions and permits only a revised recommendation with
+a new request. Cancel/EOF submits nothing. Ordinary contextual approval remains
+a real new instruction, superseding an unconfirmed recommendation without
+creating a structured Confirm. With sufficient scope and current evidence,
+the Lead can prepare its exact candidate from that ordinary input.
+
+Use `decide_lead_recommendation()` on either runtime facade; it returns the
+existing `LeadTurnResult`. The complete
+[decision example](../reference/runtime-api.md#leadrecommendationdecision)
+uses every returned request identity. Historical recommendations and runtime
+recovery notices are not turned into action requests. An objective is satisfied
+only by a matching successful Apply, regardless of preparation completion.
 
 ## Call the lead and confirm a proposal
 
@@ -191,7 +220,7 @@ The lead returns one `LeadTurnResult`:
 | `answer` | Evidence supports a direct answer. | `continue_with_lead` |
 | `question` | One material user choice is missing. | `reply_to_lead` |
 | `critique` | The lead can evaluate the direction without added work. | `continue_with_lead` |
-| `recommendation` | The lead can recommend the next action, or is reporting a workflow/recovery state. | Usually `continue_with_lead`; otherwise state-specific. |
+| `recommendation` | A fresh preparation recommendation, or a runtime workflow/recovery notice. | `submit_recommendation_decision` for a fresh action; otherwise state-specific. |
 | `proposal` | Added specialist work is disclosed but has not started. | `submit_confirmation` |
 
 A direct answer has `proposal=None`, `state=None`, and no confirmation request:
@@ -264,7 +293,8 @@ print(accepted.turn.state, accepted.turn.message)
 
 `accepted` is a `LeadDecisionResult` containing the decided proposal and the
 authoritative resulting `turn`. Confirm returns the completed, failed,
-interrupted, uncertain, recovery, or round-two-proposal turn—not a separate
+interrupted, uncertain, recovery, synthesis-recommendation, or round-two-proposal
+turn—not a separate
 stale `state` field on `LeadDecisionResult`.
 
 Reject performs no consultation and returns a rejected recommendation turn.
@@ -766,7 +796,7 @@ three action variants:
       "anyOf": [
         {"type":"object","additionalProperties":false,"properties":{"kind":{"type":"string","enum":["search"]},"path_prefix":{"type":["string","null"]},"queries":{"type":"array","minItems":1,"items":{"type":"object","additionalProperties":false,"properties":{"text":{"type":"string"},"source_kinds":{"type":"array","minItems":1,"items":{"type":"string","enum":["writing_artifact","conversation","active_debate","own_agent_state"]}}},"required":["text","source_kinds"]}}},"required":["kind","path_prefix","queries"]},
         {"type":"object","additionalProperties":false,"properties":{"kind":{"type":"string","enum":["read"]},"handles":{"type":"array","minItems":1,"items":{"type":"string"}}},"required":["kind","handles"]},
-        {"type":"object","additionalProperties":false,"properties":{"kind":{"type":"string","enum":["answer"]},"result":{"type":"object","additionalProperties":false,"properties":{"scope":{"type":"string","enum":["workflow_meta"]},"evidence_status":{"type":"string","enum":["not_applicable"]},"evidence_ids":{"type":"array","maxItems":0,"items":{"type":"string"}},"kind":{"type":"string","enum":["answer","question","critique","recommendation"]},"message":{"type":"string"},"artifact_intent":{"type":"null"},"proposal":{"type":"null"},"objective_intent":{"anyOf":[{"type":"null"},{"type":"object","additionalProperties":false,"properties":{"action":{"type":"string","enum":["start"]},"request":{"type":"string"},"target_paths":{"type":"array","items":{"type":"string"},"minItems":1},"next_step":{"type":"string","enum":["clarify","consult","prepare"]},"draft_source_event_ids":{"type":"array","items":{"type":"string"}}},"required":["action","request","target_paths","next_step","draft_source_event_ids"]},{"type":"object","additionalProperties":false,"properties":{"action":{"type":"string","enum":["continue"]},"objective_id":{"type":"string"},"next_step":{"type":"string","enum":["clarify","consult","prepare"]},"draft_source_event_ids":{"type":"array","items":{"type":"string"}}},"required":["action","objective_id","next_step","draft_source_event_ids"]},{"type":"object","additionalProperties":false,"properties":{"action":{"type":"string","enum":["cancel"]},"objective_id":{"type":"string"}},"required":["action","objective_id"]}]}},"required":["scope","evidence_status","evidence_ids","kind","message","artifact_intent","proposal","objective_intent"]},"used_handles":{"type":"array","items":{"type":"string"}}},"required":["kind","result","used_handles"]}
+        {"type":"object","additionalProperties":false,"properties":{"kind":{"type":"string","enum":["answer"]},"result":{"type":"object","additionalProperties":false,"properties":{"scope":{"type":"string","enum":["workflow_meta"]},"evidence_status":{"type":"string","enum":["not_applicable"]},"evidence_ids":{"type":"array","maxItems":0,"items":{"type":"string"}},"kind":{"type":"string","enum":["answer","question","critique"]},"message":{"type":"string"},"artifact_intent":{"type":"null"},"proposal":{"type":"null"},"recommended_action":{"type":"null"},"objective_intent":{"anyOf":[{"type":"null"},{"type":"object","additionalProperties":false,"properties":{"action":{"type":"string","enum":["start"]},"request":{"type":"string"},"target_paths":{"type":"array","items":{"type":"string"},"minItems":1},"next_step":{"type":"string","enum":["clarify","consult","prepare"]},"draft_source_event_ids":{"type":"array","items":{"type":"string"}}},"required":["action","request","target_paths","next_step","draft_source_event_ids"]},{"type":"object","additionalProperties":false,"properties":{"action":{"type":"string","enum":["continue"]},"objective_id":{"type":"string"},"next_step":{"type":"string","enum":["clarify","consult","prepare"]},"draft_source_event_ids":{"type":"array","items":{"type":"string"}}},"required":["action","objective_id","next_step","draft_source_event_ids"]},{"type":"object","additionalProperties":false,"properties":{"action":{"type":"string","enum":["cancel"]},"objective_id":{"type":"string"}},"required":["action","objective_id"]}]}},"required":["scope","evidence_status","evidence_ids","kind","message","artifact_intent","proposal","objective_intent","recommended_action"]},"used_handles":{"type":"array","items":{"type":"string"}}},"required":["kind","result","used_handles"]}
       ]
     }
   },
@@ -774,9 +804,9 @@ three action variants:
 }
 ```
 
-The shown ANSWER branch is the complete eight-field `lead-outcome-v2`
-workflow-meta result variant; live
-schemas also include the exact story-specific and proposal variants allowed by
+The shown ANSWER branch is the complete nine-field `lead-outcome-v3`
+workflow-meta answer/question/critique variant; live schemas also include
+separate recommendation, story-specific, and proposal variants allowed by
 that call. SEARCH
 finds locators, READ accepts only issued SEARCH handles, and ANSWER embeds its
 semantic result object directly plus only supporting successful READ handles.
@@ -792,7 +822,7 @@ than duplicated) has the same semantics for either provider:
   "schema": "<exact per-call schema shown above>",
   "payload": {
     "c": "<correlation-1>",
-    "q": ["lead", "sa", "wcdo", [4, 2, 2, 4, 8, 8, 16, 200], ["lead", "lead-outcome-v2"]],
+    "q": ["lead", "sa", "wcdo", [4, 2, 2, 4, 8, 8, 16, 200], ["lead", "lead-outcome-v3"]],
     "i": {"workflow": "lead_front_channel", "command": "Does the planned reveal conflict with the current opening?"}
   }
 }
@@ -836,10 +866,10 @@ SEARCH/READ; those bytes do not satisfy the current evidence contract.
 ```json
 {
   "c": "<correlation-1>",
-  "q": ["lead", "sa", "wcdo", [4, 2, 2, 4, 8, 8, 16, 200], ["lead", "lead-outcome-v2"]],
+  "q": ["lead", "sa", "wcdo", [4, 2, 2, 4, 8, 8, 16, 200], ["lead", "lead-outcome-v3"]],
   "i": {
     "workflow": "lead_front_channel",
-    "contract_version": "lead-outcome-v2",
+    "contract_version": "lead-outcome-v3",
     "command": "Does the planned reveal conflict with the current opening?",
     "identity": {"agent_id": "lead_orchestrator", "session_id": "novel", "conversation_id": "<conversation-id>", "turn_id": "<turn-id>", "step_id": "<step-id>"},
     "input_aliases": [{"input_id": "user_input", "kind": "user_input", "locator": "conversation/<turn-id>/user_input", "revision_digest": "sha256:<digest>", "start_line": null, "end_line": null}],
@@ -852,7 +882,8 @@ SEARCH/READ; those bytes do not satisfy the current evidence contract.
       "message": "nonempty user-visible text",
       "proposal": {"relation": "new_step", "purpose": "visible purpose", "assignments": "required only for ordinary consultation"},
       "artifact_intent": "null or create/patch/replace/rename/delete operations plus optional review domains",
-      "objective_intent": "null or strict start/continue/cancel intent"
+      "objective_intent": "null or strict start/continue/cancel intent",
+      "recommended_action": "null or strict prepare_artifact/prepare_consultation action"
     }
   },
   "core_statuses": [
@@ -898,7 +929,8 @@ and cite the evidence ID in its strict semantic result:
       "message": "The opening reveals the secret before the outline's turning point.",
       "artifact_intent": null,
       "proposal": null,
-      "objective_intent": null
+      "objective_intent": null,
+      "recommended_action": null
     },
     "used_handles": ["<handle-1>", "<handle-2>"]
   }
@@ -934,7 +966,8 @@ resolved to `reference_1` by runtime:
       "message": "I prepared an exact manuscript patch candidate for review.",
       "artifact_intent": {"operations":[{"kind":"patch","evidence_id":"reference_1","replacement_text":"<proposed replacement>"}],"additional_review_domains":["plot_structure","character_world"]},
       "proposal": null,
-      "objective_intent": {"action":"start","request":"Prepare the manuscript patch.","target_paths":["manuscript/part-01/opening.md"],"next_step":"prepare","draft_source_event_ids":[]}
+      "objective_intent": {"action":"start","request":"Prepare the manuscript patch.","target_paths":["manuscript/part-01/opening.md"],"next_step":"prepare","draft_source_event_ids":[]},
+      "recommended_action": null
     },
     "used_handles": []
   }
@@ -954,15 +987,17 @@ review failure event. A schema-valid intent that cannot satisfy runtime
 artifact semantics instead closes as `artifact_intent_rejected`. Both outcomes
 create no candidate and permit only `retry_lead_turn` as a fresh Lead turn.
 
-Every front-channel result supplies all eight fields, including explicit
+Every front-channel result supplies all nine fields, including explicit
 `objective_intent`. It may be null or a strict `start`, `continue`, or `cancel`
 object. CLARIFY requires `kind=question`; CONSULT requires an ordinary
 consultation proposal; PREPARE requires an artifact proposal with
 `proposal=null`. Once PREPARE is selected, bounded same-turn correction cannot
 replace it with advice or a prose completion claim. Later ordinary user input
-remains contextual. Specialist and synthesis schemas below are unchanged.
-Fresh Lead policies use v2, and retained workspace policies receive a runtime
-v2 overlay without file rewrites.
+remains contextual. A fresh recommendation instead requires `recommended_action`
+and null objective intent. Ordinary synthesis has its own nullable action;
+specialist and artifact-review synthesis contracts remain separate.
+Fresh Lead policies use v3, and retained workspace policies receive a runtime
+v3 overlay without file rewrites.
 
 ### Specialist assignment: initial input
 
@@ -1076,7 +1111,7 @@ replies and the exact attribution contract:
 ```json
 {
   "c": "<synthesis-correlation>",
-  "q": ["lead_synthesis", "sa", "wcdo", [4, 2, 2, 4, 8, 8, 16, 200], ["lead_synthesis", "outcome-v1"]],
+  "q": ["lead_synthesis", "sa", "wcdo", [4, 2, 2, 4, 8, 8, 16, 200], ["lead_synthesis", "lead-synthesis-v2"]],
   "i": {
     "workflow": "lead_synthesis",
     "inputs": [
@@ -1095,7 +1130,8 @@ replies and the exact attribution contract:
       "message": "nonempty visible synthesis",
       "reply_event_ids": ["<reply-event-1>", "<reply-event-2>"],
       "unresolved_input_ids": ["user_input", "reference_1", "read_2_1"],
-      "next_intent": "null or an exact same-lineage proposal intent"
+      "next_intent": "null or an exact same-lineage proposal intent",
+      "recommended_action": "null or one typed preparation action"
     }
   }
 }
@@ -1108,7 +1144,7 @@ The terminal provider answer is exact JSON:
   "correlation": "<synthesis-correlation>",
   "action": {
     "kind": "answer",
-    "result": {"scope":"story_specific","evidence_status":"conflicting","evidence_ids":["reference_1","read_2_1"],"message":"Motivation is plausible, but the reveal still conflicts with the outline timing.","next_intent":null,"reply_event_ids":["<reply-event-1>","<reply-event-2>"],"unresolved_input_ids":["user_input","reference_1","read_2_1"]},
+    "result": {"scope":"story_specific","evidence_status":"conflicting","evidence_ids":["reference_1","read_2_1"],"message":"Motivation is plausible, but the reveal still conflicts with the outline timing.","next_intent":null,"recommended_action":null,"reply_event_ids":["<reply-event-1>","<reply-event-2>"],"unresolved_input_ids":["user_input","reference_1","read_2_1"]},
     "used_handles": []
   }
 }
@@ -1119,11 +1155,15 @@ ordered evidence IDs unchanged; specialist reply IDs remain separate
 attribution. Synthesis may also use bounded SEARCH/READ before ANSWER, but new
 reads do not replace the proposal evidence lineage. It cannot dispatch another
 agent, write an artifact, or authorize Git. A strict `next_intent` is only a
-semantic request for runtime to construct a fresh round-two proposal.
+semantic request for runtime to construct a fresh round-two proposal. Ordinary
+synthesis uses `lead-synthesis-v2`: `recommended_action` is nullable and mutually
+exclusive with `next_intent`. Without either, the visible outcome is an answer.
+An action produces a separately confirmable recommendation while the historical
+durable synthesis payload remains unchanged.
 
 For artifact review, the synthesis input additionally includes the same exact
-`artifact_candidate`. Its answer contract adds `decision`, `rationale`,
-`user_impact`, and `limitations`, and requires `next_intent=null`:
+`artifact_candidate`. Its independent answer contract omits `recommended_action`
+and adds `decision`, `rationale`, `user_impact`, and `limitations`, and requires `next_intent=null`:
 
 ```json
 {

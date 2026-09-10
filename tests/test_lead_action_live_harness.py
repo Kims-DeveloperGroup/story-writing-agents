@@ -1,4 +1,4 @@
-"""Provider-free evidence for the explicit A-only live runner's hard gates."""
+"""Provider-free evidence for the explicit live runner's hard gates."""
 from __future__ import annotations
 
 import asyncio
@@ -23,11 +23,11 @@ class LiveHarnessTests(unittest.IsolatedAsyncioTestCase):
         self.root = Path(temporary.name)
         self.counter = 0
 
-    def authorization(self, label="case"):
-        return {"authorization_id": label, "release_id": "synthetic-release", "case": live.CASE, "limits": live.LIMITS, "release_ledger": str(self.root / "release.json"), "model": {"executable": live.EXECUTABLE, "version": live.VERSION, "model": live.MODEL, "effort": live.EFFORT}}
+    def authorization(self, label="case", *, case=live.CASE):
+        return {"authorization_id": label, "release_id": "synthetic-release", "case": case, "limits": live.LIMITS, "release_ledger": str(self.root / "release.json"), "model": {"executable": live.EXECUTABLE, "version": live.VERSION, "model": live.MODEL, "effort": live.EFFORT}}
 
     def guard(self, label="case", **kwargs):
-        return live.CallGuard(self.authorization(label), self.root / label, validate=kwargs.pop("validate", lambda: None), **kwargs)
+        return live.CallGuard(self.authorization(label, case=kwargs.pop("case", live.CASE)), self.root / label, validate=kwargs.pop("validate", lambda: None), **kwargs)
 
     @staticmethod
     def request(**changes):
@@ -187,13 +187,13 @@ class LiveHarnessTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(json.loads((guard.evidence / "cleanup.json").read_bytes()), {"workspace_removed": True, "owned_children_remaining": []})
 
         ready_order = ["validate_configuration", "provision_resources", "create_and_hold", "observe_lifecycle"]
-        for initial_objective, valid_draft in ((False, True), (True, True), (False, False)):
+        for initial_objective, valid_draft, initial_kind in ((False, True, "question"), (True, True, "question"), (False, False, "question"), (False, True, "recommendation")):
             with self.subTest(initial_objective=initial_objective, valid_draft=valid_draft):
                 observed = live.DRAFT.rstrip("\n") if not initial_objective else live.DRAFT + "\n"
                 if not valid_draft:
                     observed = "Unexpected fixture response."
                 holder = {"lifecycle": []}
-                with self.guard("objective-" + str(initial_objective) + "-" + str(valid_draft)) as guard:
+                with self.guard("objective-" + str(initial_objective) + "-" + str(valid_draft) + "-" + initial_kind) as guard:
                     async def return_native(call, value):
                         raw = lead._provider_envelope(call, value)
                         async def native(_request, **_kwargs):
@@ -205,7 +205,7 @@ class LiveHarnessTests(unittest.IsolatedAsyncioTestCase):
                         self.assertTrue((guard.evidence / "baseline.json").is_file())
                         holder["lifecycle"].append("first_turn")
                         intent = {"action": "start", "request": "Prepare the synthetic outline after approval.", "target_paths": [live.OUTLINE], "next_step": "clarify", "draft_source_event_ids": []} if initial_objective else None
-                        return await return_native(call, {"scope": "story_specific", "evidence_status": "empty", "evidence_ids": [artifact._status_id(call, live.OUTLINE)], "kind": "question", "message": observed, "proposal": None, "artifact_intent": None, "objective_intent": intent})
+                        return await return_native(call, {"scope": "story_specific", "evidence_status": "empty", "evidence_ids": [artifact._status_id(call, live.OUTLINE)], "kind": initial_kind, "message": observed, "proposal": None, "artifact_intent": None, "objective_intent": intent, "recommended_action": ({"kind": "prepare_artifact", "purpose": "Prepare the offered draft.", "instruction": "Prepare the exact offered draft.", "expected_result": "An exact candidate for review.", "source_ids": ["current_response"], "target_paths": [live.OUTLINE], "specialist_ids": [], "objective_id": None} if initial_kind == "recommendation" else None)})
                     async def second(call, provider):
                         self.assertEqual(holder["lifecycle"], ready_order + ["first_turn"])
                         holder["lifecycle"].append("second_turn")
@@ -216,7 +216,7 @@ class LiveHarnessTests(unittest.IsolatedAsyncioTestCase):
                         source = projection.offered_draft_sources[-1]
                         intent = {"action": "continue", "objective_id": projection.artifact_objectives[0].facts.objective_id, "next_step": "prepare", "draft_source_event_ids": [source.event_id]} if initial_objective else {"action": "start", "request": "Prepare the approved synthetic outline.", "target_paths": [live.OUTLINE], "next_step": "prepare", "draft_source_event_ids": [source.event_id]}
                         evidence_id = artifact._status_id(call, live.OUTLINE)
-                        return await return_native(call, {"scope": "story_specific", "evidence_status": "empty", "evidence_ids": [evidence_id], "kind": "proposal", "message": "The exact draft is ready for review.", "proposal": None, "artifact_intent": {"additional_review_domains": [], "operations": [{"kind": "replace", "evidence_id": evidence_id, "new_text": observed}]}, "objective_intent": intent})
+                        return await return_native(call, {"scope": "story_specific", "evidence_status": "empty", "evidence_ids": [evidence_id], "kind": "proposal", "message": "The exact draft is ready for review.", "proposal": None, "artifact_intent": {"additional_review_domains": [], "operations": [{"kind": "replace", "evidence_id": evidence_id, "new_text": observed}]}, "objective_intent": intent, "recommended_action": None})
                     def backend_factory(workspace, **_kwargs):
                         holder["workspace_root"] = str(workspace.root)
                         backend = lead._LeadBackend(persist_context_threads=True)
@@ -271,7 +271,7 @@ class LiveHarnessTests(unittest.IsolatedAsyncioTestCase):
                     lifecycle = json.loads((guard.evidence / "lifecycle.json").read_bytes())
                     self.assertEqual(lifecycle, {"session_id": "synthetic_a641", "durable_state": "ready", "access_state": "held_here", "workspace_root": holder["workspace_root"], "repeated_observation_matches": True})
                     diagnostic = json.loads((guard.evidence / "first-result.json").read_bytes())
-                    self.assertEqual(diagnostic["kind"], "question")
+                    self.assertEqual(diagnostic["kind"], initial_kind)
                     self.assertIsNone(diagnostic["state"])
                     self.assertEqual(diagnostic["message_sha256"], live.sha(observed.encode()))
                     self.assertEqual(diagnostic["message_utf8_bytes"], len(observed.encode()))
@@ -287,6 +287,118 @@ class LiveHarnessTests(unittest.IsolatedAsyncioTestCase):
                     self.assertEqual(raw["action"]["result"]["message"], observed)
                     cleanup = json.loads((guard.evidence / "cleanup.json").read_bytes())
                     self.assertTrue(cleanup["workspace_removed"])
+
+    async def test_recommendation_case_confirms_exact_request_without_fabricated_input(self):
+        from story_writing_agents import StoryRuntime as ActualRuntime, SessionAccessState, SessionDurableState
+        from story_writing_agents import conversations as c
+        from story_writing_agents.workspace.initialization import provision_session_resources
+        from tests import test_lead_orchestration as lead
+        from tests import recommendation_fixture as fixture
+        observed = live.DRAFT.rstrip("\n")
+        holder = {}
+        with self.guard("structured", case=live.RECOMMENDATION_CASE) as guard:
+            async def native_reply(call, raw):
+                async def native(_request, **_kwargs):
+                    return SimpleNamespace(returncode=0, stdout=raw.encode(), stderr=b"")
+                actual = await guard.invoke(native, self.request(stdin=raw.encode()))
+                return actual.stdout.decode()
+            async def first(call, provider):
+                self.assertEqual(holder["lifecycle"], ["validated", "provisioned", "held", "observed"])
+                return await native_reply(call, fixture.recommendation(message=observed)(call, provider))
+            async def second(call, provider):
+                runtime = holder["runtime"]
+                offered = holder["first"]
+                events = runtime.conversation_storage_services.event_store.read("synthetic_b642", offered.conversation_id)
+                decisions = [e for e in events if type(e.payload) is c.LeadRecommendationDecisionPayload]
+                starts = [e for e in events if type(e.payload) is c.LeadRecommendationStartedPayload]
+                self.assertEqual(len(decisions), 1)
+                self.assertEqual(len(starts), 1)
+                self.assertEqual(decisions[0].payload.decision, fixture.decision(offered))
+                self.assertEqual(holder["ordinary_calls"], 1)
+                return await native_reply(call, fixture.preparation(offered, text=observed)(call, provider))
+            def backend_factory(workspace, **_kwargs):
+                backend = lead._LeadBackend(persist_context_threads=True)
+                holder["lifecycle"] = []
+                backend.enqueue(first)
+                backend.enqueue(second)
+                def validate(session_id):
+                    self.assertEqual(session_id, "synthetic_b642")
+                    holder["lifecycle"].append("validated")
+                    return True
+                def provision(session_id):
+                    provision_session_resources(workspace.root, session_id)
+                    holder["lifecycle"].append("provisioned")
+                state = SimpleNamespace(durable_state=SessionDurableState.READY, access_state=SessionAccessState.HELD_HERE)
+                def acquire(session_id):
+                    holder["lifecycle"].append("held")
+                    return state
+                def observe(session_id):
+                    holder["lifecycle"].append("observed")
+                    return state
+                backend.validate_provider_configuration = validate
+                backend.provision_session_resources = provision
+                backend.create_session_with_access = acquire
+                backend.get_session_lifecycle = observe
+                backend.close = lambda: holder["lifecycle"].append("closed")
+                return backend
+            def runtime_factory(workspace, backend):
+                runtime = ActualRuntime(workspace, backend)
+                holder["runtime"] = runtime
+                holder["ordinary_calls"] = 0
+                original = runtime.lead_turn
+                async def observe(*args, **kwargs):
+                    holder["ordinary_calls"] += 1
+                    holder["first"] = await original(*args, **kwargs)
+                    return holder["first"]
+                runtime.lead_turn = observe
+                return runtime
+            with mock.patch("story_writing_agents.AgentBackend", side_effect=backend_factory), mock.patch("story_writing_agents.StoryRuntime", side_effect=runtime_factory), mock.patch("asyncio.create_subprocess_exec", side_effect=AssertionError("No native unit execution")):
+                await live.recommendation_case(guard)
+            self.assertEqual(len(guard.calls), 2)
+            self.assertEqual(holder["ordinary_calls"], 1)
+            self.assertEqual(holder["lifecycle"][-1], "closed")
+            assertions = json.loads((guard.evidence / "case-assertions.json").read_bytes())
+            self.assertTrue(assertions["structured_confirm"])
+            self.assertEqual(assertions["case"], live.RECOMMENDATION_CASE)
+            self.assertIsNone(assertions["abbreviated_input"])
+            self.assertEqual(assertions["observed_draft_sha256"], live.sha(observed.encode()))
+            self.assertTrue(json.loads((guard.evidence / "cleanup.json").read_bytes())["workspace_removed"])
+            raw = json.loads((guard.evidence / "calls/01/stdout.raw").read_bytes())
+            self.assertEqual(raw["action"]["result"]["message"], observed)
+            self.assertEqual(raw["action"]["result"]["recommended_action"]["source_ids"], ["current_response"])
+
+    async def test_case_selection_preserves_shared_release_caps_and_authorization_uniqueness(self):
+        self.assertEqual(live.CASES, ("A641-CONTEXT-DRAFT", "B642-RECOMMEND-PREPARE"))
+        calls = []
+        async def native(request, **_kwargs):
+            calls.append(request)
+            return SimpleNamespace(returncode=0, stdout=b"synthetic raw", stderr=b"")
+        for label, case in (("context", live.CASE), ("recommendation", live.RECOMMENDATION_CASE)):
+            with self.guard(label, case=case) as guard:
+                for _ in range(4):
+                    await guard.invoke(native, self.request())
+        ledger = json.loads((self.root / "release.json").read_bytes())
+        self.assertEqual(ledger["reserved"], 8)
+        self.assertEqual([a["case"] for a in ledger["attempts"]], list(live.CASES))
+        with self.assertRaisesRegex(live.AuthorizationError, "never retry"):
+            with live.CallGuard(self.authorization("context", case=live.RECOMMENDATION_CASE),
+                                self.root / "duplicate", validate=lambda: None):
+                self.fail("Changing the case cannot reuse an authorization")
+        with self.guard("last", case=live.RECOMMENDATION_CASE) as guard:
+            for _ in range(4): await guard.invoke(native, self.request())
+        with self.guard("exhausted") as guard:
+            with self.assertRaisesRegex(live.AuthorizationError, "Release call cap"):
+                await guard.invoke(native, self.request())
+        self.assertEqual(len(calls), 12)
+        with self.guard("wrong-entry", case=live.RECOMMENDATION_CASE) as guard:
+            with mock.patch("story_writing_agents.AgentBackend", side_effect=AssertionError("No setup on wrong case")):
+                with self.assertRaisesRegex(live.AuthorizationError, "different case"):
+                    await live.contextual_case(guard)
+            self.assertEqual(guard.calls, [])
+        manifest = self.root / "wrong-case.json"
+        live.save(manifest, self.authorization("manifest") | {"schema": "lead-action-live-authorization-v1", "authorized": True})
+        with mock.patch.dict(os.environ, {"STORY_RUN_LIVE": "1"}), self.assertRaisesRegex(live.AuthorizationError, "different case"):
+            live.load_authorization(manifest, case=live.RECOMMENDATION_CASE)
 
     async def test_timeout_cancellation_and_cleanup_preserve_evidence_and_join_owned_children(self):
         for cancellation in (False, True):

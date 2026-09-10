@@ -140,6 +140,55 @@ class CollaborationViewTests(unittest.TestCase):
                 self.assertNotIn("chain_of_thought", rendered)
                 self.assertNotIn("provider_private", rendered)
 
+    def test_recommendation_discloses_exact_sources_targets_impact_budget_and_control(self) -> None:
+        import asyncio
+        from story_writing_agents import conversations as c
+        from tests.recommendation_fixture import RecommendationCase
+
+        case = RecommendationCase()
+        case.setUp()
+        for cleanup, args, kwargs in case._cleanups:
+            self.addCleanup(cleanup, *args, **kwargs)
+        case._cleanups.clear()
+        runner = asyncio.Runner()
+        self.addCleanup(runner.close)
+        conversation_id, turn = runner.run(case.recommend())
+        request = turn.recommendation_request
+        event = next(item for item in case.history(conversation_id)
+                     if item.event_id == request.request_event_id)
+        before = case.history(conversation_id)
+        rendered_modes = []
+        for profile in (CapabilityProfile.LINE, CapabilityProfile.ANSI):
+            for details in (False, True):
+                with self.subTest(profile=profile, details=details):
+                    text = render_component(
+                        _collaboration_view.project_collaboration_event(event, show_details=details),
+                        _capability(profile, width=120),
+                    ).text
+                    plain = strip_decorative_sgr(text)
+                    compact = " ".join(plain.split())
+                    for value in (request.kind.value, request.purpose, request.instruction,
+                                  request.expected_result, request.user_impact,
+                                  *request.target_paths,
+                                  *(item.locator for item in request.basis.inputs)):
+                        self.assertIn(" ".join(value.split()), compact)
+                    self.assertIn(f"At most {request.max_preparation_physical_calls} provider calls", compact)
+                    self.assertIn(f"{request.physical_calls_spent} already spent", compact)
+                    self.assertNotIn("provider_private", plain)
+                    rendered_modes.append(plain)
+        self.assertEqual(rendered_modes[0], rendered_modes[2])
+        panel = render_component(_collaboration_view.project_lead_turn_result(turn),
+                                 _capability(CapabilityProfile.LINE, width=120)).text
+        self.assertIn("Next action: submit_recommendation_decision", panel)
+        self.assertIn("Review, Apply, and Commit each require their own decision.", " ".join(panel.split()))
+        self.assertIsNone(turn.proposal)
+        self.assertIsNone(turn.artifact_application_request)
+        self.assertIsNone(turn.story_commit_request)
+        self.assertIs(case.projection(conversation_id).current_recommendation_state,
+                      c.LeadRecommendationState.PENDING)
+        self.assertEqual(case.history(conversation_id), before)
+        case.assert_no_downstream(conversation_id)
+
     def test_conflict_names_bounded_sources_and_exact_next_action(self) -> None:
         history, _proposal, _result = executed_history()
         event = next(

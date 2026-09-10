@@ -344,8 +344,8 @@ class RagModuleBoundaryTests(unittest.TestCase):
     ) -> None:
         modules = _module_inventory()
         edges = _internal_edges(modules)
-        self.assertEqual(len(modules), 137)
-        self.assertEqual(len(edges), 539)
+        self.assertEqual(len(modules), 138)
+        self.assertEqual(len(edges), 549)
         self.assertIsNone(_cycle_witness(modules, edges))
         conversation_dependencies = {
             "story_writing_agents.conversations": {
@@ -368,6 +368,7 @@ class RagModuleBoundaryTests(unittest.TestCase):
                 "story_writing_agents.conversations.events",
                 "story_writing_agents.errors",
                 "story_writing_agents.git.story_commit_contracts",
+                "story_writing_agents.writing_artifacts",
             },
         }
         for source, expected in conversation_dependencies.items():
@@ -691,6 +692,8 @@ class RagModuleBoundaryTests(unittest.TestCase):
                 "story_writing_agents.agent_context.planning",
                 "story_writing_agents.agent_context.sources",
                 "story_writing_agents.conversations.session_context",
+                "story_writing_agents.errors",
+                "story_writing_agents.provider_auth_recovery",
                 "story_writing_agents.workspace",
             },
         )
@@ -1146,8 +1149,8 @@ class RagPackagingBoundaryTests(unittest.TestCase):
                 import story_writing_agents.workspace.core as workspace_core
                 from story_writing_agents.agent_exchanges import AgentExchangeScopeKind
                 assert len(story_writing_agents.__all__) == 104
-                assert len(conversations.__all__) == 144
-                assert len(conversation_events.__all__) == 106
+                assert len(conversations.__all__) == 154
+                assert len(conversation_events.__all__) == 116
                 assert len(conversation_context.__all__) == 30
                 assert conversations.CollaborationProposal is conversation_events.CollaborationProposal
                 assert conversations.CollaborationEventStore is conversation_context.CollaborationEventStore
@@ -1392,8 +1395,8 @@ class RagPackagingBoundaryTests(unittest.TestCase):
                 import story_writing_agents.conversations.context as context
                 import story_writing_agents.conversations.events as events
                 assert len(story_writing_agents.__all__) == 104
-                assert len(conversations.__all__) == 144
-                assert len(events.__all__) == 106
+                assert len(conversations.__all__) == 154
+                assert len(events.__all__) == 116
                 assert len(context.__all__) == 30
                 assert catalog.ConversationCatalog is conversations.ConversationCatalog
                 assert events.ConversationEvent is conversations.ConversationEvent

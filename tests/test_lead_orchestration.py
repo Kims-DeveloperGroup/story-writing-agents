@@ -429,7 +429,7 @@ def _provider_envelope(
     )
 
 
-def _visible_outcome(kind: str, message: str = "Visible lead response."):
+def _visible_outcome(kind: str, message: str = "Visible lead response.", *, recommended_action=None):
     def respond(
         call: ContextProviderCallRequest,
         _provider: _LeadContextProvider,
@@ -437,6 +437,7 @@ def _visible_outcome(kind: str, message: str = "Visible lead response."):
         return _provider_envelope(
             call,
             {
+                "recommended_action": recommended_action,
                 "kind": kind,
                 "message": message,
                 "scope": "workflow_meta",
@@ -464,6 +465,7 @@ def _proposal_outcome(
         return _provider_envelope(
             call,
             {
+                "recommended_action": None,
                 "kind": "proposal",
                 "message": "Specialist review would resolve the open question.",
                 "scope": "story_specific",
@@ -529,6 +531,7 @@ def _synthesis_outcome(
     message: str = "The specialist evidence supports proceeding.",
     unresolved_input_ids: list[str] | None = None,
     next_intent: object = None,
+    recommended_action: object = None,
 ):
     def respond(
         call: ContextProviderCallRequest,
@@ -544,6 +547,7 @@ def _synthesis_outcome(
                 "evidence_status": contract["evidence_status"],
                 "message": message,
                 "next_intent": next_intent,
+                "recommended_action": recommended_action,
                 "reply_event_ids": contract["reply_event_ids"],
                 "scope": contract["scope"],
                 "unresolved_input_ids": (
@@ -603,6 +607,7 @@ def _answer_from_history(
     return _provider_envelope(
         call,
         {
+            "recommended_action": None,
             "kind": "answer",
             "message": "The prior lead response supplies enough evidence.",
             "scope": "story_specific",
@@ -755,16 +760,18 @@ class LeadOutcomeAndProposalTests(LeadOrchestrationTestCase):
         )
 
     async def test_all_five_outcomes_have_exact_visible_next_actions(self) -> None:
+        from tests.recommendation_fixture import action
         cases = (
             ("answer", CollaborationNextAction.CONTINUE_WITH_LEAD),
             ("question", CollaborationNextAction.REPLY_TO_LEAD),
             ("critique", CollaborationNextAction.CONTINUE_WITH_LEAD),
-            ("recommendation", CollaborationNextAction.CONTINUE_WITH_LEAD),
+            ("recommendation", CollaborationNextAction.SUBMIT_RECOMMENDATION_DECISION),
         )
         for kind, next_action in cases:
             with self.subTest(kind=kind):
                 conversation_id = self.conversation(f"Outcome {kind}")
-                self.backend.enqueue(_visible_outcome(kind))
+                self.backend.enqueue(_visible_outcome(kind, recommended_action=(action(
+                    kind="prepare_consultation", source_ids=("user_input",)) if kind == "recommendation" else None)))
                 result = await self.runtime.session(self.session_id).lead_turn(
                     conversation_id,
                     f"Return a {kind}.",
@@ -781,7 +788,7 @@ class LeadOutcomeAndProposalTests(LeadOrchestrationTestCase):
                         CollaborationEventKind.PROVIDER_CALL_ACCOUNTING,
                         CollaborationEventKind.PROVIDER_CALL_ACCOUNTING,
                         CollaborationEventKind.MESSAGE,
-                    ),
+                    ) + ((CollaborationEventKind.LEAD_RECOMMENDATION_REQUEST,) if kind == "recommendation" else ()),
                 )
                 self.assertEqual(
                     project_collaboration_history(history).physical_calls_spent,
@@ -1258,6 +1265,7 @@ class LeadDecisionAuthorityTests(LeadOrchestrationTestCase):
     async def test_revise_can_return_each_direct_superseding_visible_outcome(
         self,
     ) -> None:
+        from tests.recommendation_fixture import action
         for kind in ("answer", "question", "critique", "recommendation"):
             with self.subTest(kind=kind):
                 conversation_id = self.conversation(f"Direct {kind} revision outcome")
@@ -1266,6 +1274,8 @@ class LeadDecisionAuthorityTests(LeadOrchestrationTestCase):
                     _visible_outcome(
                         kind,
                         "The revised direction is safe without another consultation.",
+                        recommended_action=(action(kind="prepare_consultation", source_ids=("user_input",))
+                                            if kind == "recommendation" else None),
                     )
                 )
 
@@ -1276,7 +1286,7 @@ class LeadDecisionAuthorityTests(LeadOrchestrationTestCase):
                 self.assertIs(revised.turn.kind, LeadOutcomeKind(kind))
                 self.assertIs(
                     revised.turn.state,
-                    CollaborationStepState.SUPERSEDED,
+                    None if kind == "recommendation" else CollaborationStepState.SUPERSEDED,
                 )
                 self.assertIsNone(revised.turn.proposal)
                 self.assertIn("safe without another consultation", revised.turn.message)
@@ -1285,8 +1295,20 @@ class LeadDecisionAuthorityTests(LeadOrchestrationTestCase):
                 )
                 self.assertIs(
                     projection.current_state,
-                    CollaborationStepState.SUPERSEDED,
+                    None if kind == "recommendation" else CollaborationStepState.SUPERSEDED,
                 )
+                if kind == "recommendation":
+                    self.assertNotEqual(revised.turn.step_id, proposed.step_id)
+                    self.assertIs(revised.turn.next_action, CollaborationNextAction.SUBMIT_RECOMMENDATION_DECISION)
+                    request = revised.turn.recommendation_request
+                    self.assertEqual((request.source_proposal_id, request.source_proposal_revision,
+                        request.source_proposal_digest, request.source_execution_attempt_id),
+                        (proposed.proposal.proposal_id, proposed.proposal.proposal_revision,
+                         proposed.proposal.proposal_digest, None))
+                    from story_writing_agents.conversations import CollaborationStepStatePayload
+                    previous_states = [e.payload.state for e in self.history(conversation_id)
+                        if e.step_id == proposed.step_id and type(e.payload) is CollaborationStepStatePayload]
+                    self.assertIs(previous_states[-1], CollaborationStepState.SUPERSEDED)
 
 
 class LeadRecoveryAndAccountingTests(LeadOrchestrationTestCase):
@@ -1434,6 +1456,7 @@ class LeadRecoveryAndAccountingTests(LeadOrchestrationTestCase):
 
         def complete_value(message: str) -> dict[str, object]:
             return {
+                "recommended_action": None,
                 "kind": "answer",
                 "message": message,
                 "scope": "workflow_meta",
@@ -2170,6 +2193,7 @@ class LeadBudgetFinalizationTests(LeadOrchestrationTestCase):
             contract = material["answer_contract"]
             input_ids = [item["input_id"] for item in material["inputs"]]
             value = {
+                "recommended_action": None,
                 "evidence_ids": contract["evidence_ids"],
                 "evidence_status": contract["evidence_status"],
                 "scope": contract["scope"], "message": message,

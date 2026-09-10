@@ -117,6 +117,7 @@ def _artifact_outcome(
         return _provider_envelope(
             call,
             {
+                "recommended_action": None,
                 "artifact_intent": {
                     "additional_review_domains": list(additional_review_domains),
                     "operations": resolved_operations,
@@ -500,25 +501,33 @@ class ArtifactProposalOrchestrationTests(LeadOrchestrationTestCase):
             _visible_outcome(
                 "recommendation",
                 "The old candidate is superseded; request a fresh candidate.",
+                recommended_action={"kind": "prepare_artifact", "purpose": "Prepare a fresh candidate.",
+                    "instruction": "Prepare a new candidate for the narrative rules.",
+                    "expected_result": "An exact separately reviewable candidate.",
+                    "source_ids": ["current_response"], "target_paths": [_RULES],
+                    "specialist_ids": [], "objective_id": None},
             ),
         )
         revised = await self.runtime.decide_lead_step(
             _decision(first, CollaborationConfirmationDecision.REVISE)
         )
-        self.assertIs(
-            project_collaboration_history(
-                self.history(revise_id)
-            ).current_artifact_state,
-            ArtifactProposalState.SUPERSEDED,
-        )
-        self.assertIs(
-            revised.turn.artifact_proposal.state,
-            ArtifactProposalState.SUPERSEDED,
-        )
-        self.assertEqual(
-            revised.turn.artifact_proposal.candidate,
-            first.artifact_proposal.candidate,
-        )
+        history = self.history(revise_id)
+        self.assertIsNone(project_collaboration_history(history).current_artifact_state)
+        self.assertIsNone(revised.turn.artifact_proposal)
+        self.assertNotEqual(revised.turn.step_id, first.step_id)
+        request = revised.turn.recommendation_request
+        self.assertIsNotNone(request)
+        self.assertEqual((request.source_proposal_id, request.source_proposal_revision,
+            request.source_proposal_digest, request.source_execution_attempt_id),
+            (first.proposal.proposal_id, first.proposal.proposal_revision,
+             first.proposal.proposal_digest, None))
+        states = [e.payload.state for e in history if e.step_id == first.step_id
+                  and type(e.payload) is ArtifactProposalStatePayload]
+        self.assertIs(states[-1], ArtifactProposalState.SUPERSEDED)
+        old_candidates = [e.payload for e in history if e.step_id == first.step_id
+                          and type(e.payload) is ArtifactReviewCandidatePayload]
+        self.assertEqual(old_candidates, [first.artifact_proposal.candidate])
+        self.assertEqual(old_candidates[0].candidate.candidate_digest, first_digest)
         self.assertEqual(len(self.backend.call_records), before_revision_calls + 1)
         self.assertEqual(
             tuple(
@@ -926,6 +935,7 @@ class ArtifactProposalOrchestrationTests(LeadOrchestrationTestCase):
             return _provider_envelope(
                 call,
                 {
+                    "recommended_action": None,
                     "artifact_intent": {
                         "additional_review_domains": [],
                         "operations": [
@@ -1103,7 +1113,8 @@ class ArtifactProposalOrchestrationTests(LeadOrchestrationTestCase):
             return json.dumps({"correlation": call.payload["c"], "action": {"kind": "search", "path_prefix": "core_documents/", "queries": [{"text": "needle", "source_kinds": ["writing_artifact"]}]}})
         def answer(call, provider):
             evidence_id = call.payload["o"][1][0][5]
-            return _provider_envelope(call, {"scope": "story_specific", "evidence_status": "verified", "evidence_ids": [evidence_id], "kind": "answer", "message": "The selected line is visible.", "proposal": None, "artifact_intent": None, "objective_intent": None}, used_handles=provider.used_handles)
+            return _provider_envelope(call, {
+                                                "recommended_action": None,"scope": "story_specific", "evidence_status": "verified", "evidence_ids": [evidence_id], "kind": "answer", "message": "The selected line is visible.", "proposal": None, "artifact_intent": None, "objective_intent": None}, used_handles=provider.used_handles)
         self.backend.enqueue(search, _read_history_hit, answer)
         result = await self.runtime.lead_turn(self.session_id, conversation_id, "Search and read the needle line before deciding.")
         self.assertIs(result.kind, c.LeadOutcomeKind.ANSWER)
