@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+import json
 import re
 from dataclasses import asdict, dataclass, replace
 from enum import StrEnum
@@ -14,10 +15,18 @@ from .events import (
     ArtifactDraftSource,
     ArtifactObjectiveCandidateBinding,
     ArtifactObjectiveFacts,
+    ArtifactObjectiveFactsV2,
     ArtifactObjectiveNextStep,
     ArtifactObjectivePayload,
+    ArtifactObjectivePayloadV2,
     ArtifactObjectiveState,
     LeadObjectiveAction,
+    LeadRecommendationActionKind,
+    LeadRecommendationDecisionPayload,
+    LeadRecommendationRequestPayload,
+    LeadRecommendationResultPayload,
+    LeadRecommendationStartedPayload,
+    LeadRecommendationState,
     COLLABORATION_EVENT_SCHEMA_VERSION,
     COLLABORATION_PHYSICAL_CALL_LIMIT,
     CollaborationActor,
@@ -40,6 +49,8 @@ from .events import (
     CollaborationLeadOutcomeFailureCode,
     CollaborationLeadOutcomeFailurePayload,
     CollaborationInputKind,
+    CollaborationInputRevision,
+    CollaborationInputState,
     CollaborationInterruptionPayload,
     CollaborationInvocationKind,
     CollaborationLeadSynthesisPayload,
@@ -425,13 +436,15 @@ class CollaborationNextAction(StrEnum):
     RETRY_LEAD_TURN = "retry_lead_turn"
     SUBMIT_APPLICATION_DECISION = "submit_application_decision"
     SUBMIT_COMMIT_DECISION = "submit_commit_decision"
+    SUBMIT_RECOMMENDATION_DECISION = "submit_recommendation_decision"
+    FINALIZE_RECOMMENDATION = "finalize_recommendation"
 
 
 @dataclass(frozen=True, slots=True)
 class ArtifactObjective:
     """Current objective facts derived from one complete owner conversation."""
 
-    facts: ArtifactObjectiveFacts
+    facts: ArtifactObjectiveFacts | ArtifactObjectiveFactsV2
     latest_event_id: str
     state: ArtifactObjectiveState
     next_step: ArtifactObjectiveNextStep | None
@@ -440,7 +453,7 @@ class ArtifactObjective:
     satisfied_by_event_id: str | None = None
 
     def __post_init__(self) -> None:
-        if type(self.facts) is not ArtifactObjectiveFacts:
+        if type(self.facts) not in {ArtifactObjectiveFacts, ArtifactObjectiveFactsV2}:
             raise TypeError("projected objective facts are invalid")
         _validate_identifier(self.latest_event_id, label="objective event ID")
         if type(self.state) is not ArtifactObjectiveState:
@@ -500,6 +513,11 @@ class CollaborationHistoryProjection:
     current_story_commit_result: StoryCommitResultPayload | None = None
     artifact_objectives: tuple[ArtifactObjective, ...] = ()
     offered_draft_sources: tuple[ArtifactDraftSource, ...] = ()
+    current_recommendation_request: LeadRecommendationRequestPayload | None = None
+    current_recommendation_decision: LeadRecommendationDecisionPayload | None = None
+    current_recommendation_start: LeadRecommendationStartedPayload | None = None
+    current_recommendation_result: LeadRecommendationResultPayload | None = None
+    current_recommendation_state: LeadRecommendationState | None = None
 
     def __post_init__(self) -> None:
         _validate_non_negative_integer(self.last_sequence, label="last sequence")
@@ -555,6 +573,41 @@ class CollaborationHistoryProjection:
             raise TypeError("projected story commit request is invalid")
         if self.current_story_commit_result is not None and type(self.current_story_commit_result) is not StoryCommitResultPayload:
             raise TypeError("projected story commit result is invalid")
+        for value, expected_type in (
+            (self.current_recommendation_request, LeadRecommendationRequestPayload),
+            (self.current_recommendation_decision, LeadRecommendationDecisionPayload),
+            (self.current_recommendation_start, LeadRecommendationStartedPayload),
+            (self.current_recommendation_result, LeadRecommendationResultPayload),
+            (self.current_recommendation_state, LeadRecommendationState),
+        ):
+            if value is not None and type(value) is not expected_type:
+                raise TypeError("projected recommendation state is invalid")
+        if (self.current_recommendation_request is None) is not (self.current_recommendation_state is None):
+            raise ValueError("recommendation state requires its exact request")
+        recommendation = self.current_recommendation_request
+        if recommendation is None:
+            if any(item is not None for item in (self.current_recommendation_decision,
+                    self.current_recommendation_start, self.current_recommendation_result)):
+                raise ValueError("recommendation facts require their immutable request")
+        else:
+            if recommendation.tail_sequence > self.last_sequence:
+                raise ValueError("recommendation tail exceeds history")
+            for item in (self.current_recommendation_decision, self.current_recommendation_start,
+                         self.current_recommendation_result):
+                if item is not None and _recommendation_key(item) != _recommendation_key(recommendation):
+                    raise ValueError("recommendation projection facts do not correlate")
+            if self.current_recommendation_state is LeadRecommendationState.PENDING:
+                if any(item is not None for item in (self.current_recommendation_decision,
+                        self.current_recommendation_start, self.current_recommendation_result)):
+                    raise ValueError("pending recommendation cannot contain execution or closure")
+            elif self.current_recommendation_state is LeadRecommendationState.RUNNING:
+                if (self.current_recommendation_decision is None or self.current_recommendation_start is None
+                    or self.current_recommendation_result is not None
+                    or self.current_recommendation_decision.decision.kind is CollaborationConfirmationDecision.REJECT):
+                    raise ValueError("running recommendation requires an actual execution decision")
+            elif (self.current_recommendation_result is None
+                  or self.current_recommendation_result.state is not self.current_recommendation_state):
+                raise ValueError("terminal recommendation requires its exact closure")
         if type(self.artifact_objectives) is not tuple or any(
             type(item) is not ArtifactObjective
             or item.facts.origin_conversation_id != self.conversation_id
@@ -814,6 +867,7 @@ class LeadTurnResult:
     artifact_proposal: ArtifactProposalResult | None = None
     artifact_application_request: ArtifactApplicationRequestPayload | None = None
     story_commit_request: StoryCommitRequestPayload | None = None
+    recommendation_request: LeadRecommendationRequestPayload | None = None
 
     def __post_init__(self) -> None:
         for value, label in (
@@ -947,6 +1001,21 @@ class LeadTurnResult:
                 or self.story_commit_request.candidate.session_id != self.session_id
             ):
                 raise ValueError("lead result Commit request is inconsistent")
+        if self.recommendation_request is not None:
+            if (
+                type(self.recommendation_request) is not LeadRecommendationRequestPayload
+                or self.kind is not LeadOutcomeKind.RECOMMENDATION
+                or self.state is not None
+                or self.proposal is not None or self.confirmation_request_id is not None
+                or self.artifact_proposal is not None
+                or self.artifact_application_request is not None
+                or self.story_commit_request is not None
+                or self.next_action is not CollaborationNextAction.SUBMIT_RECOMMENDATION_DECISION
+                or self.evidence != self.recommendation_request.basis.evidence
+            ):
+                raise ValueError("lead recommendation request is inconsistent")
+        elif self.next_action is CollaborationNextAction.SUBMIT_RECOMMENDATION_DECISION:
+            raise ValueError("recommendation control requires its exact request")
         provider_judgment = (
             self.proposal is not None
             and self.proposal.step_kind
@@ -980,6 +1049,7 @@ class LeadTurnResult:
                 or self.proposal is not None
                 or self.confirmation_request_id is not None
                 or self.evidence is not None
+                or self.recommendation_request is not None
             ):
                 raise ValueError(
                     "retry lead result must be a content-free failure notice"
@@ -1009,11 +1079,12 @@ class LeadTurnResult:
             if self.next_action not in {
                 CollaborationNextAction.NONE,
                 CollaborationNextAction.FINALIZE_RESULT,
+                CollaborationNextAction.FINALIZE_RECOMMENDATION,
             }:
                 raise ValueError(
                     "running result must wait or require known-result finalization"
                 )
-        elif self.artifact_application_request is not None or self.story_commit_request is not None:
+        elif self.artifact_application_request is not None or self.story_commit_request is not None or self.recommendation_request is not None:
             pass
         elif self.kind is not LeadOutcomeKind.PROPOSAL and (
             self.next_action is not CollaborationNextAction.CONTINUE_WITH_LEAD
@@ -1052,7 +1123,18 @@ class LeadDecisionResult:
         if (
             self.turn.session_id != self.session_id
             or self.turn.conversation_id != self.conversation_id
-            or self.turn.step_id != self.step_id
+            or (self.turn.step_id != self.step_id and not (
+                self.decision in {CollaborationConfirmationDecision.CONFIRM, CollaborationConfirmationDecision.REVISE}
+                and self.turn.recommendation_request is not None
+                and (self.turn.recommendation_request.source_proposal_id,
+                     self.turn.recommendation_request.source_proposal_revision,
+                     self.turn.recommendation_request.source_proposal_digest)
+                == (self.proposal.proposal_id, self.proposal.proposal_revision, self.proposal.proposal_digest)
+                and ((self.turn.recommendation_request.source_execution_attempt_id is not None)
+                     is (self.decision is CollaborationConfirmationDecision.CONFIRM))
+                and self.turn.recommendation_request.physical_calls_spent
+                > self.proposal.budget.physical_calls_spent
+            ))
         ):
             raise ValueError("decision result turn belongs to another step")
         if self.decision is CollaborationConfirmationDecision.CONFIRM:
@@ -1068,6 +1150,15 @@ class LeadDecisionResult:
             self._validate_revise_turn()
 
     def _validate_confirm_turn(self) -> None:
+        if self.turn.recommendation_request is not None:
+            request = self.turn.recommendation_request
+            if (self.proposal.step_kind is not CollaborationStepKind.LEAD_SPECIALIST_CONSULTATION
+                or (request.source_proposal_id, request.source_proposal_revision, request.source_proposal_digest)
+                != (self.proposal.proposal_id, self.proposal.proposal_revision, self.proposal.proposal_digest)
+                or request.source_execution_attempt_id is None
+                or request.basis.evidence != self.proposal.basis.evidence):
+                raise ValueError("only ordinary consultation synthesis can disclose a recommendation")
+            return
         if (
             self.turn.state is CollaborationStepState.SUPERSEDED
             and self.turn.kind is LeadOutcomeKind.RECOMMENDATION
@@ -1086,6 +1177,9 @@ class LeadDecisionResult:
         if self.turn.state in terminal_states:
             if (
                 self.turn.kind is not LeadOutcomeKind.RECOMMENDATION
+                and not (self.turn.kind is LeadOutcomeKind.ANSWER
+                         and self.turn.state is CollaborationStepState.COMPLETED
+                         and self.proposal.step_kind is CollaborationStepKind.LEAD_SPECIALIST_CONSULTATION)
                 or self.turn.proposal is not None
             ):
                 raise ValueError(
@@ -1127,6 +1221,13 @@ class LeadDecisionResult:
 
     def _validate_revise_turn(self) -> None:
         replacement = self.turn.proposal
+        if self.turn.recommendation_request is not None:
+            request = self.turn.recommendation_request
+            if ((request.source_proposal_id, request.source_proposal_revision, request.source_proposal_digest)
+                != (self.proposal.proposal_id, self.proposal.proposal_revision, self.proposal.proposal_digest)
+                or request.source_execution_attempt_id is not None):
+                raise ValueError("revised recommendation must bind its exact previous proposal")
+            return
         if self.turn.next_action is CollaborationNextAction.RETRY_LEAD_TURN:
             artifact = self.turn.artifact_proposal
             if (
@@ -1243,6 +1344,16 @@ class CollaborationReadableFieldKey(StrEnum):
     ARTIFACT_OBJECTIVE_REQUEST = "artifact_objective.request"
     ARTIFACT_OBJECTIVE_ACTION = "artifact_objective.action"
     ARTIFACT_OBJECTIVE_NEXT_STEP = "artifact_objective.next_step"
+    LEAD_RECOMMENDATION_PURPOSE = "lead_recommendation.purpose"
+    LEAD_RECOMMENDATION_INSTRUCTION = "lead_recommendation.instruction"
+    LEAD_RECOMMENDATION_RESULT = "lead_recommendation.result"
+    LEAD_RECOMMENDATION_IMPACT = "lead_recommendation.impact"
+    LEAD_RECOMMENDATION_DECISION = "lead_recommendation.decision"
+    LEAD_RECOMMENDATION_REVISION = "lead_recommendation.revision"
+    LEAD_RECOMMENDATION_STATE = "lead_recommendation.state"
+    LEAD_RECOMMENDATION_SOURCES = "lead_recommendation.sources"
+    LEAD_RECOMMENDATION_TARGETS = "lead_recommendation.targets"
+    LEAD_RECOMMENDATION_COST = "lead_recommendation.cost"
 
 
 _ASSIGNMENT_ORDINAL_FIELD_KEYS = frozenset(
@@ -2247,6 +2358,353 @@ def _artifact_candidate_key(
     )
 
 
+def _recommendation_key(payload: object) -> tuple[str, str, str, int, str]:
+    if type(payload) is LeadRecommendationDecisionPayload:
+        payload = payload.decision
+    return (
+        payload.request_event_id, payload.request_id, payload.action_id,
+        payload.action_revision, payload.action_digest,
+    )
+
+
+def _recommendation_origin(
+    events: tuple[CollaborationEventV2, ...], turn_id: str, step_id: str,
+) -> tuple[CollaborationEventV2, CollaborationEventV2, CollaborationEventV2] | None:
+    """Recognize an exact request/structured-choice/start chain, never prose."""
+
+    starts = tuple(event for event in events if event.turn_id == turn_id
+                   and event.step_id == step_id
+                   and type(event.payload) is LeadRecommendationStartedPayload)
+    if len(starts) != 1:
+        return None
+    start = starts[0]
+    by_id = {event.event_id: event for event in events}
+    request = by_id.get(start.payload.request_event_id)
+    decision = by_id.get(start.payload.decision_event_id)
+    if (
+        request is None or type(request.payload) is not LeadRecommendationRequestPayload
+        or decision is None or type(decision.payload) is not LeadRecommendationDecisionPayload
+        or start.payload.start_event_id != start.event_id
+        or _recommendation_key(start.payload) != _recommendation_key(request.payload)
+        or _recommendation_key(decision.payload) != _recommendation_key(request.payload)
+        or decision.payload.decision.kind not in {
+            CollaborationConfirmationDecision.CONFIRM, CollaborationConfirmationDecision.REVISE,
+        }
+        or request.payload.request_event_id != request.event_id
+        or request.payload.tail_sequence != request.sequence
+        or decision.payload.decision.request_tail_sequence != request.sequence
+        or decision.sequence != request.sequence + 1
+        or start.sequence != decision.sequence + 1
+        or start.batch_id != decision.batch_id
+        or start.turn_id != decision.turn_id or start.step_id != decision.step_id
+        or start.step_id != request.step_id
+        or decision.payload.decision.session_id != start.session_id
+        or decision.payload.decision.conversation_id != start.conversation_id
+    ):
+        return None
+    return request, decision, start
+
+
+def _project_lead_recommendation_history(
+    events: tuple[CollaborationEventV2, ...],
+) -> tuple[
+    LeadRecommendationRequestPayload | None, LeadRecommendationDecisionPayload | None,
+    LeadRecommendationStartedPayload | None, LeadRecommendationResultPayload | None,
+    LeadRecommendationState | None,
+]:
+    """Replay immutable recommendation disclosure and exact bounded action closure."""
+
+    request = None
+    decision = None
+    start = None
+    result = None
+    state = None
+    request_event = None
+    decision_event = None
+    by_id: dict[str, CollaborationEventV2] = {}
+    request_ids: set[str] = set()
+    action_revisions: dict[str, int] = {}
+    attempt_ids: set[str] = set()
+    preparation_calls: set[str] = set()
+    preparation_invocation: str | None = None
+    for event in events:
+        payload = event.payload
+        if type(payload) is LeadRecommendationRequestPayload:
+            source = by_id.get(payload.source_recommendation_event_id)
+            source_valid = source is not None and (
+                (type(source.payload) is CollaborationLeadJudgmentPayload
+                 and source.payload.kind is LeadOutcomeKind.RECOMMENDATION)
+                or (type(source.payload) is CollaborationLeadSynthesisPayload
+                    and source.payload.next_intent is None)
+            )
+            if (
+                not source_valid or source.batch_id != event.batch_id
+                or payload.request_event_id != event.event_id
+                or payload.tail_sequence != event.sequence
+                or event.batch_ordinal != event.batch_size - 1
+                or payload.request_id in request_ids
+                or payload.action_revision != action_revisions.get(payload.action_id, 0) + 1
+                or state in {LeadRecommendationState.PENDING, LeadRecommendationState.RUNNING}
+            ):
+                raise ValueError("recommendation request is not a fresh exact published tail")
+            if payload.source_recommendation_digest != "sha256:" + hashlib.sha256(source.payload.message.encode("utf-8")).hexdigest():
+                raise ValueError("recommendation source message digest drifted")
+            if payload.basis.evidence != source.payload.evidence:
+                raise ValueError("recommendation must retain its exact source evidence")
+            source_proposal = (payload.source_proposal_id, payload.source_proposal_revision,
+                               payload.source_proposal_digest)
+            if type(source.payload) is CollaborationLeadSynthesisPayload:
+                if (source_proposal != (source.payload.proposal_id, source.payload.proposal_revision,
+                                       source.payload.proposal_digest)
+                    or payload.source_execution_attempt_id != source.payload.execution_attempt_id
+                    or event.step_id == source.step_id
+                    or any(type(prior.payload) is ArtifactReviewSynthesisPayload
+                           and prior.payload.execution_attempt_id == source.payload.execution_attempt_id
+                           for prior in by_id.values())):
+                    raise ValueError("synthesis recommendation must bind its exact ordinary consultation result")
+            else:
+                revisions = tuple(prior for prior in by_id.values()
+                    if prior.turn_id == source.turn_id and prior.step_id == source.step_id
+                    and type(prior.payload) is CollaborationConfirmationPayload
+                    and prior.payload.decision is CollaborationConfirmationDecision.REVISE)
+                expected_source = (None, None, None) if not revisions else (
+                    revisions[0].payload.proposal_id, revisions[0].payload.proposal_revision,
+                    revisions[0].payload.proposal_digest)
+                if (len(revisions) > 1 or source_proposal != expected_source
+                    or payload.source_execution_attempt_id is not None
+                    or (revisions and event.step_id == source.step_id)):
+                    raise ValueError("front recommendation source proposal correlation is not exact")
+            if payload.action_id in action_revisions and (
+                request is None or payload.action_id != request.action_id
+                or decision is None or decision.decision.kind is not CollaborationConfirmationDecision.REVISE
+                or result is None or result.state is not LeadRecommendationState.SUPERSEDED
+                or result.lead_result_event_id != source.event_id
+            ):
+                raise ValueError("only exact Revise planning can advance an existing action revision")
+            for draft in payload.draft_sources:
+                if sum(item.kind is CollaborationInputKind.CONVERSATION_EVENT
+                       and item.input_id == draft.event_id
+                       and item.locator == f"conversation/{draft.event_id}"
+                       and item.revision_digest == draft.content_digest
+                       for item in payload.basis.inputs) != 1:
+                    raise ValueError("recommendation draft lineage must match its exact disclosed input")
+            for draft in payload.draft_sources:
+                offered = by_id.get(draft.event_id)
+                if (
+                    offered is None or draft.conversation_id != event.conversation_id
+                    or not (
+                        (type(offered.payload) is CollaborationLeadJudgmentPayload
+                         and offered.payload.evidence.scope is LeadOutcomeScope.STORY_SPECIFIC
+                         and offered.payload.kind is not LeadOutcomeKind.PROPOSAL)
+                        or type(offered.payload) is CollaborationLeadSynthesisPayload
+                        or (type(offered.payload) is CollaborationLeadJudgmentPayload
+                            and offered.payload.kind is LeadOutcomeKind.RECOMMENDATION
+                            and (offered.event_id == source.event_id or any(
+                                type(prior.payload) is LeadRecommendationRequestPayload
+                                and prior.payload.source_recommendation_event_id == offered.event_id
+                                for prior in by_id.values()
+                            )))
+                    )
+                    or draft.content_digest != "sha256:" + hashlib.sha256(offered.payload.message.encode("utf-8")).hexdigest()
+                ):
+                    raise ValueError("recommendation draft source was not exactly offered")
+            if type(source.payload) is CollaborationLeadSynthesisPayload and not any(
+                prior.sequence > source.sequence and prior.sequence < event.sequence
+                and prior.batch_id == event.batch_id and prior.step_id == source.step_id
+                and type(prior.payload) is CollaborationStepStatePayload
+                and prior.payload.state is CollaborationStepState.COMPLETED
+                and (completion := by_id.get(prior.payload.execution_result_event_id)) is not None
+                and type(completion.payload) is CollaborationExecutionResult
+                and completion.payload.execution_attempt_id == source.payload.execution_attempt_id
+                for prior in by_id.values()
+            ):
+                raise ValueError("synthesis recommendation must follow its terminal consultation")
+            request_ids.add(payload.request_id)
+            action_revisions[payload.action_id] = payload.action_revision
+            request, request_event = payload, event
+            decision = decision_event = start = result = None
+            state = LeadRecommendationState.PENDING
+        elif type(payload) is LeadRecommendationDecisionPayload:
+            choice = payload.decision
+            if (
+                request is None or request_event is None
+                or state is not LeadRecommendationState.PENDING or decision is not None
+                or _recommendation_key(payload) != _recommendation_key(request)
+                or choice.session_id != event.session_id or choice.conversation_id != event.conversation_id
+                or choice.request_tail_sequence != request.tail_sequence
+                or event.sequence != request_event.sequence + 1
+                or event.batch_ordinal != 0 or event.step_id != request_event.step_id
+            ):
+                raise ValueError("recommendation decision does not bind the exact pending tail")
+            decision, decision_event = payload, event
+        elif type(payload) is LeadRecommendationStartedPayload:
+            if (
+                request is None or decision is None or start is not None
+                or state is not LeadRecommendationState.PENDING
+                or payload.execution_attempt_id in attempt_ids
+                or _recommendation_origin((*by_id.values(), event), event.turn_id, event.step_id) is None
+                or event.batch_ordinal != event.batch_size - 1
+            ):
+                raise ValueError("recommendation start lacks one exact structured decision")
+            attempt_ids.add(payload.execution_attempt_id)
+            start, state = payload, LeadRecommendationState.RUNNING
+            preparation_calls = set()
+            preparation_invocation = None
+        elif type(payload) is LeadRecommendationResultPayload:
+            if request is None or request_event is None or result is not None or _recommendation_key(payload) != _recommendation_key(request):
+                raise ValueError("recommendation result lacks one exact open request")
+            if payload.superseding_user_event_id is not None:
+                user = by_id.get(payload.superseding_user_event_id)
+                if (
+                    decision is not None or start is not None
+                    or state is not LeadRecommendationState.PENDING
+                    or payload.state is not LeadRecommendationState.SUPERSEDED
+                    or payload.decision_event_id is not None or payload.start_event_id is not None
+                    or payload.lead_result_event_id is not None
+                    or user is None or type(user.payload) is not CollaborationMessagePayload
+                    or user.direction is not CollaborationDirection.USER_TO_LEAD
+                    or user.batch_id != event.batch_id or user.turn_id != event.turn_id
+                ):
+                    raise ValueError("ordinary supersession must bind its real new user event")
+            else:
+                if decision_event is None or payload.decision_event_id != decision_event.event_id:
+                    raise ValueError("recommendation result decision is not exact")
+                if start is None:
+                    expected = (LeadRecommendationState.REJECTED
+                                if decision.decision.kind is CollaborationConfirmationDecision.REJECT
+                                else LeadRecommendationState.STALE)
+                    if (payload.state is not expected or payload.start_event_id is not None
+                        or payload.lead_result_event_id is not None
+                        or event.batch_id != decision_event.batch_id):
+                        raise ValueError("unstarted recommendation may only reject or become stale")
+                else:
+                    lead = by_id.get(payload.lead_result_event_id)
+                    started_event = by_id.get(start.start_event_id)
+                    if (
+                        payload.start_event_id != start.start_event_id
+                        or started_event is None
+                        or event.turn_id != started_event.turn_id
+                        or event.step_id != started_event.step_id or event.step_id != request_event.step_id
+                        or lead is None or lead.turn_id != event.turn_id or lead.step_id != event.step_id
+                        or lead.sequence <= started_event.sequence
+                        or type(lead.payload) not in {CollaborationLeadJudgmentPayload, CollaborationLeadOutcomeFailurePayload}
+                    ):
+                        raise ValueError("recommendation closure lacks its exact preparation result")
+                    if type(lead.payload) is CollaborationLeadOutcomeFailurePayload:
+                        if payload.state not in {LeadRecommendationState.FAILED, LeadRecommendationState.INTERRUPTED, LeadRecommendationState.SUPERSEDED} or lead.sequence != event.sequence - 1:
+                            raise ValueError("failed preparation must close after its exact Lead failure tail")
+                    else:
+                        expected = (LeadRecommendationState.SUPERSEDED
+                                    if decision.decision.kind is CollaborationConfirmationDecision.REVISE
+                                    else LeadRecommendationState.COMPLETED)
+                        if payload.state is not expected or lead.batch_id != event.batch_id:
+                            raise ValueError("accepted preparation must co-batch action closure")
+                        if decision.decision.kind is CollaborationConfirmationDecision.REVISE:
+                            replacements = tuple(item for item in events
+                                if item.batch_id == event.batch_id
+                                and type(item.payload) is LeadRecommendationRequestPayload
+                                and item.sequence > event.sequence
+                                and item.payload.source_recommendation_event_id == lead.event_id
+                                and item.payload.action_id == request.action_id
+                                and item.payload.action_revision == request.action_revision + 1)
+                            if lead.payload.kind is not LeadOutcomeKind.RECOMMENDATION or len(replacements) != 1:
+                                raise ValueError("Revise may only prepare a fresh recommendation")
+                        elif lead.payload.kind not in {LeadOutcomeKind.PROPOSAL, LeadOutcomeKind.QUESTION}:
+                            raise ValueError("confirmed preparation cannot produce another recommendation")
+                        if (decision.decision.kind is CollaborationConfirmationDecision.CONFIRM
+                            and lead.payload.kind is LeadOutcomeKind.PROPOSAL):
+                            proposals = tuple(item for item in by_id.values()
+                                if item.batch_id == event.batch_id and item.step_id == event.step_id
+                                and type(item.payload) is CollaborationProposal)
+                            candidates = tuple(item for item in by_id.values()
+                                if item.batch_id == event.batch_id and item.step_id == event.step_id
+                                and type(item.payload) is ArtifactReviewCandidatePayload)
+                            if len(proposals) != 1:
+                                raise ValueError("confirmed preparation requires its exact separate proposal")
+                            if request.kind is LeadRecommendationActionKind.PREPARE_ARTIFACT:
+                                if len(candidates) != 1 or not any(
+                                    item.batch_id == event.batch_id and item.step_id == event.step_id
+                                    and type(item.payload) in {ArtifactObjectivePayload, ArtifactObjectivePayloadV2}
+                                    and item.payload.candidate_binding is not None
+                                    and item.payload.candidate_binding.candidate_event_id == candidates[0].event_id
+                                    for item in by_id.values()
+                                ):
+                                    raise ValueError("artifact preparation must bind its exact candidate and objective")
+                            elif candidates:
+                                raise ValueError("consultation preparation cannot create an artifact candidate")
+            result, state = payload, payload.state
+        elif state is LeadRecommendationState.RUNNING and type(payload) in {
+            CollaborationProviderCallPayload, CollaborationProposal, ArtifactReviewCandidatePayload,
+            ArtifactObjectivePayload, ArtifactObjectivePayloadV2,
+        }:
+            assert request is not None and request_event is not None and start is not None and decision is not None
+            started_event = by_id[start.start_event_id]
+            if (event.turn_id, event.step_id) != (started_event.turn_id, started_event.step_id):
+                raise ValueError("preparation work must belong to its exact start")
+            if type(payload) is CollaborationProviderCallPayload:
+                if payload.invocation_kind is not CollaborationInvocationKind.LEAD or payload.role != started_event.recipient.agent_id:
+                    raise ValueError("recommendation preparation cannot invoke specialists")
+                if preparation_invocation not in {None, payload.invocation_id}:
+                    raise ValueError("one recommendation start authorizes one Lead invocation")
+                preparation_invocation = payload.invocation_id
+                if payload.state is CollaborationProviderCallState.SUBMITTED:
+                    preparation_calls.add(payload.call_id)
+                    if len(preparation_calls) > request.max_preparation_physical_calls:
+                        raise ValueError("preparation exceeds its disclosed call reservation")
+            elif decision.decision.kind is CollaborationConfirmationDecision.REVISE:
+                raise ValueError("Revise cannot prepare candidates, consultation proposals or objective transitions")
+            elif type(payload) is ArtifactReviewCandidatePayload:
+                paths = {path for operation in payload.candidate.change_set.operations
+                         for path in ((operation.source_path, operation.destination_path)
+                                      if type(operation) is ArtifactRenameOperation else (operation.path,))}
+                if request.kind is not LeadRecommendationActionKind.PREPARE_ARTIFACT or paths != set(request.target_paths):
+                    raise ValueError("artifact preparation changed its frozen scope")
+            elif type(payload) is CollaborationProposal and request.kind is LeadRecommendationActionKind.PREPARE_CONSULTATION:
+                if (payload.purpose != request.purpose
+                    or tuple(item.specialist_id for item in payload.assignments) != request.specialist_ids):
+                    raise ValueError("consultation preparation changed its frozen purpose or specialists")
+                expected_inputs = (*request.basis.inputs, *tuple(CollaborationInputRevision(
+                    input_id=alias, kind=CollaborationInputKind.CONVERSATION_EVENT,
+                    locator=f"conversation/{origin.event_id}", state=CollaborationInputState.PRESENT,
+                    revision_digest="sha256:" + hashlib.sha256(json.dumps(asdict(origin.payload),
+                        ensure_ascii=False, allow_nan=False, sort_keys=True, separators=(",", ":")).encode("utf-8")).hexdigest(),
+                ) for origin, alias in ((request_event, "recommendation_request"),
+                                       (decision_event, "recommendation_decision"))))
+                if payload.basis.inputs != expected_inputs:
+                    raise ValueError("consultation preparation changed its disclosed input boundaries")
+            elif type(payload) in {ArtifactObjectivePayload, ArtifactObjectivePayloadV2}:
+                if (payload.action is LeadObjectiveAction.CANCEL
+                    or (request.objective_id is not None and payload.facts.objective_id != request.objective_id)
+                    or (request.objective_id is None and (
+                        request.kind is not LeadRecommendationActionKind.PREPARE_ARTIFACT
+                        or type(payload) is not ArtifactObjectivePayloadV2
+                        or payload.action is not LeadObjectiveAction.START))
+                    or payload.draft_sources != request.draft_sources):
+                    raise ValueError("preparation changed its frozen objective or draft lineage")
+        elif (state is LeadRecommendationState.PENDING and type(payload) is CollaborationMessagePayload
+              and event.direction is CollaborationDirection.USER_TO_LEAD):
+            if not any(item.batch_id == event.batch_id and item.sequence > event.sequence
+                       and type(item.payload) is LeadRecommendationResultPayload
+                       and item.payload.superseding_user_event_id == event.event_id
+                       for item in events):
+                raise ValueError("ordinary input must atomically supersede the pending recommendation")
+        elif state is LeadRecommendationState.PENDING and type(payload) in {
+            CollaborationProviderCallPayload, CollaborationLeadJudgmentPayload,
+            CollaborationAssignmentDispatchPayload,
+        }:
+            raise ValueError("pending recommendation must be decided or superseded before advancement")
+        elif state is LeadRecommendationState.RUNNING and (
+            type(payload) is CollaborationAssignmentDispatchPayload
+            or (type(payload) is CollaborationStepStatePayload
+                and payload.state is CollaborationStepState.AWAITING_CONFIRMATION)
+        ):
+            raise ValueError("preparation must close before its separate specialist request")
+        by_id[event.event_id] = event
+    if decision is not None and start is None and result is None:
+        raise ValueError("recommendation decision must co-batch its start or terminal result")
+    return request, decision, start, result, state
+
+
 def _lead_abandonment_is_safe(
     events: tuple[CollaborationEventV2, ...], turn_id: str, step_id: str,
 ) -> bool:
@@ -2256,6 +2714,13 @@ def _lead_abandonment_is_safe(
     pending_writes: set[str] = set()
     unsafe_write = False
     has_proposal = False
+    origin = _recommendation_origin(events, turn_id, step_id)
+    origin_event_ids = set() if origin is None else {item.event_id for item in origin}
+    user_event_ids = {
+        event.event_id for event in events if event.turn_id == turn_id
+        and type(event.payload) is CollaborationMessagePayload
+        and event.direction is CollaborationDirection.USER_TO_LEAD
+    }
     for event in events:
         payload = event.payload
         if type(payload) is CollaborationStepStatePayload:
@@ -2270,7 +2735,7 @@ def _lead_abandonment_is_safe(
             and type(payload) is CollaborationProviderCallPayload
             and payload.invocation_kind is not CollaborationInvocationKind.LEAD):
             return False
-        if event.turn_id == turn_id and type(payload) not in {
+        if event.turn_id == turn_id and event.event_id not in origin_event_ids and type(payload) not in {
             CollaborationMessagePayload, CollaborationProviderCallPayload,
             CollaborationLeadOutcomeFailurePayload,
         } and not (
@@ -2280,6 +2745,10 @@ def _lead_abandonment_is_safe(
                 and payload.decision is CollaborationConfirmationDecision.REVISE)
             or (type(payload) is ArtifactProposalStatePayload
                 and payload.state is ArtifactProposalState.SUPERSEDED)
+            or (type(payload) is LeadRecommendationResultPayload
+                and payload.state is LeadRecommendationState.SUPERSEDED
+                and payload.superseding_user_event_id in user_event_ids
+                and payload.decision_event_id is None and payload.start_event_id is None)
         ):
             return False
         if event.step_id == step_id and type(payload) is CollaborationProposal:
@@ -2303,6 +2772,9 @@ def _project_validated_collaboration_history(
     )
     application_request, application_result, commit_request, commit_result = (
         _project_artifact_operation_history(events)
+    )
+    recommendation_request, recommendation_decision, recommendation_start, recommendation_result, recommendation_state = (
+        _project_lead_recommendation_history(events)
     )
     proposals: dict[str, CollaborationProposal] = {}
     states: dict[str, CollaborationStepState] = {}
@@ -2403,6 +2875,17 @@ def _project_validated_collaboration_history(
                 continue
 
             if type(payload) is CollaborationMessagePayload:
+                continue
+
+            if type(payload) is LeadRecommendationRequestPayload:
+                source = event_by_id[payload.source_recommendation_event_id]
+                source_spent = spent_calls.get(source.step_id, 0)
+                if payload.physical_calls_spent != source_spent:
+                    raise ValueError("recommendation cannot reset source-lineage call accounting")
+                if event.step_id != source.step_id:
+                    if event.step_id in spent_calls or event.step_id in proposals:
+                        raise ValueError("recommendation preparation step must be fresh")
+                    spent_calls[event.step_id] = source_spent
                 continue
 
             if type(payload) is CollaborationLeadJudgmentPayload:
@@ -2533,10 +3016,11 @@ def _project_validated_collaboration_history(
                         and item.sender.kind.value == "user"
                         and item.recipient.kind.value == "lead"
                     )
-                    if len(requests) != 1 or any(
+                    origin = _recommendation_origin(tuple(event_by_id.values()), event.turn_id, event.step_id)
+                    if ((len(requests) != 1 if origin is None else bool(requests)) or any(
                         item.turn_id == event.turn_id
                         for item, _call in provider_call_events
-                    ):
+                    )):
                         raise ValueError("unsubmitted closure requires one exact unstarted request")
                 elif (
                     not invocation_calls
@@ -2556,6 +3040,10 @@ def _project_validated_collaboration_history(
 
             if type(payload) in {
                 ArtifactObjectivePayload,
+                ArtifactObjectivePayloadV2,
+                LeadRecommendationDecisionPayload,
+                LeadRecommendationStartedPayload,
+                LeadRecommendationResultPayload,
                 ArtifactReviewCandidatePayload,
                 ArtifactReviewSynthesisPayload,
                 ArtifactReviewedProposal,
@@ -3006,6 +3494,8 @@ def _project_validated_collaboration_history(
                  and event.recipient.kind.value == "lead")
                 or (type(event.payload) is CollaborationProviderCallPayload
                     and event.payload.invocation_kind is CollaborationInvocationKind.LEAD)
+                or (type(event.payload) is LeadRecommendationStartedPayload
+                    and _recommendation_origin(events, event.turn_id, event.step_id) is not None)
             )
             for event in events
         )
@@ -3035,6 +3525,31 @@ def _project_validated_collaboration_history(
     operation_next_action = _artifact_operation_next_action(
         events[-1], application_request, application_result, commit_request, commit_result,
     )
+    recommendation_next_action = None
+    if recommendation_state is LeadRecommendationState.PENDING:
+        recommendation_next_action = CollaborationNextAction.SUBMIT_RECOMMENDATION_DECISION
+    elif recommendation_state is LeadRecommendationState.RUNNING:
+        assert recommendation_start is not None
+        start_event = event_by_id[recommendation_start.start_event_id]
+        origin_calls = tuple(
+            call for event, call in provider_call_events
+            if event.turn_id == start_event.turn_id and event.step_id == start_event.step_id
+        )
+        recommendation_next_action = (
+            CollaborationNextAction.FINALIZE_RECOMMENDATION
+            if start_event.turn_id in completed_lead_turns or not origin_calls
+            else CollaborationNextAction.INSPECT_AND_RESOLVE_OUTCOME
+        )
+        if state in {None, CollaborationStepState.SUPERSEDED}:
+            state = (
+                CollaborationStepState.RUNNING
+                if recommendation_next_action is CollaborationNextAction.FINALIZE_RECOMMENDATION
+                else CollaborationStepState.OUTCOME_UNKNOWN
+            )
+    elif recommendation_result is not None and recommendation_result.superseding_user_event_id is None:
+        result_event = next(event for event in reversed(events) if event.payload is recommendation_result)
+        if result_event.turn_id == current_turn_id and current_proposal is None:
+            recommendation_next_action = CollaborationNextAction.CONTINUE_WITH_LEAD
     return CollaborationHistoryProjection(
         session_id=events[0].session_id,
         conversation_id=events[0].conversation_id,
@@ -3057,6 +3572,8 @@ def _project_validated_collaboration_history(
             or operation_next_action is CollaborationNextAction.INSPECT_AND_RESOLVE_OUTCOME
             else operation_next_action
             if operation_next_action is not None
+            else recommendation_next_action
+            if recommendation_next_action is not None
             else CollaborationNextAction.RETRY_LEAD_TURN
             if recoverable_lead
             else CollaborationNextAction.INSPECT_AND_RESOLVE_OUTCOME
@@ -3076,6 +3593,11 @@ def _project_validated_collaboration_history(
         current_story_commit_result=commit_result,
         artifact_objectives=artifact_objectives,
         offered_draft_sources=offered_draft_sources,
+        current_recommendation_request=recommendation_request,
+        current_recommendation_decision=recommendation_decision,
+        current_recommendation_start=recommendation_start,
+        current_recommendation_result=recommendation_result,
+        current_recommendation_state=recommendation_state,
     )
 
 
@@ -3093,12 +3615,12 @@ def _project_artifact_objective_history(
     while offset < len(events):
         batch = events[offset:offset + events[offset].batch_size]
         offered = tuple(sources.values())
-        transitions = [event for event in batch if type(event.payload) is ArtifactObjectivePayload]
+        transitions = [event for event in batch if type(event.payload) in {ArtifactObjectivePayload, ArtifactObjectivePayloadV2}]
         if len(transitions) > 1:
             raise ValueError("one Lead result may select only one objective transition")
         for event in batch:
             payload = event.payload
-            if type(payload) is ArtifactObjectivePayload:
+            if type(payload) in {ArtifactObjectivePayload, ArtifactObjectivePayloadV2}:
                 facts = payload.facts
                 previous = objectives.get(facts.objective_id)
                 judgment = by_id.get(payload.lead_result_event_id)
@@ -3112,13 +3634,32 @@ def _project_artifact_objective_history(
                 ):
                     raise ValueError("objective must co-batch its accepted owner Lead result")
                 if payload.action is LeadObjectiveAction.START:
-                    origin = by_id.get(facts.origin_user_event_id)
+                    if type(facts) is ArtifactObjectiveFactsV2:
+                        origin = _recommendation_origin(events, judgment.turn_id, judgment.step_id)
+                        if (
+                            origin is None
+                            or origin[0].event_id != facts.origin_recommendation_request_event_id
+                            or origin[1].event_id != facts.origin_recommendation_decision_event_id
+                            or origin[1].payload.decision.kind is not CollaborationConfirmationDecision.CONFIRM
+                            or origin[0].payload.kind is not LeadRecommendationActionKind.PREPARE_ARTIFACT
+                            or origin[0].payload.objective_id is not None
+                            or facts.request != origin[0].payload.instruction
+                            or facts.target_paths != origin[0].payload.target_paths
+                            or payload.draft_sources != origin[0].payload.draft_sources
+                            or previous is not None or facts.offered_draft_sources != offered
+                        ):
+                            raise ValueError("objective lacks its exact structured-Confirm origin")
+                        origin = origin[2]
+                    else:
+                        origin = by_id.get(facts.origin_user_event_id)
                     if (
                         previous is not None
                         or origin is None or origin.sequence >= judgment.sequence
                         or origin.turn_id != judgment.turn_id
-                        or origin.direction is not CollaborationDirection.USER_TO_LEAD
-                        or type(origin.payload) is not CollaborationMessagePayload
+                        or (type(facts) is ArtifactObjectiveFacts and (
+                            origin.direction is not CollaborationDirection.USER_TO_LEAD
+                            or type(origin.payload) is not CollaborationMessagePayload
+                        ))
                         or facts.offered_draft_sources != offered
                     ):
                         raise ValueError("objective origin or offered draft snapshot is invalid")
@@ -3224,7 +3765,10 @@ def _project_artifact_objective_history(
                         )
             text = None
             if type(payload) is CollaborationLeadJudgmentPayload and (
-                payload.evidence.scope is LeadOutcomeScope.STORY_SPECIFIC
+                (payload.evidence.scope is LeadOutcomeScope.STORY_SPECIFIC
+                 or any(type(item.payload) is LeadRecommendationRequestPayload
+                        and item.payload.source_recommendation_event_id == event.event_id
+                        for item in batch))
                 and payload.kind in {
                     LeadOutcomeKind.ANSWER, LeadOutcomeKind.QUESTION,
                     LeadOutcomeKind.CRITIQUE, LeadOutcomeKind.RECOMMENDATION,
@@ -3460,7 +4004,16 @@ def _validate_collaboration_execution_result(
     if actual_ids != expected_ids:
         raise ValueError("execution result outcomes must match proposal order exactly")
     if event is not batch[-1]:
-        raise ValueError("execution result must be final in its atomic result batch")
+        suffix = batch[event.batch_ordinal + 1:]
+        if (len(suffix) != 2
+            or type(suffix[0].payload) is not CollaborationStepStatePayload
+            or suffix[0].payload.state is not CollaborationStepState.COMPLETED
+            or suffix[0].payload.execution_result_event_id != event.event_id
+            or suffix[0].step_id != event.step_id
+            or type(suffix[1].payload) is not LeadRecommendationRequestPayload
+            or suffix[1].payload.source_recommendation_event_id != result.synthesis_result_event_id
+            or result.overall_outcome is not CollaborationExecutionOutcomeKind.SUCCEEDED):
+            raise ValueError("execution result must be final or precede its exact synthesis recommendation closure")
     preceding = batch[: event.batch_ordinal]
     batch_event_ids = {item.event_id for item in preceding}
     successful_reply_ids: list[str] = []
@@ -3765,6 +4318,15 @@ def _validate_collaboration_co_batch(
             for event in batch
         )
         if not has_notice:
+            has_notice = any(
+                type(event.payload) is LeadRecommendationRequestPayload
+                and any(source.event_id == event.payload.source_recommendation_event_id
+                        and source.step_id == state_event.step_id
+                        and type(source.payload) is CollaborationLeadSynthesisPayload
+                        for source in batch)
+                for event in batch
+            )
+        if not has_notice:
             raise ValueError("terminal step state requires a co-batched visible notice")
         if (
             state_payload.state is CollaborationStepState.INTERRUPTED
@@ -3827,7 +4389,7 @@ def _collaboration_readable_fields(
 ) -> tuple[CollaborationReadableField, ...]:
     """Project the closed searchable field set for one typed public payload."""
 
-    if type(payload) is ArtifactObjectivePayload:
+    if type(payload) in {ArtifactObjectivePayload, ArtifactObjectivePayloadV2}:
         return (
             CollaborationReadableField(
                 key=CollaborationReadableFieldKey.ARTIFACT_OBJECTIVE_REQUEST,
@@ -3841,6 +4403,29 @@ def _collaboration_readable_fields(
                 key=CollaborationReadableFieldKey.ARTIFACT_OBJECTIVE_NEXT_STEP,
                 text=payload.next_step.value,
             ),) if payload.next_step is not None else ()),
+        )
+    if type(payload) is LeadRecommendationRequestPayload:
+        return (
+            CollaborationReadableField(CollaborationReadableFieldKey.LEAD_RECOMMENDATION_PURPOSE, payload.purpose),
+            CollaborationReadableField(CollaborationReadableFieldKey.LEAD_RECOMMENDATION_INSTRUCTION, payload.instruction),
+            CollaborationReadableField(CollaborationReadableFieldKey.LEAD_RECOMMENDATION_RESULT, payload.expected_result),
+            CollaborationReadableField(CollaborationReadableFieldKey.LEAD_RECOMMENDATION_IMPACT, payload.user_impact),
+            CollaborationReadableField(CollaborationReadableFieldKey.LEAD_RECOMMENDATION_SOURCES, "\n".join(item.locator for item in payload.basis.inputs)),
+            CollaborationReadableField(CollaborationReadableFieldKey.LEAD_RECOMMENDATION_TARGETS, "\n".join((*payload.target_paths, *payload.specialist_ids))),
+            CollaborationReadableField(CollaborationReadableFieldKey.LEAD_RECOMMENDATION_COST, f"{payload.physical_calls_spent} spent; at most {payload.max_preparation_physical_calls} preparation calls"),
+        )
+    if type(payload) is LeadRecommendationDecisionPayload:
+        return (
+            CollaborationReadableField(CollaborationReadableFieldKey.LEAD_RECOMMENDATION_DECISION, payload.decision.kind.value),
+            *((CollaborationReadableField(CollaborationReadableFieldKey.LEAD_RECOMMENDATION_REVISION, payload.decision.revision_request),)
+              if payload.decision.revision_request is not None else ()),
+        )
+    if type(payload) is LeadRecommendationStartedPayload:
+        return (CollaborationReadableField(CollaborationReadableFieldKey.LEAD_RECOMMENDATION_STATE, LeadRecommendationState.RUNNING.value),)
+    if type(payload) is LeadRecommendationResultPayload:
+        return (
+            CollaborationReadableField(CollaborationReadableFieldKey.LEAD_RECOMMENDATION_STATE, payload.state.value),
+            CollaborationReadableField(CollaborationReadableFieldKey.LEAD_RECOMMENDATION_RESULT, payload.message),
         )
     if type(payload) is CollaborationMessagePayload:
         return (

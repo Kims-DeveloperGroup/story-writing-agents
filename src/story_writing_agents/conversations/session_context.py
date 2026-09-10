@@ -24,7 +24,9 @@ from .events import (
     CollaborationLeadSynthesisPayload, CollaborationProposal,
     CollaborationProviderCallPayload, StoryCommitDecisionPayload,
     StoryCommitRequestPayload, StoryCommitResultPayload,
-    ArtifactObjectivePayload, CollaborationEvent,
+    ArtifactObjectivePayload, ArtifactObjectivePayloadV2, CollaborationEvent,
+    LeadRecommendationRequestPayload, LeadRecommendationDecisionPayload,
+    LeadRecommendationStartedPayload, LeadRecommendationResultPayload,
 )
 from ..writing_artifacts.change_sets import (
     ArtifactCreateOperation, ArtifactDeleteOperation, ArtifactPatchOperation,
@@ -90,7 +92,11 @@ def _operations(operations: tuple[object, ...]) -> list[dict[str, object]]:
 def _visible_details(payload: object) -> dict[str, object]:
     """Session-only visible facts omitted by the bounded search field contract."""
 
-    if type(payload) is ArtifactObjectivePayload:
+    if type(payload) in {
+        ArtifactObjectivePayload, ArtifactObjectivePayloadV2,
+        LeadRecommendationRequestPayload, LeadRecommendationDecisionPayload,
+        LeadRecommendationStartedPayload, LeadRecommendationResultPayload,
+    }:
         return asdict(payload)
     if type(payload) in {ArtifactReviewSynthesisPayload, ArtifactReviewedProposal}:
         value = {"rationale": payload.rationale, "user_impact": payload.user_impact,

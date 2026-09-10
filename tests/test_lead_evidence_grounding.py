@@ -323,6 +323,11 @@ def _missing_outcome(*, proposal: bool = False):
         observation = call.payload["o"]
         assert observation[0] == "s" and observation[2] is not None
         value = {
+                "recommended_action": None if proposal else {"kind": "prepare_consultation", "purpose": "Check the missing evidence.",
+                "instruction": "Prepare an exact consultation for the disclosed user input.",
+                "expected_result": "A separate consultation confirmation request.",
+                "source_ids": ["user_input"], "target_paths": [],
+                "specialist_ids": [PLOT_ARCHITECT], "objective_id": None},
             "kind": "proposal" if proposal else "recommendation",
             "message": "No matching canonical writing artifact was found.",
             "scope": "story_specific",
@@ -357,6 +362,7 @@ def _referenced_outcome(*, status: str, evidence_ids: list[str]):
         return _provider_envelope(
             call,
             {
+                "recommended_action": None,
                 "kind": "proposal",
                 "message": "The attached sources require specialist review.",
                 "scope": "story_specific",
@@ -389,6 +395,11 @@ class RuntimeLeadEvidenceGroundingTests(LeadOrchestrationTestCase):
             return _provider_envelope(
                 call,
                 {
+                "recommended_action": {"kind": "prepare_consultation", "purpose": "Check the missing evidence.",
+                "instruction": "Prepare an exact consultation for the disclosed user input.",
+                "expected_result": "A separate consultation confirmation request.",
+                "source_ids": ["user_input"], "target_paths": [],
+                "specialist_ids": [PLOT_ARCHITECT], "objective_id": None},
                     "kind": "recommendation",
                     "message": "Conversation-only absence remains insufficient.",
                     "scope": "story_specific",
@@ -617,6 +628,11 @@ class RuntimeLeadEvidenceGroundingTests(LeadOrchestrationTestCase):
                 return _provider_envelope(
                     call,
                     {
+                "recommended_action": {"kind": "prepare_consultation", "purpose": "Check the missing evidence.",
+                "instruction": "Prepare an exact consultation for the disclosed user input.",
+                "expected_result": "A separate consultation confirmation request.",
+                "source_ids": ["user_input"], "target_paths": [],
+                "specialist_ids": [PLOT_ARCHITECT], "objective_id": None},
                         "kind": "recommendation",
                         "message": "Invalid evidence must close this turn.",
                         "scope": "story_specific",
@@ -682,6 +698,7 @@ class RuntimeLeadEvidenceGroundingTests(LeadOrchestrationTestCase):
             return _provider_envelope(
                 call,
                 {
+                    "recommended_action": None,
                     "kind": "answer",
                     "message": "The current READ supports this answer.",
                     "scope": "story_specific",
@@ -731,6 +748,7 @@ class RuntimeLeadEvidenceGroundingTests(LeadOrchestrationTestCase):
             return _provider_envelope(
                 call,
                 {
+                    "recommended_action": None,
                     "kind": "answer",
                     "message": "Correction still claims unread evidence.",
                     "scope": "story_specific",
@@ -748,6 +766,7 @@ class RuntimeLeadEvidenceGroundingTests(LeadOrchestrationTestCase):
             return _provider_envelope(
                 call,
                 {
+                    "recommended_action": None,
                     "kind": "answer",
                     "message": "A SEARCH hit is not READ evidence.",
                     "scope": "story_specific",
@@ -777,6 +796,7 @@ class RuntimeLeadEvidenceGroundingTests(LeadOrchestrationTestCase):
             return _provider_envelope(
                 call,
                 {
+                    "recommended_action": None,
                     "kind": "answer",
                     "message": "An unused READ cannot ground this answer.",
                     "scope": "story_specific",
@@ -882,6 +902,7 @@ class RuntimeLeadEvidenceGroundingTests(LeadOrchestrationTestCase):
             return _provider_envelope(
                 call,
                 {
+                    "recommended_action": None,
                     "kind": "answer",
                     "message": "Provider-invented evidence must fail.",
                     "scope": "story_specific",

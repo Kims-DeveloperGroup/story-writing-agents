@@ -253,6 +253,11 @@ await StoryRuntime.propose_specialist_advisory(
     context_event_sink: Callable[[ContextExecutionEvent], None] | None = None,
 ) -> LeadTurnResult
 
+await StoryRuntime.decide_lead_recommendation(
+    decision: LeadRecommendationDecision,
+    context_event_sink: Callable[[ContextExecutionEvent], None] | None = None,
+) -> LeadTurnResult
+
 await StoryRuntime.decide_lead_step(
     decision: LeadStepDecision,
 ) -> LeadDecisionResult
@@ -283,6 +288,8 @@ from story_writing_agents.conversations import (
     LeadOutcomeKind,
     LeadOutcomeScope,
     LeadStepDecision,
+    LeadRecommendationDecision,
+    LeadRecommendationRequestPayload,
     LeadTurnResult,
 )
 ```
@@ -307,15 +314,20 @@ LeadTurnResult(
     artifact_proposal: ArtifactProposalResult | None = None,
     artifact_application_request: ArtifactApplicationRequestPayload | None = None,
     story_commit_request: StoryCommitRequestPayload | None = None,
+    recommendation_request: LeadRecommendationRequestPayload | None = None,
 )
 ```
 
 The five `kind` values are `answer`, `question`, `critique`,
-`recommendation`, and `proposal`. For a fresh provider outcome, answer,
-critique, and recommendation return `continue_with_lead`; question returns
-`reply_to_lead`. Those four fresh direct outcomes have no proposal,
-confirmation request, or durable step state. Recovery normalization may return
-`recommendation` with an existing proposal, state, and state-specific action.
+`recommendation`, and `proposal`. Fresh answers and critiques return
+`continue_with_lead`; questions return `reply_to_lead`. A fresh recommendation
+has `recommendation_request` and `submit_recommendation_decision`. Its
+`state`, `proposal`, `confirmation_request_id`, `artifact_proposal`,
+`artifact_application_request`, and `story_commit_request` are all `None`;
+`evidence` equals the request's basis evidence. These decision controls are
+mutually exclusive. The trailing field defaults to `None`, preserving callers
+that omit it. Historical judgments and runtime recovery notices can still have
+kind `recommendation` without a new action; follow their state-specific action.
 
 A proposal result contains the complete runtime-built
 `CollaborationProposal`, state `awaiting_confirmation`, a fresh confirmation
@@ -331,7 +343,7 @@ state is `awaiting_consultation_confirmation`. After confirmed review it may be
 `git_action_occurred` fixed to false.
 
 `artifact_application_request` carries the separate exact Apply request after
-successful review, with `next_action=submit_application_decision`. The trailing
+successful review, with `next_action=submit_application_decision`. The
 optional `story_commit_request` carries an existing local Commit request when
 redisclosed, with `next_action=submit_commit_decision`. It defaults to `None`,
 preserving existing construction that omits it. These requests still need
@@ -341,25 +353,55 @@ A fresh provider judgment also returns exact durable `evidence`. It contains
 the provider-declared `scope` (`story_specific` or `workflow_meta`), declared
 status (`not_applicable`, `verified`, `missing`, `empty`, `incomplete`, or
 `conflicting`), and ordered content-free receipts. Proposal evidence is
-identical to `proposal.basis.evidence`. Runtime-generated recovery and evidence-
-rejection notices use `evidence=None`.
+identical to `proposal.basis.evidence`. Runtime-generated workflow recovery and evidence-rejection notices can use
+`evidence=None`; local recommendation rejection or failure closure can instead
+return workflow-meta `not_applicable` evidence with no receipts.
 
-The provider's `lead-outcome-v2` result is one strict JSON object with exactly
-eight fields: `scope`, `evidence_status`, `evidence_ids`, `kind`, `message`,
-`proposal`, `artifact_intent`, and `objective_intent`:
+The provider's `lead-outcome-v3` result is one strict JSON object with exactly
+nine fields: `scope`, `evidence_status`, `evidence_ids`, `kind`, `message`,
+`proposal`, `artifact_intent`, `objective_intent`, and `recommended_action`:
 
 ```json
 {
   "scope": "story_specific",
   "evidence_status": "verified",
   "evidence_ids": ["reference_1"],
-  "kind": "recommendation",
+  "kind": "answer",
   "message": "The referenced outline supports the existing sequence.",
   "proposal": null,
   "artifact_intent": null,
-  "objective_intent": null
+  "objective_intent": null,
+  "recommended_action": null
 }
 ```
+
+For a fresh `kind=recommendation`, `recommended_action` is non-null and
+`objective_intent`, `proposal`, and `artifact_intent` are null. Other kinds
+require `recommended_action=null`. A typed action has exactly these fields:
+
+```json
+{
+  "kind": "prepare_artifact",
+  "purpose": "Prepare the agreed outline for review.",
+  "instruction": "Prepare the agreed outline replacement.",
+  "expected_result": "One exact replacement candidate and its required reviewers.",
+  "source_ids": ["current_response"],
+  "target_paths": ["core_documents/global_outline.md"],
+  "specialist_ids": [],
+  "objective_id": null
+}
+```
+
+This is an action excerpt, not a complete Lead result. `prepare_artifact`
+requires exact canonical targets and no specialists; `prepare_consultation`
+requires canonical specialists and no target paths. Purpose, instruction,
+expected result, and source selection must be nonempty. An optional objective
+must be an offered open objective owned by this conversation; artifact targets
+must match it. Drafting a recommendation makes no objective transition.
+`current_response` is a provider alias for the complete visible recommendation
+message; runtime resolves it to its event ID and exact UTF-8 digest before
+persisting the request. Other source IDs must be runtime offered. Neither
+aliases nor remembered drafts grant artifact evidence or confirmation authority.
 
 For `kind=proposal`, exactly one of `proposal` or `artifact_intent` is non-null.
 Artifact intent contains `operations` and `additional_review_domains`.
@@ -430,10 +472,85 @@ Specialist/synthesis uncertainty and successful results cannot be abandoned by
 this path. See the [failure contract](collaboration-history.md#state-and-user-action-contract)
 and [Lead recovery](../guides/lead-agent.md#submitted-lead-outcome-unavailable-after-restart).
 
+### `LeadRecommendationDecision`
+
+```python
+LeadRecommendationDecision(
+    session_id: str,
+    conversation_id: str,
+    request_event_id: str,
+    request_tail_sequence: int,
+    request_id: str,
+    action_id: str,
+    action_revision: int,
+    action_digest: str,
+    kind: CollaborationConfirmationDecision,
+    revision_request: str | None = None,
+)
+```
+
+Copy the exact current request; do not reconstruct identity from prose:
+
+```python
+from story_writing_agents.conversations import (
+    CollaborationConfirmationDecision,
+    LeadRecommendationDecision,
+)
+
+request = result.recommendation_request
+assert request is not None
+prepared = await runtime.decide_lead_recommendation(
+    LeadRecommendationDecision(
+        session_id=result.session_id,
+        conversation_id=result.conversation_id,
+        request_event_id=request.request_event_id,
+        request_tail_sequence=request.tail_sequence,
+        request_id=request.request_id,
+        action_id=request.action_id,
+        action_revision=request.action_revision,
+        action_digest=request.action_digest,
+        kind=CollaborationConfirmationDecision.CONFIRM,
+    )
+)
+```
+
+Both `StoryRuntime` and `RuntimeSession` use the same method signature and
+return `LeadTurnResult`; the bound session rejects a foreign session decision.
+There is no additional recommendation-result facade. The optional synchronous
+`context_event_sink` observes the preparation under the existing callback rules.
+
+| Decision | Result and authority |
+| --- | --- |
+| `confirm` | Consumes one exact request for one bounded Lead preparation. Returns an exact artifact-review or consultation proposal, or a material question. Subsequent execution/review, Apply, and Commit require separate decisions. |
+| `reject` | Records rejection without a preparation call or objective completion. |
+| `revise` | Requires nonblank `revision_request`; authorizes only a new recommendation and request, with the same action ID and incremented revision. No candidate, consultation proposal, or objective transition is permitted. |
+
+Only Revise accepts revision text. Cancel/EOF in the shell submits no decision.
+Confirm does not authorize an automatic loop or renewed confirmation of that
+same preparation. Pending requests bind the exact event/tail, revision/digest,
+source fingerprint, evidence, input revisions, profiles, policies, and spent
+physical calls. For an existing valid session/conversation, mismatched request
+or action authority and repeated decisions raise `BackendProtocolError`.
+Foreign or missing catalog identities retain their existing lifecycle/catalog
+exceptions, such as `ConversationNotFoundError`; the bound session rejects a
+foreign session decision with `ValueError`. Current-basis drift closes as
+`stale` without preparation. Session/conversation
+serialization prevents two concurrent decisions from consuming one request.
+
+Ordinary input is a real new authoring instruction: runtime atomically records
+it and supersedes an unconfirmed recommendation before the new Lead turn. It
+never fabricates a structured Confirm. Known preparation results can finalize
+locally; a confirmed preparation without provider submission after restart
+requires a new request and Confirm. Submitted uncertainty, corrupt history,
+failed closure, and uncertain reference cleanup remain recovery-gated. See
+[recommendation history](collaboration-history.md#recommendation-preparation-events)
+and [recovery](../operations/recovery-and-limitations.md#recommendation-preparation-recovery).
+
 ### Contextual authoring objectives
 
-`objective_intent` is required in every front-channel result. `null` makes no
-objective transition. The three non-null shapes are:
+`objective_intent` is required in every front-channel result and is null for
+fresh recommendations. `null` makes no objective transition. The three non-null
+shapes are:
 
 ```json
 {"action":"start","request":"Prepare the agreed outline.","target_paths":["core_documents/global_outline.md"],"next_step":"clarify","draft_source_event_ids":[]}
@@ -484,10 +601,17 @@ result for its bound candidate makes it `SATISFIED`. Explicit cancellation
 makes it `CANCELLED`; Commit is independent of objective completion. See the
 [persisted contract](collaboration-history.md#contextual-artifact-objectives).
 
+An artifact objective first created by structured recommendation Confirm uses
+`ArtifactObjectiveFactsV2`/`ArtifactObjectivePayloadV2`, preserving the exact
+request and decision event origin. Ordinary authoring retains v1 user-event
+origin. Confirm can continue an existing v1 objective without changing its
+immutable facts or codec. The preparation execution origin is separate from
+objective provenance; there is no synthetic user message.
+
 The public objective values are additive exports of
 `story_writing_agents.conversations`; the package-root facade is unchanged.
-Retained workspace policies receive a runtime v2 overlay without file rewrites.
-Specialist and synthesis schemas remain separate from `lead-outcome-v2`.
+Retained workspace policies receive a runtime v3 overlay without file rewrites.
+Specialist and synthesis schemas remain separate from `lead-outcome-v3`.
 
 ### `LeadStepDecision`
 
@@ -537,15 +661,22 @@ LeadDecisionResult(
 
 | Decision | Authoritative `turn` |
 | --- | --- |
-| `confirm` | Terminal `completed`, `failed`, `interrupted`, `outcome_unknown`, or `recovery_required`; otherwise a fresh round-two `awaiting_confirmation` proposal. |
+| `confirm` | Terminal `completed`, `failed`, `interrupted`, `outcome_unknown`, or `recovery_required`; otherwise a separately confirmable synthesis recommendation or fresh round-two `awaiting_confirmation` proposal. |
 | `reject` | `recommendation` in `rejected`, with `continue_with_lead`. |
 | `revise` | Replacement lead outcome after the old revision becomes `superseded`. |
 
-The revise replacement retains the step ID. A replacement proposal increments
-the proposal revision and has fresh proposal/digest/request identities. A
+An ordinary replacement proposal or direct outcome from Revise retains the
+step ID. A replacement proposal increments the proposal revision and has fresh
+proposal/digest/request identities. A
 successful round-one synthesis may likewise return revision 2 on the same
 step; it includes the original inputs plus round-one reply-event inputs and
-requires fresh confirmation. Follow `result.turn.next_action`.
+requires fresh confirmation. A replacement or ordinary synthesis may instead
+return `recommendation_request` on a fresh preparation step. A Revise-origin
+recommendation binds the exact old proposal ID/revision/digest and actual
+Revise chain, with a null source execution attempt. A synthesis recommendation
+binds its exact source proposal and execution attempt. Confirming either
+authorizes only preparation. Follow
+`result.turn.next_action`.
 
 An artifact candidate follows the same exact structured decision. Reject marks
 the artifact candidate `rejected` without a provider call. Revise marks the old
@@ -581,8 +712,11 @@ Each successful specialist answer has exact fields `assignment_id`,
 `supports`, `concern`, `conflict`, or `insufficient_evidence`. After every
 assignment succeeds, a normal consultation performs separately budgeted lead
 synthesis. The synthesis cites every reply event in order and retains all input
-IDs from non-supporting replies as unresolved; it may request only one strict
-same-lineage round-two intent.
+IDs from non-supporting replies as unresolved. Its `lead-synthesis-v2` result
+requires nullable `recommended_action`, mutually exclusive with `next_intent`.
+It may recommend one separately confirmed preparation or request one strict
+same-lineage round-two intent. With neither, it returns an answer. The durable
+synthesis payload is unchanged; an action is persisted as a separate request.
 
 Synthesis separately repeats the proposal's exact story-specific scope,
 evidence status, and evidence IDs; reply event IDs are attribution, not story
@@ -707,6 +841,11 @@ await RuntimeSession.propose_specialist_advisory(
     text: str,
     context_event_sink: Callable[[ContextExecutionEvent], None] | None = None,
 ) -> LeadTurnResult
+await RuntimeSession.decide_lead_recommendation(
+    decision: LeadRecommendationDecision,
+    context_event_sink: Callable[[ContextExecutionEvent], None] | None = None,
+) -> LeadTurnResult
+
 await RuntimeSession.decide_lead_step(
     decision: LeadStepDecision,
 ) -> LeadDecisionResult

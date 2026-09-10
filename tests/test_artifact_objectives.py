@@ -69,6 +69,7 @@ class ObjectiveCase(lead.LeadOrchestrationTestCase):
     def question(self, *, intent=None, message=DRAFT):
         def respond(call, _provider):
             return lead._provider_envelope(call, {
+                "recommended_action": None,
                 "scope": "story_specific", "evidence_status": "empty",
                 "evidence_ids": [artifact._status_id(call, OUTLINE)],
                 "kind": "question", "message": message, "proposal": None,

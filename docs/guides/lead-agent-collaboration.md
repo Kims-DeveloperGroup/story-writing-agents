@@ -47,6 +47,8 @@ lead.
 you -> lead turn
      -> runtime inventories bounded source status and attached references
      -> lead answers directly
+        or recommends one preparation -> you Confirm, Reject, or Revise
+             -> lead prepares a separately confirmable proposal or asks a question
         or proposes specialist consultation
         or proposes an exact artifact candidate
      -> you Confirm, Reject, or Revise the exact request
@@ -58,6 +60,42 @@ you -> lead turn
 The runtime never treats a conversational “yes” as confirmation. A
 confirmation is a structured decision bound to the exact request, revision,
 and digest shown to you.
+
+### Decide a recommendation
+
+A recommendation shows what the Lead wants to prepare, why, the exact targets
+or specialists, selected sources, expected result, impact, and call budget.
+Use its Confirm/Reject/Revise control:
+
+| Decision | What follows |
+| --- | --- |
+| Confirm | One bounded Lead preparation. An artifact candidate then needs review confirmation; a consultation proposal needs execution confirmation. A material missing choice may produce a question. |
+| Reject | No preparation call. An existing authoring objective stays open. |
+| Revise | Supply nonempty revision instructions. The Lead prepares a revised recommendation requiring a new Confirm. |
+| Cancel or EOF | No decision is submitted and no preparation starts. |
+
+This illustrative flow starts with a recommendation that includes a visible
+draft; it is not a recorded provider run:
+
+```text
+Lead: <outline draft>; I recommend preparing its replacement candidate.
+Runtime: shows purpose, core_documents/global_outline.md, sources, impact, cost.
+You: Confirm preparation
+Lead: <exact candidate and required reviewers>
+You: Confirm review
+Lead synthesis: decision=propose
+You: Apply
+Runtime: writes the exact candidate; the authoring objective is satisfied.
+You: Commit, if requested
+Runtime: creates the separately disclosed local commit.
+```
+
+Confirm does not launch an automatic sequence or ask you to confirm the same
+preparation again. Review, Apply, and Commit each have their own decision.
+An ordinary message such as “Yes, use that” is also meaningful: it is a new
+instruction interpreted in context and supersedes a pending recommendation.
+It is not the recommendation's structured Confirm. A new proposal still
+requires its own review or execution decision.
 
 ### Follow a draft through to an artifact
 
@@ -222,7 +260,8 @@ omitted from the example:
     "message": "nonempty visible text",
     "proposal": "null or ordinary consultation intent",
     "artifact_intent": "null or exact artifact intent",
-    "objective_intent": "null or start/continue/cancel intent"
+    "objective_intent": "null or start/continue/cancel intent",
+    "recommended_action": "null or prepare_artifact/prepare_consultation action"
   }
 }
 ```
@@ -230,28 +269,29 @@ omitted from the example:
 The lead can request a bounded search:
 
 ```json
-{"action":"SEARCH","queries":[["opening reveal",["writing_artifact"]]]}
+{"correlation":"<exact-token>","action":{"kind":"search","path_prefix":null,"queries":[{"text":"opening reveal","source_kinds":["writing_artifact"]}]}}
 ```
 
 It then reads a returned opaque handle:
 
 ```json
-{"action":"READ","handles":["<runtime-handle>"]}
+{"correlation":"<exact-token>","action":{"kind":"read","handles":["<runtime-handle>"]}}
 ```
 
-Its final `lead-outcome-v2` answer has all eight fields and cites the resulting
+Its final `lead-outcome-v3` answer has all nine fields and cites the resulting
 receipt, not the handle alone:
 
 ```json
 {
   "scope": "story_specific",
   "evidence_status": "verified",
-  "evidence_ids": ["reference_1", "read_1"],
+  "evidence_ids": ["reference_1", "read_2_1"],
   "kind": "critique",
   "message": "The requested sequence is earlier than the outline permits.",
   "proposal": null,
   "artifact_intent": null,
-  "objective_intent": null
+  "objective_intent": null,
+  "recommended_action": null
 }
 ```
 
@@ -272,11 +312,12 @@ The lead's synthesis attributes every reply:
 {
   "scope": "story_specific",
   "evidence_status": "conflicting",
-  "evidence_ids": ["reference_1", "read_1"],
+  "evidence_ids": ["reference_1", "read_2_1"],
   "message": "The motivation works, but the outline timing remains unresolved.",
   "next_intent": null,
+  "recommended_action": null,
   "reply_event_ids": ["reply_plot_1", "reply_character_1"],
-  "unresolved_input_ids": ["reference_1", "read_1"]
+  "unresolved_input_ids": ["reference_1", "read_2_1"]
 }
 ```
 
@@ -284,8 +325,11 @@ The runtime rejects invented, stale, duplicated, reordered, or unused IDs.
 It also rejects a SEARCH hit that was never READ when the lead cites its
 content.
 
-Only the front-channel schema adds `objective_intent`; specialist assessments
-and Lead synthesis keep their own contracts. The exact `start`, `continue`,
+The front-channel schema requires `objective_intent` and `recommended_action`.
+Fresh recommendations have an action and null objective intent; other kinds
+have a null action. Ordinary synthesis also accepts a nullable action, mutually
+exclusive with `next_intent`. Specialist and artifact-review synthesis schemas
+remain separate. The exact `start`, `continue`,
 and `cancel` objects are in the [runtime API](../reference/runtime-api.md#contextual-authoring-objectives).
 
 ## Confirming a proposed step
@@ -499,7 +543,7 @@ runtime assignment, authorized context actions, privacy, and strict output.
 The specialist-family component defines shared assignment and isolation rules.
 The lead and each specialist add only their own behavior and domain lens.
 
-Fresh Lead policies use `lead-outcome-v2`. Existing workspace policy files are
+Fresh Lead policies use `lead-outcome-v3`. Existing workspace policy files are
 retained byte-for-byte; the runtime appends a deterministic Lead overlay that
 supersedes older front-channel field lists. The overlay also applies during
 Lead synthesis while preserving that invocation's separate result schema.
@@ -597,12 +641,27 @@ count against the operation's physical-call budget. Any Codex 401, ambiguous
 Antigravity 401, started call, or source/configuration drift remains
 non-replayable.
 
+Recommendation Confirm and Revise keep the same pending operation through
+permitted authentication assistance. Signing in neither repeats the structured
+decision nor resets its physical-call reservation.
+
 In a consultation, completed specialist siblings stay preserved while the
 failed assignment is handled. If recovery cannot safely resume, runtime stores
 the known replies and terminal failure state. Reopening the session never
 replays that provider call; follow the displayed `failed` or `outcome_unknown`
 next action. Python and other noninteractive callers receive the typed
 authentication error without a terminal handoff.
+
+### Recommendation recovery
+
+A stale request requires fresh planning and confirmation. Repeated or competing
+decisions cannot start a second preparation. If restart finds a confirmed
+preparation that never started provider work, runtime can close it as failed.
+Another attempt needs fresh planning, a new request, and Confirm. A known result
+can be finalized locally without another provider call. Unknown submitted outcomes,
+failed closure writes, or uncertain reference cleanup require resolution first.
+History and reopening do not replay preparation. See
+[recommendation recovery](../operations/recovery-and-limitations.md#recommendation-preparation-recovery).
 
 ## Scenario 9: interruption, restart, and recovery
 

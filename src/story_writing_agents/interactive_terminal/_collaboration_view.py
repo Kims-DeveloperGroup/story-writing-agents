@@ -7,6 +7,11 @@ from enum import StrEnum
 
 from ..conversations import (
     ArtifactObjectivePayload,
+    ArtifactObjectivePayloadV2,
+    LeadRecommendationRequestPayload,
+    LeadRecommendationDecisionPayload,
+    LeadRecommendationStartedPayload,
+    LeadRecommendationResultPayload,
     LeadObjectiveAction,
     ArtifactApplicationDecisionPayload,
     ArtifactApplicationDecisionResult,
@@ -179,6 +184,8 @@ def project_lead_turn_result(result: LeadTurnResult) -> Panel:
         )
     if result.story_commit_request is not None:
         items.extend(_payload_items(result.story_commit_request, {}, {}, {}))
+    if result.recommendation_request is not None:
+        items.extend(_payload_items(result.recommendation_request, {}, {}, {}))
     return Panel("Lead", tuple(items), state=_event_state(result))
 
 
@@ -275,7 +282,7 @@ def _payload_items(
     candidate_paths: Mapping[str, tuple[str, ...]],
     proposals: Mapping[str, CollaborationProposal],
 ) -> tuple[Section | Field | Notice | Message | Record | ListView, ...]:
-    if type(payload) is ArtifactObjectivePayload:
+    if type(payload) in {ArtifactObjectivePayload, ArtifactObjectivePayloadV2}:
         return (
             _message("Artifact objective", payload.facts.request),
             Field("Action", payload.action.value),
@@ -290,6 +297,26 @@ def _payload_items(
                 label="objective state",
             ),
         )
+    if type(payload) is LeadRecommendationRequestPayload:
+        return (
+            Field("Preparation", payload.kind.value),
+            _message("Purpose", payload.purpose), _message("Instruction", payload.instruction),
+            _message("Expected result", payload.expected_result),
+            Field("Sources", _joined(tuple(item.locator for item in payload.basis.inputs))),
+            Field("Targets", _joined(payload.target_paths)),
+            Field("Specialists", _joined(payload.specialist_ids)),
+            Field("Cost", f"At most {payload.max_preparation_physical_calls} provider calls; "
+                          f"{payload.physical_calls_spent} already spent in this source lineage."),
+            Notice(payload.user_impact, label="impact"),
+        )
+    if type(payload) is LeadRecommendationDecisionPayload:
+        return (Field("Recommendation decision", payload.decision.kind.value),
+                *((_message("Revision", payload.decision.revision_request),)
+                  if payload.decision.revision_request is not None else ()))
+    if type(payload) is LeadRecommendationStartedPayload:
+        return (Field("Preparation", "running"), Field("Attempt", payload.execution_attempt_id))
+    if type(payload) is LeadRecommendationResultPayload:
+        return (Field("Preparation", payload.state.value), _message("Result", payload.message))
     if type(payload) is CollaborationMessagePayload:
         return (_message("Message", payload.content),)
     if type(payload) is CollaborationLeadJudgmentPayload:
@@ -703,7 +730,7 @@ def _evidence_items(evidence: CollaborationLeadEvidence) -> tuple[Field, ...]:
 
 
 def _event_state(payload: object) -> ViewState:
-    if type(payload) is ArtifactObjectivePayload and payload.action is LeadObjectiveAction.CANCEL:
+    if type(payload) in {ArtifactObjectivePayload, ArtifactObjectivePayloadV2} and payload.action is LeadObjectiveAction.CANCEL:
         return ViewState.CANCELLED
     if isinstance(payload, (CollaborationLeadOutcomeFailurePayload, ArtifactReviewFailurePayload)):
         return ViewState.ERROR

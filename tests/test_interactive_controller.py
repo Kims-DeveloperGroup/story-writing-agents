@@ -1563,7 +1563,19 @@ class ControllerContractTests(ControllerTestCase):
         graph: dict[str, set[str]] = {name: set() for name in modules}
         for path, module_name in module_names.items():
             parsed = ast.parse(path.read_text(encoding="utf-8"))
-            for node in ast.walk(parsed):
+            pending = [parsed]
+            while pending:
+                node = pending.pop()
+                if isinstance(node, ast.If) and (
+                    isinstance(node.test, ast.Name) and node.test.id == "TYPE_CHECKING"
+                    or isinstance(node.test, ast.Attribute)
+                    and isinstance(node.test.value, ast.Name)
+                    and node.test.value.id == "typing"
+                    and node.test.attr == "TYPE_CHECKING"
+                ):
+                    pending.extend(node.orelse)
+                    continue
+                pending.extend(ast.iter_child_nodes(node))
                 if isinstance(node, ast.ImportFrom) and node.level > 0:
                     package_name = (
                         module_name
@@ -1599,8 +1611,8 @@ class ControllerContractTests(ControllerTestCase):
 
         for module_name in graph:
             visit(module_name)
-        self.assertEqual(len(modules), 132)
-        self.assertEqual(sum(len(dependencies) for dependencies in graph.values()), 514)
+        self.assertEqual(len(modules), 138)
+        self.assertEqual(sum(len(dependencies) for dependencies in graph.values()), 549)
         self.assertTrue(
             {
                 "story_writing_agents.artifact_proposals",
@@ -9969,6 +9981,71 @@ class ControllerV2HistoryCommandTests(ControllerTestCase):
         self.assertNotIn("route_fingerprint", rendered)
         self.assertTrue(workspace.root.exists())
 
+    def test_status_and_history_explain_every_next_action_without_authority(self) -> None:
+        """Both command consumers present the closed projection enum without execution."""
+        expected = {
+            CollaborationNextAction.NONE: "No history-derived action is pending.",
+            CollaborationNextAction.SUBMIT_CONFIRMATION: "Review the proposal and submit a confirmation decision.",
+            CollaborationNextAction.START_OR_RECONFIRM: "Start confirmed work, or reconfirm if its basis changed.",
+            CollaborationNextAction.FINALIZE_RESULT: "Record the terminal result for the running work.",
+            CollaborationNextAction.CONTINUE_WITH_LEAD: "Continue the conversation with the lead agent.",
+            CollaborationNextAction.INSPECT_AND_RESOLVE_OUTCOME: "Inspect durable evidence and resolve the uncertain outcome.",
+            CollaborationNextAction.REPAIR_AUTHORITATIVE_HISTORY: "Repair authoritative history before continuing.",
+            CollaborationNextAction.REPLY_TO_LEAD: "Reply to the lead agent's question.",
+            CollaborationNextAction.RETRY_LEAD_TURN: "Submit new input for a fresh Lead turn; the failed attempt will not be replayed.",
+            CollaborationNextAction.SUBMIT_APPLICATION_DECISION: "Review the exact artifact application request and submit its separate Apply decision.",
+            CollaborationNextAction.SUBMIT_COMMIT_DECISION: "Review the exact local commit request and submit its separate Commit decision.",
+            CollaborationNextAction.SUBMIT_RECOMMENDATION_DECISION: "Review the exact Lead preparation and choose Confirm, Reject, or Revise.",
+            CollaborationNextAction.FINALIZE_RECOMMENDATION: "Finalize the known preparation result locally without replaying provider work.",
+        }
+        self.assertEqual(set(expected), set(CollaborationNextAction))
+        self.assertEqual(len(expected), 13)
+        workspace, services, focused, controller, callbacks = self.prepared_v2_controller()
+        components = []
+        original_write = terminal_module.InteractiveSemanticOutput.write_component
+        def capture(output, component):
+            components.append(component)
+            return original_write(output, component)
+        def inspect(_prompt):
+            before = services.event_store.read("session", focused.conversation_id)
+            snapshot = _tree_snapshot(workspace.root)
+            records, projection = controller._read_focused_history_snapshot(focused)
+            self.assertIs(projection.next_safe_action, CollaborationNextAction.SUBMIT_CONFIRMATION)
+            def dispatch(command, selected):
+                start = len(components)
+                controller._dispatch_session_lobby_action_unlogged(
+                    controller_core_module.parse_interactive_line(command), command)
+                context = next(item for item in components[start:]
+                    if type(item) is terminal_module.Record and
+                    any(field.label == "Next safe action" for field in item.fields))
+                fields = {field.label: field.value for field in context.fields}
+                self.assertEqual(fields["Next safe action"], selected.value)
+                self.assertEqual(fields["Next action meaning"], expected[selected])
+            # Positive control traverses the real store and canonical projection first.
+            for command in ("/status", "/history"):
+                dispatch(command, projection.next_safe_action)
+            for selected in CollaborationNextAction:
+                for command in ("/status", "/history"):
+                    with self.subTest(action=selected, command=command), mock.patch.object(
+                            InteractiveController, "_read_focused_history_snapshot", autospec=True,
+                            return_value=(records, replace(projection, next_safe_action=selected))):
+                        dispatch(command, selected)
+            self.assertEqual(services.event_store.read("session", focused.conversation_id), before)
+            self.assertEqual(_tree_snapshot(workspace.root), snapshot)
+            self.assertEqual(controller._focused_conversation.conversation_id, focused.conversation_id)
+            self.assertEqual(controller._attached_session_id, "session")
+            return "/quit"
+        callbacks.reads[:] = [inspect]
+        with (mock.patch.object(terminal_module.InteractiveSemanticOutput, "write_component",
+                                autospec=True, side_effect=capture),
+              mock.patch.object(controller._backend, "bind", autospec=True) as bind,
+              mock.patch.object(services.event_store, "append_batch", side_effect=AssertionError("read command appended history")) as append):
+            self.assertEqual(controller.run_session_lobby(), 0)
+        bind.assert_not_called()
+        append.assert_not_called()
+        self.assertNotIn("internal_error", "".join(callbacks.records))
+        self.assertEqual(callbacks.prompts, ["story[session]> "])
+
     def test_transcript_picker_preparation_preserves_controller_abort(self) -> None:
         controller = mock.Mock(spec=InteractiveController)
         controller._attached_session_id = "session"
@@ -12937,6 +13014,107 @@ class InteractiveLeadAdapterTests(unittest.TestCase):
                 calls,
                 [("lead", (_UNIQUE_C, "replace the request"))],
             )
+
+    def test_recommendation_controls_route_exact_decisions_and_cancel_without_mutation(self) -> None:
+        from story_writing_agents import conversations as c
+        from tests.recommendation_fixture import RecommendationCase, decision as exact_decision
+
+        case = RecommendationCase()
+        case.setUp()
+        for cleanup, args, kwargs in case._cleanups:
+            self.addCleanup(cleanup, *args, **kwargs)
+        case._cleanups.clear()
+        runner = asyncio.Runner()
+        self.addCleanup(runner.close)
+        conversation_id, turn = runner.run(case.recommend())
+        before = case.history(conversation_id)
+        session = RuntimeSession.__new__(RuntimeSession)
+        completed = replace(turn, kind=c.LeadOutcomeKind.ANSWER, recommendation_request=None,
+                            next_action=c.CollaborationNextAction.CONTINUE_WITH_LEAD)
+        calls = []
+        routes = []
+        picker_calls = []
+        async def lead_turn(_session, cid, text):
+            calls.append(("lead", (cid, text)))
+            return turn
+        async def decide(_session, selected):
+            calls.append(("decision", selected))
+            return completed
+        original = lead_policy_module.InteractiveLeadAdapter._run_operation
+        def routed(adapter, operation):
+            routes.append(operation.cr_code.co_name)
+            return original(adapter, operation)
+        class Picker(self._Picker):
+            def read_picker(inner, prompt, choices, **kwargs):
+                picker_calls.append((prompt, choices, kwargs))
+                return super().read_picker(prompt, choices, **kwargs)
+        with (mock.patch.object(RuntimeSession, "lead_turn", lead_turn),
+              mock.patch.object(RuntimeSession, "decide_lead_recommendation", decide),
+              mock.patch.object(RuntimeSession, "decide_lead_step", side_effect=AssertionError("wrong decision API")),
+              mock.patch.object(lead_policy_module.InteractiveLeadAdapter, "_run_operation", routed)):
+            for kind in c.CollaborationConfirmationDecision:
+                with self.subTest(kind=kind):
+                    calls.clear(); routes.clear(); picker_calls.clear()
+                    revision = "  Narrow only the preparation.  " if kind is c.CollaborationConfirmationDecision.REVISE else None
+                    adapter = lead_policy_module.InteractiveLeadAdapter(
+                        session, runner, self._Progress(), Picker(self._commit(kind.value)),
+                        self._Prompt(*(() if revision is None else (self._commit(revision),))),
+                        self._Output(), recover_authentication=lambda _provider: self.fail("unexpected native handoff"))
+                    self.assertFalse(adapter.submit(conversation_id, " literal input "))
+                    self.assertEqual(calls, [("lead", (conversation_id, " literal input ")),
+                        ("decision", exact_decision(turn, kind, revision_request=revision))])
+                    self.assertEqual(routes, ["lead_turn", "decide"])
+                    prompt, choices, options = picker_calls[0]
+                    self.assertEqual(prompt.name, "Lead recommendation decision")
+                    self.assertEqual(tuple(item.identity for item in choices), ("confirm", "reject", "revise"))
+                    self.assertIn("preparation only", choices[0].description)
+                    self.assertIn("new Confirm", choices[2].description)
+                    self.assertEqual(options["highlighted_id"], "revise")
+                    self.assertEqual(case.history(conversation_id), before)
+            for outcome in (ControlOutcomeKind.CANCEL, ControlOutcomeKind.INTERRUPT, ControlOutcomeKind.EOF):
+                with self.subTest(outcome=outcome):
+                    calls.clear(); routes.clear()
+                    adapter = lead_policy_module.InteractiveLeadAdapter(
+                        session, runner, self._Progress(), Picker(ControlOutcome(outcome)),
+                        self._Prompt(), self._Output())
+                    self.assertEqual(adapter.submit(conversation_id, "still pending"), outcome is ControlOutcomeKind.EOF)
+                    self.assertEqual(calls, [("lead", (conversation_id, "still pending"))])
+                    self.assertEqual(routes, ["lead_turn"])
+                    self.assertEqual(case.history(conversation_id), before)
+        case.assert_no_downstream(conversation_id)
+
+    def test_recommendation_revision_cancel_and_eof_preserve_pending_request(self) -> None:
+        from story_writing_agents import conversations as c
+        from tests.recommendation_fixture import RecommendationCase
+
+        case = RecommendationCase()
+        case.setUp()
+        for cleanup, args, kwargs in case._cleanups:
+            self.addCleanup(cleanup, *args, **kwargs)
+        case._cleanups.clear()
+        runner = asyncio.Runner()
+        self.addCleanup(runner.close)
+        conversation_id, turn = runner.run(case.recommend())
+        before, calls = case.history(conversation_id), len(case.backend.calls)
+        session = RuntimeSession.__new__(RuntimeSession)
+        for outcome in (ControlOutcome(ControlOutcomeKind.CANCEL),
+                        ControlOutcome(ControlOutcomeKind.INTERRUPT),
+                        ControlOutcome(ControlOutcomeKind.EOF), self._commit(""), self._commit("  ")):
+            with self.subTest(outcome=outcome), mock.patch.object(
+                    RuntimeSession, "decide_lead_recommendation", side_effect=AssertionError("unconfirmed revision")):
+                output = self._Output()
+                adapter = lead_policy_module.InteractiveLeadAdapter(
+                    session, runner, self._Progress(), self._Picker(self._commit("revise")),
+                    self._Prompt(outcome), output)
+                self.assertEqual(adapter._present_and_decide(turn), outcome.kind is ControlOutcomeKind.EOF)
+                self.assertEqual(case.history(conversation_id), before)
+                self.assertEqual(len(case.backend.calls), calls)
+                projection = case.projection(conversation_id)
+                self.assertIs(projection.current_recommendation_state, c.LeadRecommendationState.PENDING)
+                self.assertEqual(projection.current_recommendation_request, turn.recommendation_request)
+                self.assertFalse(case.payload_events(conversation_id, c.LeadRecommendationDecisionPayload))
+                if outcome.kind is not ControlOutcomeKind.EOF:
+                    self.assertTrue(any(isinstance(item, terminal_module.Notice) for item in output.components))
 
     def test_failure_interruption_and_recovery_turns_never_replay_authority(
         self,

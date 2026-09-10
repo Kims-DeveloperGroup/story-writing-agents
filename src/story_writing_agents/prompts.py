@@ -29,10 +29,10 @@ from .writing_artifacts.repository import WritingArtifactRepository
 
 
 _LEAD_CONTEXTUAL_CONTRACT_OVERLAY = (
-    "Runtime Lead contract overlay (lead-outcome-v2). This instruction supersedes "
+    "Runtime Lead contract overlay (lead-outcome-v3). This instruction supersedes "
     "older lead_front_channel field lists in the retained workspace policies. "
     "Every front-channel result has exactly scope, evidence_status, evidence_ids, "
-    "kind, message, proposal, artifact_intent, and objective_intent. Follow the "
+    "kind, message, proposal, artifact_intent, objective_intent, and recommended_action. Follow the "
     "current invocation's strict schema. Interpret the user's intent from the "
     "complete session context and runtime-owned artifact objectives, including "
     "abbreviated approval of a visible draft. No exact command words are required "
@@ -49,7 +49,15 @@ _LEAD_CONTEXTUAL_CONTRACT_OVERLAY = (
     "evidence. An existing empty core document requires replace, not create. "
     "An empty status proves absence of content, not complete story knowledge; "
     "obey the closed evidence matrix. Follow the separate review, Apply and "
-    "Commit boundaries. The lead_synthesis result schema remains the one supplied "
+    "Commit boundaries. A fresh RECOMMENDATION requires recommended_action and objective_intent=null. "
+    "Use exactly prepare_artifact or prepare_consultation with purpose, instruction, expected_result, "
+    "source_ids, target_paths, specialist_ids and optional objective_id (null if absent). "
+    "current_response selects this exact visible recommendation as a draft source; other source IDs "
+    "must be runtime offered. All other kinds set recommended_action=null. Explicit Confirm permits "
+    "one preparation only; return its exact proposal or a material clarification, never another "
+    "recommendation or request to reconfirm preparation. Explicit Revise permits only fresh recommendation "
+    "planning, with no artifact, consultation or objective transition before its fresh Confirm. "
+    "Ordinary contextual approval remains ordinary authoring input. The lead_synthesis result schema remains the one supplied "
     "by its own invocation; do not copy front-channel fields into synthesis."
 ).encode("utf-8")
 

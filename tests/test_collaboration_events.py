@@ -217,6 +217,10 @@ class CollaborationValueContractTests(unittest.TestCase):
                 "story_commit_decision",
                 "story_commit_result",
                 "artifact_objective",
+                "lead_recommendation_request",
+                "lead_recommendation_decision",
+                "lead_recommendation_started",
+                "lead_recommendation_result",
             ),
             CollaborationActorKind: (
                 "user",
@@ -618,6 +622,7 @@ class CollaborationValueContractTests(unittest.TestCase):
                     "proposal",
                     "artifact_intent",
                     "objective_intent",
+                    "recommended_action",
                 ),
             ),
             (
@@ -1374,9 +1379,13 @@ class CollaborationPackageBoundaryTests(unittest.TestCase):
     ) -> None:
         expected_event_exports = (
             ("ArtifactDraftSource", "ArtifactObjectiveCandidateBinding",
-             "ArtifactObjectiveFacts", "ArtifactObjectiveNextStep",
-             "ArtifactObjectivePayload", "ArtifactObjectiveState",
-             "LeadObjectiveAction", "LeadObjectiveIntent")
+             "ArtifactObjectiveFacts", "ArtifactObjectiveFactsV2", "ArtifactObjectiveNextStep",
+             "ArtifactObjectivePayload", "ArtifactObjectivePayloadV2", "ArtifactObjectiveState",
+             "LeadObjectiveAction", "LeadObjectiveIntent", "LeadRecommendedAction",
+             "LeadRecommendationActionKind", "LeadRecommendationDecision",
+             "LeadRecommendationDecisionPayload", "LeadRecommendationRequestPayload",
+             "LeadRecommendationResultPayload", "LeadRecommendationStartedPayload",
+             "LeadRecommendationState")
             + COLLABORATION_EVENT_EXPORTS
         )
         expected_context_exports = (
@@ -1385,7 +1394,7 @@ class CollaborationPackageBoundaryTests(unittest.TestCase):
         )
         self.assertEqual(tuple(events_owner.__all__), expected_event_exports)
         self.assertEqual(tuple(context_owner.__all__), expected_context_exports)
-        self.assertEqual(len(conversations.__all__), 144)
+        self.assertEqual(len(conversations.__all__), 154)
         self.assertNotIn("__getattr__", vars(events_owner))
         self.assertNotIn("__getattr__", vars(context_owner))
         self.assertNotIn("__getattr__", vars(conversations))
@@ -1504,8 +1513,8 @@ import story_writing_agents
 import story_writing_agents.conversations as facade
 import story_writing_agents.conversations.context as context
 import story_writing_agents.conversations.events as events
-assert len(facade.__all__) == 144
-assert len(events.__all__) == 106
+assert len(facade.__all__) == 154
+assert len(events.__all__) == 116
 assert len(context.__all__) == 30
 assert facade.CollaborationProposal is events.CollaborationProposal
 assert facade.CollaborationEventStore is context.CollaborationEventStore

@@ -36,8 +36,9 @@ page one unchanged snapshot, derive a stable lookup-document ID, and explicitly
 select bounded records for possible later provider context.
 
 The contract and its pure projections run nothing. `StoryRuntime.lead_turn()`
-uses it while binding the lead, and `decide_lead_step()` records exact
-decisions and executes a confirmed consultation through runtime-owned
+uses it while binding the lead. `decide_lead_recommendation()` records a
+preparation decision and runs its bounded Lead invocation; `decide_lead_step()`
+records exact decisions and executes a confirmed consultation through runtime-owned
 capabilities. This path can call specialists and the lead for read-only
 synthesis, construct and review an exact artifact candidate, and persist the
 review result; it cannot change a story artifact or mutate Git. The active
@@ -158,9 +159,9 @@ authority.
 
 ### Contextual artifact objectives
 
-An `artifact_objective` event carries the strict `artifact_objective_v1`
-payload inside the existing schema-v2 event envelope. This is additive: older
-event payload bytes remain unchanged, and the outer history version stays v2.
+An `artifact_objective` event carries strict `artifact_objective_v1` or
+`artifact_objective_v2` payloads inside the existing schema-v2 event envelope.
+This is additive: older event payload bytes remain unchanged, and the outer history version stays v2.
 Filesystem/SQLite history, archive, and transfer retain the same objective
 records; projection itself appends nothing.
 
@@ -172,6 +173,15 @@ continuation names the exact previous objective event and preserves the origin
 facts. A PREPARE transition also binds its co-batched candidate by event ID,
 candidate ID, revision, and digest; its operations must cover the frozen target
 scope exactly.
+
+A new objective from structured recommendation Confirm instead uses
+`ArtifactObjectiveFactsV2` and `ArtifactObjectivePayloadV2`. Its immutable origin
+names `origin_recommendation_request_event_id` and
+`origin_recommendation_decision_event_id`, replacing the v1 user-event origin.
+Replay requires the exact real Confirm and its correlated preparation result;
+runtime never inserts a fake user message. Confirm continuing a v1 objective
+preserves its v1 origin facts and codec; later transitions of a v2 objective
+preserve v2. Execution origin is validated independently of objective origin.
 
 `CollaborationHistoryProjection.artifact_objectives` exposes the retained
 objectives; `offered_draft_sources` exposes exact owner-conversation visible
@@ -200,6 +210,78 @@ Readable projection exposes the closed fields `artifact_objective.request`,
 payload and required session context. No projection reconstructs confirmation
 authority from them. See the
 [front-channel contract](runtime-api.md#contextual-authoring-objectives).
+
+### Recommendation preparation events
+
+The existing schema-v2 history envelope adds four typed event kinds and strict
+versioned payloads:
+
+| Event kind | Payload type | Meaning |
+| --- | --- | --- |
+| `lead_recommendation_request` | `lead_recommendation_request_v1` | Exact immutable preparation disclosure and final-tail request. |
+| `lead_recommendation_decision` | `lead_recommendation_decision_v1` | Real structured Confirm, Reject, or Revise bound to that request. |
+| `lead_recommendation_started` | `lead_recommendation_started_v1` | Correlated single preparation attempt origin; never a reusable capability. |
+| `lead_recommendation_result` | `lead_recommendation_result_v1` | Known closure, distinct from artifact completion. |
+
+`LeadRecommendationRequestPayload` contains `request_event_id`, `request_id`,
+`action_id`, `action_revision`, `kind`, `purpose`, `instruction`,
+`expected_result`, `target_paths`, `specialist_ids`, `objective_id`,
+`source_recommendation_event_id`, `source_recommendation_digest`,
+`draft_sources`, `basis`, `source_fingerprint`, `physical_calls_spent`,
+`max_preparation_physical_calls`, `tail_sequence`, and `user_impact`.
+The computed `action_digest` binds every field using canonical JSON.
+
+Four trailing optional fields bind upstream proposal provenance:
+`source_proposal_id`, `source_proposal_revision`, `source_proposal_digest`,
+and `source_execution_attempt_id`. The proposal triple is all-or-none; an
+attempt requires the triple. Ordinary front-channel recommendations use all
+nulls. Ordinary synthesis binds its exact proposal triple and execution
+attempt. A recommendation produced by consultation Revise binds the old
+proposal and actual Revise chain, with a null attempt. Mixed, foreign, or stale
+correlation fails replay and the existing `LeadDecisionResult` validation.
+
+`LeadRecommendedAction` is untrusted provider intent, not a separate persisted
+authority payload. Runtime resolves `current_response` to the source
+recommendation's exact visible message event and whole-message UTF-8 digest;
+no fragment extraction, normalization, or alias is persisted as authority.
+Other sources resolve only from offered inputs and draft events. The request
+retains exact ordered source revisions, evidence, profiles, policies, target
+fingerprint, and remaining preparation reservation. Historical `lead_judgment`
+records are unchanged; a historical recommendation without its own request is
+not promoted to an actionable recommendation.
+
+The decision repeats the session/conversation, request event and tail sequence,
+request ID, action ID/revision/digest, kind, and optional revision text. Confirm
+or nonblank Revise is co-batched with its started event before provider work;
+Reject or detected staleness is co-batched with terminal closure. The started
+event also binds decision and execution-attempt IDs. Result states are
+`completed`, `rejected`, `superseded`, `stale`, `failed`, or `interrupted`, with
+applicable decision/start/Lead-result IDs or `superseding_user_event_id`.
+`completed` means preparation ended, not that the artifact was applied.
+
+`CollaborationHistoryProjection` exposes `current_recommendation_request`,
+`current_recommendation_decision`, `current_recommendation_start`,
+`current_recommendation_result`, and `current_recommendation_state`. Pending
+requests select `submit_recommendation_decision`; known local closure work
+selects `finalize_recommendation`. Ordinary new input atomically supersedes a
+pending request. Repeated/concurrent decisions cannot consume it twice.
+Uncertain submitted work remains `inspect_and_resolve_outcome`; corrupt or
+unprovable closure requires recovery. Inspection creates no capability or
+provider replay. See [recovery](../operations/recovery-and-limitations.md#recommendation-preparation-recovery).
+
+Ordinary provider synthesis uses `lead-synthesis-v2` with nullable
+`recommended_action`; it is mutually exclusive with `next_intent`. Runtime
+persists the unchanged historical `CollaborationLeadSynthesisPayload` and a
+separate recommendation request when an action is selected. Artifact-review
+synthesis keeps its independent contract. Filesystem/SQLite storage, archive,
+transfer, and pure replay use these exact records without rewriting historical
+judgment, synthesis, or v1 objective payloads.
+
+Readable history adds `lead_recommendation.purpose`, `.instruction`, `.result`,
+`.impact`, `.decision`, `.revision`, `.state`, `.sources`, `.targets`, and
+`.cost` fields. Required session context includes the exact recommendation
+request, decision, start, and closure, including source and objective origins;
+remembering those records grants no execution authority.
 
 ## Proposal closure and limits
 

@@ -345,6 +345,7 @@ def lead_consultation_answer(value, _agent_id):
             "reply_event_ids": contract["reply_event_ids"],
             "scope": contract["scope"],
             "unresolved_input_ids": [],
+            "recommended_action": None,
         }
     statuses = nested_mapping_with(value, "core_statuses")
     status_rows = statuses["core_statuses"] if statuses is not None else []
@@ -360,7 +361,8 @@ def lead_consultation_answer(value, _agent_id):
         ),
         "evidence_ids": evidence_ids,
         "artifact_intent": None,
-                "objective_intent": None,
+        "objective_intent": None,
+        "recommended_action": None,
         "proposal": {
             "relation": "new_step",
             "purpose": "Check outline consistency before answering.",
@@ -371,6 +373,33 @@ def lead_consultation_answer(value, _agent_id):
             } for specialist in control.get("specialists", ["plot_architect"])],
         },
     }
+
+
+def lead_recommendation_answer(value):
+    """Offer a synthetic draft, then prepare only after exact runtime Confirm."""
+    draft = "1. A courier finds a sealed map.\n2. The map reveals a false harbor.\n3. The courier returns the missing seal.\nB642-PTY-SYNTHETIC\n"
+    execution = nested_mapping_with(value, "structured_recommendation_execution")
+    if execution is None:
+        return {"kind": "recommendation", "message": draft, "scope": "workflow_meta",
+            "evidence_status": "not_applicable", "evidence_ids": [], "proposal": None,
+            "artifact_intent": None, "objective_intent": None,
+            "recommended_action": {"kind": "prepare_artifact", "purpose": "Prepare the offered outline for review.",
+                "instruction": "Prepare the exact offered synthetic outline.",
+                "expected_result": "One outline candidate awaiting separate review.",
+                "source_ids": ["current_response"], "objective_id": None,
+                "target_paths": ["core_documents/global_outline.md"], "specialist_ids": []}}
+    request = execution["structured_recommendation_execution"]["request"]
+    statuses = nested_mapping_with(value, "core_statuses")["core_statuses"]
+    evidence = next(item["evidence_id"] for item in statuses
+                    if item["locator"] == "core_documents/global_outline.md")
+    return {"kind": "proposal", "message": "B642 exact candidate awaits separate specialist review.",
+        "scope": "story_specific", "evidence_status": "empty", "evidence_ids": [evidence],
+        "proposal": None, "recommended_action": None,
+        "artifact_intent": {"additional_review_domains": [], "operations": [
+            {"kind": "replace", "evidence_id": evidence, "new_text": draft}]},
+        "objective_intent": {"action": "start", "request": request["instruction"],
+            "target_paths": request["target_paths"], "next_step": "prepare",
+            "draft_source_event_ids": [item["event_id"] for item in request["draft_sources"]]}}
 
 
 def compact_answer(value, used_handles=(), *, after_retrieval=False):
@@ -508,11 +537,14 @@ elif control.get("mode") == "correlation_mismatch":
 elif isinstance(query, list):
     if control.get("mode") in {
         "lead_consultation",
+        "lead_recommendation",
         "lead_answer",
         "lead_incomplete_then_correct",
     }:
         if control.get("mode") == "lead_consultation":
             answer = lead_consultation_answer(payload, agent_id)
+        elif control.get("mode") == "lead_recommendation":
+            answer = lead_recommendation_answer(payload)
         elif control.get("mode") == "lead_answer":
             answer = {
                 "kind": "answer",
@@ -522,6 +554,7 @@ elif isinstance(query, list):
                 "evidence_ids": [],
                 "artifact_intent": None,
                 "objective_intent": None,
+                "recommended_action": None,
                 "proposal": None,
             }
         elif nested_mapping_with(payload, "response_correction") is None:
@@ -542,6 +575,7 @@ elif isinstance(query, list):
                 "evidence_ids": [],
                 "artifact_intent": None,
                 "objective_intent": None,
+                "recommended_action": None,
                 "proposal": None,
             }
         response = {
@@ -874,7 +908,8 @@ if "--print" in argv:
     if agent == "lead_orchestrator":
         answer = {"kind": "answer", "message": "AUTH631 exact request recovered.",
             "scope": "workflow_meta", "evidence_status": "not_applicable",
-            "evidence_ids": [], "artifact_intent": None, "proposal": None}
+            "evidence_ids": [], "artifact_intent": None, "proposal": None,
+            "objective_intent": None, "recommended_action": None}
     else:
         answer = lead_consultation_answer(payload, agent)
     print(json.dumps({"conversation_id": option("--conversation") or ("auth-thread-" + agent),
@@ -4914,6 +4949,91 @@ raise SystemExit(cli.main([]))
         reopened.wait_for_text("story[alpha]> ", after=continuation_mark)
         reopened.send_line("/quit")
         self.assertEqual(reopened.wait_for_exit(), 0, reopened.normalized_text)
+
+    def test_recommendation_confirm_prepares_review_without_running_specialists_on_pty(self) -> None:
+        """Confirm one preparation and stop at its independent review decision."""
+        import hashlib
+        from story_writing_agents import conversations as c
+
+        defaults_path = self.workspace.path("config/system_defaults.json")
+        defaults = json.loads(defaults_path.read_text())
+        defaults["default_backend"] = "codex"
+        defaults_path.write_text(json.dumps(defaults, indent=2, sort_keys=True) + "\n")
+        self._set_provider_control(mode="lead_recommendation")
+        process = self._spawn_cli((), terminal_columns=120)
+        process.wait_for_text("story[lobby]> ")
+        process.send_line("/session create alpha")
+        process.wait_for_text("story[alpha]> ")
+        conversation = self._create_conversation(process, subject="Synthetic recommendation")
+        outline = self.workspace.path("core_documents/global_outline.md")
+        self.assertEqual(outline.read_bytes(), b"")
+        def baseline():
+            return (tuple((f.name, f.read_bytes()) for f in sorted(
+                        self.workspace.path("core_documents").glob("*.md"))),
+                    *(subprocess.check_output(["git", *args], cwd=self.workspace.root)
+                      for args in (("rev-parse", "HEAD"), ("diff", "--cached", "--binary"),
+                                   ("diff", "--binary"))))
+        before = baseline()
+        store = FilesystemCollaborationEventStore(
+            self.workspace, catalog=FilesystemConversationCatalog(self.workspace))
+        mark = process.output_mark()
+        process.send_line("Offer the tiny synthetic outline and recommend preparing it.")
+        offered = process.wait_for_text("Lead recommendation decision", after=mark)
+        self.assertIn("B642-PTY-SYNTHETIC", offered)
+        self.assertIn("core_documents/global_outline.md", offered)
+        pending = store.read("alpha", conversation.conversation_id)
+        request_event = next(e for e in pending if type(e.payload) is c.LeadRecommendationRequestPayload)
+        request = request_event.payload
+        self.assertEqual(c.project_collaboration_history(pending).artifact_objectives, ())
+        self.assertEqual(baseline(), before)
+        process.send_line("1")
+        prepared = process.wait_for_text("Lead proposal decision", after=mark)
+        self.assertIn("B642 exact candidate awaits separate specialist review.", prepared)
+        events = store.read("alpha", conversation.conversation_id)
+        projection = c.project_collaboration_history(events)
+        decisions = [e for e in events if type(e.payload) is c.LeadRecommendationDecisionPayload]
+        starts = [e for e in events if type(e.payload) is c.LeadRecommendationStartedPayload]
+        results = [e for e in events if type(e.payload) is c.LeadRecommendationResultPayload]
+        self.assertEqual((len(decisions), len(starts), len(results)), (1, 1, 1))
+        self.assertIs(decisions[0].payload.decision.kind, c.CollaborationConfirmationDecision.CONFIRM)
+        self.assertEqual(decisions[0].payload.decision.request_event_id, request_event.event_id)
+        self.assertEqual(decisions[0].batch_id, starts[0].batch_id)
+        self.assertEqual(starts[0].payload.decision_event_id, decisions[0].event_id)
+        self.assertIs(results[0].payload.state, c.LeadRecommendationState.COMPLETED)
+        objectives = projection.artifact_objectives
+        self.assertEqual(len(objectives), 1)
+        objective = objectives[0]
+        self.assertIs(objective.state, c.ArtifactObjectiveState.OPEN)
+        self.assertIs(type(objective.facts), c.ArtifactObjectiveFactsV2)
+        self.assertEqual(objective.facts.origin_recommendation_request_event_id, request_event.event_id)
+        self.assertEqual(objective.facts.origin_recommendation_decision_event_id, decisions[0].event_id)
+        self.assertEqual(objective.draft_sources, request.draft_sources)
+        candidate_event = next(e for e in events if type(e.payload) is c.ArtifactReviewCandidatePayload)
+        operation = candidate_event.payload.candidate.change_set.operations[0]
+        draft = next(e.payload.message for e in pending if e.event_id == request.source_recommendation_event_id)
+        self.assertEqual((operation.operation_kind.value, operation.path, operation.content),
+                         ("replace", "core_documents/global_outline.md", draft.encode()))
+        self.assertEqual(request.draft_sources[0].content_digest,
+                         "sha256:" + hashlib.sha256(draft.encode()).hexdigest())
+        self.assertFalse(any(type(e.payload) in {
+            c.CollaborationAssignmentDispatchPayload, c.ArtifactApplicationDecisionPayload,
+            c.ArtifactApplicationResultPayload, c.StoryCommitDecisionPayload, c.StoryCommitResultPayload}
+            for e in events))
+        self.assertEqual(sum(type(e.payload) is c.CollaborationMessagePayload and
+                             e.direction is c.CollaborationDirection.USER_TO_LEAD for e in events), 1)
+        calls = [item for item in self._provider_records() if item.get("event") == "started"]
+        self.assertEqual(len(calls), 2)
+        self.assertTrue(all(item["context_current"]["identity"]["agent_id"] == "lead_orchestrator"
+                            for item in calls))
+        self.assertEqual(baseline(), before)
+        cancel_mark = process.output_mark()
+        process.send_line("/cancel")
+        process.wait_for_text("story[alpha]> ", after=cancel_mark)
+        self.assertEqual(store.read("alpha", conversation.conversation_id), events)
+        process.send_line("/quit")
+        self.assertEqual(process.wait_for_exit(), 0, process.normalized_text)
+        self.assertEqual(process.final_terminal_attributes, process.original_terminal_attributes)
+        self.assertEqual(baseline(), before)
 
     def test_submitted_lead_failure_after_reference_is_stable_and_nonreplaying_on_pty(
         self,
