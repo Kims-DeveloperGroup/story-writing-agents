@@ -148,7 +148,7 @@ def project_lead_turn_result(result: LeadTurnResult) -> Panel:
         raise TypeError("result must be a LeadTurnResult")
     items: list[Section | Field | Notice | Message | Record | ListView] = [
         Field("Outcome", result.kind.value),
-        _message("Lead", result.message),
+        _message("Lead", result.message, role=SemanticRole.AGENT),
     ]
     if result.proposal is not None:
         items.extend(_proposal_items(result.proposal))
@@ -322,7 +322,7 @@ def _payload_items(
     if type(payload) is CollaborationLeadJudgmentPayload:
         return (
             Field("Outcome", payload.kind.value),
-            _message("Lead", payload.message),
+            _message("Lead", payload.message, role=SemanticRole.AGENT),
             *_evidence_items(payload.evidence),
         )
     if type(payload) is CollaborationProposal:
@@ -340,7 +340,7 @@ def _payload_items(
             Field("Assignment", payload.assignment_id),
             Field("Assessment", payload.assessment.value),
             Field("Inputs read", _joined(payload.input_ids)),
-            _message("Specialist reply", payload.message),
+            _message("Specialist reply", payload.message, role=SemanticRole.AGENT),
         ]
         if payload.assessment.value == "conflict":
             items.extend(
@@ -368,7 +368,7 @@ def _payload_items(
             Field("Attempt", payload.execution_attempt_id),
             Field("Replies", _joined(payload.reply_event_ids)),
             Field("Unresolved inputs", _joined(payload.unresolved_input_ids)),
-            _message("Lead synthesis", payload.message),
+            _message("Lead synthesis", payload.message, role=SemanticRole.AGENT),
             *_evidence_items(payload.evidence),
         )
     if type(payload) is CollaborationStepStatePayload:
@@ -461,7 +461,7 @@ def _payload_items(
             Field("Decision", payload.decision.value),
             Field("Replies", _joined(payload.reply_event_ids)),
             Field("Unresolved inputs", _joined(payload.unresolved_input_ids)),
-            _message("Review synthesis", payload.message),
+            _message("Review synthesis", payload.message, role=SemanticRole.AGENT),
             Field("Rationale", payload.rationale),
             Field("User impact", payload.user_impact),
             Field("Limitations", payload.limitations),
@@ -744,8 +744,18 @@ def _event_state(payload: object) -> ViewState:
     return ViewState.OPEN
 
 
-def _message(sender: str, content: str) -> Message:
-    return Message(sender, content, presentation=MessagePresentation.CHAT_BLOCK)
+def _message(
+    sender: str,
+    content: str,
+    *,
+    role: SemanticRole = SemanticRole.DEFAULT,
+) -> Message:
+    return Message(
+        sender,
+        content,
+        role=role,
+        presentation=MessagePresentation.CHAT_BLOCK,
+    )
 
 
 def _actor(kind: str, agent_id: str | None) -> str:

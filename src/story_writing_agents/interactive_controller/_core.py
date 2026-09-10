@@ -55,6 +55,7 @@ from ..debug_log import (
 from ..conversations import (
     CollaborationHistoryProjection,
     CollaborationNextAction,
+    CollaborationReadableFieldKey,
     CollaborationReadableRecord,
     CollaborationStepState,
     ConversationMetadata,
@@ -110,6 +111,7 @@ from ..interactive_settings import (
 )
 from ..interactive_terminal import (
     AdvisoryProgressError,
+    format_agent_reply_content,
     InteractiveAdvisoryProgress,
     InteractiveMainInput,
     InputPresentation,
@@ -866,25 +868,41 @@ class InteractiveController:
 
         sender = record.sender.agent_id or record.sender.kind.value
         recipient = record.recipient.agent_id or record.recipient.kind.value
-        readable_fields = tuple(
-            Field(
-                (
-                    field.key.value
-                    + (
-                        ""
-                        if field.assignment_ordinal is None
-                        else f"[{field.assignment_ordinal}]"
-                    )
-                    + (
-                        ""
-                        if field.input_ordinal is None
-                        else f"[{field.input_ordinal}]"
-                    )
-                ),
-                field.text,
+        multiline_agent_keys = {
+            CollaborationReadableFieldKey.LEAD_JUDGMENT_MESSAGE,
+            CollaborationReadableFieldKey.SPECIALIST_REPLY_CONTENT,
+            CollaborationReadableFieldKey.LEAD_SYNTHESIS_MESSAGE,
+            CollaborationReadableFieldKey.ARTIFACT_REVIEW_MESSAGE,
+        }
+        readable_fields: list[Field] = []
+        content: list[str] = []
+        for field in record.fields:
+            formatted = (
+                format_agent_reply_content(field.text)
+                if field.key in multiline_agent_keys
+                else field.text
             )
-            for field in record.fields
-        )
+            if field.key in multiline_agent_keys and "\n" in formatted:
+                content.append(formatted)
+                continue
+            readable_fields.append(
+                Field(
+                    (
+                        field.key.value
+                        + (
+                            ""
+                            if field.assignment_ordinal is None
+                            else f"[{field.assignment_ordinal}]"
+                        )
+                        + (
+                            ""
+                            if field.input_ordinal is None
+                            else f"[{field.input_ordinal}]"
+                        )
+                    ),
+                    formatted,
+                )
+            )
         return Record(
             f"event {record.event_id}",
             fields=(
@@ -896,6 +914,7 @@ class InteractiveController:
                 Field("Actors", f"{sender} → {recipient}"),
                 *readable_fields,
             ),
+            content="\n".join(content) if content else None,
             state=ViewState.COMPLETED,
         )
 

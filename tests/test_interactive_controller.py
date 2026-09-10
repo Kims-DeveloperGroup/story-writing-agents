@@ -69,6 +69,8 @@ from story_writing_agents.conversations import (
     CollaborationConfirmationDecision,
     CollaborationEventBatch,
     CollaborationNextAction,
+    CollaborationReadableField,
+    CollaborationReadableFieldKey,
     CollaborationStepState,
     CONVERSATION_EVENT_SCHEMA_VERSION,
     CONVERSATION_METADATA_SCHEMA_VERSION,
@@ -9980,6 +9982,134 @@ class ControllerV2HistoryCommandTests(ControllerTestCase):
         self.assertIn("submit_confirmation", rendered)
         self.assertNotIn("route_fingerprint", rendered)
         self.assertTrue(workspace.root.exists())
+
+    def test_history_and_transcript_render_only_approved_agent_fields_multiline(
+        self,
+    ) -> None:
+        workspace, services, metadata, controller, callbacks = (
+            self.prepared_v2_controller(with_history=True)
+        )
+        controller._attached_session_id = "session"
+        controller._focused_conversation = metadata
+        before = services.event_store.read("session", metadata.conversation_id)
+        records, projection = controller._read_focused_history_snapshot(metadata)
+        record = SimpleNamespace(
+            event_id=records[0].event_id,
+            sequence=1,
+            turn_id=records[0].turn_id,
+            step_id=records[0].step_id,
+            kind=records[0].kind,
+            direction=records[0].direction,
+            sender=records[0].sender,
+            recipient=records[0].recipient,
+            fields=(
+                CollaborationReadableField(
+                    CollaborationReadableFieldKey.LEAD_JUDGMENT_MESSAGE,
+                    r"lead one\n\nlead two",
+                ),
+                CollaborationReadableField(
+                    CollaborationReadableFieldKey.MESSAGE_CONTENT,
+                    r"user\nkept",
+                ),
+                CollaborationReadableField(
+                    CollaborationReadableFieldKey.SPECIALIST_REPLY_CONTENT,
+                    r"specialist\x0Aline",
+                ),
+                CollaborationReadableField(
+                    CollaborationReadableFieldKey.LEAD_SYNTHESIS_MESSAGE,
+                    "synthesis\nline",
+                ),
+                CollaborationReadableField(
+                    CollaborationReadableFieldKey.ARTIFACT_REVIEW_MESSAGE,
+                    r"review\r\nline",
+                ),
+                CollaborationReadableField(
+                    CollaborationReadableFieldKey.LEAD_EVIDENCE_SCOPE,
+                    r"scope\nkept",
+                ),
+                CollaborationReadableField(
+                    CollaborationReadableFieldKey.LEAD_SYNTHESIS_MESSAGE,
+                    r"double\\nkept",
+                ),
+            ),
+        )
+        expected_content = (
+            "lead one\n\nlead two\n"
+            "specialist\nline\n"
+            "synthesis\nline\n"
+            "review\nline"
+        )
+        view = controller._collaboration_record_view(record)
+        self.assertEqual(view.content, expected_content)
+        self.assertEqual(
+            tuple((field.label, field.value) for field in view.fields[-3:]),
+            (
+                ("message.content", r"user\nkept"),
+                ("lead_evidence.scope", r"scope\nkept"),
+                ("lead_synthesis.message", r"double\\nkept"),
+            ),
+        )
+
+        page = SimpleNamespace(
+            records=(record,),
+            next_cursor=None,
+        )
+        history_service = mock.Mock()
+        history_service.read_history.return_value = page
+        with (
+            mock.patch.object(
+                InteractiveController,
+                "_read_focused_history_snapshot",
+                autospec=True,
+                return_value=((record,), projection),
+            ),
+            mock.patch.object(
+                InteractiveController,
+                "_resolve_conversation_reference",
+                autospec=True,
+                return_value=(metadata, (metadata,)),
+            ),
+            mock.patch.object(
+                controller_core_module,
+                "CollaborationHistoryService",
+                return_value=history_service,
+            ),
+            mock.patch.object(
+                controller_core_module,
+                "validate_transcript_page",
+                return_value=page,
+            ),
+        ):
+            controller._write_focused_conversation_history(
+                InteractiveAction(ActionKind.HISTORY)
+            )
+            controller._read_attached_conversation_transcript(
+                controller_core_module.parse_interactive_line(
+                    f"/transcript {metadata.conversation_id}"
+                )
+        )
+
+        rendered = "".join(callbacks.records)
+        for line in (
+            "lead one",
+            "lead two",
+            "specialist",
+            "synthesis\n",
+            "review\n",
+        ):
+            with self.subTest(line=line):
+                self.assertEqual(rendered.count(line), 2)
+        self.assertEqual(rendered.count("line"), 6)
+        self.assertEqual(rendered.count(r"user\nkept"), 2)
+        self.assertEqual(rendered.count(r"scope\nkept"), 2)
+        self.assertEqual(rendered.count(r"double\\nkept"), 2)
+        self.assertNotIn(r"lead one\n", rendered)
+        self.assertNotIn(r"specialist\x0Aline", rendered)
+        self.assertNotIn(r"review\r\nline", rendered)
+        self.assertEqual(
+            services.event_store.read("session", metadata.conversation_id),
+            before,
+        )
 
     def test_status_and_history_explain_every_next_action_without_authority(self) -> None:
         """Both command consumers present the closed projection enum without execution."""

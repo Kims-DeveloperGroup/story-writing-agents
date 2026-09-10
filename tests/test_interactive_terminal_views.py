@@ -233,6 +233,50 @@ class InteractiveSemanticOutputTests(unittest.TestCase):
             with self.subTest(source=source):
                 self.assertIs(format_agent_reply_content(source), source)
 
+    def test_agent_reply_newlines_are_narrowly_normalized_for_agent_chat_blocks(
+        self,
+    ) -> None:
+        actual = "first\n\nsecond"
+        singly_escaped = r"first\n\nsecond\r\nthird\x0afourth\x0Afifth"
+        doubly_escaped = r"first\\nsecond\\r\\nthird\\x0afourth\\x0Afifth"
+
+        self.assertEqual(format_agent_reply_content(actual), actual)
+        self.assertEqual(
+            format_agent_reply_content(singly_escaped),
+            "first\n\nsecond\nthird\nfourth\nfifth",
+        )
+        self.assertEqual(
+            format_agent_reply_content(doubly_escaped),
+            doubly_escaped,
+        )
+        self.assertEqual(
+            format_agent_reply_content(r"invalid {json}\nnext"),
+            "invalid {json}\nnext",
+        )
+        self.assertEqual(format_agent_reply_content(r"42"), "42")
+
+        agent = render_plain(
+            _chat_block_message(singly_escaped, sender="lead", metadata=None),
+            width=80,
+        ).text
+        default = render_plain(
+            _chat_block_message(
+                singly_escaped,
+                sender="user",
+                metadata=None,
+                role=SemanticRole.DEFAULT,
+            ),
+            width=80,
+        ).text
+        self.assertEqual(
+            agent,
+            "lead\n│ first\n│\n│ second\n│ third\n│ fourth\n│ fifth\n",
+        )
+        self.assertEqual(
+            default,
+            r"user" "\n" r"│ first\n\nsecond\r\nthird\x0afourth\x0Afifth" "\n",
+        )
+
     def test_agent_reply_rendering_uses_bold_sgr_and_plain_no_color(self) -> None:
         source = '{"message":"界"}'
         component = Message(
