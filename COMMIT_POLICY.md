@@ -68,3 +68,9 @@ Create a new commit instead when any of these conditions apply:
 
 Amending a shared commit requires explicit agreement from all affected
 contributors and confirmation that the branch can be safely force-updated.
+
+## Pull Request Merges
+
+Always merge pull requests with GitHub's **Squash and merge** method. Never use a merge
+commit or rebase merge for a pull request. Include the owning issue number (for example,
+`#123`) in every resulting squash commit message.

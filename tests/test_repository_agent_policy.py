@@ -13,6 +13,7 @@ ROOT = Path(__file__).resolve().parents[1]
 AGENTS_PATH = ROOT / "AGENTS.md"
 README_PATH = ROOT / "README.md"
 WORKFLOW_PATH = ROOT / "GITHUB_WORKFLOW.md"
+COMMIT_POLICY_PATH = ROOT / "COMMIT_POLICY.md"
 AGENT_DIRECTORY = ROOT / ".codex" / "agents"
 SKILL_DIRECTORY = ROOT / ".agents" / "skills"
 SKILL_PATHS = {
@@ -169,6 +170,7 @@ class RepositoryAgentPolicyTests(unittest.TestCase):
         cls.agents_source = AGENTS_PATH.read_text(encoding="utf-8")
         cls.readme_source = README_PATH.read_text(encoding="utf-8")
         cls.workflow_source = WORKFLOW_PATH.read_text(encoding="utf-8")
+        cls.commit_policy_source = COMMIT_POLICY_PATH.read_text(encoding="utf-8")
         cls.skill_sources = {
             name: path.read_text(encoding="utf-8") for name, path in SKILL_PATHS.items()
         }
@@ -915,7 +917,7 @@ class RepositoryAgentPolicyTests(unittest.TestCase):
             "|Oversize|Split-oversized-work-into-complete-slices/releases;indivisible-over-cap-needs-capacity-exception;preserve-all-`Must`|",
             "|Iteration|One-per-release;leaves-inherit-Iteration/waves;active-statuses-require-it;`Backlog`-may-omit;root-tracks-current-`Must`;completed-releases-retain-theirs|",
             "|Closure|Each-release-has-publishable-`main`-PR-and-closes-on-publication;root-closes-after-all-`Must`/integration;other-tiers-stay-linked/nonblocking|",
-            "|Topology|Single-release=current/root-Issue;feature-leaf-PR-targets-release-branch-and-squashes;numbered-release-PR-targets-`main`-and-closes-release;umbrella-normally-planning-only/administrative-close-after-`Must`/core-verification;distinct-diff-uses-own-Development-linked-branch/PR-targeting-`main`,starts-after-all-`Must`-release-PRs/core-integration,and-may-close-root|",
+            "|Topology|Single-release=current/root-Issue;feature-leaf-PR-targets-release-branch;numbered-release-PR-targets-`main`-and-closes-release;all-PRs-use-GitHub-squash-merge;umbrella-normally-planning-only/administrative-close-after-`Must`/core-verification;distinct-diff-uses-own-Development-linked-branch/PR-targeting-`main`,starts-after-all-`Must`-release-PRs/core-integration,and-may-close-root|",
         )
         self.assertTerms(
             issues,
@@ -926,9 +928,16 @@ class RepositoryAgentPolicyTests(unittest.TestCase):
         self.assertTerms(
             branches,
             "Link every branch/PR through its owning Issue's Development field",
-            "Ordinary child-to-parent squashes apply only to feature leaves, never release PRs; follow Requirement Topology above",
+            "Use GitHub's **Squash and merge** method for every PR, including feature, release, and distinct-diff PRs; never use a merge commit or rebase merge",
+            "Every resulting squash commit message must include the owning issue number (for example, `#123`)",
             "Use `Refs #N` for partial/child work",
             "Use `Closes #N` only for completing `main` PRs",
+        )
+        self.assertTerms(
+            markdown_section(self.commit_policy_source, "## Pull Request Merges"),
+            "Always merge pull requests with GitHub's **Squash and merge** method",
+            "Never use a merge commit or rebase merge for a pull request",
+            "Include the owning issue number (for example, `#123`) in every resulting squash commit message",
         )
         self.assertTerms(
             self.lifecycle_source,
@@ -956,6 +965,10 @@ class RepositoryAgentPolicyTests(unittest.TestCase):
             "Reopening clears `Done`, returns `Backlog`, and replans",
         )
         self.assertNotIn("Child PRs target parent and squash", branches)
+        self.assertNotIn(
+            "Ordinary child-to-parent squashes apply only to feature leaves, never release PRs",
+            branches,
+        )
         self.assertNotIn(
             "umbrella-root-planning-only/no-integration-branch-unless-own-distinct-diff",
             requirement,
