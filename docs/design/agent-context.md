@@ -181,6 +181,20 @@ and bootstraps from current authority; corrupt canonical history fails closed.
 Current directives and complete current core bytes accompany both modes.
 Neither remembered decisions nor visible workflow facts grant capabilities.
 
+Required history also carries exact recommendation requests, decisions, starts,
+and results. A source alias such as `current_response` is resolved to the whole
+visible event and exact UTF-8 digest before persistence. Those remembered facts
+do not reconstruct a live preparation capability. Recommendation Confirm is
+its own execution origin; objective v1 user-event or v2 Confirm provenance stays
+immutable when the objective continues.
+
+Required history includes runtime-owned artifact objectives, their origin
+conversations, selected whole-message draft sources, and exact candidate
+bindings. This lets the Lead interpret abbreviated approval after a draft or
+retain outstanding authoring work after a conversation switch. Only the owner
+conversation can continue or cancel its objective; only a matching successful
+Apply result satisfies it. Consultation and synthesis leave it open.
+
 Ledger v2 lives below the internal agent-state area and stores only identities,
 digests, revisions, boundaries, sizes, aliases, numeric usage/accounting, and
 fixed state. V1 remains untouched and is not read or migrated. The authoritative
@@ -264,6 +278,12 @@ evidence, then applies the domain's closed status/kind matrix. The context
 component does not interpret story semantics. Search queries and source bodies
 are absent from durable collaboration evidence.
 
+For artifact preparation, a selected exact status receipt for an existing
+zero-byte canonical core document can support `replace` after runtime
+recaptures and revalidates that status. It proves empty content only. Nonempty
+targets need attached-reference or READ evidence; a metadata revision is kept
+distinct from the recaptured whole-file digest and selected-boundary digest.
+
 <!-- Historical audit-link alias only; the visible normative contract is v7. -->
 <a id="compact-provider-wire-v5"></a>
 <a id="typed-provider-wire-v7"></a>
@@ -295,11 +315,11 @@ is one schema-selected closed variant:
 ```
 
 ```json
-{"correlation":"<exact-token>","action":{"kind":"answer","result":{"kind":"answer","message":"Visible result.","proposal":null},"used_handles":["<issued-handle>"]}}
+{"correlation":"<exact-token>","action":{"kind":"answer","result":{"scope":"workflow_meta","evidence_status":"not_applicable","evidence_ids":[],"kind":"answer","message":"What would you like to work on?","proposal":null,"artifact_intent":null,"objective_intent":null,"recommended_action":null},"used_handles":[]}}
 ```
 
-The third example uses a shortened generic result object; the live ANSWER
-schema embeds the complete invocation-specific result schema at
+The third example uses the complete workflow-meta `lead-outcome-v3` result;
+the live ANSWER schema embeds the invocation-specific result schema at
 `action.result`. There is no JSON-in-string layer and no compatibility decoder
 for an older action envelope. `used_handles` contains only successful READ
 handles supporting that answer and is empty when no READ supports it.
@@ -308,16 +328,36 @@ boundary, digest, size, provenance, handle, and untrusted content required for
 provider reasoning, even though the input payload remains compact.
 
 For a lead initial call, `core_statuses` is an additional top-level list beside
-`c`, `q`, and `i`. The final `action.result` contains all seven Lead fields:
+`c`, `q`, and `i`. The final `action.result` contains all nine
+`lead-outcome-v3` fields:
 `scope`, `evidence_status`, `evidence_ids`, `kind`, `message`,
-`artifact_intent`, and `proposal`. Those semantic fields are decoded by
+`artifact_intent`, `proposal`, `objective_intent`, and `recommended_action`.
+Null objective intent makes no transition; `start`, `continue`, and `cancel` follow the strict
+[objective contract](../reference/runtime-api.md#contextual-authoring-objectives).
+Fresh recommendations require `recommended_action` and null objective intent;
+other kinds have a null action. Confirm permits one Lead preparation, returning
+a separately confirmable proposal or a material question. Ordinary contextual
+approval remains a new instruction and supersedes a pending recommendation.
+Those semantic fields are decoded by
 orchestration only after context ANSWER authorization. Invalid, invented,
 reordered, stale, or matrix-incompatible evidence rejects that physical
 response, which is never replayed. With fresh authority and remaining budget,
 runtime may request one bounded same-turn correction. A final deterministic
 rejection closes with `retry_lead_turn`, which starts a fresh user turn and
-provider call. An uncertain submitted outcome instead remains
+provider call after explicit new input. A selected objective PREPARE cannot
+downgrade to advice in that correction. A known read-only provider failure,
+including after references, is retryable once its exact history and reference
+accounting close; it leaves an open objective unchanged. An unresolved
+submitted outcome instead remains
 `outcome_unknown` with `inspect_and_resolve_outcome` and is never replayed.
+Uncertain cleanup or closure remains recovery-gated.
+
+The runtime supplies a deterministic Lead v3 overlay after retained workspace
+policies without rewriting those files. Fresh defaults already use v3. The
+context action envelope stays wire v7. Ordinary synthesis uses `lead-synthesis-v2`
+with a nullable action, mutually exclusive with `next_intent`; its durable
+historical codec is unchanged. Specialist and artifact-review synthesis results
+retain their own contracts.
 
 The built-in runtime uses provider-managed context and empty mutable-core
 bindings. Package-internal `story_session_context` remains an internal capture

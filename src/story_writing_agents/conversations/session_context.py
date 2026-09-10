@@ -10,10 +10,13 @@ from __future__ import annotations
 
 import hashlib
 import json
-from dataclasses import dataclass, field
+from dataclasses import asdict, dataclass, field
 
 from .catalog import ConversationMetadata
-from .context import CollaborationReadableRecord
+from .context import (
+    CollaborationReadableRecord, artifact_objective_context,
+    project_collaboration_history,
+)
 from .events import (
     ArtifactApplicationDecisionPayload, ArtifactApplicationRequestPayload,
     ArtifactApplicationResultPayload, ArtifactReviewCandidatePayload,
@@ -21,6 +24,9 @@ from .events import (
     CollaborationLeadSynthesisPayload, CollaborationProposal,
     CollaborationProviderCallPayload, StoryCommitDecisionPayload,
     StoryCommitRequestPayload, StoryCommitResultPayload,
+    ArtifactObjectivePayload, ArtifactObjectivePayloadV2, CollaborationEvent,
+    LeadRecommendationRequestPayload, LeadRecommendationDecisionPayload,
+    LeadRecommendationStartedPayload, LeadRecommendationResultPayload,
 )
 from ..writing_artifacts.change_sets import (
     ArtifactCreateOperation, ArtifactDeleteOperation, ArtifactPatchOperation,
@@ -86,6 +92,12 @@ def _operations(operations: tuple[object, ...]) -> list[dict[str, object]]:
 def _visible_details(payload: object) -> dict[str, object]:
     """Session-only visible facts omitted by the bounded search field contract."""
 
+    if type(payload) in {
+        ArtifactObjectivePayload, ArtifactObjectivePayloadV2,
+        LeadRecommendationRequestPayload, LeadRecommendationDecisionPayload,
+        LeadRecommendationStartedPayload, LeadRecommendationResultPayload,
+    }:
+        return asdict(payload)
     if type(payload) in {ArtifactReviewSynthesisPayload, ArtifactReviewedProposal}:
         value = {"rationale": payload.rationale, "user_impact": payload.user_impact,
                  "limitations": payload.limitations,
@@ -164,6 +176,21 @@ class SessionConversationHistory:
             [item.sequence, item.event_id, item.batch_digest, item.timestamp]
             for item in self.records[:sequence]
         ])).hexdigest()
+
+    def objective_context(self) -> dict[str, object]:
+        """Derive current objective facts even when delivery contains no new records."""
+
+        events = tuple(CollaborationEvent(
+            schema_version=record.schema_version,
+            session_id=record.session_id, conversation_id=record.conversation_id,
+            turn_id=record.turn_id, step_id=record.step_id, event_id=record.event_id,
+            batch_id=record.batch_id, batch_ordinal=record.batch_ordinal,
+            batch_size=record.batch_size, batch_digest=record.batch_digest,
+            sequence=record.sequence, timestamp=record.timestamp,
+            sender=record.sender, recipient=record.recipient,
+            kind=record.kind, payload=record.payload,
+        ) for record in self.records)
+        return artifact_objective_context(project_collaboration_history(events))
 
 
 @dataclass(frozen=True, slots=True)
@@ -244,6 +271,7 @@ class SessionHistorySnapshot:
                 "status": metadata.status.value,
                 "after_sequence": sequence,
                 "records": records,
+                "artifact_objectives": item.objective_context(),
             })
         value = {
             "session_id": self.session_id,

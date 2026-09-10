@@ -32,6 +32,8 @@ For `lead_front_channel`, use:
   "kind": "answer | question | critique | recommendation | proposal",
   "message": "nonempty user-visible text",
   "artifact_intent": null,
+  "objective_intent": null,
+  "recommended_action": null,
   "proposal": {
     "relation": "new_step | revise_pending",
     "purpose": "nonempty user-visible purpose",
@@ -46,7 +48,8 @@ For `lead_front_channel`, use:
 }
 ```
 
-Every `lead_front_channel` result contains exactly all seven fields shown
+Every `lead_front_channel` result uses `lead-outcome-v3` and contains exactly
+all nine fields shown
 above; never omit a field. For answer, question, critique, and recommendation,
 set both `proposal` and `artifact_intent` explicitly to `null`. For a
 consultation proposal, populate `proposal` and use the relation supplied by the
@@ -57,6 +60,56 @@ provider-neutral operations: `create` (`suggested_path`, `new_text`), `patch`
 `rename` (`evidence_id`, `suggested_destination`), or `delete` (`evidence_id`).
 An artifact evidence ID expresses intent only; it is not an operation
 authorization.
+
+Interpret ordinary instructions using the complete session context and
+runtime-owned artifact objectives, including abbreviated approval after a
+visible draft. No fixed command words are required. When the request and
+current artifact evidence are sufficient, select PREPARE and form the exact
+artifact proposal. Draft source references identify visible drafting context;
+they grant no artifact evidence, review, Apply, or Commit authority.
+
+A fresh recommendation requires `recommended_action` and `objective_intent:null`.
+Use exactly `prepare_artifact` or `prepare_consultation` with these fields:
+`kind`, `purpose`, `instruction`, `expected_result`, ordered `source_ids`,
+`target_paths`, canonical `specialist_ids`, and `objective_id` (null if absent).
+Artifact preparation has exact target paths and no specialists; consultation
+has specialists and no target paths. `current_response` selects the exact visible
+recommendation message as draft context. Other source IDs must be runtime offered.
+Every other kind sets `recommended_action:null`. Recommendation drafting does
+not transition an objective. Explicit Confirm authorizes one bounded Lead
+preparation only. Return its exact artifact/review or consultation proposal,
+or ask a material clarification; do not recommend or reconfirm that preparation.
+Explicit Revise authorizes only a fresh recommendation requiring a new Confirm,
+with no candidate, consultation proposal, or objective transition. Ordinary
+contextual approval remains ordinary authoring input.
+
+Set `objective_intent` to `null` for no objective transition, or use exactly one
+of these semantic objects:
+
+- `{"action":"start","request":"requested authoring work","target_paths":["exact canonical path"],"next_step":"clarify | consult | prepare","draft_source_event_ids":[]}`
+- `{"action":"continue","objective_id":"runtime-offered OPEN owner objective","next_step":"clarify | consult | prepare","draft_source_event_ids":[]}`
+- `{"action":"cancel","objective_id":"runtime-offered OPEN owner objective"}`
+
+START requires a nonempty exact target scope. If scope is unresolved, ask a
+focused question with `objective_intent:null` first. CLARIFY requires a question;
+CONSULT requires an ordinary consultation proposal; PREPARE requires
+`kind:proposal`, populated `artifact_intent`, and `proposal:null`. A selected
+exact status receipt for a currently empty canonical core document can support
+`replace` after runtime revalidation. Nonempty artifacts require an attached
+reference or READ evidence. An existing empty core document requires `replace`,
+not `create`. An empty status proves absence of content, not complete story
+knowledge; obey the closed evidence matrix.
+
+Continue only an objective owned by this conversation, preserve its
+request and target scope, and select only runtime-offered draft event IDs. An
+empty continuation source list retains its prior selected draft sources.
+
+Objectives stay OPEN after advice, consultation, review, rejection, staleness,
+or failure. Synthesis must preserve that fact. Only a successful exact
+structured Apply result makes an objective SATISFIED. Null intent and prose
+completion never complete or cancel an objective; step rejection is not
+objective cancellation. CANCEL explicitly closes the named objective without
+proposing work. Once PREPARE is selected, do not downgrade it to advice.
 
 Use evidence IDs in runtime order: attached references by ordinal, canonical
 core statuses, then completed SEARCH/READ actions by action order. Select the
@@ -93,12 +146,18 @@ For `lead_synthesis`, use exactly:
   "evidence_ids": ["the proposal's unchanged ordered evidence IDs"],
   "message": "nonempty user-visible synthesis",
   "next_intent": null,
+  "recommended_action": null,
   "reply_event_ids": ["every runtime-supplied reply event ID, in order"],
   "unresolved_input_ids": ["unresolved original input IDs, in input order"]
 }
 ```
 
-If another specialist round is genuinely needed and the runtime permits it,
+An ordinary synthesis may recommend one of the same typed preparation actions,
+using `current_response` for its exact visible message. Without an action it is
+an answer. `recommended_action` and `next_intent` are mutually exclusive.
+The artifact-review synthesis contract remains the exact schema supplied by its invocation.
+
+If another specialist round is needed and the runtime permits it,
 `next_intent` may be a `continue_lineage` proposal with visible purpose and
 canonically ordered assignments. Those assignments collectively use every
 original input and reply-event ID. Round two always sets `next_intent` to null.

@@ -14,11 +14,13 @@ from ..conversations import (
     CollaborationConfirmationDecision,
     CollaborationStepState,
     LeadDecisionResult,
+    LeadRecommendationDecision,
     LeadStepDecision,
     LeadTurnResult,
     StoryCommitDecision,
     StoryCommitDecisionRequest,
     StoryCommitDecisionResult,
+    StoryCommitRequestPayload,
 )
 from ..interactive_terminal import (
     Choice,
@@ -192,17 +194,25 @@ class InteractiveLeadAdapter:
                 return False
             if turn.artifact_application_request is not None:
                 return self._decide_artifact_application(turn)
-            if turn.proposal is None or turn.confirmation_request_id is None:
+            if turn.story_commit_request is not None:
+                return self._decide_story_commit(turn, turn.story_commit_request)
+            recommendation = turn.recommendation_request
+            if recommendation is None and (turn.proposal is None or turn.confirmation_request_id is None):
                 return False
             outcome = self._picker.read_picker(
                 Prompt(
-                    "Lead proposal decision",
+                    "Lead recommendation decision" if recommendation is not None else "Lead proposal decision",
                     instruction=(
                         "Choose the exact Confirm, Reject, or Revise control. "
                         "Ordinary text never confirms work."
                     ),
                 ),
-                _DECISION_CHOICES,
+                (tuple(Choice(item.value, item.value.title(), description={
+                    CollaborationConfirmationDecision.CONFIRM: "Authorize one bounded Lead preparation only.",
+                    CollaborationConfirmationDecision.REJECT: "Close this recommendation without provider work.",
+                    CollaborationConfirmationDecision.REVISE: "Replan a fresh recommendation that requires a new Confirm.",
+                }[item]) for item in CollaborationConfirmationDecision)
+                 if recommendation is not None else _DECISION_CHOICES),
                 highlighted_id=CollaborationConfirmationDecision.REVISE.value,
             )
             if outcome.kind is ControlOutcomeKind.EOF:
@@ -246,7 +256,7 @@ class InteractiveLeadAdapter:
                         )
                     )
                     return False
-                if revision.kind is not ControlOutcomeKind.COMMIT or not revision.text:
+                if revision.kind is not ControlOutcomeKind.COMMIT or not revision.text or not revision.text.strip():
                     self._semantic_output.write_component(
                         Notice(
                             "A revision request must not be empty.",
@@ -257,7 +267,21 @@ class InteractiveLeadAdapter:
                     )
                     return False
                 revision_request = revision.text
+            if recommendation is not None:
+                turn = self._run_turn(self._session.decide_lead_recommendation(
+                    LeadRecommendationDecision(
+                        session_id=turn.session_id, conversation_id=turn.conversation_id,
+                        request_event_id=recommendation.request_event_id,
+                        request_tail_sequence=recommendation.tail_sequence,
+                        request_id=recommendation.request_id, action_id=recommendation.action_id,
+                        action_revision=recommendation.action_revision,
+                        action_digest=recommendation.action_digest, kind=kind,
+                        revision_request=revision_request,
+                    ),
+                ))
+                continue
             proposal = turn.proposal
+            assert proposal is not None
             decision = LeadStepDecision(
                 confirmation_request_id=turn.confirmation_request_id,
                 session_id=turn.session_id,
@@ -333,17 +357,15 @@ class InteractiveLeadAdapter:
         )
         if result.commit_request is None:
             return False
-        return self._decide_story_commit(turn, result)
+        return self._decide_story_commit(turn, result.commit_request)
 
     def _decide_story_commit(
         self,
         turn: LeadTurnResult,
-        application_result: ArtifactApplicationDecisionResult,
+        request: StoryCommitRequestPayload,
     ) -> bool:
         """Apply one separately selected exact local commit decision."""
 
-        request = application_result.commit_request
-        assert request is not None
         outcome = self._picker.read_picker(
             Prompt(
                 "Local commit decision",

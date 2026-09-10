@@ -64,6 +64,14 @@ therefore changes the source revision/delta and can force bootstrap; it does not
 change the stable definition fingerprint. Role-prompt and persona references
 remain content-backed at definition construction.
 
+The runtime appends a deterministic Lead contract overlay to the retained
+common and Lead policy snapshots. It specifies the current nine-field
+`lead-outcome-v3` contract and contextual objectives without rewriting an
+existing workspace's policies. Fresh checked-in and embedded Lead defaults
+already describe v3. The overlay preserves the separate `lead_synthesis`
+result schema. Ordinary synthesis has a nullable `recommended_action`;
+specialist replies and artifact-review synthesis retain their own schemas.
+
 <a id="explicit-reference-read-contracts"></a>
 
 ## Explicit-reference read contracts
@@ -126,7 +134,7 @@ actions and bounds valid for that physical call:
 ```
 
 ```json
-{"correlation":"<exact-token>","action":{"kind":"answer","result":{"scope":"workflow_meta","evidence_status":"not_applicable","evidence_ids":[],"kind":"answer","message":"Hello. What would you like to work on?","artifact_intent":null,"proposal":null},"used_handles":[]}}
+{"correlation":"<exact-token>","action":{"kind":"answer","result":{"scope":"workflow_meta","evidence_status":"not_applicable","evidence_ids":[],"kind":"answer","message":"Hello. What would you like to work on?","artifact_intent":null,"proposal":null,"objective_intent":null,"recommended_action":null},"used_handles":[]}}
 ```
 
 SEARCH has required `kind`, nullable `path_prefix`, and nonempty typed
@@ -140,9 +148,10 @@ common provider-schema subset types and enums members; it does not claim JSON
 Schema enforces uniqueness or canonical order.
 READ has required `kind` and nonempty typed `handles`. ANSWER has required
 `kind`, the exact invocation-specific object in `result`, and typed
-`used_handles`. The Lead front-channel result in the example is complete: it
-always has exactly `scope`, `evidence_status`, `evidence_ids`, `kind`,
-`message`, `artifact_intent`, and `proposal`, including explicit nulls.
+`used_handles`. The Lead front-channel result in the example is the complete
+`lead-outcome-v3` value: it always has exactly nine fields, `scope`,
+`evidence_status`, `evidence_ids`, `kind`, `message`, `artifact_intent`,
+`proposal`, `objective_intent`, and `recommended_action`, including explicit nulls.
 
 No action or result object is encoded as JSON text. Runtime still checks the closed schema, exact
 correlation, issued handles, result-domain contract, and current source
@@ -194,6 +203,55 @@ An evidence-validation rejection persists the content-free failure payload and
 returns `retry_lead_turn`; the rejected provider result is not a judgment and
 is not replay authority.
 
+## Contextual objective contracts
+
+`story_writing_agents.conversations` also exports `LeadObjectiveAction`,
+`LeadObjectiveIntent`, `ArtifactObjectiveNextStep`, `ArtifactObjectiveState`,
+`ArtifactDraftSource`, `ArtifactObjectiveFacts`, `ArtifactObjectiveFactsV2`,
+`ArtifactObjectiveCandidateBinding`, `ArtifactObjectivePayload`,
+`ArtifactObjectivePayloadV2`, `ArtifactObjective`, and `artifact_objective_context()`.
+
+The provider's `objective_intent` is null or a strict `start`, `continue`, or
+`cancel` intent. A start fixes the visible authoring request and exact target
+paths; continuation/cancellation names an offered `OPEN` objective owned by
+the current conversation. `clarify` requires a question, `consult` an ordinary
+consultation proposal, and `prepare` an artifact-intent proposal. PREPARE
+cannot become advice during bounded result correction. The exact field shapes
+are in the [runtime API](runtime-api.md#contextual-authoring-objectives).
+
+Runtime co-batches an accepted transition with its Lead result. Draft sources
+bind the complete original visible message bytes by event ID and digest;
+candidate bindings name the exact candidate event, ID, revision, and digest.
+These are persisted context and correlation, never read/write capabilities.
+Only the bound candidate's matching validated `APPLIED` or `UNCHANGED` result
+satisfies the objective. Synthesis and review cannot do so. Persistence and
+origin-conversation ownership are described in
+[collaboration history](collaboration-history.md#contextual-artifact-objectives).
+
+## Recommendation preparation contracts
+
+The conversations facade exports `LeadRecommendationActionKind`,
+`LeadRecommendedAction`, `LeadRecommendationState`,
+`LeadRecommendationRequestPayload`, `LeadRecommendationDecision`,
+`LeadRecommendationDecisionPayload`, `LeadRecommendationStartedPayload`, and
+`LeadRecommendationResultPayload`. These values do not add a runtime result
+facade: `decide_lead_recommendation()` returns `LeadTurnResult` with a trailing
+optional `recommendation_request` for a pending recommendation.
+
+A fresh front-channel recommendation requires one `prepare_artifact` or
+`prepare_consultation` action and `objective_intent=null`. Other kinds require
+`recommended_action=null`. Runtime replaces source aliases with exact event or
+input identities and discloses the action, basis, impact, and call reservation.
+Confirm authorizes one preparation only. Review/execution, Apply, and Commit
+retain separate decisions. Ordinary contextual approval is a new instruction
+and can supersede the unconfirmed recommendation without a fabricated Confirm.
+
+A new Confirm-origin objective uses v2 request/decision provenance. Continuing
+an existing objective preserves its immutable v1 or v2 facts independently of
+the preparation execution origin. See the
+[exact API](runtime-api.md#leadrecommendationdecision) and
+[versioned history](collaboration-history.md#recommendation-preparation-events).
+
 ## Specialist reply and lead synthesis
 
 Import the public semantic values from `story_writing_agents.conversations`:
@@ -223,6 +281,12 @@ CollaborationLeadSynthesisPayload(
     next_intent: LeadProposalIntent | None = None,
 )
 ```
+
+The constructor above is the unchanged durable synthesis payload. The ordinary
+provider result uses `lead-synthesis-v2` and additionally requires nullable
+`recommended_action`, mutually exclusive with `next_intent`. Runtime stores an
+action in a separate versioned recommendation request; historical synthesis
+bytes and the artifact-review synthesis contract remain unchanged.
 
 Assessment is exactly `supports`, `concern`, `conflict`, or
 `insufficient_evidence`. The reply must repeat its assignment ID and exact
@@ -260,6 +324,15 @@ optional canonical tuple of added review domains. Runtime-issued
 `ArtifactIntentEvidence` binds an evidence ID to the current canonical path,
 full-source digest, selected-boundary digest, and optional line range. These
 values are semantic input only; they contain no capability or authority.
+
+An exact selected zero-byte status receipt for an existing canonical core file
+can supply replacement evidence after runtime recaptures and revalidates that
+status. Nonempty targets still require attached-reference or READ evidence.
+For READ evidence, the source revision identifies the captured metadata while
+the recaptured snapshot supplies the whole-file content digest; the receipt's
+content digest identifies the selected boundary. Runtime keeps those identities
+distinct when constructing `ArtifactIntentEvidence`. A whole empty core file
+uses the empty-content digest for both source and boundary.
 
 `build_artifact_review_candidate()` resolves that intent against one complete
 canonical `base_state`, builds the exact change set, validates projected

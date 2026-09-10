@@ -155,6 +155,30 @@ class PromptAssemblerTests(unittest.TestCase):
                 ):
                     self.assertIn(phrase, normalized)
 
+    def test_lead_overlay_supersedes_retained_policy_and_preserves_specialist_bytes(self):
+        from story_writing_agents.agents import behavior_policy_files
+        baseline = {agent: self.assembler.build_definition(session_id="overlay", agent_id=agent).system_prompt_file.content for agent in ROSTER}
+        policy = next(path for path in behavior_policy_files(LEAD_ORCHESTRATOR) if "lead" in path)
+        original = self.workspace.path(policy).read_bytes()
+        retained = b"\nRetained older policy fixture: return only the seven legacy front-channel fields.\n"
+        self.workspace.path(policy).write_bytes(original + retained)
+        changed = {agent: PromptAssembler(self.workspace).build_definition(session_id="overlay", agent_id=agent).system_prompt_file.content for agent in ROSTER}
+        lead = changed[LEAD_ORCHESTRATOR]
+        self.assertIn(retained.strip(), lead)
+        self.assertIn(b"Runtime Lead contract overlay (lead-outcome-v3)", lead)
+        self.assertIn(b"objective_intent", lead)
+        self.assertIn(b"recommended_action", lead)
+        self.assertIn(b"objective_intent=null", lead)
+        self.assertIn(b"current_response selects this exact visible recommendation", lead)
+        self.assertIn(b"one preparation only", lead)
+        self.assertIn(b"before its fresh Confirm", lead)
+        self.assertIn(b"empty core document requires replace, not create", lead)
+        self.assertIn(b"Only the exact successful structured Apply", lead)
+        self.assertGreater(lead.index(b"Runtime Lead contract overlay"), lead.index(retained.strip()))
+        for agent in ROSTER[1:]:
+            self.assertEqual(changed[agent], baseline[agent])
+
+
     def test_explicit_configuration_snapshot_is_fixed_and_overrides_stay_live(
         self,
     ) -> None:

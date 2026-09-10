@@ -54,6 +54,27 @@ confirmation, sends every reviewer the same immutable candidate. A successful
 lead `propose` synthesis records a reviewed proposal whose Apply/write/Git
 flags are all false.
 
+A fresh recommendation discloses one preparation action: its purpose, targets
+or specialists, sources, expected result, impact, and provider-call budget.
+Confirm authorizes one Lead preparation. The resulting artifact-review or
+consultation proposal has its own Confirm/Reject/Revise decision; Apply and
+Commit remain separate. Reject starts no preparation. Revise takes nonempty
+instructions and returns a new recommendation for fresh confirmation.
+
+The lead interprets short follow-ups such as “Use that draft” from the session
+context. Ordinary approval is a new authoring instruction and can supersede an
+unconfirmed recommendation. With a clear target and current evidence, it can
+prepare the exact candidate for separately confirmed review. Runtime retains the authoring
+objective in its originating conversation across discussion, consultation,
+conversation switches, and restart. Only a matching successful Apply result
+(`applied` or `unchanged`) satisfies it; review, prose approval, and Commit do
+not. An explicit objective cancellation closes it without writing.
+
+Pending Apply or Commit requests are shown again with their exact identities
+when ordinary input arrives. After a known terminal Apply/Commit result, another
+authoring cycle can begin with fresh review, Apply, and Commit requests.
+Unknown outcomes and recovery states require resolution first.
+
 After a session is attached and an active conversation is focused, every
 ordinary non-slash line is sent literally to the Lead Orchestrator. The lead
 can answer directly or disclose a specialist or artifact-review proposal.
@@ -151,9 +172,10 @@ story[novel]> Does this opening conflict with ${core_documents/global_outline.md
 ```
 
 Exact wording comes from the configured provider; the typed fields and
-authority boundaries are stable. If the lead proposes specialist work, the
-shell opens a Confirm/Reject/Revise picker. Free-form `Yes` is a new lead turn,
-not confirmation.
+authority boundaries are stable. If the lead recommends preparation or proposes
+specialist work, the shell opens a Confirm/Reject/Revise picker. Free-form `Yes` is contextual Lead
+input. It can express approval of a visible draft, but it never confirms
+review, Apply, or Commit.
 
 ## Provider-free smoke
 
@@ -223,8 +245,8 @@ The exact grammar is in the [CLI reference](docs/reference/cli.md) and
 
 `StoryRuntime` is a management, configuration, directive, inspection, and lead-
 orchestration facade. It can bind a `RuntimeSession`; both expose async
-`lead_turn()`, `propose_specialist_advisory()`, and `decide_lead_step()`
-methods. Confirmation executes the disclosed read-only consultation through
+`lead_turn()`, `propose_specialist_advisory()`, `decide_lead_recommendation()`,
+and `decide_lead_step()` methods. Confirmation executes the disclosed read-only consultation through
 `decide_lead_step()`. Both facades also expose a phase-confirmed consensus API:
 submit prompt/draft input, inspect, decide or confirm the exact phase,
 explicitly request its successor, interrupt, and resume inspection. There is

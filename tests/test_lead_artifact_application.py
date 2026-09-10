@@ -200,18 +200,16 @@ class LeadArtifactApplicationTests(LeadOrchestrationTestCase):
             request.reviewed_proposal.candidate.change_set,
         )
 
-        self.backend.enqueue(_visible_outcome("recommendation", "Apply it now."))
-        await self.runtime.lead_turn(
-            self.session_id,
-            turn.conversation_id,
-            "Apply the reviewed change now.",
+        calls = len(self.backend.calls)
+        history = self.history(turn.conversation_id)
+        redisclosed = await self.runtime.lead_turn(
+            self.session_id, turn.conversation_id, "Apply the reviewed change now."
         )
+        self.assertEqual(redisclosed.artifact_application_request, request)
+        self.assertEqual(len(self.backend.calls), calls)
+        self.assertEqual(self.history(turn.conversation_id), history)
         self.assertEqual(self.artifact_snapshot(), before)
         self.assertEqual(self.git_snapshot(), git_before)
-        with self.assertRaisesRegex(ValueError, "authoritative request tail"):
-            await self.runtime.decide_artifact_application(
-                _application_decision(turn, ArtifactApplicationDecisionKind.APPLY)
-            )
 
     async def test_reject_and_revise_are_structured_zero_write_terminals(self) -> None:
         for kind, expected, revision in (

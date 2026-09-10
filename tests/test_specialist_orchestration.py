@@ -811,6 +811,7 @@ class SpecialistExecutionAcceptanceTests(LeadOrchestrationTestCase):
             return _provider_envelope(
                 call,
                 {
+                    "recommended_action": None,
                     "evidence_ids": contract["evidence_ids"],
                     "evidence_status": contract["evidence_status"],
                     "message": "One issue needs a focused second review.",

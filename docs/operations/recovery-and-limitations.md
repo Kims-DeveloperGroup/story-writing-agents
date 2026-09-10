@@ -702,7 +702,11 @@ infer authority from visible text or replay incomplete work.
 | --- | --- | --- |
 | `retry_lead_turn` | An eligible read-only Lead attempt failed, timed out, was cancelled/interrupted, or returned rejected output/evidence. A typed failure closes it; exact legacy unstarted, prepared-only, or unmatched submitted attempts may await that closure. | Send a new message, revise the wording, or explicitly resubmit in the same conversation, including after restart. Runtime closes any pending prior attempt before appending the new turn and preserves its request and failure. Failed closure persistence still requires recovery. |
 | `reply_to_lead` or `continue_with_lead` | Continue the conversation; no work is authorized. | Send a new lead turn. Ordinary text while a proposal is pending supersedes it first. |
+| `submit_recommendation_decision` | One exact preparation recommendation is waiting. | Confirm one Lead preparation, Reject without preparation, or Revise with nonblank instructions for a new recommendation. Cancel/EOF submits no decision. |
+| `finalize_recommendation` | Recommendation history has local closure work. | Let runtime validate and finalize the exact known result; do not replay provider work. |
 | `submit_confirmation` | One exact proposal is waiting. | Submit `confirm`, `reject`, or `revise` with every returned identity/digest field. Text such as `Yes` is not confirmation. |
+| `submit_application_decision` | The exact reviewed Apply request is still pending. | Use its structured Apply/Reject/Revise control. Ordinary Lead/advisory input rediscloses the same request without a provider call or history append. |
+| `submit_commit_decision` | The exact local Commit request is still pending. | Use its separate structured Commit/Reject/Revise control. Ordinary Lead/advisory input rediscloses the same request without a provider call or history append. |
 | `start_or_reconfirm` | A confirmation is durable, but projection alone is not a reusable capability. A live `decide_lead_step()` normally crosses this boundary immediately. | Let the owning runtime use its private single-use start authority. After restart, collect the fresh `reconfirmation_required` request instead of reconstructing authority. |
 | `reconfirmation_required` | A confirmed proposal survived restart but its live execution capability did not. | Present the same proposal/digest with the fresh request and collect another exact decision. No provider call is needed. |
 | `finalize_result` | `running` has an authoritative result batch but lacks its visible terminal state. | Let runtime append deterministic local finalization. Do not call a provider or replay assignments. |
@@ -719,6 +723,27 @@ leaves its old proposal superseded and creates no replacement authority. Read-on
 successful results, uncertain specialist/synthesis work, and pending or
 uncertain Apply/Commit outcomes. It neither replays a full turn or successful
 specialist automatically nor revives Apply or Commit authority.
+
+An eligible known read-only failure after references can expose the same retry
+once runtime closes the exact attempt and reference accounting. Retry requires
+explicit new input and reacquires current evidence. Failed closure or uncertain
+reference cleanup remains recovery-gated; a recorded provider timeout alone
+does not establish that cleanup succeeded.
+
+The owner-conversation authoring objective survives clarification, side
+discussion, consultation, review, rejection, staleness, failure, and restart.
+Only a matching validated Apply result of `applied` or `unchanged` satisfies it.
+Null intent, a message saying the work is finished, or rejection of a step
+does not cancel it; cancellation explicitly names the open objective. Session
+context makes these facts visible across conversation switches without
+transferring ownership or confirmation authority.
+
+After known terminal Apply/Commit outcomes, a later authoring cycle may create
+fresh review, Apply, and Commit requests while preserving the earlier records.
+Pending controls must be resolved first. Unknown outcomes and recovery states
+still block ordinary work. An exact current empty-core status can ground a
+replacement only after revalidation; stale or nonempty targets require fresh
+attached-reference/READ evidence before a new candidate is prepared.
 
 Confirmed consultations create `running` plus all ordered dispatches as one
 durable batch before any provider call. A complete result batch can be
@@ -744,6 +769,48 @@ specialist/synthesis invocations, a submitted timeout or transport failure
 marked outcome-uncertain enters `outcome_unknown`; the read-only Lead retry
 path does not abandon them. A PREPARED call that never crossed the provider
 boundary does not spend budget or justify that state.
+
+### Recommendation preparation recovery
+
+A recommendation request grants no preparation authority until its exact
+structured Confirm or Revise is consumed. The request binds the final history
+tail, action ID/revision/digest, sources, evidence, profiles, policies, and
+physical-call spend. Reject makes no preparation call. Cancel or EOF leaves
+the request undecided. Ordinary input atomically supersedes an unconfirmed
+recommendation and starts a new contextual Lead instruction; it is not a
+structured Confirm. Pending Apply and Commit controls still take precedence.
+
+| Condition | Recovery behavior |
+| --- | --- |
+| Source, target, evidence, profile, policy, or spent-call basis changed | Close the decision as `stale`; request fresh planning and confirmation. |
+| Repeated, foreign, obsolete, or competing decision | Reject mismatched authority; serialization permits at most one preparation. |
+| Confirmed/started record but no provider call after restart | Close the unsubmitted preparation locally when provable. Another attempt needs fresh planning, a new request, and Confirm; the stored start cannot restore a capability. |
+| Exact known result awaiting closure | Finalize local history without provider work or fabricated success. Preparation completion does not satisfy an authoring objective. |
+| Submitted result unavailable | Preserve `outcome_unknown` and `inspect_and_resolve_outcome`; do not replay. |
+| Failed closure, corrupt history, or unproved reference accounting | Preserve `recovery_required`; resolve the exact owner state before new work. |
+
+A no-reference failure or proven-unsubmitted attempt may close locally. A
+reference-backed failure requires the exact operation, invocation, and Lead
+closure proof before its action result can be persisted. If restart lacks the
+durable operation correlation for an unclosed reference-backed failure, it
+remains `recovery_required` even when the Lead failure is recorded. Runtime
+cannot reconstruct that proof from a recommendation, objective, or remembered
+provider thread.
+
+Confirm prepares the disclosed artifact-review or consultation proposal, or
+asks a material question. It never starts an automatic sequence or requests
+another confirmation for that same preparation. Revise permits only a fresh
+recommendation, with no candidate, consultation execution, or objective
+transition. Existing objectives remain open through rejection, revision,
+staleness, and failure; only a matching successful Apply satisfies one.
+Execution origin is separate from immutable objective provenance, and no fake
+user event or provider replay supplies either.
+
+Permitted native authentication assistance stays within the same Confirm or
+Revise operation and physical-call reservation. Signing in does not repeat the
+structured authority or authorize replay of an ambiguous submitted call.
+See [authentication recovery](#authentication-recovery) and the
+[exact recommendation history](../reference/collaboration-history.md#recommendation-preparation-events).
 
 <a id="conversation-archive-recovery"></a>
 
@@ -1281,6 +1348,12 @@ maps failures to existing safe error categories rather than displaying this
 history. Pre-submit `$`/`$$` discovery and viewer selection create no operation
 ID or evidence; their empty, invalid, stale, unreadable, and unavailable cases
 use fixed content-free shell errors and restore the exact draft.
+
+For eligible read-only Lead failures, successful closure of this exact
+reference history and the Lead attempt allows `retry_lead_turn`, including
+after reference content was delivered. The failure and open authoring
+objective remain durable. A new turn creates a new reference operation;
+uncertain cleanup or corrupt accounting keeps the existing recovery block.
 
 ## Controller cancellation proof
 

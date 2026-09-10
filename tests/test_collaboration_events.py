@@ -216,6 +216,11 @@ class CollaborationValueContractTests(unittest.TestCase):
                 "story_commit_request",
                 "story_commit_decision",
                 "story_commit_result",
+                "artifact_objective",
+                "lead_recommendation_request",
+                "lead_recommendation_decision",
+                "lead_recommendation_started",
+                "lead_recommendation_result",
             ),
             CollaborationActorKind: (
                 "user",
@@ -333,6 +338,11 @@ class CollaborationValueContractTests(unittest.TestCase):
                 "evidence_validation_rejected",
                 "artifact_intent_rejected",
                 "provider_result_rejected",
+                "request_not_submitted",
+                "provider_failed",
+                "provider_timed_out",
+                "cancelled",
+                "interrupted",
             ),
             ArtifactProposalState: (
                 "awaiting_consultation_confirmation",
@@ -611,6 +621,8 @@ class CollaborationValueContractTests(unittest.TestCase):
                     "evidence_ids",
                     "proposal",
                     "artifact_intent",
+                    "objective_intent",
+                    "recommended_action",
                 ),
             ),
             (
@@ -1366,36 +1378,23 @@ class CollaborationPackageBoundaryTests(unittest.TestCase):
         self,
     ) -> None:
         expected_event_exports = (
-            COLLABORATION_EVENT_EXPORTS[:1]
-            + (
-                "ArtifactApplicationDecisionKind",
-                "ArtifactApplicationDecisionPayload",
-                "ArtifactApplicationNextAction",
-                "ArtifactApplicationOutcomeKind",
-                "ArtifactApplicationRequestPayload",
-                "ArtifactApplicationResultPayload",
-                "StoryCommitDecisionPayload",
-                "StoryCommitNextAction",
-                "StoryCommitOutcomeKind",
-                "StoryCommitRequestPayload",
-                "StoryCommitResultPayload",
-                "build_story_commit_request_payload",
-            )
-            + COLLABORATION_EVENT_EXPORTS[1:]
+            ("ArtifactDraftSource", "ArtifactObjectiveCandidateBinding",
+             "ArtifactObjectiveFacts", "ArtifactObjectiveFactsV2", "ArtifactObjectiveNextStep",
+             "ArtifactObjectivePayload", "ArtifactObjectivePayloadV2", "ArtifactObjectiveState",
+             "LeadObjectiveAction", "LeadObjectiveIntent", "LeadRecommendedAction",
+             "LeadRecommendationActionKind", "LeadRecommendationDecision",
+             "LeadRecommendationDecisionPayload", "LeadRecommendationRequestPayload",
+             "LeadRecommendationResultPayload", "LeadRecommendationStartedPayload",
+             "LeadRecommendationState")
+            + COLLABORATION_EVENT_EXPORTS
         )
         expected_context_exports = (
-            COLLABORATION_CONTEXT_EXPORTS[:17]
-            + (
-                "ArtifactApplicationDecision",
-                "ArtifactApplicationDecisionResult",
-                "StoryCommitDecisionRequest",
-                "StoryCommitDecisionResult",
-            )
-            + COLLABORATION_CONTEXT_EXPORTS[17:]
+            ("ArtifactObjective", "artifact_objective_context")
+            + COLLABORATION_CONTEXT_EXPORTS
         )
         self.assertEqual(tuple(events_owner.__all__), expected_event_exports)
         self.assertEqual(tuple(context_owner.__all__), expected_context_exports)
-        self.assertEqual(len(conversations.__all__), 134)
+        self.assertEqual(len(conversations.__all__), 154)
         self.assertNotIn("__getattr__", vars(events_owner))
         self.assertNotIn("__getattr__", vars(context_owner))
         self.assertNotIn("__getattr__", vars(conversations))
@@ -1514,9 +1513,9 @@ import story_writing_agents
 import story_writing_agents.conversations as facade
 import story_writing_agents.conversations.context as context
 import story_writing_agents.conversations.events as events
-assert len(facade.__all__) == 134
-assert len(events.__all__) == 98
-assert len(context.__all__) == 28
+assert len(facade.__all__) == 154
+assert len(events.__all__) == 116
+assert len(context.__all__) == 30
 assert facade.CollaborationProposal is events.CollaborationProposal
 assert facade.CollaborationEventStore is context.CollaborationEventStore
 assert not hasattr(story_writing_agents, "CollaborationProposal")

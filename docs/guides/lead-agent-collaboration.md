@@ -47,6 +47,8 @@ lead.
 you -> lead turn
      -> runtime inventories bounded source status and attached references
      -> lead answers directly
+        or recommends one preparation -> you Confirm, Reject, or Revise
+             -> lead prepares a separately confirmable proposal or asks a question
         or proposes specialist consultation
         or proposes an exact artifact candidate
      -> you Confirm, Reject, or Revise the exact request
@@ -58,6 +60,85 @@ you -> lead turn
 The runtime never treats a conversational “yes” as confirmation. A
 confirmation is a structured decision bound to the exact request, revision,
 and digest shown to you.
+
+### Decide a recommendation
+
+A recommendation shows what the Lead wants to prepare, why, the exact targets
+or specialists, selected sources, expected result, impact, and call budget.
+Use its Confirm/Reject/Revise control:
+
+| Decision | What follows |
+| --- | --- |
+| Confirm | One bounded Lead preparation. An artifact candidate then needs review confirmation; a consultation proposal needs execution confirmation. A material missing choice may produce a question. |
+| Reject | No preparation call. An existing authoring objective stays open. |
+| Revise | Supply nonempty revision instructions. The Lead prepares a revised recommendation requiring a new Confirm. |
+| Cancel or EOF | No decision is submitted and no preparation starts. |
+
+This illustrative flow starts with a recommendation that includes a visible
+draft; it is not a recorded provider run:
+
+```text
+Lead: <outline draft>; I recommend preparing its replacement candidate.
+Runtime: shows purpose, core_documents/global_outline.md, sources, impact, cost.
+You: Confirm preparation
+Lead: <exact candidate and required reviewers>
+You: Confirm review
+Lead synthesis: decision=propose
+You: Apply
+Runtime: writes the exact candidate; the authoring objective is satisfied.
+You: Commit, if requested
+Runtime: creates the separately disclosed local commit.
+```
+
+Confirm does not launch an automatic sequence or ask you to confirm the same
+preparation again. Review, Apply, and Commit each have their own decision.
+An ordinary message such as “Yes, use that” is also meaningful: it is a new
+instruction interpreted in context and supersedes a pending recommendation.
+It is not the recommendation's structured Confirm. A new proposal still
+requires its own review or execution decision.
+
+### Follow a draft through to an artifact
+
+The lead interprets ordinary follow-ups in context; there are no required
+command words. For example, this is an illustrative exchange, not a recorded
+provider run:
+
+```text
+You: Draft the global outline for the direction we agreed on.
+Lead: <visible outline draft and a focused question about using it>
+You: Yes, use that.
+Lead: <exact replacement candidate for core_documents/global_outline.md>
+Runtime: discloses the candidate and required reviewers; no file changes.
+You: structured Confirm for review
+Lead synthesis: decision=propose; the reviewed candidate is ready.
+You: separate structured Apply
+Runtime: applies the exact candidate; the authoring objective is satisfied.
+You: separate structured Commit, if a local commit is requested
+Runtime: creates only the disclosed local session-branch commit.
+```
+
+If the target or intended change is unclear, the lead asks a focused question.
+It proposes consultation when additional advice is needed. Once the request
+and evidence are sufficient, it prepares the candidate. If an existing core
+document is empty, a freshly revalidated empty-status receipt can support a
+replacement; a nonempty target requires an attached reference or READ evidence.
+Empty status proves only that the file has no content.
+
+Runtime keeps the authoring objective in the conversation where it began.
+Other conversations in the same session can see it through retained session
+context, but continuation and cancellation belong to the originating
+conversation. Side discussion, a review, a rejected step, a stale candidate,
+or a failed attempt leaves the objective open. Only an exact matching Apply
+result of `applied` or `unchanged` satisfies it. A cancellation must explicitly
+close that objective; neither prose completion nor a null objective intent
+does so. Commit remains a separate decision after authoring completion.
+
+The visible drafting context is retained as whole messages with exact byte
+digests. A draft reference does not authorize a file read, review, or write.
+Pending Apply and Commit controls are shown again unchanged when you send
+ordinary input, without a new provider call or history append. Resolve that
+control first. Known terminal outcomes allow a new cycle with fresh requests;
+unknown or recovery outcomes remain blocked.
 
 ### Compose the next request while confirmed work runs
 
@@ -175,7 +256,12 @@ omitted from the example:
     "scope": "story_specific | workflow_meta",
     "evidence_status": "not_applicable | verified | missing | empty | incomplete | conflicting",
     "evidence_ids": "ordered runtime-issued IDs only",
-    "kind": "answer | question | critique | recommendation | proposal"
+    "kind": "answer | question | critique | recommendation | proposal",
+    "message": "nonempty visible text",
+    "proposal": "null or ordinary consultation intent",
+    "artifact_intent": "null or exact artifact intent",
+    "objective_intent": "null or start/continue/cancel intent",
+    "recommended_action": "null or prepare_artifact/prepare_consultation action"
   }
 }
 ```
@@ -183,26 +269,29 @@ omitted from the example:
 The lead can request a bounded search:
 
 ```json
-{"action":"SEARCH","queries":[["opening reveal",["writing_artifact"]]]}
+{"correlation":"<exact-token>","action":{"kind":"search","path_prefix":null,"queries":[{"text":"opening reveal","source_kinds":["writing_artifact"]}]}}
 ```
 
 It then reads a returned opaque handle:
 
 ```json
-{"action":"READ","handles":["<runtime-handle>"]}
+{"correlation":"<exact-token>","action":{"kind":"read","handles":["<runtime-handle>"]}}
 ```
 
-Its final answer cites the resulting receipt, not the handle alone:
+Its final `lead-outcome-v3` answer has all nine fields and cites the resulting
+receipt, not the handle alone:
 
 ```json
 {
   "scope": "story_specific",
   "evidence_status": "verified",
-  "evidence_ids": ["reference_1", "read_1"],
+  "evidence_ids": ["reference_1", "read_2_1"],
   "kind": "critique",
   "message": "The requested sequence is earlier than the outline permits.",
   "proposal": null,
-  "artifact_intent": null
+  "artifact_intent": null,
+  "objective_intent": null,
+  "recommended_action": null
 }
 ```
 
@@ -223,17 +312,25 @@ The lead's synthesis attributes every reply:
 {
   "scope": "story_specific",
   "evidence_status": "conflicting",
-  "evidence_ids": ["reference_1", "read_1"],
+  "evidence_ids": ["reference_1", "read_2_1"],
   "message": "The motivation works, but the outline timing remains unresolved.",
   "next_intent": null,
+  "recommended_action": null,
   "reply_event_ids": ["reply_plot_1", "reply_character_1"],
-  "unresolved_input_ids": ["reference_1", "read_1"]
+  "unresolved_input_ids": ["reference_1", "read_2_1"]
 }
 ```
 
 The runtime rejects invented, stale, duplicated, reordered, or unused IDs.
 It also rejects a SEARCH hit that was never READ when the lead cites its
 content.
+
+The front-channel schema requires `objective_intent` and `recommended_action`.
+Fresh recommendations have an action and null objective intent; other kinds
+have a null action. Ordinary synthesis also accepts a nullable action, mutually
+exclusive with `next_intent`. Specialist and artifact-review synthesis schemas
+remain separate. The exact `start`, `continue`,
+and `cancel` objects are in the [runtime API](../reference/runtime-api.md#contextual-authoring-objectives).
 
 ## Confirming a proposed step
 
@@ -262,9 +359,11 @@ The three decisions have distinct effects:
 | `reject` | Records that the step will not run; no specialist or artifact call occurs. |
 | `revise` | Requires a visible revision request, supersedes the old proposal, and asks for a fresh proposal. |
 
-Free-form input such as `Yes`, `go ahead`, or `confirm this` is ordinary lead
-conversation. If a proposal is pending, a new ordinary turn supersedes that
-proposal before asking the lead for a new outcome. It does not start work.
+Free-form input such as `Yes`, `go ahead`, or `confirm this` is contextual Lead
+conversation. If a consultation proposal is pending, a new ordinary turn
+supersedes it before asking the lead for a new outcome. It can express approval
+of a draft and lead to a candidate, but it does not start review or apply a
+change. Pending Apply/Commit controls are redisclosed unchanged instead.
 
 ## Scenario 1: direct answer
 
@@ -427,7 +526,7 @@ Each bound agent receives immutable policy components in this exact order:
 
 ```text
 lead_orchestrator
-  = common + lead
+  = common + lead + runtime Lead contract overlay
 
 plot_architect
   = common + specialist_collaboration + plot
@@ -443,6 +542,11 @@ The common component defines behavior true for every role: untrusted input,
 runtime assignment, authorized context actions, privacy, and strict output.
 The specialist-family component defines shared assignment and isolation rules.
 The lead and each specialist add only their own behavior and domain lens.
+
+Fresh Lead policies use `lead-outcome-v3`. Existing workspace policy files are
+retained byte-for-byte; the runtime appends a deterministic Lead overlay that
+supersedes older front-channel field lists. The overlay also applies during
+Lead synthesis while preserving that invocation's separate result schema.
 
 The runtime captures strict UTF-8, NUL-free snapshots before binding and
 fingerprints every ordered component. A changed common component invalidates
@@ -500,6 +604,9 @@ story[alpha]> Review ${core_documents/global_outline.md} and focus on pacing.
 ```
 
 This input starts a fresh turn with fresh reference and call identities.
+The same retry is available after references were read when runtime can close
+the exact failed attempt and its reference accounting. The authoring objective
+remains open; the new turn reacquires current evidence.
 Reopening, reading history, and projecting status do not submit provider work.
 For an exact legacy unstarted, prepared-only, or unmatched submitted read-only
 Lead attempt, the projection exposes retry without changing history. Explicit
@@ -512,7 +619,8 @@ replacement confirmation authority by itself. Only the matching unfinished
 native operation can be retired, so a successful checkpoint from another
 conversation remains intact. Failed closure writes, corrupt history, uncertain
 specialist/synthesis work, and pending or uncertain Apply/Commit outcomes
-retain their recovery gates. Successful specialists or full turns are not
+retain their gates. Uncertain reference cleanup also requires recovery.
+Successful specialists or full turns are not
 automatically replayed. Existing bounded malformed-response correction and
 proven pre-execution continuation replacement keep their separate constraints.
 
@@ -533,12 +641,27 @@ count against the operation's physical-call budget. Any Codex 401, ambiguous
 Antigravity 401, started call, or source/configuration drift remains
 non-replayable.
 
+Recommendation Confirm and Revise keep the same pending operation through
+permitted authentication assistance. Signing in neither repeats the structured
+decision nor resets its physical-call reservation.
+
 In a consultation, completed specialist siblings stay preserved while the
 failed assignment is handled. If recovery cannot safely resume, runtime stores
 the known replies and terminal failure state. Reopening the session never
 replays that provider call; follow the displayed `failed` or `outcome_unknown`
 next action. Python and other noninteractive callers receive the typed
 authentication error without a terminal handoff.
+
+### Recommendation recovery
+
+A stale request requires fresh planning and confirmation. Repeated or competing
+decisions cannot start a second preparation. If restart finds a confirmed
+preparation that never started provider work, runtime can close it as failed.
+Another attempt needs fresh planning, a new request, and Confirm. A known result
+can be finalized locally without another provider call. Unknown submitted outcomes,
+failed closure writes, or uncertain reference cleanup require resolution first.
+History and reopening do not replay preparation. See
+[recommendation recovery](../operations/recovery-and-limitations.md#recommendation-preparation-recovery).
 
 ## Scenario 9: interruption, restart, and recovery
 

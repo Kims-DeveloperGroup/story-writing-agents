@@ -14,7 +14,7 @@ The stable inventories in this revision are:
 | Import boundary | Exports | Purpose |
 | --- | ---: | --- |
 | `story_writing_agents` | 104 | Management runtime, workspace/catalog, backend/session, generic models, retrieval contracts, parser, and errors |
-| `story_writing_agents.conversations` | 117 | Catalog plus schema-v2 events, projection, evidence-grounded lead/specialist/artifact-review values, readable context, and pure validation |
+| `story_writing_agents.conversations` | 154 | Catalog plus schema-v2 events, projection, evidence-grounded lead/specialist/artifact-review values, readable context, and pure validation |
 | `story_writing_agents.conversation_search` | 18 | Schema-v2 search, exact citations, paging, and history service |
 | `story_writing_agents.conversation_retrieval` | 24 | Low-level provider search/read-history/answer contracts |
 | `story_writing_agents.conversation_storage` | 63 | Storage composition, provenance, activation, archive, and transfer contracts |
@@ -24,11 +24,10 @@ The stable inventories in this revision are:
 | `story_writing_agents.writing_artifacts` | 76 | Canonical artifact/reference values plus pure exact change-set, relationship-policy, and artifact-application contracts |
 | `story_writing_agents.artifact_proposals` | 16 | Direct-only pure intent, evidence, exact candidate, reviewer-map, and strict candidate-codec contracts |
 
-The production graph has 122 modules, 468 dependency edges, no cycles, and 104
-package-root exports. The conversations facade contributes 86 event exports
-and 24 context exports; its bindings are identical to the owner bindings.
-Session-transition integration contributes accepted orchestration-facing edges
-without adding an assessment facade export.
+The [project module index](../../PYTHON_MODULE_INDEX.md) owns the production
+graph inventory. The conversations facade contributes 116 event exports and
+30 context exports; its bindings are identical to the owner bindings. The
+package root retains 104 exports.
 
 Import the management facade explicitly:
 
@@ -37,9 +36,10 @@ from story_writing_agents import StoryRuntime, RuntimeSession, Workspace
 ```
 
 There is no package-root `Runtime` or `Session` alias. `StoryRuntime` and
-`RuntimeSession` expose `lead_turn()`, `propose_specialist_advisory()`, and
-`decide_lead_step()`. Confirmed proposals execute through the decision method;
-there is no public raw/unconfirmed specialist dispatch, artifact-write, Git,
+`RuntimeSession` expose `lead_turn()`, `propose_specialist_advisory()`,
+`decide_lead_recommendation()`, and `decide_lead_step()`. The former confirms
+one Lead preparation and returns `LeadTurnResult`; the latter executes
+confirmed proposals through their separate decision. There is no public raw/unconfirmed specialist dispatch, artifact-write, Git,
 or debate-start method.
 
 The root still exposes generic backend, prompt/request/result, debate model,
@@ -500,6 +500,43 @@ from story_writing_agents.conversations import (
 )
 ```
 
+Contextual authoring adds these exports to the same conversations facade:
+
+```python
+from story_writing_agents.conversations import (
+    ArtifactDraftSource,
+    ArtifactObjective,
+    ArtifactObjectiveCandidateBinding,
+    ArtifactObjectiveFacts,
+    ArtifactObjectiveFactsV2,
+    ArtifactObjectiveNextStep,
+    ArtifactObjectivePayload,
+    ArtifactObjectivePayloadV2,
+    ArtifactObjectiveState,
+    LeadObjectiveAction,
+    LeadObjectiveIntent,
+    artifact_objective_context,
+)
+```
+
+These additions do not change the package-root facade. They describe the
+owner-conversation objective, whole-message draft-source digests, exact
+candidate binding, and `open`/`satisfied`/`cancelled` projection. Only matching
+successful Apply satisfies an objective; no value grants execution authority.
+Recommendation preparation adds `LeadRecommendationActionKind`,
+`LeadRecommendedAction`, `LeadRecommendationState`,
+`LeadRecommendationRequestPayload`, `LeadRecommendationDecision`,
+`LeadRecommendationDecisionPayload`, `LeadRecommendationStartedPayload`, and
+`LeadRecommendationResultPayload` to this same facade. Confirm-origin objectives
+use v2 provenance; an existing objective retains its immutable v1 or v2 origin.
+
+`LeadTurnResult` has a trailing optional `recommendation_request=None`.
+A pending recommendation uses `submit_recommendation_decision`, with proposal,
+Apply, and Commit controls absent. The preceding optional `story_commit_request`
+rediscloses an exact pending Commit; `artifact_application_request` carries
+Apply disclosure. The nine-field provider `lead-outcome-v3` contract is distinct from these Python result values;
+see [Runtime API](runtime-api.md#contextual-authoring-objectives).
+
 The lead and specialist values are strict public inputs and results. Every
 fresh provider lead judgment carries exact runtime-issued evidence; the runtime
 persists a typed judgment or a content-free validation-failure closure. Scope
@@ -662,17 +699,18 @@ collaboration event. The installed lead workflow does not invoke it.
 
 ## Ownership of collaboration and later story writes
 
-The public shell is inspection-only for collaboration history. The Python lead
-workflow owns proposal, confirmation, rejection, revision, supersession,
+Ordinary focused shell input uses the Python Lead workflow, which owns
+proposal, confirmation, rejection, revision, supersession,
 reconfirmation, confirmed specialist execution, typed synthesis,
 artifact-candidate/review records, result, finalization, and outcome-unknown
 history writes. Confirmation is authority only for the disclosed read-only
 consultation.
 
-Artifact Apply and Git Commit remain separate future operations with separate
-exact confirmations. The lead is their planned semantic trigger and
-user-facing coordinator; runtime code, not the provider, will execute the
-filesystem and Git effects.
+Artifact Apply and local Git Commit have separate exact confirmations in the
+current workflow. The lead coordinates the requested change; runtime code
+executes the disclosed filesystem and Git effects. An authoring objective is
+completed only by its matching successful Apply result. It grants no
+confirmation or remote-publication authority.
 
 ## Reference map
 

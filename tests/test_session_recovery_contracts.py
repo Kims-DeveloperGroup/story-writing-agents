@@ -867,11 +867,11 @@ class SessionRecoveryBoundaryTests(unittest.TestCase):
         )
         self.assertEqual(completed.returncode, 0, completed.stderr)
         modules, edges = _module_graph()
-        self.assertEqual((len(modules), len(edges)), (137, 539))
+        self.assertEqual((len(modules), len(edges)), (138, 549))
         self.assertFalse(_has_cycle(modules, edges))
         index = (_ROOT / "PYTHON_MODULE_INDEX.md").read_text()
-        self.assertIn("Importable production units indexed: 137.", index)
-        self.assertIn("Direct internal dependency edges indexed: 539.", index)
+        self.assertIn("Importable production units indexed: 138.", index)
+        self.assertIn("Direct internal dependency edges indexed: 549.", index)
         self.assertIn("session_recovery.contracts", index)
 
 

@@ -56,7 +56,7 @@ Interpret a failed turn by its displayed next action:
 
 | Visible result | User action |
 | --- | --- |
-| A normal answer, question, critique, recommendation, or confirmation request | Continue with the Lead or decide the exact displayed proposal. |
+| A normal answer, question, critique, recommendation, or confirmation request | Continue with the Lead or decide the exact displayed preparation or proposal. Preparation Confirm, review/execution, Apply, and Commit are separate decisions. |
 | Native authentication opens during an active Lead operation | Complete the provider-owned sign-in. If the native interface remains open after sign-in, exit it normally so Story can perform its fresh status check. |
 | `retry_lead_turn` after a read-only Lead failure or rejection | Send a new message, revise the wording, or resubmit the request in the same conversation, including after restart. Runtime preserves the original request and failure and starts a fresh turn. |
 | `outcome_unknown` / `inspect_and_resolve_outcome` | Inspect the preserved outcome. Do not submit the same call again: external work may have occurred. |
@@ -456,7 +456,9 @@ object supplied on argv, whose canonical bytes must match exactly.
         "kind": "answer",
         "message": "<sanitized reply>",
         "artifact_intent": null,
-        "proposal": null
+        "proposal": null,
+        "objective_intent": null,
+        "recommended_action": null
       },
       "used_handles": []
     }
@@ -466,7 +468,15 @@ object supplied on argv, whose canonical bytes must match exactly.
 }
 ```
 
-The example shows a Lead ANSWER; other calls require their selected result type.
+The example shows all nine fields of a `lead-outcome-v3` Lead ANSWER; other
+calls require their selected result type. `recommended_action` is null for this
+answer. Fresh recommendations require one typed preparation action and null
+objective intent, then offer Confirm/Reject/Revise. Confirm prepares one exact
+proposal or asks a material question; execution/review, Apply, and Commit need
+separate decisions. Ordinary contextual approval can supersede an unconfirmed
+recommendation as a new instruction. `objective_intent` is null here;
+contextual authoring can instead select `start`, `continue`, or `cancel`
+under the [runtime contract](../reference/runtime-api.md#contextual-authoring-objectives).
 Story rejects invalid UTF-8, duplicate fields, non-finite numbers, additional
 JSON objects, and trailing non-whitespace data. It requires a safe
 `conversation_id` matching the retained ID on resume, object
@@ -476,8 +486,23 @@ completed-error recovery below. It never falls back to a string-valued
 `response` field.
 Usage comes only from the terminal object's recognized exact nonnegative
 integer counters; absent or invalid counters remain unavailable. The complete
-closed SEARCH, READ, and seven-field Lead ANSWER branches are shown in
+closed SEARCH, READ, and nine-field Lead ANSWER branches are shown in
 [What providers receive](lead-agent.md#what-providers-receive).
+
+Retained workspace Lead policies receive the runtime v3 overlay without being
+rewritten. Ordinary synthesis uses `lead-synthesis-v2` with nullable
+`recommended_action`, exclusive with `next_intent`. Its durable historical codec,
+specialist schema, and artifact-review synthesis contract remain separate. A known
+read-only Lead failure after reference reads can expose `retry_lead_turn` once
+the exact attempt and reference accounting close. Its authoring objective
+stays open; explicit new input uses fresh evidence. Uncertain cleanup remains
+recovery-gated, and neither adapter nor runtime automatically replays the turn.
+
+Recommendation Confirm and Revise retain the same pending operation through
+permitted authentication assistance. Login neither repeats the decision nor
+resets its call reservation. These contract descriptions do not establish a
+new native-provider evaluation; historical evaluation records below retain
+their recorded scope and versions.
 
 ### Recover a completed native error
 

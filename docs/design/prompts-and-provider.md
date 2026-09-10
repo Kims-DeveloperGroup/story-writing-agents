@@ -193,6 +193,15 @@ provider restrictions, and typed wire-v7 protocol remain stable binding material
 Current core documents are P2 authoritative sources selected by the context
 planner; manuscripts and other additive sources are SEARCH-first.
 
+Lead binding appends a deterministic runtime contract overlay after the
+retained common and Lead policies. Fresh embedded and checked-in Lead defaults
+use the nine-field `lead-outcome-v3` contract. Existing workspace policy files
+remain unchanged; the overlay supersedes their older front-channel field
+lists and describes contextual objectives. It also preserves the independent
+`lead_synthesis` schema when the same Lead binding synthesizes a review.
+Ordinary `lead-synthesis-v2` results add nullable `recommended_action`, mutually
+exclusive with `next_intent`; artifact-review synthesis keeps its exact contract.
+
 A direct custom `AgentDefinition` can still bind explicit
 `context_document_files`. That eager path preserves its exact bytes,
 fingerprint, staging, and provider behavior for compatibility, but it is not how
@@ -234,14 +243,47 @@ Provider output never supplies confirmation, runtime IDs/budgets, write/Git
 authority, or a call to another agent.
 
 `lead_front_channel` receives the current command, identity, content-free input
-aliases, a strict seven-field semantic answer contract, and four canonical-core
-status rows. Inventory alone supplies no story body. The lead must classify the
+aliases, current owner-conversation objectives and offered draft sources, a
+strict nine-field `lead-outcome-v3` answer contract, and four canonical-core
+status rows. `objective_intent` is explicitly null or a `start`, `continue`, or
+`cancel` intent. Inventory alone supplies no story body. The lead must classify the
 turn as `story_specific` or `workflow_meta`; runtime performs no NLP relabeling.
 For story-specific results the provider selects the minimum ordered current
 evidence IDs supporting `verified`, `missing`, `empty`, `incomplete`, or
 `conflicting`. For workflow/meta it must use `not_applicable`, no IDs, and no
 proposal. Ambiguous scope is handled by the role prompt—choose story-specific
 and ask a grounded question—not by runtime inference.
+
+Fresh front-channel recommendations require `recommended_action` and null
+`objective_intent`. Other kinds require a null action. The action selects
+`prepare_artifact` or `prepare_consultation` with purpose, instruction, expected
+result, sources, targets or specialists, and an optional offered objective.
+Runtime resolves `current_response` to the complete visible source message event
+and exact digest before publishing a separate versioned action request; aliases
+are never persisted as authority. Ordinary synthesis may select the same action
+instead of a continuation, while its historical durable payload stays unchanged.
+
+Confirm or Revise binds an exact final-tail request and starts one bounded Lead
+invocation with a fresh execution origin. Confirm prepares the disclosed proposal
+or asks a material question; it cannot return a recommendation for the same
+preparation. Revise produces only a new recommendation. No preparation starts
+specialists or bypasses review, Apply, or Commit. The reservation includes
+mandatory reference reads and permitted authentication assistance without
+resetting physical-call spend or repeating the structured decision.
+
+The provider interprets short approval from complete session context. CLARIFY
+requires a question, CONSULT an ordinary proposal, and PREPARE an exact
+artifact-intent proposal that cannot downgrade during bounded correction.
+Runtime validates the origin-conversation objective, whole-message draft
+digests, target scope, and current artifact evidence before publishing an
+objective transition with its accepted result. A selected exact empty-core
+status can support replacement after revalidation; nonempty targets require
+attached-reference or READ evidence. Synthesis keeps the objective open.
+Only a matching successful Apply result satisfies it. A new objective from
+recommendation Confirm records v2 request/decision origins; a continued objective
+keeps its immutable v1 or v2 facts. Execution origin remains independently
+validated, without a synthetic user message. See the
+[objective contract](../reference/runtime-api.md#contextual-authoring-objectives).
 
 The lead role prompt never grants tool or agent-dispatch authority. Provider
 SEARCH/READ/ANSWER values are requests to the context service. A proposal in
@@ -288,6 +330,14 @@ record changes, tombstones, and an exact candidate pointer or beneficial
 lossless single-splice. Invocation and evidence scope stays conversation-bound;
 specialists and consensus retain their separate scopes. See
 [Agent-context design](agent-context.md#typed-provider-wire-v7).
+
+Retained session history includes objective origin, transitions, and exact
+candidate bindings. Visibility across conversation switches does not transfer
+ownership: an objective can be continued or cancelled only in its origin
+conversation. A known read-only provider failure, including after references,
+can return `retry_lead_turn` once exact history/reference accounting closes;
+the objective stays open. Uncertain cleanup remains recovery-gated and no call
+is automatically replayed.
 
 <a id="explicit-reference-provider-flow"></a>
 
