@@ -5028,6 +5028,11 @@ every intermediate arrow. The current runtime graph is acyclic.
   structured readable records; `/history` also renders the projected current
   collaboration state and next-safe action with explicit empty, confirmation,
   reconfirmation, running, terminal, unknown-outcome, and recovery meanings.
+  Their shared readable-record projection applies the terminal-owned agent-reply
+  formatter only to the closed Lead-judgment, specialist-reply, Lead-synthesis,
+  and artifact-review message keys. Only resulting multiline agent prose moves
+  to record content so its line and paragraph breaks remain readable; user
+  messages and structural fields retain their existing compact field rendering.
   Both `/status` and `/history` explain every closed `CollaborationNextAction`,
   including fresh-input retry, separate Apply/Commit/recommendation decisions,
   and local recommendation finalization. This complete presentation mapping
@@ -5430,9 +5435,11 @@ every intermediate arrow. The current runtime graph is acyclic.
   authentication-notice, result-boundary, timing, and cleanup lifecycle for
   `interactive_auth` without exposing capabilities, streams, or a public
   animation API. Unlisted package-internal
-  `format_agent_reply_content` shares the pure strict-JSON agent-reply
-  presentation projection with controller-owned semantic records without
-  becoming a supported public export. Its
+  `format_agent_reply_content` shares the pure agent-reply presentation
+  projection with controller-owned semantic records: complete strict JSON
+  containers retain their established formatting, while model prose receives
+  narrow newline normalization. The binding remains outside `__all__` and does
+  not become a supported public export. Its
   unlisted package-internal `build_stream_terminal` factory is the sole real-CLI
   construction boundary and binds trusted semantic input rendering to the sole
   raw driver without exposing renderer or driver details. Unlisted
@@ -5756,11 +5763,15 @@ every intermediate arrow. The current runtime graph is acyclic.
   state, and every rich projection strips to the exact plain, `NO_COLOR`, and
   fallback text.
   `format_agent_reply_content`
-  recognizes only a complete strict JSON object or array, rejects duplicate
-  object keys and non-finite constants, and preserves key order and Unicode in
-  a two-space-indented projection; malformed JSON, scalars, embedded prose, and
-  every other string return exactly unchanged. The fixed `AGENT` role is bold
-  terminal-default foreground with the same plain meaning and local reset.
+  gives a complete strict JSON object or array its established two-space-
+  indented projection, rejecting duplicate object keys and non-finite constants
+  while preserving key order and Unicode. For other model prose it converts
+  only singly escaped `\\n`, `\\r\\n`, `\\x0a`, and `\\x0A` spellings to line
+  feeds; actual line feeds and intentionally multiply escaped spellings retain
+  their meaning, and no general escape or JSON-like decoding occurs. Chat-block
+  messages opt into this formatting only through the fixed `AGENT` role. That
+  role is bold terminal-default foreground with the same plain meaning and
+  local reset.
   Messages retain the established inline layout by default. Generated completed
   state is visually silent across components, while every non-idle,
   non-completed state and semantic result-role suffix remains textual;
@@ -5987,6 +5998,11 @@ every intermediate arrow. The current runtime graph is acyclic.
   preparation, purpose, instruction, expected result, ordered sources, targets,
   specialists, spent/reserved calls, and impact; separate decision/start/result
   events expose their visible lifecycle without provider capability.
+  Runtime-validated fresh Lead results and the closed Lead-judgment,
+  specialist-reply, Lead-synthesis, and artifact-review payloads alone mark
+  their prose messages with the renderer's `AGENT` role. User messages,
+  objectives, instructions, recommendation metadata, and structural fields do
+  not opt into agent-prose normalization.
   `validate_collaboration_event_order`
   rejects mixed conversation scope, duplicate sequence, and out-of-order input
   before presentation. Details mode adds durable record identity but cannot
@@ -6363,8 +6379,9 @@ every intermediate arrow. The current runtime graph is acyclic.
   closed component vocabulary through the terminal, while the latter delegates
   its completed rendering to a mode-aware callback without exposing terminal
   mode to the controller. The specialized agent writer applies the pure
-  strict-JSON reply projection before constructing exactly one chat-block
-  semantic message. It maps the canonical lead, plot, character, and execution
+  agent-reply projection—strict JSON-container formatting or narrow model-prose
+  newline normalization—before constructing exactly one chat-block semantic
+  message. It maps the canonical lead, plot, character, and execution
   IDs to cyan, yellow, green, and blue speaker accents respectively without
   changing its supported signature or write cardinality, and
   the core binds that formatter through the facade for controller-owned

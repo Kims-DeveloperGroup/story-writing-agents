@@ -23,14 +23,99 @@ from tests.test_interactive_terminal_composer import _capability
 from tests.test_lead_artifact_application import _application_decision
 from tests.test_lead_story_commit import _commit_decision
 from story_writing_agents.conversations import (
+    ArtifactReviewDecision,
+    ArtifactReviewSynthesisPayload,
     ArtifactApplicationDecisionKind,
+    CollaborationLeadJudgmentPayload,
+    CollaborationLeadSynthesisPayload,
+    CollaborationNextAction,
     CollaborationSpecialistAssessment,
     CollaborationSpecialistReplyPayload,
+    LeadTurnResult,
+    LeadOutcomeKind,
 )
 from story_writing_agents.git.story_commit_contracts import StoryCommitDecision
 
 
 class CollaborationViewTests(unittest.TestCase):
+    def test_fresh_lead_and_closed_agent_messages_opt_into_multiline_rendering(
+        self,
+    ) -> None:
+        history, _proposal, _result = executed_history()
+        payloads = [
+            event.payload
+            for event in history
+            if type(event.payload)
+            in {
+                CollaborationLeadJudgmentPayload,
+                CollaborationSpecialistReplyPayload,
+                CollaborationLeadSynthesisPayload,
+            }
+        ]
+        review = ArtifactReviewSynthesisPayload(
+            "candidate_a",
+            1,
+            "sha256:" + "a" * 64,
+            "proposal_a",
+            1,
+            "sha256:" + "b" * 64,
+            "attempt_a",
+            ArtifactReviewDecision.PROPOSE,
+            r"review one\n\nreview two",
+            "rationale",
+            "impact",
+            "limitations",
+            (),
+            (),
+        )
+        payloads.append(review)
+
+        for payload in payloads:
+            with self.subTest(payload=type(payload).__name__):
+                updated = replace(payload, message=r"line one\n\nline two")
+                message = next(
+                    item
+                    for item in _collaboration_view._payload_items(
+                        updated,
+                        {},
+                        {},
+                        {},
+                    )
+                    if type(item).__name__ == "Message"
+                )
+                self.assertIs(message.role, _collaboration_view.SemanticRole.AGENT)
+                rendered = render_component(
+                    message,
+                    _capability(CapabilityProfile.LINE, width=120),
+                ).text
+                self.assertIn("│ line one\n│\n│ line two\n", rendered)
+                self.assertNotIn(r"\n", rendered)
+
+        judgment = next(
+            payload
+            for payload in payloads
+            if type(payload) is CollaborationLeadJudgmentPayload
+        )
+        fresh = LeadTurnResult(
+            "session_a",
+            "conversation_a",
+            "turn_fresh",
+            "step_fresh",
+            LeadOutcomeKind.ANSWER,
+            r"fresh one\x0Afresh two",
+            None,
+            None,
+            None,
+            CollaborationNextAction.CONTINUE_WITH_LEAD,
+            judgment.evidence,
+        )
+        rendered = render_component(
+            _collaboration_view.project_lead_turn_result(fresh),
+            _capability(CapabilityProfile.LINE, width=120),
+        ).text
+        self.assertIn("  │ fresh one\n  │ fresh two\n", rendered)
+        self.assertNotIn(r"\x0A", rendered)
+
     def test_proposal_discloses_complete_assignments_sources_impact_and_budget(
         self,
     ) -> None:

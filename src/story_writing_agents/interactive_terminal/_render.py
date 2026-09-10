@@ -403,7 +403,7 @@ def _fit_startup_line(line: _StartupLine, width: int) -> _StartupLine:
 
 
 def format_agent_reply_content(content: str) -> str:
-    """Pretty-print one complete strict JSON object or array, if valid."""
+    """Pretty-print strict JSON or normalize narrow model-prose newlines."""
 
     if type(content) is not str:
         raise TypeError("content must be a string")
@@ -414,9 +414,9 @@ def format_agent_reply_content(content: str) -> str:
             parse_constant=_reject_nonfinite_constant,
         )
     except (TypeError, ValueError, json.JSONDecodeError, RecursionError):
-        return content
+        return _normalize_agent_reply_newlines(content)
     if type(value) not in {dict, list}:
-        return content
+        return _normalize_agent_reply_newlines(content)
     try:
         return json.dumps(
             value,
@@ -425,7 +425,68 @@ def format_agent_reply_content(content: str) -> str:
             allow_nan=False,
         )
     except (TypeError, ValueError, UnicodeError, RecursionError):
+        return _normalize_agent_reply_newlines(content)
+
+
+def _normalize_agent_reply_newlines(content: str) -> str:
+    """Decode only common singly escaped newline spellings in model prose."""
+
+    if "\\" not in content:
         return content
+
+    normalized: list[str] = []
+    replaced = False
+    position = 0
+    while position < len(content):
+        if content[position] != "\\":
+            normalized.append(content[position])
+            position += 1
+            continue
+
+        slash_stop = position
+        while slash_stop < len(content) and content[slash_stop] == "\\":
+            slash_stop += 1
+        slash_count = slash_stop - position
+
+        if slash_stop < len(content) and content[slash_stop] == "r":
+            next_slash_start = slash_stop + 1
+            next_slash_stop = next_slash_start
+            while (
+                next_slash_stop < len(content)
+                and content[next_slash_stop] == "\\"
+            ):
+                next_slash_stop += 1
+            if (
+                next_slash_stop > next_slash_start
+                and next_slash_stop < len(content)
+                and content[next_slash_stop] == "n"
+            ):
+                if slash_count == 1 and next_slash_stop - next_slash_start == 1:
+                    normalized.append("\n")
+                    replaced = True
+                else:
+                    normalized.append(content[position : next_slash_stop + 1])
+                position = next_slash_stop + 1
+                continue
+
+        if slash_count == 1 and content.startswith("n", slash_stop):
+            normalized.append("\n")
+            replaced = True
+            position = slash_stop + 1
+            continue
+        if slash_count == 1 and (
+            content.startswith("x0a", slash_stop)
+            or content.startswith("x0A", slash_stop)
+        ):
+            normalized.append("\n")
+            replaced = True
+            position = slash_stop + 3
+            continue
+
+        normalized.append(content[position:slash_stop])
+        position = slash_stop
+
+    return "".join(normalized) if replaced else content
 
 
 def _reject_duplicate_object_pairs(
@@ -1420,9 +1481,14 @@ def _chat_block_message_lines(
                 fallback_prefix="",
             )
         )
+    content = (
+        format_agent_reply_content(message.content)
+        if message.role is SemanticRole.AGENT
+        else message.content
+    )
     lines.extend(
         (line, SemanticRole.DEFAULT)
-        for line in _chat_block_body_lines(message.content, width, indent=indent)
+        for line in _chat_block_body_lines(content, width, indent=indent)
     )
     lines.append(("", SemanticRole.DEFAULT))
     return lines
