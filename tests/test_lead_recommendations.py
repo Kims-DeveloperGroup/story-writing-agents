@@ -608,8 +608,13 @@ class LeadRecommendationTests(RecommendationCase):
         self.assertIsNone(stale.recommendation_request)
         _, offered = await self.recommend(other)
         reviewed = await self.review(await self.confirm(offered))
-        with mock.patch.object(self.runtime.artifacts, "apply_artifact_changes",
-                               side_effect=ArtifactApplicationError(ArtifactApplicationErrorCode.RECOVERY_REQUIRED)):
+        with mock.patch.object(
+            type(self.runtime.artifacts),
+            "apply_artifact_changes",
+            side_effect=ArtifactApplicationError(
+                ArtifactApplicationErrorCode.RECOVERY_REQUIRED
+            ),
+        ):
             await self.apply(reviewed)
         before, calls = self.history(other), len(self.backend.calls)
         for runtime in (self.runtime, StoryRuntime(self.workspace, self.backend)):

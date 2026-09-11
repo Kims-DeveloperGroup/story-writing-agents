@@ -5,10 +5,12 @@ front-channel facade. `RuntimeSession` binds those operations to one session
 ID. The runtime can obtain one strict lead outcome, disclose a consultation,
 construct an exact complete-state-bound artifact candidate, and execute its
 one-to-three specialist assignments after an exact structured confirmation.
-Artifact review can produce an immutable reviewed proposal. The runtime also
-exposes a stepwise, separately confirmed consensus workflow through Python.
-Neither workflow applies or mutates an artifact, grants Apply authority, or
-performs Git work.
+Artifact review can produce an immutable reviewed proposal. A separate exact
+Apply decision can apply that proposal, and a later separate exact Commit
+decision can create its local session-branch commit. The runtime also exposes
+a stepwise, separately confirmed consensus workflow through Python. Review and
+consensus finalization alone never apply an artifact, grant Apply authority, or
+perform Git work.
 
 The installed shell calls the session-bound lead methods for ordinary focused
 input and constructs exact decisions through structured controls. It does not
@@ -37,6 +39,34 @@ whose configured session/provider lifecycle is ready when binding occurs.
 `backend=None` remains valid for provider-free management and inspection, but
 provider-backed lead and confirmed consensus execution then raise
 `BackendProtocolError`.
+
+### Control workspace and exact session artifacts
+
+Construct `StoryRuntime` from the initialized `main` workspace. Runtime
+configuration, directives, conversation storage, diagnostics, and other
+control-plane state remain rooted there. The construction-compatible
+`StoryRuntime.artifacts` repository likewise names that control root, but it
+has no session authority and must not be used as an active session's artifact
+repository.
+
+Every artifact-sensitive runtime call instead derives the session ID already
+present in its public arguments or durable identity, freshly requires that
+session's exact READY branch/ref/sibling-worktree resources, and creates a
+call-local repository rooted at the validated worktree. This covers explicit
+and contextual references, source status and fingerprints, proposal and review
+revalidation, Apply and application-ledger access, recovery reads, consensus
+artifact material, and the interactive attachment picker. A
+`RuntimeSession` forwards the same session ID; switching between two ready
+sessions or using them concurrently cannot borrow the control root or the
+other session's repository.
+
+Binding is validation only. It never provisions resources, calls a provider,
+or performs artifact I/O. Absent, moved, mismatched, staged, or otherwise
+non-ready resources fail closed with a content-free binding failure before
+provider or artifact access; runtime never falls back to `main`, the process
+working directory, or a previously used session. Use Session Create or Reopen
+to establish the lifecycle precondition before calling an artifact-sensitive
+method. Existing public constructor and method signatures are unchanged.
 
 ## Phase-confirmed consensus methods
 
@@ -229,6 +259,13 @@ StoryRuntime.inspect_reference_operation(
     operation_id: str,
 ) -> ReferenceOperationHistory | None
 ```
+
+A reference-operation ID encodes its owning session. Inspection decodes that
+canonical identity and reads only the corresponding session worktree's
+persisted reference ledger after fresh READY validation. Malformed identities
+raise `ValueError`; `RuntimeSession.inspect_reference_operation()` also rejects
+an otherwise valid identity belonging to a different session. Neither case
+falls back to another repository.
 
 `RuntimeConfigurationCandidate` is defined in the orchestrator module but is
 not a package-root export. Prepare requires a backend and complete quiescence;
@@ -847,6 +884,37 @@ grants later execution authority. Specialist assessments are evidence, not a
 vote, and synthesis cannot discard a concern because more peers returned
 `supports`.
 
+### Apply and Commit decision methods
+
+```python
+await StoryRuntime.decide_artifact_application(
+    decision: ArtifactApplicationDecision,
+) -> ArtifactApplicationDecisionResult
+await StoryRuntime.decide_story_commit(
+    decision: StoryCommitDecisionRequest,
+) -> StoryCommitDecisionResult
+```
+
+Import the decision and result values from
+`story_writing_agents.conversations`. `RuntimeSession` exposes the same two
+method signatures and rejects a decision owned by another session.
+
+Apply requires the exact authoritative request tail and same-process one-use
+authority. Immediately before any candidate revalidation or write, runtime
+freshly binds the exact session worktree. If that binding was lost after the
+Apply decision became durable, the returned and persisted application result
+is `recovery_required` with `operator_recovery`; no artifact write or provider
+call is attempted. Successful application affects only the correlated session
+worktree and its application ledger. Control-root and sibling-session bytes
+remain outside the operation.
+
+Commit remains a distinct decision and authority boundary. Its internal
+service independently requires and revalidates the same exact session
+worktree, branch, and candidate evidence before staging only the disclosed
+paths and creating a local commit. Apply never implies Commit, and neither
+operation pushes, merges, or grants a provider direct filesystem or Git
+authority.
+
 ### Free text and recovery
 
 Calling `lead_turn(..., "Yes")` is contextual conversation, never structured
@@ -972,6 +1040,12 @@ await RuntimeSession.decide_lead_step(
     *,
     action_progress_sink: ContextActionProgressSink | None = None,
 ) -> LeadDecisionResult
+await RuntimeSession.decide_artifact_application(
+    decision: ArtifactApplicationDecision,
+) -> ArtifactApplicationDecisionResult
+await RuntimeSession.decide_story_commit(
+    decision: StoryCommitDecisionRequest,
+) -> StoryCommitDecisionResult
 ```
 
 The bound decision method rejects a decision for another session. Bound
@@ -1000,7 +1074,8 @@ There is no package-root `Runtime` or `Session` alias. Import the explicit
 No alternate or forwarding entry point restores `converse`,
 `converse_with_retrieval`, `run_prompt`, or `run_draft` on the runtime classes.
 There is no unconfirmed/public raw specialist-dispatch, debate-start,
-artifact-application, commit, push, merge, or one-turn bypass method. Consensus
+artifact-application bypass, general Git, push, merge, or one-turn bypass
+method. Consensus
 is available only through the separately confirmed Python methods above; it
 has no installed shell command.
 
@@ -1022,8 +1097,9 @@ typed evidence-bound lead judgments or failures, dispatch, typed
 reply/synthesis, provider-call-accounting, result, and state events as
 applicable. Attached references create content-free
 reference-operation evidence and send authorized selected bytes to the
-configured provider for each addressed invocation. These methods never publish
-an artifact or mutate Git.
+configured provider for each addressed invocation. Conversation, consultation,
+review, and consensus methods never publish an artifact or mutate Git; only the
+separate exact Apply and Commit decision methods can perform those effects.
 
 <a id="context-lifecycle-observer"></a>
 

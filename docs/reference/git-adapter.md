@@ -18,7 +18,7 @@ external-operation inspection work:
   later-commit method. Separate package-internal #504 modules now own exact
   session resources for #455 composition. Package-internal #509 now owns exact
   story commits, and package-internal #510 owns closed-path checkpoints;
-  #491/#492 still own application/confirmation integration.
+  the Lead runtime owns application/confirmation integration.
 
 The adapter is not a general Git client. It accepts no command, argument list,
 revision, ref, commit message, credential, prose, or provider-tool input.
@@ -548,6 +548,16 @@ credentials. Session Create provisions/verifies the correlated resources;
 Reopen requires them ready. Provider-session readiness remains a separate
 lifecycle fact and never substitutes for Git-resource readiness.
 
+The runtime's package-internal session-artifact binding is a fifth composition
+seam above `require one ready session`. Given the initialized `main` control
+root and a session ID, it freshly requires the exact READY identity and returns
+a call-local writing-artifact repository rooted at that session worktree.
+Binding itself performs no artifact I/O, provisioning, provider call, or global
+runtime mutation. Known readiness and workspace-validation failures become one
+content-free binding failure; malformed protocol/type defects remain visible.
+There is no fallback to the control root, current directory, another session,
+or a previously returned binding.
+
 For session `novel`, the exact identity is:
 
 ```text
@@ -649,7 +659,8 @@ safe next actions, see
 Issue #508 supplies the common infrastructure now used by #509 story commits
 and #510 internal checkpoints. The history store itself does not stage a file,
 create a commit/checkpoint, update a ref, consume confirmation, or expose a
-CLI/runtime/facade method. #492 owns the later confirmation UI.
+CLI/runtime/facade method. Runtime and the confirmation UI consume it only
+through their separate orchestration boundaries.
 
 `git.session_history_contracts` owns the pure schema-v1 values and codecs;
 `git.session_history` owns descriptor-relative durable storage;
@@ -803,13 +814,12 @@ and [session-history privacy](../operations/privacy-and-provider.md#session-hist
 
 ## Package-internal exact story commits
 
-Issue #509 implements the local Git operation behind a future lead-confirmed
-story commit. It remains a direct-module capability: there is no CLI command,
-provider path, lead binding, or export from `story_writing_agents`,
-`story_writing_agents.git`, or a workspace facade. #491 owns production of
-successful typed application evidence, #492 owns the interactive lead
-projection and confirmation UI. The separate #510 checkpoint service is
-described below.
+Issue #509 implements the local Git operation behind the separately confirmed
+Lead story-commit workflow. The service remains a direct-module capability:
+there is no standalone CLI command, provider path, or export from `story_writing_agents`,
+`story_writing_agents.git`, or a workspace facade. Successful typed application
+evidence, Lead projection, and confirmation reach it only through runtime
+orchestration. The separate #510 checkpoint service is described below.
 
 The three internal owners are:
 
@@ -844,8 +854,8 @@ to that service owner, process, and thread, cannot be copied/pickled, and is
 consumed before the first filesystem or Git action. Reject/Revise/Apply/
 consultation values cannot authorize execution, a confirmation ID cannot be
 reserved twice by the same service, and candidate/proposal/correlation IDs must
-all match. No authority survives restart; the future #492 owner must obtain a
-fresh user decision instead of presenting an old serialized decision again.
+all match. No authority survives restart; the runtime must obtain a fresh user
+decision instead of presenting an old serialized decision again.
 
 ### Prepare and lead projection
 
@@ -890,7 +900,8 @@ Artifact application operations normalize as follows:
 
 Authorize revalidates the process-local binding before minting one-use
 authority. Execute consumes that authority, takes the common-Git/session-history
-lease, revalidates again, then follows this fixed order:
+lease, independently requires the exact READY session resources, revalidates
+again, then follows this fixed order:
 
 ```text
 publish and fsync RUNNING operation evidence

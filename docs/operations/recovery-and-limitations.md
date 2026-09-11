@@ -178,6 +178,22 @@ Concrete cases:
   across the repository. Exact same-session calls converge; case-distinct IDs
   follow filesystem identity truth and a real alias fails closed.
 
+Artifact-sensitive runtime and picker operations add no recovery shortcut.
+Each call freshly requires the exact READY identity and then uses only that
+session worktree for source reads, references, proposals, application-ledger
+access, Apply, and recovery. Absent resources are not provisioned; moved,
+mismatched, staged, or otherwise non-ready resources do not fall back to
+`main`, the current directory, a sibling session, or an older binding. The
+binding failure is content-free and occurs before provider or artifact I/O.
+
+If the exact binding is lost after an Apply decision is durably recorded but
+before artifact I/O, runtime consumes that decision once, appends an
+`artifact_application_result` with `recovery_required` and
+`operator_recovery`, attempts no write, and emits no Commit request for that
+result. Preserve the session resources and authoritative history; repair the
+resource identity before any fresh authoring attempt. Commit remains a
+separate decision and independently revalidates the same session worktree.
+
 The runtime never automatically removes a named branch, internal ref,
 worktree, worktree-administration entry, seed object, journal-backed recovery
 fact, or user byte. The lock file persists as coordination infrastructure.
@@ -193,10 +209,10 @@ supplies closed-path internal checkpoints.
 
 Issue #508 supplies package-internal evidence and classification. #509 now
 supplies internal exact story-commit execution, and #510 now supplies exact
-internal-ref checkpoint execution and conservative recovery. No current
-command, lead action, or public facade starts either one, and no current UI
-displays these states: #491 still owns application evidence and #492 owns the
-lead confirmation UI.
+internal-ref checkpoint execution and conservative recovery. The separately
+confirmed Lead workflow can start a story commit through the runtime; no
+standalone Git command or provider capability does so. Checkpoints remain
+package-internal and are not started merely by ordinary Lead work.
 
 For any internal interruption or later public-workflow interruption, first stop
 repository writers and preserve the main repository, sibling session worktree,
@@ -230,7 +246,7 @@ and [workspace composition](../reference/workspace-api.md#workspace-session-hist
 
 | State, result, or failure | Meaning | Safe response |
 | --- | --- | --- |
-| Candidate `prepared` | Exact path/digest/expected-tree evidence exists; no confirmation or Git index/object/ref mutation is implied. | Revalidate it. When #492 is available, request a fresh exact decision; if any candidate fact changed, `reprepare` from new successful application evidence. |
+| Candidate `prepared` | Exact path/digest/expected-tree evidence exists; no confirmation or Git index/object/ref mutation is implied. | Revalidate it and request a fresh exact decision through the Lead workflow; if any candidate fact changed, `reprepare` from new successful application evidence. |
 | Checkpoint `unchanged` / `none` | An empty delta or fully validated same-tree result needed no operation. No operation ID, index, object, or ref update exists to recover. | Continue from the unchanged internal tip; do not fabricate an operation or checkpoint ID. |
 | Commit `rejected` / `none` | One Reject or Revise decision was recorded before execution. It is terminal and authorizes nothing. Reject preserves the candidate; Revise invalidates it. | After Reject, keep the candidate and require a fresh confirmation for another decision. After Revise, apply/prepare a new candidate and request new confirmation. |
 | Story commit `running` / `inspect` | Commit authority was consumed and intent was durable before staging, but the resulting index/branch state is not yet proved. | Call the internal recovery classifier once writers are stopped. Do not replay confirmation or execute again. It may classify exact staging, an exact committed tip, ambiguity, or recovery-required state. |
@@ -1202,7 +1218,7 @@ outcomes:
 
 A recoverable crash is not reported as a partial application on the next
 authoritative call: that call completes or verifies the existing journal first.
-Reject and Revise are not repository outcomes; #491 must leave this seam
+Reject and Revise are not repository outcomes; runtime must leave this seam
 uninvoked. Recovery does not infer confirmation, refresh agent context, call a
 provider, or stage/commit Git. Any later Git operation has separate evidence
 and confirmation.

@@ -24,6 +24,8 @@ from story_writing_agents.writing_artifacts import (
     ArtifactApplicationErrorCode,
     ArtifactApplicationState,
 )
+from story_writing_agents.writing_artifacts.repository import WritingArtifactRepository
+from story_writing_agents.workspace.initialization import provision_session_resources
 
 from tests.test_artifact_proposal_orchestration import (
     _INDEX,
@@ -76,7 +78,9 @@ class LeadArtifactApplicationTests(LeadOrchestrationTestCase):
     def artifact_snapshot(self) -> tuple[tuple[str, bytes], ...]:
         return tuple(
             (item.path, item.content)
-            for item in self.runtime.artifacts.capture_complete_state()
+            for item in WritingArtifactRepository(
+                self.workspace.root
+            ).capture_complete_state()
         )
 
     def git_snapshot(self) -> tuple[bytes, bytes]:
@@ -87,6 +91,20 @@ class LeadArtifactApplicationTests(LeadOrchestrationTestCase):
             subprocess.check_output(
                 ["git", "diff", "--cached", "--binary"], cwd=self.workspace.root
             ),
+        )
+
+    def control_git_snapshot(self) -> tuple[bytes, bytes, bytes]:
+        return (
+            subprocess.check_output(
+                ["git", "rev-parse", "HEAD"], cwd=self.control_workspace.root
+            ),
+            subprocess.check_output(
+                ["git", "status", "--porcelain=v1", "-z"],
+                cwd=self.control_workspace.root,
+            ),
+            self.control_workspace.path(
+                "core_documents/global_outline.md"
+            ).read_bytes(),
         )
 
     async def reviewed_create(self, subject: str = "Reviewed application"):
@@ -249,10 +267,21 @@ class LeadArtifactApplicationTests(LeadOrchestrationTestCase):
     async def test_atomic_multi_file_apply_has_exact_provenance_and_no_git_effect(
         self,
     ) -> None:
+        other = provision_session_resources(
+            self.control_workspace.root,
+            "other_session",
+        )
+        other_index = other.identity.worktree_root / _INDEX
+        other_second = other.identity.worktree_root / _SECOND
+        other_index.parent.mkdir(parents=True, exist_ok=True)
+        other_index.write_text("[other](second.md)\n", encoding="utf-8")
+        other_second.write_text("Other session scene.\n", encoding="utf-8")
+        other_before = (other_index.read_bytes(), other_second.read_bytes())
         turn = await self.reviewed_rename()
         request = turn.artifact_application_request
         assert request is not None
         git_before = self.git_snapshot()
+        control_before = self.control_git_snapshot()
         result = await self.runtime.decide_artifact_application(
             _application_decision(turn, ArtifactApplicationDecisionKind.APPLY)
         )
@@ -282,6 +311,12 @@ class LeadArtifactApplicationTests(LeadOrchestrationTestCase):
             self.workspace.path(_THIRD).read_text(encoding="utf-8"), "Second scene.\n"
         )
         self.assertEqual(self.git_snapshot(), git_before)
+        self.assertEqual(self.control_git_snapshot(), control_before)
+        self.assertEqual(
+            (other_index.read_bytes(), other_second.read_bytes()),
+            other_before,
+        )
+        self.assertFalse((other.identity.worktree_root / _THIRD).exists())
         with self.assertRaisesRegex(ValueError, "authoritative request tail"):
             await self.runtime.decide_artifact_application(
                 _application_decision(turn, ArtifactApplicationDecisionKind.APPLY)
@@ -291,7 +326,7 @@ class LeadArtifactApplicationTests(LeadOrchestrationTestCase):
         turn = await self.reviewed_create("Restart authority")
         before = self.artifact_snapshot()
         git_before = self.git_snapshot()
-        restarted = StoryRuntime(self.workspace, _LeadBackend())  # type: ignore[arg-type]
+        restarted = StoryRuntime(self.control_workspace, _LeadBackend())  # type: ignore[arg-type]
         result = await restarted.decide_artifact_application(
             _application_decision(turn, ArtifactApplicationDecisionKind.APPLY)
         )
@@ -366,7 +401,7 @@ class LeadArtifactApplicationTests(LeadOrchestrationTestCase):
                 before = self.artifact_snapshot()
                 git_before = self.git_snapshot()
                 with mock.patch.object(
-                    self.runtime.artifacts,
+                    WritingArtifactRepository,
                     "apply_artifact_changes",
                     side_effect=ArtifactApplicationError(code),
                 ):
@@ -408,6 +443,57 @@ class LeadArtifactApplicationTests(LeadOrchestrationTestCase):
         self.assertIsNone(uncertain.outcome.result)
         self.assertTrue(self.workspace.path(_RULES).exists())
         self.assertEqual(self.git_snapshot(), git_before)
+
+    async def test_ready_binding_loss_after_confirmation_is_durable_and_single_use(
+        self,
+    ) -> None:
+        turn = await self.reviewed_create("Binding loss")
+        before = self.artifact_snapshot()
+        session_git_before = self.git_snapshot()
+        control_before = self.control_git_snapshot()
+        subprocess.run(
+            [
+                "git",
+                "update-ref",
+                "-d",
+                self.session_resources.identity.internal_ref,
+            ],
+            cwd=self.control_workspace.root,
+            check=True,
+        )
+
+        with mock.patch.object(
+            WritingArtifactRepository,
+            "apply_artifact_changes",
+            side_effect=AssertionError("artifact write was attempted"),
+        ) as apply_changes:
+            result = await self.runtime.decide_artifact_application(
+                _application_decision(turn, ArtifactApplicationDecisionKind.APPLY)
+            )
+
+        self.assertIs(
+            result.outcome.outcome,
+            ArtifactApplicationOutcomeKind.RECOVERY_REQUIRED,
+        )
+        self.assertIs(
+            result.outcome.next_action,
+            ArtifactApplicationNextAction.OPERATOR_RECOVERY,
+        )
+        self.assertIsNone(result.outcome.result)
+        self.assertIsNone(result.commit_request)
+        apply_changes.assert_not_called()
+        self.assertEqual(self.artifact_snapshot(), before)
+        self.assertEqual(self.git_snapshot(), session_git_before)
+        self.assertEqual(self.control_git_snapshot(), control_before)
+        projection = project_collaboration_history(self.history(turn.conversation_id))
+        self.assertEqual(
+            projection.current_artifact_application_result,
+            result.outcome,
+        )
+        with self.assertRaisesRegex(ValueError, "authoritative request tail"):
+            await self.runtime.decide_artifact_application(
+                _application_decision(turn, ArtifactApplicationDecisionKind.APPLY)
+            )
 
 
 if __name__ == "__main__":

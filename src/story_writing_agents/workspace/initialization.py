@@ -7,7 +7,7 @@ import hashlib
 import os
 import stat
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from enum import StrEnum
 from pathlib import Path
 from uuid import uuid4
@@ -48,6 +48,7 @@ from ..git.session_resources import (
     provision_git_session_resources as _provision_git_session_resources,
     require_ready_git_session_resources as _require_ready_git_session_resources,
 )
+from ..writing_artifacts.repository import WritingArtifactRepository
 from ._policy_baselines import LEGACY_V2_POLICY_FILES, OBJECTIVE_V2_POLICY_FILES, MAIN_V2_POLICY_FILES
 from .schema import (
     WORKSPACE_DIRECTORIES,
@@ -380,6 +381,51 @@ def require_ready_session_resources(
         session_id,
         allowed_worktree_changes=allowance,
     )
+
+
+@dataclass(frozen=True, slots=True)
+class SessionArtifactBinding:
+    """One call-local artifact repository bound to exact READY session resources."""
+
+    resources: GitSessionResourceInspection
+    repository: WritingArtifactRepository = field(init=False, repr=False)
+
+    def __post_init__(self) -> None:
+        if type(self.resources) is not GitSessionResourceInspection:
+            raise TypeError("resources must be a GitSessionResourceInspection")
+        if self.resources.state is not GitSessionResourceState.READY:
+            raise ValueError("session artifact resources must be READY")
+        object.__setattr__(
+            self,
+            "repository",
+            WritingArtifactRepository(self.resources.identity.worktree_root),
+        )
+
+
+class SessionArtifactBindingError(RuntimeError):
+    """A content-free failure to bind exact READY session artifact resources."""
+
+
+def compose_session_artifact_binding(
+    root: Path,
+    session_id: str,
+) -> SessionArtifactBinding:
+    """Bind artifacts to one freshly validated READY session worktree."""
+
+    try:
+        resources = require_ready_session_resources(root, session_id)
+    except (
+        ConfigurationError,
+        GitSessionResourceError,
+        SessionIdError,
+        WorkspaceFormatError,
+        WorkspaceSecurityError,
+        WorkspaceVersionUnsupportedError,
+    ):
+        raise SessionArtifactBindingError(
+            "session artifact resources are unavailable"
+        ) from None
+    return SessionArtifactBinding(resources=resources)
 
 
 def _validated_configuration_allowance(root: Path) -> tuple[str, ...]:

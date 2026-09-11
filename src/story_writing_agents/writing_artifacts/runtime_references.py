@@ -48,17 +48,40 @@ def reference_operation_belongs_to_session(
     """Return whether a content-free operation identity embeds this session."""
 
     try:
-        validate_reference_identity(operation_id)
         validate_reference_identity(session_id)
-    except ReferenceAuthorizationError:
+        return reference_operation_session_id(operation_id) == session_id
+    except (ReferenceAuthorizationError, ValueError):
         return False
-    if len(session_id) > 64:
-        return False
-    prefix = f"rr_{len(session_id):02x}_{session_id}_"
-    suffix = operation_id[len(prefix):] if operation_id.startswith(prefix) else ""
-    return len(suffix) == 32 and all(
-        character in "0123456789abcdef" for character in suffix
-    )
+
+
+def reference_operation_session_id(operation_id: str) -> str:
+    """Decode the exact session from one canonical reference-operation ID."""
+
+    try:
+        validate_reference_identity(operation_id)
+        if not operation_id.startswith("rr_"):
+            raise ValueError
+        encoded_length, remainder = operation_id[3:].split("_", 1)
+        if len(encoded_length) != 2 or any(
+            character not in "0123456789abcdef" for character in encoded_length
+        ):
+            raise ValueError
+        session_length = int(encoded_length, 16)
+        if not 1 <= session_length <= 64:
+            raise ValueError
+        session_id = remainder[:session_length]
+        suffix = remainder[session_length:]
+        if (
+            encoded_length != f"{len(session_id):02x}"
+            or len(suffix) != 33
+            or suffix[0] != "_"
+            or any(character not in "0123456789abcdef" for character in suffix[1:])
+        ):
+            raise ValueError
+        validate_reference_identity(session_id)
+    except (ReferenceAuthorizationError, TypeError, ValueError):
+        raise ValueError("reference operation ID is invalid") from None
+    return session_id
 
 
 def _failure_code(

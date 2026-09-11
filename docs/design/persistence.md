@@ -961,8 +961,8 @@ catalog, and application operation acquires both and runs recovery before it
 reads current artifact authority. The private store uses existing
 descriptor-safe storage and is not exported. #520 adds the module-supported
 internal `apply_artifact_changes(request)` repository seam; neither repository
-nor store is exported by a package facade. #491 will separately supply lead/user
-Apply-confirmation authority.
+nor store is exported by a package facade. Runtime separately supplies
+lead/user Apply-confirmation authority.
 
 The seam accepts exactly one frozen `ArtifactApplicationRequest`, never prose,
 a mapping, a mutable wrapper, or a subclass. The request owns its exact
@@ -1020,7 +1020,7 @@ completed or verified before the next repository-owned authoritative access.
 
 This seam neither confirms nor rejects a proposal, refreshes prompt context,
 calls a provider or agent, nor stages or commits Git. Reject and Revise mean
-#491 does not invoke it. A later story-commit action must independently inspect
+runtime does not invoke it. A later story-commit action must independently inspect
 the applied state and obtain fresh Git-specific authority.
 
 The additive `inspect_artifact_application(application_id)` method shares the

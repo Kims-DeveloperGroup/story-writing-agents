@@ -177,12 +177,13 @@ The initial session set is empty. `story init` still creates none of these
 resources. The package-internal #504 provision operation can materialize one
 exact correlated triple while keeping the pristine `main` root invariant;
 #455 owns command wiring. #508 provides internal content-free history evidence;
-#509 owns later story commits, #510 owns checkpoints, and #492 owns their
+#509 owns story commits, #510 owns checkpoints, and runtime owns the separate
 confirmation UI. Session provisioning/history state is separate from both the
 root initialization journal and writing-artifact transaction journals.
 
-Artifact state appears only when its direct repository owner is accessed; no
-current public shell command publishes output. `recovery_blocked.json` appears
+Artifact state appears only when its direct repository owner is accessed; the
+installed Lead path reaches it only after separate review and Apply controls.
+`recovery_blocked.json` appears
 only after artifact recovery cannot be trusted. Staging residue is
 non-authoritative, never catalog-listed, retained after successful and failed
 publication, and may grow. Only exact JSON entries under artifact

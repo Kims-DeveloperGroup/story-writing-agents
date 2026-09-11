@@ -10,7 +10,17 @@ import story_writing_agents
 from story_writing_agents import RuntimeSession, StoryRuntime
 from story_writing_agents import orchestrator as orchestrator_module
 
-from tests.helpers import initialized_workspace
+from story_writing_agents.workspace.initialization import (
+    compose_session_artifact_binding,
+    provision_session_resources,
+)
+from story_writing_agents.writing_artifacts.runtime_references import (
+    prepare_runtime_reference_operation,
+    reference_operation_belongs_to_session,
+    reference_operation_session_id,
+)
+
+from tests.helpers import initialized_workspace, pristine_initialized_workspace
 
 
 REMOVED_RUNTIME_METHODS = (
@@ -163,6 +173,72 @@ class RuntimeExecutionRetirementTests(unittest.TestCase):
                               if parameter.kind is inspect.Parameter.KEYWORD_ONLY),
                         ("action_progress_sink", "authoring_scope", "review_basis"),
                     )
+
+    def test_session_reference_identity_and_persisted_ledger_fail_closed(self) -> None:
+        workspace = pristine_initialized_workspace(self)
+        ready = provision_session_resources(workspace.root, "novel")
+        source = ready.identity.worktree_root / "core_documents/global_outline.md"
+        source.write_text("Session-only reference.\n", encoding="utf-8")
+        binding = compose_session_artifact_binding(workspace.root, "novel")
+        operation = prepare_runtime_reference_operation(
+            binding.repository,
+            session_id="novel",
+            text="Read ${core_documents/global_outline.md}.",
+        )
+        operation_id = operation.operation_id
+        assert operation_id is not None
+
+        self.assertEqual(reference_operation_session_id(operation_id), "novel")
+        self.assertTrue(
+            reference_operation_belongs_to_session(operation_id, "novel")
+        )
+        runtime = StoryRuntime(workspace)
+        history = runtime.inspect_reference_operation(operation_id)
+        self.assertIsNotNone(history)
+        assert history is not None
+        self.assertEqual(history.manifest.operation_id, operation_id)
+        restarted = StoryRuntime(workspace)
+        self.assertEqual(
+            restarted.session("novel").inspect_reference_operation(operation_id),
+            history,
+        )
+
+        foreign_ready = provision_session_resources(workspace.root, "foreign")
+        foreign_source = (
+            foreign_ready.identity.worktree_root
+            / "core_documents/global_outline.md"
+        )
+        foreign_source.write_text("Foreign reference.\n", encoding="utf-8")
+        foreign = prepare_runtime_reference_operation(
+            compose_session_artifact_binding(
+                workspace.root,
+                "foreign",
+            ).repository,
+            session_id="foreign",
+            text="Read ${core_documents/global_outline.md}.",
+        ).operation_id
+        assert foreign is not None
+        with self.assertRaisesRegex(ValueError, "does not belong"):
+            restarted.session("novel").inspect_reference_operation(foreign)
+
+        malformed = (
+            "rr_00__" + "0" * 32,
+            "rr_05_novel_" + "g" * 32,
+            operation_id + "0",
+            "not_an_operation",
+        )
+        for invalid in malformed:
+            with self.subTest(operation_id=invalid):
+                with self.assertRaisesRegex(
+                    ValueError,
+                    "reference operation ID is invalid",
+                ):
+                    reference_operation_session_id(invalid)
+                self.assertFalse(
+                    reference_operation_belongs_to_session(invalid, "novel")
+                )
+                with self.assertRaises(ValueError):
+                    restarted.inspect_reference_operation(invalid)
 
 
 if __name__ == "__main__":

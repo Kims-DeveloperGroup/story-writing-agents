@@ -163,6 +163,10 @@ from ..session_lifecycle import (
     provider_work_is_ready,
 )
 from ..workspace import Workspace
+from ..workspace.initialization import (
+    SessionArtifactBindingError,
+    compose_session_artifact_binding,
+)
 from ._conversation_policy import (
     ConversationCatalogProtocolFailure,
     classify_conversation_failure,
@@ -1817,8 +1821,21 @@ class InteractiveController:
         """List only current canonical writing sources for the main picker."""
 
         try:
-            return self._runtime.artifacts.list_paths()
-        except (OSError, WorkspaceFormatError, WorkspaceSecurityError):
+            if self._attached_session_id is None:
+                raise ReferenceInputFailure(ReferenceInputFailureKind.UNAVAILABLE)
+            artifacts = compose_session_artifact_binding(
+                self._workspace.root,
+                self._attached_session_id,
+            ).repository
+            return artifacts.list_paths()
+        except ReferenceInputFailure:
+            raise
+        except (
+            OSError,
+            SessionArtifactBindingError,
+            WorkspaceFormatError,
+            WorkspaceSecurityError,
+        ):
             raise ReferenceInputFailure(
                 ReferenceInputFailureKind.UNAVAILABLE
             ) from None
@@ -1827,14 +1844,22 @@ class InteractiveController:
         """Read one selected canonical source for the independent range viewer."""
 
         try:
-            return self._runtime.artifacts.read_text(path)
+            if self._attached_session_id is None:
+                raise ReferenceInputFailure(ReferenceInputFailureKind.UNAVAILABLE)
+            artifacts = compose_session_artifact_binding(
+                self._workspace.root,
+                self._attached_session_id,
+            ).repository
+            return artifacts.read_text(path)
+        except ReferenceInputFailure:
+            raise
         except FileNotFoundError:
             raise ReferenceInputFailure(ReferenceInputFailureKind.STALE) from None
         except WorkspaceFormatError:
             raise ReferenceInputFailure(
                 ReferenceInputFailureKind.UNREADABLE
             ) from None
-        except (OSError, WorkspaceSecurityError):
+        except (OSError, SessionArtifactBindingError, WorkspaceSecurityError):
             raise ReferenceInputFailure(
                 ReferenceInputFailureKind.UNAVAILABLE
             ) from None

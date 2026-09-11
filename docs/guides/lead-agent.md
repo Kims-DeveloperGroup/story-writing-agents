@@ -107,8 +107,9 @@ and cannot override these rules.
 | Receive an evidence-grounded answer, question, critique, recommendation, or consultation proposal. | Assume runtime performed semantic conflict detection or proved that every relevant artifact was selected. |
 | Confirm, reject, or revise the exact current proposal. | Confirm with free text such as `Yes`, or replay stale confirmation fields. |
 | Receive an exact runtime-built artifact candidate, confirm review by every disclosed specialist, and receive a reviewed/revise/reject result. | Treat a candidate or reviewed proposal as Apply, write, stage, commit, or Git authority. |
-| Run one to three specialists in parallel after confirmation and receive a typed lead synthesis. | Apply a proposed core-document or manuscript edit through this API. |
-| Request one direct specialist advisory without a lead planning call. | Stage or commit files, push, merge, or mutate a remote. |
+| Run one to three specialists in parallel after confirmation and receive a typed lead synthesis. | Treat consultation or review confirmation as Apply or Commit authority. |
+| Separately confirm exact Apply and local Commit requests through the installed shell or public runtime methods. | Push, merge, mutate a remote, or give a provider direct write/Git authority. |
+| Request one direct specialist advisory without a lead planning call. | Bypass the exact ready session-worktree requirement or fall back to `main`. |
 | Reconfirm safe pre-start work after restart and locally finalize known results without replay. | Automatically retry an uncertain submitted provider call. |
 
 Local provider request/response diagnostics, collaboration events, and
@@ -1635,6 +1636,19 @@ reviewed artifact proposal
 The lead is the semantic trigger and user-facing coordinator at every step;
 runtime code is the only executor. Consultation confirmation never doubles as
 Apply or Commit confirmation.
+
+`StoryRuntime` is constructed from the initialized `main` control workspace,
+but every artifact read, reference, proposal check, Apply, application-ledger
+lookup, and recovery operation freshly binds the exact READY session worktree.
+The interactive picker uses the exact attached session as well. There is no
+fallback to the control root, current directory, or another session and no
+automatic provisioning. A binding failure occurs before provider or artifact
+I/O; if resources are lost after Apply confirmation, runtime durably reports
+`recovery_required` / `operator_recovery` without attempting the write.
+
+Commit has separate authority and independently revalidates the same session
+worktree and branch. Providers receive only bounded context/reference access;
+they never receive repository, write, or Git authority.
 
 Only a matching successful Apply satisfies the authoring objective. Before
 that result, rejection, revision, staleness, or failure leaves it open. A

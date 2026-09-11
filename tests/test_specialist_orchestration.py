@@ -382,7 +382,7 @@ class SpecialistExecutionAcceptanceTests(LeadOrchestrationTestCase):
             len(_payloads(history, CollaborationTerminalOutcomePayload)), 2
         )
         restarted_backend = _LeadBackend()
-        restarted = StoryRuntime(self.workspace, restarted_backend)  # type: ignore[arg-type]
+        restarted = StoryRuntime(self.control_workspace, restarted_backend)  # type: ignore[arg-type]
         finalized = await restarted.lead_turn(
             self.session_id,
             conversation_id,
@@ -463,7 +463,7 @@ class SpecialistExecutionAcceptanceTests(LeadOrchestrationTestCase):
         self.assertIs(execution.assignment_outcomes[0].outcome, CollaborationAssignmentOutcomeKind.SUCCEEDED)
         self.assertEqual(len(_payloads(history, CollaborationSpecialistReplyPayload)), 1)
         backend = _LeadBackend()
-        restarted = StoryRuntime(self.workspace, backend)
+        restarted = StoryRuntime(self.control_workspace, backend)
         result = await restarted.lead_turn(self.session_id, conversation, "Inspect the cancelled result.")
         self.assertIs(result.state, CollaborationStepState.INTERRUPTED)
         self.assertEqual(backend.calls, [])
@@ -735,7 +735,7 @@ class SpecialistExecutionAcceptanceTests(LeadOrchestrationTestCase):
 
         self.assertIs(decision.turn.state, CollaborationStepState.OUTCOME_UNKNOWN)
         restarted_backend = _LeadBackend()
-        restarted = StoryRuntime(self.workspace, restarted_backend)  # type: ignore[arg-type]
+        restarted = StoryRuntime(self.control_workspace, restarted_backend)  # type: ignore[arg-type]
         recovery = await restarted.lead_turn(
             self.session_id,
             conversation_id,

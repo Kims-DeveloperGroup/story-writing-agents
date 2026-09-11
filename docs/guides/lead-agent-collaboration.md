@@ -48,6 +48,22 @@ Specialists are isolated. A Plot assignment cannot use a Character reply as if
 it were its own evidence, and a specialist never becomes a second user-facing
 lead.
 
+### Session worktree boundary
+
+The initialized `main` workspace is the runtime's control root: configuration,
+conversation history, and diagnostics stay there. Story artifacts do not.
+Before every artifact-sensitive operation, runtime freshly verifies the exact
+branch, internal ref, and sibling worktree for the selected session and binds
+the operation only to that worktree. The picker follows the currently attached
+session, and switching or concurrent sessions never reuse another session's
+artifact source or application ledger.
+
+There is no fallback to `main`, the shell's current directory, or a previous
+session, and a Lead call does not provision missing resources. If the exact
+session binding is absent or unsafe, runtime reports a content-free failure
+before any provider or artifact I/O. Create or reopen the session resources,
+or follow operator recovery when the identity has drifted.
+
 ## The normal request flow
 
 ```text
@@ -625,17 +641,21 @@ candidate, not an applied file. The next sequence is always separate:
 Lead: Reviewed candidate is ready. Apply it?
 You: structured Apply confirmation
 Runtime: revalidates the candidate and current artifact state, writes the exact
-         disclosed paths atomically, and reports the application result.
+         disclosed paths atomically in this session's worktree, and reports
+         the application result.
 
 Lead: The artifact change applied successfully. Create the local story commit?
 You: structured Commit confirmation
 Runtime: stages only the disclosed changed paths and commits the local session
-         branch. It does not push, merge, or mutate a remote.
+         branch after independently revalidating the same worktree. It does not
+         push, merge, or mutate a remote.
 ```
 
 Reject or Revise at Apply leaves the reviewed candidate unapplied. A stale
 candidate is not applied; the lead must prepare a new one. Commit confirmation
-is not implied by Apply confirmation.
+is not implied by Apply confirmation. If the exact session resources disappear
+after Apply confirmation but before artifact I/O, runtime attempts no write
+and durably returns `recovery_required` with `operator_recovery`.
 
 ## Scenario 6: ordinary discussion
 
@@ -946,7 +966,9 @@ When collaborating with the lead:
 5. Treat a reviewed candidate as unchanged until Apply is separately confirmed.
 6. Treat an applied candidate as uncommitted until Commit is separately
    confirmed.
-7. Follow the displayed state-specific next action after interruption or
+7. Confirm the currently attached session and its ready worktree before
+   artifact-sensitive work; never use `main` as a story-work fallback.
+8. Follow the displayed state-specific next action after interruption or
    failure.
 
 ## Issue #583 integration evidence

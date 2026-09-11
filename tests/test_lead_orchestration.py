@@ -69,6 +69,7 @@ from story_writing_agents.writing_artifacts.read_actions import (
     ReferenceReadAction,
     ReferenceReadActionKind,
 )
+from story_writing_agents.workspace.initialization import provision_session_resources
 
 from tests.collaboration_contract_fixture import contract_batches
 from story_writing_agents.specialist_routing import AuthoringScope, AuthoringActivity, ArtifactReviewDomain, ReviewBasis
@@ -757,7 +758,14 @@ class LeadOrchestrationTestCase(unittest.IsolatedAsyncioTestCase):
     def setUp(self) -> None:
         temporary = tempfile.TemporaryDirectory(prefix="lead-orchestration-")
         self.addCleanup(temporary.cleanup)
-        self.workspace = Workspace(temporary.name).initialize()
+        self.control_workspace = Workspace(f"{temporary.name}/story").initialize()
+        self.session_id = "story_session"
+        ready = provision_session_resources(
+            self.control_workspace.root,
+            self.session_id,
+        )
+        self.session_resources = ready
+        self.workspace = Workspace(ready.identity.worktree_root).require_ready()
         self.workspace.path("core_documents/global_outline.md").write_text(
             "Outline first line.\nOutline second line.\n",
             encoding="utf-8",
@@ -773,8 +781,10 @@ class LeadOrchestrationTestCase(unittest.IsolatedAsyncioTestCase):
             encoding="utf-8",
         )
         self.backend = _LeadBackend()
-        self.runtime = StoryRuntime(self.workspace, self.backend)  # type: ignore[arg-type]
-        self.session_id = "story_session"
+        self.runtime = StoryRuntime(  # type: ignore[arg-type]
+            self.control_workspace,
+            self.backend,
+        )
 
     def conversation(self, subject: str = "Lead collaboration") -> str:
         return self.runtime.conversation_storage_services.catalog.create(
@@ -1433,7 +1443,7 @@ class LeadRecoveryAndAccountingTests(LeadOrchestrationTestCase):
         self.assertEqual(len(self.backend.calls), before_calls)
         confirmed_history = self.history(conversation_id)
         restart_backend = _LeadBackend()
-        restarted = StoryRuntime(self.workspace, restart_backend)  # type: ignore[arg-type]
+        restarted = StoryRuntime(self.control_workspace, restart_backend)  # type: ignore[arg-type]
 
         restored = await restarted.lead_turn(self.session_id, conversation_id, "Resume safely.")
 
@@ -1525,7 +1535,7 @@ class LeadRecoveryAndAccountingTests(LeadOrchestrationTestCase):
                     self.session_id, conversation_id, "Inspect confirmation."
                 )
                 restart_backend = _LeadBackend()
-                restarted = StoryRuntime(self.workspace, restart_backend)  # type: ignore[arg-type]
+                restarted = StoryRuntime(self.control_workspace, restart_backend)  # type: ignore[arg-type]
                 restored = await restarted.lead_turn(
                     self.session_id, conversation_id, "Resume confirmation."
                 )
@@ -1659,7 +1669,7 @@ class LeadRecoveryAndAccountingTests(LeadOrchestrationTestCase):
         for label, initial_script, rejection_code in cases:
             with self.subTest(label=label):
                 backend = _LeadBackend(persist_context_threads=True)
-                runtime = StoryRuntime(self.workspace, backend)  # type: ignore[arg-type]
+                runtime = StoryRuntime(self.control_workspace, backend)  # type: ignore[arg-type]
                 conversation_id = self.conversation(f"Same-turn correction {label}")
                 backend.enqueue(*initial_script)
                 correction_records: list[tuple[str, str, str]] = []
@@ -1760,7 +1770,7 @@ class LeadRecoveryAndAccountingTests(LeadOrchestrationTestCase):
                 )
 
         backend = _LeadBackend()
-        runtime = StoryRuntime(self.workspace, backend)  # type: ignore[arg-type]
+        runtime = StoryRuntime(self.control_workspace, backend)  # type: ignore[arg-type]
         conversation_id = self.conversation("No correction needed")
         backend.enqueue(_visible_outcome("answer", "First response accepted."))
         result = await runtime.lead_turn(
@@ -1776,7 +1786,7 @@ class LeadRecoveryAndAccountingTests(LeadOrchestrationTestCase):
         self,
     ) -> None:
         backend = _LeadBackend(persist_context_threads=True)
-        runtime = StoryRuntime(self.workspace, backend)  # type: ignore[arg-type]
+        runtime = StoryRuntime(self.control_workspace, backend)  # type: ignore[arg-type]
         conversation_id = self.conversation("Pre-submission correction failure")
         rejected_body = "PRE_SUBMISSION_REJECTED_BODY"
 
@@ -1885,7 +1895,7 @@ class LeadRecoveryAndAccountingTests(LeadOrchestrationTestCase):
 
     async def test_second_returned_rejection_closes_against_last_call(self) -> None:
         backend = _LeadBackend(persist_context_threads=True)
-        runtime = StoryRuntime(self.workspace, backend)  # type: ignore[arg-type]
+        runtime = StoryRuntime(self.control_workspace, backend)  # type: ignore[arg-type]
         conversation_id = self.conversation("Second rejection closes")
 
         def malformed(message: str):
@@ -1962,7 +1972,7 @@ class LeadRecoveryAndAccountingTests(LeadOrchestrationTestCase):
 
     async def test_reference_response_correction_renews_authority(self) -> None:
         backend = _LeadBackend(persist_context_threads=True)
-        runtime = StoryRuntime(self.workspace, backend)  # type: ignore[arg-type]
+        runtime = StoryRuntime(self.control_workspace, backend)  # type: ignore[arg-type]
         conversation_id = self.conversation("Referenced correction")
 
         def incomplete(call: ContextProviderCallRequest, _provider: object) -> str:
@@ -2071,7 +2081,7 @@ class LeadRecoveryAndAccountingTests(LeadOrchestrationTestCase):
         for label, response, expected_code in cases:
             with self.subTest(label=label):
                 backend = _LeadBackend()
-                runtime = StoryRuntime(self.workspace, backend)  # type: ignore[arg-type]
+                runtime = StoryRuntime(self.control_workspace, backend)  # type: ignore[arg-type]
                 conversation_id = self.conversation(label)
                 backend.enqueue(response)
                 with mock.patch.object(
@@ -2113,7 +2123,7 @@ class LeadRecoveryAndAccountingTests(LeadOrchestrationTestCase):
         )
         restart_backend = _LeadBackend()
         restart_backend.enqueue(_visible_outcome("answer"))
-        restarted = StoryRuntime(self.workspace, restart_backend)  # type: ignore[arg-type]
+        restarted = StoryRuntime(self.control_workspace, restart_backend)  # type: ignore[arg-type]
 
         result = await restarted.lead_turn(
             self.session_id,
@@ -2130,7 +2140,7 @@ class LeadRecoveryAndAccountingTests(LeadOrchestrationTestCase):
             with self.subTest(stage=stage):
                 conversation = self.conversation(stage)
                 backend = _LeadBackend(bind_failure=RuntimeError("bind failed") if stage == "unstarted" else None)
-                runtime = StoryRuntime(self.workspace, backend)
+                runtime = StoryRuntime(self.control_workspace, backend)
                 if stage == "unstarted":
                     with self.assertRaisesRegex(RuntimeError, "bind failed"):
                         await runtime.lead_turn(self.session_id, conversation, "Retain the original request.")
@@ -2146,7 +2156,7 @@ class LeadRecoveryAndAccountingTests(LeadOrchestrationTestCase):
                 self.assertEqual(project_collaboration_history(prefix).physical_calls_spent, 0)
                 restarted_backend = _LeadBackend()
                 restarted_backend.enqueue(_visible_outcome("answer"))
-                restarted = StoryRuntime(self.workspace, restarted_backend)
+                restarted = StoryRuntime(self.control_workspace, restarted_backend)
                 result = await restarted.lead_turn(self.session_id, conversation, "Explicit new request.")
                 self.assertIs(result.kind, LeadOutcomeKind.ANSWER)
                 self.assertEqual(len(restarted_backend.calls), 1)
@@ -2166,7 +2176,7 @@ class LeadRecoveryAndAccountingTests(LeadOrchestrationTestCase):
             for label, failure_factory in cases:
                 with self.subTest(corrective=corrective, failure=label):
                     backend = _LeadBackend(persist_context_threads=True)
-                    runtime = StoryRuntime(self.workspace, backend)
+                    runtime = StoryRuntime(self.control_workspace, backend)
                     conversation = self.conversation(f"{corrective}-{label}")
                     original = f"Retain original {corrective}-{label} request."
                     if corrective:
@@ -2200,7 +2210,7 @@ class LeadRecoveryAndAccountingTests(LeadOrchestrationTestCase):
                         self.assertEqual(backend.tainted_thread_ids, ["thread-lead-1"])
                     restarted_backend = _LeadBackend()
                     restarted_backend.enqueue(_visible_outcome("answer"))
-                    restarted = StoryRuntime(self.workspace, restarted_backend)
+                    restarted = StoryRuntime(self.control_workspace, restarted_backend)
                     result = await restarted.lead_turn(self.session_id, conversation, "Explicit retry after failure.")
                     self.assertIs(result.kind, LeadOutcomeKind.ANSWER)
                     self.assertEqual(len(restarted_backend.calls), 1)
@@ -2379,14 +2389,18 @@ class LeadBudgetFinalizationTests(LeadOrchestrationTestCase):
         projection = project_collaboration_history(known)
         self.assertIs(projection.current_state, CollaborationStepState.RUNNING)
         backend = _LeadBackend()
-        restarted = StoryRuntime(self.workspace, backend)  # type: ignore[arg-type]
+        restarted = StoryRuntime(self.control_workspace, backend)  # type: ignore[arg-type]
         restored = await restarted.lead_turn(self.session_id, conversation, "Recover completed work.")
         self.assertIs(restored.state, CollaborationStepState.COMPLETED)
         self.assertEqual(backend.calls, [])
         complete = self.history(conversation)
         self.assertEqual(complete[:len(known)], known)
         self.assertEqual(len(complete), len(known) + 2)
-        repeated = restarted._finalize_known_result_locked(known, projection)
+        repeated = restarted._finalize_known_result_locked(
+            self.session_id,
+            known,
+            projection,
+        )
         self.assertEqual(repeated, restored)
         self.assertEqual(self.history(conversation), complete)
         self.assertEqual(backend.calls, [])
@@ -2440,7 +2454,7 @@ class LeadReferenceFailurePrecedenceTests(LeadOrchestrationTestCase):
 
     def reference_case(self, subject):
         backend = _LeadBackend(persist_context_threads=True)
-        runtime = StoryRuntime(self.workspace, backend)
+        runtime = StoryRuntime(self.control_workspace, backend)
         conversation_id = self.conversation(subject)
         return runtime, backend, conversation_id
 
@@ -2659,7 +2673,7 @@ class LeadReferenceFailurePrecedenceTests(LeadOrchestrationTestCase):
             self.assertIs(result.state, CollaborationStepState.RECOVERY_REQUIRED)
             self.assertIs(result.next_action, CollaborationNextAction.REPAIR_AUTHORITATIVE_HISTORY)
             prefix = self.history(conversation_id)
-            restarted = StoryRuntime(self.workspace, backend)
+            restarted = StoryRuntime(self.control_workspace, backend)
             blocked = await restarted.lead_turn(self.session_id, conversation_id,
                 "Wait until the failure can be recorded.")
             self.assertIs(blocked.state, CollaborationStepState.RECOVERY_REQUIRED)

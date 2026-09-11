@@ -18,12 +18,12 @@ Package root: `src/story_writing_agents/`
 
 Importable production units indexed: 142.
 
-Direct internal dependency edges indexed: 565.
+Direct internal dependency edges indexed: 567.
 
 Directed internal dependency cycles indexed: 0.
 
 Edge and cycle totals exclude annotation-only `TYPE_CHECKING` imports. The
-all-import AST graph has 567 edges. Its two annotation-only edges are
+all-import AST graph has 569 edges. Its two annotation-only edges are
 `config -> workspace` and `interactive_terminal._core -> conversations`; the
 workspace cycle was already present in the 135-unit baseline
 (528 all-import / 526 runtime edges).
@@ -93,6 +93,7 @@ interactive_controller._core -> interactive_controller._session_policy
                              -> agent_exchanges/agents/backend/cli_context/debug_log
                              -> conversation_search
                              -> conversation_storage.contracts/selection
+                             -> workspace.initialization
                              -> conversations/errors/interactive_commands
                              -> interactive_auth/interactive_settings/interactive_terminal
                              -> orchestrator/provider_adapter/provider_auth
@@ -296,6 +297,7 @@ workspace.core -> agents/conversations/errors/models
 workspace.initialization -> agent_exchange_paths/config/errors/git/git.session_checkpoints
                          -> git.session_contracts/git.session_history/git.session_resources/git.story_commits
                          -> runtime_state_paths/workspace._policy_baselines/workspace.schema
+                         -> writing_artifacts.repository
 workspace._policy_baselines -> (immutable data only)
 workspace.schema -> agents/errors/git.session_contracts
 writing_artifacts -> writing_artifacts.application_contracts/authorization/catalog
@@ -5061,8 +5063,13 @@ every intermediate arrow. The current runtime graph is acyclic.
   specialist route, or duplicated artifact/Git execution path. The controller
   delegates ordinary input to its private lead adapter and passes exact input
   text to the session-bound runtime. Focused main input binds the established
-  reference-aware terminal route to the runtime artifact repository's safe
-  recursive path inventory and bounded viewer read; the submitted line retains
+  reference-aware terminal route to a freshly READY-validated repository at
+  the exact attached session worktree for safe recursive path inventory and
+  bounded viewer reads; unavailable or malformed bindings fail closed without
+  falling back to the control root. Only the typed session-binding failure and
+  established workspace/storage failures are projected as unavailable;
+  unexpected protocol or programming failures retain the normal fatal path.
+  The submitted line retains
   only canonical whole-file or line-range indicators. It consumes the session
   policy's exact transition values and
   fixed content-safe denial projection without adding a direct assessor-module
@@ -5083,7 +5090,7 @@ every intermediate arrow. The current runtime graph is acyclic.
   `interactive_controller._session_policy`, `interactive_settings`,
   `interactive_terminal`, `orchestrator`,
   `provider_adapter`, `provider_auth`, `provider_catalog`,
-  `session_lifecycle`, and `workspace`.
+  `session_lifecycle`, `workspace`, and `workspace.initialization`.
 - **State, resources, and side effects:** Owns shell attachment/focus, input,
   picker, settings-progress, one attachment-scoped
   `CollaborationHistoryService`, and cleanup state. `/search` returns only
@@ -7015,12 +7022,23 @@ every intermediate arrow. The current runtime graph is acyclic.
   `writing_artifacts.runtime_references`.
 - **State, resources, and side effects:** Retains workspace, prompt/config, one
   composed v2 `ConversationStorageServices` bundle, optional RAG service,
-  artifact repository, backend snapshot, one workspace-scoped
+  a construction-compatible control-root artifact repository with no internal
+  session authority, backend snapshot, one workspace-scoped
   `AgentContextService`, consensus material and workflow stores, one consensus
   runtime adapter, exact phase-request provider-task ownership, quiescent
   binding state, per-conversation async locks,
   private confirmed-step, recommendation, and artifact-application capabilities,
   and live execution-attempt markers.
+  Every artifact-sensitive top-level operation freshly requires the exact
+  READY session resource identity and constructs a call-local repository at
+  that session worktree. Reference lookup, evidence capture/revalidation,
+  candidate construction, Apply, and artifact-ledger inspection never fall
+  back to the control root. Private review/input/finalization consumers receive
+  the enclosing authoritative session explicitly and reject every event tuple
+  containing another session before artifact access. A known READY-binding
+  failure after durable Apply confirmation produces the existing durable
+  recovery-required/operator-recovery no-write result. Provider seams receive only bounded reference and
+  context capabilities, never a repository, root, write, or Git capability.
   Runtime and bound sessions expose the same storage bundle; no raw
   schema-v1 event-store injection or property remains. Explicit lead turns may
   bind the lead, authorize ordered references and optional context evidence,
@@ -7574,6 +7592,8 @@ every intermediate arrow. The current runtime graph is acyclic.
   initialization and readiness lifecycle.
 - **Supported surface:** Internal-only `WorkspaceRootState`,
   `WorkspaceRootRole`, `WorkspaceRootInspection`, `WorkspaceRootDiscovery`,
+  `SessionArtifactBinding`, `SessionArtifactBindingError`,
+  `compose_session_artifact_binding`,
   the inspect/initialize/require-ready and typed nearest-discovery operations,
   plus bounded `inspect_session_resources`, `inspect_session_history`,
   `compose_story_commit_service`, `compose_session_checkpoint_service`,
@@ -7583,7 +7603,8 @@ every intermediate arrow. The current runtime graph is acyclic.
   exports them.
 - **Direct internal dependencies:** `agent_exchange_paths`, `config`, `errors`, the public `git` facade,
   `git.session_checkpoints`, `git.session_contracts`, `git.session_history`,
-  `git.session_resources`, `git.story_commits`, `runtime_state_paths`, and
+  `git.session_resources`, `git.story_commits`, `runtime_state_paths`,
+  `writing_artifacts.repository`, and
   `workspace._policy_baselines`/`workspace.schema`.
 - **State, resources, and side effects:** Classifies absent, empty,
   journal-backed initializing, exact ready-v2, unsupported, and recovery states
@@ -7613,7 +7634,7 @@ every intermediate arrow. The current runtime graph is acyclic.
   or descend into unknown files, directories, symlinks, nonregular entries, or
   optional owner state; ignored and untracked Git entries do not affect
   readiness, while staged or tracked unknown entries require recovery. Optional
-  state content is validated only by its owning consumer. All seven session
+  state content is validated only by its owning consumer. All eight session
   resource/history and commit/checkpoint composition seams freshly select the
   same known manifest from the main root through descriptor-bound no-follow
   policy reads and root-identity rechecks. Session inspect,
@@ -7629,6 +7650,12 @@ every intermediate arrow. The current runtime graph is acyclic.
   checks enforce its fixed root message, parent, tree, index, and topology.
   Schema-only empty runtime directories are main-initializer resources
   and are not required in a Git-materialized session root.
+  `compose_session_artifact_binding` first performs that same fresh exact READY
+  validation and then returns an immutable call-local binding whose repository
+  is rooted at the validated session worktree. It performs no fallback,
+  provisioning, global mutation, provider work, or repository I/O during
+  construction. Known readiness and workspace-validation failures become the
+  content-free typed binding error; type/protocol defects are not normalized.
   Strict absent, empty, and journal-backed initialization retains the recursive
   snapshot, current-only scaffold, and registered runtime-directory predicates.
   No existing workspace or Git bytes are rewritten for baseline admission. Exact
@@ -8092,7 +8119,8 @@ every intermediate arrow. The current runtime graph is acyclic.
   correlated provider invocations, and terminal finalization.
 - **Supported surface:** Package-internal `RuntimeReferenceOperation`,
   `prepare_runtime_reference_operation`, and
-  `reference_operation_belongs_to_session`; none is re-exported by the
+  `reference_operation_belongs_to_session`, plus the exact fail-closed
+  `reference_operation_session_id` decoder; none is re-exported by the
   writing-artifact or project-root facade. Preparation preserves exact source
   and provider-text projections and uses a no-operation-ID fast path when no
   references exist. Each referenced provider attempt receives a fresh
@@ -8417,7 +8445,7 @@ every intermediate arrow. The current runtime graph is acyclic.
 
 ## Consistency Notes
 
-- The combined runtime has 140 production units, 555 runtime edges, 557
+- The combined runtime has 142 production units, 567 runtime edges, 569
   all-import edges, and no directed runtime cycle. Whole-source path parity is
   exact. Specialist routing adds one pure module and five net inward runtime
   edges over the provider-recovery baseline: artifact proposals replace their
@@ -8430,10 +8458,10 @@ every intermediate arrow. The current runtime graph is acyclic.
   selected-task inheritance; it adds no task store, resource owner, import
   edge, or public export beyond the recorded routing contracts.
 - Known v2 workspace admission adds the private `workspace._policy_baselines`
-  data leaf and one inward initialization dependency. Readiness and all seven
+  data leaf and one inward initialization dependency. Readiness and all eight
   workspace session composition seams select only the current or exact
-  published pre-routing, artifact-objective, or main640 policy baseline; current initialization remains
-  unchanged. No schema migration, arbitrary baseline adoption, or Git-owner
+  published pre-routing, artifact-objective, or main640 policy baseline; root
+  initialization remains unchanged. No schema migration, arbitrary baseline adoption, or Git-owner
   invariant relaxation is introduced.
 - Provider timeout and Lead recovery contribute the inward
   `cli -> provider_adapter` shared-default edge and retain their exact failed

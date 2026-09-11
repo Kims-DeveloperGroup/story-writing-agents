@@ -125,6 +125,8 @@ from story_writing_agents.interactive_terminal import (
     INTERACTIVE_ERROR_SPECS,
     InteractiveErrorCode,
     InteractiveTerminal,
+    ReferenceInputFailure,
+    ReferenceInputFailureKind,
 )
 from story_writing_agents.provider_auth import (
     AUTH_PROVIDERS,
@@ -161,6 +163,10 @@ from story_writing_agents.session_recovery.transition_assessment import (
 from story_writing_agents.orchestrator import RuntimeSession
 from story_writing_agents.workspace import (
     Workspace,
+)
+from story_writing_agents.workspace.initialization import (
+    SessionArtifactBindingError,
+    require_ready_session_resources,
 )
 
 from tests.collaboration_contract_fixture import STEP_ID, contract_batches, make_proposal
@@ -2230,6 +2236,72 @@ class ControllerConversationStartupTests(ControllerTestCase):
         self.assertEqual(
             load_default_conversation(workspace, "session"),
             metadata.conversation_id,
+        )
+
+    def test_reference_picker_switches_exact_session_and_masks_only_known_failures(
+        self,
+    ) -> None:
+        workspace = self.make_workspace()
+        for session_id, content in (
+            ("source", "Source-only outline.\n"),
+            ("destination", "Destination-only outline.\n"),
+        ):
+            self.seed_session(
+                workspace,
+                session_id,
+                durable_state=SessionDurableState.READY,
+            )
+            ready = require_ready_session_resources(workspace.root, session_id)
+            ready.identity.worktree_root.joinpath(
+                "core_documents/global_outline.md"
+            ).write_text(content, encoding="utf-8")
+
+        controller, _backend, _callbacks = self.make_controller(workspace)
+        for session_id, expected in (
+            ("source", "Source-only outline.\n"),
+            ("destination", "Destination-only outline.\n"),
+            ("source", "Source-only outline.\n"),
+        ):
+            with self.subTest(session_id=session_id):
+                controller._attached_session_id = session_id
+                self.assertIn(
+                    "core_documents/global_outline.md",
+                    controller._lead_reference_paths(),
+                )
+                self.assertEqual(
+                    controller._lead_reference_text(
+                        "core_documents/global_outline.md"
+                    ),
+                    expected,
+                )
+
+        with mock.patch.object(
+            controller_core_module,
+            "compose_session_artifact_binding",
+            side_effect=SessionArtifactBindingError(
+                "session artifact resources are unavailable"
+            ),
+        ):
+            with self.assertRaises(ReferenceInputFailure) as caught:
+                controller._lead_reference_paths()
+        self.assertIs(caught.exception.kind, ReferenceInputFailureKind.UNAVAILABLE)
+
+        with mock.patch.object(
+            controller_core_module,
+            "compose_session_artifact_binding",
+            side_effect=TypeError("unexpected binding defect"),
+        ):
+            with self.assertRaisesRegex(TypeError, "unexpected binding defect"):
+                controller._lead_reference_text(
+                    "core_documents/global_outline.md"
+                )
+
+        controller._attached_session_id = None
+        with self.assertRaises(ReferenceInputFailure) as detached:
+            controller._lead_reference_paths()
+        self.assertIs(
+            detached.exception.kind,
+            ReferenceInputFailureKind.UNAVAILABLE,
         )
 
     def test_malformed_or_unsafe_initial_selection_aborts_and_detaches(self) -> None:

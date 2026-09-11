@@ -236,7 +236,11 @@ class LeadArtifactObjectiveTests(objectives.ObjectiveCase):
                 conversation_id, _ = await self.start()
                 prepared = await self.prepare(conversation_id)
                 reviewed = await self.review(prepared)
-                with mock.patch.object(self.runtime.artifacts, "apply_artifact_changes", side_effect=ArtifactApplicationError(code)):
+                with mock.patch.object(
+                    type(self.runtime.artifacts),
+                    "apply_artifact_changes",
+                    side_effect=ArtifactApplicationError(code),
+                ):
                     await self.apply(reviewed)
                 history, calls, before = self.history(conversation_id), len(self.backend.calls), self.snapshots()
                 for runtime in (self.runtime, StoryRuntime(self.workspace, self.backend)):

@@ -8,7 +8,7 @@
 > `$`/`$$` activates canonical selection and ranged viewing. Existing artifacts and
 > reference-operation evidence remain inspectable through direct components.
 > The pure exact change-set and relationship-policy contracts documented below
-> remain available independently of those inactive runtime workflows.
+> remain available independently of their installed runtime callers.
 
 This reference uses **writing artifact path** for the canonical story-output
 topology. A current source at one of those paths may be manual or
@@ -91,10 +91,12 @@ grants none of their authority.
 > exact request and may persist it through the private #519 store. Neither the
 > value contract nor repository seam asks a user or agent for confirmation,
 > calls a provider, changes prompt context, or stages or commits Git. They are
-> not an installed CLI command or lead-agent action.
+> not standalone installed commands or provider/lead capabilities. The runtime
+> invokes this seam only after its separate exact Apply decision boundary.
 
-In the later workflow, #491 will create an `ArtifactApplicationRequest` only after
-the user separately confirms **Apply** for one reviewed candidate. The request
+The installed Lead workflow creates an `ArtifactApplicationRequest` for one
+reviewed candidate and invokes the repository only after the user separately
+confirms **Apply**. The request
 then carries the exact content-bearing `ArtifactChangeSet` that the repository
 may apply. Possessing, constructing, or deserializing this value is not proof of
 confirmation and grants no provider, agent, or Git authority.
@@ -115,8 +117,8 @@ The immutable provenance keeps the later application tied to the review facts:
 The contract validates shapes and the embedded change-set correlation. It does
 not look up a candidate or determine whether Apply was confirmed. The repository
 does reread the complete canonical state and recompute the relationship result
-under its lease before writing; #491 remains responsible for creating authority
-only after confirmation.
+under its lease before writing; runtime remains responsible for creating
+authority only after confirmation.
 
 ### Public Python surface
 
@@ -340,11 +342,11 @@ exact canonical fields is the only accepted form.
 
 The package-internal #509 story-commit service consumes a typed
 `StoryCommitApplicationEvidence` only after some owning workflow has applied the
-exact change set successfully. #491 will produce that evidence; it is not a
-public writing-artifacts export or current CLI/lead behavior. Applying artifact
-files and committing them remain separate operations: Apply never stages or
-commits, and a change-set value or application receipt is not user confirmation
-or Git authority.
+exact change set successfully. The installed Lead runtime produces that
+evidence internally; it is not a public writing-artifacts export. Applying
+artifact files and committing them remain separate operations: Apply never
+stages or commits, and a change-set value or application receipt is not user
+confirmation or Git authority.
 
 The evidence binds the session/application/proposal/correlation IDs, complete
 `ArtifactChangeSet`, and its exact projected-state digest. Candidate preparation
@@ -1425,14 +1427,16 @@ evidence namespace are safe.
 
 ## What a user can change
 
-No current public command changes an artifact. Users can ask the Python lead to
-critique or recommend a change, construct an exact artifact candidate, confirm
-its specialist review, and inspect an immutable reviewed proposal. Users can
+Users can ask the Python or installed interactive Lead to critique or
+recommend a change, construct an exact artifact candidate, confirm its
+specialist review, and inspect an immutable reviewed proposal. A separate
+structured Apply decision can publish that exact reviewed change in the
+correlated session worktree. Review confirmation alone does not apply the
+candidate, and providers never receive filesystem or Git authority. Users can
 also prepare or inspect safe canonical files directly while no workspace
-process is active. A lead decision authorizes only the disclosed review; it
-does not apply the candidate. A manual file has no agent-produced provenance.
+process is active. A manual file has no agent-produced provenance.
 
-The later execution/publication workflow is expected to support:
+The implemented execution/publication workflow supports:
 
 - an outline request can lead the lead orchestrator to publish full replacements
   for `global_outline.md` or `part_outlines.md`;
@@ -1503,7 +1507,7 @@ identity in [Exact output paths](#exact-output-paths).
 
 | State | Source behavior | Publication behavior |
 | --- | --- | --- |
-| Absent | The path is not listed, viewable, referenceable, or available to contextual source capture. | `apply_artifact_changes()` or the temporary native caller may create it when an exact request and policy permit. No installed UI invokes that seam yet. |
+| Absent | The path is not listed, viewable, referenceable, or available to contextual source capture. | `apply_artifact_changes()` may create it when an exact request and policy permit; the installed Lead path reaches that seam only after separate review and Apply decisions. |
 | Present and safe | The path is listed. Opening captures current bytes with strict UTF-8/NUL and 8 MiB checks; role-allowlisted core files can enter contextual P2 selection. Empty whole-file references are valid. | If catalog/application-ledger metadata matches, it may also be a current applied artifact. Source use alone does not establish that fact. |
 | Manual, pre-provenance, or hash-divergent | It has the same source behavior as any other present safe file. A changed core file changes its context revision and can force delta/bootstrap. | No provenance is fabricated or adopted. Its current bytes can make an exact create/update/delete request stale before journaling. |
 | Unsafe or unsupported | It is excluded during metadata discovery when the failure is entry-local; an exact open fails closed. A listed file whose bytes later prove oversized, invalid UTF-8, or NUL-containing fails when opened. | It cannot be published through the unsafe identity. |
@@ -1531,10 +1535,10 @@ canonical story sources.
 The #519 private persistence owner now sits beneath the #520
 `WritingArtifactRepository.apply_artifact_changes()` seam. The repository is a
 module-supported internal component, not a package-facade export or installed
-CLI command. It accepts application authority but does not obtain it: #491 will
-supply the separate lead/user Apply-confirmation workflow. It has no provider,
-agent, context, or Git entry point. The retained `commit_consensus` method is
-only a temporary translator for its existing native caller.
+CLI command. It accepts application authority but does not obtain it: the
+runtime supplies the separate lead/user Apply-confirmation workflow. It has no
+provider, agent, context, or Git entry point. The retained `commit_consensus`
+method is only a compatibility translator for its existing native caller.
 
 Repository construction remains I/O-free. Every authoritative catalog,
 canonical-source, explicit-reference, and application operation then uses one
@@ -1636,9 +1640,9 @@ effects. Call `catalog()` separately when current membership is needed.
 | Repair one incomplete core document with a patch to `core_documents/character_sheets.md`, with that core path attached to the reviewed evidence. | `applied`; one affected path and one final core path/kind/SHA-256 fact. The repository does not claim that a lead obtained confirmation. |
 | Replace `manuscript/part-01/opening.md` after review against the sorted attached paths `core_documents/character_sheets.md` and `core_documents/narrative_rules.md`. | `applied`; the manuscript path and final digest. Attached core paths are relationship-review facts, not implicit write targets. |
 | Repair multi-file consistency in one request by patching `global_outline.md`, replacing `opening.md`, and patching every affected inbound manuscript link. | `applied`; every operation path appears in the affected/final/rename/delete facts. Omitting a path from the request is not deletion. |
-| Reject the proposal or request a revision before Apply. | #491 must not call this method. There is no result, journal, catalog change, or artifact write. A revised candidate needs a fresh exact request and confirmation. |
+| Reject the proposal or request a revision before Apply. | Runtime must not call this method. There is no result, journal, catalog change, or artifact write. A revised candidate needs a fresh exact request and confirmation. |
 
-For example, after #491 eventually records confirmation it may pass an
+For example, after runtime records the separate confirmation it may pass an
 already-built request to the repository:
 
 ```text
