@@ -1153,6 +1153,349 @@ class Workspace:
             os.close(descriptor)
 
 
+class SessionSourceWorkspace(Workspace):
+    """Package-internal session-state reader pinned to one physical worktree."""
+
+    def __init__(
+        self,
+        root: Path,
+        session_id: str,
+        expected_root_identity: tuple[int, int],
+    ) -> None:
+        if not isinstance(root, Path) or not root.is_absolute():
+            raise TypeError("session source root must be an absolute Path")
+        normalized = Path(os.path.normpath(os.fspath(root)))
+        if normalized != root:
+            raise TypeError("session source root must be lexically normalized")
+        session = self.validate_identifier(session_id)
+        if (
+            not isinstance(expected_root_identity, tuple)
+            or len(expected_root_identity) != 2
+            or any(
+                type(value) is not int or value <= 0
+                for value in expected_root_identity
+            )
+        ):
+            raise TypeError("session source root identity is invalid")
+        self.root = root
+        self._root_identity = expected_root_identity
+        self._session_id = session
+        self._ready = True
+        self._initialization_failed = True
+
+    def path(self, relative: str | os.PathLike[str]) -> Path:
+        """Reject inherited pathname I/O outside the two source-read methods."""
+
+        del relative
+        raise WorkspaceSecurityError(
+            "session source authority permits only descriptor-relative reads"
+        )
+
+    @classmethod
+    def from_artifact_binding(cls, binding: object) -> SessionSourceWorkspace:
+        """Derive source authority only from one exact session artifact binding."""
+
+        from .initialization import SessionArtifactBinding
+
+        if type(binding) is not SessionArtifactBinding:
+            raise TypeError("binding must be a SessionArtifactBinding")
+        return cls(
+            binding.resources.identity.worktree_root,
+            binding.resources.identity.session_id,
+            binding.worktree_identity,
+        )
+
+    def _read_bound(self, reader: Callable[[int], Any]) -> Any:
+        descriptor = open_workspace_root_directory(self)
+        try:
+            value = reader(descriptor)
+            verify_workspace_root_directory(self, descriptor)
+            return value
+        finally:
+            os.close(descriptor)
+
+    @staticmethod
+    def _open_directory_at(root: int, parts: tuple[str, ...]) -> int:
+        flags = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW
+        descriptor = os.dup(root)
+        try:
+            for part in parts:
+                child = os.open(part, flags, dir_fd=descriptor)
+                try:
+                    opened = os.fstat(child)
+                    named = os.stat(
+                        part,
+                        dir_fd=descriptor,
+                        follow_symlinks=False,
+                    )
+                    if (
+                        not stat.S_ISDIR(opened.st_mode)
+                        or (opened.st_dev, opened.st_ino)
+                        != (named.st_dev, named.st_ino)
+                    ):
+                        raise WorkspaceSecurityError(
+                            "session source directory identity changed"
+                        )
+                except BaseException:
+                    os.close(child)
+                    raise
+                os.close(descriptor)
+                descriptor = child
+            return descriptor
+        except BaseException:
+            os.close(descriptor)
+            raise
+
+    @classmethod
+    def _read_bytes_at(
+        cls,
+        root: int,
+        relative: str,
+        *,
+        missing_ok: bool = False,
+    ) -> bytes | None:
+        parts = Path(relative).parts
+        try:
+            directory = cls._open_directory_at(root, parts[:-1])
+        except FileNotFoundError:
+            if missing_ok:
+                return None
+            raise
+        descriptor = -1
+        try:
+            flags = os.O_RDONLY | os.O_NOFOLLOW | getattr(os, "O_NONBLOCK", 0)
+            try:
+                descriptor = os.open(parts[-1], flags, dir_fd=directory)
+            except FileNotFoundError:
+                if missing_ok:
+                    return None
+                raise
+            initial = os.fstat(descriptor)
+            chunks: list[bytes] = []
+            while True:
+                chunk = os.read(descriptor, 64 * 1024)
+                if not chunk:
+                    break
+                chunks.append(chunk)
+            final = os.fstat(descriptor)
+            named = os.stat(
+                parts[-1],
+                dir_fd=directory,
+                follow_symlinks=False,
+            )
+            identity = (initial.st_dev, initial.st_ino)
+            if (
+                not stat.S_ISREG(initial.st_mode)
+                or not stat.S_ISREG(final.st_mode)
+                or not stat.S_ISREG(named.st_mode)
+                or identity != (final.st_dev, final.st_ino)
+                or identity != (named.st_dev, named.st_ino)
+                or initial.st_size != final.st_size
+                or initial.st_mtime_ns != final.st_mtime_ns
+                or initial.st_ctime_ns != final.st_ctime_ns
+            ):
+                raise WorkspaceSecurityError(
+                    "session source file identity changed"
+                )
+            return b"".join(chunks)
+        finally:
+            if descriptor >= 0:
+                os.close(descriptor)
+            os.close(directory)
+
+    @classmethod
+    def _read_text_at(
+        cls,
+        root: int,
+        relative: str,
+        *,
+        missing_ok: bool = False,
+    ) -> str | None:
+        content = cls._read_bytes_at(root, relative, missing_ok=missing_ok)
+        if content is None:
+            return None
+        try:
+            return content.decode("utf-8", errors="strict")
+        except UnicodeDecodeError as exc:
+            raise WorkspaceFormatError(
+                f"file is not valid UTF-8: {relative}"
+            ) from exc
+
+    def read_agent_session_state(
+        self,
+        agent_id: str,
+        session_id: str,
+    ) -> tuple[AgentStateEntry, ...]:
+        """Read one owner's session state through the pinned root descriptor."""
+
+        if agent_id not in AGENT_STATE_DIRECTORIES:
+            raise WorkspaceSecurityError(f"unknown agent state owner: {agent_id}")
+        session = self.validate_identifier(session_id)
+        if session != self._session_id:
+            raise WorkspaceSecurityError("session source authority does not match")
+        state_directory = AGENT_STATE_DIRECTORIES[agent_id]
+        relative_directory = f"agent_states/{state_directory}/debates/{session}"
+
+        def read(root: int) -> tuple[AgentStateEntry, ...]:
+            try:
+                directory = self._open_directory_at(
+                    root,
+                    Path(relative_directory).parts,
+                )
+            except FileNotFoundError:
+                return ()
+            try:
+                names = os.listdir(directory)
+            finally:
+                os.close(directory)
+            ordered: list[tuple[str, str, int, int, AgentStateEntry]] = []
+            state_files = sorted(
+                name for name in names if name.endswith(".jsonl")
+            )
+            for file_index, filename in enumerate(state_files):
+                debate_id = filename[: -len(".jsonl")]
+                self.validate_identifier(debate_id, label="debate ID")
+                relative = f"{relative_directory}/{filename}"
+                text = self._read_text_at(root, relative)
+                assert text is not None
+                for line_number, line in enumerate(text.splitlines(), 1):
+                    try:
+                        raw = json.loads(line)
+                        value = self._validate_agent_state_entry(raw)
+                        if (
+                            value["agent_id"] != agent_id
+                            or value["session_id"] != session
+                            or value["debate_id"] != debate_id
+                        ):
+                            raise TypeError(
+                                "agent state ownership does not match its path"
+                            )
+                        entry = AgentStateEntry(**value)
+                    except (json.JSONDecodeError, TypeError) as exc:
+                        raise WorkspaceFormatError(
+                            "invalid agent state entry in "
+                            f"{filename} at line {line_number}"
+                        ) from exc
+                    ordered.append(
+                        (
+                            entry.timestamp,
+                            debate_id,
+                            file_index,
+                            line_number,
+                            entry,
+                        )
+                    )
+            ordered.sort(key=lambda item: item[:4])
+            return tuple(item[4] for item in ordered)
+
+        return self._read_bound(read)
+
+    def inspect_debate(self, session_id: str, debate_id: str) -> dict[str, Any]:
+        """Inspect one debate through the pinned session root descriptor."""
+
+        session = self.validate_identifier(session_id)
+        debate = self.validate_identifier(debate_id, label="debate ID")
+        if session != self._session_id:
+            raise WorkspaceSecurityError("session source authority does not match")
+
+        def read(root: int) -> dict[str, Any]:
+            prefix = f"discussion_logs/{session}/{debate}"
+            result_text = self._read_text_at(
+                root,
+                f"{prefix}.result.json",
+                missing_ok=True,
+            )
+            state_text = self._read_text_at(
+                root,
+                f"{prefix}.state.json",
+                missing_ok=True,
+            )
+            message_text = self._read_text_at(
+                root,
+                f"{prefix}.jsonl",
+                missing_ok=True,
+            )
+            try:
+                result = (
+                    None
+                    if result_text is None
+                    else self._validate_debate_result(json.loads(result_text))
+                )
+                state = (
+                    None
+                    if state_text is None
+                    else self._validate_debate_state(json.loads(state_text))
+                )
+            except json.JSONDecodeError as exc:
+                raise WorkspaceFormatError("invalid debate JSON state") from exc
+            messages: list[DebateMessage] = []
+            for line_number, line in enumerate(
+                (() if message_text is None else message_text.splitlines()),
+                1,
+            ):
+                try:
+                    value = json.loads(line)
+                    expected = {
+                        "sender",
+                        "phase",
+                        "round",
+                        "revision",
+                        "kind",
+                        "content",
+                        "timestamp",
+                    }
+                    if not isinstance(value, dict) or set(value) != expected:
+                        raise TypeError("debate log entry has an invalid schema")
+                    string_fields = expected.difference({"round"})
+                    if any(
+                        not isinstance(value[field], str)
+                        for field in string_fields
+                    ):
+                        raise TypeError("debate log string field has an invalid type")
+                    round_number = value["round"]
+                    if (
+                        isinstance(round_number, bool)
+                        or not isinstance(round_number, int)
+                        or round_number < 0
+                    ):
+                        raise TypeError(
+                            "debate log round must be a non-negative integer"
+                        )
+                    messages.append(DebateMessage(**value))
+                except (json.JSONDecodeError, TypeError) as exc:
+                    raise WorkspaceFormatError(
+                        f"invalid debate log entry at line {line_number}"
+                    ) from exc
+            if result is not None:
+                status = result["status"]
+                terminal = True
+            elif state is not None:
+                status = state["status"]
+                terminal = state["terminal"]
+            elif messages:
+                status = "interrupted"
+                terminal = True
+            else:
+                status = "not_found"
+                terminal = False
+            public_state = (
+                {key: value for key, value in state.items() if key != "owner_token"}
+                if state is not None
+                else None
+            )
+            return {
+                "session_id": session,
+                "debate_id": debate,
+                "status": status,
+                "terminal": terminal,
+                "state": public_state,
+                "result": result,
+                "messages": [message.to_dict() for message in messages],
+            }
+
+        return self._read_bound(read)
+
+
 def initialize_workspace(
     root: str | os.PathLike[str],
 ) -> Workspace:

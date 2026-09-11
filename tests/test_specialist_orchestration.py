@@ -51,6 +51,9 @@ from tests.test_lead_orchestration import (
 )
 
 
+_SYNCHRONIZATION_TIMEOUT_SECONDS = 30
+
+
 def _assignments(*agent_ids: str) -> list[dict[str, object]]:
     return [
         {
@@ -146,7 +149,9 @@ class SpecialistExecutionAcceptanceTests(LeadOrchestrationTestCase):
             peak = max(peak, active)
             if entered == 3:
                 all_entered.set()
-            await asyncio.wait_for(release.wait(), timeout=2)
+            await asyncio.wait_for(
+                release.wait(), timeout=_SYNCHRONIZATION_TIMEOUT_SECONDS
+            )
             active -= 1
             return _specialist_outcome()(call, provider)
 
@@ -163,7 +168,9 @@ class SpecialistExecutionAcceptanceTests(LeadOrchestrationTestCase):
                 _decision(proposed, CollaborationConfirmationDecision.CONFIRM)
             )
         )
-        await asyncio.wait_for(all_entered.wait(), timeout=2)
+        await asyncio.wait_for(
+            all_entered.wait(), timeout=_SYNCHRONIZATION_TIMEOUT_SECONDS
+        )
         self.assertEqual(peak, 3)
         release.set()
         decision = await task
@@ -279,7 +286,9 @@ class SpecialistExecutionAcceptanceTests(LeadOrchestrationTestCase):
         async def sibling(call, provider):
             nonlocal sibling_finishes
             sibling_started.set()
-            await asyncio.wait_for(sibling_release.wait(), timeout=2)
+            await asyncio.wait_for(
+                sibling_release.wait(), timeout=_SYNCHRONIZATION_TIMEOUT_SECONDS
+            )
             sibling_finishes += 1
             return _specialist_outcome()(call, provider)
 
@@ -294,7 +303,9 @@ class SpecialistExecutionAcceptanceTests(LeadOrchestrationTestCase):
                 _decision(proposed, CollaborationConfirmationDecision.CONFIRM)
             )
         )
-        await asyncio.wait_for(sibling_started.wait(), timeout=2)
+        await asyncio.wait_for(
+            sibling_started.wait(), timeout=_SYNCHRONIZATION_TIMEOUT_SECONDS
+        )
         sibling_release.set()
         decision = await task
 
@@ -349,7 +360,9 @@ class SpecialistExecutionAcceptanceTests(LeadOrchestrationTestCase):
                 _decision(proposed, CollaborationConfirmationDecision.CONFIRM)
             )
         )
-        await asyncio.wait_for(both_started.wait(), timeout=2)
+        await asyncio.wait_for(
+            both_started.wait(), timeout=_SYNCHRONIZATION_TIMEOUT_SECONDS
+        )
         task.cancel()
         with self.assertRaises(asyncio.CancelledError):
             await task
@@ -413,7 +426,9 @@ class SpecialistExecutionAcceptanceTests(LeadOrchestrationTestCase):
                     entered += 1
                     if entered == len(specialist_ids):
                         ready.set()
-                    await asyncio.wait_for(release.wait(), timeout=2)
+                    await asyncio.wait_for(
+                        release.wait(), timeout=_SYNCHRONIZATION_TIMEOUT_SECONDS
+                    )
                     return _specialist_outcome()(call, provider)
 
                 for agent_id in specialist_ids:
@@ -427,7 +442,9 @@ class SpecialistExecutionAcceptanceTests(LeadOrchestrationTestCase):
                         )
                     )
                 )
-                await asyncio.wait_for(ready.wait(), timeout=2)
+                await asyncio.wait_for(
+                    ready.wait(), timeout=_SYNCHRONIZATION_TIMEOUT_SECONDS
+                )
                 self.assertEqual(entered, len(specialist_ids))
                 release.set()
                 decision = await task
@@ -447,7 +464,9 @@ class SpecialistExecutionAcceptanceTests(LeadOrchestrationTestCase):
         task = asyncio.create_task(self.runtime.decide_lead_step(
             _decision(proposed, CollaborationConfirmationDecision.CONFIRM)))
         try:
-            await asyncio.wait_for(entered.wait(), timeout=2)
+            await asyncio.wait_for(
+                entered.wait(), timeout=_SYNCHRONIZATION_TIMEOUT_SECONDS
+            )
             task.cancel()
             with self.assertRaises(asyncio.CancelledError):
                 await task

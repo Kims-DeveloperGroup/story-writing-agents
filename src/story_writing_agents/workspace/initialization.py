@@ -388,6 +388,7 @@ class SessionArtifactBinding:
     """One call-local artifact repository bound to exact READY session resources."""
 
     resources: GitSessionResourceInspection
+    worktree_identity: tuple[int, int]
     repository: WritingArtifactRepository = field(init=False, repr=False)
 
     def __post_init__(self) -> None:
@@ -395,10 +396,15 @@ class SessionArtifactBinding:
             raise TypeError("resources must be a GitSessionResourceInspection")
         if self.resources.state is not GitSessionResourceState.READY:
             raise ValueError("session artifact resources must be READY")
+        if not _valid_identity(self.worktree_identity):
+            raise TypeError("worktree_identity must be a physical directory identity")
         object.__setattr__(
             self,
             "repository",
-            WritingArtifactRepository(self.resources.identity.worktree_root),
+            WritingArtifactRepository(
+                self.resources.identity.worktree_root,
+                expected_root_identity=self.worktree_identity,
+            ),
         )
 
 
@@ -414,9 +420,34 @@ def compose_session_artifact_binding(
 
     try:
         resources = require_ready_session_resources(root, session_id)
+        worktree_root = resources.identity.worktree_root
+        observed = os.stat(worktree_root, follow_symlinks=False)
+        worktree_identity = _meaningful_directory_identity(observed)
+        if worktree_identity is None:
+            raise WorkspaceSecurityError(
+                "session worktree root is not a safe directory"
+            )
+        descriptor = _open_existing_root(worktree_root, worktree_identity)
+        try:
+            confirmed_resources = require_ready_session_resources(
+                root,
+                session_id,
+            )
+            if confirmed_resources != resources:
+                raise WorkspaceFormatError(
+                    "session artifact resources changed during binding"
+                )
+            _verify_named_identity(
+                worktree_root,
+                descriptor,
+                worktree_identity,
+            )
+        finally:
+            os.close(descriptor)
     except (
         ConfigurationError,
         GitSessionResourceError,
+        OSError,
         SessionIdError,
         WorkspaceFormatError,
         WorkspaceSecurityError,
@@ -425,7 +456,10 @@ def compose_session_artifact_binding(
         raise SessionArtifactBindingError(
             "session artifact resources are unavailable"
         ) from None
-    return SessionArtifactBinding(resources=resources)
+    return SessionArtifactBinding(
+        resources=confirmed_resources,
+        worktree_identity=worktree_identity,
+    )
 
 
 def _validated_configuration_allowance(root: Path) -> tuple[str, ...]:

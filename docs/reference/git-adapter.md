@@ -550,13 +550,18 @@ lifecycle fact and never substitutes for Git-resource readiness.
 
 The runtime's package-internal session-artifact binding is a fifth composition
 seam above `require one ready session`. Given the initialized `main` control
-root and a session ID, it freshly requires the exact READY identity and returns
-a call-local writing-artifact repository rooted at that session worktree.
+root and a session ID, it freshly requires the exact READY identity, opens the
+worktree without following symlinks, captures a meaningful physical
+`(st_dev, st_ino)` identity, repeats complete READY inspection, and requires
+the named root to retain that identity. It returns a call-local
+writing-artifact repository rooted at and pinned to that session worktree.
 Binding itself performs no artifact I/O, provisioning, provider call, or global
 runtime mutation. Known readiness and workspace-validation failures become one
 content-free binding failure; malformed protocol/type defects remain visible.
 There is no fallback to the control root, current directory, another session,
-or a previously returned binding.
+or a previously returned binding. Repository calls reopen and recheck the
+physical identity, so replacement before the first call, after an earlier
+call, or during I/O is rejected rather than granting the replacement authority.
 
 For session `novel`, the exact identity is:
 

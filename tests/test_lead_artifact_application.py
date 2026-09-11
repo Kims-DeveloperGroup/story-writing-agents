@@ -24,6 +24,7 @@ from story_writing_agents.writing_artifacts import (
     ArtifactApplicationErrorCode,
     ArtifactApplicationState,
 )
+from story_writing_agents.writing_artifacts._storage import ArtifactRootSecurityError
 from story_writing_agents.writing_artifacts.repository import WritingArtifactRepository
 from story_writing_agents.workspace.initialization import provision_session_resources
 
@@ -494,6 +495,84 @@ class LeadArtifactApplicationTests(LeadOrchestrationTestCase):
             await self.runtime.decide_artifact_application(
                 _application_decision(turn, ArtifactApplicationDecisionKind.APPLY)
             )
+
+    async def test_physical_root_loss_before_repository_entry_is_durable_zero_write(
+        self,
+    ) -> None:
+        turn = await self.reviewed_create("Physical root loss")
+        sibling = provision_session_resources(
+            self.control_workspace.root,
+            "sibling_session",
+        )
+        sibling_source = sibling.identity.worktree_root / _RULES
+        sibling_source.write_text("Sibling rule.\n", encoding="utf-8")
+        before = self.artifact_snapshot()
+        control_before = self.control_git_snapshot()
+        sibling_before = sibling_source.read_bytes()
+
+        with self.replace_session_worktree() as (moved, replacement):
+            replacement_source = replacement / _RULES
+            replacement_source.parent.mkdir(parents=True)
+            replacement_source.write_text(
+                "Replacement must remain untouched.\n",
+                encoding="utf-8",
+            )
+            result = await self.runtime.decide_artifact_application(
+                _application_decision(turn, ArtifactApplicationDecisionKind.APPLY)
+            )
+
+            self.assertEqual(
+                replacement_source.read_text(encoding="utf-8"),
+                "Replacement must remain untouched.\n",
+            )
+            self.assertFalse((moved / _RULES).exists())
+            self.assertEqual(sibling_source.read_bytes(), sibling_before)
+            self.assertEqual(self.control_git_snapshot(), control_before)
+
+        self.assertIs(
+            result.outcome.outcome,
+            ArtifactApplicationOutcomeKind.RECOVERY_REQUIRED,
+        )
+        self.assertIs(
+            result.outcome.next_action,
+            ArtifactApplicationNextAction.OPERATOR_RECOVERY,
+        )
+        self.assertIsNone(result.outcome.result)
+        self.assertIsNone(result.commit_request)
+        self.assertEqual(self.artifact_snapshot(), before)
+        projection = project_collaboration_history(self.history(turn.conversation_id))
+        self.assertEqual(projection.current_artifact_application_result, result.outcome)
+        with self.assertRaisesRegex(ValueError, "authoritative request tail"):
+            await self.runtime.decide_artifact_application(
+                _application_decision(turn, ArtifactApplicationDecisionKind.APPLY)
+            )
+
+    async def test_root_loss_after_repository_entry_remains_outcome_unknown(self) -> None:
+        turn = await self.reviewed_create("Post-entry root loss")
+        before = self.artifact_snapshot()
+        git_before = self.git_snapshot()
+
+        with mock.patch.object(
+            WritingArtifactRepository,
+            "apply_artifact_changes",
+            side_effect=ArtifactRootSecurityError("workspace root identity changed"),
+        ):
+            result = await self.runtime.decide_artifact_application(
+                _application_decision(turn, ArtifactApplicationDecisionKind.APPLY)
+            )
+
+        self.assertIs(
+            result.outcome.outcome,
+            ArtifactApplicationOutcomeKind.OUTCOME_UNKNOWN,
+        )
+        self.assertIs(
+            result.outcome.next_action,
+            ArtifactApplicationNextAction.INSPECT_AND_RESOLVE_OUTCOME,
+        )
+        self.assertIsNone(result.outcome.result)
+        self.assertIsNone(result.commit_request)
+        self.assertEqual(self.artifact_snapshot(), before)
+        self.assertEqual(self.git_snapshot(), git_before)
 
 
 if __name__ == "__main__":

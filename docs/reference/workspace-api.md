@@ -161,6 +161,17 @@ malformed structures where the consuming contract performs schema validation.
 Package-internal root helpers recheck the bound identity for diagnostic and
 storage owners, but they are not public imports.
 
+The package-internal `SessionSourceWorkspace` is likewise not a public import.
+Runtime derives it only from a freshly validated session-artifact binding. It
+adopts that binding's exact session root and physical `(st_dev, st_ino)`
+identity, then provides only descriptor-relative active-debate and invoking-
+agent-state reads needed by context adapters. Every allowed read opens the
+no-follow root, traverses regular files relative to descriptors, verifies the
+named root again before returning, and closes its call-local descriptors on
+success or failure. Generic pathname access, writes, Git operations, control-
+root fallback, and sibling-session fallback are rejected. These internal
+semantics do not change any public constructor or method signature.
+
 This explicit path contract is unchanged by opaque readiness. For example,
 readiness does not inspect an unknown symlink beneath `.antigravity/`, but a
 later `Workspace.path()` or read directed through that symlink still rejects

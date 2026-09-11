@@ -218,6 +218,17 @@ artifact-only paths. Lead synthesis is a separate invocation over all direct
 story-artifact inputs and typed specialist replies; it does not inherit a
 specialist's read authority or receipt.
 
+These adapters do not share one filesystem authority. Focused conversation
+uses the configured conversation store owned by the control plane. For each
+artifact-sensitive invocation, runtime derives a package-internal
+`SessionSourceWorkspace` from the same freshly validated exact-session binding
+as the artifact repository and lends it only to the active-debate and invoking-
+agent-state adapters. Its reads are descriptor-relative and pinned to the
+session worktree's physical `(st_dev, st_ino)` identity. A replaced or unsafe
+root is rejected before content returns; neither adapter can fall back to the
+control root, another session, or a previous binding. The view supplies no
+generic path, write, provider-filesystem, or Git authority.
+
 `FocusedConversationSourceAdapter` reads canonical v2 events from the active
 store and applies `select_bounded_collaboration_context()`. Its default mode is
 a content-free bootstrap with no provider-readable record body. The lead

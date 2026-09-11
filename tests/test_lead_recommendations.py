@@ -13,6 +13,7 @@ from story_writing_agents import orchestrator as owner
 from story_writing_agents.agents import LEAD_ORCHESTRATOR, PLOT_ARCHITECT, EXECUTION_SPECIALIST
 from story_writing_agents.specialist_routing import AuthoringActivity
 from story_writing_agents.errors import BackendProtocolError
+from story_writing_agents.writing_artifacts._storage import ArtifactRootSecurityError
 from tests.recommendation_fixture import (
     DRAFT, OUTLINE, RecommendationCase, action, decision, digest,
     preparation, recommendation, rewrite_history,
@@ -617,7 +618,7 @@ class LeadRecommendationTests(RecommendationCase):
         ):
             await self.apply(reviewed)
         before, calls = self.history(other), len(self.backend.calls)
-        for runtime in (self.runtime, StoryRuntime(self.workspace, self.backend)):
+        for runtime in (self.runtime, StoryRuntime(self.control_workspace, self.backend)):
             blocked = await runtime.decide_lead_recommendation(decision(offered))
             self.assertIs(blocked.next_action, c.CollaborationNextAction.REPAIR_AUTHORITATIVE_HISTORY)
             self.assertIsNone(blocked.recommendation_request)
@@ -713,9 +714,13 @@ class LeadRecommendationSynthesisTests(RecommendationCase):
         projection = c.project_collaboration_history(known)
         self.assertIs(projection.current_recommendation_state, c.LeadRecommendationState.PENDING)
         backend = lead._LeadBackend()
-        restarted = StoryRuntime(self.workspace, backend)
+        restarted = StoryRuntime(self.control_workspace, backend)
         for _ in range(2):
-            restored = restarted._finalize_known_result_locked(known, projection)
+            restored = restarted._finalize_known_result_locked(
+                self.session_id,
+                known,
+                projection,
+            )
             self.assertEqual(restored.recommendation_request, projection.current_recommendation_request)
             self.assertEqual(self.history(conversation_id), known)
             self.assertEqual(backend.calls, [])
@@ -759,7 +764,7 @@ class LeadRecommendationRecoveryTests(RecommendationCase):
                 await self.runtime.decide_lead_recommendation(decision(turn))
         known = self.history(conversation_id)
         self.assertIs(self.projection(conversation_id).current_recommendation_state, c.LeadRecommendationState.RUNNING)
-        restarted = StoryRuntime(self.workspace, self.backend)
+        restarted = StoryRuntime(self.control_workspace, self.backend)
         self.assertEqual(self.history(conversation_id), known)
         closed = await restarted.decide_lead_recommendation(decision(turn))
         self.assertIs(closed.next_action, c.CollaborationNextAction.CONTINUE_WITH_LEAD)
@@ -839,7 +844,7 @@ class LeadRecommendationRecoveryTests(RecommendationCase):
                 self.assertEqual(invocation[-1].correlation.operation_id, reference.manifest.operation_id)
                 self.assertEqual(invocation[-1].correlation.phase, "lead")
             old = self.history(conversation_id)
-            restarted = StoryRuntime(self.workspace, self.backend)
+            restarted = StoryRuntime(self.control_workspace, self.backend)
             with self.assertRaises(BackendProtocolError):
                 await restarted.decide_lead_recommendation(decision(turn))
             self.assertEqual(self.history(conversation_id), old)
@@ -876,7 +881,7 @@ class LeadRecommendationRecoveryTests(RecommendationCase):
                     await self.runtime.decide_lead_recommendation(decision(turn))
             self.assertFalse(self.payload_events(conversation_id, c.LeadRecommendationResultPayload))
             calls, history = len(self.backend.calls), self.history(conversation_id)
-            restarted = StoryRuntime(self.workspace, self.backend)
+            restarted = StoryRuntime(self.control_workspace, self.backend)
             blocked = await restarted.lead_turn(self.session_id, conversation_id, "Do not replay uncertain work.")
             self.assertIs(blocked.next_action, c.CollaborationNextAction.INSPECT_AND_RESOLVE_OUTCOME if fault == "uncertain"
                           else c.CollaborationNextAction.REPAIR_AUTHORITATIVE_HISTORY)
@@ -923,7 +928,7 @@ class LeadRecommendationRecoveryTests(RecommendationCase):
                         await self.runtime.decide_lead_recommendation(decision(turn))
             history, calls = self.history(conversation_id), len(self.backend.calls)
             self.assertFalse(self.payload_events(conversation_id, c.LeadRecommendationResultPayload))
-            restarted = StoryRuntime(self.workspace, self.backend)
+            restarted = StoryRuntime(self.control_workspace, self.backend)
             result = await restarted.lead_turn(self.session_id, conversation_id, "Finalize known local failure only.")
             self.assertEqual(len(self.backend.calls), calls)
             self.assertIsNone(result.recommendation_request)
@@ -937,6 +942,85 @@ class LeadRecommendationRecoveryTests(RecommendationCase):
                 with self.assertRaises(BackendProtocolError):
                     await restarted.decide_lead_recommendation(decision(turn))
                 self.assertEqual(len(self.payload_events(conversation_id, c.LeadRecommendationResultPayload)), 1)
+
+    async def test_reference_recovery_root_loss_preserves_failure_without_replay(self):
+        repository_type = type(self.runtime.artifacts)
+        inspect_operation = repository_type.inspect_reference_operation
+
+        for fail_on_terminal_inspection in (1, 2):
+            with self.subTest(
+                fail_on_terminal_inspection=fail_on_terminal_inspection
+            ):
+                conversation_id, turn = await self.reference_offer()
+                self.backend.enqueue(
+                    lead._SubmittedFailure(
+                        BackendProtocolError("Synthetic native provider failure")
+                    )
+                )
+                terminal_inspections = 0
+
+                def lose_root_after_failure(repository, operation_id):
+                    nonlocal terminal_inspections
+                    history = inspect_operation(repository, operation_id)
+                    if self.payload_events(
+                        conversation_id,
+                        c.CollaborationLeadOutcomeFailurePayload,
+                    ):
+                        terminal_inspections += 1
+                        if terminal_inspections >= fail_on_terminal_inspection:
+                            raise ArtifactRootSecurityError(
+                                "workspace root identity changed"
+                            )
+                    return history
+
+                with mock.patch.object(
+                    repository_type,
+                    "inspect_reference_operation",
+                    new=lose_root_after_failure,
+                ):
+                    blocked = await self.runtime.decide_lead_recommendation(
+                        decision(turn)
+                    )
+                    durable = self.history(conversation_id)
+                    provider_calls = (
+                        len(self.backend.calls),
+                        len(self.backend.reference_calls),
+                    )
+                    restarted = StoryRuntime(self.control_workspace, self.backend)
+                    repeated = await restarted.lead_turn(
+                        self.session_id,
+                        conversation_id,
+                        "Do not replay the failed preparation.",
+                    )
+
+                self.assertGreaterEqual(
+                    terminal_inspections,
+                    fail_on_terminal_inspection,
+                )
+                for result in (blocked, repeated):
+                    self.assertIs(
+                        result.state,
+                        c.CollaborationStepState.RECOVERY_REQUIRED,
+                    )
+                    self.assertIs(
+                        result.next_action,
+                        c.CollaborationNextAction.REPAIR_AUTHORITATIVE_HISTORY,
+                    )
+                    self.assertIsNone(result.recommendation_request)
+                self.assertEqual(
+                    (len(self.backend.calls), len(self.backend.reference_calls)),
+                    provider_calls,
+                )
+                self.assertEqual(self.history(conversation_id), durable)
+                failures = self.payload_events(
+                    conversation_id,
+                    c.CollaborationLeadOutcomeFailurePayload,
+                )
+                self.assertEqual(len(failures), 1)
+                self.assertIs(
+                    failures[0].payload.code,
+                    c.CollaborationLeadOutcomeFailureCode.PROVIDER_FAILED,
+                )
 
 
 class LeadRecommendationAuthRecoveryTests(RecommendationCase):
@@ -1068,7 +1152,7 @@ class LeadRecommendationAuthRecoveryTests(RecommendationCase):
                 self.assertFalse(error.validate_replay())
                 if mode == "timeout": self.assertTrue(context_provider_failure_facts(error).timed_out)
                 old_calls = len(self.backend.calls)
-                restarted = StoryRuntime(self.workspace, self.backend)
+                restarted = StoryRuntime(self.control_workspace, self.backend)
                 self.assertEqual(len(self.backend.calls), old_calls)
                 self.assert_no_downstream(conversation_id)
                 self.workspace.path(OUTLINE).write_bytes(b"")

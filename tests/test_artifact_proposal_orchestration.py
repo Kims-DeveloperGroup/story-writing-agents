@@ -28,6 +28,8 @@ from story_writing_agents.conversations import (
     CollaborationLeadOutcomeFailureCode,
     CollaborationLeadOutcomeFailurePayload,
     CollaborationNextAction,
+    CollaborationStepState,
+    CollaborationStepStatePayload,
     CollaborationSpecialistAssessment,
     LeadOutcomeKind,
     artifact_reviewed_proposal_digest,
@@ -53,6 +55,7 @@ from story_writing_agents.conversation_storage.sqlite import (
     provision_sqlite_conversation_storage,
 )
 from story_writing_agents.writing_artifacts.repository import WritingArtifactRepository
+from story_writing_agents.writing_artifacts._storage import ArtifactRootSecurityError
 
 from tests.test_lead_orchestration import (
     LeadOrchestrationTestCase,
@@ -323,6 +326,87 @@ class ArtifactProposalOrchestrationTests(LeadOrchestrationTestCase):
                 "artifact_proposal.state",
             }.issubset(readable_keys)
         )
+
+    async def test_artifact_finalization_root_loss_is_one_durable_recovery_terminal(
+        self,
+    ) -> None:
+        conversation_id = self.conversation("Artifact finalization root loss")
+        self.workspace.path(_RULES).unlink(missing_ok=True)
+        self.backend.enqueue(
+            _artifact_outcome(
+                operations=[
+                    {
+                        "kind": "create",
+                        "new_text": "Use restrained close-third narration.\n",
+                        "suggested_path": _RULES,
+                    }
+                ],
+                evidence_status="missing",
+                evidence_ids=lambda call, _material: [_status_id(call, _RULES)],
+            )
+        )
+        proposed = await self.runtime.lead_turn(
+            self.session_id,
+            conversation_id,
+            "Complete the missing narrative rules.",
+        )
+        self.backend.enqueue_for(
+            EXECUTION_SPECIALIST,
+            _specialist_outcome("supports"),
+        )
+        self.backend.enqueue_for(
+            LEAD_ORCHESTRATOR,
+            _artifact_synthesis_outcome("propose"),
+        )
+        finalize = self.runtime._finalize_artifact_result_locked
+        finalized_inputs = []
+
+        def lose_root_during_finalization(**inputs):
+            finalized_inputs.append(inputs)
+            with mock.patch.object(
+                WritingArtifactRepository,
+                "capture_complete_state",
+                side_effect=ArtifactRootSecurityError(
+                    "workspace root identity changed"
+                ),
+            ):
+                return finalize(**inputs)
+
+        with mock.patch.object(
+            self.runtime,
+            "_finalize_artifact_result_locked",
+            side_effect=lose_root_during_finalization,
+        ):
+            decided = await self.runtime.decide_lead_step(
+                _decision(proposed, CollaborationConfirmationDecision.CONFIRM)
+            )
+            self.assertEqual(len(finalized_inputs), 1)
+            known = finalized_inputs[0]
+            provider_calls = len(self.backend.calls)
+            for _ in range(2):
+                restored = lose_root_during_finalization(**known)
+                self.assertEqual(restored, decided.turn)
+                self.assertEqual(len(self.backend.calls), provider_calls)
+
+        self.assertIs(decided.turn.state, CollaborationStepState.RECOVERY_REQUIRED)
+        self.assertIs(
+            decided.turn.next_action,
+            CollaborationNextAction.REPAIR_AUTHORITATIVE_HISTORY,
+        )
+        self.assertIs(
+            decided.turn.artifact_proposal.state,
+            ArtifactProposalState.RECOVERY_REQUIRED,
+        )
+        self.assertIsNone(decided.turn.artifact_application_request)
+        self.assertEqual(self.runtime._artifact_application_capabilities, {})
+        durable = self.history(conversation_id)
+        recovery_terminals = tuple(
+            event
+            for event in durable
+            if type(event.payload) is CollaborationStepStatePayload
+            and event.payload.state is CollaborationStepState.RECOVERY_REQUIRED
+        )
+        self.assertEqual(len(recovery_terminals), 1)
 
     async def test_core_conflict_revision_and_manuscript_atomic_rename_workflows(
         self,

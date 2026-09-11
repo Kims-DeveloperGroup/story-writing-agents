@@ -52,7 +52,10 @@ repository.
 Every artifact-sensitive runtime call instead derives the session ID already
 present in its public arguments or durable identity, freshly requires that
 session's exact READY branch/ref/sibling-worktree resources, and creates a
-call-local repository rooted at the validated worktree. This covers explicit
+call-local repository pinned to the validated worktree's physical
+`(st_dev, st_ino)` identity. Each later repository access reopens the named
+root without following symlinks and rejects replacement before the replacement
+can become artifact authority. This covers explicit
 and contextual references, source status and fingerprints, proposal and review
 revalidation, Apply and application-ledger access, recovery reads, consensus
 artifact material, and the interactive attachment picker. A
@@ -67,6 +70,14 @@ provider or artifact access; runtime never falls back to `main`, the process
 working directory, or a previously used session. Use Session Create or Reopen
 to establish the lifecycle precondition before calling an artifact-sensitive
 method. Existing public constructor and method signatures are unchanged.
+
+Provider context keeps the same ownership split. Focused conversation remains
+in the configured conversation store. Active-debate and invoking-agent-state
+reads use a package-internal, descriptor-relative `SessionSourceWorkspace`
+derived from the same call-local binding; it exposes no generic path, write, or
+Git authority. Each allowed read reopens and rechecks the exact physical
+session root before returning. A missing, replaced, or unsafe bound root fails
+closed instead of borrowing control-root or sibling-session state.
 
 ## Phase-confirmed consensus methods
 
@@ -901,12 +912,18 @@ method signatures and rejects a decision owned by another session.
 
 Apply requires the exact authoritative request tail and same-process one-use
 authority. Immediately before any candidate revalidation or write, runtime
-freshly binds the exact session worktree. If that binding was lost after the
-Apply decision became durable, the returned and persisted application result
-is `recovery_required` with `operator_recovery`; no artifact write or provider
-call is attempted. Successful application affects only the correlated session
-worktree and its application ledger. Control-root and sibling-session bytes
-remain outside the operation.
+freshly binds the exact session worktree. If binding or physical-root
+validation fails after the Apply decision became durable but before the
+repository's `apply_artifact_changes()` method starts, the returned and
+persisted application result is
+`recovery_required` with `operator_recovery`; artifact application does not
+start and no provider call is attempted. Once that method has started, an
+unclassified root, security, or format failure is conservatively
+`outcome_unknown` with `inspect_and_resolve_outcome`; the exact application
+must be inspected before any new write. A terminal recovery condition reported
+by the repository remains `recovery_required`. Successful application affects
+only the correlated session worktree and its application ledger. Control-root
+and sibling-session bytes remain outside the operation.
 
 Commit remains a distinct decision and authority boundary. Its internal
 service independently requires and revalidates the same exact session
@@ -914,6 +931,14 @@ worktree, branch, and candidate evidence before staging only the disclosed
 paths and creating a local commit. Apply never implies Commit, and neither
 operation pushes, merges, or grants a provider direct filesystem or Git
 authority.
+
+Known provider work is not replayed merely because session resources disappear
+during local closure. Binding loss while finalizing a completed artifact review
+durably closes the artifact and collaboration state as `recovery_required` and
+does not issue Apply authority. Binding loss while proving recommendation or
+reference closure returns the typed blocking recovery result and preserves the
+original attempt. Repair authoritative session resources/history before
+continuing.
 
 ### Free text and recovery
 

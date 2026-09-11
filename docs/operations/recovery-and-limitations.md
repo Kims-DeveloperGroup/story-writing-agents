@@ -180,19 +180,36 @@ Concrete cases:
 
 Artifact-sensitive runtime and picker operations add no recovery shortcut.
 Each call freshly requires the exact READY identity and then uses only that
-session worktree for source reads, references, proposals, application-ledger
-access, Apply, and recovery. Absent resources are not provisioned; moved,
-mismatched, staged, or otherwise non-ready resources do not fall back to
+session worktree for artifact source reads, references, proposals,
+application-ledger access, Apply, and recovery. The binding pins the physical
+`(st_dev, st_ino)` identity; repository and session debate/own-agent-state
+reads reject replacement before, between, or during calls. Conversation
+history remains in its separately configured control-plane store. Absent
+resources are not provisioned; moved, mismatched, staged, or otherwise
+non-ready resources do not fall back to
 `main`, the current directory, a sibling session, or an older binding. The
 binding failure is content-free and occurs before provider or artifact I/O.
 
-If the exact binding is lost after an Apply decision is durably recorded but
-before artifact I/O, runtime consumes that decision once, appends an
+If exact binding or physical-root validation fails after an Apply decision is
+durably recorded but before the repository's `apply_artifact_changes()` method
+starts, runtime consumes that decision once and appends an
 `artifact_application_result` with `recovery_required` and
-`operator_recovery`, attempts no write, and emits no Commit request for that
-result. Preserve the session resources and authoritative history; repair the
-resource identity before any fresh authoring attempt. Commit remains a
-separate decision and independently revalidates the same session worktree.
+`operator_recovery`, does not start artifact application, and emits no Commit
+request for that result. Once that method starts, an unclassified root,
+security, or format failure remains `outcome_unknown` with
+`inspect_and_resolve_outcome`; a repository-classified terminal recovery
+condition remains `recovery_required`. Preserve the session resources and
+authoritative history and inspect any uncertain application before another
+write. Commit remains a separate decision and independently revalidates the
+same session worktree.
+
+Resource loss during local closure does not replay known provider work. A
+completed artifact-review result that cannot be finalized against its bound
+session closes durably as artifact/collaboration `recovery_required`, without
+Apply authority. Recommendation or reference closure that cannot prove its
+correlated session evidence returns a typed blocking recovery result and keeps
+the original attempt closed. Repair the exact resources and authoritative
+history instead of retrying that provider call.
 
 The runtime never automatically removes a named branch, internal ref,
 worktree, worktree-administration entry, seed object, journal-backed recovery

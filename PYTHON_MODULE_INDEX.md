@@ -7031,13 +7031,27 @@ every intermediate arrow. The current runtime graph is acyclic.
   and live execution-attempt markers.
   Every artifact-sensitive top-level operation freshly requires the exact
   READY session resource identity and constructs a call-local repository at
-  that session worktree. Reference lookup, evidence capture/revalidation,
+  that session worktree with its descriptor-verified physical root identity.
+  Provider invocation, artifact-evidence resolution, and evidence
+  revalidation derive the correlated call-local `SessionSourceWorkspace` from
+  the same binding and lend it to every active-debate and invoking-agent-state
+  context adapter. Those adapters never receive the control-root workspace,
+  fall back to it, or acquire Git authority; conversation sources retain their
+  separate conversation-storage owners.
+  Reference lookup, evidence capture/revalidation,
   candidate construction, Apply, and artifact-ledger inspection never fall
   back to the control root. Private review/input/finalization consumers receive
   the enclosing authoritative session explicitly and reject every event tuple
-  containing another session before artifact access. A known READY-binding
-  failure after durable Apply confirmation produces the existing durable
-  recovery-required/operator-recovery no-write result. Provider seams receive only bounded reference and
+  containing another session before artifact access. Lost session artifact
+  resources during recommendation/reference recovery produce a blocking typed
+  recovery result without replay; loss during known artifact finalization is
+  durably finalized as artifact and collaboration recovery-required state.
+  A known READY-binding or pre-execution artifact-root failure after durable
+  Apply confirmation produces the existing durable recovery-required/operator-
+  recovery no-write result. Once repository application execution starts,
+  an unclassified root, security, or format failure remains conservatively
+  outcome-unknown, while a repository-reported terminal recovery condition
+  retains recovery-required. Provider seams receive only bounded reference and
   context capabilities, never a repository, root, write, or Git capability.
   Runtime and bound sessions expose the same storage bundle; no raw
   schema-v1 event-store injection or property remains. Explicit lead turns may
@@ -7079,6 +7093,7 @@ every intermediate arrow. The current runtime graph is acyclic.
   tasks owned by the exact phase request.
 - **Primary verification/documentation:** `tests/test_lead_orchestration.py`
   (including `LeadReferenceFailurePrecedenceTests`),
+  `tests/test_session_artifact_binding.py`,
   `tests/test_lead_recommendations.py` with `tests/recommendation_fixture.py`
   (preparation, synthesis, exact origins, recovery, and authentication),
   `tests/test_lead_artifact_objectives.py`,
@@ -7460,11 +7475,14 @@ every intermediate arrow. The current runtime graph is acyclic.
   defining module. Workspace/root imports and pickle lookup through those
   canonical modules remain supported, while the intentionally breaking v2
   initializer removes the former prompt-overwrite parameter without a shim.
-  Package-internal `open_workspace_root_directory`,
-  `verify_workspace_root_directory`, `WORKSPACE_DIRECTORIES`, and exact-v2
-  role-aware `discover_workspace` are statically bound for internal consumers but are
-  absent from `__all__` and from the project-root facade. No incidental core
-  implementation global or private helper is forwarded.
+  Package-internal `SessionSourceWorkspace`,
+  `open_workspace_root_directory`, `verify_workspace_root_directory`,
+  `WORKSPACE_DIRECTORIES`, and exact-v2 role-aware `discover_workspace` are
+  statically bound for internal consumers but are absent from `__all__` and
+  from the project-root facade. `SessionSourceWorkspace` is the narrow
+  descriptor-relative session debate/owner-state read authority derived from
+  an exact session artifact binding; no incidental core implementation global
+  or private helper is forwarded.
 - **Direct internal dependencies:** `conversation_storage.filesystem` and
   `workspace.core`.
 - **State, resources, and side effects:** Owns no state or external resource.
@@ -7521,6 +7539,7 @@ every intermediate arrow. The current runtime graph is acyclic.
   `tests/test_workspace_policy_compatibility.py`,
   `tests/fixtures/workspace_policy_baselines/manifest.json`,
   `tests/test_workspace_v2_initialization.py`,
+  `tests/test_session_artifact_binding.py`,
   `tests/test_workspace_session_resources.py`,
   `docs/guides/workspaces.md#initialize-and-verify`,
   `docs/reference/workspace-api.md#construction-and-common-methods`, and the
@@ -7533,12 +7552,15 @@ every intermediate arrow. The current runtime graph is acyclic.
 - **Supported surface:** Exactly `Workspace` and `initialize_workspace` in
   `__all__`. The stable workspace facade re-exports those objects and retains
   their established canonical workspace-module identity. Package-internal
-  `open_workspace_root_directory`,
+  `SessionSourceWorkspace`, `open_workspace_root_directory`,
   `verify_workspace_root_directory`, and `WORKSPACE_DIRECTORIES` provide the
-  identity-bound internal-storage and topology boundary used by diagnostic,
-  agent-exchange, disposable-generation, and smoke owners; they remain
-  deliberately absent from both public `__all__` declarations and the
-  project-root facade. Package-internal `discover_workspace` delegates nearest
+  identity-bound internal-storage and topology boundary used by orchestration,
+  diagnostic, agent-exchange, disposable-generation, and smoke owners; they
+  remain deliberately absent from both public `__all__` declarations and the
+  project-root facade. `SessionSourceWorkspace` is derived only from an exact
+  `workspace.initialization.SessionArtifactBinding`; it exposes the existing
+  `Workspace` read shape needed by context adapters while rejecting inherited
+  pathname I/O. Package-internal `discover_workspace` delegates nearest
   recognizable-boundary selection and constructs an exactly ready workspace.
   `Workspace.inspect_debate_context` is the strict, separate context-sidecar
   inspection operation. `Workspace.read_agent_session_state` returns one
@@ -7562,7 +7584,14 @@ every intermediate arrow. The current runtime graph is acyclic.
   performs no second schema interpretation. The intentionally breaking
   initializer has no overwrite parameter or schema-v1 migration path. Generic writes
   reject marker/journal identities and normalized/case-folded writing-artifact
-  namespaces before mutation. Package-internal root-descriptor helpers recheck
+  namespaces before mutation. The package-internal session source view adopts
+  the root, session, and physical identity already validated by its artifact
+  binding without rerunning full workspace readiness or re-admitting mutable
+  artifact scaffold. Each allowed debate or owner-state read opens that exact
+  no-follow root, traverses and reads descriptor-relative regular files only,
+  rechecks the named root before returning, and closes every call-local
+  descriptor on success or failure; it provides no generic path or write
+  authority. Package-internal root-descriptor helpers recheck
   the bound identity for storage owners. This module does not define marker,
   scaffold, journal, Git, discovery, or readiness policy; it owns no Git
   subprocess and no repository-mediated artifact write, commit, or rollback.
@@ -7651,8 +7680,16 @@ every intermediate arrow. The current runtime graph is acyclic.
   Schema-only empty runtime directories are main-initializer resources
   and are not required in a Git-materialized session root.
   `compose_session_artifact_binding` first performs that same fresh exact READY
-  validation and then returns an immutable call-local binding whose repository
-  is rooted at the validated session worktree. It performs no fallback,
+  validation, opens and retains the physical worktree descriptor across a
+  second complete Git-session-resource READY validation, requires the second
+  immutable inspection to equal the first, and verifies that the named root
+  still has the same meaningful `(st_dev, st_ino)` identity. This composition
+  does not re-admit the session scaffold or require clean artifact worktree
+  content, so clean-index unstaged artifact modifications and deletions remain
+  valid session state. It returns an immutable
+  call-local binding that carries that identity into a repository rooted at the
+  validated session worktree. Later path replacement therefore fails closed
+  before the replacement can become repository authority. It performs no fallback,
   provisioning, global mutation, provider work, or repository I/O during
   construction. Known readiness and workspace-validation failures become the
   content-free typed binding error; type/protocol defects are not normalized.
@@ -8278,11 +8315,14 @@ every intermediate arrow. The current runtime graph is acyclic.
   only lease owner; these adapters receive the same instance and use its
   supported methods only within repository-managed calls.
 - **Direct internal dependencies:** `errors`.
-- **State, resources, and side effects:** Construction captures only a lexical
-  absolute workspace-root name, without symlink resolution, filesystem access,
-  or a platform/security probe. Required primitives are checked lazily on first
-  artifact I/O, which binds a meaningful root `(st_dev, st_ino)` pair. Every
-  later operation reopens and verifies that identity. Every successfully opened
+- **State, resources, and side effects:** Construction captures a lexical
+  absolute workspace-root name and may accept one already validated physical
+  root `(st_dev, st_ino)` identity, without symlink resolution, filesystem
+  access, or a platform/security probe. On first artifact I/O, path-only callers
+  lazily bind the meaningful opened identity, while prebound callers require the
+  opened descriptor to match their supplied identity before adopting it. Every
+  later operation reopens and verifies both the retained and any prebound
+  identity. Every successfully opened
   child descriptor enters call-local ownership immediately; a post-open
   validation failure unwinds through one reverse cleanup and closes it exactly
   once. Each traversal uses
@@ -8323,6 +8363,7 @@ every intermediate arrow. The current runtime graph is acyclic.
   stopped, not as a hostile same-user live namespace writer.
 - **Primary verification/documentation:**
   `tests/test_writing_artifacts.py`,
+  `tests/test_session_artifact_binding.py`,
   `tests/test_workspace_and_config.py`,
   `docs/reference/writing-artifacts.md`, `docs/design/persistence.md`, and
   `docs/operations/filesystem-safety.md`.
@@ -8390,7 +8431,10 @@ every intermediate arrow. The current runtime graph is acyclic.
   `writing_artifacts.references`.
 - **State, resources, and side effects:** Owns the per-instance reentrant
   process lock and workspace-local permanent `.artifacts.lock`, anchor, and
-  ready-link lease. It constructs and lends one secure storage adapter to the
+  ready-link lease. Its backward-compatible constructor optionally receives a
+  prevalidated physical root identity and passes it to the secure storage
+  adapter without performing I/O; existing path-only callers retain lazy
+  first-open binding. It constructs and lends that adapter to the
   private application, filesystem-source, and reference-evidence owners. Both
   repository lock modes acquire that same workspace lease and invoke application
   recovery before any authoritative catalog, source, or reference observation,
@@ -8433,6 +8477,7 @@ every intermediate arrow. The current runtime graph is acyclic.
   `tests/test_artifact_reference_evidence.py`,
   `tests/test_artifact_reference_read_actions.py`,
   `tests/test_runtime_reference_integration.py`,
+  `tests/test_session_artifact_binding.py`,
   `tests/test_smoke_cli.py`,
   `docs/guides/artifact-references.md#what-happens-when-an-attached-source-is-later-applied`,
   `docs/reference/writing-artifacts.md#inspecting-one-historical-application`,

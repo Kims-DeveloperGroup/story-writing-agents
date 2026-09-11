@@ -96,8 +96,16 @@ class WritingArtifactRepository:
     any prepared artifact application before observing canonical files.
     """
 
-    def __init__(self, workspace_root: str | Path) -> None:
-        self._storage = SecureWorkspaceStorage(workspace_root)
+    def __init__(
+        self,
+        workspace_root: str | Path,
+        *,
+        expected_root_identity: tuple[int, int] | None = None,
+    ) -> None:
+        self._storage = SecureWorkspaceStorage(
+            workspace_root,
+            expected_root_identity=expected_root_identity,
+        )
         self._applications = ArtifactApplicationStore(self._storage)
         self._sources = CanonicalArtifactFilesystem(self._storage)
         self._lock = threading.RLock()

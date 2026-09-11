@@ -6,10 +6,11 @@ import asyncio
 import inspect
 import json
 import pickle
+import shutil
 import tempfile
 import unittest
 from collections.abc import Mapping
-from contextlib import asynccontextmanager
+from contextlib import asynccontextmanager, contextmanager
 from dataclasses import dataclass, replace
 from typing import Awaitable, Callable
 from unittest import mock
@@ -785,6 +786,20 @@ class LeadOrchestrationTestCase(unittest.IsolatedAsyncioTestCase):
             self.control_workspace,
             self.backend,
         )
+
+    @contextmanager
+    def replace_session_worktree(self):
+        """Temporarily replace the named session root with another directory."""
+
+        root = self.session_resources.identity.worktree_root
+        moved = root.with_name(f"{root.name}-physically-moved")
+        root.rename(moved)
+        root.mkdir()
+        try:
+            yield moved, root
+        finally:
+            shutil.rmtree(root)
+            moved.rename(root)
 
     def conversation(self, subject: str = "Lead collaboration") -> str:
         return self.runtime.conversation_storage_services.catalog.create(

@@ -54,9 +54,13 @@ The initialized `main` workspace is the runtime's control root: configuration,
 conversation history, and diagnostics stay there. Story artifacts do not.
 Before every artifact-sensitive operation, runtime freshly verifies the exact
 branch, internal ref, and sibling worktree for the selected session and binds
-the operation only to that worktree. The picker follows the currently attached
-session, and switching or concurrent sessions never reuse another session's
-artifact source or application ledger.
+the operation to that worktree's physical `(st_dev, st_ino)` identity. The
+picker follows the currently attached session, and switching or concurrent
+sessions never reuse another session's artifact source, active-debate or
+own-agent state, or application ledger. Conversation history keeps its
+separate control-root/configured-storage ownership. Replacing the worktree
+path before or during a bound operation is rejected rather than adopting the
+replacement.
 
 There is no fallback to `main`, the shell's current directory, or a previous
 session, and a Lead call does not provision missing resources. If the exact
@@ -653,9 +657,14 @@ Runtime: stages only the disclosed changed paths and commits the local session
 
 Reject or Revise at Apply leaves the reviewed candidate unapplied. A stale
 candidate is not applied; the lead must prepare a new one. Commit confirmation
-is not implied by Apply confirmation. If the exact session resources disappear
-after Apply confirmation but before artifact I/O, runtime attempts no write
-and durably returns `recovery_required` with `operator_recovery`.
+is not implied by Apply confirmation. If exact binding or physical-root
+validation fails after Apply confirmation but before the repository's
+`apply_artifact_changes()` method starts, runtime does not start artifact
+application and durably returns `recovery_required` with
+`operator_recovery`. After that method has started, an unclassified root,
+security, or format failure is instead
+`outcome_unknown` with `inspect_and_resolve_outcome`; inspect the exact
+application before any new write.
 
 ## Scenario 6: ordinary discussion
 

@@ -281,7 +281,11 @@ Construct `StoryRuntime` from the initialized `main` workspace. That root is
 the control plane for configuration, conversation history, and diagnostics;
 it is not the story-artifact root for an active session. Every
 artifact-sensitive session operation freshly validates the session's exact
-branch/ref/sibling-worktree identity and reads or writes only that worktree.
+branch/ref/sibling-worktree identity and pins the worktree's physical
+`(st_dev, st_ino)` identity. Artifact access and provider-visible active-debate
+or own-agent state then come only from that worktree; conversation history
+retains its separately configured control-plane storage. Replacing the named
+worktree does not transfer authority to the replacement.
 The runtime never falls back to `main`, the current directory, or a previously
 used session, and it does not provision missing session resources as a side
 effect. Create or reopen the session through the lifecycle first.
@@ -361,9 +365,13 @@ durable identity-only indicators. See
   capabilities do not grant the lead Apply, commit, or checkpoint authority.
 - Missing, moved, mismatched, or otherwise non-ready session Git resources
   stop artifact-sensitive work before provider or artifact I/O. There is no
-  fallback or automatic provisioning. If readiness is lost after Apply was
-  durably confirmed but before artifact I/O, runtime records
-  `recovery_required` / `operator_recovery` and attempts no write.
+  fallback or automatic provisioning. If binding or physical-root validation
+  fails after Apply was durably confirmed but before the repository's
+  `apply_artifact_changes()` method starts, runtime records
+  `recovery_required` / `operator_recovery` and does not start artifact
+  application. Once that method has started, an unclassified root, security,
+  or format failure is conservatively
+  `outcome_unknown` / `inspect_and_resolve_outcome`.
 - Smoke is intentionally provider-free and story-free.
 - Workspace configuration, histories, diagnostics, and artifacts are local
   plaintext unless the surrounding environment protects them.

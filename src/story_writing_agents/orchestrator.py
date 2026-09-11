@@ -263,7 +263,11 @@ from .debug_log import (
 )
 from .directives import apply_directive as persist_directive
 from .errors import (
-    BackendProtocolError, ConversationNotFoundError, ProviderAuthenticationRequiredError,
+    BackendProtocolError,
+    ConversationNotFoundError,
+    ProviderAuthenticationRequiredError,
+    WorkspaceFormatError,
+    WorkspaceSecurityError,
 )
 from .prompts import PromptAssembler
 from .specialist_routing import (
@@ -277,7 +281,7 @@ from .specialist_routing import (
     specialists_for_domains,
     validate_specialist_routing,
 )
-from .workspace import Workspace
+from .workspace import SessionSourceWorkspace, Workspace
 from .workspace.initialization import (
     SessionArtifactBinding,
     SessionArtifactBindingError,
@@ -2687,9 +2691,25 @@ class StoryRuntime:
             operation_id = None if preparation is None else preparation.reference_operation_id
             terminal_proof = False
             if operation_id is not None and reference_operation_belongs_to_session(operation_id, session_id):
-                reference_history = self._session_artifact_binding(
-                    session_id
-                ).repository.inspect_reference_operation(operation_id)
+                try:
+                    reference_history = self._session_artifact_binding(
+                        session_id
+                    ).repository.inspect_reference_operation(operation_id)
+                except (
+                    SessionArtifactBindingError,
+                    WorkspaceFormatError,
+                    WorkspaceSecurityError,
+                ):
+                    return self._blocking_lead_result(
+                        session_id,
+                        conversation_id,
+                        CollaborationStepState.RECOVERY_REQUIRED,
+                        "The Lead failure is durable, but its exact session artifact "
+                        "resources are unavailable. Repair them before continuing; "
+                        "this preparation will not be replayed.",
+                        turn_id=start_event.turn_id,
+                        step_id=start_event.step_id,
+                    )
                 permitted = {None, ReferenceAuthorizationErrorCode.WORKFLOW_FAILURE,
                              ReferenceAuthorizationErrorCode.PROVIDER_FAILURE}
                 terminal_proof = bool(
@@ -3595,6 +3615,7 @@ class StoryRuntime:
                             "No write occurred; regenerate and review it."
                         )
                     else:
+                        repository_execution_started = False
                         try:
                             consultation = next((event.payload for event in persisted
                                 if type(event.payload) is CollaborationProposal
@@ -3634,19 +3655,34 @@ class StoryRuntime:
                                 raise ArtifactApplicationError(
                                     ArtifactApplicationErrorCode.DRIFT
                                 )
+                            repository_execution_started = True
                             application_result = artifacts.apply_artifact_changes(
                                 application
                             )
-                        except SessionArtifactBindingError:
-                            outcome = ArtifactApplicationOutcomeKind.RECOVERY_REQUIRED
-                            next_action = (
-                                ArtifactApplicationNextAction.OPERATOR_RECOVERY
-                            )
-                            message = (
-                                "The exact session artifact resources are not ready. "
-                                "No artifact write was attempted; operator recovery "
-                                "is required."
-                            )
+                        except (
+                            SessionArtifactBindingError,
+                            WorkspaceFormatError,
+                            WorkspaceSecurityError,
+                        ):
+                            if repository_execution_started:
+                                outcome = ArtifactApplicationOutcomeKind.OUTCOME_UNKNOWN
+                                next_action = (
+                                    ArtifactApplicationNextAction.INSPECT_AND_RESOLVE_OUTCOME
+                                )
+                                message = (
+                                    "The artifact application outcome is uncertain. "
+                                    "Inspect the exact application before any new write."
+                                )
+                            else:
+                                outcome = ArtifactApplicationOutcomeKind.RECOVERY_REQUIRED
+                                next_action = (
+                                    ArtifactApplicationNextAction.OPERATOR_RECOVERY
+                                )
+                                message = (
+                                    "The exact session artifact resources are not ready. "
+                                    "Repository execution did not start; operator recovery "
+                                    "is required."
+                                )
                         except ArtifactChangeSetError:
                             outcome = ArtifactApplicationOutcomeKind.STALE
                             next_action = (
@@ -4657,7 +4693,11 @@ class StoryRuntime:
         bound_agent: BoundAgent | None = None
         provider: _AccountingContextProvider | None = None
         try:
-            artifacts = self._session_artifact_binding(session_id).repository
+            artifact_binding = self._session_artifact_binding(session_id)
+            artifacts = artifact_binding.repository
+            session_sources = SessionSourceWorkspace.from_artifact_binding(
+                artifact_binding
+            )
             reference_operation = prepare_runtime_reference_operation(
                 artifacts,
                 session_id=session_id,
@@ -4722,8 +4762,8 @@ class StoryRuntime:
                     conversation_id,
                     captured_context=captured_conversation,
                 ),
-                ActiveDebateSourceAdapter(self.workspace, scope, None),
-                OwnAgentStateSourceAdapter(self.workspace, scope),
+                ActiveDebateSourceAdapter(session_sources, scope, None),
+                OwnAgentStateSourceAdapter(session_sources, scope),
             )
             reference_operation_id, reservations = self._reference_reservations(
                 reference_operation
@@ -5547,6 +5587,7 @@ class StoryRuntime:
             else cast(ArtifactReviewSynthesisPayload, artifact_synthesis_event.payload)
         )
         state = ArtifactProposalState.FAILED
+        artifact_recovery_required = False
         reviewed_proposal: ArtifactReviewedProposal | None = None
         application_payload: ArtifactApplicationRequestPayload | None = None
         message = (
@@ -5577,6 +5618,18 @@ class StoryRuntime:
                     project_artifact_change_set(
                         {item.path: item.content for item in snapshots},
                         candidate.candidate.change_set,
+                    )
+                except (
+                    SessionArtifactBindingError,
+                    WorkspaceFormatError,
+                    WorkspaceSecurityError,
+                ):
+                    artifact_recovery_required = True
+                    state = ArtifactProposalState.RECOVERY_REQUIRED
+                    message = (
+                        "Artifact review results are durable, but the exact session "
+                        "artifact resources were lost before finalization. Repair "
+                        "them before continuing; provider work will not be replayed."
                     )
                 except (ArtifactChangeSetError, ValueError, BackendProtocolError):
                     state = ArtifactProposalState.STALE
@@ -5765,11 +5818,15 @@ class StoryRuntime:
                 ),
             )
         )
-        core_state = {
-            CollaborationExecutionOutcomeKind.SUCCEEDED: CollaborationStepState.COMPLETED,
-            CollaborationExecutionOutcomeKind.FAILED: CollaborationStepState.FAILED,
-            CollaborationExecutionOutcomeKind.CANCELLED: CollaborationStepState.INTERRUPTED,
-        }[result.overall_outcome]
+        core_state = (
+            CollaborationStepState.RECOVERY_REQUIRED
+            if artifact_recovery_required
+            else {
+                CollaborationExecutionOutcomeKind.SUCCEEDED: CollaborationStepState.COMPLETED,
+                CollaborationExecutionOutcomeKind.FAILED: CollaborationStepState.FAILED,
+                CollaborationExecutionOutcomeKind.CANCELLED: CollaborationStepState.INTERRUPTED,
+            }[result.overall_outcome]
+        )
         final_drafts.append(
             self._terminal_state_draft(
                 events=events,
@@ -5815,6 +5872,15 @@ class StoryRuntime:
                 application_payload.application_request_digest,
                 request_event.event_id,
             )
+        elif artifact_recovery_required:
+            self._artifact_application_capabilities.pop(
+                (
+                    events[-1].session_id,
+                    events[-1].conversation_id,
+                    proposal.step_id,
+                ),
+                None,
+            )
         return LeadTurnResult(
             events[-1].session_id,
             events[-1].conversation_id,
@@ -5826,7 +5892,9 @@ class StoryRuntime:
             core_state,
             None,
             (
-                CollaborationNextAction.SUBMIT_APPLICATION_DECISION
+                CollaborationNextAction.REPAIR_AUTHORITATIVE_HISTORY
+                if artifact_recovery_required
+                else CollaborationNextAction.SUBMIT_APPLICATION_DECISION
                 if application_payload is not None
                 else CollaborationNextAction.CONTINUE_WITH_LEAD
             ),
@@ -5858,7 +5926,11 @@ class StoryRuntime:
                 proposal_id=proposal.proposal_id,
                 proposal_revision=proposal.proposal_revision,
                 proposal_digest=proposal.proposal_digest,
-                execution_result_event_id=result_event_id,
+                execution_result_event_id=(
+                    None
+                    if state is CollaborationStepState.RECOVERY_REQUIRED
+                    else result_event_id
+                ),
             ),
         )
 
@@ -6698,7 +6770,11 @@ class StoryRuntime:
     ) -> LeadTurnResult:
         if self.backend is None:
             raise BackendProtocolError("lead collaboration requires an AgentBackend")
-        artifacts = self._session_artifact_binding(session_id).repository
+        artifact_binding = self._session_artifact_binding(session_id)
+        artifacts = artifact_binding.repository
+        session_sources = SessionSourceWorkspace.from_artifact_binding(
+            artifact_binding
+        )
         reference_operation = prepare_runtime_reference_operation(
             artifacts,
             session_id=session_id,
@@ -6802,8 +6878,8 @@ class StoryRuntime:
                     include_same_session_active=True,
                     include_searchable_history=True,
                 ),
-                ActiveDebateSourceAdapter(self.workspace, scope, None),
-                OwnAgentStateSourceAdapter(self.workspace, scope),
+                ActiveDebateSourceAdapter(session_sources, scope, None),
+                OwnAgentStateSourceAdapter(session_sources, scope),
             )
             reference_operation_id, reservations = self._reference_reservations(
                 reference_operation
@@ -7974,9 +8050,13 @@ class StoryRuntime:
             conversation_id,
             LEAD_ORCHESTRATOR,
         )
+        artifact_binding = self._session_artifact_binding(session_id)
         writing_adapter = WritingArtifactSourceAdapter(
-            self._session_artifact_binding(session_id).repository,
+            artifact_binding.repository,
             scope,
+        )
+        session_sources = SessionSourceWorkspace.from_artifact_binding(
+            artifact_binding
         )
         current_statuses: dict[str, CollaborationEvidenceReceipt] | None = None
         empty_digest = "sha256:" + hashlib.sha256(b"").hexdigest()
@@ -8053,6 +8133,7 @@ class StoryRuntime:
                     scope=scope,
                     receipt=receipt,
                     writing_adapter=writing_adapter,
+                    session_sources=session_sources,
                 )
                 source_digest = snapshot.descriptor.content_digest
             result.append(
@@ -8161,9 +8242,25 @@ class StoryRuntime:
 
         # failure() can swallow cleanup I/O and mark its in-memory operation
         # finished. Only the repository's validated terminal history is proof.
-        references = self._session_artifact_binding(
-            session_id
-        ).repository.inspect_reference_operation(operation_id)
+        try:
+            references = self._session_artifact_binding(
+                session_id
+            ).repository.inspect_reference_operation(operation_id)
+        except (
+            SessionArtifactBindingError,
+            WorkspaceFormatError,
+            WorkspaceSecurityError,
+        ):
+            return self._blocking_lead_result(
+                session_id,
+                conversation_id,
+                CollaborationStepState.RECOVERY_REQUIRED,
+                "The original Lead failure is durable, but its exact session "
+                "reference history is unavailable. Repair the session artifact "
+                "resources before continuing; the provider call will not be replayed.",
+                turn_id=turn_id,
+                step_id=step_id,
+            )
         if (
             type(references) is not ReferenceOperationHistory
             or references.manifest.operation_id != operation_id
@@ -9336,9 +9433,13 @@ class StoryRuntime:
             conversation_id,
             LEAD_ORCHESTRATOR,
         )
+        artifact_binding = self._session_artifact_binding(session_id)
         writing_adapter = WritingArtifactSourceAdapter(
-            self._session_artifact_binding(session_id).repository,
+            artifact_binding.repository,
             scope,
+        )
+        session_sources = SessionSourceWorkspace.from_artifact_binding(
+            artifact_binding
         )
         if status_receipts:
             current_statuses = {
@@ -9406,7 +9507,7 @@ class StoryRuntime:
                     current_descriptors.extend(
                         sorted(
                             OwnAgentStateSourceAdapter(
-                                self.workspace,
+                                session_sources,
                                 scope,
                             ).inventory(CONTEXT_SOURCE_POLICY),
                             key=lambda descriptor: descriptor.source_id,
@@ -9434,6 +9535,7 @@ class StoryRuntime:
                 scope=scope,
                 receipt=receipt,
                 writing_adapter=writing_adapter,
+                session_sources=session_sources,
             )
             if receipt.evidence_id in read_inputs:
                 raise ValueError("lead READ evidence identity is duplicated")
@@ -9485,6 +9587,7 @@ class StoryRuntime:
         scope: ContextScope,
         receipt: CollaborationEvidenceReceipt,
         writing_adapter: WritingArtifactSourceAdapter,
+        session_sources: Workspace,
     ) -> CollaborationInputRevision:
         """Capture and compare one cited READ boundary through its source owner."""
 
@@ -9494,6 +9597,7 @@ class StoryRuntime:
             scope=scope,
             receipt=receipt,
             writing_adapter=writing_adapter,
+            session_sources=session_sources,
         )
         assert receipt.source_kind is not None
         assert receipt.locator is not None
@@ -9525,6 +9629,7 @@ class StoryRuntime:
         scope: ContextScope,
         receipt: CollaborationEvidenceReceipt,
         writing_adapter: WritingArtifactSourceAdapter,
+        session_sources: Workspace,
     ) -> ContextSourceSnapshot:
         """Revalidate READ identity and boundary bytes, retaining the whole source."""
 
@@ -9561,7 +9666,7 @@ class StoryRuntime:
             and receipt.locator == f"agent-state/{LEAD_ORCHESTRATOR}"
         ):
             snapshot = OwnAgentStateSourceAdapter(
-                self.workspace,
+                session_sources,
                 scope,
             ).capture(receipt.locator, CONTEXT_SOURCE_POLICY)
         else:
