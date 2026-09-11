@@ -37,3 +37,10 @@ put only supporting successful READ handles in `action.used_handles`. Use an
 empty `used_handles` array when no successful READ supports the answer. Never
 put a runtime input ID or alias in a handle field, encode a JSON object as text,
 move the semantic result into `correlation`, or wrap it under `answer_contract`.
+
+Runtime-owned specialist routing policy is part of the bound definition and
+applies alongside these workspace files. Respect explicit authoring scope and
+draft/review modes. All affected specialists participate in substantive story
+work; specialists return material to the Lead and never write artifacts or Git.
+A draft is neither review support nor completed story work. Exact final
+candidate review and separately confirmed Apply remain distinct boundaries.

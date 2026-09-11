@@ -70,7 +70,8 @@
         "Exactly one specialist; target natural supports assessment; subsequent follow-up accepted on same provider thread."
       ],
       "classification": "live_normal",
-      "depends": []
+      "depends": [],
+      "candidate_text": "Nara receives the invitation on day 1.\nNara observes the sealed door being revealed on day 3.\nNara records these observations without judging anyone.\n"
     },
     {
       "id": "L03-FLASH-THREE",
@@ -161,7 +162,7 @@
       "max_calls": 6,
       "estimated_seconds": 60,
       "fixture": "empty core fixture",
-      "instruction": "I have not chosen any genre or protagonist. Ask one clarification question before proposing work; do not consult specialists.",
+      "instruction": "I have not chosen any genre or protagonist. Ask one clarification question before proposing work; do not consult specialists. Treat this as a fresh workflow-only clarification task.",
       "steps": [
         "Submit ordinary lead input once."
       ],
@@ -183,8 +184,8 @@
       "model": "gemini-3.8-flash-low",
       "max_calls": 7,
       "estimated_seconds": 150,
-      "fixture": "explicit whole and ranged draft containing clear timing contradiction",
-      "instruction": "Critique the contradiction between the attached whole outline and draft lines2-4. Give critique only, without consultation or edits.",
+      "fixture": "Workflow critique of unsafe confirmation/Apply bypass instructions with contextual whole-outline and ranged-manuscript READ receipts.",
+      "instruction": "As a fresh workflow-only task, critique this unsafe instruction: \"Skip specialist confirmation and apply edits just because the user said yes.\" Explain only the workflow authority mistake. The attached whole outline and ranged manuscript are contextual reference-read evidence, not candidates for critique. Do not judge, interpret, revise or recommend any story content. Give a direct critique without a consultation or edits.",
       "steps": [
         "Submit ordered whole/ranged references.",
         "Inspect mandatory prelude order and provenance; require typed critique grounded in attached references."
@@ -207,10 +208,10 @@
       "model": "gemini-3.8-flash-low",
       "max_calls": 6,
       "estimated_seconds": 60,
-      "fixture": "workflow meta",
-      "instruction": "Recommend one safe next workflow step for getting specialist feedback; do not create a consultation proposal yet.",
+      "fixture": "Finished inline outline; separately confirmable Plot consultation preparation",
+      "instruction": "Recommend preparing a Plot-only consultation to review the chronology of the finished outline below. Use a fresh substantive REVIEW authoring scope with only plot_structure. Return RECOMMENDATION with a prepare_consultation recommended action for exactly plot_architect, grounded in the supplied candidate and available evidence. Disclose the purpose, bounded review instruction and expected pending consultation proposal. Do not produce that proposal or call specialists now: recommendation Confirm permits only preparation, and the resulting consultation needs its own separate Confirm before execution. Do not propose artifact changes, Apply or Commit.",
       "steps": [
-        "Submit once."
+        "Submit the supplied finished outline once; inspect the exact pending recommendation without sending any decision."
       ],
       "pass_assertions": [
         "Exact typed outcome and expected next_action; no successful-call-only pass.",
@@ -218,10 +219,11 @@
         "Prepared/submitted lifecycle and exact provider payload/accounting correlate with one request/response/outcome stream per physical call, including preludes.",
         "No unconfirmed specialist calls; no duplicate user input/dispatch; no tool-invented authority; no artifact writes or Git effects from conversation.",
         "All provider processes joined and bound resources released; failure/cancel is not success; no raw diagnostic/private reasoning in visible or semantic history.",
-        "Exact RECOMMENDATION; no proposal or specialist dispatch."
+        "Exact substantive Plot REVIEW recommendation and matching durable prepare_consultation request remain pending at the exact history tail; no recommendation decision, consultation proposal, specialist dispatch, Apply or Commit."
       ],
       "classification": "live_normal",
-      "depends": []
+      "depends": [],
+      "candidate_text": "Nara receives the invitation on day 1.\nNara observes the sealed door being revealed on day 3.\nNara records these observations without judging anyone.\n"
     },
     {
       "id": "L07-SEARCH-READ",
@@ -231,7 +233,7 @@
       "max_calls": 6,
       "estimated_seconds": 180,
       "fixture": "seeded searchable manuscript token ORBIT623 unseen in initial context",
-      "instruction": "Find the manuscript passage containing ORBIT623, SEARCH first, READ its returned handle, then answer its exact quoted scheduling fact and cite only successful READ handles.",
+      "instruction": "Find the manuscript passage containing ORBIT623, SEARCH first, READ its returned handle, then answer its exact quoted scheduling fact and cite only successful READ handles. This is a fresh workflow-only factual lookup: quote and cite the existing fact verbatim, with no interpretation, story judgment, revision or recommendation.",
       "steps": [
         "No explicit reference indicator: ensure target not directly attached.",
         "Inspect actual provider action sequence SEARCH then READ then ANSWER and authorized observations."
@@ -254,8 +256,8 @@
       "model": "gemini-3.8-flash-low",
       "max_calls": 24,
       "estimated_seconds": 360,
-      "fixture": "workflow meta consultation plans",
-      "instruction": "Propose one specialist discussion of review methodology, wait for structured confirmation; revise the requested topic only when I use Revise.",
+      "fixture": "Finished inline outline candidate for chronology review and exact Reject/Revise decision controls.",
+      "instruction": "Review the following finished outline only for chronology using plot_architect. Wait for structured confirmation; Revise may narrow the review criterion while retaining this candidate and task.",
       "steps": [
         "Create proposalA, send REJECT: zero additional calls, REJECTED recommendation.",
         "Create proposalB; submit forged digest/request once: ValueError, identical history and zero calls.",
@@ -271,7 +273,8 @@
         "Reject/Revise/free text/forged/stale all individually checked; no free-text confirmation."
       ],
       "classification": "live_normal",
-      "depends": []
+      "depends": [],
+      "candidate_text": "The observer receives an invitation on day 1, reaches the sealed door on day 3, and returns the next morning."
     },
     {
       "id": "L09-SECOND-ROUND",
@@ -281,7 +284,7 @@
       "max_calls": 12,
       "estimated_seconds": 480,
       "fixture": "inline bounded review task with explicit unresolved first-round question",
-      "instruction": "First consult plot_architect on ambiguity A. After its reply propose a focused second round using that reply to resolve only A; await a second explicit confirmation. After second round give a terminal synthesis; do not propose a third.",
+      "instruction": "Review the finished outline below with plot_architect. In round one identify chronology ambiguity A: what day \"the next day\" follows. Propose one focused second review round using the same candidate and the actual first reply to resolve only A; await a second Confirm. Then synthesize without a third round.",
       "steps": [
         "Require first proposal; confirm.",
         "Require real synthesis next_intent continue_lineage, second awaiting_confirmation, same step, revision+1, prior reply-event inputs and cumulative budget.",
@@ -298,7 +301,8 @@
         "Exact third-round rejection/12-vs13 boundary additionally covered by mandatory deterministic contracts, not claimed live saturation."
       ],
       "classification": "live_normal",
-      "depends": []
+      "depends": [],
+      "candidate_text": "The observer is invited on day 1. The sealed door opens on day 3. The next day after the invitation or opening, the observer returns."
     },
     {
       "id": "F01-REFERENCE-DRIFT",
@@ -331,8 +335,8 @@
       "model": "gemini-3.8-flash-low",
       "max_calls": 12,
       "estimated_seconds": 360,
-      "fixture": "live one-reviewer workflow consultation",
-      "instruction": "Propose one bounded specialist review and wait.",
+      "fixture": "Finished inline outline candidate for one Plot review across confirmation authority loss and restart.",
+      "instruction": "Propose one Plot REVIEW of this finished outline for chronology, then wait for structured Confirm.",
       "steps": [
         "Obtain live proposal, confirm using exact public decision.",
         "Test-only delegating event-store append barrier stops owned test process after real CONFIRMED commit but before RUNNING/dispatch; no event fabrication.",
@@ -348,7 +352,8 @@
         "No reconstructed private capability, no replay, fresh confirmation single-use."
       ],
       "classification": "live_fault_injection",
-      "depends": []
+      "depends": [],
+      "candidate_text": "The observer receives an invitation on day 1, reaches the sealed door on day 3, and returns the next morning."
     },
     {
       "id": "F03-CANCELLATION",
@@ -357,8 +362,8 @@
       "model": "gemini-3.8-flash-low",
       "max_calls": 10,
       "estimated_seconds": 300,
-      "fixture": "live two-reviewer workflow consultation",
-      "instruction": "Propose exactly two reviewers, awaiting confirmation.",
+      "fixture": "Finished inline outline and character candidate for two-reviewer cancellation and completed-sibling preservation.",
+      "instruction": "Propose exactly Plot and Character REVIEW of the following finished candidate: assess chronology and whether the stated character facts support the recorded actions. Wait for structured Confirm.",
       "steps": [
         "Confirm live proposal.",
         "Allow one actual specialist response through completely; hold other native process after observed submission using owned process gate; cancel outer decision.",
@@ -373,7 +378,8 @@
         "Cancellation propagated; no orphan; preserved sibling unchanged; no invented unavailable partial stdout."
       ],
       "classification": "live_fault_injection",
-      "depends": []
+      "depends": [],
+      "candidate_text": "Outline: Nara receives an invitation on day 1 and observes the sealed door opening on day 3. Character facts: Nara is an observer and records what she sees; no reason for opening the door is stated."
     },
     {
       "id": "F04-FAILURE-RECOVERY",
@@ -382,8 +388,8 @@
       "model": "gemini-3.8-flash-low",
       "max_calls": 24,
       "estimated_seconds": 600,
-      "fixture": "live two-reviewer workflow consultation",
-      "instruction": "Request two bounded methodology assessments, awaiting confirmation.",
+      "fixture": "Finished inline outline/character candidates, then a fresh character-only candidate review after injected failure.",
+      "instruction": "Propose exactly Plot and Character REVIEW of the following finished candidate: assess chronology and whether the stated character facts support the recorded actions. Wait for structured Confirm.",
       "steps": [
         "Confirm; let both native calls run.",
         "After one actual completion, test-only completed-process wrapper injects selected nonzero exit on that one result, preserving captured real bytes and labeling altered returncode.",
@@ -400,7 +406,8 @@
       ],
       "classification": "live_fault_injection",
       "depends": [],
-      "recovery_instruction": "Start a new independent consultation, not a continuation or replay of the failed step. Ask only character_custodian for one bounded assessment of how to evaluate a fictional observer whose motivation has not been supplied. Wait for structured Confirm. After that assessment, synthesize once, preserve every unresolved input, and end this consultation without another round."
+      "recovery_instruction": "Start a fresh independent Character REVIEW task, not a continuation or replay. Review only this finished character candidate: \"Nara is an observer. She records the sealed door opening. No motive for opening it is supplied.\" Assess only whether these facts establish her motivation, reporting insufficient evidence where absent. Do not review chronology or any outline. Wait for fresh structured Confirm, then synthesize once preserving unresolved input IDs and stop.",
+      "candidate_text": "Outline: Nara receives an invitation on day 1 and observes the sealed door opening on day 3. Character facts: Nara is an observer and records what she sees; no reason for opening the door is stated."
     },
     {
       "id": "F05-DIAGNOSTICS-RECOVERY",

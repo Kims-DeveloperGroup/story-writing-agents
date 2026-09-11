@@ -12,7 +12,7 @@ from unittest import mock
 
 from story_writing_agents import StoryRuntime, Workspace
 from story_writing_agents import conversations as c
-from story_writing_agents.agents import LEAD_ORCHESTRATOR
+from story_writing_agents.agents import LEAD_ORCHESTRATOR, PLOT_ARCHITECT
 from story_writing_agents.workspace.initialization import provision_session_resources
 from tests import test_lead_orchestration as lead
 from tests import test_artifact_proposal_orchestration as artifact
@@ -52,6 +52,7 @@ class ObjectiveCase(lead.LeadOrchestrationTestCase):
         self.workspace = Workspace(ready.identity.worktree_root).require_ready()
         self.backend = lead._LeadBackend(persist_context_threads=True)
         self.runtime = StoryRuntime(self.workspace, self.backend)
+        self.objective_tasks = {}
 
     def projection(self, conversation_id):
         return c.project_collaboration_history(self.history(conversation_id))
@@ -74,33 +75,85 @@ class ObjectiveCase(lead.LeadOrchestrationTestCase):
                 "evidence_ids": [artifact._status_id(call, OUTLINE)],
                 "kind": "question", "message": message, "proposal": None,
                 "artifact_intent": None, "objective_intent": intent,
+                "authoring_scope": self.scope(call, intent=intent, activity="draft"),
             })
         return respond
 
-    async def start(self, conversation_id=None, *, message=DRAFT):
+    def scope(self, call, *, intent=None, activity="review"):
+        tasks = lead._workflow_material(call.payload)["authoring_tasks"]
+        task_id = self.objective_tasks.get((intent or {}).get("objective_id"))
+        index = next((i for i, task in enumerate(tasks) if task["task_id"] == task_id), -1)
+        return lead._live_scope(call, activity=activity, paths=(OUTLINE,), task_index=index)
+
+    async def start(self, conversation_id=None, *, message=DRAFT, objective_id=None):
+        from tests.test_specialist_routing_runtime import scoped_proposal
+
+        conversation_id = conversation_id or self.conversation()
+        intent = {
+            "action": "start", "request": "Prepare the approved synthetic outline.",
+            "target_paths": [OUTLINE], "next_step": "consult", "draft_source_event_ids": [],
+        }
+        if objective_id is not None:
+            intent = {"action": "continue", "objective_id": objective_id,
+                      "next_step": "consult", "draft_source_event_ids": []}
+        self.backend.enqueue(scoped_proposal(
+            PLOT_ARCHITECT, paths=(OUTLINE,),
+            selected=self.objective_tasks.get(objective_id),
+            mutate=lambda value, _material: value.update(objective_intent=intent),
+        ))
+        proposed = await self.runtime.lead_turn(self.session_id, conversation_id,
+            f"Draft {OUTLINE} from this brief: a lantern vanishes, its keeper is found, and it returns.")
+        self.assertIs(proposed.kind, c.LeadOutcomeKind.PROPOSAL, proposed)
+        self.assertEqual(proposed.proposal.participants, (PLOT_ARCHITECT,))
+        self.objective_tasks[self.objective(conversation_id).facts.objective_id] = proposed.proposal.authoring_scope.task_id
+        self.backend.enqueue_for(PLOT_ARCHITECT, lead._specialist_outcome("drafted", message))
+        self.backend.enqueue_for(LEAD_ORCHESTRATOR, lead._synthesis_outcome(message=message))
+        completed = await self.runtime.decide_lead_step(lead._decision(proposed, c.CollaborationConfirmationDecision.CONFIRM))
+        turn = completed.turn
+        self.assertIs(turn.state, c.CollaborationStepState.COMPLETED)
+        self.assertEqual(turn.message, message + "\n\n"
+            "Draft material is available for Lead integration and concrete review. "
+            "Story authoring is not complete; no Apply is authorized.")
+        synthesis = next(e for e in reversed(self.history(conversation_id))
+                         if isinstance(e.payload, c.CollaborationLeadSynthesisPayload))
+        self.assertEqual(synthesis.payload.message, message)
+        source = self.projection(conversation_id).offered_draft_sources[-1]
+        self.assertEqual(source.event_id, synthesis.event_id)
+        self.assertEqual(source.content_digest, digest(message))
+        return conversation_id, turn
+
+    async def clarify(self, conversation_id=None, *, message="Which consequence should close the outline?"):
         conversation_id = conversation_id or self.conversation()
         self.backend.enqueue(self.question(intent={
             "action": "start", "request": "Prepare the approved synthetic outline.",
             "target_paths": [OUTLINE], "next_step": "clarify", "draft_source_event_ids": [],
         }, message=message))
         turn = await self.runtime.lead_turn(self.session_id, conversation_id,
-            f"Offer a tiny three-beat draft for {OUTLINE}; wait for my approval.")
-        self.assertEqual(turn.message, message)
+            f"Help me clarify the ending before drafting {OUTLINE}.")
+        self.assertIs(turn.kind, c.LeadOutcomeKind.QUESTION)
+        judgment = next(e.payload for e in reversed(self.history(conversation_id))
+                        if isinstance(e.payload, c.CollaborationLeadJudgmentPayload))
+        self.objective_tasks[self.objective(conversation_id).facts.objective_id] = judgment.authoring_scope.task_id
         return conversation_id, turn
 
     async def prepare(self, conversation_id, *, text=DRAFT, select=True, new=False, attached=False):
+        if new:
+            await self.start(conversation_id, message=text)
         objective = self.objective(conversation_id)
         source = self.projection(conversation_id).offered_draft_sources[-1]
-        intent = ({"action": "start", "request": "Prepare a subsequent outline.",
-                   "target_paths": [OUTLINE], "next_step": "prepare", "draft_source_event_ids": []}
-                  if new else {"action": "continue", "objective_id": objective.facts.objective_id,
-                              "next_step": "prepare", "draft_source_event_ids": [source.event_id] if select else []})
+        intent = {"action": "continue", "objective_id": objective.facts.objective_id,
+                  "next_step": "prepare", "draft_source_event_ids": [source.event_id] if select else []}
         evidence = (lambda call, material: artifact._reference_ids(material)) if attached else (
             lambda call, _material: [artifact._status_id(call, OUTLINE)])
-        self.backend.enqueue(artifact._artifact_outcome(
+        response = artifact._artifact_outcome(
             operations=lambda call, material: [{"kind": "replace", "evidence_id": evidence(call, material)[0], "new_text": text}],
             evidence_status="verified" if attached else "empty", evidence_ids=evidence,
-            objective_intent=intent))
+            objective_intent=intent)
+        def prepare_current_task(call, provider):
+            value = json.loads(response(call, provider))
+            value["action"]["result"]["authoring_scope"] = self.scope(call, intent=intent)
+            return json.dumps(value)
+        self.backend.enqueue(prepare_current_task)
         prompt = f"Prepare the next revision using ${{{OUTLINE}}}." if attached else "네, 그 초안 그대로 문서로 준비해 줘."
         result = await self.runtime.lead_turn(self.session_id, conversation_id, prompt)
         self.assertIs(result.kind, c.LeadOutcomeKind.PROPOSAL, result)
@@ -176,7 +229,17 @@ class ArtifactObjectiveContractTests(ObjectiveCase):
 
     async def test_question_and_synthesis_sources_preserve_exact_whole_message_digests(self):
         message = "초안\r\n" + DRAFT + "\nApprove this whole message?"
-        conversation_id, _ = await self.start(message=message)
+        question = "확인\r\nWhich consequence should close the outline?"
+        conversation_id, _ = await self.clarify(message=question)
+        question_event = next(e for e in reversed(self.history(conversation_id))
+                              if isinstance(e.payload, c.CollaborationLeadJudgmentPayload))
+        historical = rewrite_history(self.history(conversation_id), question_event.event_id,
+            payload=replace(question_event.payload, authoring_scope=None))
+        historical_wire = c.encode_collaboration_event(historical[question_event.sequence - 1])
+        self.assertNotIn(b'"authoring_scope"', historical_wire)
+        self.assertEqual(c.encode_collaboration_event(c.decode_collaboration_event(historical_wire)), historical_wire)
+        self.assertEqual(c.project_collaboration_history(historical).offered_draft_sources[-1].content_digest, digest(question))
+        await self.start(conversation_id, message=message, objective_id=self.objective(conversation_id).facts.objective_id)
         sources = self.projection(conversation_id).offered_draft_sources
         self.assertEqual(sources[-1].content_digest, digest(message))
         self.assertNotEqual(sources[-1].content_digest, digest(message.replace("\r\n", "\n")))
@@ -252,7 +315,7 @@ class ArtifactObjectiveContractTests(ObjectiveCase):
         self.assertEqual({field.key: field.text for field in objective_record.fields}, {
             c.CollaborationReadableFieldKey.ARTIFACT_OBJECTIVE_REQUEST: "Prepare the approved synthetic outline.",
             c.CollaborationReadableFieldKey.ARTIFACT_OBJECTIVE_ACTION: "start",
-            c.CollaborationReadableFieldKey.ARTIFACT_OBJECTIVE_NEXT_STEP: "clarify",
+            c.CollaborationReadableFieldKey.ARTIFACT_OBJECTIVE_NEXT_STEP: "consult",
         })
         services = self.runtime.conversation_storage_services
         snapshot = SessionHistorySourceAdapter(services.catalog, services.event_store, self.session_id).capture()

@@ -373,6 +373,9 @@ blocks new provider activity and waits for already active calls to finish, then
 returns the real terminal to one native login owner. Same-provider challenges
 from one authentication generation share that handoff; provider handoffs are
 serialized. Python and other noninteractive calls launch no login process.
+That handoff changes no story-authoring authority: completed sibling replies
+remain retained, current task/revision and draft/review requirements still
+apply, and review, Apply, and Commit keep their separate confirmations.
 
 Native sign-in runs at the same workspace root and inherits the real stdin,
 stdout, stderr, process environment, and process group. The provider CLI may
@@ -657,7 +660,12 @@ separate storage/transfer representation; creating an archive copy does not
 alter the retained history that Lead context captures.
 
 The lead initial payload also exposes four content-free canonical-core status
-rows and the strict scope/status/evidence answer contract. Status inventory
+rows, active same-session authoring task facts, and the strict
+scope/authoring-scope/status/evidence answer contract. Scope interpretation,
+target paths, domains, task identity/revision, assignment mode, review candidate
+aliases, and criteria may disclose story plans and are retained in collaboration
+history where applicable. Archived history is still provider-readable memory,
+but its tasks supply no current routing authority. Status inventory
 does not itself expose core bytes or grant a story-body receipt. Even with no
 explicit reference or provider SEARCH/READ, `workflow_meta` turns receive
 current core bytes and retained history through the separate required `h`
@@ -672,13 +680,18 @@ absolute paths, internal files, another agent's state, and incompatible scopes.
 These evidence facts are provider input; public progress and the ledger remain
 content-free.
 
-A specialist-assignment payload also exposes its visible instruction, exact
-input aliases/revisions, and strict assessment/message contract. A synthesis
+A specialist-assignment payload also exposes its visible instruction,
+authoring scope, draft/review mode, review basis, exact input aliases/revisions,
+and strict assessment/message contract. A drafted reply can contain substantive
+new story text even though the specialist cannot write files. A synthesis
 payload exposes every successful specialist's assessment, message, ordered
 input IDs, reply-event attribution, all direct story inputs, mandatory
 unresolved IDs, and the optional round-two contract. Those values can contain
 sensitive story analysis and are captured as plaintext provider input/output
-and canonical collaboration events as applicable. The provider receives no
+and canonical collaboration events as applicable. Objective draft sources
+retain complete original messages and exact digests, even when a prepared
+candidate omits their conversational framing. The displayed runtime drafting
+notice is separate from that stored source identity. The provider receives no
 write/Git capability, credential, absolute path, sibling-only artifact source,
 or API for calling another agent.
 

@@ -19,6 +19,16 @@ from ..artifact_proposals import (
     serialize_artifact_review_candidate,
 )
 from ..errors import SessionIdError
+from ..specialist_routing import (
+    ArtifactReviewDomain,
+    AuthoringActivity,
+    AuthoringScope,
+    ReviewBasis,
+    SpecialistAssignmentMode,
+    required_authoring_specialists,
+    validate_specialist_assignment,
+    validate_specialist_routing,
+)
 from ..git.story_commit_contracts import (
     StoryCommitCandidate,
     StoryCommitDecision,
@@ -441,6 +451,7 @@ class CollaborationLeadJudgmentPayload:
     kind: LeadOutcomeKind
     message: str
     evidence: CollaborationLeadEvidence
+    authoring_scope: AuthoringScope | None = None
 
     def __post_init__(self) -> None:
         _require_enum(self.kind, LeadOutcomeKind, "lead judgment kind")
@@ -448,6 +459,7 @@ class CollaborationLeadJudgmentPayload:
         if type(self.evidence) is not CollaborationLeadEvidence:
             raise TypeError("lead judgment evidence must be CollaborationLeadEvidence")
         _validate_lead_evidence_matrix(self.kind, self.evidence)
+        _validate_authoring_evidence_scope(self.authoring_scope, self.evidence.scope)
 
 
 @dataclass(frozen=True, slots=True)
@@ -1013,6 +1025,8 @@ class LeadAssignmentIntent:
     agent_id: str
     instruction: str
     input_ids: tuple[str, ...]
+    mode: SpecialistAssignmentMode | None = None
+    review_basis: ReviewBasis | None = None
 
     def __post_init__(self) -> None:
         if type(self.agent_id) is not str or self.agent_id not in SPECIALIST_IDS:
@@ -1027,6 +1041,7 @@ class LeadAssignmentIntent:
                 raise TypeError("lead assignment input IDs must be exact text")
             _validate_identifier(input_id, label="lead assignment input ID")
         _require_unique(self.input_ids, label="lead assignment input IDs")
+        _validate_assignment_routing(self.mode, self.input_ids, self.review_basis)
 
 
 @dataclass(frozen=True, slots=True)
@@ -1036,6 +1051,7 @@ class LeadProposalIntent:
     relation: LeadProposalRelation
     purpose: str
     assignments: tuple[LeadAssignmentIntent, ...]
+    authoring_scope: AuthoringScope | None = None
 
     def __post_init__(self) -> None:
         _require_enum(self.relation, LeadProposalRelation, "lead proposal relation")
@@ -1052,6 +1068,11 @@ class LeadProposalIntent:
             tuple(item.agent_id for item in self.assignments),
             label="lead proposal specialist IDs",
         )
+        _validate_scoped_assignments(
+            self.authoring_scope,
+            tuple(item.agent_id for item in self.assignments),
+            tuple(item.mode for item in self.assignments),
+        )
 
 
 @dataclass(frozen=True, slots=True)
@@ -1067,6 +1088,7 @@ class LeadProviderOutcome:
     artifact_intent: ArtifactProposalIntent | None = None
     objective_intent: LeadObjectiveIntent | None = None
     recommended_action: LeadRecommendedAction | None = None
+    authoring_scope: AuthoringScope | None = field(default=None, kw_only=True)
 
     def __post_init__(self) -> None:
         _require_enum(self.kind, LeadOutcomeKind, "lead outcome kind")
@@ -1112,6 +1134,14 @@ class LeadProviderOutcome:
                     raise ValueError("objective preparation requires an artifact proposal")
             elif self.kind is LeadOutcomeKind.PROPOSAL:
                 raise ValueError("objective cancellation cannot propose work")
+        _validate_authoring_evidence_scope(self.authoring_scope, self.scope)
+        if (
+            self.authoring_scope is not None
+            and self.proposal is not None
+            and self.proposal.authoring_scope is not None
+            and self.proposal.authoring_scope != self.authoring_scope
+        ):
+            raise ValueError("lead outcome and intent authoring scopes must agree")
 
 
 class CollaborationInvocationKind(StrEnum):
@@ -1153,6 +1183,7 @@ class CollaborationSpecialistAssessment(StrEnum):
     CONCERN = "concern"
     CONFLICT = "conflict"
     INSUFFICIENT_EVIDENCE = "insufficient_evidence"
+    DRAFTED = "drafted"
 
 
 class CollaborationSynthesisOutcomeKind(StrEnum):
@@ -1438,6 +1469,7 @@ class LeadRecommendationRequestPayload:
     source_proposal_revision: int | None = None
     source_proposal_digest: str | None = None
     source_execution_attempt_id: str | None = None
+    authoring_scope: AuthoringScope | None = field(default=None, kw_only=True)
     action_digest: str = field(init=False)
 
     def __post_init__(self) -> None:
@@ -1477,11 +1509,23 @@ class LeadRecommendationRequestPayload:
             raise ValueError("recommendation source attempt requires its exact proposal")
         if self.source_execution_attempt_id is not None:
             _validate_identifier(self.source_execution_attempt_id, label="recommendation source attempt")
+        if self.authoring_scope is not None:
+            if type(self.basis.evidence) is not CollaborationLeadEvidence:
+                raise TypeError("scoped recommendation requires canonical source evidence")
+            _validate_authoring_evidence_scope(self.authoring_scope, self.basis.evidence.scope)
+            if self.authoring_scope.activity is AuthoringActivity.WORKFLOW:
+                raise ValueError("recommended preparation requires substantive authoring scope")
+            if not set(self.target_paths).issubset(self.authoring_scope.target_paths):
+                raise ValueError("recommendation scope omits its artifact targets")
+            if self.kind is LeadRecommendationActionKind.PREPARE_CONSULTATION:
+                validate_specialist_routing(self.authoring_scope, self.specialist_ids)
         value = {
             item.name: getattr(self, item.name)
             for item in self.__dataclass_fields__.values()
             if item.name != "action_digest"
         }
+        value.pop("authoring_scope", None)
+        value.update(_authoring_scope_fields(self.authoring_scope))
         value["basis"] = _basis_value(self.basis)
         value["draft_sources"] = [asdict(item) for item in self.draft_sources]
         object.__setattr__(self, "action_digest", "sha256:" + hashlib.sha256(
@@ -1588,6 +1632,8 @@ class CollaborationAssignment:
     instruction: str
     input_ids: tuple[str, ...]
     max_physical_calls: int
+    mode: SpecialistAssignmentMode | None = None
+    review_basis: ReviewBasis | None = None
 
     def __post_init__(self) -> None:
         _validate_identifier(self.assignment_id, label="assignment ID")
@@ -1606,6 +1652,7 @@ class CollaborationAssignment:
             self.max_physical_calls,
             label="assignment maximum physical calls",
         )
+        _validate_assignment_routing(self.mode, self.input_ids, self.review_basis)
 
 
 @dataclass(frozen=True, slots=True)
@@ -1664,6 +1711,7 @@ class CollaborationProposal:
     budget: CollaborationBudget
     basis: CollaborationProposalBasis
     proposal_digest: str
+    authoring_scope: AuthoringScope | None = None
 
     def __post_init__(self) -> None:
         _validate_identifier(self.step_id, label="collaboration step ID")
@@ -1693,6 +1741,11 @@ class CollaborationProposal:
         specialists = tuple(item.specialist_id for item in self.assignments)
         _require_unique(assignment_ids, label="proposal assignment IDs")
         _require_unique(specialists, label="proposal specialists")
+        _validate_scoped_assignments(
+            self.authoring_scope,
+            specialists,
+            tuple(item.mode for item in self.assignments),
+        )
         expected_round = self.budget.rounds_spent + 1
         if any(item.round != expected_round for item in self.assignments):
             raise ValueError("every assignment must use the next lineage round")
@@ -1774,6 +1827,7 @@ class CollaborationProposal:
         side_effects: tuple[CollaborationSideEffect, ...],
         budget: CollaborationBudget,
         basis: CollaborationProposalBasis,
+        authoring_scope: AuthoringScope | None = None,
     ) -> CollaborationProposal:
         """Create a proposal with its canonical digest."""
 
@@ -1789,6 +1843,8 @@ class CollaborationProposal:
             "step_kind": step_kind.value,
             "user_impact": user_impact,
         }
+        if authoring_scope is not None:
+            fields["authoring_scope"] = authoring_scope_to_dict(authoring_scope)
         digest = _digest_value(fields)
         return cls(
             step_id=step_id,
@@ -1802,6 +1858,7 @@ class CollaborationProposal:
             budget=budget,
             basis=basis,
             proposal_digest=digest,
+            authoring_scope=authoring_scope,
         )
 
 
@@ -1984,6 +2041,7 @@ class CollaborationSpecialistReplyPayload:
     assessment: CollaborationSpecialistAssessment
     message: str
     input_ids: tuple[str, ...]
+    mode: SpecialistAssignmentMode | None = None
 
     def __post_init__(self) -> None:
         _validate_identifier(self.proposal_id, label="reply proposal ID")
@@ -2001,6 +2059,16 @@ class CollaborationSpecialistReplyPayload:
         )
         _validate_visible_text(self.message, label="specialist reply")
         _validate_identifier_tuple(self.input_ids, label="specialist reply input IDs")
+        if self.mode is not None:
+            _require_enum(self.mode, SpecialistAssignmentMode, "specialist reply mode")
+        if self.mode is SpecialistAssignmentMode.DRAFT:
+            if self.assessment not in {
+                CollaborationSpecialistAssessment.DRAFTED,
+                CollaborationSpecialistAssessment.INSUFFICIENT_EVIDENCE,
+            }:
+                raise ValueError("draft replies cannot assert review assessments")
+        elif self.assessment is CollaborationSpecialistAssessment.DRAFTED:
+            raise ValueError("drafted assessment requires explicit draft mode")
 
 
 @dataclass(frozen=True, slots=True)
@@ -2016,6 +2084,7 @@ class CollaborationLeadSynthesisPayload:
     unresolved_input_ids: tuple[str, ...]
     evidence: CollaborationLeadEvidence
     next_intent: LeadProposalIntent | None = None
+    authoring_scope: AuthoringScope | None = None
 
     def __post_init__(self) -> None:
         _validate_identifier(self.proposal_id, label="synthesis proposal ID")
@@ -2039,11 +2108,19 @@ class CollaborationLeadSynthesisPayload:
         if self.evidence.scope is not LeadOutcomeScope.STORY_SPECIFIC:
             raise ValueError("lead synthesis must remain story-specific")
         _validate_lead_evidence_matrix(LeadOutcomeKind.RECOMMENDATION, self.evidence)
+        _validate_authoring_evidence_scope(self.authoring_scope, self.evidence.scope)
         if self.next_intent is not None:
             if type(self.next_intent) is not LeadProposalIntent:
                 raise TypeError("synthesis next intent must be a LeadProposalIntent")
             if self.next_intent.relation is not LeadProposalRelation.CONTINUE_LINEAGE:
                 raise ValueError("synthesis next intent must continue the same lineage")
+            next_scope = self.next_intent.authoring_scope
+            if self.authoring_scope is not None and (
+                next_scope is None
+                or next_scope.task_id != self.authoring_scope.task_id
+                or next_scope.task_revision != self.authoring_scope.task_revision
+            ):
+                raise ValueError("synthesis continuation must retain task correlation")
 
 
 @dataclass(frozen=True, slots=True)
@@ -2067,6 +2144,8 @@ class ArtifactReviewReply:
             CollaborationSpecialistAssessment,
             "artifact review assessment",
         )
+        if self.assessment is CollaborationSpecialistAssessment.DRAFTED:
+            raise ValueError("draft material cannot serve as an artifact review")
 
 
 @dataclass(frozen=True, slots=True)
@@ -3477,6 +3556,101 @@ def decode_collaboration_batch(payload: bytes) -> CollaborationEventBatch:
     )
 
 
+def authoring_scope_to_dict(scope: AuthoringScope) -> dict[str, object]:
+    """Encode the exact versioned scope shape owned by collaboration codecs."""
+
+    if type(scope) is not AuthoringScope:
+        raise TypeError("authoring scope must be an AuthoringScope")
+    return {
+        "activity": scope.activity.value,
+        "domains": [domain.value for domain in scope.domains],
+        "interpretation": scope.interpretation,
+        "schema_version": scope.schema_version,
+        "target_paths": list(scope.target_paths),
+        "task_id": scope.task_id,
+        "task_revision": scope.task_revision,
+    }
+
+
+def authoring_scope_from_dict(value: object) -> AuthoringScope:
+    """Decode a complete strict scope; absent legacy fields are handled outside."""
+
+    item = _object(
+        value,
+        {
+            "activity", "domains", "interpretation", "schema_version",
+            "target_paths", "task_id", "task_revision",
+        },
+        label="authoring scope",
+    )
+    return AuthoringScope(
+        activity=_enum(AuthoringActivity, item["activity"], label="authoring activity"),
+        target_paths=tuple(
+            _string(path, label="authoring target path")
+            for path in _array(item["target_paths"], label="authoring target paths")
+        ),
+        domains=tuple(
+            _enum(ArtifactReviewDomain, domain, label="authoring domain")
+            for domain in _array(item["domains"], label="authoring domains")
+        ),
+        interpretation=_string(item["interpretation"], label="authoring interpretation"),
+        task_id=_string(item["task_id"], label="authoring task ID"),
+        task_revision=_integer(item["task_revision"], label="authoring task revision"),
+        schema_version=_integer(item["schema_version"], label="authoring schema version"),
+    )
+
+
+def review_basis_to_dict(basis: ReviewBasis) -> dict[str, object]:
+    """Encode concrete review-input correlation without granting read authority."""
+
+    if type(basis) is not ReviewBasis:
+        raise TypeError("review basis must be a ReviewBasis")
+    return {
+        "candidate_input_ids": list(basis.candidate_input_ids),
+        "criteria": basis.criteria,
+        "schema_version": basis.schema_version,
+    }
+
+
+def review_basis_from_dict(value: object) -> ReviewBasis:
+    """Decode a complete strict, versioned candidate review basis."""
+
+    item = _object(
+        value,
+        {"candidate_input_ids", "criteria", "schema_version"},
+        label="review basis",
+    )
+    return ReviewBasis(
+        candidate_input_ids=tuple(
+            _string(input_id, label="review candidate input ID")
+            for input_id in _array(
+                item["candidate_input_ids"], label="review candidate input IDs"
+            )
+        ),
+        criteria=_string(item["criteria"], label="review criteria"),
+        schema_version=_integer(item["schema_version"], label="review schema version"),
+    )
+
+
+def _decode_optional_authoring_scope(item: dict[str, object]) -> AuthoringScope | None:
+    if "authoring_scope" not in item:
+        return None
+    return authoring_scope_from_dict(item["authoring_scope"])
+
+
+def _decode_assignment_mode(
+    item: dict[str, object],
+) -> SpecialistAssignmentMode | None:
+    if "mode" not in item:
+        return None
+    return _enum(SpecialistAssignmentMode, item["mode"], label="assignment mode")
+
+
+def _decode_assignment_review_basis(item: dict[str, object]) -> ReviewBasis | None:
+    value = item.get("review_basis")
+    return None if value is None else review_basis_from_dict(value)
+
+
 def _canonical_json(value: object) -> bytes:
     try:
         text = json.dumps(
@@ -3622,7 +3796,26 @@ def _assignment_value(assignment: CollaborationAssignment) -> dict[str, object]:
         "max_physical_calls": assignment.max_physical_calls,
         "round": assignment.round,
         "specialist_id": assignment.specialist_id,
+        **_assignment_routing_value(assignment.mode, assignment.review_basis),
     }
+
+
+def _assignment_routing_value(
+    mode: SpecialistAssignmentMode | None,
+    review_basis: ReviewBasis | None,
+) -> dict[str, object]:
+    if mode is None:
+        return {}
+    return {
+        "mode": mode.value,
+        "review_basis": (
+            None if review_basis is None else review_basis_to_dict(review_basis)
+        ),
+    }
+
+
+def _authoring_scope_fields(scope: AuthoringScope | None) -> dict[str, object]:
+    return {} if scope is None else {"authoring_scope": authoring_scope_to_dict(scope)}
 
 
 def _lead_proposal_intent_value(intent: LeadProposalIntent) -> dict[str, object]:
@@ -3632,11 +3825,13 @@ def _lead_proposal_intent_value(intent: LeadProposalIntent) -> dict[str, object]
                 "agent_id": assignment.agent_id,
                 "input_ids": list(assignment.input_ids),
                 "instruction": assignment.instruction,
+                **_assignment_routing_value(assignment.mode, assignment.review_basis),
             }
             for assignment in intent.assignments
         ],
         "purpose": intent.purpose,
         "relation": intent.relation.value,
+        **_authoring_scope_fields(intent.authoring_scope),
     }
 
 
@@ -3668,6 +3863,7 @@ def _proposal_value(
         "step_id": proposal.step_id,
         "step_kind": proposal.step_kind.value,
         "user_impact": proposal.user_impact,
+        **_authoring_scope_fields(proposal.authoring_scope),
     }
     if include_digest:
         value["proposal_digest"] = proposal.proposal_digest
@@ -3766,6 +3962,8 @@ def _payload_value(payload: CollaborationPayload) -> dict[str, object]:
     if type(payload) in recommendation_types:
         value = asdict(payload)
         if type(payload) is LeadRecommendationRequestPayload:
+            value.pop("authoring_scope", None)
+            value.update(_authoring_scope_fields(payload.authoring_scope))
             value["basis"] = _basis_value(payload.basis)
         return {"payload_type": recommendation_types[type(payload)], **value}
     if type(payload) is CollaborationProposal:
@@ -3778,6 +3976,7 @@ def _payload_value(payload: CollaborationPayload) -> dict[str, object]:
             "kind": payload.kind.value,
             "message": payload.message,
             "payload_type": "lead_judgment",
+            **_authoring_scope_fields(payload.authoring_scope),
         }
     if type(payload) is CollaborationAssignmentDispatchPayload:
         return {
@@ -3797,6 +3996,7 @@ def _payload_value(payload: CollaborationPayload) -> dict[str, object]:
             "input_ids": list(payload.input_ids),
             "message": payload.message,
             "payload_type": "specialist_reply",
+            **({} if payload.mode is None else {"mode": payload.mode.value}),
             "proposal_digest": payload.proposal_digest,
             "proposal_id": payload.proposal_id,
             "proposal_revision": payload.proposal_revision,
@@ -3812,6 +4012,7 @@ def _payload_value(payload: CollaborationPayload) -> dict[str, object]:
                 else _lead_proposal_intent_value(payload.next_intent)
             ),
             "payload_type": "lead_synthesis",
+            **_authoring_scope_fields(payload.authoring_scope),
             "proposal_digest": payload.proposal_digest,
             "proposal_id": payload.proposal_id,
             "proposal_revision": payload.proposal_revision,
@@ -4274,16 +4475,18 @@ def _decode_lead_evidence(value: object) -> CollaborationLeadEvidence:
 
 
 def _decode_lead_proposal_intent(value: object) -> LeadProposalIntent:
-    item = _object(
+    item = _object_with_extension(
         value,
         {"assignments", "purpose", "relation"},
+        {"authoring_scope"},
         label="lead proposal intent",
     )
     assignments = []
     for raw in _array(item["assignments"], label="lead intent assignments"):
-        assignment = _object(
+        assignment = _object_with_extension(
             raw,
             {"agent_id", "input_ids", "instruction"},
+            {"mode", "review_basis"},
             label="lead assignment intent",
         )
         assignments.append(
@@ -4300,6 +4503,8 @@ def _decode_lead_proposal_intent(value: object) -> LeadProposalIntent:
                         label="lead assignment input IDs",
                     )
                 ),
+                mode=_decode_assignment_mode(assignment),
+                review_basis=_decode_assignment_review_basis(assignment),
             )
         )
     return LeadProposalIntent(
@@ -4310,6 +4515,7 @@ def _decode_lead_proposal_intent(value: object) -> LeadProposalIntent:
         ),
         purpose=_string(item["purpose"], label="lead proposal purpose"),
         assignments=tuple(assignments),
+        authoring_scope=_decode_optional_authoring_scope(item),
     )
 
 
@@ -4358,7 +4564,7 @@ def _decode_basis(value: object) -> CollaborationProposalBasis:
 
 
 def _decode_assignment(value: object) -> CollaborationAssignment:
-    item = _object(
+    item = _object_with_extension(
         value,
         {
             "assignment_id",
@@ -4368,6 +4574,7 @@ def _decode_assignment(value: object) -> CollaborationAssignment:
             "round",
             "specialist_id",
         },
+        {"mode", "review_basis"},
         label="collaboration assignment",
     )
     return CollaborationAssignment(
@@ -4383,6 +4590,8 @@ def _decode_assignment(value: object) -> CollaborationAssignment:
             item["max_physical_calls"],
             label="assignment maximum physical calls",
         ),
+        mode=_decode_assignment_mode(item),
+        review_basis=_decode_assignment_review_basis(item),
     )
 
 
@@ -4424,7 +4633,7 @@ def _decode_budget(value: object) -> CollaborationBudget:
 
 
 def _decode_proposal(value: object) -> CollaborationProposal:
-    item = _object(
+    item = _object_with_extension(
         value,
         {
             "assignments",
@@ -4439,6 +4648,7 @@ def _decode_proposal(value: object) -> CollaborationProposal:
             "step_kind",
             "user_impact",
         },
+        {"authoring_scope"},
         label="collaboration proposal",
     )
     return CollaborationProposal(
@@ -4466,6 +4676,7 @@ def _decode_proposal(value: object) -> CollaborationProposal:
         budget=_decode_budget(item["budget"]),
         basis=_decode_basis(item["basis"]),
         proposal_digest=_string(item["proposal_digest"], label="proposal digest"),
+        authoring_scope=_decode_optional_authoring_scope(item),
     )
 
 
@@ -4748,10 +4959,13 @@ def _decode_payload(value: object) -> CollaborationPayload:
             candidate_binding=binding,
         )
     if payload_type == "lead_recommendation_request_v1":
-        item = _object(value, {
-            "payload_type", *LeadRecommendationRequestPayload.__dataclass_fields__,
-        }, label="recommendation request")
-        fields = {key: item[key] for key in LeadRecommendationRequestPayload.__dataclass_fields__ if key != "action_digest"}
+        item = _object_with_extension(value, {
+            "payload_type", *(set(LeadRecommendationRequestPayload.__dataclass_fields__) - {"authoring_scope"}),
+        }, {"authoring_scope"}, label="recommendation request")
+        fields = {key: item[key] for key in LeadRecommendationRequestPayload.__dataclass_fields__
+                  if key not in {"action_digest", "authoring_scope"}}
+        fields["authoring_scope"] = (authoring_scope_from_dict(item["authoring_scope"])
+                                     if "authoring_scope" in item else None)
         fields["kind"] = _enum(LeadRecommendationActionKind, fields["kind"], label="recommended action")
         fields["target_paths"] = tuple(_array(fields["target_paths"], label="recommended targets"))
         fields["specialist_ids"] = tuple(_array(fields["specialist_ids"], label="recommended specialists"))
@@ -4786,15 +5000,17 @@ def _decode_payload(value: object) -> CollaborationPayload:
             content=_string(item["content"], label="message content")
         )
     if payload_type == "lead_judgment":
-        item = _object(
+        item = _object_with_extension(
             value,
             {"evidence", "kind", "message", "payload_type"},
+            {"authoring_scope"},
             label="lead judgment payload",
         )
         return CollaborationLeadJudgmentPayload(
             kind=_enum(LeadOutcomeKind, item["kind"], label="lead judgment kind"),
             message=_string(item["message"], label="lead judgment message"),
             evidence=_decode_lead_evidence(item["evidence"]),
+            authoring_scope=_decode_optional_authoring_scope(item),
         )
     if payload_type == "assignment_dispatch":
         item = _object(
@@ -4826,7 +5042,7 @@ def _decode_payload(value: object) -> CollaborationPayload:
             assignment=_decode_assignment(item["assignment"]),
         )
     if payload_type == "specialist_reply":
-        item = _object(
+        item = _object_with_extension(
             value,
             {
                 "assignment_id",
@@ -4840,6 +5056,7 @@ def _decode_payload(value: object) -> CollaborationPayload:
                 "proposal_id",
                 "proposal_revision",
             },
+            {"mode"},
             label="specialist reply payload",
         )
         return CollaborationSpecialistReplyPayload(
@@ -4871,9 +5088,10 @@ def _decode_payload(value: object) -> CollaborationPayload:
                 _string(input_id, label="reply input ID")
                 for input_id in _array(item["input_ids"], label="reply input IDs")
             ),
+            mode=_decode_assignment_mode(item),
         )
     if payload_type == "lead_synthesis":
-        item = _object(
+        item = _object_with_extension(
             value,
             {
                 "evidence",
@@ -4887,6 +5105,7 @@ def _decode_payload(value: object) -> CollaborationPayload:
                 "reply_event_ids",
                 "unresolved_input_ids",
             },
+            {"authoring_scope"},
             label="lead synthesis payload",
         )
         return CollaborationLeadSynthesisPayload(
@@ -4924,6 +5143,7 @@ def _decode_payload(value: object) -> CollaborationPayload:
                 if item["next_intent"] is None
                 else _decode_lead_proposal_intent(item["next_intent"])
             ),
+            authoring_scope=_decode_optional_authoring_scope(item),
         )
     if payload_type == "lead_outcome_failure":
         item = _object(
@@ -5798,6 +6018,61 @@ def _validate_collaboration_direction(
             raise ValueError("provider-call recipient must match its exact role")
 
 
+def _validate_authoring_evidence_scope(
+    scope: AuthoringScope | None,
+    evidence_scope: LeadOutcomeScope,
+) -> None:
+    if scope is None:
+        return
+    if type(scope) is not AuthoringScope:
+        raise TypeError("authoring scope must be an AuthoringScope")
+    if (
+        scope.activity is not AuthoringActivity.WORKFLOW
+        and evidence_scope is not LeadOutcomeScope.STORY_SPECIFIC
+    ):
+        raise ValueError("story authoring requires story-specific evidence scope")
+
+
+def _validate_assignment_routing(
+    mode: SpecialistAssignmentMode | None,
+    input_ids: tuple[str, ...],
+    review_basis: ReviewBasis | None,
+) -> None:
+    if mode is None:
+        if review_basis is not None:
+            raise ValueError("legacy assignment cannot carry a review basis")
+        return
+    validate_specialist_assignment(mode, input_ids, review_basis)
+
+
+def _validate_scoped_assignments(
+    scope: AuthoringScope | None,
+    specialist_ids: tuple[str, ...],
+    modes: tuple[SpecialistAssignmentMode | None, ...],
+) -> None:
+    if scope is None:
+        if any(mode is not None for mode in modes):
+            raise ValueError("explicit assignment modes require an authoring scope")
+        return
+    validate_specialist_routing(scope, specialist_ids)
+    if scope.activity is AuthoringActivity.WORKFLOW:
+        raise ValueError("workflow scope cannot dispatch story specialists")
+    if any(type(mode) is not SpecialistAssignmentMode for mode in modes):
+        raise TypeError("scoped assignments require explicit draft or review modes")
+    expected_mode = (
+        SpecialistAssignmentMode.REVIEW
+        if scope.activity is AuthoringActivity.REVIEW
+        else SpecialistAssignmentMode.DRAFT
+    )
+    required = required_authoring_specialists(scope)
+    if any(
+        mode is not expected_mode
+        for specialist_id, mode in zip(specialist_ids, modes, strict=True)
+        if specialist_id in required
+    ):
+        raise ValueError("required specialists must perform the scoped activity")
+
+
 def _validate_schema_version(value: object) -> None:
     if type(value) is not int or value != COLLABORATION_EVENT_SCHEMA_VERSION:
         raise ValueError("unsupported collaboration schema version")
@@ -5889,6 +6164,21 @@ def _require_unique(value: object, *, label: str) -> None:
         raise TypeError(f"{label} must be a tuple")
     if len(set(value)) != len(value):
         raise ValueError(f"{label} must be unique")
+
+
+def _object_with_extension(
+    value: object,
+    fields: set[str],
+    extension: set[str],
+    *,
+    label: str,
+) -> dict[str, object]:
+    """Accept the exact historical shape or one complete additive shape."""
+
+    if type(value) is not dict:
+        raise ValueError(f"{label} must be an object")
+    expected = fields | extension if set(value) & extension else fields
+    return _object(value, expected, label=label)
 
 
 def _object(
@@ -6048,6 +6338,10 @@ __all__ = [
     "LeadRecommendationResultPayload",
     "LeadRecommendationStartedPayload",
     "LeadRecommendationState",
+    "authoring_scope_from_dict",
+    "authoring_scope_to_dict",
+    "review_basis_from_dict",
+    "review_basis_to_dict",
     "ARTIFACT_REVIEW_SCHEMA_VERSION",
     "ArtifactApplicationDecisionKind",
     "ArtifactApplicationDecisionPayload",

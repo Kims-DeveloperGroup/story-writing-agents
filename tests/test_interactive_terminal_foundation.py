@@ -3367,6 +3367,7 @@ class PackageBoundaryFoundationTests(unittest.TestCase):
             "__init__.py": {"._core"},
             "_collaboration_view.py": {
                 "..conversations",
+                "..specialist_routing",
                 "..writing_artifacts",
                 "._model",
             },

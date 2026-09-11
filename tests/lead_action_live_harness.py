@@ -2,7 +2,7 @@
 
 The manifest authorizes one case on pinned source and an explicit Codex model.
 The release ledger is separate from historical live harness budgets. This runner
-never confirms a consultation, applies an artifact, or creates a story commit.
+confirms only the disclosed Plot draft; it never confirms final review, applies an artifact, or creates a story commit.
 """
 from __future__ import annotations
 
@@ -11,6 +11,7 @@ import asyncio
 import dataclasses
 import fcntl
 import hashlib
+import importlib.util
 import json
 import os
 from pathlib import Path
@@ -19,6 +20,7 @@ import signal
 import subprocess
 import tempfile
 import time
+import traceback
 from unittest import mock
 
 CASE = "A641-CONTEXT-DRAFT"
@@ -72,7 +74,7 @@ def source_closure(root: Path | None = None):
     root = (root or Path(__file__).resolve().parents[1]).resolve()
     files = list((root / "src").rglob("*.py"))
     files += [p for p in (root / "config").rglob("*") if p.is_file()]
-    files += [root / "tests/lead_action_live_harness.py", root / "pyproject.toml"]
+    files += [root / "tests/lead_action_live_harness.py", root / "tests/specialist_routing_live.py", root / "pyproject.toml"]
     return {p.relative_to(root).as_posix(): sha(p.read_bytes()) for p in sorted(files)}
 
 
@@ -226,6 +228,15 @@ def snapshot(runtime, workspace):
     return {"artifacts": artifacts, "head": git("rev-parse", "HEAD"), "index": git("ls-files", "--stage", "-z"), "tracked_diff": git("diff", "--binary", "HEAD")}
 
 
+def evidence_helper():
+    """Load the pinned sibling for package imports and direct-script invocation."""
+    path = Path(__file__).resolve().with_name('specialist_routing_live.py')
+    spec = importlib.util.spec_from_file_location('_lead_action_evidence', path)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
 async def contextual_case(guard):
     return await _authoring_case(guard, case=CASE)
 
@@ -235,6 +246,12 @@ async def recommendation_case(guard):
 
 
 async def _authoring_case(guard, *, case):
+    helper = evidence_helper()
+    EvidenceJournal, RUNTIME_DRAFT_NOTICE, decision = helper.EvidenceJournal, helper.RUNTIME_DRAFT_NOTICE, helper.decision
+    state = {'case': case, 'passed': False, 'planned_assertions': ['draft_proposal', 'initial_objective', 'initial_target', 'confirmed_plot_draft', 'current_synthesis', 'whole_source_digest', 'draft_objective_open', 'candidate_present', 'one_objective', 'same_open_objective', 'selected_source', 'same_task_revision', 'bound_candidate', 'single_replace', 'substantive_candidate', 'no_runtime_receipt', 'exact_plot_review', 'no_apply_or_commit', 'final_preservation']}
+    journal = EvidenceJournal(guard.evidence, state)
+    primary = None
+    baseline = None
     from story_writing_agents import (
         AgentBackend, SessionAccessState, SessionDurableState, StoryRuntime,
         Workspace, codex_adapter,
@@ -278,119 +295,180 @@ async def _authoring_case(guard, *, case):
         original = codex_adapter.run_process
         async def capture(request, **kwargs):
             return await guard.invoke(original, request, **kwargs)
+        def events():
+            return services.event_store.read(session_id, conversation_id)
+        def check(name, predicate):
+            journal.check(name, predicate, name)
         with mock.patch.object(codex_adapter, "run_process", capture):
-            instruction = (f"This is disposable synthetic test content. Prepare an outline for {OUTLINE}. "
-                "First offer exactly the following complete tiny draft as your whole visible message, "
-                "and wait for my approval before preparing a candidate.")
             if structured:
-                instruction += (" Return a RECOMMENDATION with one prepare_artifact recommended_action for "
-                    f"{OUTLINE}, source_ids=[current_response], and objective_intent=null. "
-                    "Only a later structured Confirm may authorize preparing the exact supplied draft.")
-            first = await runtime.lead_turn(session_id, conversation_id, instruction + "\n" + DRAFT)
-            save(guard.evidence / "first-result.json", {
-                "session_id": first.session_id, "conversation_id": first.conversation_id,
-                "turn_id": first.turn_id, "step_id": first.step_id,
-                "kind": first.kind, "state": first.state, "next_action": first.next_action,
-                "message_sha256": sha(first.message.encode("utf-8")),
-                "message_utf8_bytes": len(first.message.encode("utf-8")),
-                "confirmation_request_id": first.confirmation_request_id,
-                "proposal_present": first.proposal is not None,
-                "artifact_proposal_present": first.artifact_proposal is not None,
-                "apply_request_present": first.artifact_application_request is not None,
-                "commit_request_present": first.story_commit_request is not None,
-                "recommendation_request_present": first.recommendation_request is not None,
-            })
-            require(first.message.rstrip("\n") == DRAFT.rstrip("\n"), "Provider did not offer the supplied tiny draft (apart from final newline)")
-            observed_draft = first.message.encode("utf-8")
-            require(first.artifact_proposal is None and first.proposal is None, "Draft offer prematurely requested work")
-            history = services.event_store.read(session_id, conversation_id)
-            projection = c.project_collaboration_history(history)
-            require(len(projection.artifact_objectives) <= 1, "Draft offer created multiple objectives")
-            objective = projection.artifact_objectives[0] if projection.artifact_objectives else None
-            recommendation = first.recommendation_request
-            if structured or first.kind is c.LeadOutcomeKind.RECOMMENDATION:
-                require(first.kind is c.LeadOutcomeKind.RECOMMENDATION and recommendation is not None,
-                        "Recommendation lacks its typed action request")
-                require(objective is None, "Unconfirmed recommendation started an objective")
-            if objective is not None:
-                require(objective.state is c.ArtifactObjectiveState.OPEN and objective.facts.origin_conversation_id == conversation_id, "Initial objective is not OPEN and owned")
-                require(objective.facts.target_paths == (OUTLINE,), "Initial objective target mismatch")
-            offered = next((s for s in projection.offered_draft_sources if s.content_digest == "sha256:" + sha(observed_draft)), None)
-            require(offered is not None, "Exact whole-message draft reference is absent")
-            require(snapshot(runtime, workspace) == baseline, "Draft offer changed artifact or Git state")
-            if structured:
-                require(recommendation.kind is c.LeadRecommendationActionKind.PREPARE_ARTIFACT
-                        and recommendation.target_paths == (OUTLINE,)
-                        and recommendation.draft_sources == (offered,)
-                        and recommendation.source_recommendation_event_id == offered.event_id
-                        and recommendation.source_recommendation_digest == offered.content_digest,
-                        "Recommendation disclosure changed the exact action or whole draft")
-                choice = c.LeadRecommendationDecision(session_id, conversation_id,
-                    recommendation.request_event_id, recommendation.tail_sequence,
-                    recommendation.request_id, recommendation.action_id, recommendation.action_revision,
-                    recommendation.action_digest, c.CollaborationConfirmationDecision.CONFIRM)
-                save(guard.evidence / "decision.json", dataclasses.asdict(choice))
-                second = await runtime.decide_lead_recommendation(choice)
+                instruction = (f"This is disposable synthetic test content. Prepare an outline for {OUTLINE}. "
+                    "The following is a finished user-supplied candidate. Quote it as your whole visible message, "
+                    "declare REVIEW of this supplied candidate, and wait for my approval before preparing a candidate.")
+                if structured:
+                    instruction += (" Return a RECOMMENDATION with one prepare_artifact recommended_action for "
+                        f"{OUTLINE}, source_ids=[current_response], and objective_intent=null. "
+                        "Only a later structured Confirm may authorize preparing the exact supplied draft.")
+                first = await runtime.lead_turn(session_id, conversation_id, instruction + "\n" + DRAFT)
+                journal.capture("first", events(), first)
+                save(guard.evidence / "first-result.json", {
+                    "session_id": first.session_id, "conversation_id": first.conversation_id,
+                    "turn_id": first.turn_id, "step_id": first.step_id,
+                    "kind": first.kind, "state": first.state, "next_action": first.next_action,
+                    "message_sha256": sha(first.message.encode("utf-8")),
+                    "message_utf8_bytes": len(first.message.encode("utf-8")),
+                    "confirmation_request_id": first.confirmation_request_id,
+                    "proposal_present": first.proposal is not None,
+                    "artifact_proposal_present": first.artifact_proposal is not None,
+                    "apply_request_present": first.artifact_application_request is not None,
+                    "commit_request_present": first.story_commit_request is not None,
+                    "recommendation_request_present": first.recommendation_request is not None,
+                })
+                require(first.message.rstrip("\n") == DRAFT.rstrip("\n"), "Provider did not offer the supplied tiny draft (apart from final newline)")
+                observed_draft = first.message.encode("utf-8")
+                require(first.artifact_proposal is None and first.proposal is None, "Draft offer prematurely requested work")
+                history = services.event_store.read(session_id, conversation_id)
+                projection = c.project_collaboration_history(history)
+                require(len(projection.artifact_objectives) <= 1, "Draft offer created multiple objectives")
+                objective = projection.artifact_objectives[0] if projection.artifact_objectives else None
+                recommendation = first.recommendation_request
+                if structured or first.kind is c.LeadOutcomeKind.RECOMMENDATION:
+                    require(first.kind is c.LeadOutcomeKind.RECOMMENDATION and recommendation is not None,
+                            "Recommendation lacks its typed action request")
+                    require(objective is None, "Unconfirmed recommendation started an objective")
+                if objective is not None:
+                    require(objective.state is c.ArtifactObjectiveState.OPEN and objective.facts.origin_conversation_id == conversation_id, "Initial objective is not OPEN and owned")
+                    require(objective.facts.target_paths == (OUTLINE,), "Initial objective target mismatch")
+                offered = next((s for s in projection.offered_draft_sources if s.content_digest == "sha256:" + sha(observed_draft)), None)
+                require(offered is not None, "Exact whole-message draft reference is absent")
+                require(snapshot(runtime, workspace) == baseline, "Draft offer changed artifact or Git state")
+                if structured:
+                    require(recommendation.kind is c.LeadRecommendationActionKind.PREPARE_ARTIFACT
+                            and recommendation.target_paths == (OUTLINE,)
+                            and recommendation.draft_sources == (offered,)
+                            and recommendation.source_recommendation_event_id == offered.event_id
+                            and recommendation.source_recommendation_digest == offered.content_digest,
+                            "Recommendation disclosure changed the exact action or whole draft")
+                    choice = c.LeadRecommendationDecision(session_id, conversation_id,
+                        recommendation.request_event_id, recommendation.tail_sequence,
+                        recommendation.request_id, recommendation.action_id, recommendation.action_revision,
+                        recommendation.action_digest, c.CollaborationConfirmationDecision.CONFIRM)
+                    save(guard.evidence / "decision.json", dataclasses.asdict(choice))
+                    second = await runtime.decide_lead_recommendation(choice)
+                else:
+                    second = await runtime.lead_turn(session_id, conversation_id, "네, 그 초안 그대로 문서로 준비해 줘.")
+                require(second.kind is c.LeadOutcomeKind.PROPOSAL and second.artifact_proposal is not None, "Approval did not prepare a candidate")
+                journal.capture("prepared", events(), second)
             else:
+                first = await runtime.lead_turn(session_id, conversation_id,
+                    f"This is disposable synthetic content. Draft only the causal outline at {OUTLINE}: a lantern vanishes, Min finds its keeper, and the lantern returns. Start the document objective, propose only Plot drafting and wait for confirmation. Exclude character/world and prose work. Do not prepare or apply an artifact yet.")
+                journal.capture('first', events(), first)
+                check('draft_proposal', lambda: first.proposal is not None and first.proposal.participants == ('plot_architect',) and all(a.mode.value == 'draft' for a in first.proposal.assignments))
+                projection = c.project_collaboration_history(events())
+                check('initial_objective', lambda: len(projection.artifact_objectives) == 1 and projection.artifact_objectives[0].state is c.ArtifactObjectiveState.OPEN and projection.artifact_objectives[0].next_step is c.ArtifactObjectiveNextStep.CONSULT)
+                objective = projection.artifact_objectives[0]
+                task = first.proposal.authoring_scope
+                check('initial_target', lambda: objective.facts.target_paths == (OUTLINE,))
+                completed = await runtime.decide_lead_step(decision(first))
+                journal.capture('confirmed', events(), completed)
+                replies = [e for e in events() if type(e.payload) is c.CollaborationSpecialistReplyPayload]
+                syntheses = [e for e in events() if type(e.payload) is c.CollaborationLeadSynthesisPayload]
+                check('confirmed_plot_draft', lambda: completed.turn.state is c.CollaborationStepState.COMPLETED and len(replies) == 1 and replies[0].sender.agent_id == 'plot_architect' and replies[0].payload.assessment is c.CollaborationSpecialistAssessment.DRAFTED and len(replies[0].payload.message.strip()) >= 40)
+                check('current_synthesis', lambda: len(syntheses) == 1 and syntheses[0].payload.authoring_scope == task)
+                synthesis = syntheses[0]
+                source_bytes = synthesis.payload.message.encode('utf-8')
+                projection = c.project_collaboration_history(events())
+                offered = next((s for s in projection.offered_draft_sources if s.event_id == synthesis.event_id), None)
+                check('whole_source_digest', lambda: offered is not None and offered.content_digest == 'sha256:' + sha(source_bytes))
+                check('draft_objective_open', lambda: projection.artifact_objectives[0].facts == objective.facts and projection.artifact_objectives[0].state is c.ArtifactObjectiveState.OPEN)
+                state.update(source_event_id=offered.event_id, source_digest=offered.content_digest, observed_draft_sha256=sha(source_bytes), objective_id=objective.facts.objective_id)
                 second = await runtime.lead_turn(session_id, conversation_id, "네, 그 초안 그대로 문서로 준비해 줘.")
-            require(second.kind is c.LeadOutcomeKind.PROPOSAL and second.artifact_proposal is not None, "Approval did not prepare a candidate")
+                # Capture exact candidate/history before evaluating any PREPARE assertion.
+                journal.capture('prepared', events(), second)
+                check('candidate_present', lambda: second.kind is c.LeadOutcomeKind.PROPOSAL and second.artifact_proposal is not None and second.proposal is not None)
             candidate = second.artifact_proposal.candidate.candidate
-            require(len(candidate.change_set.operations) == 1, "Candidate scope expanded")
-            operation = candidate.change_set.operations[0]
-            require(operation.operation_kind.value == "replace" and operation.path == OUTLINE and operation.content == observed_draft, "Candidate does not exactly replace the existing empty outline")
-            history = services.event_store.read(session_id, conversation_id)
-            projection = c.project_collaboration_history(history)
-            require(len(projection.artifact_objectives) == 1, "Approval must select exactly one objective")
+            projection = c.project_collaboration_history(events())
+            check('one_objective', lambda: len(projection.artifact_objectives) == 1)
             continued = projection.artifact_objectives[0]
-            require(continued.state is c.ArtifactObjectiveState.OPEN and continued.facts.origin_conversation_id == conversation_id and continued.facts.target_paths == (OUTLINE,), "Review request lacks its OPEN exact owner objective")
             if structured:
-                require(type(continued.facts) is c.ArtifactObjectiveFactsV2, "Structured Confirm did not preserve its v2 origin")
-                decisions = [e for e in history if type(e.payload) is c.LeadRecommendationDecisionPayload]
-                starts = [e for e in history if type(e.payload) is c.LeadRecommendationStartedPayload]
-                closures = [e for e in history if type(e.payload) is c.LeadRecommendationResultPayload]
-                require(len(decisions) == len(starts) == len(closures) == 1, "Structured preparation did not close exactly once")
-                require(decisions[0].payload.decision == choice and starts[0].payload.decision_event_id == decisions[0].event_id
-                        and starts[0].payload.request_event_id == recommendation.request_event_id,
-                        "Preparation execution origin changed")
-                require(continued.facts.origin_recommendation_request_event_id == recommendation.request_event_id
-                        and continued.facts.origin_recommendation_decision_event_id == decisions[0].event_id,
-                        "Objective does not bind the exact Confirm")
-                require(closures[0].payload.state is c.LeadRecommendationState.COMPLETED
-                        and closures[0].sequence < history[-1].sequence,
-                        "Action closure must precede the final review control")
-                require(sum(type(e.payload) is c.CollaborationMessagePayload and e.direction is c.CollaborationDirection.USER_TO_LEAD
-                            for e in history) == 1, "Structured Confirm fabricated ordinary user input")
-            elif objective is not None:
-                require(continued.facts == objective.facts, "Initial objective origin changed")
+                history = events()
+                require(continued.state is c.ArtifactObjectiveState.OPEN and continued.facts.origin_conversation_id == conversation_id and continued.facts.target_paths == (OUTLINE,), "Review request lacks its OPEN exact owner objective")
+                if structured:
+                    require(type(continued.facts) is c.ArtifactObjectiveFactsV2, "Structured Confirm did not preserve its v2 origin")
+                    decisions = [e for e in history if type(e.payload) is c.LeadRecommendationDecisionPayload]
+                    starts = [e for e in history if type(e.payload) is c.LeadRecommendationStartedPayload]
+                    closures = [e for e in history if type(e.payload) is c.LeadRecommendationResultPayload]
+                    require(len(decisions) == len(starts) == len(closures) == 1, "Structured preparation did not close exactly once")
+                    require(decisions[0].payload.decision == choice and starts[0].payload.decision_event_id == decisions[0].event_id
+                            and starts[0].payload.request_event_id == recommendation.request_event_id,
+                            "Preparation execution origin changed")
+                    require(continued.facts.origin_recommendation_request_event_id == recommendation.request_event_id
+                            and continued.facts.origin_recommendation_decision_event_id == decisions[0].event_id,
+                            "Objective does not bind the exact Confirm")
+                    require(closures[0].payload.state is c.LeadRecommendationState.COMPLETED
+                            and closures[0].sequence < history[-1].sequence,
+                            "Action closure must precede the final review control")
+                    require(sum(type(e.payload) is c.CollaborationMessagePayload and e.direction is c.CollaborationDirection.USER_TO_LEAD
+                                for e in history) == 1, "Structured Confirm fabricated ordinary user input")
+                elif objective is not None:
+                    require(continued.facts == objective.facts, "Initial objective origin changed")
+                else:
+                    approval = next(e for e in history if e.turn_id == second.turn_id and e.direction is c.CollaborationDirection.USER_TO_LEAD and isinstance(e.payload, c.CollaborationMessagePayload))
+                    require(continued.facts.origin_user_event_id == approval.event_id, "New objective did not originate at the actual approval")
+                    if recommendation is not None:
+                        closure = next(e for e in history if type(e.payload) is c.LeadRecommendationResultPayload)
+                        require(closure.payload.state is c.LeadRecommendationState.SUPERSEDED
+                                and closure.payload.superseding_user_event_id == approval.event_id
+                                and closure.batch_id == approval.batch_id,
+                                "Ordinary approval did not supersede the exact recommendation")
+                if not structured:
+                    require(not any(type(e.payload) in {c.LeadRecommendationDecisionPayload, c.LeadRecommendationStartedPayload}
+                                    for e in history), "Ordinary approval fabricated recommendation authority")
+                require(continued.draft_sources == (offered,), "Candidate selected another draft")
+                require(continued.candidate_binding.candidate_digest == candidate.candidate_digest, "Candidate binding drift")
+                require(second.confirmation_request_id is not None and second.artifact_application_request is None
+                        and second.story_commit_request is None and second.recommendation_request is None,
+                        "Review/Apply/Commit authority boundary failed")
+                require(not any(isinstance(e.payload, (c.CollaborationSpecialistReplyPayload, c.ArtifactApplicationRequestPayload, c.ArtifactApplicationResultPayload, c.StoryCommitRequestPayload)) for e in history), "Unauthorized downstream workflow appeared")
+                require(snapshot(runtime, workspace) == baseline, "Artifact or Git state changed after fixture initialization")
+                state.update({"case": case, "passed": True, "source_event_id": offered.event_id, "source_digest": offered.content_digest, "candidate_digest": candidate.candidate_digest, "objective_id": continued.facts.objective_id, "state": continued.state, "initial_objective_present": objective is not None, "observed_draft_sha256": sha(observed_draft), "cleanup_margin_seconds": CLEANUP_MARGIN_SECONDS, "structured_confirm": structured, "abbreviated_input": None if structured else "네, 그 초안 그대로 문서로 준비해 줘."})
             else:
-                approval = next(e for e in history if e.turn_id == second.turn_id and e.direction is c.CollaborationDirection.USER_TO_LEAD and isinstance(e.payload, c.CollaborationMessagePayload))
-                require(continued.facts.origin_user_event_id == approval.event_id, "New objective did not originate at the actual approval")
-                if recommendation is not None:
-                    closure = next(e for e in history if type(e.payload) is c.LeadRecommendationResultPayload)
-                    require(closure.payload.state is c.LeadRecommendationState.SUPERSEDED
-                            and closure.payload.superseding_user_event_id == approval.event_id
-                            and closure.batch_id == approval.batch_id,
-                            "Ordinary approval did not supersede the exact recommendation")
-            if not structured:
-                require(not any(type(e.payload) in {c.LeadRecommendationDecisionPayload, c.LeadRecommendationStartedPayload}
-                                for e in history), "Ordinary approval fabricated recommendation authority")
-            require(continued.draft_sources == (offered,), "Candidate selected another draft")
-            require(continued.candidate_binding.candidate_digest == candidate.candidate_digest, "Candidate binding drift")
-            require(second.confirmation_request_id is not None and second.artifact_application_request is None
-                    and second.story_commit_request is None and second.recommendation_request is None,
-                    "Review/Apply/Commit authority boundary failed")
-            require(not any(isinstance(e.payload, (c.CollaborationSpecialistReplyPayload, c.ArtifactApplicationRequestPayload, c.ArtifactApplicationResultPayload, c.StoryCommitRequestPayload)) for e in history), "Unauthorized downstream workflow appeared")
-            require(snapshot(runtime, workspace) == baseline, "Artifact or Git state changed after fixture initialization")
-            save(guard.evidence / "case-assertions.json", {"case": case, "passed": True, "source_event_id": offered.event_id, "source_digest": offered.content_digest, "candidate_digest": candidate.candidate_digest, "objective_id": continued.facts.objective_id, "state": continued.state, "initial_objective_present": objective is not None, "observed_draft_sha256": sha(observed_draft), "cleanup_margin_seconds": CLEANUP_MARGIN_SECONDS, "structured_confirm": structured, "abbreviated_input": None if structured else "네, 그 초안 그대로 문서로 준비해 줘."})
+                check('same_open_objective', lambda: continued.facts == objective.facts and continued.state is c.ArtifactObjectiveState.OPEN and continued.next_step is c.ArtifactObjectiveNextStep.PREPARE)
+                check('selected_source', lambda: continued.draft_sources == (offered,))
+                scope = second.proposal.authoring_scope
+                check('same_task_revision', lambda: (scope.task_id, scope.task_revision) == (task.task_id, task.task_revision))
+                check('bound_candidate', lambda: continued.candidate_binding.candidate_digest == candidate.candidate_digest)
+                check('single_replace', lambda: len(candidate.change_set.operations) == 1 and candidate.change_set.operations[0].operation_kind.value == 'replace' and candidate.change_set.operations[0].path == OUTLINE)
+                content = candidate.change_set.operations[0].content
+                check('substantive_candidate', lambda: len(content.decode('utf-8').strip()) >= 40)
+                check('no_runtime_receipt', lambda: RUNTIME_DRAFT_NOTICE.encode() not in content)
+                inputs = tuple(i.input_id for i in second.proposal.basis.inputs if i.kind is c.CollaborationInputKind.ARTIFACT_CANDIDATE)
+                check('exact_plot_review', lambda: second.proposal.participants == ('plot_architect',) and len(inputs) == 1 and all(a.mode.value == 'review' and a.review_basis.candidate_input_ids == inputs for a in second.proposal.assignments))
+                check('no_apply_or_commit', lambda: second.confirmation_request_id is not None and second.artifact_application_request is None and second.story_commit_request is None and not any(isinstance(e.payload, (c.ArtifactApplicationRequestPayload, c.ArtifactApplicationResultPayload, c.StoryCommitRequestPayload)) for e in events()))
+                state.update(candidate_digest=candidate.candidate_digest, candidate_sha256=sha(content), state=continued.state, semantic_acceptance='pending_root_review_of_retained_draft_and_candidate', passed=True)
+    except BaseException as error:
+        primary = error
+        state['failure'] = {'type': type(error).__name__, 'message': str(error), 'traceback': traceback.format_exc()}
+        raise
     finally:
         if runtime is not None and conversation_id is not None:
-            history = runtime.conversation_storage_services.event_store.read(session_id, conversation_id)
-            (guard.evidence / "events.jsonl").write_bytes(b"\n".join(c.encode_collaboration_event(e) for e in history) + b"\n")
-        await guard.join_owned()
+            journal.finalize('final_history', lambda: journal.capture('final', runtime.conversation_storage_services.event_store.read(session_id, conversation_id)))
+        if baseline is not None:
+            journal.finalize('final_preservation', lambda: journal.check('final_preservation', lambda: snapshot(runtime, workspace) == baseline, 'Artifact or Git state changed after fixture initialization'))
+        else:
+            state['final_preservation'] = 'not_reached: setup baseline unavailable'
+        try:
+            await guard.join_owned()
+        except BaseException as error:
+            state['additional_failures'].append({'id': 'join_owned', 'type': type(error).__name__, 'message': str(error)})
         if backend is not None:
-            backend.close()
-        temporary.cleanup()
-        save(guard.evidence / "cleanup.json", {"workspace_removed": not Path(temporary.name).exists(), "owned_children_remaining": list(guard.children)})
+            journal.finalize('backend_close', backend.close)
+        journal.finalize('temporary_cleanup', temporary.cleanup)
+        state['passed'] = state.get('passed', False) and primary is None and not state['additional_failures']
+        state['unexecuted_assertions'] = sorted(set(state['planned_assertions']) - {row['id'] for row in state['assertions']})
+        journal.finalize('cleanup_evidence', lambda: save(guard.evidence / 'cleanup.json', {'workspace_removed': not Path(temporary.name).exists(), 'owned_children_remaining': list(guard.children)}))
+        journal.finalize('case_evidence', lambda: journal.write('case-assertions.json', state))
+        if primary is None and state['additional_failures']:
+            raise AuthorizationError('Final evidence or preservation check failed')
 
 
 async def run_authorized(manifest: Path, evidence: Path, *, case=None):

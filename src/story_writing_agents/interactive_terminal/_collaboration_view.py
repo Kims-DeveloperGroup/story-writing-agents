@@ -45,6 +45,7 @@ from ..conversations import (
     StoryCommitRequestPayload,
     StoryCommitResultPayload,
 )
+from ..specialist_routing import AuthoringScope
 from ..writing_artifacts import (
     ArtifactCreateOperation,
     ArtifactDeleteOperation,
@@ -299,6 +300,7 @@ def _payload_items(
         )
     if type(payload) is LeadRecommendationRequestPayload:
         return (
+            *_authoring_scope_items(payload.authoring_scope),
             Field("Preparation", payload.kind.value),
             _message("Purpose", payload.purpose), _message("Instruction", payload.instruction),
             _message("Expected result", payload.expected_result),
@@ -321,6 +323,7 @@ def _payload_items(
         return (_message("Message", payload.content),)
     if type(payload) is CollaborationLeadJudgmentPayload:
         return (
+            *_authoring_scope_items(payload.authoring_scope),
             Field("Outcome", payload.kind.value),
             _message("Lead", payload.message, role=SemanticRole.AGENT),
             *_evidence_items(payload.evidence),
@@ -339,6 +342,7 @@ def _payload_items(
             Field("Attempt", payload.execution_attempt_id),
             Field("Assignment", payload.assignment_id),
             Field("Assessment", payload.assessment.value),
+            Field("Mode", "legacy" if payload.mode is None else payload.mode.value),
             Field("Inputs read", _joined(payload.input_ids)),
             _message("Specialist reply", payload.message, role=SemanticRole.AGENT),
         ]
@@ -364,6 +368,7 @@ def _payload_items(
         return tuple(items)
     if type(payload) is CollaborationLeadSynthesisPayload:
         return (
+            *_authoring_scope_items(payload.authoring_scope),
             *_proposal_identity(payload),
             Field("Attempt", payload.execution_attempt_id),
             Field("Replies", _joined(payload.reply_event_ids)),
@@ -587,6 +592,18 @@ def _payload_items(
     raise TypeError("unsupported collaboration payload")
 
 
+def _authoring_scope_items(scope: AuthoringScope | None) -> tuple[Field | Notice, ...]:
+    if scope is None:
+        return ()
+    return (
+        Field("Activity", scope.activity.value),
+        Field("Task", f"{scope.task_id} revision {scope.task_revision}"),
+        Field("Targets", _joined(scope.target_paths)),
+        Field("Domains", _joined(tuple(item.value for item in scope.domains))),
+        Notice(scope.interpretation, label="interpretation"),
+    )
+
+
 def _proposal_items(payload: CollaborationProposal) -> tuple[Section | Field | Notice | ListView, ...]:
     assignments = tuple(
         Record(
@@ -594,6 +611,11 @@ def _proposal_items(payload: CollaborationProposal) -> tuple[Section | Field | N
             title=item.specialist_id,
             fields=(
                 Field("Round", str(item.round)),
+                Field("Mode", "legacy" if item.mode is None else item.mode.value),
+                *( () if item.review_basis is None else (
+                    Field("Review candidates", _joined(item.review_basis.candidate_input_ids)),
+                    Field("Review criteria", item.review_basis.criteria),
+                )),
                 Field("Inputs", _joined(item.input_ids)),
                 Field("Maximum provider calls", str(item.max_physical_calls)),
             ),
@@ -615,6 +637,7 @@ def _proposal_items(payload: CollaborationProposal) -> tuple[Section | Field | N
     )
     budget = payload.budget
     return (
+        *_authoring_scope_items(payload.authoring_scope),
         Field("Proposal", payload.proposal_id),
         Field("Revision", str(payload.proposal_revision)),
         Field("Digest", payload.proposal_digest),
@@ -640,6 +663,11 @@ def _assignment_items(assignment: CollaborationAssignment) -> tuple[Field | Noti
     return (
         Field("Assignment", assignment.assignment_id),
         Field("Specialist", assignment.specialist_id),
+        Field("Mode", "legacy" if assignment.mode is None else assignment.mode.value),
+        *( () if assignment.review_basis is None else (
+            Field("Review candidates", _joined(assignment.review_basis.candidate_input_ids)),
+            Field("Review criteria", assignment.review_basis.criteria),
+        )),
         Field("Round", str(assignment.round)),
         Field("Inputs", _joined(assignment.input_ids)),
         Field("Maximum provider calls", str(assignment.max_physical_calls)),

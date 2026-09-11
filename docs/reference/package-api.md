@@ -14,7 +14,7 @@ The stable inventories in this revision are:
 | Import boundary | Exports | Purpose |
 | --- | ---: | --- |
 | `story_writing_agents` | 104 | Management runtime, workspace/catalog, backend/session, generic models, retrieval contracts, parser, and errors |
-| `story_writing_agents.conversations` | 154 | Catalog plus schema-v2 events, projection, evidence-grounded lead/specialist/artifact-review values, readable context, and pure validation |
+| `story_writing_agents.conversations` | 158 | Catalog plus schema-v2 events, projection, evidence-grounded lead/specialist/artifact-review values, readable context, and pure validation |
 | `story_writing_agents.conversation_search` | 18 | Schema-v2 search, exact citations, paging, and history service |
 | `story_writing_agents.conversation_retrieval` | 24 | Low-level provider search/read-history/answer contracts |
 | `story_writing_agents.conversation_storage` | 63 | Storage composition, provenance, activation, archive, and transfer contracts |
@@ -24,10 +24,12 @@ The stable inventories in this revision are:
 | `story_writing_agents.writing_artifacts` | 76 | Canonical artifact/reference values plus pure exact change-set, relationship-policy, and artifact-application contracts |
 | `story_writing_agents.artifact_proposals` | 16 | Direct-only pure intent, evidence, exact candidate, reviewer-map, and strict candidate-codec contracts |
 
-The [project module index](../../PYTHON_MODULE_INDEX.md) owns the production
-graph inventory. The conversations facade contributes 116 event exports and
-30 context exports; its bindings are identical to the owner bindings. The
-package root retains 104 exports.
+The production graph has 140 modules, 555 runtime dependency edges, no runtime
+cycles, and 557 edges when annotation-only imports are included. The package
+root has 104 exports. The conversations facade contributes 120 event exports
+and 30 context exports; its bindings are identical to the owner bindings.
+Session-transition integration contributes accepted orchestration-facing edges
+without adding an assessment facade export.
 
 Import the management facade explicitly:
 
@@ -534,8 +536,21 @@ use v2 provenance; an existing objective retains its immutable v1 or v2 origin.
 A pending recommendation uses `submit_recommendation_decision`, with proposal,
 Apply, and Commit controls absent. The preceding optional `story_commit_request`
 rediscloses an exact pending Commit; `artifact_application_request` carries
-Apply disclosure. The nine-field provider `lead-outcome-v3` contract is distinct from these Python result values;
+Apply disclosure. The ten-field provider `lead-outcome-v4` contract is distinct from these Python result values;
 see [Runtime API](runtime-api.md#contextual-authoring-objectives).
+
+Pure `AuthoringScope`, `AuthoringActivity`, `ReviewBasis`,
+`SpecialistAssignmentMode`, and canonical domain/routing helpers are direct-module
+APIs in `story_writing_agents.specialist_routing`; they are not package-root
+exports. Existing `ArtifactReviewDomain` imports through artifact-proposal and
+relationship-policy modules remain compatible. Durable scope/basis codecs are
+exported by `story_writing_agents.conversations`, which continues to own their
+stored shapes. See [Agent contracts](agent-contracts.md#authoring-scope-and-assignments).
+
+Both runtime advisory facades accept keyword-only `authoring_scope` and
+`review_basis`. Missing/workflow scope raises `ValueError`; a selected single
+specialist must cover every affected domain. Use the complete
+[advisory migration example](runtime-api.md#propose_specialist_advisory).
 
 The lead and specialist values are strict public inputs and results. Every
 fresh provider lead judgment carries exact runtime-issued evidence; the runtime
@@ -544,8 +559,8 @@ and evidence status are provider semantic declarations, while runtime enforces
 their structural receipt matrix without NLP. Construct a `LeadStepDecision`
 from the exact proposal identity, digest, revision, and confirmation-request ID
 returned by `lead_turn()`; conversational text is not confirmation. A confirmed
-consultation records typed specialist replies and a typed, evidence-preserving
-lead synthesis when all assignments succeed. See
+consultation records typed draft/review replies and a typed lead synthesis
+that preserves scope and evidence when all assignments succeed. See
 [Runtime API](runtime-api.md) for signatures and state outcomes.
 
 For artifact intent, runtime creates an exact candidate and a normal

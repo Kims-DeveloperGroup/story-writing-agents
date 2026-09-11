@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
-from dataclasses import replace
+from dataclasses import asdict, replace
+import copy
+import json
 
 from story_writing_agents import conversations as c
 from story_writing_agents.agents import PLOT_ARCHITECT
@@ -24,15 +26,32 @@ def action(*, kind="prepare_artifact", source_ids=("current_response",),
     }
 
 
-def recommendation(*, message=DRAFT, recommended_action=None, mutate=None):
+def recommendation(*, message=DRAFT, recommended_action=None, mutate=None, authoring_scope=None):
     selected = action() if recommended_action is None else recommended_action
 
     def respond(call, _provider):
+        material = lead._live_material(call)
+        execution = material.get("structured_recommendation_execution")
+        if authoring_scope is not None:
+            scope = authoring_scope(call) if callable(authoring_scope) else copy.deepcopy(authoring_scope)
+        elif execution is not None:
+            scope = copy.deepcopy(execution["request"]["authoring_scope"])
+            if execution["decision"]["decision"]["kind"] == "revise":
+                scope["task_revision"] += 1
+        else:
+            domains = {"plot_architect": "plot_structure", "character_custodian": "character_world",
+                       "execution_specialist": "tone_execution"}
+            scope = lead._live_scope(call, activity="review", paths=tuple(selected["target_paths"]),
+                domains=tuple(domains[agent] for agent in selected["specialist_ids"]),
+                task_index=0 if selected["objective_id"] is not None else -1)
+            scope["interpretation"] = "Prepare separate review of the finished user-supplied synthetic candidate."
+        status = next(item for item in call.payload["core_statuses"] if item["locator"] == OUTLINE)
         value = {
             "kind": "recommendation", "message": message,
-            "scope": "workflow_meta", "evidence_status": "not_applicable",
-            "evidence_ids": [], "proposal": None, "artifact_intent": None,
+            "scope": "story_specific", "evidence_status": status["status"] if status["status"] in {"empty", "missing"} else "incomplete",
+            "evidence_ids": [artifact._status_id(call, OUTLINE)], "proposal": None, "artifact_intent": None,
             "objective_intent": None, "recommended_action": selected,
+            "authoring_scope": scope,
         }
         if mutate is not None:
             mutate(value)
@@ -88,11 +107,13 @@ def preparation(turn, *, text=DRAFT, mutate=None):
             return json.dumps(value, ensure_ascii=False)
 
     def respond(call, provider):
-        if mutate is None:
-            return producer(call, provider)
-        import json
         value = json.loads(producer(call, provider))
-        mutate(value["action"]["result"])
+        body = value["action"]["result"]
+        body["authoring_scope"] = json.loads(json.dumps(asdict(request.authoring_scope)))
+        if body.get("proposal") is not None:
+            body["proposal"]["authoring_scope"] = copy.deepcopy(body["authoring_scope"])
+        if mutate is not None:
+            mutate(body)
         return json.dumps(value, ensure_ascii=False)
     return respond
 
@@ -101,10 +122,10 @@ class RecommendationCase(ObjectiveCase):
     """Disposable Git-backed workspace, public event store and controlled providers."""
 
     async def recommend(self, conversation_id=None, *, recommended_action=None,
-                        message=DRAFT, text="Offer a synthetic outline and recommend preparing it."):
+                        message=DRAFT, text="Recommend preparing this finished user-supplied outline for separate review."):
         conversation_id = conversation_id or self.conversation("Synthetic recommendation")
         self.backend.enqueue(recommendation(message=message, recommended_action=recommended_action))
-        turn = await self.runtime.lead_turn(self.session_id, conversation_id, text)
+        turn = await self.runtime.lead_turn(self.session_id, conversation_id, text + "\nFinished candidate:\n" + message)
         self.assertIs(turn.kind, c.LeadOutcomeKind.RECOMMENDATION, turn)
         self.assertIsNotNone(turn.recommendation_request, turn)
         return conversation_id, turn

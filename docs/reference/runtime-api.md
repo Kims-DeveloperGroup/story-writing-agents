@@ -251,6 +251,9 @@ await StoryRuntime.propose_specialist_advisory(
     specialist_id: str,
     text: str,
     context_event_sink: Callable[[ContextExecutionEvent], None] | None = None,
+    *,
+    authoring_scope: AuthoringScope | None = None,
+    review_basis: ReviewBasis | None = None,
 ) -> LeadTurnResult
 
 await StoryRuntime.decide_lead_recommendation(
@@ -357,23 +360,39 @@ identical to `proposal.basis.evidence`. Runtime-generated workflow recovery and 
 `evidence=None`; local recommendation rejection or failure closure can instead
 return workflow-meta `not_applicable` evidence with no receipts.
 
-The provider's `lead-outcome-v3` result is one strict JSON object with exactly
-nine fields: `scope`, `evidence_status`, `evidence_ids`, `kind`, `message`,
-`proposal`, `artifact_intent`, `objective_intent`, and `recommended_action`:
+The provider's `lead-outcome-v4` result is one strict JSON object with exactly
+ten fields: `scope`, `evidence_status`, `evidence_ids`, `kind`, `message`,
+`proposal`, `artifact_intent`, `objective_intent`, `recommended_action`, and `authoring_scope`:
 
 ```json
 {
-  "scope": "story_specific",
-  "evidence_status": "verified",
-  "evidence_ids": ["reference_1"],
+  "scope": "workflow_meta",
+  "authoring_scope": {
+    "schema_version": 1,
+    "activity": "workflow",
+    "target_paths": [],
+    "domains": [],
+    "interpretation": "Explain the Reject control.",
+    "task_id": "task_demo",
+    "task_revision": 1
+  },
+  "evidence_status": "not_applicable",
+  "evidence_ids": [],
   "kind": "answer",
-  "message": "The referenced outline supports the existing sequence.",
+  "message": "Reject records the decision without starting specialist work.",
   "proposal": null,
   "artifact_intent": null,
   "objective_intent": null,
   "recommended_action": null
 }
 ```
+
+The synthetic workflow example assumes `task_demo`/`1` was offered by runtime.
+Every live authoring scope must select an exact offered task/revision. Direct
+workflow/status and clarification are allowed; substantive story work requires
+a proposal covering all affected domains, which the Lead can first recommend
+preparing. See the complete
+[scope and routing contract](../guides/lead-agent.md#how-specialist-routing-works).
 
 For a fresh `kind=recommendation`, `recommended_action` is non-null and
 `objective_intent`, `proposal`, and `artifact_intent` are null. Other kinds
@@ -420,7 +439,8 @@ whole-source and selected-range digests before constructing a candidate.
 Runtime inventories content-free statuses for the four canonical core
 documents and issues evidence IDs for explicit references, complete zero-hit
 SEARCH, and final-answer-used READ operations. It accepts only the closed
-matrix below:
+evidence matrix below. Authoring routing applies in addition; a valid receipt
+does not permit substantive direct story authoring:
 
 | Scope/status | Required receipts | Allowed kinds |
 | --- | --- | --- |
@@ -525,6 +545,16 @@ There is no additional recommendation-result facade. The optional synchronous
 | `reject` | Records rejection without a preparation call or objective completion. |
 | `revise` | Requires nonblank `revision_request`; authorizes only a new recommendation and request, with the same action ID and incremented revision. No candidate, consultation proposal, or objective transition is permitted. |
 
+Preparation requests require substantive, nonworkflow `authoring_scope`.
+Consultation preparation covers the union of all affected specialist domains.
+Confirm preserves the exact scope, including activity and interpretation; the
+current task/revision and cumulative obligations are revalidated. Revise uses
+the next offered revision of the same task, preserves existing obligations,
+and returns a fresh recommendation requiring a new decision. A fresh complete
+supplied candidate can go directly to exact required-specialist review. A task
+with DRAFT/REVISE history retains its draft provenance even if this request says
+REVIEW. Legacy unscoped pending requests become stale and need fresh planning.
+
 Only Revise accepts revision text. Cancel/EOF in the shell submits no decision.
 Confirm does not authorize an automatic loop or renewed confirmation of that
 same preparation. Pending requests bind the exact event/tail, revision/digest,
@@ -593,6 +623,15 @@ and line endings. There is no extracted-draft or normalized-text identity.
 An empty `continue` source list retains the previous selection. Draft sources
 supply context, never artifact evidence or confirmation authority.
 
+The stored source message and digest remain intact. Runtime may append a
+separate visible notice about unfinished authoring; that notice is not part of
+the source message. Candidate content is prepared separately and may omit
+conversational framing. It need not copy the whole Lead message, and runtime
+notices must not become story content. Selecting an earlier Lead draft does
+not replace the required current-task specialist drafting coverage. A fresh,
+finished user-supplied candidate can enter review without fabricated drafting
+when the Lead explicitly discloses that interpretation.
+
 `CollaborationHistoryProjection.artifact_objectives` retains these objectives;
 `offered_draft_sources` supplies the current selectable source identities.
 Advice, consultation, review, rejection, staleness, failure, and null intent
@@ -610,8 +649,24 @@ objective provenance; there is no synthetic user message.
 
 The public objective values are additive exports of
 `story_writing_agents.conversations`; the package-root facade is unchanged.
-Retained workspace policies receive a runtime v3 overlay without file rewrites.
-Specialist and synthesis schemas remain separate from `lead-outcome-v3`.
+Retained workspace policies receive a runtime v4 overlay without file rewrites.
+Specialist and synthesis schemas remain separate from `lead-outcome-v4`.
+
+`LeadProviderOutcome` preserves its Python positional order:
+
+```python
+LeadProviderOutcome(
+    kind, message, scope, evidence_status, evidence_ids,
+    proposal=None, artifact_intent=None, objective_intent=None,
+    recommended_action=None, *, authoring_scope=None,
+)
+```
+
+`objective_intent` remains the eighth positional slot and `recommended_action`
+the ninth. Optional `authoring_scope` is keyword-only. The Python defaults
+support retained values, while fresh provider output must include all ten
+strict JSON fields. JSON member order does not define positional
+Python arguments.
 
 ### `LeadStepDecision`
 
@@ -691,35 +746,72 @@ reviewer calls, and changes no artifact.
 This method constructs a provider-free proposal for exactly one specialist:
 
 ```python
+from story_writing_agents.specialist_routing import (
+    ArtifactReviewDomain, AuthoringActivity, AuthoringScope, ReviewBasis,
+)
+
+# Synthetic complete outline candidate; runtime rebinds this fresh task ID.
+scope = AuthoringScope(
+    activity=AuthoringActivity.REVIEW,
+    target_paths=("core_documents/global_outline.md",),
+    domains=(ArtifactReviewDomain.PLOT_STRUCTURE,),
+    interpretation="Review the complete outline supplied in this message.",
+    task_id="outline_review",
+    task_revision=1,
+)
 advisory = await runtime.propose_specialist_advisory(
     "novel",
     conversation_id,
     "plot_architect",
-    "Advise on the immediate pacing question.",
+    "Review this complete outline: A courier loses a letter, retraces the route, "
+    "and returns the recovered letter. Assess causal order and pacing.",
+    authoring_scope=scope,
+    review_basis=ReviewBasis(
+        candidate_input_ids=("user_input",),
+        criteria="Check causal order and pacing of the supplied complete outline.",
+    ),
 )
 ```
+
+`authoring_scope` and `review_basis` are keyword-only on both facades. Missing
+scope or `activity=workflow` raises `ValueError`; the defaults do not preserve
+unscoped calls. The selected specialist must cover all semantic and known path
+domains. Use `lead_turn()` for interpretation or work spanning multiple domains.
+A new API task ID is rebound runtime-side; inspect `advisory.proposal.authoring_scope`
+for the actual identity. To continue an offered active task, pass its exact
+current identity/revision; stale or applied revisions are rejected.
+
+For drafting, use `activity=AuthoringActivity.DRAFT`, an adequate authoring brief,
+and omit `review_basis`. Review requires concrete nonempty material; the direct
+supplied-text alias is `user_input`. A status receipt or a request to write a
+candidate is insufficient review material. Confirm the exact returned proposal
+using the decision flow above; this call alone starts no specialist.
 
 It returns `awaiting_confirmation` without calling the lead provider. The
 proposal has step kind `specialist_advisory`, one assignment, and zero
 synthesis reservation. Confirm invokes that specialist and returns its typed
-message directly. It cannot chain to round two. Runtime rejects a reference
-whose mandatory core-document reviewer differs from `specialist_id`.
+message directly. It cannot chain to round two. Runtime rejects any semantic
+or known-path domain that the selected specialist cannot cover.
 
 ### Confirmed execution results
 
-Each successful specialist answer has exact fields `assignment_id`,
-`assessment`, `message`, and the ordered assignment `input_ids`. Assessment is
-`supports`, `concern`, `conflict`, or `insufficient_evidence`. After every
+Each successful specialist answer has exact fields `assignment_id`, `mode`,
+`assessment`, `message`, and the ordered assignment `input_ids`. Draft mode
+returns `drafted` material or `insufficient_evidence`; review mode returns
+`supports`, `concern`, `conflict`, or `insufficient_evidence`. Draft material
+is not a supporting review or task completion. After every
 assignment succeeds, a normal consultation performs separately budgeted lead
 synthesis. The synthesis cites every reply event in order and retains all input
-IDs from non-supporting replies as unresolved. Its `lead-synthesis-v2` result
-requires nullable `recommended_action`, mutually exclusive with `next_intent`.
-It may recommend one separately confirmed preparation or request one strict
-same-lineage round-two intent. With neither, it returns an answer. The durable
-synthesis payload is unchanged; an action is persisted as a separate request.
+IDs from `concern`, `conflict`, or `insufficient_evidence` replies as
+unresolved; `drafted` is exempt from that unresolved-input requirement. Its
+`lead-synthesis-v3` result requires nullable `recommended_action`, mutually
+exclusive with `next_intent`. It may recommend one separately confirmed
+preparation or request one strict same-lineage round-two intent. With neither,
+it returns an answer. Historical synthesis payloads remain readable; an action
+is persisted as a separate request.
 
-Synthesis separately repeats the proposal's exact story-specific scope,
-evidence status, and evidence IDs; reply event IDs are attribution, not story
+Synthesis separately repeats the proposal's exact `authoring_scope`,
+story-specific scope, evidence status, and evidence IDs; reply event IDs are attribution, not story
 evidence. One to three assignments run concurrently with isolated reference/context
 authority and disjoint call reservations. If one fails, siblings finish and
 known replies are preserved, but synthesis is not attempted. Cancellation
@@ -840,6 +932,9 @@ await RuntimeSession.propose_specialist_advisory(
     specialist_id: str,
     text: str,
     context_event_sink: Callable[[ContextExecutionEvent], None] | None = None,
+    *,
+    authoring_scope: AuthoringScope | None = None,
+    review_basis: ReviewBasis | None = None,
 ) -> LeadTurnResult
 await RuntimeSession.decide_lead_recommendation(
     decision: LeadRecommendationDecision,

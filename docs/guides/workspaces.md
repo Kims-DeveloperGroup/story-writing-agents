@@ -27,8 +27,8 @@ Users can:
 
 Users cannot:
 
-- adopt arbitrary existing files or a markerless/legacy workspace;
-- overwrite packaged prompts, migrate, upgrade, or enable compatibility;
+- adopt arbitrary existing files or a markerless/non-v2 legacy workspace;
+- overwrite packaged prompts or request arbitrary policy migration or adoption;
 - initialize inside another repository, submodule, linked worktree, sparse
   checkout, bare repository, or mismatched Git root;
 - use initialization as authorization for a later commit; or
@@ -107,6 +107,28 @@ does not ask Git to enumerate ignored or untracked entries. An unrelated
 untracked note therefore remains untouched and does not block readiness;
 staging it or committing an unknown path does.
 
+New workspaces and incomplete-journal recovery use only the current scaffold
+and role policies. A journal-free ready main root may instead retain the exact
+published v2 policy set from `68a07827924598571ff8e3f6e4a602ad1a52b771`
+(pre-routing), `2e9ef969bd07ee71356e91573068876e5c6f2d0d` (contextual
+objectives), or `1e482fe9ed37f94da0e747a8cb54240af2624f5c` (published
+recommendation actions). Readiness recognizes only these four complete sets and still
+requires the matching Git baseline, marker, remaining scaffold,
+index, and session topology. Mixed or modified main policies, arbitrary older
+policies, and a known policy set paired with the wrong Git baseline require
+recovery; no files are adopted or rewritten.
+
+The recognized main-root baseline also governs session-resource provisioning
+and inspection, session history, and composition of local Commit and checkpoint
+services. A session's policy edits do not select a different baseline. This
+recognition adds no public API, schema version, or migration command.
+
+Valid policy customizations in an exact session worktree are preserved. Runtime
+prompt assembly captures those session files, appends versioned specialist
+routing policy in memory, and fingerprints the effective composition. It does
+not rewrite the files or relax session readiness and prompt validation. See
+[Agent contracts](../reference/agent-contracts.md#bound-definition).
+
 Provider authentication at lobby startup is also nonpersistent. If no default
 provider has been saved, the authenticated choice is held in memory for that
 process; only an explicit Settings save may change `config/system_defaults.json`.
@@ -119,11 +141,11 @@ initialization journal or other untracked initializer residue.
 | Observed state | User-visible behavior | Safe action |
 | --- | --- | --- |
 | Missing root or empty safe directory | Initialization creates the journal and converges to ready v2. | Wait for success before using the root. |
-| Exact journal plus matching partial scaffold | A fresh command validates every existing byte and continues only missing exact steps. | Rerun the same `story init PATH` in a fresh process. |
-| Exact baseline plus journal | The initializer verifies the baseline, removes only the journal, and verifies again. | Rerun with a fresh process. |
-| Ready v2, journal absent, required paths and Git invariants valid | `story init` is validation-only and creates no second commit. Unknown ignored/untracked entries are left opaque. | Continue only through the supported session-worktree workflow. |
+| Exact current journal plus matching current partial scaffold | A fresh command validates every existing byte and continues only missing exact steps. | Rerun the same `story init PATH` in a fresh process. |
+| Exact current baseline plus current journal | The initializer verifies the baseline, removes only the journal, and verifies again. | Rerun with a fresh process. |
+| Ready v2 with current or one of the three exact published v2 policy sets, journal absent, required paths and Git invariants valid | `story init` is validation-only and creates no second commit. Unknown ignored/untracked entries are left opaque. | Continue only through the supported session-worktree workflow. |
 | Effective Git identity unavailable | Initialization reports `ConfigurationError`; the exact journal/scaffold may remain, but an absent repository is not created. | Configure a valid effective author and committer, then rerun with a fresh process. |
-| Recognizable legacy/markerless root or non-v2 numeric version | The command reports that migration and compatibility are unsupported. | Preserve it and create a separate new workspace. |
+| Recognizable non-v2 legacy/markerless root or non-v2 numeric version | The command reports that migration and compatibility are unsupported. | Preserve it and create a separate new workspace. |
 | Markerless arbitrary content, partial initialization, required-path drift, staged or disallowed tracked changes, or unsafe state | The command preserves all bytes and reports invalid/recovery-required state. | Stop; inspect or restore trusted state outside the runtime. Do not delete the journal or reset files to force success. |
 
 ## Ready-workspace scenarios
@@ -134,8 +156,9 @@ The readiness check follows one compact rule:
 fresh ready check
   -> bind the supplied root without following a symlink
   -> require the journal to be absent
+  -> recognize the main root's complete current or one of the three fixed published v2 policy sets
   -> read and validate only required scaffold/configuration/persona paths
-  -> verify the applicable exact Git baseline, index, and session topology
+  -> verify the matching exact Git baseline, index, and session topology
   -> return ready without listing, stating, opening, decoding, or traversing unknown entries
 ```
 
@@ -710,10 +733,13 @@ propose user-confirmed changes. Initialization never fills these files.
 The four packaged role prompts remain at
 `config/agents/<agent-id>/AGENTS.md`, for `lead_orchestrator`,
 `plot_architect`, `character_custodian`, and `execution_specialist`. They are
-part of the exact baseline. There is no prompt-overwrite option. Editing a
+part of the recognized exact main baseline, together with common and
+specialist-family policies. There is no prompt-overwrite option. Editing a
 prompt or core document in the original root makes a fresh readiness check
-reject that root. The two mutable configuration documents may differ from the
-baseline only when their bytes and referenced persona presence validate.
+reject that root. Valid session-worktree policy customizations are preserved
+and included in the effective bound prompt. The two mutable configuration
+documents may differ from the baseline only when their bytes and referenced
+persona presence validate.
 Unknown untracked entries are opaque; staged changes and tracked unknown
 additions require recovery. Later supported story edits belong in the exact
 session worktree after #455 composes it.

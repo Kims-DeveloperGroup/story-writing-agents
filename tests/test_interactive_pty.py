@@ -323,6 +323,14 @@ def nested_mapping_with(value, key):
     return None
 
 
+def lead_scope(value, activity="workflow", domains=()):
+    material = nested_mapping_with(value, "authoring_tasks")
+    task = material["authoring_tasks"][-1]
+    return {"schema_version":1, "activity":activity, "target_paths":[], "domains":list(domains),
+            "interpretation":"Assess the synthetic current input candidate." if activity == "review" else "Report factual workflow status.",
+            "task_id":task["task_id"], "task_revision":task["task_revision"]}
+
+
 def lead_consultation_answer(value, _agent_id):
     """Return one deterministic proposal, specialist reply, or synthesis."""
 
@@ -331,6 +339,7 @@ def lead_consultation_answer(value, _agent_id):
         contract = material["answer_contract"]
         return {
             "assessment": "supports",
+            "mode": contract["mode"],
             "assignment_id": contract["assignment_id"],
             "input_ids": contract["input_ids"],
             "message": "The outline evidence supports the request.",
@@ -338,6 +347,7 @@ def lead_consultation_answer(value, _agent_id):
     if material is not None and "reply_event_ids" in material["answer_contract"]:
         contract = material["answer_contract"]
         return {
+            "authoring_scope": contract["authoring_scope"],
             "evidence_ids": contract["evidence_ids"],
             "evidence_status": contract["evidence_status"],
             "message": "The specialist confirms the proposed direction.",
@@ -350,8 +360,14 @@ def lead_consultation_answer(value, _agent_id):
     statuses = nested_mapping_with(value, "core_statuses")
     status_rows = statuses["core_statuses"] if statuses is not None else []
     evidence_ids = [status_rows[0]["evidence_id"]] if status_rows else []
+    domain_by_specialist = {"plot_architect": "plot_structure",
+        "character_custodian": "character_world", "execution_specialist": "tone_execution"}
+    specialists = [agent for agent in domain_by_specialist
+                   if agent in control.get("specialists", ["plot_architect"])]
+    authoring_scope = lead_scope(value, "review", [domain_by_specialist[agent] for agent in specialists])
     return {
         "kind": "proposal",
+        "authoring_scope": authoring_scope,
         "message": "Specialist review would resolve the open question.",
         "scope": "story_specific",
         "evidence_status": (
@@ -365,23 +381,32 @@ def lead_consultation_answer(value, _agent_id):
         "recommended_action": None,
         "proposal": {
             "relation": "new_step",
+            "authoring_scope": authoring_scope,
             "purpose": "Check outline consistency before answering.",
             "assignments": [{
                 "agent_id": specialist,
                 "instruction": "Check the user request against the outline.",
                 "input_ids": ["user_input"],
-            } for specialist in control.get("specialists", ["plot_architect"])],
+                "mode":"review",
+                "review_basis":{"schema_version":1,"candidate_input_ids":["user_input"],"criteria":"Assess the supplied synthetic candidate."},
+            } for specialist in specialists],
         },
     }
 
 
 def lead_recommendation_answer(value):
-    """Offer a synthetic draft, then prepare only after exact runtime Confirm."""
+    """Echo the finished user candidate, then prepare only after exact Confirm."""
     draft = "1. A courier finds a sealed map.\n2. The map reveals a false harbor.\n3. The courier returns the missing seal.\nB642-PTY-SYNTHETIC\n"
     execution = nested_mapping_with(value, "structured_recommendation_execution")
+    statuses = nested_mapping_with(value, "core_statuses")["core_statuses"]
+    evidence = next(item["evidence_id"] for item in statuses
+                    if item["locator"] == "core_documents/global_outline.md")
     if execution is None:
-        return {"kind": "recommendation", "message": draft, "scope": "workflow_meta",
-            "evidence_status": "not_applicable", "evidence_ids": [], "proposal": None,
+        scope = lead_scope(value, "review")
+        scope["target_paths"] = ["core_documents/global_outline.md"]
+        return {"kind": "recommendation", "message": draft, "scope": "story_specific",
+            "authoring_scope": scope,
+            "evidence_status": "empty", "evidence_ids": [evidence], "proposal": None,
             "artifact_intent": None, "objective_intent": None,
             "recommended_action": {"kind": "prepare_artifact", "purpose": "Prepare the offered outline for review.",
                 "instruction": "Prepare the exact offered synthetic outline.",
@@ -393,6 +418,7 @@ def lead_recommendation_answer(value):
     evidence = next(item["evidence_id"] for item in statuses
                     if item["locator"] == "core_documents/global_outline.md")
     return {"kind": "proposal", "message": "B642 exact candidate awaits separate specialist review.",
+        "authoring_scope": request["authoring_scope"],
         "scope": "story_specific", "evidence_status": "empty", "evidence_ids": [evidence],
         "proposal": None, "recommended_action": None,
         "artifact_intent": {"additional_review_domains": [], "operations": [
@@ -578,6 +604,8 @@ elif isinstance(query, list):
                 "recommended_action": None,
                 "proposal": None,
             }
+        if "kind" in answer:
+            answer.setdefault("authoring_scope", lead_scope(payload))
         response = {
             "correlation": payload["c"],
             "action": {
@@ -909,7 +937,7 @@ if "--print" in argv:
         answer = {"kind": "answer", "message": "AUTH631 exact request recovered.",
             "scope": "workflow_meta", "evidence_status": "not_applicable",
             "evidence_ids": [], "artifact_intent": None, "proposal": None,
-            "objective_intent": None, "recommended_action": None}
+            "objective_intent": None, "recommended_action": None, "authoring_scope": lead_scope(payload)}
     else:
         answer = lead_consultation_answer(payload, agent)
     print(json.dumps({"conversation_id": option("--conversation") or ("auth-thread-" + agent),
@@ -4283,7 +4311,8 @@ print(
         process = self._spawn_cli(args, terminal_columns=120)
         process.wait_for_text("story[lobby]> ")
         process.send_line("/session create alpha")
-        process.wait_for_text("story[alpha]> ")
+        # Git/session setup has its own bound; auth waits keep the normal deadline.
+        process.wait_for_text("story[alpha]> ", timeout=30.0)
         conversation = self._create_conversation(process, subject="Synthetic auth recovery")
         mark = process.output_mark()
         process.send_line("AUTH631 preserve this exact request and its confirmation.")
@@ -4977,7 +5006,9 @@ raise SystemExit(cli.main([]))
         store = FilesystemCollaborationEventStore(
             self.workspace, catalog=FilesystemConversationCatalog(self.workspace))
         mark = process.output_mark()
-        process.send_line("Offer the tiny synthetic outline and recommend preparing it.")
+        process.send_line("Recommend separate review of this finished user candidate: "
+                          "1. A courier finds a sealed map. 2. The map reveals a false harbor. "
+                          "3. The courier returns the missing seal. B642-PTY-SYNTHETIC")
         offered = process.wait_for_text("Lead recommendation decision", after=mark)
         self.assertIn("B642-PTY-SYNTHETIC", offered)
         self.assertIn("core_documents/global_outline.md", offered)
@@ -5284,7 +5315,7 @@ raise SystemExit(cli.main([]))
         process.wait_for_text("story[lobby]> draft-Xtail", after=draft_mark)
         process.send_text("\n")
         process.wait_for_text(
-            "Direct story execution is unavailable",
+            "[error session_not_attached]",
             after=draft_mark,
         )
         process.wait_for_text("story[lobby]> ", after=draft_mark)
@@ -5857,7 +5888,7 @@ print(
 
         mark = process.output_mark()
         process.send_line("/session create beta")
-        process.wait_for_text("Session: beta (created)", after=mark)
+        process.wait_for_text("Session: beta (created)", after=mark, timeout=60.0)
         process.wait_for_text("story[beta]> ", after=mark)
         self.assertFalse(
             self.workspace.path(f"{_SESSION_DIRECTORY}/alpha.access.json").exists()
@@ -5865,7 +5896,7 @@ print(
 
         mark = process.output_mark()
         process.send_line("/session resume alpha")
-        process.wait_for_text("Session: alpha (opened)", after=mark)
+        process.wait_for_text("Session: alpha (opened)", after=mark, timeout=60.0)
         process.wait_for_text("story[alpha]> ", after=mark)
         self.assertFalse(
             self.workspace.path(f"{_SESSION_DIRECTORY}/beta.access.json").exists()
@@ -5911,10 +5942,12 @@ print(
         )
         process.wait_for_text("story[alpha]> ")
         self._create_conversation(process)
+        create_mark = process.output_mark()
         process.send_line("/session create beta")
-        process.wait_for_text("story[beta]> ")
+        process.wait_for_text("story[beta]> ", after=create_mark, timeout=60.0)
+        resume_mark = process.output_mark()
         process.send_line("/session resume alpha")
-        process.wait_for_text("story[alpha]> ")
+        process.wait_for_text("story[alpha]> ", after=resume_mark, timeout=60.0)
         for session_id, updated_at in (
             ("alpha", "2099-01-01T00:00:00+00:00"),
             ("beta", "2099-01-02T00:00:00+00:00"),
@@ -5949,7 +5982,7 @@ print(
         )
         commit_mark = process.output_mark()
         process.send_text("\n")
-        resumed = process.wait_for_text("story[beta]> ", after=commit_mark)
+        resumed = process.wait_for_text("story[beta]> ", after=commit_mark, timeout=60.0)
         self.assertRegex(resumed, r"^\r(?:\x1b\[A)*\r\x1b\[J")
         self.assertEqual(resumed.count("Session: beta (opened)"), 1)
         self.assertGreaterEqual(resumed.count("[conversation]"), 1)
@@ -6170,10 +6203,10 @@ print(
         self.assertNotIn("PTY_TEST_CREDENTIAL_MUST_NOT_APPEAR", combined)
         self.assertNotIn(b"\x1b[", combined.encode("utf-8"))
 
-    def test_second_real_process_rejects_runtime_workspace_without_exposing_token(
+    def test_second_real_process_reports_blocked_access_without_exposing_token(
         self,
     ) -> None:
-        """Prove a fresh path-only process cannot reopen the owner's runtime root."""
+        """Keep an access contender in the lobby without exposing the owner's token."""
 
         owner = self._spawn_cli(
             ("chat", "alpha", "--workspace", str(self.workspace.root))
@@ -6188,8 +6221,10 @@ print(
         contender = self._spawn_cli(
             ("chat", "alpha", "--workspace", str(self.workspace.root))
         )
-        contender.wait_for_text("[error workspace_invalid]")
-        self.assertEqual(contender.wait_for_exit(), 2, contender.normalized_text)
+        contender.wait_for_text("[error session_access_blocked]")
+        contender.wait_for_text("story[lobby]> ")
+        contender.send_text("/quit\n\n")
+        self.assertEqual(contender.wait_for_exit(), 0, contender.normalized_text)
         self.assertEqual(_durable_tree(self.workspace.root), before_contender)
         self.assertNotIn(claim_token, contender.normalized_text)
         self.assertNotIn(

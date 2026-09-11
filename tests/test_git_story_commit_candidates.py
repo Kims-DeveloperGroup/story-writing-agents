@@ -346,7 +346,7 @@ class StoryCommitCandidateIntegrationTests(StoryCommitGitTestCase):
             prepare_story_commit_candidate(
                 root, manifest(), evidence, "Update opening", ("impact",)
             )
-        self.assertIs(caught.exception.code, StoryCommitFailureCode.PRESTAGED_CHANGES)
+        self.assertIs(caught.exception.code, StoryCommitFailureCode.CANDIDATE_DRIFT)
 
     def test_noncanonical_untracked_bytes_are_preserved_and_excluded(self) -> None:
         root, session_root, evidence = self.applied_replace("preserve")

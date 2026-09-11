@@ -862,6 +862,18 @@ assert len(writing_artifacts.__all__) == len(set(writing_artifacts.__all__)) == 
             candidate = ".".join(parts)
             return candidate if candidate in modules else None
 
+        def runtime_nodes(node: ast.AST):
+            yield node
+            if isinstance(node, ast.If) and (
+                isinstance(node.test, ast.Name) and node.test.id == "TYPE_CHECKING"
+                or isinstance(node.test, ast.Attribute) and node.test.attr == "TYPE_CHECKING"
+            ):
+                for child in node.orelse:
+                    yield from runtime_nodes(child)
+                return
+            for child in ast.iter_child_nodes(node):
+                yield from runtime_nodes(child)
+
         edges: set[tuple[str, str]] = set()
         for module, path in modules.items():
             tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
@@ -870,19 +882,7 @@ assert len(writing_artifacts.__all__) == len(set(writing_artifacts.__all__)) == 
                 if path.name == "__init__.py"
                 else module.split(".")[:-1]
             )
-            pending = [tree]
-            while pending:
-                node = pending.pop()
-                if isinstance(node, ast.If) and (
-                    isinstance(node.test, ast.Name) and node.test.id == "TYPE_CHECKING"
-                    or isinstance(node.test, ast.Attribute)
-                    and isinstance(node.test.value, ast.Name)
-                    and node.test.value.id == "typing"
-                    and node.test.attr == "TYPE_CHECKING"
-                ):
-                    pending.extend(node.orelse)
-                    continue
-                pending.extend(ast.iter_child_nodes(node))
+            for node in runtime_nodes(tree):
                 targets: list[str] = []
                 if isinstance(node, ast.Import):
                     targets.extend(alias.name for alias in node.names)
@@ -903,8 +903,8 @@ assert len(writing_artifacts.__all__) == len(set(writing_artifacts.__all__)) == 
                     resolved = resolve(target)
                     if resolved is not None and resolved != module:
                         edges.add((module, resolved))
-        self.assertEqual(len(modules), 138)
-        self.assertEqual(len(edges), 549)
+        self.assertEqual(len(modules), 140)
+        self.assertEqual(len(edges), 555)
         application_name = (
             "story_writing_agents.writing_artifacts.application_contracts"
         )
@@ -938,8 +938,8 @@ assert len(writing_artifacts.__all__) == len(set(writing_artifacts.__all__)) == 
         for module in modules:
             visit(module)
         index = (_ROOT / "PYTHON_MODULE_INDEX.md").read_text(encoding="utf-8")
-        self.assertIn("Importable production units indexed: 138.", index)
-        self.assertIn("Direct internal dependency edges indexed: 549.", index)
+        self.assertIn("Importable production units indexed: 140.", index)
+        self.assertIn("Direct internal dependency edges indexed: 555.", index)
         self.assertIn("Directed internal dependency cycles indexed: 0.", index)
         self.assertIn(
             "### `story_writing_agents.writing_artifacts.application_contracts`",

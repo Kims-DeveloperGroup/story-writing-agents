@@ -10,7 +10,7 @@ from dataclasses import dataclass, field
 from enum import StrEnum
 from typing import NoReturn, TypeAlias
 
-from .agents import CHARACTER_CUSTODIAN, EXECUTION_SPECIALIST, PLOT_ARCHITECT
+from .specialist_routing import specialists_for_domains
 from .writing_artifacts import (
     ArtifactChangeOperation,
     ArtifactChangeOperationKind,
@@ -42,16 +42,7 @@ ARTIFACT_PROPOSAL_SCHEMA_VERSION = 1
 
 _IDENTIFIER = re.compile(r"[A-Za-z0-9][A-Za-z0-9_-]{0,63}")
 _DIGEST = re.compile(r"sha256:[0-9a-f]{64}")
-_DOMAIN_ORDER = (
-    ArtifactReviewDomain.PLOT_STRUCTURE,
-    ArtifactReviewDomain.CHARACTER_WORLD,
-    ArtifactReviewDomain.TONE_EXECUTION,
-)
-_REVIEWER_BY_DOMAIN = {
-    ArtifactReviewDomain.PLOT_STRUCTURE: PLOT_ARCHITECT,
-    ArtifactReviewDomain.CHARACTER_WORLD: CHARACTER_CUSTODIAN,
-    ArtifactReviewDomain.TONE_EXECUTION: EXECUTION_SPECIALIST,
-}
+_DOMAIN_ORDER = tuple(ArtifactReviewDomain)
 
 
 class ArtifactProposalErrorCode(StrEnum):
@@ -365,10 +356,7 @@ def artifact_review_specialists(
     """Map a canonical closed domain tuple to canonical specialist identities."""
 
     _review_domain_tuple(domains, allow_empty=False)
-    try:
-        return tuple(_REVIEWER_BY_DOMAIN[item] for item in domains)
-    except KeyError:
-        _raise_content_free_error(ArtifactProposalErrorCode.REVIEWER_MAPPING)
+    return specialists_for_domains(domains)
 
 
 def build_artifact_review_candidate(

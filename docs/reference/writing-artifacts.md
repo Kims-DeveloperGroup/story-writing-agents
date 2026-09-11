@@ -1098,9 +1098,9 @@ There is no proposed artifact operation, so the application should not invent
 a no-op change set or call relationship validation. There is no validation
 value and no review fact to display. Plain words such as “opening,” a filename,
 or a core-document name do not create relationships or select a specialist.
-The lead can clarify the question, answer directly, or separately propose
-a consultation according to the later orchestration workflow. Nothing is
-written, staged, or committed.
+The lead can clarify the question directly. A substantive recommendation
+requires a scoped specialist proposal through the orchestration workflow, even
+though no change set is needed. Nothing is written, staged, or committed.
 
 ### Relationship failures and retry
 
@@ -1142,12 +1142,23 @@ artifact intent instead of an ordinary consultation intent:
 | rename | current artifact `evidence_id`, canonical `suggested_destination` | Evidence must identify a whole artifact; projected links/policies must remain valid. |
 | delete | current artifact `evidence_id` | Evidence must identify a whole artifact; protected core and relationship rules still apply. |
 
+The Lead first integrates all required current-task specialist drafts. A fresh
+user-supplied complete candidate may enter review when the Lead discloses that
+interpretation. Every required specialist then reviews the exact immutable
+final candidate; earlier drafts or supporting reviews do not authorize Apply.
+An earlier Lead source message retains its whole-message identity and digest,
+but the candidate is prepared independently and may omit conversational framing.
+The runtime notice about unfinished authoring is not source or story content.
+Selected earlier drafts cannot waive current task/revision drafting obligations.
+Only the bound candidate's exact successful Apply satisfies an open authoring
+objective; reviewed status and a completed consultation do not.
+
 The lead also may name additional affected review domains. Runtime, not the
 provider, performs `capture_complete_state()` under the source lease, resolves
 the evidence-bound operations, calls `build_artifact_change_set()`, calls
 `validate_artifact_relationships()`, derives mandatory domains from the
-returned review facts, adds the requested domains in canonical order, maps
-them to specialists, and computes the candidate digest. Invalid or stale
+returned review facts, unions current authoring-scope and requested domains
+in canonical order, maps them to specialists, and computes the candidate digest. Invalid or stale
 intent produces no partial candidate.
 
 The candidate is immutable and content-bearing. It contains the exact change

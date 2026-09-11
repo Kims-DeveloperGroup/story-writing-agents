@@ -48,6 +48,7 @@ from ..git.session_resources import (
     provision_git_session_resources as _provision_git_session_resources,
     require_ready_git_session_resources as _require_ready_git_session_resources,
 )
+from ._policy_baselines import LEGACY_V2_POLICY_FILES, OBJECTIVE_V2_POLICY_FILES, MAIN_V2_POLICY_FILES
 from .schema import (
     WORKSPACE_DIRECTORIES,
     WORKSPACE_INITIALIZATION_JOURNAL_PATH,
@@ -309,8 +310,8 @@ def inspect_session_resources(
 ) -> GitSessionResourceInspection:
     """Inspect one session through the bounded workspace-owned composition seam."""
 
-    manifest = _baseline_manifest(canonical_initializer_scaffold())
     main_root = _main_root(root)
+    manifest = _known_baseline_manifest(main_root)
     allowance = _validated_configuration_allowance(main_root)
     return _inspect_git_session_resources(
         main_root,
@@ -327,7 +328,7 @@ def inspect_session_history(
     """Return one immutable complete history snapshot without creating storage."""
 
     main_root = _main_root(root)
-    manifest = _baseline_manifest(canonical_initializer_scaffold())
+    manifest = _known_baseline_manifest(main_root)
     allowance = _validated_configuration_allowance(main_root)
     with open_git_session_history(
         main_root,
@@ -342,8 +343,9 @@ def inspect_session_history(
 def list_session_resources(root: Path) -> GitSessionResourceInventory:
     """List the complete correlated session inventory without mutation."""
 
-    manifest = _baseline_manifest(canonical_initializer_scaffold())
-    return _list_git_session_resources(_main_root(root), manifest)
+    main_root = _main_root(root)
+    manifest = _known_baseline_manifest(main_root)
+    return _list_git_session_resources(main_root, manifest)
 
 
 def provision_session_resources(
@@ -353,7 +355,7 @@ def provision_session_resources(
     """Create or resume one exact session triple under the repository lock."""
 
     main_root = _main_root(root)
-    manifest = _baseline_manifest(canonical_initializer_scaffold())
+    manifest = _known_baseline_manifest(main_root)
     allowance = _validated_configuration_allowance(main_root)
     return _provision_git_session_resources(
         main_root,
@@ -370,7 +372,7 @@ def require_ready_session_resources(
     """Require one exact ready session triple without mutation."""
 
     main_root = _main_root(root)
-    manifest = _baseline_manifest(canonical_initializer_scaffold())
+    manifest = _known_baseline_manifest(main_root)
     allowance = _validated_configuration_allowance(main_root)
     return _require_ready_git_session_resources(
         main_root,
@@ -408,7 +410,7 @@ def compose_story_commit_service(root: Path, session_id: str) -> StoryCommitServ
     """Compose commit authority for one already-ready workspace session."""
 
     main_root = _main_root(root)
-    manifest = _baseline_manifest(canonical_initializer_scaffold())
+    manifest = _known_baseline_manifest(main_root)
     allowance = _validated_configuration_allowance(main_root)
     _require_ready_git_session_resources(
         main_root,
@@ -431,7 +433,7 @@ def compose_session_checkpoint_service(
     """Compose checkpoint authority for one freshly validated workspace."""
 
     main_root = _main_root(root)
-    manifest = _baseline_manifest(canonical_initializer_scaffold())
+    manifest = _known_baseline_manifest(main_root)
     allowance = _validated_configuration_allowance(main_root)
     _require_ready_git_session_resources(
         main_root,
@@ -493,7 +495,6 @@ def _verify_ready(
     manifest: GitBaselineManifest | None = None,
 ) -> tuple[WorkspaceRootRole, str | None, Path]:
     scaffold = canonical_initializer_scaffold()
-    manifest = manifest or _baseline_manifest(scaffold)
     role, session_id, main_root = _workspace_role(root)
     if role is WorkspaceRootRole.SESSION:
         try:
@@ -508,6 +509,7 @@ def _verify_ready(
             persona_exists=lambda name: _persona_exists(descriptor, name),
         )
         assert session_id is not None
+        manifest = manifest or _known_baseline_manifest(main_root)
         try:
             _require_ready_git_session_resources(
                 root,
@@ -523,6 +525,7 @@ def _verify_ready(
             ) from None
         return role, session_id, main_root
     if journal_present:
+        manifest = manifest or _baseline_manifest(scaffold)
         snapshot = _snapshot_relative_files(descriptor)
         marker_bytes = snapshot.get(WORKSPACE_MARKER_PATH)
         if marker_bytes is None:
@@ -551,6 +554,8 @@ def _verify_ready(
             raise WorkspaceFormatError("workspace marker is missing") from None
         decode_workspace_marker(marker_bytes)
         _require_directories(descriptor)
+        scaffold = _known_initializer_scaffold(descriptor)
+        manifest = manifest or _baseline_manifest(scaffold)
         snapshot = _required_scaffold_projection(descriptor, scaffold)
         _validate_mutable_configuration(
             snapshot["config/system_defaults.json"],
@@ -674,6 +679,53 @@ def _install_missing_scaffold(
             _write_create_only(descriptor, entry.path, entry.content)
         elif current != entry.content:
             raise WorkspaceFormatError("workspace partial scaffold requires recovery")
+
+
+def _known_initializer_scaffold(
+    descriptor: int,
+) -> tuple[WorkspaceScaffoldEntry, ...]:
+    """Select only current or exact published v2 policy bytes from a bound root."""
+
+    scaffold = canonical_initializer_scaffold()
+    legacy_policies = dict(LEGACY_V2_POLICY_FILES)
+    policy_scaffold = tuple(
+        entry for entry in scaffold if entry.path in legacy_policies
+    )
+    observed = _required_scaffold_projection(descriptor, policy_scaffold)
+    current_policies = {entry.path: entry.content for entry in policy_scaffold}
+    if observed == current_policies:
+        return scaffold
+    for published in (legacy_policies, dict(OBJECTIVE_V2_POLICY_FILES), dict(MAIN_V2_POLICY_FILES)):
+        if observed == published:
+            return tuple(
+                WorkspaceScaffoldEntry(
+                    entry.path,
+                    published.get(entry.path, entry.content),
+                )
+                for entry in scaffold
+            )
+    raise WorkspaceFormatError("workspace scaffold requires recovery")
+
+
+def _known_baseline_manifest(main_root: Path) -> GitBaselineManifest:
+    """Read the main root's known policy baseline without adopting session edits."""
+
+    main_root = _require_lexical_root(main_root)
+    try:
+        identity = _meaningful_directory_identity(
+            os.stat(main_root, follow_symlinks=False)
+        )
+    except OSError:
+        raise WorkspaceSecurityError("workspace root cannot be inspected") from None
+    if identity is None:
+        raise WorkspaceSecurityError("workspace root is not a safe directory")
+    descriptor = _open_existing_root(main_root, identity)
+    try:
+        scaffold = _known_initializer_scaffold(descriptor)
+        _verify_named_identity(main_root, descriptor, identity)
+        return _baseline_manifest(scaffold)
+    finally:
+        os.close(descriptor)
 
 
 def _baseline_manifest(

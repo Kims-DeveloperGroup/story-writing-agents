@@ -26,6 +26,7 @@ from story_writing_agents import antigravity_adapter, codex_adapter
 from story_writing_agents.config import ConfigManager
 from story_writing_agents.conversations import (
     CollaborationConfirmationDecision, CollaborationEventKind,
+    CollaborationLeadSynthesisPayload, CollaborationSpecialistReplyPayload,
     CollaborationProviderCallPayload, CollaborationStepState, LeadStepDecision,
 )
 from story_writing_agents.interactive_controller._lead_policy import InteractiveLeadAdapter
@@ -261,33 +262,42 @@ class Case:
             artifact_proposal=turn.artifact_proposal is not None,
             artifact_application=turn.artifact_application_request is not None)
 
+    def drafting_request(self):
+        directions = {
+            "plot_architect": (
+                "Draft three causal outline beats leading from the beacon failure to Mara entering "
+                "the cellar, with one fair clue before that turning point. Hold Mara's decision, "
+                "her relationship with Iona, all world facts, and prose style fixed. Work only on "
+                "plot structure; do not invent character motivation or finished scene prose."
+            ),
+            "character_custodian": (
+                "Draft a short character note on Mara's conflicting loyalty to Iona and fear of "
+                "breaking her promise. The event sequence and her decision to enter the cellar "
+                "are fixed. Work only on character motivation and relationship continuity; "
+                "do not add plot events, world rules, or finished scene prose."
+            ),
+            "execution_specialist": (
+                "Draft three sentences of close-third-person scene prose: the beacon fails, "
+                "Mara hears Iona's rhyme, and she enters the cellar despite her promise. Keep "
+                "that event order, decision, motivation, relationships, and world facts fixed. "
+                "Work only on sensory phrasing, sentence rhythm, and narrative perspective."
+            ),
+        }
+        return (
+            "Please disclose exactly one bounded, one-round drafting consultation with " + self.agent + ". "
+            "The requested material is new: use authoring activity draft and assignment mode draft "
+            "with no review basis. This is a brief, not a supplied review candidate. "
+            "Mara is a lighthouse keeper who promised her sister Iona never to enter the storm cellar. "
+            "Tonight the beacon fails and a voice below repeats Iona's private childhood rhyme. "
+            + directions[self.agent] + " Use only this self-contained premise and the single named domain; "
+            "hold the other domains fixed. Disclose the exact proposal for my separate structured Confirm. "
+            "After that specialist drafts, synthesize the material without another round. "
+            "Keep the draft in conversation; do not prepare an artifact candidate, Apply, or Commit."
+        )
+
     def seek_proposal(self):
         self.event("proposal_continuation_started", new_user_turn=True, repeated_call=False)
-        text = (
-            "Please now disclose a concrete one-round consultation proposal for " + self.agent +
-            " about the hypothetical premise already provided. I am asking you, the Lead, to coordinate "
-            "that specialist and synthesize the result. This is a request to propose the bounded work, "
-            "not merely recommend that I consult someone. Include only that specialist and user_input; "
-            "use the premise from my previous message in the assignment. I will separately Confirm "
-            "the exact proposal through the structured control. Do not perform artifact operations.")
-        if self.resume and self.agent == "execution_specialist":
-            text = ("New task: propose exactly one bounded, read-only, one-round consultation with "
-                "execution_specialist for prose and scene execution. Hold the established premise and "
-                "character choice fixed: Mara hears the childhood rhyme from the cellar as the beacon fails. "
-                "Ask for an advisory on how to dramatize her cellar choice through beat sequence, sensory "
-                "focus, line pacing, and narrative perspective. This is prose execution, not a request to "
-                "redesign the plot or character. Disclose a concrete consultation proposal now; I will "
-                "separately Confirm that exact proposal. Use the supplied user_input and relevant existing "
-                "runtime evidence. After the single specialist advisory, synthesize it without another "
-                "round. Do not create an artifact intent, apply changes, or commit anything.")
-        if self.agent == "plot_architect" and (self.case == "L631-PRO-MIXED-NOAUTH" or self.attempt.endswith("-attempt4-ctrl-d") or self.resume and self.attempt.endswith("-attempt3")):
-            text = ("New task: disclose exactly one bounded, read-only, one-round consultation proposal "
-                "for plot_architect. Hold all character and prose choices fixed. For the established "
-                "Mara lighthouse/cellar premise, ask the architect to assess causal beat order, clue and "
-                "reveal placement, and turning-point payoff. This is plot architecture only. Give me "
-                "the concrete proposal now so I can separately Confirm its exact scope. Use the supplied "
-                "user_input and relevant existing runtime evidence; after the single specialist advisory, "
-                "synthesize it without another round. No artifact intent, application, or commit.")
+        text = "Continue this same bounded drafting request. " + self.drafting_request()
         turn = self.adapter._run_operation(self.runtime.lead_turn("live", self.conversation, text))
         self.turn_checkpoint(turn, "proposal_continuation")
         require(turn.proposal is not None, "CONTINUATION_DID_NOT_PROPOSE")
@@ -322,27 +332,7 @@ class Case:
                 if not self.resume:
                     self.conversation = self.runtime.conversation_storage_services.catalog.create("live", self.case).conversation_id
                     self.event("conversation_created", conversation_id=self.conversation)
-                prompt = ("Please propose exactly one read-only consultation with " + self.agent + ". "
-                    "Do not answer directly or consult another specialist. Use one round, then synthesize the "
-                    "specialist's advice; do not create an artifact intent or apply/commit anything. "
-                    "This is a self-contained hypothetical story premise, not a claim about existing artifacts: "
-                    "Mara, a lighthouse keeper, promised her sister Iona never to enter the storm cellar. "
-                    "Tonight the beacon fails and a tapping voice below repeats Iona's private childhood rhyme. "
-                    "Assess one plausible choice and its emotional consequence from your specialty. "
-                    "The specialist should give a brief advisory assessment, not request another round. "
-                    "Use only the supplied user_input; no retrieval or file references are necessary. "
-                    "Your first response must disclose that consultation for my separate structured Confirm.")
-                if self.case == "L631-PRO-MIXED-NOAUTH" or self.attempt.endswith("-attempt4-ctrl-d"):
-                    prompt = ("Please disclose exactly one bounded, read-only, one-round consultation "
-                        "proposal for plot_architect. Assess causal beat order, clue/reveal placement, and "
-                        "turning-point payoff only; hold character and prose choices fixed. The fixed "
-                        "premise is that lighthouse keeper Mara's beacon fails, then she hears her sister's "
-                        "private childhood rhyme from the storm cellar she promised never to enter. "
-                        "Ask the architect to assess the causal scene sequence and placement of a fair "
-                        "clue before the cellar turning point. Use current runtime evidence as needed. "
-                        "Disclose the concrete proposal now for my separate exact structured Confirm, "
-                        "then synthesize the one specialist advisory. Do not substitute character or "
-                        "prose review, create artifact intent, apply changes, or commit anything.")
+                prompt = self.drafting_request()
                 if self.resume:
                     turn = self.seek_proposal()
                 else:
@@ -351,6 +341,16 @@ class Case:
                     if turn.proposal is None:
                         turn = self.seek_proposal()
                 require([a.specialist_id for a in turn.proposal.assignments] == [self.agent], "WRONG_PROPOSAL_ROSTER")
+                scope = turn.proposal.authoring_scope
+                domain = {"plot_architect": "plot_structure", "character_custodian": "character_world",
+                          "execution_specialist": "tone_execution"}[self.agent]
+                require(scope is not None and scope.activity.value == "draft"
+                        and tuple(item.value for item in scope.domains) == (domain,)
+                        and not scope.target_paths, "WRONG_DRAFT_SCOPE")
+                assignment = turn.proposal.assignments[0]
+                require(assignment.mode.value == "draft" and assignment.review_basis is None,
+                        "WRONG_DRAFT_ASSIGNMENT")
+                self.event("draft_scope", domain=domain, task_id=scope.task_id, task_revision=scope.task_revision)
                 require(not any(c["vendor"] == "antigravity" for c in self.calls), "SPECIALIST_BEFORE_CONFIRM")
                 decision = LeadStepDecision(confirmation_request_id=turn.confirmation_request_id,
                     session_id=turn.session_id, conversation_id=turn.conversation_id, step_id=turn.step_id,
@@ -365,6 +365,13 @@ class Case:
                 for kind in (CollaborationEventKind.ASSIGNMENT_DISPATCH, CollaborationEventKind.SPECIALIST_REPLY,
                              CollaborationEventKind.LEAD_SYNTHESIS):
                     require(kinds.count(kind) == 1, "COLLABORATION_EVENT_COUNT_" + kind.value)
+                reply = next(e for e in self.history() if type(e.payload) is CollaborationSpecialistReplyPayload)
+                synthesis = next(e.payload for e in self.history() if type(e.payload) is CollaborationLeadSynthesisPayload)
+                require(reply.payload.mode.value == "draft" and reply.payload.assessment.value == "drafted"
+                        and reply.payload.assignment_id == assignment.assignment_id, "SPECIALIST_DRAFT_NOT_CORRELATED")
+                require(synthesis.authoring_scope == scope and synthesis.reply_event_ids == (reply.event_id,)
+                        and synthesis.proposal_digest == turn.proposal.proposal_digest,
+                        "SYNTHESIS_DRAFT_SCOPE_NOT_CORRELATED")
                 self.event("synthesis_completed")
                 prior_history, prior_calls = self.history(), len(self.calls)
                 self.backend.close()
@@ -379,8 +386,9 @@ class Case:
                 require(len(self.calls) == prior_calls, "RESTART_AUTOMATIC_CALL")
                 self.event("restart_verified", automatic_calls=0)
                 followup = self.adapter._run_operation(self.runtime.lead_turn("live", self.conversation,
-                    "Answer directly in two sentences: summarize the specialist advice and your synthesis "
-                    "already recorded above. Do not propose more consultation, retrieve, or create artifacts."))
+                    "Give a factual two-sentence summary of the specialist draft and your synthesis "
+                    "already recorded above, with workflow authoring scope. Do not add recommendations, "
+                    "draft new story material, propose more consultation, retrieve, or create artifacts."))
                 self.turn_checkpoint(followup, "restart_followup")
                 require(followup.proposal is None, "FOLLOWUP_NOT_DIRECT")
                 require(self.snapshot() == before, "STORY_ARTIFACT_OR_GIT_CHANGED")

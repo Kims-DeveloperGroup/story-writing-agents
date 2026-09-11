@@ -30,7 +30,7 @@ Workspace.load_session_overrides(session_id: str) -> dict[str, Any]
 Workspace.save_session_overrides(session_id: str, overrides: Mapping[str, Any]) -> pathlib.Path
 ```
 
-There is no prompt-overwrite parameter, alias, or compatibility shim.
+There is no prompt-overwrite parameter, alias, or migration command.
 Initialization accepts only an absent root, an existing empty safe directory,
 or one exact journal-backed interrupted-v2 root. `initialize_workspace(root)`
 is the convenience wrapper for `Workspace(root).initialize()`.
@@ -71,6 +71,22 @@ baseline uses the effective author and committer, contains exactly the
 initializer manifest, has one parentless commit named
 `Initialize story workspace`, and leaves `main` clean.
 
+New workspaces receive the current role policies. Journal-free readiness
+recognizes that exact complete policy set and three fixed published v2 sets:
+`68a07827924598571ff8e3f6e4a602ad1a52b771` (pre-routing),
+`2e9ef969bd07ee71356e91573068876e5c6f2d0d` (contextual objectives), and
+`1e482fe9ed37f94da0e747a8cb54240af2624f5c` (recommendation actions). This changes
+only selection of the expected baseline;
+arbitrary older, modified, or mixed main-root policy bytes remain unsupported.
+The selected set must agree with the exact Git baseline and all other required
+marker, scaffold, index, and topology invariants.
+
+Valid customized policies in an exact session worktree are captured by prompt
+assembly and preserved on disk. The runtime appends its routing policy in
+memory and fingerprints the effective composition. Session customization never
+selects or changes the main-root baseline. See
+[Agent contracts](agent-contracts.md#bound-definition).
+
 Marker and journal decoding accepts only canonical UTF-8 JSON with a trailing
 newline and their closed fields. Duplicate, missing, extra, malformed, and
 noncanonical values fail; a numeric version other than `2` receives the fixed
@@ -80,16 +96,19 @@ A ready `initialize()` call is validation-only. It does not rewrite, restage,
 or recommit. If an initialization attempt fails, the object becomes terminal;
 later calls on that same object raise `OSError` before another attempt. A fresh
 object or process may inspect and resume only an exact durable journal and
-matching partial scaffold. That initializing state remains recursively closed:
+matching current partial scaffold. Incomplete-journal recovery remains
+current-only; none of the published sets can authorize an old partial
+initialization. That initializing state remains recursively closed:
 unknown or divergent bytes are preserved and rejected rather than adopted,
 reset, deleted, or overwritten.
 
 Journal-free readiness uses a narrower required-path projection. For a main
 root it checks root identity and journal absence; required directories and all
 25 scaffold files through descriptor-relative no-follow reads; canonical
-marker and immutable bytes; valid mutable configuration and the safe regular
-presence of referenced personae; and the exact baseline, index, `main`
-topology/history, and correlated session-resource inventory. It does not list,
+marker and immutable bytes for the recognized policy baseline; valid mutable
+configuration and the safe regular presence of referenced personae; and the
+exact baseline, index, `main` topology/history, and correlated session-resource
+inventory. It does not list,
 stat, open, decode, or descend into unknown filesystem entries. Git readiness
 likewise does not enumerate ignored or untracked paths. Those entries are
 permitted but not trusted: the provider or runtime owner must validate optional
@@ -101,7 +120,17 @@ that Git materializes, plus its local marker, configuration, referenced
 personae, clean index, and exact correlated session topology. It does not
 require schema-only empty runtime directories that are absent from a linked
 worktree. Unstaged story edits and untracked entries are allowed; staged
-changes are not.
+changes are not. Valid customized session policies may differ from the
+main-root policy files; the required path, session, and prompt checks still
+apply.
+
+Workspace-owned composition selects the known baseline from descriptor-bound
+reads of the main root, including when entered through a session worktree.
+Session-resource inspection/listing/provisioning/readiness, session-history
+inspection, and local Commit/checkpoint service composition all receive that
+same exact expected manifest. Git continues to validate it without adopting
+observed session edits. There is no new public method or schema for this
+recognition.
 
 `require_ready()` checks the readiness already authorized for that object. It
 does not perform a live filesystem rescan. Supported CLI entry points and
@@ -251,9 +280,10 @@ from story_writing_agents.workspace.initialization import inspect_session_histor
 snapshot = inspect_session_history(root, session_id)
 ```
 
-It derives the baseline manifest from the canonical initializer scaffold,
-accepts either the exact main workspace root or an exact session worktree root,
-resolves the main repository, and opens the requested session's history with
+It accepts either the exact main workspace root or an exact session worktree
+root, resolves the main repository, and selects its fixed recognized current
+or any of the three published v2 policy baselines. Session policy edits do not alter
+that expected manifest. It opens the requested session's history with
 `create=False`.
 Consequently an empty history returns an immutable empty snapshot without
 creating `.git/story-writing-agents/runtime/session-history/<session_id>`.

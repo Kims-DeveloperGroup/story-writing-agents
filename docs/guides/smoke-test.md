@@ -122,6 +122,7 @@ A pass does not validate:
 - Codex or Antigravity installation, authentication, model behavior, or network;
 - interactive terminal behavior;
 - provider request/response capture;
+- specialist routing, draft/review behavior, final-candidate review, or Apply;
 - story generation, debate, publication, or quality;
 - session Git-resource provisioning, interruption/resume, or later #505
   commits/checkpoints; or
@@ -130,7 +131,7 @@ A pass does not validate:
 Explicit `story smoke --workspace PATH` does perform fresh workspace readiness,
 so any already-present session branch/worktree/internal-ref inventory must be
 exactly correlated. Smoke does not create, resume, repair, or remove those
-resources and current `story session` commands are not connected to them until
-#455.
+resources. Session lifecycle commands provision or verify them through their
+separate runtime boundary.
 
 The exact report contract is in the [CLI reference](../reference/cli.md#smoke).

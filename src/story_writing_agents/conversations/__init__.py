@@ -158,6 +158,10 @@ from .events import (
     encode_collaboration_event_draft,
     encode_collaboration_proposal,
     build_story_commit_request_payload,
+    authoring_scope_from_dict,
+    authoring_scope_to_dict,
+    review_basis_from_dict,
+    review_basis_to_dict,
 )
 from ..git.story_commit_contracts import StoryCommitDecision
 
@@ -275,6 +279,10 @@ _PUBLIC_TYPES = (
 for _public_type in _PUBLIC_TYPES:
     _public_type.__module__ = __name__
 normalize_conversation_subject.__module__ = __name__
+authoring_scope_from_dict.__module__ = __name__
+authoring_scope_to_dict.__module__ = __name__
+review_basis_from_dict.__module__ = __name__
+review_basis_to_dict.__module__ = __name__
 select_bounded_conversation_context.__module__ = __name__
 validate_conversation_context_window.__module__ = __name__
 collaboration_batch_digest.__module__ = __name__
@@ -320,6 +328,10 @@ __all__ = [
     "LeadRecommendationStartedPayload",
     "LeadRecommendationState",
     "artifact_objective_context",
+    "authoring_scope_from_dict",
+    "authoring_scope_to_dict",
+    "review_basis_from_dict",
+    "review_basis_to_dict",
     "ARTIFACT_REVIEW_SCHEMA_VERSION",
     "COLLABORATION_EVENT_SCHEMA_VERSION",
     "COLLABORATION_PHYSICAL_CALL_LIMIT",

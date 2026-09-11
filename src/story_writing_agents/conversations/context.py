@@ -11,6 +11,7 @@ from types import MappingProxyType
 from typing import Mapping, Protocol
 
 from ..errors import SessionIdError
+from ..specialist_routing import SpecialistAssignmentMode
 from .events import (
     ArtifactDraftSource,
     ArtifactObjectiveCandidateBinding,
@@ -2211,6 +2212,13 @@ def _project_artifact_review_history(
                 for assignment in proposal.assignments
             ):
                 raise ValueError("artifact reviewer lacks candidate evidence")
+            if proposal.authoring_scope is not None and any(
+                assignment.mode is not SpecialistAssignmentMode.REVIEW
+                or assignment.review_basis is None
+                or assignment.review_basis.candidate_input_ids != (candidate_inputs[0].input_id,)
+                for assignment in proposal.assignments
+            ):
+                raise ValueError("scoped artifact reviewers require the exact final candidate basis")
             state = artifact_awaiting[0]
             if state.confirmation_request_id != core_awaiting[
                 0
@@ -2451,6 +2459,24 @@ def _project_lead_recommendation_history(
                 raise ValueError("recommendation source message digest drifted")
             if payload.basis.evidence != source.payload.evidence:
                 raise ValueError("recommendation must retain its exact source evidence")
+            if payload.authoring_scope is not None:
+                source_scope = source.payload.authoring_scope
+                scope = payload.authoring_scope
+                if (source_scope is None
+                    or (scope.task_id, scope.task_revision) != (source_scope.task_id, source_scope.task_revision)
+                    or not set(source_scope.domains).issubset(scope.domains)
+                    or not set(source_scope.target_paths).issubset(scope.target_paths)):
+                    raise ValueError("recommendation must retain its exact source authoring task and obligations")
+                prior_request = next((prior.payload for prior in reversed(tuple(by_id.values()))
+                    if type(prior.payload) is LeadRecommendationRequestPayload
+                    and prior.payload.action_id == payload.action_id), None)
+                if prior_request is not None and prior_request.authoring_scope is not None:
+                    prior_scope = prior_request.authoring_scope
+                    if (scope.task_id != prior_scope.task_id
+                        or scope.task_revision != prior_scope.task_revision + 1
+                        or not set(prior_scope.domains).issubset(scope.domains)
+                        or not set(prior_scope.target_paths).issubset(scope.target_paths)):
+                        raise ValueError("recommendation revision must retain its authoring task and obligations")
             source_proposal = (payload.source_proposal_id, payload.source_proposal_revision,
                                payload.source_proposal_digest)
             if type(source.payload) is CollaborationLeadSynthesisPayload:
@@ -3228,6 +3254,8 @@ def _project_validated_collaboration_history(
                     raise ValueError(
                         "specialist reply input IDs must match its assignment exactly"
                     )
+                if payload.mode is not dispatch_payload.assignment.mode:
+                    raise ValueError("specialist reply mode must match its exact assignment")
                 replies[payload.assignment_id] = event
                 batch_replies.append((event, payload))
                 continue
@@ -3239,6 +3267,8 @@ def _project_validated_collaboration_history(
                     raise ValueError("lead synthesis attempt does not match running")
                 if payload.evidence != proposal.basis.evidence:
                     raise ValueError("lead synthesis evidence drifts from its proposal")
+                if payload.authoring_scope != proposal.authoring_scope:
+                    raise ValueError("lead synthesis authoring scope drifts from its proposal")
                 expected_reply_ids = tuple(
                     replies[assignment.assignment_id].event_id
                     for assignment in proposal.assignments
@@ -3263,7 +3293,9 @@ def _project_validated_collaboration_history(
                 seen_required: set[str] = set()
                 for reply in ordered_replies:
                     assert isinstance(reply, CollaborationSpecialistReplyPayload)
-                    if reply.assessment is CollaborationSpecialistAssessment.SUPPORTS:
+                    if reply.assessment in {
+                        CollaborationSpecialistAssessment.SUPPORTS, CollaborationSpecialistAssessment.DRAFTED,
+                    }:
                         continue
                     for input_id in reply.input_ids:
                         if input_id not in seen_required:
@@ -3296,6 +3328,14 @@ def _project_validated_collaboration_history(
                         "lead synthesis unresolved inputs violate required canonical order"
                     )
                 if payload.next_intent is not None:
+                    prior_scope = proposal.authoring_scope
+                    next_scope = payload.next_intent.authoring_scope
+                    if prior_scope is not None and (
+                        next_scope is None
+                        or not set(prior_scope.target_paths).issubset(next_scope.target_paths)
+                        or not set(prior_scope.domains).issubset(next_scope.domains)
+                    ):
+                        raise ValueError("continuation cannot omit current authoring targets or domains")
                     if proposal.budget.rounds_spent + 1 >= proposal.budget.round_limit:
                         raise ValueError(
                             "round two synthesis cannot request round three"
@@ -3455,6 +3495,7 @@ def _project_validated_collaboration_history(
                 or len(batch_judgments) != 1
                 or batch_judgments[0][1].kind is not LeadOutcomeKind.PROPOSAL
                 or lead_proposals[0].basis.evidence != batch_judgments[0][1].evidence
+                or lead_proposals[0].authoring_scope != batch_judgments[0][1].authoring_scope
             ):
                 raise ValueError(
                     "lead proposal must co-batch its exact evidence judgment"

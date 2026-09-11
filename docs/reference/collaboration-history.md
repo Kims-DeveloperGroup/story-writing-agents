@@ -190,7 +190,10 @@ Lead judgments (including questions) and ordinary Lead synthesis messages.
 Each `ArtifactDraftSource` binds the whole original strict-UTF-8 message digest,
 including whitespace and line endings. It does not extract a draft fragment
 or grant artifact evidence. An empty continuation selection retains the prior
-selected sources.
+selected sources. The source message is preserved unchanged. A separate
+runtime notice shown after drafting is not included in that source digest.
+The independently prepared artifact candidate may omit conversational framing;
+there is no requirement to copy the whole source message into story content.
 
 | Objective state | Meaning |
 | --- | --- |
@@ -229,7 +232,11 @@ versioned payloads:
 `source_recommendation_event_id`, `source_recommendation_digest`,
 `draft_sources`, `basis`, `source_fingerprint`, `physical_calls_spent`,
 `max_preparation_physical_calls`, `tail_sequence`, and `user_impact`.
-The computed `action_digest` binds every field using canonical JSON.
+The computed `action_digest` binds every field using canonical JSON. Optional
+`authoring_scope` is keyword-only in the Python constructor. When present, its
+canonical scope is bound into the digest. Legacy omitted scope remains omitted
+in serialized payloads, digests, and session details; a pending unscoped request
+is stale and needs fresh scoped planning before preparation can execute.
 
 Four trailing optional fields bind upstream proposal provenance:
 `source_proposal_id`, `source_proposal_revision`, `source_proposal_digest`,
@@ -269,7 +276,7 @@ Uncertain submitted work remains `inspect_and_resolve_outcome`; corrupt or
 unprovable closure requires recovery. Inspection creates no capability or
 provider replay. See [recovery](../operations/recovery-and-limitations.md#recommendation-preparation-recovery).
 
-Ordinary provider synthesis uses `lead-synthesis-v2` with nullable
+Ordinary provider synthesis uses `lead-synthesis-v3` with nullable
 `recommended_action`; it is mutually exclusive with `next_intent`. Runtime
 persists the unchanged historical `CollaborationLeadSynthesisPayload` and a
 separate recommendation request when an action is selected. Artifact-review
@@ -291,7 +298,8 @@ remembering those records grants no execution authority.
 | --- | --- |
 | `step_id`, `proposal_id`, `proposal_revision` | Lineage, proposal identity, and increasing revision |
 | `step_kind`, `purpose` | Exact typed step and visible reason |
-| `assignments` | Ordered, unique specialist assignments |
+| `authoring_scope` | Versioned activity, targets, domains, interpretation, and task/revision; omitted in historical unscoped records |
+| `assignments` | Ordered, unique specialist assignments with explicit live mode and review basis |
 | `user_impact`, `side_effects` | Visible consequence and closed side-effect set |
 | `budget` | Whole-lineage and whole-next-step physical-call reservation |
 | `basis` | Route and policy fingerprints, participant profiles, closed input revisions, and exact lead evidence when applicable |
@@ -312,6 +320,8 @@ round = 1
 instruction = "Review the exact referenced outline range."
 input_ids = ("input_outline",)
 max_physical_calls = 2
+mode = "review"
+review_basis = {"schema_version": 1, "candidate_input_ids": ["input_outline"], "criteria": "Check the supplied outline range."}
 ```
 
 Every proposal input is content-free identity and revision evidence:
@@ -407,12 +417,15 @@ the exact proposal ID/revision/digest, execution attempt, assignment, and
 dispatch event. Each provider-facing invocation records a terminal outcome with
 its scope, submitted-call count, and assignment ID where applicable.
 
-A specialist reply also carries one closed assessment (`supports`, `concern`,
-`conflict`, or `insufficient_evidence`), a visible message, and the exact
-ordered assignment input IDs. A `lead_synthesis` payload binds every successful
+A live specialist reply also carries its exact assignment mode. Draft mode
+returns `drafted` or `insufficient_evidence`; review mode returns `supports`,
+`concern`, `conflict`, or `insufficient_evidence`, plus a visible message and
+the exact ordered assignment input IDs. Drafted material is neither support
+nor final candidate review. A `lead_synthesis` payload binds every successful
 reply event in order, preserves required unresolved input IDs from every
-non-supporting reply, and optionally carries one strict same-lineage round-two
-intent. It separately preserves the proposal's story-specific evidence;
+concern/conflict/insufficient-evidence reply, and optionally carries one strict
+same-lineage round-two intent. It separately preserves the proposal's exact
+`authoring_scope` and story-specific evidence;
 specialist replies remain attribution rather than replacement story evidence.
 Synthesis is absent after any assignment failure and for direct
 advisories.
@@ -927,12 +940,42 @@ continue to block new work.
   failed sibling facts enter the one result batch, synthesis is prohibited,
   and the step can finalize as `failed`.
 
+## Routing history compatibility
+
+AuthoringScope and ReviewBasis each use schema 1. Collaboration event schema 2
+and existing historical bytes/digests remain compatible: absent optional scope,
+mode, and review-basis fields are omitted when re-encoded. Strict current
+provider contracts require the routing fields; old pending unscoped proposals
+must be regenerated with fresh scope and confirmation before execution.
+
+Current tasks derive from independently validated events and the active
+same-session conversation catalog. An explicit selected task retains cumulative
+domains/targets, drafting obligations, and its current revision across
+conversations. Archived history remains readable context, without routing or
+confirmation authority. Applied revisions are excluded from offered tasks.
+This is a projection of existing durable facts, not a new task store.
+
+`completed` describes a consultation round. It does not mean the authoring
+objective is complete, a drafted message was reviewed, or Apply is authorized.
+All required current-task drafts precede exact final-candidate review by every
+required specialist, followed by a separate Apply decision. A fresh finished
+user-supplied candidate can enter review without a fabricated draft round;
+an existing task with DRAFT/REVISE history still requires its draft provenance,
+even when the current request says REVIEW. Selecting a prior Lead message on a
+fresh REVIEW task does not by itself create a drafting obligation. Task/revision coverage
+tracks current specialist work across active conversations; an objective
+remains owned by its originating conversation and stays open until its exact
+successful Apply or explicit cancellation.
+
 ## Python value, wire, and projection example
 
 This example uses only the implemented `story_writing_agents.conversations`
 facade. It performs no I/O or provider call. The manual storage-metadata step is
 only an in-memory illustration; either direct persistence adapter owns that
-step when a caller chooses to store the batch.
+step when a caller chooses to store the batch. It deliberately illustrates
+a historical unscoped proposal and its unchanged codec. It is not a live
+execution proposal; new callers must supply the scope/mode/basis described
+above and use runtime confirmation.
 
 ```python
 from story_writing_agents.conversations import (

@@ -424,7 +424,7 @@ class ArtifactAndGitCollaborationViewTests(unittest.IsolatedAsyncioTestCase):
         await case.prepare(conversation_id)
         event = next(e for e in case.history(conversation_id) if isinstance(e.payload, ArtifactObjectivePayload))
         rendered = render_component(_collaboration_view.project_collaboration_event(event), _capability(CapabilityProfile.LINE, width=120)).text
-        for exact in (event.payload.facts.objective_id, event.payload.facts.origin_conversation_id, objectives.OUTLINE, "Action: start", "Next step: clarify", "Only a successful Apply result completes"):
+        for exact in (event.payload.facts.objective_id, event.payload.facts.origin_conversation_id, objectives.OUTLINE, "Action: start", "Next step: consult", "Only a successful Apply result completes"):
             self.assertIn(exact, rendered)
         self.assertNotIn("State: open", rendered)
         self.assertNotIn("State: satisfied", rendered)

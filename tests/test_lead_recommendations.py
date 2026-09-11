@@ -10,7 +10,8 @@ from unittest import mock
 from story_writing_agents import StoryRuntime
 from story_writing_agents import conversations as c
 from story_writing_agents import orchestrator as owner
-from story_writing_agents.agents import LEAD_ORCHESTRATOR, PLOT_ARCHITECT
+from story_writing_agents.agents import LEAD_ORCHESTRATOR, PLOT_ARCHITECT, EXECUTION_SPECIALIST
+from story_writing_agents.specialist_routing import AuthoringActivity
 from story_writing_agents.errors import BackendProtocolError
 from tests.recommendation_fixture import (
     DRAFT, OUTLINE, RecommendationCase, action, decision, digest,
@@ -23,11 +24,117 @@ from tests import test_lead_story_commit as commit
 
 
 class LeadRecommendationTests(RecommendationCase):
+    async def test_legacy_unscoped_recommendation_stays_readable_but_decisions_are_stale(self):
+        for kind in (c.CollaborationConfirmationDecision.CONFIRM, c.CollaborationConfirmationDecision.REVISE):
+            with self.subTest(kind=kind):
+                conversation_id, current = await self.recommend()
+                history = self.history(conversation_id)
+                request = replace(current.recommendation_request, authoring_scope=None)
+                source = next(event for event in history
+                              if event.event_id == request.source_recommendation_event_id)
+                legacy = rewrite_history(history, source.event_id,
+                    payload=replace(source.payload, authoring_scope=None))
+                legacy = rewrite_history(legacy, request.request_event_id, payload=request)
+                self.assertIs(c.project_collaboration_history(legacy).current_recommendation_state,
+                              c.LeadRecommendationState.PENDING)
+                # Historical fixture installation only; the decisions below use the real runtime/store.
+                self.runtime.conversation_storage_services.event_store._write_history(legacy)
+                stored = self.history(conversation_id)
+                images = tuple(c.encode_collaboration_event(event) for event in stored)
+                self.assertEqual(stored, legacy)
+                for event, image in zip(stored, images):
+                    self.assertEqual(c.encode_collaboration_event(c.decode_collaboration_event(image)), image)
+                    if event.event_id in {source.event_id, request.request_event_id}:
+                        self.assertNotIn("authoring_scope", json.loads(image)["payload"])
+                readable = c.project_collaboration_readable_history(stored)
+                self.assertTrue(any(type(item.payload) is c.LeadRecommendationRequestPayload for item in readable))
+                self.assertEqual(request.source_recommendation_digest, digest(source.payload.message))
+                before, calls, refs = self.snapshots(), len(self.backend.calls), len(self.backend.reference_calls)
+                choice = decision(replace(current, recommendation_request=request), kind)
+                result = await self.runtime.decide_lead_recommendation(choice)
+                self.assertIsNone(result.proposal)
+                self.assertIsNone(result.artifact_proposal)
+                self.assertIsNone(result.recommendation_request)
+                self.assertIsNone(result.artifact_application_request)
+                self.assertIsNone(result.story_commit_request)
+                self.assertEqual((len(self.backend.calls), len(self.backend.reference_calls)), (calls, refs))
+                self.assertEqual(self.snapshots(), before)
+                events = self.history(conversation_id)
+                self.assertEqual(tuple(c.encode_collaboration_event(event) for event in events[:len(stored)]), images)
+                self.assertEqual(len(events), len(stored) + 2)
+                accepted, closure = events[-2:]
+                self.assertEqual(accepted.payload.decision, choice)
+                self.assertIs(type(closure.payload), c.LeadRecommendationResultPayload)
+                self.assertIs(closure.payload.state, c.LeadRecommendationState.STALE)
+                self.assertEqual(closure.payload.decision_event_id, accepted.event_id)
+                self.assertEqual((closure.payload.request_event_id, closure.payload.action_digest),
+                                 (request.request_event_id, request.action_digest))
+                self.assertEqual(accepted.batch_id, closure.batch_id)
+                self.assertFalse(self.payload_events(conversation_id, c.LeadRecommendationStartedPayload))
+                self.assertEqual(self.projection(conversation_id).artifact_objectives, ())
+                self.assert_no_downstream(conversation_id)
+
+    async def test_revise_cannot_drop_disclosed_domains_targets_or_switch_task(self):
+        for changed_field in ("domains", "target_paths", "task_id"):
+            with self.subTest(changed_field=changed_field):
+                conversation_id = self.conversation("Preserve exact Revise obligations")
+                def mixed_scope(call):
+                    return lead._live_scope(call, activity="review", paths=(OUTLINE,),
+                                            domains=("plot_structure", "tone_execution"))
+                self.backend.enqueue(recommendation(authoring_scope=mixed_scope))
+                offered = await self.runtime.lead_turn(self.session_id, conversation_id,
+                    "Prepare review of this finished outline and its wording: " + DRAFT)
+                request = offered.recommendation_request
+                self.assertIsNotNone(request)
+                self.assertEqual(tuple(domain.value for domain in request.authoring_scope.domains),
+                                 ("plot_structure", "tone_execution"))
+                self.assertEqual(request.authoring_scope.target_paths, (OUTLINE,))
+                decoded = []
+                def mutate(body):
+                    scope = body["authoring_scope"]
+                    scope[changed_field] = (["plot_structure"] if changed_field == "domains" else
+                                            [] if changed_field == "target_paths" else "foreign_task")
+                    # Keep this a structurally valid closed outcome; only its authority is wrong.
+                    decoded.append(owner.StoryRuntime._decode_lead_outcome(json.dumps(body)))
+                self.backend.enqueue(recommendation(mutate=mutate))
+                observed = []
+                validation_errors = []
+                validate = owner.StoryRuntime._validate_recommendation_preparation
+                def observe(outcome, capability):
+                    observed.append(outcome)
+                    try:
+                        return validate(outcome, capability)
+                    except owner._LeadOutcomeValidationError as error:
+                        validation_errors.append(str(error))
+                        raise
+                before, calls = self.snapshots(), len(self.backend.calls)
+                choice = decision(offered, c.CollaborationConfirmationDecision.REVISE)
+                with mock.patch.object(owner.StoryRuntime, "_validate_recommendation_preparation", side_effect=observe):
+                    rejected = await self.runtime.decide_lead_recommendation(choice)
+                self.assertEqual(len(decoded), 1)
+                self.assertEqual(decoded[0].authoring_scope.task_revision, request.authoring_scope.task_revision + 1)
+                if changed_field == "task_id" and not observed:
+                    # The live JSON contract admits only the disclosed task before semantic validation.
+                    self.assertNotEqual(decoded[0].authoring_scope.task_id, request.authoring_scope.task_id)
+                    self.assertNotIn("foreign_task", repr(self.backend.calls[-1].schema))
+                else:
+                    self.assertEqual(observed, decoded)
+                    self.assertEqual(validation_errors, ["preparation must retain its disclosed authoring task and scope"])
+                self.assertIsNone(rejected.proposal)
+                self.assertIsNone(rejected.artifact_proposal)
+                self.assertIsNone(rejected.recommendation_request)
+                self.assertEqual(len(self.backend.calls), calls + 1)
+                self.assertIs(self.projection(conversation_id).current_recommendation_state,
+                              c.LeadRecommendationState.FAILED)
+                self.assertEqual(self.projection(conversation_id).artifact_objectives, ())
+                self.assertEqual(self.snapshots(), before)
+                self.assert_no_downstream(conversation_id)
+
     async def test_fresh_outcome_schema_requires_typed_actions_only_for_recommendations(self):
         conversation_id, turn = await self.recommend()
         call = self.backend.calls[-1]
         expected = {"scope", "evidence_status", "evidence_ids", "kind", "message", "proposal",
-                    "artifact_intent", "objective_intent", "recommended_action"}
+                    "artifact_intent", "objective_intent", "recommended_action", "authoring_scope"}
         value = json.loads(recommendation()(call, None))["action"]["result"]
         self.assertEqual(set(value), expected)
         self.assertIn("recommended_action", repr(call.schema))
@@ -59,6 +166,8 @@ class LeadRecommendationTests(RecommendationCase):
         conversation_id, turn = await self.recommend()
         request = turn.recommendation_request
         before_events = self.history(conversation_id)
+        self.assertIs(request.authoring_scope.activity, AuthoringActivity.REVIEW)
+        self.assertFalse(self.payload_events(conversation_id, c.CollaborationAssignmentDispatchPayload))
         self.assertEqual(self.projection(conversation_id).artifact_objectives, ())
         self.assertEqual(self.snapshots(), before)
         producer = preparation(turn)
@@ -88,6 +197,9 @@ class LeadRecommendationTests(RecommendationCase):
         self.assertIsNone(prepared.recommendation_request)
         self.assertIsNone(prepared.artifact_application_request)
         self.assertIsNone(prepared.story_commit_request)
+        self.assertEqual(prepared.proposal.authoring_scope, request.authoring_scope)
+        self.assertEqual(prepared.proposal.participants, (PLOT_ARCHITECT,))
+        self.assertTrue(all(item.mode.value == "review" for item in prepared.proposal.assignments))
         candidate = prepared.artifact_proposal.candidate.candidate
         operation = candidate.change_set.operations[0]
         self.assertEqual((operation.operation_kind.value, operation.path, operation.content),
@@ -104,9 +216,128 @@ class LeadRecommendationTests(RecommendationCase):
         self.assertIs(projection.current_state, c.CollaborationStepState.AWAITING_CONFIRMATION)
         self.assertEqual(self.snapshots(), before)
 
+    async def test_review_objective_lineage_cannot_relabel_required_drafts(self):
+        conversation_id, turn = await self.recommend()
+        events = self.history(conversation_id)
+        projection = self.projection(conversation_id)
+        validate = owner.StoryRuntime._validate_objective_routing
+        with mock.patch.object(owner.StoryRuntime, "_validate_objective_routing", wraps=validate) as observed:
+            prepared = await self.confirm(turn)
+        self.assertIsNotNone(prepared.artifact_proposal)
+        self.assertTrue(observed.called)
+        outcome = next(call.args[0] for call in observed.call_args_list
+                       if call.args[0].objective_intent is not None)
+        # These are real typed provider and durable event values from fresh REVIEW.
+        validate(outcome, projection, events, events)
+        source_id = turn.recommendation_request.source_recommendation_event_id
+        for activity in (AuthoringActivity.DRAFT, AuthoringActivity.REVISE):
+            changed = tuple(replace(event, payload=replace(event.payload,
+                authoring_scope=replace(event.payload.authoring_scope, activity=activity)))
+                if event.event_id == source_id else event for event in events)
+            for source_events, canonical_events in ((changed, events), (events, changed)):
+                with self.subTest(activity=activity, selected_source=source_events is changed):
+                    with self.assertRaises(owner._LeadOutcomeValidationError):
+                        validate(outcome, projection, source_events, canonical_events)
+        self.assertEqual(self.history(conversation_id)[:len(events)], events)
+        self.assert_no_downstream(conversation_id)
+
+    async def test_mixed_recommendation_disclosure_and_preparation_cannot_omit_plot(self):
+        selected = action(kind="prepare_consultation", specialist_ids=(PLOT_ARCHITECT, EXECUTION_SPECIALIST))
+        def scope(call):
+            return lead._live_scope(call, activity="review", paths=(OUTLINE,), domains=("tone_execution",))
+        bad = recommendation(recommended_action=selected, authoring_scope=scope,
+            mutate=lambda value: value["recommended_action"].update(specialist_ids=[EXECUTION_SPECIALIST]))
+        conversation_id = self.conversation("Reject missing Plot disclosure")
+        self.backend.enqueue(bad)
+        self.backend.enqueue(bad)
+        rejected = await self.runtime.lead_turn(self.session_id, conversation_id,
+            "Review this finished outline and its phrasing: " + DRAFT)
+        self.assertIsNone(rejected.recommendation_request)
+        self.assertIs(rejected.next_action, c.CollaborationNextAction.RETRY_LEAD_TURN)
+        self.assert_no_downstream(conversation_id)
+        # A complete request binds both owners before any preparation call.
+        conversation_id = self.conversation("Preserve mixed scope at Confirm")
+        self.backend.enqueue(recommendation(recommended_action=action(kind="prepare_consultation",
+            specialist_ids=(PLOT_ARCHITECT, EXECUTION_SPECIALIST)), authoring_scope=scope))
+        offered = await self.runtime.lead_turn(self.session_id, conversation_id,
+            "Review this finished outline and its phrasing: " + DRAFT)
+        request = offered.recommendation_request
+        self.assertIsNotNone(request)
+        self.assertEqual(request.specialist_ids, (PLOT_ARCHITECT, EXECUTION_SPECIALIST))
+        before, calls = self.history(conversation_id), len(self.backend.calls)
+        with self.assertRaises(BackendProtocolError):
+            await self.runtime.decide_lead_recommendation(decision(offered, action_digest=digest("scope omitted")))
+        self.assertEqual(self.history(conversation_id), before)
+        self.assertEqual(len(self.backend.calls), calls)
+        def omit_plot(body):
+            body["proposal"]["assignments"] = [item for item in body["proposal"]["assignments"]
+                                                if item["agent_id"] != PLOT_ARCHITECT]
+        self.backend.enqueue(preparation(offered, mutate=omit_plot))
+        failed = await self.runtime.decide_lead_recommendation(decision(offered))
+        self.assertIsNone(failed.proposal)
+        self.assertIsNone(failed.artifact_proposal)
+        self.assertEqual(len(self.backend.calls), calls + 1)
+        self.assert_no_downstream(conversation_id)
+
+    async def test_confirm_rechecks_plot_obligation_added_to_same_task(self):
+        from tests.test_specialist_routing_runtime import scoped_proposal
+        conversation_id = self.conversation("Tone-only finished candidate review")
+        base = recommendation(recommended_action=action(
+            kind="prepare_consultation", specialist_ids=(EXECUTION_SPECIALIST,)))
+        def tone_only(call, provider):
+            value = json.loads(base(call, provider))
+            status = next(item for item in call.payload["core_statuses"]
+                          if item["locator"] == "core_documents/narrative_rules.md")
+            body = value["action"]["result"]
+            body["evidence_ids"] = [status["evidence_id"]]
+            body["evidence_status"] = status["status"] if status["status"] in {"empty", "missing"} else "incomplete"
+            return json.dumps(value, ensure_ascii=False)
+        self.backend.enqueue(tone_only)
+        turn = await self.runtime.lead_turn(self.session_id, conversation_id,
+            "Review only wording and tone of this finished candidate; chronology is outside this request: " + DRAFT)
+        self.assertIsNotNone(turn.recommendation_request)
+        request = turn.recommendation_request
+        self.assertEqual(request.specialist_ids, (EXECUTION_SPECIALIST,))
+        other = self.conversation("Expanded same-task review")
+        self.backend.enqueue(scoped_proposal(PLOT_ARCHITECT, EXECUTION_SPECIALIST,
+            activity="review", paths=(), domains=("plot_structure", "tone_execution"),
+            selected=request.authoring_scope.task_id))
+        expanded = await self.runtime.lead_turn(self.session_id, other,
+            "For the same finished candidate, also assess chronology: " + DRAFT)
+        self.assertIsNotNone(expanded.proposal)
+        self.assertEqual(expanded.proposal.authoring_scope.task_id, request.authoring_scope.task_id)
+        self.assertEqual(expanded.proposal.participants, (PLOT_ARCHITECT, EXECUTION_SPECIALIST))
+        calls = len(self.backend.calls)
+        stale = await self.runtime.decide_lead_recommendation(decision(turn))
+        self.assertIsNone(stale.proposal)
+        self.assertIsNone(stale.artifact_proposal)
+        self.assertEqual(len(self.backend.calls), calls)
+        self.assertIs(self.projection(conversation_id).current_recommendation_state,
+                      c.LeadRecommendationState.STALE)
+        self.assert_no_downstream(conversation_id)
+
+    async def test_scoped_consultation_revision_can_offer_separately_confirmed_recommendation(self):
+        conversation_id = self.conversation("Scoped revised recommendation")
+        proposed = await self.proposal(conversation_id, text="Review this finished user candidate: " + DRAFT)
+        self.backend.enqueue(recommendation(recommended_action=action(kind="prepare_consultation",
+            source_ids=("user_input",))))
+        revised = await self.runtime.decide_lead_step(lead._decision(
+            proposed, c.CollaborationConfirmationDecision.REVISE))
+        request = revised.turn.recommendation_request
+        self.assertIsNotNone(request)
+        self.assertEqual(request.authoring_scope.task_id, proposed.proposal.authoring_scope.task_id)
+        self.assertEqual(request.authoring_scope.task_revision, proposed.proposal.authoring_scope.task_revision + 1)
+        self.assertIsNone(revised.turn.proposal)
+        calls = len(self.backend.calls)
+        prepared = await self.confirm(revised.turn)
+        self.assertEqual(len(self.backend.calls), calls + 1)
+        self.assertEqual(prepared.proposal.authoring_scope, request.authoring_scope)
+        self.assert_no_downstream(conversation_id)
+
     async def test_consultation_confirm_without_objective_stops_at_matching_proposal(self):
         conversation_id, turn = await self.recommend(recommended_action=action(
-            kind="prepare_consultation", instruction="Prepare this consultation; ${core_documents/narrative_rules.md} is text only."))
+            kind="prepare_consultation", instruction="Prepare this consultation; ${core_documents/narrative_rules.md} is text only.",
+            source_ids=("user_input",)))
         request = turn.recommendation_request
         before, calls, references = self.snapshots(), len(self.backend.calls), len(self.backend.reference_calls)
         result = await self.confirm(turn, through_session=True)
@@ -133,6 +364,12 @@ class LeadRecommendationTests(RecommendationCase):
         request = turn.recommendation_request
         self.assertEqual(request.draft_sources, previous.draft_sources)
         self.assertTrue({s.event_id for s in request.draft_sources} <= {i.input_id for i in request.basis.inputs})
+        downstream_types = {c.CollaborationAssignmentDispatchPayload,
+            c.ArtifactApplicationDecisionPayload, c.ArtifactApplicationResultPayload,
+            c.StoryCommitDecisionPayload, c.StoryCommitResultPayload}
+        downstream_event_ids = tuple(e.event_id for e in self.history(conversation_id)
+                                     if type(e.payload) in downstream_types)
+        call_record_boundary = len(self.backend.call_records)
         await self.confirm(turn)
         current = self.objective(conversation_id)
         self.assertEqual(current.facts, previous.facts)
@@ -140,7 +377,20 @@ class LeadRecommendationTests(RecommendationCase):
         transition = next(e for e in self.history(conversation_id) if e.event_id == current.latest_event_id)
         self.assertEqual(transition.payload.previous_objective_event_id, previous.latest_event_id)
         self.assertIs(type(current.facts), c.ArtifactObjectiveFacts)
-        self.assert_action_closed(conversation_id)
+        projection = self.projection(conversation_id)
+        self.assertIs(projection.current_recommendation_state, c.LeadRecommendationState.COMPLETED)
+        closure = projection.current_recommendation_result
+        self.assertIsNotNone(closure)
+        events = {event.event_id: event for event in self.history(conversation_id)}
+        if closure.start_event_id is not None:
+            start = events[closure.start_event_id]
+            source = events[closure.lead_result_event_id]
+            self.assertEqual((source.turn_id, source.step_id), (start.turn_id, start.step_id))
+            self.assertLess(start.sequence, source.sequence)
+        self.assertEqual(tuple(e.event_id for e in self.history(conversation_id)
+                               if type(e.payload) in downstream_types), downstream_event_ids)
+        self.assertTrue(all(agent == lead.LEAD_ORCHESTRATOR
+                            for agent, _ in self.backend.call_records[call_record_boundary:]))
 
     async def test_exact_stale_duplicate_and_concurrent_decisions_never_reuse_authority(self):
         conversation_id, turn = await self.recommend()
@@ -216,13 +466,31 @@ class LeadRecommendationTests(RecommendationCase):
         conversation_id, _ = await self.start()
         objective = self.objective(conversation_id)
         _, turn = await self.recommend(conversation_id, recommended_action=action(objective_id=objective.facts.objective_id))
+        downstream_types = {c.CollaborationAssignmentDispatchPayload,
+            c.ArtifactApplicationDecisionPayload, c.ArtifactApplicationResultPayload,
+            c.StoryCommitDecisionPayload, c.StoryCommitResultPayload}
+        downstream_event_ids = tuple(e.event_id for e in self.history(conversation_id)
+                                     if type(e.payload) in downstream_types)
+        call_records = tuple(self.backend.call_records)
         before, calls = self.snapshots(), len(self.backend.calls)
         result = await self.runtime.decide_lead_recommendation(decision(turn, c.CollaborationConfirmationDecision.REJECT))
         self.assertIs(result.kind, c.LeadOutcomeKind.ANSWER)
         self.assertEqual(len(self.backend.calls), calls)
         self.assertEqual(self.objective(conversation_id), objective)
         self.assertFalse(self.payload_events(conversation_id, c.LeadRecommendationStartedPayload))
-        self.assert_action_closed(conversation_id, c.LeadRecommendationState.REJECTED)
+        projection = self.projection(conversation_id)
+        self.assertIs(projection.current_recommendation_state, c.LeadRecommendationState.REJECTED)
+        closure = projection.current_recommendation_result
+        self.assertIsNotNone(closure)
+        events = {event.event_id: event for event in self.history(conversation_id)}
+        if closure.start_event_id is not None:
+            start = events[closure.start_event_id]
+            source = events[closure.lead_result_event_id]
+            self.assertEqual((source.turn_id, source.step_id), (start.turn_id, start.step_id))
+            self.assertLess(start.sequence, source.sequence)
+        self.assertEqual(tuple(e.event_id for e in self.history(conversation_id)
+                               if type(e.payload) in downstream_types), downstream_event_ids)
+        self.assertEqual(tuple(self.backend.call_records), call_records)
         self.assertEqual(self.snapshots(), before)
 
     async def test_revise_supersedes_and_requires_fresh_confirmation(self):
@@ -239,6 +507,10 @@ class LeadRecommendationTests(RecommendationCase):
         new = revised.recommendation_request
         self.assertEqual((new.action_id, new.action_revision), (request.action_id, request.action_revision + 1))
         self.assertNotEqual(new.action_digest, request.action_digest)
+        self.assertEqual(new.authoring_scope.task_id, request.authoring_scope.task_id)
+        self.assertEqual(new.authoring_scope.task_revision, request.authoring_scope.task_revision + 1)
+        self.assertEqual(new.authoring_scope.domains, request.authoring_scope.domains)
+        self.assertEqual(new.authoring_scope.target_paths, request.authoring_scope.target_paths)
         self.assertGreater(new.physical_calls_spent, request.physical_calls_spent)
         origin = self.payload_events(conversation_id, c.LeadRecommendationDecisionPayload)[0]
         self.assertIs(origin.payload.decision.kind, c.CollaborationConfirmationDecision.REVISE)
@@ -259,11 +531,16 @@ class LeadRecommendationTests(RecommendationCase):
         request = turn.recommendation_request
         before = self.snapshots()
         source = request.draft_sources[0]
-        self.backend.enqueue(artifact._artifact_outcome(
+        producer = artifact._artifact_outcome(
             operations=lambda call, _: [{"kind": "replace", "evidence_id": artifact._status_id(call, OUTLINE), "new_text": DRAFT}],
             evidence_status="empty", evidence_ids=lambda call, _: [artifact._status_id(call, OUTLINE)],
             objective_intent={"action": "start", "request": "Prepare the approved draft.", "target_paths": [OUTLINE],
-                "next_step": "prepare", "draft_source_event_ids": [source.event_id]}))
+                "next_step": "prepare", "draft_source_event_ids": [source.event_id]})
+        def scoped_outcome(call, provider):
+            envelope = json.loads(producer(call, provider))
+            envelope["action"]["result"]["authoring_scope"] = c.authoring_scope_to_dict(request.authoring_scope)
+            return json.dumps(envelope)
+        self.backend.enqueue(scoped_outcome)
         result = await self.runtime.lead_turn(self.session_id, conversation_id, "네, 그 초안 그대로 준비해 줘.")
         self.assertIsNotNone(result.artifact_proposal)
         objective = self.objective(conversation_id)
@@ -346,7 +623,7 @@ class LeadRecommendationTests(RecommendationCase):
 class LeadRecommendationSynthesisTests(RecommendationCase):
     async def consultation(self, *, actionable, pause=False, mixed=False):
         conversation_id = self.conversation("Synthetic synthesis")
-        proposed = await self.proposal(conversation_id)
+        proposed = await self.proposal(conversation_id, text="Review this finished user candidate: " + DRAFT)
         self.backend.enqueue_for(PLOT_ARCHITECT, lead._specialist_outcome())
         selected = action() if actionable else None
         base = lead._synthesis_outcome(message=DRAFT, recommended_action=selected)
@@ -354,7 +631,7 @@ class LeadRecommendationSynthesisTests(RecommendationCase):
             value = json.loads(base(call, provider))
             result = value["action"]["result"]
             self.assertEqual(set(result), {"scope", "evidence_status", "evidence_ids", "message",
-                "next_intent", "reply_event_ids", "unresolved_input_ids", "recommended_action"})
+                "next_intent", "reply_event_ids", "unresolved_input_ids", "recommended_action", "authoring_scope"})
             if mixed:
                 material = lead._workflow_material(call.payload)
                 result["next_intent"] = {"relation": "continue_lineage", "purpose": "Review again.",
@@ -502,6 +779,12 @@ class LeadRecommendationRecoveryTests(RecommendationCase):
                 objective = self.objective(conversation_id).facts
             _, turn = await self.recommend(conversation_id, recommended_action=action(
                 kind="prepare_consultation", objective_id=None if objective is None else objective.objective_id))
+            downstream_types = {c.CollaborationAssignmentDispatchPayload,
+                c.ArtifactApplicationDecisionPayload, c.ArtifactApplicationResultPayload,
+                c.StoryCommitDecisionPayload, c.StoryCommitResultPayload}
+            downstream_event_ids = tuple(e.event_id for e in self.history(conversation_id)
+                                         if type(e.payload) in downstream_types)
+            call_records = tuple(self.backend.call_records)
             calls = len(self.backend.calls)
             error = BackendProtocolError("Synthetic binding rejected before submission")
             with mock.patch.object(self.backend, "bind", side_effect=error):
@@ -511,7 +794,19 @@ class LeadRecommendationRecoveryTests(RecommendationCase):
             self.assertIs(failure.payload.code, c.CollaborationLeadOutcomeFailureCode.REQUEST_NOT_SUBMITTED)
             self.assertIsNone(failure.payload.call_id)
             self.assertIsNone(failure.payload.invocation_id)
-            self.assert_action_closed(conversation_id, c.LeadRecommendationState.INTERRUPTED)
+            projection = self.projection(conversation_id)
+            self.assertIs(projection.current_recommendation_state, c.LeadRecommendationState.INTERRUPTED)
+            closure = projection.current_recommendation_result
+            self.assertIsNotNone(closure)
+            events = {event.event_id: event for event in self.history(conversation_id)}
+            if closure.start_event_id is not None:
+                start = events[closure.start_event_id]
+                source = events[closure.lead_result_event_id]
+                self.assertEqual((source.turn_id, source.step_id), (start.turn_id, start.step_id))
+                self.assertLess(start.sequence, source.sequence)
+            self.assertEqual(tuple(e.event_id for e in self.history(conversation_id)
+                                   if type(e.payload) in downstream_types), downstream_event_ids)
+            self.assertEqual(tuple(self.backend.call_records), call_records)
             if objective is not None: self.assertEqual(self.objective(conversation_id).facts, objective)
             self.assertIsNone(result.recommendation_request)
             self.assertEqual(len(self.payload_events(conversation_id, c.LeadRecommendationDecisionPayload)), 1)

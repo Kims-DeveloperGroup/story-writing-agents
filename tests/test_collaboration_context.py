@@ -249,6 +249,11 @@ class CollaborationTransitionTests(unittest.TestCase):
                 "current_story_commit_result",
                 "artifact_objectives",
                 "offered_draft_sources",
+                "current_recommendation_request",
+                "current_recommendation_decision",
+                "current_recommendation_start",
+                "current_recommendation_result",
+                "current_recommendation_state",
             ),
         )
 

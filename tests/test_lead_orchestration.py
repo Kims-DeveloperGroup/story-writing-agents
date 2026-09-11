@@ -71,6 +71,7 @@ from story_writing_agents.writing_artifacts.read_actions import (
 )
 
 from tests.collaboration_contract_fixture import contract_batches
+from story_writing_agents.specialist_routing import AuthoringScope, AuthoringActivity, ArtifactReviewDomain, ReviewBasis
 
 
 _Response = (
@@ -81,6 +82,9 @@ _Response = (
         str | BaseException | Awaitable[str | BaseException],
     ]
 )
+
+
+_LIVE_CONTEXT = {}
 
 
 class _Finalizer:
@@ -239,6 +243,12 @@ class _LeadContextProvider:
         self._require_active(request.scope, request.policy_fingerprint)
         self.backend.calls.append(request)
         self.backend.call_records.append((self.agent_id, request))
+        try:
+            self._live_material = _workflow_material(request.payload)
+        except LookupError:
+            pass
+        if hasattr(self, "_live_material"):
+            _LIVE_CONTEXT[request.payload["c"]] = self._live_material
         if not self.responses:
             raise AssertionError("unexpected lead provider call")
         scripted = self.responses.pop(0)
@@ -409,6 +419,105 @@ class _LeadBackend:
         return _LeadBoundAgent(self, definition)
 
 
+def _live_material(call):
+    try:
+        return _workflow_material(call.payload)
+    except LookupError:
+        return _LIVE_CONTEXT[call.payload["c"]]
+
+
+def _live_scope(call, *, activity="workflow", domains=(), paths=(), task_index=-1):
+    """Declare synthetic test semantics using one exact runtime-offered task pair."""
+    material = _live_material(call)
+    if "authoring_tasks" not in material:
+        return dict(material["answer_contract"]["authoring_scope"])
+    task = material["authoring_tasks"][task_index]
+    return {"schema_version": 1, "activity": activity, "target_paths": list(paths),
+            "domains": list(domains), "interpretation": "Synthetic current input candidate review." if activity == "review" else "Synthetic workflow status or clarification.",
+            "task_id": task["task_id"], "task_revision": task["task_revision"]}
+
+
+def _live_assignments(assignments):
+    import copy
+    assignments = copy.deepcopy(assignments)
+    if type(assignments) is list:
+        for assignment in assignments:
+            if type(assignment) is not dict:
+                continue
+            assignment.setdefault("mode", "review")
+            ids = assignment.get("input_ids", [])
+            assignment.setdefault("review_basis", {
+                "schema_version": 1,
+                "candidate_input_ids": ["user_input"] if "user_input" in ids else ids[:1],
+                "criteria": "Assess the concrete synthetic candidate supplied in this input.",
+            } if assignment["mode"] == "review" else None)
+    return assignments
+
+
+def _live_result(call, value):
+    """Upgrade live-only fixtures; historical wire builders remain untouched.
+
+    Direct legacy responses describe factual status/history. Tests for substantive
+    authoring supply their explicit scope, bypassing these fixture defaults.
+    """
+    import copy
+    if type(value) is not dict:
+        return value
+    value = copy.deepcopy(value)
+    material = _live_material(call)
+    contract = material["answer_contract"]
+    if "assignment_id" in value:
+        value.setdefault("mode", contract["mode"])
+        return value
+    if "reply_event_ids" in value:
+        if "decision" not in value:
+            value.setdefault("recommended_action", None)
+        value.setdefault("authoring_scope", contract["authoring_scope"])
+        if type(value.get("next_intent")) is dict:
+            value["next_intent"].setdefault("authoring_scope", value["authoring_scope"])
+            value["next_intent"]["assignments"] = _live_assignments(value["next_intent"].get("assignments"))
+        return value
+    if "kind" not in value:
+        return value
+    value.setdefault("recommended_action", None)
+    value.setdefault("objective_intent", None)
+    proposal = value.get("proposal")
+    artifact = value.get("artifact_intent")
+    domains = []
+    paths = []
+    if type(proposal) is dict:
+        by_agent = {"plot_architect": "plot_structure", "character_custodian": "character_world", "execution_specialist": "tone_execution"}
+        assigned = proposal.get("assignments", [])
+        if type(assigned) is list:
+            domains = [domain for agent, domain in by_agent.items() if any(type(a) is dict and a.get("agent_id") == agent for a in assigned)]
+        proposal["assignments"] = _live_assignments(assigned)
+    elif type(artifact) is dict:
+        from story_writing_agents.specialist_routing import artifact_domain
+        for operation in artifact.get("operations", []):
+            if type(operation) is dict:
+                for key in ("path", "suggested_path", "source_path", "destination_path"):
+                    path = operation.get(key)
+                    if type(path) is str and artifact_domain(path) is not None and path not in paths:
+                        paths.append(path)
+        domains = list(artifact.get("additional_review_domains", []))
+        if not paths and not domains:
+            domains = ["tone_execution"]
+    scope = _live_scope(call, activity="review" if proposal is not None or artifact is not None else "workflow", domains=domains or (["plot_structure"] if proposal is not None else []), paths=paths)
+    execution = material.get("structured_recommendation_execution")
+    if execution is not None:
+        scope = copy.deepcopy(execution["request"]["authoring_scope"])
+        if execution["decision"]["decision"]["kind"] == "revise":
+            scope["task_revision"] += 1
+        if value.get("scope") == "workflow_meta":
+            value["scope"] = "story_specific"
+            value["evidence_status"] = "empty"
+            value["evidence_ids"] = [call.payload["core_statuses"][0]["evidence_id"]]
+    value.setdefault("authoring_scope", scope)
+    if type(proposal) is dict:
+        proposal.setdefault("authoring_scope", value["authoring_scope"])
+    return value
+
+
 def _provider_envelope(
     call: ContextProviderCallRequest,
     value: object,
@@ -420,7 +529,7 @@ def _provider_envelope(
             "correlation": call.payload["c"],
             "action": {
                 "kind": "answer",
-                "result": value,
+                "result": _live_result(call, value),
                 "used_handles": list(used_handles),
             },
         },
@@ -770,11 +879,13 @@ class LeadOutcomeAndProposalTests(LeadOrchestrationTestCase):
         for kind, next_action in cases:
             with self.subTest(kind=kind):
                 conversation_id = self.conversation(f"Outcome {kind}")
-                self.backend.enqueue(_visible_outcome(kind, recommended_action=(action(
-                    kind="prepare_consultation", source_ids=("user_input",)) if kind == "recommendation" else None)))
+                from tests.recommendation_fixture import recommendation
+                self.backend.enqueue(recommendation(recommended_action=action(
+                    kind="prepare_consultation", source_ids=("user_input",)))
+                    if kind == "recommendation" else _visible_outcome(kind))
                 result = await self.runtime.session(self.session_id).lead_turn(
                     conversation_id,
-                    f"Return a {kind}.",
+                    f"Return a {kind}. Finished candidate: a summons causes a choice and its consequence.",
                 )
                 self.assertIs(result.kind, LeadOutcomeKind(kind))
                 self.assertIsNone(result.proposal)
@@ -905,6 +1016,8 @@ class LeadOutcomeAndProposalTests(LeadOrchestrationTestCase):
                 "instruction": "Check the established character motivation.",
                 "input_ids": ["reference_2"],
             },
+            {"agent_id": EXECUTION_SPECIALIST, "instruction": "Assess the supplied opening prose.",
+             "input_ids": ["reference_3"]},
         ]
 
         result = await self.proposal(
@@ -917,7 +1030,7 @@ class LeadOutcomeAndProposalTests(LeadOrchestrationTestCase):
         assert isinstance(proposal, CollaborationProposal)
         self.assertEqual(
             tuple(item.specialist_id for item in proposal.assignments),
-            (PLOT_ARCHITECT, CHARACTER_CUSTODIAN),
+            (PLOT_ARCHITECT, CHARACTER_CUSTODIAN, EXECUTION_SPECIALIST),
         )
         self.assertEqual(
             tuple(item.locator for item in proposal.basis.inputs[1:]),
@@ -952,7 +1065,7 @@ class LeadOutcomeAndProposalTests(LeadOrchestrationTestCase):
         )
         self.assertEqual(
             tuple(item.agent_id for item in proposal.basis.agent_profiles),
-            (LEAD_ORCHESTRATOR, PLOT_ARCHITECT, CHARACTER_CUSTODIAN),
+            (LEAD_ORCHESTRATOR, PLOT_ARCHITECT, CHARACTER_CUSTODIAN, EXECUTION_SPECIALIST),
         )
         self.assertEqual(len(self.backend.reference_contexts), 1)
         self.assertEqual(len(self.backend.reference_contexts[0]), 3)
@@ -1262,7 +1375,7 @@ class LeadDecisionAuthorityTests(LeadOrchestrationTestCase):
             CollaborationStepState.AWAITING_CONFIRMATION,
         )
 
-    async def test_revise_can_return_each_direct_superseding_visible_outcome(
+    async def test_revision_direct_workflow_cannot_erase_selected_story_scope(
         self,
     ) -> None:
         from tests.recommendation_fixture import action
@@ -1283,32 +1396,15 @@ class LeadDecisionAuthorityTests(LeadOrchestrationTestCase):
                     _decision(proposed, CollaborationConfirmationDecision.REVISE)
                 )
 
-                self.assertIs(revised.turn.kind, LeadOutcomeKind(kind))
-                self.assertIs(
-                    revised.turn.state,
-                    None if kind == "recommendation" else CollaborationStepState.SUPERSEDED,
-                )
+                self.assertIs(revised.turn.next_action, CollaborationNextAction.RETRY_LEAD_TURN)
+                self.assertIsNone(revised.turn.state)
                 self.assertIsNone(revised.turn.proposal)
-                self.assertIn("safe without another consultation", revised.turn.message)
                 projection = project_collaboration_history(
                     self.history(conversation_id)
                 )
-                self.assertIs(
-                    projection.current_state,
-                    None if kind == "recommendation" else CollaborationStepState.SUPERSEDED,
-                )
-                if kind == "recommendation":
-                    self.assertNotEqual(revised.turn.step_id, proposed.step_id)
-                    self.assertIs(revised.turn.next_action, CollaborationNextAction.SUBMIT_RECOMMENDATION_DECISION)
-                    request = revised.turn.recommendation_request
-                    self.assertEqual((request.source_proposal_id, request.source_proposal_revision,
-                        request.source_proposal_digest, request.source_execution_attempt_id),
-                        (proposed.proposal.proposal_id, proposed.proposal.proposal_revision,
-                         proposed.proposal.proposal_digest, None))
-                    from story_writing_agents.conversations import CollaborationStepStatePayload
-                    previous_states = [e.payload.state for e in self.history(conversation_id)
-                        if e.step_id == proposed.step_id and type(e.payload) is CollaborationStepStatePayload]
-                    self.assertIs(previous_states[-1], CollaborationStepState.SUPERSEDED)
+                self.assertIs(projection.current_state, CollaborationStepState.SUPERSEDED)
+                self.assertIsNone(revised.turn.recommendation_request)
+
 
 
 class LeadRecoveryAndAccountingTests(LeadOrchestrationTestCase):
@@ -1396,7 +1492,9 @@ class LeadRecoveryAndAccountingTests(LeadOrchestrationTestCase):
                 if advisory:
                     proposed = await self.runtime.propose_specialist_advisory(
                         self.session_id, conversation_id, PLOT_ARCHITECT,
-                        "Advise on the next plot question.",
+                        "Draft from the current synthetic causal brief.",
+                        authoring_scope=AuthoringScope(AuthoringActivity.DRAFT, (), (ArtifactReviewDomain.PLOT_STRUCTURE,),
+                                                      "Draft from a synthetic causal brief.", "advisory_task", 1),
                     )
                     self.assertEqual(len(self.backend.calls), calls_before)
                     self.assertIsNone(proposed.proposal.basis.evidence)
@@ -2299,7 +2397,7 @@ class LeadBudgetFinalizationTests(LeadOrchestrationTestCase):
         self.assertEqual(self.history(conversation)[:len(complete)], complete)
 
     async def test_budget_notice_preserves_maximum_utf8_synthesis(self):
-        notice = ("The consultation is complete. The requested second specialist "
+        notice = ("The provider round ended. The requested second specialist "
                   "round exceeds its remaining call budget. Start a new request "
                   "with the lead to continue. The completed replies and synthesis "
                   "remain in the conversation history.")

@@ -2,7 +2,7 @@
 
 The Lead Orchestrator is the normal front channel for story work. You tell the
 lead what you want to understand, change, or discuss. The lead reads the
-evidence it needs, decides whether specialist help adds value, explains the
+evidence it needs, discloses the affected specialist domains, explains the
 next action, and speaks to you again after specialist work completes.
 
 Runtime code is the authority boundary. It captures references, performs
@@ -20,8 +20,8 @@ story content for a real workspace.
 | Participant | Owns | Does not own |
 | --- | --- | --- |
 | You | The request, clarification, and each explicit decision | Provider calls or implicit approval |
-| Lead | User conversation, evidence-based critique, routing, synthesis, and next-action recommendations | Filesystem, provider tools, specialist calls, artifact writes, or Git |
-| Specialist | One assigned domain assessment over its assigned inputs | Sibling context, lead conversation, routing, writes, or Git |
+| Lead | User conversation, scope interpretation, routing, draft integration, synthesis, and next-action guidance | Filesystem, provider tools, specialist calls, artifact writes, or Git |
+| Specialist | Drafting, revision, or review in its assigned domain over its assigned inputs | Sibling context, lead conversation, routing, writes, or Git |
 | Runtime | Context loading, validation, persistence, budgets, calls, writes, and commit execution | Choosing story meaning on the lead's behalf |
 
 The lead works from the four core documents and current manuscript evidence. It
@@ -37,6 +37,13 @@ The fixed specialist roster is:
 | Character & World Custodian | Motivation, behavior, relationships, world facts, and continuity | `character_sheets.md` |
 | Tone & Execution Specialist | Narrative rules, prose, POV, tone, formatting, and manuscript execution | `narrative_rules.md`, manuscripts |
 
+Routing covers semantic domains and affected canonical paths, even when a
+target is empty or missing. The Lead discloses its interpretation and explicitly
+selects the current task/revision when continuing work across conversations.
+That task retains its affected scope and drafting obligations. Unrelated
+inventory/history does not add work, and status facts do not grant reads.
+Archived conversations remain readable context without active task authority.
+
 Specialists are isolated. A Plot assignment cannot use a Character reply as if
 it were its own evidence, and a specialist never becomes a second user-facing
 lead.
@@ -46,14 +53,16 @@ lead.
 ```text
 you -> lead turn
      -> runtime inventories bounded source status and attached references
-     -> lead answers directly
+     -> lead answers workflow/status questions or clarifies directly
         or recommends one preparation -> you Confirm, Reject, or Revise
              -> lead prepares a separately confirmable proposal or asks a question
-        or proposes specialist consultation
-        or proposes an exact artifact candidate
+        or proposes specialist drafting/review in every affected domain
+        or integrates required drafts into an exact artifact candidate
      -> you Confirm, Reject, or Revise the exact request
      -> runtime calls the disclosed specialists with isolated inputs
      -> lead synthesizes every reply and preserves disagreement
+     -> after drafting, you ask the Lead to prepare the final candidate
+     -> you confirm review; all required specialists review that exact candidate
      -> you may separately confirm Apply, then separately confirm Commit
 ```
 
@@ -105,7 +114,10 @@ provider run:
 
 ```text
 You: Draft the global outline for the direction we agreed on.
-Lead: <visible outline draft and a focused question about using it>
+Lead: <Plot drafting proposal with the current task and revision>
+You: structured Confirm for drafting
+Plot: <substantive outline draft>
+Lead: <integrated draft and a focused question about preparing it for review>
 You: Yes, use that.
 Lead: <exact replacement candidate for core_documents/global_outline.md>
 Runtime: discloses the candidate and required reviewers; no file changes.
@@ -118,9 +130,12 @@ Runtime: creates only the disclosed local session-branch commit.
 ```
 
 If the target or intended change is unclear, the lead asks a focused question.
-It proposes consultation when additional advice is needed. Once the request
-and evidence are sufficient, it prepares the candidate. If an existing core
-document is empty, a freshly revalidated empty-status receipt can support a
+It proposes consultation for required specialist drafting or review. Once the
+request, evidence, and all required drafts for the current task/revision are
+sufficient, it prepares the candidate. A fresh finished candidate supplied by
+the user may enter review directly when the Lead discloses that interpretation;
+selecting an earlier Lead message does not waive current drafting obligations.
+If an existing core document is empty, a freshly revalidated empty-status receipt can support a
 replacement; a nonempty target requires an attached reference or READ evidence.
 Empty status proves only that the file has no content.
 
@@ -134,7 +149,10 @@ close that objective; neither prose completion nor a null objective intent
 does so. Commit remains a separate decision after authoring completion.
 
 The visible drafting context is retained as whole messages with exact byte
-digests. A draft reference does not authorize a file read, review, or write.
+digests. The stored source remains unchanged; the displayed runtime notice
+about incomplete authoring is separate. The prepared candidate can omit
+conversational framing and must not include that runtime notice. A draft
+reference does not authorize a file read, review, or write.
 Pending Apply and Commit controls are shown again unchanged when you send
 ordinary input, without a new provider call or history append. Resolve that
 control first. Known terminal outcomes allow a new cycle with fresh requests;
@@ -240,90 +258,192 @@ exact delivery, capacity, and recovery limits.
 
 ### Provider-shaped examples
 
-For a story question, this excerpt shows identity, input aliases, core statuses,
-and the answer contract. The separate required session-memory payload is
-omitted from the example:
+These synthetic excerpts illustrate review of a nonempty part outline against
+a nonempty global outline. The initial workflow excerpt shows identity, input
+aliases, a task offer, and the answer contract. Core statuses, required session
+memory, and the outer compact input envelope are omitted:
 
 ```json
 {
   "workflow": "lead_front_channel",
-  "identity": {"agent_id": "lead_orchestrator", "session_id": "novel"},
-  "inputs": [
-    {"input_id": "user_input", "kind": "user_input"},
-    {"input_id": "reference_1", "kind": "core_document", "locator": "${core_documents/global_outline.md}"}
+  "identity": {
+    "agent_id": "lead_orchestrator",
+    "session_id": "novel"
+  },
+  "authoring_tasks": [
+    {
+      "task_id": "task_outline",
+      "task_revision": 1,
+      "current_scope": null
+    }
+  ],
+  "input_aliases": [
+    {
+      "input_id": "user_input",
+      "kind": "user_input"
+    },
+    {
+      "input_id": "reference_1",
+      "kind": "core_document",
+      "locator": "${core_documents/global_outline.md}"
+    }
   ],
   "answer_contract": {
     "scope": "story_specific | workflow_meta",
+    "authoring_scope": "schema 1 with exact offered task/revision",
     "evidence_status": "not_applicable | verified | missing | empty | incomplete | conflicting",
     "evidence_ids": "ordered runtime-issued IDs only",
     "kind": "answer | question | critique | recommendation | proposal",
     "message": "nonempty visible text",
-    "proposal": "null or ordinary consultation intent",
-    "artifact_intent": "null or exact artifact intent",
+    "proposal": "null or scope plus explicit draft/review assignments and bases",
+    "artifact_intent": "null or supported artifact operations",
     "objective_intent": "null or start/continue/cancel intent",
-    "recommended_action": "null or prepare_artifact/prepare_consultation action"
+    "recommended_action": null
   }
 }
 ```
 
-The lead can request a bounded search:
+The Lead requests a bounded search, then reads a returned opaque handle:
 
 ```json
-{"correlation":"<exact-token>","action":{"kind":"search","path_prefix":null,"queries":[{"text":"opening reveal","source_kinds":["writing_artifact"]}]}}
+{"correlation":"<search-token>","action":{"kind":"search","path_prefix":null,"queries":[{"text":"part outline pacing","source_kinds":["writing_artifact"]}]}}
 ```
-
-It then reads a returned opaque handle:
 
 ```json
-{"correlation":"<exact-token>","action":{"kind":"read","handles":["<runtime-handle>"]}}
+{"correlation":"<read-token>","action":{"kind":"read","handles":["<runtime-handle>"]}}
 ```
 
-Its final `lead-outcome-v3` answer has all nine fields and cites the resulting
-receipt, not the handle alone:
+Assume READ returns the nonempty part outline as `read_1`. The complete
+`lead-outcome-v4` ANSWER embeds all ten fields in `action.result` and names
+the used READ handle in `action.used_handles`. Its evidence IDs cite receipts,
+not the handle alone. Substantive critique requires a proposal:
 
 ```json
 {
   "scope": "story_specific",
+  "authoring_scope": {
+    "schema_version": 1,
+    "activity": "review",
+    "target_paths": [
+      "core_documents/global_outline.md",
+      "core_documents/part_outlines.md"
+    ],
+    "domains": [
+      "plot_structure"
+    ],
+    "interpretation": "Review the part outline for pacing against the global outline.",
+    "task_id": "task_outline",
+    "task_revision": 1
+  },
   "evidence_status": "verified",
-  "evidence_ids": ["reference_1", "read_2_1"],
-  "kind": "critique",
-  "message": "The requested sequence is earlier than the outline permits.",
-  "proposal": null,
+  "evidence_ids": [
+    "reference_1",
+    "read_1"
+  ],
+  "kind": "proposal",
+  "message": "I propose Plot review of part-outline pacing against the global outline.",
+  "proposal": {
+    "relation": "new_step",
+    "purpose": "Review outline pacing.",
+    "authoring_scope": {
+      "schema_version": 1,
+      "activity": "review",
+      "target_paths": [
+        "core_documents/global_outline.md",
+        "core_documents/part_outlines.md"
+      ],
+      "domains": [
+        "plot_structure"
+      ],
+      "interpretation": "Review the part outline for pacing against the global outline.",
+      "task_id": "task_outline",
+      "task_revision": 1
+    },
+    "assignments": [
+      {
+        "agent_id": "plot_architect",
+        "instruction": "Review the concrete part outline against the global outline.",
+        "input_ids": [
+          "user_input",
+          "reference_1",
+          "read_1"
+        ],
+        "mode": "review",
+        "review_basis": {
+          "schema_version": 1,
+          "candidate_input_ids": [
+            "read_1"
+          ],
+          "criteria": "Check pacing and causal order."
+        }
+      }
+    ]
+  },
   "artifact_intent": null,
   "objective_intent": null,
   "recommended_action": null
 }
 ```
 
-A specialist receives its own assignment and returns only its typed assessment:
+After exact confirmation, the Plot specialist returns this `action.result`:
 
 ```json
 {
+  "mode": "review",
   "assessment": "concern",
   "assignment_id": "as_plot_1",
-  "input_ids": ["user_input", "reference_1"],
-  "message": "The scene advances the reversal before its required trigger."
+  "input_ids": [
+    "user_input",
+    "reference_1",
+    "read_1"
+  ],
+  "message": "The part outline advances the reversal before its required trigger."
 }
 ```
 
-The lead's synthesis attributes every reply:
+The Lead synthesis preserves the exact proposal scope/evidence and attributes
+every reply. Its semantic `action.result` is:
 
 ```json
 {
   "scope": "story_specific",
-  "evidence_status": "conflicting",
-  "evidence_ids": ["reference_1", "read_2_1"],
-  "message": "The motivation works, but the outline timing remains unresolved.",
+  "authoring_scope": {
+    "schema_version": 1,
+    "activity": "review",
+    "target_paths": [
+      "core_documents/global_outline.md",
+      "core_documents/part_outlines.md"
+    ],
+    "domains": [
+      "plot_structure"
+    ],
+    "interpretation": "Review the part outline for pacing against the global outline.",
+    "task_id": "task_outline",
+    "task_revision": 1
+  },
+  "evidence_status": "verified",
+  "evidence_ids": [
+    "reference_1",
+    "read_1"
+  ],
+  "message": "The Plot review identifies a pacing concern to resolve before revision.",
   "next_intent": null,
-  "recommended_action": null,
-  "reply_event_ids": ["reply_plot_1", "reply_character_1"],
-  "unresolved_input_ids": ["reference_1", "read_2_1"]
+  "reply_event_ids": [
+    "reply_plot_1"
+  ],
+  "unresolved_input_ids": [
+    "user_input",
+    "reference_1",
+    "read_1"
+  ],
+  "recommended_action": null
 }
 ```
 
 The runtime rejects invented, stale, duplicated, reordered, or unused IDs.
 It also rejects a SEARCH hit that was never READ when the lead cites its
-content.
+content. The complete contracts are in the
+[Lead API guide](lead-agent.md#what-providers-receive).
 
 The front-channel schema requires `objective_intent` and `recommended_action`.
 Fresh recommendations have an action and null objective intent; other kinds
@@ -429,6 +549,10 @@ Runtime: runs only the new focused assignments. Round two is terminal; no third
          specialist round is created.
 ```
 
+A `completed` round records its result, not completion of the authoring task.
+Drafting returns material; review requires concrete nonempty candidate inputs
+and criteria. A brief or empty status alone cannot serve as review material.
+
 The lead never takes a majority vote. Every material concern is retained in
 the synthesis and its unresolved input IDs.
 
@@ -440,10 +564,15 @@ first describes the evidence state and proposes the smallest useful next step.
 ```text
 You: The narrative rules are empty. Add a close-third-person rule.
 
-Lead: The current narrative-rules source is empty. I can prepare a candidate
-      that replaces that core document, then ask Execution to review it.
-      No file has changed. Confirm review?
+Lead: The current narrative-rules source is empty. I propose Execution drafting
+      from your brief. No file has changed. Confirm the draft assignment?
 
+You: Confirm drafting.
+Execution: drafted — returns the proposed close-third rule.
+Lead synthesis: presents the draft material.
+You: Prepare the final candidate from these drafts.
+Lead: I integrated the draft into an exact replacement candidate. Confirm a
+      separate Execution review of that immutable candidate?
 You: Confirm review.
 
 Execution: supports — the candidate is a clear rule for the requested POV.
@@ -471,10 +600,15 @@ You: Rewrite lines 20–32 so Mara reveals the secret.
     ${core_documents/character_sheets.md}
     ${core_documents/narrative_rules.md}
 
-Lead: I prepared one exact range-patch candidate. Plot, Character, and
-      Execution are required. Confirm review?
-
-You: Confirm review.
+Lead: I propose Plot, Character, and Execution draft/revision assignments for
+      the event, motivation, and prose. Confirm drafting?
+You: Confirm the exact drafting proposal.
+Specialists: drafted — return material to the Lead without writing files.
+Lead synthesis: presents the draft material.
+You: Prepare the final candidate from these drafts.
+Lead: I integrated all required drafts into one exact range-patch candidate.
+      Plot, Character, and Execution must review that final candidate.
+You: Confirm the separate exact candidate review.
 
 Runtime: gives every reviewer the same immutable candidate and the disclosed
          evidence. It does not write the manuscript.
@@ -507,18 +641,19 @@ is not implied by Apply confirmation.
 
 ```text
 You: What makes a scene feel tense?
-Lead: I can give a general writing opinion; no story specialist is needed.
+Lead: I propose an Execution assignment for the prose/tension recommendation.
 
 You: Is the current scene tense enough under our rules?
-Lead: I need the relevant manuscript and narrative-rule evidence. I will either
-      answer from those sources or propose an Execution consultation.
+Lead: I need concrete manuscript text and the narrative-rule evidence, then
+      I can propose an Execution review with explicit criteria.
 
 You: Would slowing this scene help the plot and the character arc?
-Lead: I propose Plot and Character because both domains are affected.
+Lead: I propose Plot and Character; an affected manuscript also requires Execution.
 ```
 
-The lead clarifies a material choice before routing. If no specialist has a
-useful domain lens, it answers directly and does not manufacture a consultation.
+The lead clarifies material choices before routing. Workflow/status answers
+can remain direct. Substantive story recommendations and critiques require
+specialists even when no file edit is requested.
 
 ## Scenario 7: policy composition and isolation
 
@@ -526,31 +661,34 @@ Each bound agent receives immutable policy components in this exact order:
 
 ```text
 lead_orchestrator
-  = common + lead + runtime Lead contract overlay
+  = common + lead + runtime Lead contract overlay + runtime routing policy v1
 
 plot_architect
-  = common + specialist_collaboration + plot
+  = common + specialist_collaboration + plot + runtime routing policy v1
 
 character_custodian
-  = common + specialist_collaboration + character
+  = common + specialist_collaboration + character + runtime routing policy v1
 
 execution_specialist
-  = common + specialist_collaboration + execution
+  = common + specialist_collaboration + execution + runtime routing policy v1
 ```
 
 The common component defines behavior true for every role: untrusted input,
 runtime assignment, authorized context actions, privacy, and strict output.
 The specialist-family component defines shared assignment and isolation rules.
-The lead and each specialist add only their own behavior and domain lens.
+The lead and each specialist add their own behavior and domain lens. The
+runtime appends its routing policy to the captured prompt; customized workspace
+files are preserved. Routing policy v1 is separate from Lead result v3 and
+specialist/synthesis result v2.
 
-Fresh Lead policies use `lead-outcome-v3`. Existing workspace policy files are
+Fresh Lead policies use `lead-outcome-v4`. Existing workspace policy files are
 retained byte-for-byte; the runtime appends a deterministic Lead overlay that
 supersedes older front-channel field lists. The overlay also applies during
 Lead synthesis while preserving that invocation's separate result schema.
 
 The runtime captures strict UTF-8, NUL-free snapshots before binding and
-fingerprints every ordered component. A changed common component invalidates
-all role bindings; a changed specialist-family component invalidates the three
+fingerprints every ordered file component and the runtime policy bytes.
+A changed common component invalidates all role bindings; a changed specialist-family component invalidates the three
 specialists; a changed lead or domain component invalidates only that role. A
 provider cannot turn a prompt sentence into filesystem, confirmation, artifact,
 or Git authority.
@@ -558,11 +696,11 @@ or Git authority.
 For example, the visible and internal exchange remains role-specific:
 
 ```text
-You: Check the scene's pacing.
-Lead input: route only the Plot domain, with the supplied outline reference.
-Runtime input: common + specialist_collaboration + plot snapshots, then one
-                isolated plot assignment.
-Plot output: {"assessment":"concern", "assignment_id":"as_plot_1", ...}
+You: Check the outline's pacing.
+Lead input: route the Plot domain, with the supplied concrete outline reference.
+Runtime input: common + specialist_collaboration + plot snapshots + runtime
+               routing policy, then one isolated review assignment.
+Plot output: {"mode":"review", "assessment":"concern", "assignment_id":"as_plot_1", ...}
 Lead output: The timing concern is ...; next action: ...
 Runtime effect: the reply is stored and shown through the lead; no sibling
                 policy or authority is added.
@@ -634,7 +772,9 @@ Story does not read or retain the native login terminal bytes.
 
 A successful sign-in does not by itself authorize the submitted call to run
 again. Story makes one automatic replacement only for Antigravity's exact
-zero-turn authentication-timeout rejection. That replacement keeps the request,
+zero-turn authentication-timeout rejection when no independent timeout fact
+exists. An actual timeout still permits sign-in assistance but forbids replay
+and provider-thread reuse. That replacement keeps the request,
 schema, correlation, expected provider thread, execution profile, and captured
 evidence unchanged, but uses a new physical call ID and exchange. Both attempts
 count against the operation's physical-call budget. Any Codex 401, ambiguous
@@ -650,7 +790,9 @@ failed assignment is handled. If recovery cannot safely resume, runtime stores
 the known replies and terminal failure state. Reopening the session never
 replays that provider call; follow the displayed `failed` or `outcome_unknown`
 next action. Python and other noninteractive callers receive the typed
-authentication error without a terminal handoff.
+authentication error without a terminal handoff. Authentication does not
+change the selected task/revision, waive required drafts or candidate reviews,
+or authorize Apply or Commit. An unfinished authoring objective remains open.
 
 ### Recommendation recovery
 
