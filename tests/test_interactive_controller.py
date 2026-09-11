@@ -1614,8 +1614,8 @@ class ControllerContractTests(ControllerTestCase):
 
         for module_name in graph:
             visit(module_name)
-        self.assertEqual(len(modules), 140)
-        self.assertEqual(sum(len(dependencies) for dependencies in graph.values()), 555)
+        self.assertEqual(len(modules), 142)
+        self.assertEqual(sum(len(dependencies) for dependencies in graph.values()), 565)
         self.assertTrue(
             {
                 "story_writing_agents.artifact_proposals",
@@ -2052,6 +2052,7 @@ class ControllerStartupTests(ControllerTestCase):
         controller._semantic_output = object()
         controller._auth_coordinator = None
         controller._runtime = mock.Mock()
+        controller._conversation_storage_services = SimpleNamespace(event_store=mock.Mock())
         controller._runtime.session.return_value = runtime_session
         adapter = mock.Mock()
         adapter.submit.return_value = False
@@ -2075,6 +2076,7 @@ class ControllerStartupTests(ControllerTestCase):
             controller._prompt_input,
             controller._semantic_output,
             recover_authentication=None,
+            read_events=mock.ANY,
         )
         adapter.submit.assert_called_once_with(_UNIQUE_C, " literal request ")
 
@@ -2096,7 +2098,7 @@ class ControllerConversationStartupTests(ControllerTestCase):
         calls = []
         persisted = []
 
-        async def lead_turn(session, conversation_id, text):
+        async def lead_turn(session, conversation_id, text, **_kwargs):
             calls.append((session.session_id, conversation_id, text))
             batch = _ordinary_lead_batch(
                 session_id=session.session_id, conversation_id=conversation_id,
@@ -2173,6 +2175,7 @@ class ControllerConversationStartupTests(ControllerTestCase):
             runtime_session: RuntimeSession,
             conversation_id: str,
             text: str,
+            **_kwargs: object,
         ) -> LeadTurnResult:
             lead_calls.append((runtime_session.session_id, conversation_id, text))
             return LeadTurnResult(
@@ -13063,6 +13066,12 @@ class InteractiveLeadAdapterTests(unittest.TestCase):
     """Verify the terminal adapter emits only exact runtime decisions."""
 
     class _Progress:
+        def __init__(self) -> None:
+            self.begins: list[tuple[object, ...]] = []
+            self.observed: list[object] = []
+        def begin(self, requests: tuple[object, ...] = ()) -> None: self.begins.append(requests)
+        def observe(self, event: object) -> None: self.observed.append(event)
+        def finish(self) -> str: return "00:00:00"
         async def run(self, operation: object) -> object:
             return await operation  # type: ignore[misc]
 
@@ -13141,6 +13150,7 @@ class InteractiveLeadAdapterTests(unittest.TestCase):
             _session: RuntimeSession,
             conversation_id: str,
             text: str,
+            **_kwargs: object,
         ) -> LeadTurnResult:
             calls.append(("lead", (conversation_id, text)))
             return current[0]
@@ -13148,6 +13158,7 @@ class InteractiveLeadAdapterTests(unittest.TestCase):
         async def decide(
             _session: RuntimeSession,
             decision: object,
+            **_kwargs: object,
         ) -> LeadDecisionResult:
             calls.append(("decision", decision))
             kind = decision.kind  # type: ignore[attr-defined]
@@ -13233,6 +13244,31 @@ class InteractiveLeadAdapterTests(unittest.TestCase):
                 [("lead", (_UNIQUE_C, "replace the request"))],
             )
 
+    def test_ordinary_lead_progress_sink_finishes_before_lead_and_elapsed_output(self) -> None:
+        session = RuntimeSession.__new__(RuntimeSession); runner = asyncio.Runner(); self.addCleanup(runner.close)
+        progress, output, sinks = self._Progress(), self._Output(), []
+        async def lead_turn(_session, cid, text, *, action_progress_sink):
+            sinks.append(action_progress_sink); return self._terminal_turn(CollaborationStepState.COMPLETED)
+        with mock.patch.object(RuntimeSession, "lead_turn", lead_turn):
+            adapter = lead_policy_module.InteractiveLeadAdapter(session, runner, progress,
+                self._Picker(), self._Prompt(), output)
+            self.assertFalse(adapter.submit(_UNIQUE_C, "ordinary"))
+        self.assertEqual(sinks, [progress.observe]); self.assertEqual(progress.begins, [()])
+        self.assertIsInstance(output.components[-1], terminal_module.Notice)
+        self.assertEqual(output.components[-1].text, "Elapsed: 00:00:00")
+
+    def test_confirmed_execution_writes_specialists_then_lead_then_elapsed(self) -> None:
+        runner = asyncio.Runner(); self.addCleanup(runner.close); output = self._Output()
+        adapter = lead_policy_module.InteractiveLeadAdapter(RuntimeSession.__new__(RuntimeSession),
+            runner, self._Progress(), self._Picker(), self._Prompt(), output)
+        specialists = (SimpleNamespace(name="first"), SimpleNamespace(name="second"))
+        adapter._pending_specialist_panels = specialists; adapter._pending_elapsed = "00:00:07"
+        lead = SimpleNamespace(name="lead")
+        with mock.patch.object(lead_policy_module, "project_lead_turn_result", return_value=lead):
+            self.assertFalse(adapter._present_and_decide(self._terminal_turn(CollaborationStepState.COMPLETED)))
+        self.assertEqual(output.components[:3], [*specialists, lead])
+        self.assertEqual(output.components[3].text, "Elapsed: 00:00:07")
+
     def test_recommendation_controls_route_exact_decisions_and_cancel_without_mutation(self) -> None:
         from story_writing_agents import conversations as c
         from tests.recommendation_fixture import RecommendationCase, decision as exact_decision
@@ -13252,10 +13288,10 @@ class InteractiveLeadAdapterTests(unittest.TestCase):
         calls = []
         routes = []
         picker_calls = []
-        async def lead_turn(_session, cid, text):
+        async def lead_turn(_session, cid, text, **_kwargs):
             calls.append(("lead", (cid, text)))
             return turn
-        async def decide(_session, selected):
+        async def decide(_session, selected, **_kwargs):
             calls.append(("decision", selected))
             return completed
         original = lead_policy_module.InteractiveLeadAdapter._run_operation
@@ -13347,6 +13383,7 @@ class InteractiveLeadAdapterTests(unittest.TestCase):
             _session: RuntimeSession,
             conversation_id: str,
             text: str,
+            **_kwargs: object,
         ) -> LeadTurnResult:
             calls.append((conversation_id, text))
             return current[0]
@@ -13404,7 +13441,7 @@ class InteractiveLeadAdapterTests(unittest.TestCase):
                     self.assertFalse(adapter.submit(_UNIQUE_C, label))
 
                     self.assertEqual(calls, [(_UNIQUE_C, label)])
-                    self.assertEqual(len(output.components), 1)
+                    self.assertEqual(len(output.components), 2)
 
     def test_pending_commit_redisclosure_reuses_exact_picker_without_apply(self):
         digest = "sha256:" + "a" * 64
@@ -13416,7 +13453,7 @@ class InteractiveLeadAdapterTests(unittest.TestCase):
         runner = asyncio.Runner()
         self.addCleanup(runner.close)
         calls = []
-        async def lead_turn(*args):
+        async def lead_turn(*args, **_kwargs):
             return turn
         async def commit_decision(_session, decision):
             calls.append(decision)
@@ -13482,7 +13519,7 @@ class InteractiveLeadAdapterTests(unittest.TestCase):
         self.addCleanup(runner.close)
         calls: list[tuple[str, object]] = []
 
-        async def lead_turn(*_args: object) -> LeadTurnResult:
+        async def lead_turn(*_args: object, **_kwargs: object) -> LeadTurnResult:
             return turn  # type: ignore[return-value]
 
         async def application_decision(

@@ -56,6 +56,14 @@ from ._collaboration_view import (
     project_collaboration_event,
     validate_collaboration_event_order,
 )
+from ._advisory_progress import (
+    AdvisoryProgressRequest,
+    AdvisoryProgressState,
+    bind_advisory_progress,
+    format_elapsed,
+    reset_advisory_progress,
+)
+from ..agent_context.progress import ContextActionProgressEvent
 from ._driver import (
     AdvisoryProgressError as AdvisoryProgressError,
     RawTerminalDriver,
@@ -1853,7 +1861,7 @@ class InteractiveExternalViewer:
 class InteractiveAdvisoryProgress:
     """Retain one terminal's package-internal advisory progress session."""
 
-    __slots__ = ("_run",)
+    __slots__ = ("_run", "_state")
 
     def __init__(self, terminal: InteractiveTerminal) -> None:
         """Bind progress lifecycle without inspecting streams or capabilities."""
@@ -1863,11 +1871,31 @@ class InteractiveAdvisoryProgress:
         self._run: Callable[[Awaitable[object]], Awaitable[object]] = (
             terminal._advisory_progress
         )
+        self._state = AdvisoryProgressState()
+
+    def begin(self, requests: tuple[AdvisoryProgressRequest, ...] = ()) -> None:
+        """Begin one timer and reset its transient ordered cards."""
+
+        self._state.begin(requests)
+
+    def observe(self, event: ContextActionProgressEvent) -> None:
+        """Apply one exact package-internal action event."""
+
+        self._state.observe(event)
+
+    def finish(self) -> str:
+        """Discard transient state and return the final elapsed duration."""
+
+        return format_elapsed(self._state.finish())
 
     async def run(self, operation: Awaitable[object]) -> object:
         """Join one advisory operation with the terminal-owned indicator."""
 
-        return await self._run(operation)
+        token = bind_advisory_progress(self._state)
+        try:
+            return await self._run(operation)
+        finally:
+            reset_advisory_progress(token)
 
 
 class InteractiveDebateProgress:

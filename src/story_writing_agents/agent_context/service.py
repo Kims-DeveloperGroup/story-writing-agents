@@ -91,6 +91,13 @@ from .planning import (
     context_source_uses_catalog_alias,
     plan_context_projection,
 )
+from .progress import (
+    ContextActionProgressEvent,
+    ContextActionProgressKind,
+    ContextActionProgressQuery,
+    ContextActionProgressSink,
+    ContextActionProgressSource,
+)
 from .ledger import (
     MAX_CONTEXT_LEDGER_SOURCES,
     ContextLedger,
@@ -1046,6 +1053,14 @@ def _emit_context_event(
         return
     assert event is not None
     _require_sync_none(sink(event))
+
+
+def _emit_action_progress(
+    sink: ContextActionProgressSink | None,
+    event: ContextActionProgressEvent,
+) -> None:
+    if sink is not None:
+        _require_sync_none(sink(event))
 
 
 def _emit_context_event_without_replacing(
@@ -2009,6 +2024,30 @@ class ContextInvocationSession:
             raise _action_error(ContextActionErrorCode.HANDLE_INVALID)
         return ContextSourceHandle(self._full_handle_by_wire[matched])
 
+    def progress_sources(
+        self,
+        handles: tuple[ContextSourceHandle, ...],
+        *,
+        utf8_bytes: Mapping[str, int] | None = None,
+    ) -> tuple[ContextActionProgressSource, ...]:
+        """Describe authorized handles without exposing their opaque authority."""
+
+        with self._lock:
+            bindings = tuple(self._lookup_handle(handle) for handle in handles)
+            return tuple(
+                ContextActionProgressSource(
+                    source_kind=binding.entry.source_kind,
+                    locator=binding.safe_locator,
+                    boundary=binding.boundary,
+                    utf8_bytes=(
+                        None
+                        if utf8_bytes is None
+                        else utf8_bytes.get(binding.handle.value)
+                    ),
+                )
+                for binding in bindings
+            )
+
     def serialize_observation(
         self,
         observation: ContextSearchObservation | ContextReadObservation,
@@ -2207,6 +2246,11 @@ class ContextInvocationSession:
         """Retain own-state debate identity in an otherwise canonical locator."""
 
         locator = entry.provenance.locator
+        if (
+            entry.source_kind is ContextSourceKind.WRITING_ARTIFACT
+            and locator.startswith("manuscript/")
+        ):
+            return locator.removeprefix("manuscript/")
         if entry.source_kind is not ContextSourceKind.OWN_AGENT_STATE:
             return locator
         try:
@@ -4162,6 +4206,7 @@ class AgentContextService:
         answer_validator: Callable[[str, ContextAnswerAuthorization], object]
         | None = None,
         event_sink: ContextExecutionEventSink | None = None,
+        progress_sink: ContextActionProgressSink | None = None,
         phase: str | None = None,
         round_number: int | None = None,
         continuation: ContextContinuationTransaction | None = None,
@@ -4196,6 +4241,7 @@ class AgentContextService:
             raise _execution_error(ContextExecutionErrorCode.INVALID_VALUE)
         _validate_sync_callback(answer_validator)
         _validate_sync_callback(event_sink)
+        _validate_sync_callback(progress_sink)
         if request.subject_kind is ContextSubjectKind.DEBATE:
             if event_sink is not None and (phase is None or round_number is None):
                 raise _execution_error(ContextExecutionErrorCode.INVALID_VALUE)
@@ -4269,6 +4315,7 @@ class AgentContextService:
                     physical_call_limit=physical_call_limit,
                     answer_validator=answer_validator,
                     event_sink=event_sink,
+                    progress_sink=progress_sink,
                     phase=phase,
                     round_number=round_number,
                     continuation=continuation,
@@ -4291,6 +4338,7 @@ class AgentContextService:
         physical_call_limit: int,
         answer_validator: Callable[[str, ContextAnswerAuthorization], object] | None,
         event_sink: ContextExecutionEventSink | None,
+        progress_sink: ContextActionProgressSink | None,
         phase: str | None,
         round_number: int | None,
         continuation: ContextContinuationTransaction | None,
@@ -4331,6 +4379,19 @@ class AgentContextService:
                 request.operation_id,
                 phase=phase,
                 round_number=round_number,
+                **facts,
+            )
+
+        def progress_event(
+            kind: ContextActionProgressKind,
+            action_index: int,
+            **facts: object,
+        ) -> ContextActionProgressEvent:
+            return ContextActionProgressEvent(
+                kind=kind,
+                agent_id=scope.agent_id,
+                operation_id=request.operation_id,
+                action_index=action_index,
                 **facts,
             )
 
@@ -5040,6 +5101,21 @@ class AgentContextService:
                             action_index=action_index,
                         ),
                     )
+                    _emit_action_progress(
+                        progress_sink,
+                        progress_event(
+                            ContextActionProgressKind.SEARCH_STARTED,
+                            action_index,
+                            queries=tuple(
+                                ContextActionProgressQuery(
+                                    query.text,
+                                    query.source_kinds,
+                                    query.artifact_path_prefix,
+                                )
+                                for query in action.queries
+                            ),
+                        ),
+                    )
                     stage = "action"
                     search_observation = action_session.search(action)
                     observation = action_session.serialize_observation(
@@ -5060,6 +5136,21 @@ class AgentContextService:
                             truncated=search_observation.truncated,
                         ),
                     )
+                    _emit_action_progress(
+                        progress_sink,
+                        progress_event(
+                            ContextActionProgressKind.SEARCH_COMPLETED,
+                            action_index,
+                            sources=action_session.progress_sources(
+                                tuple(hit.handle for hit in search_observation.hits),
+                                utf8_bytes={
+                                    hit.handle.value: hit.boundary_utf8_bytes
+                                    for hit in search_observation.hits
+                                },
+                            ),
+                            truncated=search_observation.truncated,
+                        ),
+                    )
                     finalizer = call_finalizer
                     call_finalizer = None
                     if finalizer is not None:
@@ -5068,11 +5159,22 @@ class AgentContextService:
                 if type(action) is ContextReadAction:
                     history_advanced = True
                     stage = "action_observer"
+                    read_progress_sources = action_session.progress_sources(
+                        action.handles
+                    )
                     _emit_context_event(
                         event_sink,
                         execution_event(
                             ContextExecutionEventKind.READ_STARTED,
                             action_index=action_index,
+                        ),
+                    )
+                    _emit_action_progress(
+                        progress_sink,
+                        progress_event(
+                            ContextActionProgressKind.READ_STARTED,
+                            action_index,
+                            sources=read_progress_sources,
                         ),
                     )
                     stage = "action"
@@ -5095,6 +5197,24 @@ class AgentContextService:
                             history_record_count=record_count,
                             observation_utf8_bytes=len(
                                 observation.encode("utf-8", errors="strict")
+                            ),
+                        ),
+                    )
+                    _emit_action_progress(
+                        progress_sink,
+                        progress_event(
+                            ContextActionProgressKind.READ_COMPLETED,
+                            action_index,
+                            sources=tuple(
+                                replace(
+                                    source,
+                                    utf8_bytes=evidence.receipt.boundary_utf8_bytes,
+                                )
+                                for source, evidence in zip(
+                                    read_progress_sources,
+                                    read_observation.evidence,
+                                    strict=True,
+                                )
                             ),
                         ),
                     )

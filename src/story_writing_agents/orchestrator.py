@@ -71,6 +71,7 @@ from .agent_context.sources import (
     WritingArtifactSourceAdapter,
     writing_artifact_source_id,
 )
+from .agent_context.progress import ContextActionProgressSink
 from .backend import (
     AgentBackend,
     BackendRuntimeConfigurationCandidate,
@@ -2498,12 +2499,15 @@ class StoryRuntime:
     async def decide_lead_recommendation(
         self, decision: LeadRecommendationDecision,
         context_event_sink: Callable[[ContextExecutionEvent], None] | None = None,
+        *,
+        action_progress_sink: ContextActionProgressSink | None = None,
     ) -> LeadTurnResult:
         """Consume one exact recommendation decision and bounded preparation."""
         if type(decision) is not LeadRecommendationDecision:
             raise TypeError("decision must be a LeadRecommendationDecision")
         self._validate_lead_identity(decision.session_id, decision.conversation_id)
         self._validate_context_event_sink(context_event_sink)
+        self._validate_context_event_sink(action_progress_sink)
         session_id, conversation_id = decision.session_id, decision.conversation_id
         async with self._lead_session_lifecycle(session_id), self._conversation_lock(session_id, conversation_id):
             events, projection, failure = self._read_lead_history(session_id, conversation_id)
@@ -2589,11 +2593,16 @@ class StoryRuntime:
             self._append_drafts(projection.last_sequence, (decision_draft, start))
             published = self.conversation_storage_services.event_store.read(session_id, conversation_id)
             capability = _RecommendationCapability(request_event, published[-2], published[-1])
-            return await self._run_confirmed_lead_preparation_locked(capability, context_event_sink)
+            return await self._run_confirmed_lead_preparation_locked(
+                capability,
+                context_event_sink,
+                action_progress_sink,
+            )
 
     async def _run_confirmed_lead_preparation_locked(
         self, capability: _RecommendationCapability,
         context_event_sink: Callable[[ContextExecutionEvent], None] | None,
+        action_progress_sink: ContextActionProgressSink | None,
     ) -> LeadTurnResult:
         capability.consume()
         request = cast(LeadRecommendationRequestPayload, capability.request_event.payload)
@@ -2613,6 +2622,7 @@ class StoryRuntime:
                 turn_id=origin.turn_id, step_id=origin.step_id, text=command,
                 expected_relation=LeadProposalRelation.NEW_STEP, previous_proposal=None,
                 context_event_sink=context_event_sink, preparation=capability,
+                action_progress_sink=action_progress_sink,
             )
         except BaseException as failure:
             self._close_failed_lead_attempt(origin.session_id, origin.conversation_id,
@@ -2695,12 +2705,15 @@ class StoryRuntime:
         conversation_id: str,
         text: str,
         context_event_sink: Callable[[ContextExecutionEvent], None] | None = None,
+        *,
+        action_progress_sink: ContextActionProgressSink | None = None,
     ) -> LeadTurnResult:
         """Run one ordinary user turn through the canonical lead front channel."""
 
         self._validate_lead_identity(session_id, conversation_id)
         text = self._validate_visible_text(text, label="lead input")
         self._validate_context_event_sink(context_event_sink)
+        self._validate_context_event_sink(action_progress_sink)
         lock = self._conversation_lock(session_id, conversation_id)
         async with self._lead_session_lifecycle(session_id), lock:
             events, projection, failure = self._read_lead_history(
@@ -2817,6 +2830,7 @@ class StoryRuntime:
                     expected_relation=LeadProposalRelation.NEW_STEP,
                     previous_proposal=None,
                     context_event_sink=context_event_sink,
+                    action_progress_sink=action_progress_sink,
                 )
             except BaseException as failure:
                 # Preparation and cancellation may stop before the provider seam
@@ -2835,6 +2849,7 @@ class StoryRuntime:
         text: str,
         context_event_sink: Callable[[ContextExecutionEvent], None] | None = None,
         *,
+        action_progress_sink: ContextActionProgressSink | None = None,
         authoring_scope: AuthoringScope | None = None,
         review_basis: ReviewBasis | None = None,
     ) -> LeadTurnResult:
@@ -2847,6 +2862,7 @@ class StoryRuntime:
         if authoring_scope is None or authoring_scope.activity is AuthoringActivity.WORKFLOW:
             raise ValueError("specialist advisory requires explicit authoring scope; ask the Lead to interpret this work")
         self._validate_context_event_sink(context_event_sink)
+        self._validate_context_event_sink(action_progress_sink)
         if self.backend is None:
             raise BackendProtocolError("specialist advisory requires an AgentBackend")
         async with self._conversation_lock(session_id, conversation_id):
@@ -3036,11 +3052,14 @@ class StoryRuntime:
     async def decide_lead_step(
         self,
         decision: LeadStepDecision,
+        *,
+        action_progress_sink: ContextActionProgressSink | None = None,
     ) -> LeadDecisionResult:
         """Apply one exact structured decision to the authoritative request tail."""
 
         if type(decision) is not LeadStepDecision:
             raise TypeError("decision must be a LeadStepDecision")
+        self._validate_context_event_sink(action_progress_sink)
         self._validate_lead_identity(decision.session_id, decision.conversation_id)
         lock = self._conversation_lock(
             decision.session_id,
@@ -3308,6 +3327,7 @@ class StoryRuntime:
                     conversation_id=decision.conversation_id,
                     proposal=proposal,
                     capability=capability,
+                    action_progress_sink=action_progress_sink,
                 )
                 return LeadDecisionResult(
                     decision.session_id,
@@ -3380,6 +3400,7 @@ class StoryRuntime:
                     expected_relation=LeadProposalRelation.REVISE_PENDING,
                     previous_proposal=proposal,
                     context_event_sink=None,
+                    action_progress_sink=action_progress_sink,
                     user_source_text=decision.revision_request,
                 )
             except BaseException as failure:
@@ -3877,6 +3898,7 @@ class StoryRuntime:
         conversation_id: str,
         proposal: CollaborationProposal,
         capability: _ConfirmedStepCapability,
+        action_progress_sink: ContextActionProgressSink | None,
     ) -> LeadTurnResult:
         """Consume exact start authority and finish one confirmed provider round."""
 
@@ -3998,6 +4020,7 @@ class StoryRuntime:
                         assignment=assignment,
                         dispatch_event_id=dispatch.event_id,
                         events=events,
+                        action_progress_sink=action_progress_sink,
                     ),
                     name=(
                         f"collaboration:{assignment.specialist_id}:"
@@ -4063,6 +4086,7 @@ class StoryRuntime:
                                 replies,
                             ),
                             events=events,
+                            action_progress_sink=action_progress_sink,
                         )
                     )
                 except Exception as failure:
@@ -4201,6 +4225,7 @@ class StoryRuntime:
         assignment: CollaborationAssignment,
         dispatch_event_id: str,
         events: tuple[CollaborationEvent, ...],
+        action_progress_sink: ContextActionProgressSink | None,
     ) -> _CollaborationInvocationResult:
         self._validate_review_material((assignment,), proposal.basis.inputs, events)
         inputs_by_id = {item.input_id: item for item in proposal.basis.inputs}
@@ -4276,6 +4301,7 @@ class StoryRuntime:
             physical_call_limit=assignment.max_physical_calls,
             round_number=assignment.round,
             decoder=decode,
+            action_progress_sink=action_progress_sink,
         )
 
     async def _run_lead_synthesis(
@@ -4288,6 +4314,7 @@ class StoryRuntime:
         attempt_id: str,
         replies: tuple[CollaborationSpecialistReplyPayload, ...],
         events: tuple[CollaborationEvent, ...],
+        action_progress_sink: ContextActionProgressSink | None,
     ) -> _CollaborationInvocationResult:
         artifact_candidate = self._artifact_candidate_for_proposal(events, proposal)
         reply_event_ids = tuple(
@@ -4438,6 +4465,7 @@ class StoryRuntime:
             physical_call_limit=proposal.budget.synthesis_max_physical_calls,
             round_number=proposal.budget.rounds_spent + 1,
             decoder=decode,
+            action_progress_sink=action_progress_sink,
         )
 
     @staticmethod
@@ -4558,6 +4586,7 @@ class StoryRuntime:
         physical_call_limit: int,
         round_number: int,
         decoder: Callable[[str], object],
+        action_progress_sink: ContextActionProgressSink | None,
     ) -> _CollaborationInvocationResult:
         artifact_inputs = tuple(
             item
@@ -4688,6 +4717,7 @@ class StoryRuntime:
                 active_debate=authorities[2],
                 own_agent_state=authorities[3],
                 answer_validator=validate,
+                progress_sink=action_progress_sink,
                 **self._lead_continuation_arguments(
                     session_id, conversation_id, turn_id, step_id,
                     agent_id=agent_id, synthesis=True,
@@ -6578,6 +6608,7 @@ class StoryRuntime:
         expected_relation: LeadProposalRelation,
         previous_proposal: CollaborationProposal | None,
         context_event_sink: Callable[[ContextExecutionEvent], None] | None,
+        action_progress_sink: ContextActionProgressSink | None,
         user_source_text: str | None = None,
         preparation: _RecommendationCapability | None = None,
     ) -> LeadTurnResult:
@@ -6988,6 +7019,7 @@ class StoryRuntime:
                     own_agent_state=authorities[3],
                     answer_validator=validate,
                     event_sink=context_event_sink,
+                    progress_sink=action_progress_sink,
                     **self._lead_continuation_arguments(
                         session_id, conversation_id, turn_id, step_id,
                     ),
@@ -7084,6 +7116,7 @@ class StoryRuntime:
                         own_agent_state=authorities[3],
                         answer_validator=validate,
                         event_sink=context_event_sink,
+                        progress_sink=action_progress_sink,
                         **self._lead_continuation_arguments(
                             session_id, conversation_id, turn_id, step_id,
                         ),
@@ -11153,6 +11186,8 @@ class RuntimeSession:
         conversation_id: str,
         text: str,
         context_event_sink: Callable[[ContextExecutionEvent], None] | None = None,
+        *,
+        action_progress_sink: ContextActionProgressSink | None = None,
     ) -> LeadTurnResult:
         """Run one ordinary turn through this session's lead front channel."""
 
@@ -11161,6 +11196,7 @@ class RuntimeSession:
             conversation_id,
             text,
             context_event_sink,
+            action_progress_sink=action_progress_sink,
         )
 
     async def propose_specialist_advisory(
@@ -11170,6 +11206,7 @@ class RuntimeSession:
         text: str,
         context_event_sink: Callable[[ContextExecutionEvent], None] | None = None,
         *,
+        action_progress_sink: ContextActionProgressSink | None = None,
         authoring_scope: AuthoringScope | None = None,
         review_basis: ReviewBasis | None = None,
     ) -> LeadTurnResult:
@@ -11181,6 +11218,7 @@ class RuntimeSession:
             specialist_id,
             text,
             context_event_sink,
+            action_progress_sink=action_progress_sink,
             authoring_scope=authoring_scope,
             review_basis=review_basis,
         )
@@ -11188,17 +11226,25 @@ class RuntimeSession:
     async def decide_lead_recommendation(
         self, decision: LeadRecommendationDecision,
         context_event_sink: Callable[[ContextExecutionEvent], None] | None = None,
+        *,
+        action_progress_sink: ContextActionProgressSink | None = None,
     ) -> LeadTurnResult:
         """Consume an exact recommendation decision owned by this session."""
         if type(decision) is not LeadRecommendationDecision:
             raise TypeError("decision must be a LeadRecommendationDecision")
         if decision.session_id != self.session_id:
             raise ValueError("recommendation decision does not belong to this session")
-        return await self.runtime.decide_lead_recommendation(decision, context_event_sink)
+        return await self.runtime.decide_lead_recommendation(
+            decision,
+            context_event_sink,
+            action_progress_sink=action_progress_sink,
+        )
 
     async def decide_lead_step(
         self,
         decision: LeadStepDecision,
+        *,
+        action_progress_sink: ContextActionProgressSink | None = None,
     ) -> LeadDecisionResult:
         """Apply an exact pending-step decision owned by this session."""
 
@@ -11206,7 +11252,10 @@ class RuntimeSession:
             raise TypeError("decision must be a LeadStepDecision")
         if decision.session_id != self.session_id:
             raise ValueError("lead decision does not belong to this session")
-        return await self.runtime.decide_lead_step(decision)
+        return await self.runtime.decide_lead_step(
+            decision,
+            action_progress_sink=action_progress_sink,
+        )
 
     async def decide_artifact_application(
         self,

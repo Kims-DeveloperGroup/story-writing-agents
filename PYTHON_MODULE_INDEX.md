@@ -16,14 +16,14 @@ Source root: `src/`
 
 Package root: `src/story_writing_agents/`
 
-Importable production units indexed: 140.
+Importable production units indexed: 142.
 
-Direct internal dependency edges indexed: 555.
+Direct internal dependency edges indexed: 565.
 
 Directed internal dependency cycles indexed: 0.
 
 Edge and cycle totals exclude annotation-only `TYPE_CHECKING` imports. The
-all-import AST graph has 557 edges. Its two annotation-only edges are
+all-import AST graph has 567 edges. Its two annotation-only edges are
 `config -> workspace` and `interactive_terminal._core -> conversations`; the
 workspace cycle was already present in the 135-unit baseline
 (528 all-import / 526 runtime edges).
@@ -118,8 +118,10 @@ interactive_commands -> agents
 interactive_auth -> interactive_terminal/provider_auth
 interactive_line_editor -> interactive_commands/interactive_terminal
 interactive_settings -> agents/config/errors/workspace
-interactive_terminal -> interactive_terminal._core
+interactive_terminal -> interactive_terminal._advisory_progress/interactive_terminal._core
 interactive_terminal._core -> agents/interactive_commands
+                           -> agent_context.progress
+                           -> interactive_terminal._advisory_progress
                            -> interactive_terminal._controls
                            -> interactive_terminal._driver
                            -> interactive_terminal._external_view
@@ -131,6 +133,7 @@ interactive_terminal._core -> agents/interactive_commands
                            -> interactive_terminal._viewer_model
                            -> interactive_terminal._viewer_render
 interactive_terminal._controls -> interactive_terminal._model
+interactive_terminal._advisory_progress -> agent_context.actions/agent_context.progress
 interactive_terminal._live_composer -> interactive_terminal._model
 interactive_terminal._driver -> interactive_terminal._input_lifecycle
                              -> interactive_terminal._external_view
@@ -140,7 +143,7 @@ interactive_terminal._driver -> interactive_terminal._input_lifecycle
                              -> interactive_terminal._viewer_model
 interactive_terminal._reference_activation -> interactive_terminal._model
                                            -> writing_artifacts
-interactive_terminal._render -> interactive_terminal._model
+interactive_terminal._render -> interactive_terminal._advisory_progress/interactive_terminal._model
 interactive_terminal._viewer_controls -> interactive_terminal._model
                                       -> interactive_terminal._viewer_model
 interactive_terminal._viewer_render -> interactive_terminal._model
@@ -198,7 +201,7 @@ conversation_storage.sqlite -> conversation_literal_search/conversation_search
                             -> errors/workspace.core
                             -> conversation_storage.sqlite_database
                             -> conversation_storage.sqlite_search_index
-orchestrator -> artifact_proposals/backend/config/consensus.contracts/consensus.execution/consensus.event_store/consensus.material_store/consensus.runtime_adapter
+orchestrator -> agent_context.progress/artifact_proposals/backend/config/consensus.contracts/consensus.execution/consensus.event_store/consensus.material_store/consensus.runtime_adapter
              -> conversation_rag_runtime/debug_log/directives
              -> conversation_storage.composition/contracts
              -> errors/git.story_commit_contracts/git.story_commits
@@ -214,9 +217,10 @@ agent_context.ledger -> agent_context.accounting/manifest/planning
                      -> runtime_state_paths/workspace
 agent_context.manifest -> (standard library only)
 agent_context.planning -> agent_context.manifest
+agent_context.progress -> agent_context.actions/agent_context.manifest
 agent_context.service -> errors/provider_auth_recovery
                       -> agent_context.accounting/actions/continuation/ledger
-                      -> agent_context.manifest/planning/sources
+                      -> agent_context.manifest/planning/progress/sources
                       -> conversations.session_context/workspace
 agent_context.sources -> agent_context.actions/manifest
                       -> conversations/errors/models/workspace
@@ -795,6 +799,19 @@ every intermediate arrow. The current runtime graph is acyclic.
   `tests/test_session_lifecycle.py`, and
   `tests/test_interactive_controller.py`.
 
+### `story_writing_agents.agent_context.progress`
+
+- **Source:** `src/story_writing_agents/agent_context/progress.py`
+- **Responsibility:** Define exact package-internal ephemeral SEARCH/READ progress facts.
+- **Supported surface:** No facade or project-root export. Internal immutable query,
+  source, event, kind, and synchronous-sink contracts carry literal validated queries,
+  safe relative locators, exact boundaries, counts, and truncation without excerpts,
+  bodies, provider answers, digests, credentials, or exception text.
+- **Direct internal dependencies:** `agent_context.actions` and `agent_context.manifest`.
+- **State, resources, and side effects:** Values are immutable and importing performs no I/O.
+- **Primary verification/documentation:** `tests/test_agent_context_execution.py`,
+  `tests/test_interactive_controller.py`, and `docs/guides/agent-context-progress.md`.
+
 ### `story_writing_agents.agent_context.service`
 
 - **Source:** `src/story_writing_agents/agent_context/service.py`
@@ -821,7 +838,10 @@ every intermediate arrow. The current runtime graph is acyclic.
   `ContextProviderTerminalCode`, `ContextReferencePreludeRequest`,
   `ContextReferencePreludeResult`, `ContextReadReceipt`, `ContextScope`,
   `ContextSourceClassification`, `context_provider_failure_facts`, and
-  `record_context_provider_failure`. `AgentContextService` derives the exact
+  `record_context_provider_failure`. The separate package-internal progress sink
+  emits exact transient SEARCH/READ query, safe-locator, boundary, count, and
+  truncation facts while the supported `ContextExecutionEvent` stays content-free.
+  `AgentContextService` derives the exact
   workspace identity from the public canonical Workspace root, composes a
   manifest and transient material from the four authorized source adapters,
   plans against the scoped ledger checkpoint, reserves INCOMPLETE before any
@@ -950,7 +970,8 @@ every intermediate arrow. The current runtime graph is acyclic.
   Missing recovery scope returns a typed failure without native interaction.
 - **Direct internal dependencies:** `agent_context.accounting`,
   `agent_context.actions`, `agent_context.continuation`, `agent_context.ledger`,
-  `agent_context.manifest`, `agent_context.planning`, `agent_context.sources`,
+  `agent_context.manifest`, `agent_context.planning`, `agent_context.progress`,
+  `agent_context.sources`,
   `conversations.session_context`, `errors`, `provider_auth_recovery`, and
   `workspace`.
 - **State, resources, and side effects:** A workspace-scoped service retains
@@ -5124,6 +5145,9 @@ every intermediate arrow. The current runtime graph is acyclic.
   authority. Recovery-required and outcome-unknown results are rendered without
   replay or decision controls. Package-internal `project_lead_reference_scope`
   limits reference activation to the complete ordinary non-command input span.
+  It also owns operation-level elapsed timing across authentication recovery,
+  supplies the ephemeral action sink, and projects final specialist panels only
+  from an injected read-only durable-event snapshot.
 - **Direct internal dependencies:** `conversations`, `errors`, `interactive_terminal`,
   `interactive_terminal._collaboration_view`, `orchestrator`, and
   `provider_auth_recovery`.
@@ -5538,9 +5562,10 @@ every intermediate arrow. The current runtime graph is acyclic.
   `AdvisoryProgressError` bind startup, advisory, consensus, and Settings
   option-read async progress lifecycles through the same facade: callback and
   incapable terminals await silently,
-  while stream construction injects the pure fixed-row renderer into the sole
-  driver. They do not expand the public `__all__` or expose terminal leaves to
-  the controller.
+  while stream construction injects the pure call-local advisory renderer into
+  the sole driver. `AdvisoryProgressRequest` is likewise an unlisted internal
+  binding for exact ordered cards. They do not expand the public `__all__` or
+  expose terminal leaves to the controller.
   Unlisted package-internal `InteractiveTextViewer`, `TextViewerExitKind`, and
   `TextViewerResult` bind one storage-free supplied-text viewer. Each read
   returns only a typed noncommit outcome or one one-based inclusive tuple; it
@@ -5561,7 +5586,8 @@ every intermediate arrow. The current runtime graph is acyclic.
   recovery vocabulary to callback or stream terminals. It preserves the exact
   12-name supported facade surface and grants no provider, artifact, Git, or
   lead authority.
-- **Direct internal dependencies:** `interactive_terminal._core`.
+- **Direct internal dependencies:** `interactive_terminal._advisory_progress` and
+  `interactive_terminal._core`.
 - **State, resources, and side effects:** Owns no terminal resource or mutable
   process state. Import deterministically canonicalizes supported public object
   module identities and binds the private startup adapter without running it;
@@ -5690,6 +5716,19 @@ every intermediate arrow. The current runtime graph is acyclic.
   `docs/design/interactive-cli-design-system.md`; focused component, renderer,
   control, capability, and compatibility coverage belongs to the interactive
   terminal test suites.
+
+### `story_writing_agents.interactive_terminal._advisory_progress`
+
+- **Source:** `src/story_writing_agents/interactive_terminal/_advisory_progress.py`
+- **Responsibility:** Project one operation's detailed transient advisory cards and elapsed time.
+- **Supported surface:** Package-internal request/state and pure duration/frame helpers only.
+  Frames retain assignment order and show exact SEARCH queries/scopes or READ locators/ranges.
+- **Direct internal dependencies:** `agent_context.actions` and `agent_context.progress`.
+- **State, resources, and side effects:** One adapter-owned process-local state uses a
+  monotonic clock and call-local context binding; it performs no persistence, provider, or
+  terminal I/O and discards query/source metadata at completion.
+- **Primary verification/documentation:** `tests/test_interactive_terminal_foundation.py`,
+  `tests/test_interactive_controller.py`, and `docs/design/interactive-cli-design-system.md`.
 
 ### `story_writing_agents.interactive_terminal._controls`
 
@@ -5830,9 +5869,9 @@ every intermediate arrow. The current runtime graph is acyclic.
   measures physical cells for combining and wide text, hard-splits long tokens,
   and safely removes the rail when the remaining width or a wide glyph cannot
   coexist with it. `ListView` delegates message rows through that same renderer.
-  `render_advisory_progress_frame` projects one fixed text-free sixteen-cell
-  block-shade shimmer whose graded bright point travels out and back, without
-  ANSI, cursor controls, dynamic content, or state. Package-internal
+  `render_advisory_progress_frame` projects the active call-local detailed
+  multiline advisory frame when bound and otherwise the established fixed
+  text-free sixteen-cell shimmer; it emits no cursor controls or I/O. Package-internal
   `render_startup_welcome_frame` separately consumes one
   exact purpose-bound `StartupWelcome`, never a raw stage index, and projects
   its validated stage without entering the general `Component` vocabulary. It
@@ -5844,7 +5883,8 @@ every intermediate arrow. The current runtime graph is acyclic.
   narrow layouts retain the same five-color identity. Fixed local resets make
   the ANSI projection strip to exactly the plain text, and the completed view
   includes explicit team and next-provider-check copy independent of color.
-- **Direct internal dependencies:** `interactive_terminal._model`.
+- **Direct internal dependencies:** `interactive_terminal._advisory_progress`
+  and `interactive_terminal._model`.
 - **State, resources, and side effects:** Pure projections only. Dynamic text
   is sanitized before wrapping or fixed styling; the module writes and flushes
   no stream, emits no OSC, query, background, dim, blink, or cursor sequence,
@@ -6060,7 +6100,8 @@ every intermediate arrow. The current runtime graph is acyclic.
   reads no store, invokes no provider, writes no stream, and owns no terminal,
   artifact, Git, or runtime state. Closed payload dispatch fails on unknown
   types. Raw create/replace/patch bytes and private provider state are never
-  projected.
+  projected. The final specialist-result projection joins exact durable
+  dispatch, reply, and execution-result facts in proposal assignment order.
 - **Primary verification/documentation:**
   `tests/test_interactive_collaboration_view.py`,
   `docs/reference/interactive-terminal.md`, and
@@ -6156,11 +6197,12 @@ every intermediate arrow. The current runtime graph is acyclic.
   this lifecycle. Line fallback cannot erase printed prompts or input and emits
   no synthetic `completed` or `cancelled` control frame. Supported
   package-internal `run_advisory_progress` accepts one startup, advisory,
-  consensus, or Settings option-read awaitable and an injected fixed-row
-  renderer, awaits
+  consensus, or Settings option-read awaitable and an injected safe single- or
+  multiline renderer, awaits
   silently without raw cursor capability, and on a capable stream joins the
-  operation with one indicator task. The row is fitted to a freshly observed
-  width while reserving the rightmost cell, cleared as a unit around semantic
+  operation with one indicator task. Every logical row is Unicode-cell wrapped
+  to a freshly observed width while reserving the rightmost cell; the exact
+  produced physical-row count is cleared around semantic
   writes, and leaves no completed loading record. A fixed bold ANSI palette
   cycles by frame when decorative SGR is enabled; `NO_COLOR` retains the same
   spatial frames without SGR. Internal
@@ -6222,7 +6264,10 @@ every intermediate arrow. The current runtime graph is acyclic.
 - **State, resources, and side effects:** Sole owner of borrowed input/output
   streams, independent capability checks, detected width, normalized physical
   keys, raw POSIX attributes, functional cursor controls, live redraw writes,
-  flushes, and exact restoration. It retains exactly one bounded process-local
+  flushes, and exact restoration. During advisory progress it retains the
+  current animation index, pure renderer, active flag, and produced physical-row
+  count solely for redraw/cleanup; operation failure retains precedence over
+  simultaneous indicator or clear failure. It retains exactly one bounded process-local
   main-input history store per driver instance; each main read resets only its
   call-local navigation state. A contextual input-frame provider is likewise
   call-local and shares the existing editor, history, reference activation,
@@ -6506,8 +6551,10 @@ every intermediate arrow. The current runtime graph is acyclic.
   `InteractiveAdvisoryProgress` and
   `InteractiveDebateProgress` bind the terminal's startup, picker preparation,
   advisory, consensus, and Settings option-read awaitable wrappers: callback construction remains
-  visually silent, and stream construction injects the pure fixed-row
-  renderer into the sole driver without exposing capabilities or streams.
+  visually silent. Advisory instances own one call-local detailed state/timer
+  binding while stream construction injects its pure renderer into the sole
+  driver without exposing capabilities or streams; debate and other callers
+  retain the fixed-row fallback.
   Resource-free `InteractiveLiveComposer` binds one injected operation,
   width-correlated progress/input renderer, authoritative boundary classifier,
   and exact-task cancellation/join callback. Callback construction uses the
@@ -6532,8 +6579,9 @@ every intermediate arrow. The current runtime graph is acyclic.
   external-view lifecycle. Neither route imports the required external viewer
   package, exposes terminal resources, nor retains operation, frame, input,
   search, or navigation state after return or failure.
-- **Direct internal dependencies:** `agents`, `conversations`,
-  `interactive_commands`, `interactive_terminal._collaboration_view`,
+- **Direct internal dependencies:** `agent_context.progress`, `agents`, `conversations`,
+  `interactive_commands`, `interactive_terminal._advisory_progress`,
+  `interactive_terminal._collaboration_view`,
   `interactive_terminal._controls`, `interactive_terminal._driver`,
   `interactive_terminal._external_view`,
   `interactive_terminal._live_composer`,
@@ -6548,8 +6596,10 @@ every intermediate arrow. The current runtime graph is acyclic.
   Stream-factory instances delegate all raw terminal state, width detection,
   keys, writes, flushes, restoration, readiness, irreversible input-source
   selection, persistent incremental decoding, and the bounded process-local
-  main-input history store, plus advisory indicator task and cleanup to one
-  driver. Live-composer awaitables, exact editor state, frame renderers, boundary
+  main-input history store, plus advisory indicator task, multiline-row count,
+  and cleanup to one driver. The resource-free advisory adapter retains only
+  call-local exact progress state and a monotonic start time until finish.
+  Live-composer awaitables, exact editor state, frame renderers, boundary
   classifiers, and cancellation/join callbacks are call-local. Callback
   fallback awaits confirmed work without opening input and retains the initial
   draft/cursor; it owns no background input worker or terminal resource.
@@ -6953,7 +7003,7 @@ every intermediate arrow. The current runtime graph is acyclic.
   task projection; recommendation completion never satisfies authoring.
 - **Direct internal dependencies:** `agent_context.accounting`,
   `agent_context.continuation`, `agent_context.manifest`, `agent_context.planning`, `agent_context.service`,
-  `agent_context.sources`, `agents`, `artifact_proposals`, `backend`, `config`,
+  `agent_context.progress`, `agent_context.sources`, `agents`, `artifact_proposals`, `backend`, `config`,
   `consensus.contracts`, `consensus.execution`, `consensus.event_store`,
   `consensus.material_store`, `consensus.runtime_adapter`, `conversations`,
   `conversations.session_context`,
@@ -6984,6 +7034,9 @@ every intermediate arrow. The current runtime graph is acyclic.
   create invocation-local exact reference operations, retain isolated bindings,
   account calls synchronously between awaits, cancel and join parallel tasks,
   and append idempotently derived start/result/finalization batches. Advisory
+  action progress is synchronously forwarded through an optional package-internal
+  sink for Lead, preparation, assignment, advisory, revision, and synthesis calls;
+  it is never stored or added to durable results. Advisory
   proposals are provider-free until confirmation and reject missing affected
   domain owners or unavailable concrete review material. Specialist draft
   replies carry material with `DRAFTED`, which is distinct from review support;

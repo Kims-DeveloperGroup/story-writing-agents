@@ -89,6 +89,15 @@ Only the terminal's structured decision controls authorize that exact step.
 Slash-prefixed management commands remain provider-free; removed execution
 commands remain unavailable.
 
+While a Lead or confirmed specialist request is active, capable terminals show
+a transient shared `HH:MM:SS` working bar and per-agent context cards. SEARCH
+cards may display exact query text, requested resource kinds and scope, and safe
+workspace-relative locators/ranges; READ cards show selected locators and exact
+boundaries. They never display source excerpts, provider answers, absolute
+paths, or hidden reasoning. Final specialist request/answer/status panels
+precede the Lead result and elapsed time. Terminal capture or scrollback may
+retain the transient query and locator text.
+
 See [Collaborate with the Lead Agent](docs/guides/lead-agent-collaboration.md)
 for responsibilities, authority limits, concrete story workflows,
 provider-call examples, visible states, and recovery behavior. The exact API

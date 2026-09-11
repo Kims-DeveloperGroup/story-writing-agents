@@ -190,6 +190,159 @@ def project_lead_turn_result(result: LeadTurnResult) -> Panel:
     return Panel("Lead", tuple(items), state=_event_state(result))
 
 
+def project_specialist_results(
+    events: tuple[CollaborationEvent, ...],
+    proposal: CollaborationProposal,
+) -> tuple[Panel, ...]:
+    """Join durable dispatch, reply, and outcome truth for one execution."""
+
+    validate_collaboration_event_order(events)
+    durable_proposals = tuple(
+        event.payload
+        for event in events
+        if type(event.payload) is CollaborationProposal
+        and event.step_id == proposal.step_id
+        and event.payload.proposal_id == proposal.proposal_id
+        and event.payload.proposal_revision == proposal.proposal_revision
+        and event.payload.proposal_digest == proposal.proposal_digest
+    )
+    if len(durable_proposals) != 1 or durable_proposals[0] != proposal:
+        raise ValueError("specialist result proposal does not match durable authority")
+
+    results = tuple(
+        event
+        for event in events
+        if type(event.payload) is CollaborationExecutionResult
+        and event.step_id == proposal.step_id
+        and event.payload.proposal_id == proposal.proposal_id
+        and event.payload.proposal_revision == proposal.proposal_revision
+        and event.payload.proposal_digest == proposal.proposal_digest
+    )
+    if not results:
+        return ()
+    if len(results) != 1:
+        raise ValueError("specialist result has ambiguous execution authority")
+    result = results[0].payload
+    assert isinstance(result, CollaborationExecutionResult)
+    dispatch_events = tuple(
+        event
+        for event in events
+        if type(event.payload) is CollaborationAssignmentDispatchPayload
+        and event.step_id == proposal.step_id
+        and event.payload.proposal_id == proposal.proposal_id
+        and event.payload.proposal_revision == proposal.proposal_revision
+        and event.payload.proposal_digest == proposal.proposal_digest
+        and event.payload.execution_attempt_id == result.execution_attempt_id
+    )
+    expected_assignments = proposal.assignments
+    if (
+        len(dispatch_events) != len(expected_assignments)
+        or tuple(event.payload.assignment for event in dispatch_events)
+        != expected_assignments
+    ):
+        raise ValueError("specialist dispatches do not match the exact proposal")
+    outcomes = result.assignment_outcomes
+    if tuple(item.assignment_id for item in outcomes) != tuple(
+        item.assignment_id for item in expected_assignments
+    ):
+        raise ValueError("specialist outcomes do not match proposal order")
+    reply_events = {
+        event.event_id: event
+        for event in events
+        if type(event.payload) is CollaborationSpecialistReplyPayload
+        and event.step_id == proposal.step_id
+        and event.payload.execution_attempt_id == result.execution_attempt_id
+    }
+    expected_reply_ids = {
+        item.reply_event_id for item in outcomes if item.reply_event_id is not None
+    }
+    if set(reply_events) != expected_reply_ids:
+        raise ValueError("specialist replies do not match execution outcomes")
+
+    panels: list[Panel] = []
+    for assignment, dispatch_event, outcome in zip(
+        expected_assignments,
+        dispatch_events,
+        outcomes,
+        strict=True,
+    ):
+        dispatch = dispatch_event.payload
+        assert isinstance(dispatch, CollaborationAssignmentDispatchPayload)
+        if (
+            dispatch.assignment != assignment
+            or dispatch.execution_attempt_id != result.execution_attempt_id
+        ):
+            raise ValueError("specialist dispatch identity is inconsistent")
+        durable_assignment = dispatch.assignment
+        reply_event = reply_events.get(outcome.reply_event_id or "")
+        reply = None if reply_event is None else reply_event.payload
+        if reply is not None and (
+            not isinstance(reply, CollaborationSpecialistReplyPayload)
+            or reply.proposal_id != proposal.proposal_id
+            or reply.proposal_revision != proposal.proposal_revision
+            or reply.proposal_digest != proposal.proposal_digest
+            or reply.execution_attempt_id != result.execution_attempt_id
+            or reply.assignment_id != durable_assignment.assignment_id
+            or reply.dispatch_event_id != dispatch_event.event_id
+            or reply.input_ids != durable_assignment.input_ids
+            or reply.mode is not durable_assignment.mode
+            or reply_event is None
+            or reply_event.sender.agent_id != durable_assignment.specialist_id
+        ):
+            raise ValueError("specialist reply identity is inconsistent")
+
+        result_items: list[Section | Field | Notice | Message | Record | ListView] = [
+            Field("Round", str(durable_assignment.round)),
+            Field(
+                "Mode",
+                (
+                    "legacy"
+                    if durable_assignment.mode is None
+                    else durable_assignment.mode.value
+                ),
+            ),
+            _message("Request", durable_assignment.instruction),
+            Field("Status", outcome.outcome.value),
+            Field("Provider calls", str(outcome.submitted_physical_calls)),
+        ]
+        if reply is not None:
+            assert isinstance(reply, CollaborationSpecialistReplyPayload)
+            result_items.extend(
+                (
+                    Field("Assessment", reply.assessment.value),
+                    _message(
+                        "Specialist answer",
+                        reply.message,
+                        role=SemanticRole.AGENT,
+                    ),
+                )
+            )
+        else:
+            result_items.append(
+                Notice(
+                    "No specialist answer was recorded for this terminal outcome.",
+                    label="specialist result",
+                    role=SemanticRole.WARNING,
+                )
+            )
+        panels.append(
+            Panel(
+                durable_assignment.specialist_id,
+                tuple(result_items),
+                state=(
+                    ViewState.COMPLETED
+                    if reply is not None
+                    else (
+                        ViewState.CANCELLED
+                        if outcome.outcome.value == "cancelled"
+                        else ViewState.ERROR
+                    )
+                ),
+            )
+        )
+    return tuple(panels)
+
+
 def project_artifact_application_decision_result(
     result: ArtifactApplicationDecisionResult,
 ) -> Panel:
@@ -815,6 +968,7 @@ __all__ = (
     "project_artifact_application_decision_result",
     "project_collaboration_event",
     "project_lead_turn_result",
+    "project_specialist_results",
     "project_story_commit_decision_result",
     "validate_collaboration_event_order",
 )

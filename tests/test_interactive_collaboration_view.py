@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import unittest
 import subprocess
-from dataclasses import replace
+from dataclasses import fields, replace
 from pathlib import Path
 
 from story_writing_agents.interactive_terminal import InteractiveTerminal
@@ -29,6 +29,8 @@ from story_writing_agents.conversations import (
     CollaborationLeadJudgmentPayload,
     CollaborationLeadSynthesisPayload,
     CollaborationNextAction,
+    CollaborationAssignmentDispatchPayload,
+    CollaborationExecutionResult,
     CollaborationSpecialistAssessment,
     CollaborationSpecialistReplyPayload,
     LeadTurnResult,
@@ -38,6 +40,57 @@ from story_writing_agents.git.story_commit_contracts import StoryCommitDecision
 
 
 class CollaborationViewTests(unittest.TestCase):
+    def test_specialist_result_panels_follow_proposal_order_and_durable_truth(self) -> None:
+        history, proposal, _ = executed_history()
+        panels = _collaboration_view.project_specialist_results(history, proposal)
+        self.assertEqual(tuple(p.title for p in panels),
+            tuple(a.specialist_id for a in proposal.assignments))
+        for panel, assignment in zip(panels, proposal.assignments, strict=True):
+            text = render_component(panel, _capability(CapabilityProfile.LINE, width=120)).text
+            self.assertIn(assignment.instruction, text)
+            self.assertIn(f"Visible reply from {assignment.specialist_id}.", text)
+
+    def test_specialist_results_fail_closed_on_durable_identity_drift(self) -> None:
+        history, proposal, _ = executed_history()
+        dispatches = [i for i, e in enumerate(history)
+            if isinstance(e.payload, CollaborationAssignmentDispatchPayload)]
+        replies = [i for i, e in enumerate(history)
+            if isinstance(e.payload, CollaborationSpecialistReplyPayload)]
+        result_i = next(i for i, e in enumerate(history)
+            if isinstance(e.payload, CollaborationExecutionResult))
+        result = history[result_i].payload
+        dispatch, reply = history[dispatches[0]], history[replies[0]]
+        assert isinstance(result, CollaborationExecutionResult)
+        assert isinstance(dispatch.payload, CollaborationAssignmentDispatchPayload)
+        assert isinstance(reply.payload, CollaborationSpecialistReplyPayload)
+        cases = {
+            "missing_dispatch": tuple(e for i, e in enumerate(history) if i != dispatches[0]),
+            "duplicate_dispatch": (*history[:dispatches[0] + 1], dispatch, *history[dispatches[0] + 1:]),
+        }
+        changed = list(history)
+        changed[dispatches[0]] = replace(dispatch, payload=replace(dispatch.payload,
+            assignment=replace(dispatch.payload.assignment, instruction="drift")))
+        cases["dispatch_content"] = tuple(changed)
+        for label, outcomes in (("missing_outcome", result.assignment_outcomes[1:]),
+                ("outcome_order", tuple(reversed(result.assignment_outcomes)))):
+            changed = list(history); changed[result_i] = replace(history[result_i],
+                payload=replace(result, assignment_outcomes=outcomes)); cases[label] = tuple(changed)
+        for label, changes in (("reply_attempt", {"execution_attempt_id": "wrong"}),
+                ("reply_assignment", {"assignment_id": proposal.assignments[1].assignment_id}),
+                ("reply_dispatch", {"dispatch_event_id": "wrong"}),
+                ("reply_inputs", {"input_ids": ()})):
+            changed = list(history); changed[replies[0]] = replace(reply,
+                payload=replace(reply.payload, **changes)); cases[label] = tuple(changed)
+        drifted_reply = object.__new__(type(reply))
+        for field in fields(reply):
+            object.__setattr__(drifted_reply, field.name, getattr(reply, field.name))
+        object.__setattr__(drifted_reply, "sender", history[0].sender)
+        changed = list(history); changed[replies[0]] = drifted_reply
+        cases["reply_sender"] = tuple(changed)
+        for label, candidate in cases.items():
+            with self.subTest(label=label), self.assertRaises(ValueError):
+                _collaboration_view.project_specialist_results(candidate, proposal)
+
     def test_fresh_lead_and_closed_agent_messages_opt_into_multiline_rendering(
         self,
     ) -> None:

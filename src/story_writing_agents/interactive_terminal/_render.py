@@ -36,6 +36,7 @@ from ._model import (
     display_character_width,
     sanitize_terminal_text,
 )
+from ._advisory_progress import render_detailed_advisory_progress
 
 
 _RESET = "\x1b[0m"
@@ -201,7 +202,10 @@ def render_advisory_progress_frame(frame: int) -> str:
         raise TypeError("frame must be an integer")
     if frame < 0 or frame >= len(_ADVISORY_PROGRESS_FRAMES):
         raise ValueError("frame must identify one advisory progress row")
-    return _ADVISORY_PROGRESS_FRAMES[frame]
+    return render_detailed_advisory_progress(
+        frame,
+        _ADVISORY_PROGRESS_FRAMES[frame],
+    )
 
 
 def render_startup_welcome_frame(

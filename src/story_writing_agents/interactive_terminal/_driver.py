@@ -411,6 +411,7 @@ class RawTerminalDriver:
         "_progress_active",
         "_progress_frame",
         "_progress_renderer",
+        "_progress_rows",
         "_termios_provider",
     )
 
@@ -459,6 +460,7 @@ class RawTerminalDriver:
         self._progress_active = False
         self._progress_frame = 0
         self._progress_renderer: Callable[[int], str] | None = None
+        self._progress_rows = 0
         self._termios_provider = (
             (lambda: _termios) if termios_provider is None else termios_provider
         )
@@ -520,15 +522,22 @@ class RawTerminalDriver:
         self._output_stream.flush()
 
     def _clear_progress_frame(self) -> None:
-        """Clear the current one-row indicator without adding a row."""
+        """Clear every physical row owned by the current indicator."""
 
-        self._write_raw_text("\r\x1b[K")
+        rows = max(1, self._progress_rows)
+        commands: list[str] = []
+        for ordinal in range(rows):
+            commands.append("\r\x1b[K")
+            if ordinal + 1 < rows:
+                commands.append("\x1b[1A")
+        self._write_raw_text("".join(commands))
+        self._progress_rows = 0
 
     def _draw_progress_frame(
         self,
         frame_renderer: Callable[[int], str] | None = None,
     ) -> None:
-        """Draw the current fixed indicator frame on the active row."""
+        """Draw the current safe multiline indicator frame."""
 
         frame_renderer = (
             self._progress_renderer if frame_renderer is None else frame_renderer
@@ -543,13 +552,20 @@ class RawTerminalDriver:
             if frame.startswith(prefix) and frame.endswith(_SGR_RESET):
                 plain_frame = frame[len(prefix) : -len(_SGR_RESET)]
                 break
+        lines = plain_frame.split("\n")
         if (
-            sanitize_terminal_text(plain_frame) != plain_frame
-            or any(character in plain_frame for character in ("\r", "\n", "\x1b"))
+            not lines
+            or any(
+                sanitize_terminal_text(line) != line
+                or any(character in line for character in ("\r", "\x1b"))
+                for line in lines
+            )
             or (plain_frame is frame and "\x1b" in frame)
         ):
-            raise ValueError("progress frame must be safe single-row text")
-        self._write_raw_text(f"\r{frame}")
+            raise ValueError("progress frame must contain safe text rows")
+        display_frame = frame if plain_frame != frame else "\n".join(lines)
+        self._write_raw_text("\r" + display_frame)
+        self._progress_rows = len(lines)
 
     async def run_advisory_progress(
         self,
@@ -567,28 +583,39 @@ class RawTerminalDriver:
             return await operation
 
         def fitted_frame_renderer(frame: int) -> str:
-            """Reserve the rightmost cell while retaining fixed safe copy."""
+            """Reserve the rightmost cell on every safe logical row."""
 
             rendered = frame_renderer(frame)
             if type(rendered) is not str:
                 raise TypeError("frame_renderer must return a string")
             if sanitize_terminal_text(rendered) != rendered or any(
-                character in rendered for character in ("\r", "\n", "\x1b")
+                character in rendered for character in ("\r", "\x1b")
             ):
-                raise ValueError("progress frame must be safe single-row text")
+                raise ValueError("progress frame must be safe text")
             available_width = max(0, capabilities.width - 1)
-            fitted: list[str] = []
-            fitted_width = 0
-            for character in rendered:
-                character_width = display_character_width(character)
-                if fitted_width + character_width > available_width:
-                    break
-                fitted.append(character)
-                fitted_width += character_width
-            fitted_text = "".join(fitted)
-            if not fitted_text or not capabilities.decorative_sgr:
-                return fitted_text
-            return f"{_PROGRESS_SGR_FRAMES[frame]}{fitted_text}{_SGR_RESET}"
+            rows: list[str] = []
+            for logical in rendered.split("\n"):
+                if not logical:
+                    rows.append("")
+                    continue
+                fitted: list[str] = []
+                fitted_width = 0
+                for character in logical:
+                    character_width = display_character_width(character)
+                    if fitted and fitted_width + character_width > available_width:
+                        rows.append("".join(fitted))
+                        fitted = []
+                        fitted_width = 0
+                    if not fitted and character_width > available_width:
+                        continue
+                    fitted.append(character)
+                    fitted_width += character_width
+                if fitted:
+                    rows.append("".join(fitted))
+            fitted_text = "\n".join(rows)
+            if len(rows) == 1 and fitted_text and capabilities.decorative_sgr:
+                return f"{_PROGRESS_SGR_FRAMES[frame]}{fitted_text}{_SGR_RESET}"
+            return fitted_text
 
         self._progress_active = True
         self._progress_frame = 0
@@ -1053,6 +1080,8 @@ class RawTerminalDriver:
         while True:
             await asyncio.sleep(_PROGRESS_INTERVAL_SECONDS)
             self._progress_frame = (self._progress_frame + 1) % _PROGRESS_FRAME_COUNT
+            if self._progress_rows > 1:
+                self._clear_progress_frame()
             self._draw_progress_frame(frame_renderer)
 
     def capabilities(self) -> TerminalCapabilities:

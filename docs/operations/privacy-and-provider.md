@@ -578,20 +578,39 @@ finalization.
 
 ## Agent-context progress privacy
 
-The optional context lifecycle observer and any caller projection contain
+The optional public context lifecycle observer and any caller projection contain
 only validated scope and operation identities, fixed lifecycle kinds,
 nonnegative counters, and an optional truncation boolean. They have no field
 for prompts, search queries, candidates, excerpts, mandatory-reference bodies,
 provider responses, source or reference paths, source digests, private agent
 state, exception details, or provider-thread identities. Debate events add only
 the canonical agent, phase, and round needed to distinguish logical
-invocations.
+invocations. This content-free `ContextExecutionEvent` contract remains the
+supported Python observer.
+
+Supported runtime/session Lead methods separately expose an additive
+keyword-only `action_progress_sink` for package-internal-typed, process-local
+action events. They contain exact SEARCH query literals, requested source kinds,
+an optional validated workspace-relative artifact prefix, and completion
+locators, ranges, truncation, and UTF-8 byte counts. READ trace edges contain
+safe relative locators, exact whole/line/record boundaries, and completion byte
+counts. They have no source snippets or excerpts, provider answers, absolute
+paths, credentials, or hidden reasoning, and are not a supported general
+observer callback, durable event, ledger, or compatibility surface. Their type
+is not root- or facade-exported, and the interactive controller is the intended
+consumer. Python callers can nevertheless supply this callback and retain its
+events; the caller then owns access control, retention, and cleanup for that
+copy.
 
 Observer delivery adds no provider call, result field, story content,
 conversation event, debate record, or second context ledger. The component has
-no supported post-hoc observer inspection. A consumer may render compact facts
-into terminal output, where an emulator, multiplexer, or remote terminal may
-retain them in scrollback. A Python caller may deliberately retain
+no supported post-hoc observer inspection. A consumer may render public compact
+facts into terminal output, where an emulator, multiplexer, or remote terminal
+may retain them in scrollback. The installed shell's detailed frame is actively
+redrawn and cleared, but that is presentation cleanup rather than secure
+erasure: terminal capture, scrollback, multiplexers, remote terminals, or
+accessibility tooling may retain its exact queries and relative locators/ranges.
+A Python caller may deliberately retain
 callback values, in which case that caller owns access control, retention, and
 cleanup for the new copy.
 
