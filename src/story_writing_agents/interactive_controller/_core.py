@@ -2057,6 +2057,12 @@ class InteractiveController:
                 recover_authentication=(
                     getattr(self._auth_coordinator, "recover", None)
                 ),
+                read_events=lambda conversation_id: (
+                    self._conversation_storage_services.event_store.read(
+                        self._attached_session_id,
+                        conversation_id,
+                    )
+                ),
             )
             return adapter.submit(
                 self._focused_conversation.conversation_id,

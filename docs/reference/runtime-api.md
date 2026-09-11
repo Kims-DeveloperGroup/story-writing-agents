@@ -243,6 +243,8 @@ await StoryRuntime.lead_turn(
     conversation_id: str,
     text: str,
     context_event_sink: Callable[[ContextExecutionEvent], None] | None = None,
+    *,
+    action_progress_sink: ContextActionProgressSink | None = None,
 ) -> LeadTurnResult
 
 await StoryRuntime.propose_specialist_advisory(
@@ -252,6 +254,7 @@ await StoryRuntime.propose_specialist_advisory(
     text: str,
     context_event_sink: Callable[[ContextExecutionEvent], None] | None = None,
     *,
+    action_progress_sink: ContextActionProgressSink | None = None,
     authoring_scope: AuthoringScope | None = None,
     review_basis: ReviewBasis | None = None,
 ) -> LeadTurnResult
@@ -259,10 +262,14 @@ await StoryRuntime.propose_specialist_advisory(
 await StoryRuntime.decide_lead_recommendation(
     decision: LeadRecommendationDecision,
     context_event_sink: Callable[[ContextExecutionEvent], None] | None = None,
+    *,
+    action_progress_sink: ContextActionProgressSink | None = None,
 ) -> LeadTurnResult
 
 await StoryRuntime.decide_lead_step(
     decision: LeadStepDecision,
+    *,
+    action_progress_sink: ContextActionProgressSink | None = None,
 ) -> LeadDecisionResult
 ```
 
@@ -877,6 +884,20 @@ exception-raising observers fail under the agent-context lifecycle rules. The
 events contain fixed identities, states, and bounded counts—not prompts,
 queries, paths, excerpts, provider responses, or credentials.
 
+Do not confuse this public content-free observer with detailed action progress.
+The supported `StoryRuntime` and `RuntimeSession` Lead methods above and below
+expose an additive keyword-only `action_progress_sink` seam for
+package-internal-typed events. Its sink type is not exported from the package
+root or `agent_context` facade, and the seam is unsupported for general
+application observation; the interactive controller is its intended consumer.
+Python callers can still supply and retain the callback events and then own
+their access control, retention, and cleanup. Events carry exact SEARCH query
+text, requested resource/source kinds and optional relative scope prefix, plus
+SEARCH/READ relative locators, boundaries, counts, and truncation. They carry
+no snippets, provider answers, absolute paths, credentials, or hidden
+reasoning. Terminal capture or scrollback may nevertheless retain those exact
+queries and relative locators.
+
 ## Bound session methods
 
 ```python
@@ -926,6 +947,8 @@ await RuntimeSession.lead_turn(
     conversation_id: str,
     text: str,
     context_event_sink: Callable[[ContextExecutionEvent], None] | None = None,
+    *,
+    action_progress_sink: ContextActionProgressSink | None = None,
 ) -> LeadTurnResult
 await RuntimeSession.propose_specialist_advisory(
     conversation_id: str,
@@ -933,16 +956,21 @@ await RuntimeSession.propose_specialist_advisory(
     text: str,
     context_event_sink: Callable[[ContextExecutionEvent], None] | None = None,
     *,
+    action_progress_sink: ContextActionProgressSink | None = None,
     authoring_scope: AuthoringScope | None = None,
     review_basis: ReviewBasis | None = None,
 ) -> LeadTurnResult
 await RuntimeSession.decide_lead_recommendation(
     decision: LeadRecommendationDecision,
     context_event_sink: Callable[[ContextExecutionEvent], None] | None = None,
+    *,
+    action_progress_sink: ContextActionProgressSink | None = None,
 ) -> LeadTurnResult
 
 await RuntimeSession.decide_lead_step(
     decision: LeadStepDecision,
+    *,
+    action_progress_sink: ContextActionProgressSink | None = None,
 ) -> LeadDecisionResult
 ```
 

@@ -12,6 +12,7 @@ from ..conversations import (
     ArtifactApplicationDecisionKind,
     ArtifactApplicationDecisionResult,
     CollaborationConfirmationDecision,
+    CollaborationEvent,
     CollaborationStepState,
     LeadDecisionResult,
     LeadRecommendationDecision,
@@ -23,6 +24,7 @@ from ..conversations import (
     StoryCommitRequestPayload,
 )
 from ..interactive_terminal import (
+    AdvisoryProgressRequest,
     Choice,
     ControlOutcomeKind,
     InteractiveAdvisoryProgress,
@@ -38,6 +40,7 @@ from ..interactive_terminal import (
 from ..interactive_terminal._collaboration_view import (
     project_artifact_application_decision_result,
     project_lead_turn_result,
+    project_specialist_results,
     project_story_commit_decision_result,
 )
 from ..errors import ProviderAuthenticationRequiredError
@@ -129,6 +132,9 @@ class InteractiveLeadAdapter:
         "_semantic_output",
         "_session",
         "_recover_authentication",
+        "_read_events",
+        "_pending_elapsed",
+        "_pending_specialist_panels",
     )
 
     def __init__(
@@ -141,6 +147,7 @@ class InteractiveLeadAdapter:
         semantic_output: InteractiveSemanticOutput,
         *,
         recover_authentication: Callable[[str], bool] | None = None,
+        read_events: Callable[[str], tuple[CollaborationEvent, ...]] | None = None,
     ) -> None:
         if not isinstance(session, RuntimeSession):
             raise TypeError("session must be a RuntimeSession")
@@ -153,12 +160,21 @@ class InteractiveLeadAdapter:
         self._prompt = prompt
         self._semantic_output = semantic_output
         self._recover_authentication = recover_authentication
+        self._read_events = read_events
+        self._pending_elapsed: str | None = None
+        self._pending_specialist_panels: tuple[object, ...] = ()
 
     def submit(self, conversation_id: str, text: str) -> bool:
         """Run one literal lead turn; return true only for call-local EOF."""
 
         try:
-            turn = self._run_turn(self._session.lead_turn(conversation_id, text))
+            turn = self._run_turn(
+                self._session.lead_turn(
+                    conversation_id,
+                    text,
+                    action_progress_sink=self._progress.observe,
+                )
+            )
             return self._present_and_decide(turn)
         except ProviderAuthenticationRequiredError:
             self._semantic_output.write_component(
@@ -170,6 +186,7 @@ class InteractiveLeadAdapter:
                     state=ViewState.ERROR,
                 )
             )
+            self._write_elapsed()
             return False
         except (asyncio.CancelledError, KeyboardInterrupt):
             self._semantic_output.write_component(
@@ -180,13 +197,18 @@ class InteractiveLeadAdapter:
                     state=ViewState.CANCELLED,
                 )
             )
+            self._write_elapsed()
             return False
 
     def _present_and_decide(self, turn: LeadTurnResult) -> bool:
         """Render typed turns and consume only explicit structured controls."""
 
         while True:
+            for panel in self._pending_specialist_panels:
+                self._semantic_output.write_component(panel)
+            self._pending_specialist_panels = ()
             self._semantic_output.write_component(project_lead_turn_result(turn))
+            self._write_elapsed()
             if turn.state in {
                 CollaborationStepState.OUTCOME_UNKNOWN,
                 CollaborationStepState.RECOVERY_REQUIRED,
@@ -278,6 +300,7 @@ class InteractiveLeadAdapter:
                         action_digest=recommendation.action_digest, kind=kind,
                         revision_request=revision_request,
                     ),
+                    action_progress_sink=self._progress.observe,
                 ))
                 continue
             proposal = turn.proposal
@@ -294,8 +317,31 @@ class InteractiveLeadAdapter:
                 revision_request=revision_request,
             )
             result = self._run_decision(
-                self._session.decide_lead_step(decision)
+                self._session.decide_lead_step(
+                    decision,
+                    action_progress_sink=self._progress.observe,
+                ),
+                requests=(
+                    tuple(
+                        AdvisoryProgressRequest(
+                            assignment.specialist_id,
+                            f"assignment_{assignment.assignment_id}",
+                            assignment.instruction,
+                        )
+                        for assignment in proposal.assignments
+                    )
+                    if kind is CollaborationConfirmationDecision.CONFIRM
+                    else ()
+                ),
             )
+            if (
+                kind is CollaborationConfirmationDecision.CONFIRM
+                and self._read_events is not None
+            ):
+                self._pending_specialist_panels = project_specialist_results(
+                    self._read_events(turn.conversation_id),
+                    proposal,
+                )
             turn = result.turn
 
     def _decide_artifact_application(self, turn: LeadTurnResult) -> bool:
@@ -457,6 +503,14 @@ class InteractiveLeadAdapter:
             )
         )
 
+    def _write_elapsed(self) -> None:
+        if self._pending_elapsed is None:
+            return
+        self._semantic_output.write_component(
+            Notice(f"Elapsed: {self._pending_elapsed}", label="duration")
+        )
+        self._pending_elapsed = None
+
     def _run_operation(self, operation: Awaitable[object]) -> object:
         """Keep the operation pending while progress yields terminal ownership."""
 
@@ -504,7 +558,11 @@ class InteractiveLeadAdapter:
     def _run_turn(self, operation: Awaitable[LeadTurnResult]) -> LeadTurnResult:
         """Complete one lead turn and progress cleanup before returning."""
 
-        result = self._run_operation(operation)
+        self._progress.begin()
+        try:
+            result = self._run_operation(operation)
+        finally:
+            self._pending_elapsed = self._progress.finish()
         if type(result) is not LeadTurnResult:
             raise TypeError("lead turn returned an invalid result")
         return result
@@ -512,10 +570,16 @@ class InteractiveLeadAdapter:
     def _run_decision(
         self,
         operation: Awaitable[LeadDecisionResult],
+        *,
+        requests: tuple[AdvisoryProgressRequest, ...] = (),
     ) -> LeadDecisionResult:
         """Complete one decision and progress cleanup before returning."""
 
-        result = self._run_operation(operation)
+        self._progress.begin(requests)
+        try:
+            result = self._run_operation(operation)
+        finally:
+            self._pending_elapsed = self._progress.finish()
         if type(result) is not LeadDecisionResult:
             raise TypeError("lead decision returned an invalid result")
         return result

@@ -111,8 +111,9 @@ class RuntimeExecutionRetirementTests(unittest.TestCase):
                 "conversation_id",
                 "text",
                 "context_event_sink",
+                "action_progress_sink",
             ),
-            StoryRuntime.decide_lead_step: ("self", "decision"),
+            StoryRuntime.decide_lead_step: ("self", "decision", "action_progress_sink"),
             StoryRuntime.decide_artifact_application: ("self", "decision"),
             StoryRuntime.decide_story_commit: ("self", "decision"),
             StoryRuntime.propose_specialist_advisory: (
@@ -122,6 +123,7 @@ class RuntimeExecutionRetirementTests(unittest.TestCase):
                 "specialist_id",
                 "text",
                 "context_event_sink",
+                "action_progress_sink",
                 "authoring_scope",
                 "review_basis",
             ),
@@ -130,8 +132,9 @@ class RuntimeExecutionRetirementTests(unittest.TestCase):
                 "conversation_id",
                 "text",
                 "context_event_sink",
+                "action_progress_sink",
             ),
-            RuntimeSession.decide_lead_step: ("self", "decision"),
+            RuntimeSession.decide_lead_step: ("self", "decision", "action_progress_sink"),
             RuntimeSession.decide_artifact_application: ("self", "decision"),
             RuntimeSession.decide_story_commit: ("self", "decision"),
             RuntimeSession.propose_specialist_advisory: (
@@ -140,6 +143,7 @@ class RuntimeExecutionRetirementTests(unittest.TestCase):
                 "specialist_id",
                 "text",
                 "context_event_sink",
+                "action_progress_sink",
                 "authoring_scope",
                 "review_basis",
             ),
@@ -157,7 +161,7 @@ class RuntimeExecutionRetirementTests(unittest.TestCase):
                     self.assertEqual(
                         tuple(name for name, parameter in signature.parameters.items()
                               if parameter.kind is inspect.Parameter.KEYWORD_ONLY),
-                        ("authoring_scope", "review_basis"),
+                        ("action_progress_sink", "authoring_scope", "review_basis"),
                     )
 
 

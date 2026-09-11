@@ -185,10 +185,10 @@ current production behavior.
 | #372 compact completion-free messages | Implemented: generated `COMPLETED` state is visually silent across the semantic renderer, while actionable states and semantic result roles remain textual. Chat-block execution metadata occupies a subordinate default-styled row; routine direct/retrieval details use `Provider / Model / Effort · Thread`, adding only exceptional `pending` and `launch override` qualifiers. Literal content is never rewritten, and `/agents` and `/status` retain full provenance. |
 | #105 agent reply presentation | Implemented: direct, retrieval, transcript, and focused-history agent replies use a presentation-only strict JSON object/array projection with exact unchanged fallback cases and two-space Unicode-preserving output; stored/provider content remains unchanged. Generic inline `AGENT` output retains bold terminal-default foreground styling, while chat blocks accent only the speaker header. |
 | #106 transient settings UI | Implemented: settings picker and prompt reads clear capable transient rows, suppress duplicate fallback finals, and keep nested Escape silent. #142 later makes this lifecycle universal for capable submitted input. |
-| #111 advisory progress indicator | Implemented: one advisory and consensus waiting indicator runs only on capable raw streams, including `NO_COLOR`; callback, non-TTY, `TERM=dumb`, and uncertain-capability paths remain silent, and no general animation or `[routing]`/`[waiting]` record is introduced. #331 supersedes its one-cell presentation. |
+| #111 advisory progress indicator | Implemented: advisory and consensus waiting progress runs only on capable raw streams, including `NO_COLOR`; callback, non-TTY, `TERM=dumb`, and uncertain-capability paths remain silent, and no general `[routing]`/`[waiting]` record is introduced. #331 superseded its original one-cell presentation; detailed Lead/specialist progress is now the multiline metadata-bearing frame described below. |
 | #321 Settings option progress | Implemented: Provider authentication probing and Model/Effort catalog discovery reuse the terminal-owned progress lifecycle after the preceding capable picker clears; the indicator clears before the completed picker, fallback remains silent, and option reads, failures, ordering, cancellation, and persistence remain unchanged. |
-| #331 visible loading row | Implemented: every existing capable progress consumer shows one width-fitted transient row with a text-free eight-cell block-shade shimmer and fixed bold ANSI color cycle; complete-row clear/redraw, spatially equivalent `NO_COLOR`, silent fallback, task joining, and failure precedence remain unchanged. |
-| #340 wider loading row | Implemented: the same text-free block-shade shimmer now uses a sixteen-cell track when width permits, while preserving width fitting, rightmost-cell reservation, color, and spatially equivalent `NO_COLOR` motion. |
+| #331 visible loading row | Implemented: generic, startup, picker, consensus, and Settings progress consumers show one width-fitted transient row with a text-free eight-cell block-shade shimmer and fixed bold ANSI color cycle; complete-row clear/redraw, spatially equivalent `NO_COLOR`, silent fallback, task joining, and failure precedence remain unchanged. Detailed Lead/specialist progress instead shares an eight-cell shimmer with a duration and multiline exact-metadata cards. |
+| #340 wider loading row | Implemented: the generic text-free block-shade shimmer now uses a sixteen-cell track when width permits, while preserving width fitting, rightmost-cell reservation, color, and spatially equivalent `NO_COLOR` motion. Detailed Lead/specialist progress preserves its eight-cell bar alongside `HH:MM:SS · Working`. |
 | #332 startup loading progress | Implemented: capable interactive startup shows the same text-free colorful shimmer during conversation-storage activation before the welcome and during one continuous authenticated CLI-context/backend/controller preparation span before the lobby; both rows clear before the next view, fallback is silent, and startup copy, errors, ordering, and ownership transfer remain unchanged. |
 | #333 delayed picker progress | Implemented: native authentication status probes and persisted session/conversation reads before omitted resume pickers run off-loop beneath the same text-free colorful shimmer; progress clears before refreshed authentication, picker, empty, or error views, while choices, fresh-read guarantees, cancellation, mapping, and silent fallback remain unchanged. |
 | #115 settings lifecycle | Implemented: capable committed `/settings` input is cleared from the live display without deleting its history entry; dirty-only Apply and Discard use transient selectable YES/NO confirmations; capable confirmation context shows only changed Current/Pending fields with `(Changed)` cues, while a no-changes panel remains defensive internal projection; fallback paths preserve visible committed input and report no cleanup they cannot perform. #391 defines the current capable-frame ownership and fallback omission. |
@@ -1839,26 +1839,47 @@ states remain distinguishable in plain output and under `TERM=dumb`.
 
 ### Advisory and Settings progress indicator
 
-During advisory turns, consensus waits, and Settings Provider/Model/Effort
-option preparation, a capable raw stream may show one fixed loading row. Its
-bright block and graded trail travel across a sixteen-cell text-free track and
-back. ANSI-capable terminals cycle a fixed bold cyan, blue, magenta, red,
-yellow, and green palette as it moves. The existing raw driver owns the
-indicator state, fits it without addressing the rightmost cell, clears the complete row before
-each semantic or provider-result write, and
-redraws it while the operation remains pending. Completion, cancellation, and
-failure join the operation and indicator tasks, then clear the row before
-their normal record or completed picker is rendered. `NO_COLOR` retains the
-same spatial shimmer without SGR; the indicator adds no text, alternate screen,
-or background detection.
+During Lead advisory turns, a capable raw stream shows one transient multiline
+frame. A shared first row combines an eight-cell block-shade animation with a
+monotonic `HH:MM:SS` duration and `Working`. Ordered agent cards beneath it
+show each exact specialist request, `Preparing context`, or the latest indexed
+SEARCH/READ action. SEARCH starts expose exact literal queries, requested
+resource/source kinds, and an optional safe relative artifact scope prefix;
+completions expose safe relative locators, exact line/record ranges, byte
+counts, empty results, and truncation. READ starts expose safe relative locators
+and exact whole/line/record boundaries; completions add byte counts. No
+snippets, excerpts, provider answers, absolute paths, credentials, or hidden
+reasoning enter the frame.
+
+The existing raw driver redraws and clears the complete multiline frame before
+semantic or provider-result output. ANSI-capable terminals use the fixed color
+cycle; `NO_COLOR` uses the same plain spatial frame without SGR.
+Authentication recovery temporarily releases raw-terminal ownership without
+resetting the monotonic duration. Completion, cancellation, and failure join
+operation and indicator tasks before cleanup.
+
+Intermediate cards are transient. After a confirmed consultation, persistent
+specialist panels follow proposal order. Each retains the exact request and
+terminal status; success also shows the assessment and exact answer, while
+failed/cancelled outcomes explicitly say that no answer was recorded. Projection
+fails closed unless the durable proposal, dispatches, execution result, ordered
+assignment outcomes, and referenced replies form one unambiguous identity
+chain. The Lead panel follows, then one persistent `Elapsed: HH:MM:SS` notice.
+Terminal cleanup is not secure erasure: capture or scrollback may retain exact
+query and relative locator/range text.
+
+Consensus waits and generic startup, picker, and Settings Provider/Model/Effort
+preparation retain the established one-row text-free indicator. It adds no
+alternate screen or background detection.
 
 Callback construction and stream paths without raw capability—including
 non-TTY, `TERM=dumb`, non-POSIX, missing, or uncertain capability—await the
 same awaitable silently. The installed CLI's TTY guard still rejects
 non-TTY shell entry before controller work. A provider/operation failure wins
 over a simultaneous indicator failure; an indicator-only failure is converted
-to the existing internal error after cleanup. Only advisory/consensus awaits
-and the three Settings option-preparation paths use this animation lifecycle;
+to the existing internal error after cleanup. Only Lead advisory/consultation
+waits, consensus awaits, and the generic startup, picker, and three Settings
+option-preparation paths use this animation lifecycle;
 it remains unavailable to other views and operations.
 
 ## Compatibility contract
@@ -2381,7 +2402,8 @@ provider-native threads.
 | Ranged text viewer | Exact `str`, display-name, strict-UTF-8, private 8 MiB source, exact 65,536-line and 16 MiB complete-fallback boundaries, initial-line, empty/final-LF validation before terminal access; ordinary and Shift+Arrow clamped selection including reversal; configured VINTR/VEOF raw-byte disable/decode/round-trip classification and priority; singleton/range commit; distinct cancel/interrupt/EOF; one row per logical line; safe CR/U+2028/control display; bounded-prefix plain/ANSI current and selected cues; wide/combining/ellipsis behavior; suffix-independent redraw work; bounded height and next-nonexit-key resize; exact untruncated `START-END` or `/cancel` fallback with reverse normalization and visible retry; content-free results; close-on-select/cancel, repeat-open disposal; and no workspace/artifact/runtime/controller dependencies. |
 | Settings | Two-snapshot current/pending separation; canonical twelve-key system persistence; form-only title/context/guidance/choice/state-summary/description/value regions without generic bracket labels; exact complete seven-row clean Language/Persona/Maximum debate rounds/Conversation storage/Conversation RAG/Message details/Agents root plus complete nine-row dirty root with Apply Changes/Discard Changes; seven-row nested windows and absolute `Choices N/M`; nested RAG Provider Disabled/Local and Automatic Off/On invariants; Settings-scoped Current/Pending summaries with complete-picker physical-cell alignment, exact 20-cell inline/19-cell stacked behavior, untruncated wrapping, live/fallback parity, and color-independent meaning; stacked descriptions and one-level Escape hierarchy; capable-only changed comparison inside the single transient confirmation frame, complete cleanup on all exits/failures, no separate durable comparison panel, and line-fallback omission; exact retained-editor, Agents profile, launch-override, discovery, SQLite readiness, guarded persistence, rollback, activation, speaker/detail, and fallback contracts; Message-details-only live presentation persistence; RAG-only system-config persistence with no authentication, storage selection/readiness, backend/runtime prepare/commit/discard/activation, route/thread, composition, probe/install, catalog, subprocess, socket, network, or live-RAG work; full-path mixed activation with startup-fixed storage and RAG; exact applicable live, RAG-next-shell, and storage-restart results; provider-switch fresh-thread/story-session-context guidance; downgrade rejection by older closed schemas; and unchanged global `/auth`, generic picker, precedence, public, machine, parser, search, debate, consensus, and storage-adapter contracts. |
 | Authentication startup | Exact Codex and resolved-executable Antigravity probes and logins; text-free storage-activation progress before welcome; four states; disabled unavailable choice; bounded null-stream monitoring while native login remains open; fresh-status-only authority; exact-child bounded stop/reap and automatic return; at most one provider-controlled code paste with no extra exit/confirmation; initial/effective-route hard gates; `/auth`; absent-only default policy; settings integration; inherited terminal/environment/root/process group; no output/URL/code/account/token/credential capture; four physical-width-aware welcome frames with exactly three 0.4-second waits; bold cyan/magenta/yellow/blue/green wordmark spans with local resets; one continuous post-authentication context/backend/controller progress span; reduced-motion one-final-colored-welcome-frame path; 0.8-second transient notices; right-margin/resize safety; foreground-process-group and termios restoration; no cursor hiding or alternate screen; `NO_COLOR` preserves progress motion without SGR while selecting a static plain welcome; callback/non-TTY/`TERM=dumb`/non-POSIX/uncertain paths use silent progress and a static welcome. |
-| Startup, picker, advisory, and Settings progress | One width-fitted, text-free sixteen-cell block-shade shimmer with a fixed bold cyan/blue/magenta/red/yellow/green ANSI color cycle for capable raw startup storage and authenticated runtime preparation, native authentication probes, persisted omitted-resume preparation, advisory and consensus awaitables, plus Provider/Model/Effort option preparation; rightmost-cell reservation; spatially equivalent `NO_COLOR`; complete-row clear/redraw around semantic writes; clear and task joining before welcome, lobby, refreshed authentication, resume picker, empty/error result, final/cancel/error record, or completed Settings picker; silent callback/non-TTY/`TERM=dumb`/uncertain fallback; operation-error precedence; indicator-only internal-error mapping; no false completion, status copy, `[routing]`/`[waiting]` records, or reusable animation API. |
+| Generic, startup, picker, consensus, and Settings progress | One width-fitted, text-free sixteen-cell block-shade shimmer with a fixed bold cyan/blue/magenta/red/yellow/green ANSI color cycle for capable raw startup storage and authenticated runtime preparation, native authentication probes, persisted omitted-resume preparation, consensus awaitables, and Provider/Model/Effort option preparation; rightmost-cell reservation; spatially equivalent `NO_COLOR`; complete-row clear/redraw around semantic writes; clear and task joining before welcome, lobby, refreshed authentication, resume picker, empty/error result, final/cancel/error record, or completed Settings picker; silent callback/non-TTY/`TERM=dumb`/uncertain fallback; operation-error precedence; indicator-only internal-error mapping; no false completion, status copy, `[routing]`/`[waiting]` records, or reusable animation API. |
+| Detailed Lead and specialist progress | One transient multiline frame on capable raw streams: an eight-cell animated bar with monotonic `HH:MM:SS · Working`, followed by ordered agent cards containing exact requests and SEARCH/READ resource, scope, locator, and boundary metadata; ANSI and plain `NO_COLOR` redraw and clear the complete frame; terminal callback construction and line-mode presentation remain silent; authentication recovery preserves the timer; durable specialist panels, Lead result, and elapsed notice follow cleanup. Specialist projection requires one exact durable identity chain and fails closed on missing, duplicated, reordered, or mismatched authority. Exact queries and safe relative locators/ranges may remain in terminal capture or scrollback, while snippets, provider answers, absolute paths, credentials, and hidden reasoning remain excluded. |
 | Parser and mutation boundary | The exact visible committed main buffer reaches the established parser once; previews, recall, replacement, highlight, rerender, cancel, Ctrl-C, empty VEOF, and physical EOF cause no parser/runtime/storage call. |
 | Artifact-reference activation | Provider-bound Lead conversation and agent-targeted CHAT composer spans only; escaped-dollar inertness; fresh sorted reference-source projection; `$` whole-file completion; exact `$$` panel before a third key/newline; Up/Down highlight; Enter/Tab viewer entry; `{` transition to direct `$${path}` text; one-write and bracketed-paste preservation; multiple ordered indicators; exact marker replacement/cursor; capable same-read return; fallback post-submission activation and second confirmation; empty/stale/unreadable/unavailable/invalid content-free failures; exact origin/focus/mode restoration; no submit/history/residue; listing-to-view stale detection; independent current runtime capture without viewer-byte reuse; and per-agent enforcement after later normal submission. |
 | Composer/confirmation | Ordered semantic input facts and focused prompt; equivalent width-aware plain/ANSI rendering; fallback-once and trusted-live routing; exact `/send`, `/cancel`, `/say`, yes/no/default, invalid retry, Ctrl-C, and EOF results; semantic composer events and hint cardinality; history isolation; reserved-key no-ops; no full-screen or persistent state. |

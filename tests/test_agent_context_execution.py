@@ -54,6 +54,10 @@ from story_writing_agents.agent_context.planning import (
     ContextPlanningPolicy,
     MandatoryReferenceReservation,
 )
+from story_writing_agents.agent_context.progress import (
+    ContextActionProgressEvent,
+    ContextActionProgressKind,
+)
 from story_writing_agents.agent_context.service import (
     AgentContextService,
     ContextExecutionEvent,
@@ -561,6 +565,7 @@ class ContextExecutionTestCase(unittest.IsolatedAsyncioTestCase):
         authorities: dict[str, object] | None = None,
         answer_validator: Callable[[str, object], object] | None = None,
         event_sink: ContextExecutionEventSink | None = None,
+        progress_sink: Callable[[ContextActionProgressEvent], None] | None = None,
         phase: str | None = None,
         round_number: int | None = None,
     ) -> ContextInvocationResult:
@@ -575,6 +580,7 @@ class ContextExecutionTestCase(unittest.IsolatedAsyncioTestCase):
             provider,
             answer_validator=answer_validator,  # type: ignore[arg-type]
             event_sink=event_sink,
+            progress_sink=progress_sink,
             phase=phase,
             round_number=round_number,
             **collaborators,  # type: ignore[arg-type]
@@ -847,6 +853,37 @@ class ContextExecutionValueTests(ContextExecutionTestCase):
 
 
 class ContextExecutionLifecycleTests(ContextExecutionTestCase):
+    async def test_search_and_read_emit_exact_content_free_transient_progress(self) -> None:
+        self.publish()
+        request = self.request(invocation_kind=ContextInvocationKind.LEAD,
+            result_contract=_LEAD_RESULT_CONTRACT, physical_call_limit=3)
+        progress: list[ContextActionProgressEvent] = []
+        result = await self.invoke(
+            _ScriptedProvider((_search, _read_search_hit, _lead_answer_with_read)),
+            request, progress_sink=progress.append)
+        self.assertEqual(result.answer,
+            '{"kind":"answer","message":"Visible grounded lead answer.","proposal":null}')
+        self.assertEqual(tuple(item.kind for item in progress), (
+            ContextActionProgressKind.SEARCH_STARTED,
+            ContextActionProgressKind.SEARCH_COMPLETED,
+            ContextActionProgressKind.READ_STARTED,
+            ContextActionProgressKind.READ_COMPLETED))
+        search_start, search_done, read_start, read_done = progress
+        self.assertEqual((search_start.agent_id, search_start.operation_id,
+            search_start.action_index), (LEAD_ORCHESTRATOR, request.operation_id, 1))
+        self.assertEqual(search_start.queries[0].text, "needle")
+        self.assertEqual(search_start.queries[0].source_kinds,
+            (ContextSourceKind.WRITING_ARTIFACT,))
+        source = search_done.sources[0]
+        self.assertEqual(source.locator, "part-01/chapter-01.md")
+        self.assertEqual(source.boundary, read_start.sources[0].boundary)
+        self.assertEqual(read_done.sources[0].utf8_bytes,
+            len(_PRIVATE_ARTIFACT.encode("utf-8")))
+        rendered = repr(progress)
+        for forbidden in (_PRIVATE_ARTIFACT, _PRIVATE_ANSWER,
+                          str(self.workspace.root), "PRIVATE_ARTIFACT"):
+            self.assertNotIn(forbidden, rendered)
+
     async def test_lead_search_read_json_answer_uses_exact_dynamic_contract_and_limit(
         self,
     ) -> None:

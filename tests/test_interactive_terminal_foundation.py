@@ -22,6 +22,13 @@ from unittest import mock
 import story_writing_agents
 from story_writing_agents import interactive_line_editor as editor_facade
 from story_writing_agents import interactive_terminal as terminal_facade
+from story_writing_agents.interactive_terminal import _advisory_progress
+from story_writing_agents.agent_context.actions import ContextSourceBoundary, ContextSourceBoundaryKind
+from story_writing_agents.agent_context.manifest import ContextSourceKind
+from story_writing_agents.agent_context.progress import (
+    ContextActionProgressEvent, ContextActionProgressKind,
+    ContextActionProgressQuery, ContextActionProgressSource,
+)
 from story_writing_agents.interactive_line_editor import (
     InteractiveMainLineEditor,
     SlashCommandSuggestion,
@@ -1114,6 +1121,29 @@ class PureControlFoundationTests(unittest.TestCase):
 
 
 class RenderingFoundationTests(unittest.TestCase):
+    def test_detailed_progress_cards_render_exact_safe_facts_and_finish_clears_state(self) -> None:
+        state = _advisory_progress.AdvisoryProgressState()
+        state.begin((_advisory_progress.AdvisoryProgressRequest("plot_architect", "op", "Check outline."),))
+        state.observe(ContextActionProgressEvent(ContextActionProgressKind.SEARCH_STARTED,
+            "plot_architect", "op", 1, queries=(ContextActionProgressQuery(
+                "opening", (ContextSourceKind.WRITING_ARTIFACT,), "core_documents"),)))
+        rendered = state.render(0)
+        self.assertIn("Request: Check outline.", rendered)
+        self.assertIn('Searching for: "opening"', rendered)
+        self.assertIn("Scope: writing_artifact under core_documents", rendered)
+        boundary = ContextSourceBoundary(ContextSourceBoundaryKind.ARTIFACT_LINES, start=2, end=4)
+        state.observe(ContextActionProgressEvent(ContextActionProgressKind.READ_STARTED,
+            "plot_architect", "op", 2, sources=(ContextActionProgressSource(
+                ContextSourceKind.WRITING_ARTIFACT, "core_documents/global_outline.md", boundary),)))
+        self.assertIn("Reading: core_documents/global_outline.md · lines 2–4", state.render(1))
+        state.finish()
+        self.assertIsNone(state.started_at); self.assertEqual(state.requests, ()); self.assertEqual(state.events, {})
+
+    def test_auth_recovery_pumps_share_one_monotonic_elapsed_interval(self) -> None:
+        state = _advisory_progress.AdvisoryProgressState()
+        with mock.patch.object(_advisory_progress.time, "monotonic", side_effect=(10.0, 14.0, 19.0)):
+            state.begin(); self.assertEqual(state.elapsed_seconds(), 4)
+            state.begin(); self.assertEqual(state.finish(), 9)
     def test_advisory_progress_frames_are_fixed_and_strict(self) -> None:
         self.assertEqual(
             tuple(
@@ -2045,9 +2075,9 @@ class CapabilityAndDriverFoundationTests(unittest.TestCase):
             return "done"
 
         for width, expected in (
-            (10, "[█▓▒░░░░░"),
-            (7, "[█▓▒░░"),
-            (1, ""),
+            (10, ("[█▓▒░░░░░", "░░░░░░░░]")),
+            (7, ("[█▓▒░░", "░░░░░░", "░░░░░]")),
+            (1, ()),
         ):
             with self.subTest(width=width):
                 driver, output = self._progress_driver()
@@ -2066,7 +2096,21 @@ class CapabilityAndDriverFoundationTests(unittest.TestCase):
                         )
                     )
                 self.assertEqual(result, "done")
-                self.assertEqual(output.getvalue(), f"\r{expected}\r\x1b[K")
+                drawn = "\n".join(expected)
+                cleared = "".join("\r\x1b[K" + ("\x1b[1A" if i + 1 < len(expected) else "")
+                    for i in range(max(1, len(expected))))
+                self.assertEqual(output.getvalue(), f"\r{drawn}{cleared}")
+
+    def test_multiline_advisory_progress_wraps_narrow_unicode_rows(self) -> None:
+        driver, output = self._progress_driver()
+        async def operation() -> str: return "done"
+        with mock.patch.object(RawTerminalDriver, "capabilities", autospec=True,
+            return_value=capability(CapabilityProfile.PLAIN, width=8)):
+            self.assertEqual(asyncio.run(driver.run_advisory_progress(
+                operation(), lambda _frame: "SEARCH 한🙂alpha\nREAD beta")), "done")
+        rendered = output.getvalue()
+        for row in ("SEARCH \n", "한🙂alp\n", "ha\n", "READ be\n", "ta"):
+            self.assertIn(row, rendered)
 
     def test_advisory_progress_preserves_operation_failure_and_wraps_worker_failure(
         self,
@@ -3364,7 +3408,8 @@ class PackageBoundaryFoundationTests(unittest.TestCase):
         package_root = repository_root / "src" / "story_writing_agents"
         terminal_root = package_root / "interactive_terminal"
         expected_dependencies = {
-            "__init__.py": {"._core"},
+            "__init__.py": {"._advisory_progress", "._core"},
+            "_advisory_progress.py": {"..agent_context.actions", "..agent_context.progress"},
             "_collaboration_view.py": {
                 "..conversations",
                 "..specialist_routing",
@@ -3376,7 +3421,7 @@ class PackageBoundaryFoundationTests(unittest.TestCase):
             "_live_composer.py": {"._model"},
             "_model.py": set(),
             "_controls.py": {"._model"},
-            "_render.py": {"._model"},
+            "_render.py": {"._advisory_progress", "._model"},
             "_viewer_model.py": set(),
             "_viewer_controls.py": {"._model", "._viewer_model"},
             "_viewer_render.py": {"._model", "._viewer_model"},
@@ -3393,10 +3438,12 @@ class PackageBoundaryFoundationTests(unittest.TestCase):
                 "._viewer_model",
             },
             "_core.py": {
+                "..agent_context.progress",
                 "..agents",
                 "..conversations",
                 "..interactive_commands",
                 "._collaboration_view",
+                "._advisory_progress",
                 "._controls",
                 "._driver",
                 "._external_view",
