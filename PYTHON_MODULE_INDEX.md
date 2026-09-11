@@ -2070,6 +2070,15 @@ every intermediate arrow. The current runtime graph is acyclic.
   `session_recovery.transition_assessment`, `smoke`, and `workspace`.
 - **State, resources, and side effects:** Argument parsing is resource-free;
   retained dispatch delegates state and resources to the selected owner.
+  Interactive startup owns the missing-default composition sequence: it uses
+  fresh authentication to derive only a highlighted recommendation, loops
+  until the user explicitly selects an authenticated provider or exits through
+  cancel, interrupt, or EOF, then delegates the guarded absent-only write to
+  `interactive_settings` and reloads configuration so a concurrent existing
+  default remains authoritative. Only explicit `--backend` mappings remain
+  one-run launch overrides; startup no longer synthesizes per-agent overrides
+  from the recommendation. Default-selection exit occurs before default
+  persistence or CLI-context, backend, controller, and session artifacts.
   Initialization emits the established absolute-workspace JSON only after the
   workspace owner completes its schema-v2 Git baseline, and deliberately
   creates no post-baseline debug-log event. Explicit smoke resolves one already
@@ -4967,9 +4976,12 @@ every intermediate arrow. The current runtime graph is acyclic.
   `InteractiveAuthResult`, exact `InteractiveAuthResultKind` outcomes,
   `InteractiveAuthCoordinator`, and pure `select_default_provider` policy are
   consumed by CLI and controller orchestration without entering either package
-  facade. The coordinator's additive internal picker-presentation keyword
-  defaults to the standard layout and accepts the terminal's validated form
-  layout without changing authentication, selection, or native-login results.
+  facade. The coordinator's package-internal `select_default()` route supports
+  explicit missing-default onboarding through the same purpose-specific picker
+  path as ordinary authentication. Its additive internal picker-presentation
+  keyword defaults to the standard layout and accepts the terminal's validated
+  form layout without changing authentication, selection, or native-login
+  results.
 - **Runtime recovery:** `recover(provider)` bypasses the authenticated-picker
   shortcut and invokes native login with `recovery=True` for the exact failed
   provider. Guidance completes before synchronous native terminal ownership;
@@ -4980,12 +4992,17 @@ every intermediate arrow. The current runtime graph is acyclic.
 - **Direct internal dependencies:** `interactive_terminal` and `provider_auth`.
 - **State, resources, and side effects:** The coordinator retains borrowed
   authentication and terminal collaborators plus a resource-free picker and
-  startup-presentation adapter. Each `run` call forwards its validated
-  call-local presentation to that picker and retains none of it afterward; the
-  global authentication flow omits it and therefore remains standard, while
-  Settings explicitly supplies form presentation. Each full or selected
-  ordinary native-status probe runs
-  in a bounded local Runner/default-executor span under terminal-owned progress;
+  startup-presentation adapter. Ordinary `run` and missing-default
+  `select_default()` calls share one picker execution path with purpose-specific
+  prompt and notice copy. `run` forwards its validated call-local presentation
+  and may project its selected provider as both highlighted and selected;
+  `select_default()` uses standard presentation, highlights the recommendation,
+  and deliberately supplies no selected identity so user commit remains
+  explicit. Neither route retains picker state afterward; the global
+  authentication flow remains standard, while Settings explicitly supplies
+  form presentation. Every native-auth outcome remains a typed
+  `InteractiveAuthResult`. Each full or selected ordinary native-status probe
+  runs in a bounded local Runner/default-executor span under terminal-owned progress;
   callback and incapable terminals remain silent. It projects stable Codex and Antigravity rows
   with explicit authenticated, unauthenticated, unavailable, and indeterminate
   text; disabled state and current selection remain meaningful without color.
@@ -4994,11 +5011,12 @@ every intermediate arrow. The current runtime graph is acyclic.
   afterward it explicitly refreshes both providers and displays only one fixed
   sanitized success or failure result. It never captures or renders provider
   output, account facts, credentials, environment values, paths, URLs, or
-  codes. `select_default_provider` chooses an immediately newly authenticated
-  provider, otherwise the sole authenticated provider, otherwise Codex when
-  both are authenticated, and otherwise no default. The module owns no native
-  process, credential, terminal mode, workspace configuration write, provider
-  route, backend, session, network, or import-time I/O.
+  codes. `select_default_provider` recommends an immediately newly authenticated
+  provider as the highlight, otherwise the sole authenticated provider,
+  otherwise Codex when both are authenticated, and otherwise no default. The
+  module owns no native process, credential, terminal mode, workspace
+  configuration write, provider route, backend, session, network, or import-time
+  I/O.
 - **Primary verification/documentation:**
   `tests/test_provider_auth_recovery.py`,
   `tests/test_interactive_auth.py`

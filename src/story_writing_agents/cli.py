@@ -64,6 +64,7 @@ from .interactive_controller import InteractiveController
 from .interactive_settings import (
     SettingsError,
     SettingsErrorKind,
+    establish_default_backend,
 )
 from .interactive_terminal import (
     AdvisoryProgressError,
@@ -690,6 +691,32 @@ def _authenticate_initial_provider(
     return snapshot, newly_authenticated
 
 
+def _select_missing_default_provider(
+    coordinator: InteractiveAuthCoordinator,
+    snapshot: ProviderAuthSnapshot,
+    *,
+    selected_provider: str | None,
+) -> tuple[ProviderAuthSnapshot, str] | None:
+    """Require one authenticated default choice or an explicit shell exit."""
+
+    while True:
+        result = coordinator.select_default(
+            snapshot,
+            selected_provider=selected_provider,
+        )
+        if result.kind in {
+            InteractiveAuthResultKind.CANCEL,
+            InteractiveAuthResultKind.INTERRUPT,
+            InteractiveAuthResultKind.EOF,
+        }:
+            return None
+        snapshot = result.snapshot
+        if result.kind is InteractiveAuthResultKind.AUTHENTICATED:
+            assert result.provider is not None
+            return snapshot, result.provider
+        selected_provider = result.provider
+
+
 def _effective_interactive_providers(
     manager: ConfigManager,
     snapshot: ConfigurationSnapshot,
@@ -946,11 +973,24 @@ def _run_interactive_cli(arguments: argparse.Namespace) -> int:
             raise RuntimeError("authenticated startup snapshot has no default provider")
         manager = ConfigManager(workspace)
         configuration = manager.load_configuration_snapshot()
-        runtime_backend_overrides = dict(backend_overrides)
         if configuration.system_defaults.default_backend is None:
-            for agent_id, agent in configuration.agent_configs.items():
-                if agent.backend is None:
-                    runtime_backend_overrides.setdefault(agent_id, default_provider)
+            default_selection = _select_missing_default_provider(
+                auth_coordinator,
+                snapshot,
+                selected_provider=default_provider,
+            )
+            if default_selection is None:
+                _trace_cli(
+                    debug_log,
+                    DebugOperation.CLI_COMMAND,
+                    DebugPhase.CANCELLED,
+                    outcome=DebugOutcome.INTERRUPTED,
+                )
+                return 0
+            snapshot, default_provider = default_selection
+            establish_default_backend(workspace, default_provider)
+            configuration = manager.load_configuration_snapshot()
+        runtime_backend_overrides = dict(backend_overrides)
         effective_providers = _effective_interactive_providers(
             manager,
             configuration,

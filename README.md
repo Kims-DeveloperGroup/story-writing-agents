@@ -121,10 +121,23 @@ installation includes the isolated read-only JSONL viewer used by
 `/exchanges`. Optional local conversation RAG requires the reviewed `rag`
 extra before it can be enabled; installation alone never enables it.
 
-The interactive shell performs its configured native provider authentication
-gate and exposes `/auth` and provider settings. Ordinary focused lead input and
-confirmed collaboration can invoke the configured provider; management and
-inspection commands retain their documented provider-free behavior.
+The interactive shell first performs its configured native provider
+authentication gate. When the workspace has no `default_backend`, a separate
+**Default provider** picker then opens before the lobby. A newly authenticated
+or sole authenticated provider—or Codex when both authenticate—is highlighted
+only as a recommendation; nothing is preselected. Choose either enabled
+provider to save it as the workspace default. Choosing an unauthenticated
+provider starts its existing native sign-in first. Cancelling, interrupting, or
+ending this picker exits before saving a default or entering the lobby.
+
+Later shells skip this first-start choice, and agents that inherit the saved
+default keep an editable Provider setting. Only an explicit `--backend` mapping
+is a one-run launch override: its Provider setting is read-only in that shell
+and it never rewrites configuration. Existing defaults and explicit per-agent
+routes are preserved. The shell also exposes `/auth` and provider settings.
+Ordinary focused lead input and confirmed collaboration can invoke the
+configured provider; management and inspection commands retain their
+documented provider-free behavior.
 
 ## Quick start
 

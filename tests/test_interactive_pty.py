@@ -1325,6 +1325,7 @@ class InteractiveCliPtyTests(unittest.TestCase):
         self.addCleanup(temporary.cleanup)
         self.temporary_root = Path(temporary.name)
         self.workspace = initialize_test_workspace(self.temporary_root / "workspace")
+        self._set_existing_default()
         self.fake_directory = self.temporary_root / "provider-bin"
         self.fake_directory.mkdir()
         self.fake_executable = self.fake_directory / "codex"
@@ -1360,6 +1361,13 @@ class InteractiveCliPtyTests(unittest.TestCase):
         )
         self._processes: list[PtyCliProcess] = []
         self.addCleanup(self._close_processes)
+
+    def _set_existing_default(self) -> None:
+        """Give non-onboarding PTY cases one persisted provider default."""
+
+        defaults = self.workspace.read_json("config/system_defaults.json")
+        defaults["default_backend"] = "codex"
+        self.workspace.write_json("config/system_defaults.json", defaults)
 
     def _close_processes(self) -> None:
         """Close every process harness retained by the current test."""
@@ -3032,6 +3040,7 @@ print(
         self.workspace = initialize_test_workspace(
             self.temporary_root / "workspace-no-color"
         )
+        self._set_existing_default()
         no_color = self._spawn_cli(
             (),
             environment_overrides={"TERM": "xterm-256color"},
@@ -3057,6 +3066,7 @@ print(
         self.workspace = initialize_test_workspace(
             self.temporary_root / "workspace-line-profile"
         )
+        self._set_existing_default()
         line = self._spawn_cli(())
         line.wait_for_text("story[lobby]> ")
         mark = line.output_mark()
@@ -3246,6 +3256,7 @@ print(
                 self.workspace = initialize_test_workspace(
                     self.temporary_root / f"workspace-settings-save-{attempt}"
                 )
+                self._set_existing_default()
                 current_language = "KO"
                 process = self._spawn_cli(
                     (),
@@ -3493,15 +3504,12 @@ print(
         compact_fields = "".join(
             re.sub(r"\x1b\[[0-9;]*[A-Za-z]", "", initial_fields).split()
         )
-        self.assertIn("Provider(disabled)—Current:Codex", compact_fields)
-        self.assertIn(
-            "Disabled:Setbyalaunchoverride;read-onlyinthisshell.",
-            compact_fields,
-        )
+        self.assertIn("Provider—Current:Codex", compact_fields)
+        self.assertNotIn("read-onlyinthisshell", compact_fields)
         self.assertIn("Model—Current:providerdefault", compact_fields)
         self.assertIn("Effort—Current:providerdefault", compact_fields)
         model_picker_mark = process.output_mark()
-        process.send_text("\n")
+        process.send_text("\x1b[B\n")
         model_picker = process.wait_for_text("GPT PTY", after=model_picker_mark)
         self.assertIn("GPT PTY", model_picker)
         self.assertIn("gpt-pty", model_picker)
@@ -3766,7 +3774,7 @@ print(
             self.assertNotIn(f"{_VISIBLE_PROGRESS_FRAMES[0]}\n", output)
             return output
 
-        model = open_delayed_picker("\n", "GPT PTY")
+        model = open_delayed_picker("\x1b[B\n", "GPT PTY")
         self.assertIn("Model\nContext: Plot & Structure Architect", model)
         return_mark = process.output_mark()
         process.send_text("\x1b")
@@ -3829,17 +3837,14 @@ print(
         process.send_text("\x1b[B\n")
         fields = process.wait_for_text("Agent settings", after=mark)
         compact_fields = "".join(fields.split())
-        self.assertIn("Provider(disabled)Current:Codex", compact_fields)
+        self.assertIn("ProviderCurrent:Codex", compact_fields)
         self.assertIn("ModelCurrent:providerdefault", compact_fields)
         self.assertIn("EffortCurrent:providerdefault", compact_fields)
         plain_fields = self.plain_terminal_text(fields)
-        self.assertIn("1. Provider (disabled)", plain_fields)
+        self.assertIn("1. Provider", plain_fields)
         self.assertIn("Current: Codex", plain_fields)
-        self.assertIn(
-            "Disabled:Setbyalaunchoverride;read-onlyinthisshell.",
-            compact_fields,
-        )
-        process.send_text("\n")
+        self.assertNotIn("read-onlyinthisshell", compact_fields)
+        process.send_text("\x1b[B\n")
         process.wait_for_text("GPT PTY", after=mark)
         self.assertNotRegex(
             process.text_after(mark),
@@ -3952,6 +3957,7 @@ print(
                     self.workspace = initialize_test_workspace(
                         self.temporary_root / f"workspace-{event_name}-{attempt}"
                     )
+                    self._set_existing_default()
                     process = self._spawn_cli(
                         (),
                         environment_overrides={"TERM": "xterm-256color"},
@@ -4139,6 +4145,89 @@ print(
             process.original_terminal_attributes,
         )
 
+    def test_first_start_persists_default_keeps_settings_editable_and_skips_restart(
+        self,
+    ) -> None:
+        """Persist an explicit first choice without turning it into an override."""
+
+        defaults = self.workspace.read_json("config/system_defaults.json")
+        defaults["default_backend"] = None
+        self.workspace.write_json("config/system_defaults.json", defaults)
+
+        first = self._spawn_cli(())
+        onboarding = first.wait_for_text("Default provider")
+        compact_onboarding = "".join(onboarding.split())
+        self.assertIn("Choosetheworkspacedefaultprovider.", compact_onboarding)
+        self.assertIn("Storysavesthischoiceforlatershells", compact_onboarding)
+        self.assertIn("1.[highlighted]Codex", compact_onboarding)
+        self.assertNotIn("[selected]", compact_onboarding)
+        first.send_line("1")
+        first.wait_for_text("story[lobby]> ")
+        self.assertEqual(
+            self.workspace.read_json("config/system_defaults.json")["default_backend"],
+            "codex",
+        )
+
+        settings_mark = first.output_mark()
+        first.send_line("/settings")
+        first.wait_for_text("  7. Agents", after=settings_mark)
+        first.send_line("7")
+        first.wait_for_text("Select an agent to configure", after=settings_mark)
+        first.send_line("2")
+        fields = first.wait_for_text(
+            "Choose a provider, model, or effort setting",
+            after=settings_mark,
+        )
+        self.assertIn("1. Provider", fields)
+        self.assertIn("Current: Codex", fields)
+        self.assertNotIn("Provider (disabled)", fields)
+        self.assertNotIn("read-only in this shell", fields)
+
+        first.send_line("1")
+        first.wait_for_text(
+            "Choose an authenticated provider",
+            after=settings_mark,
+        )
+        first.send_line("2")
+        first.wait_for_text(
+            "Pending Provider entered: Antigravity.",
+            after=settings_mark,
+        )
+        first.send_line("/cancel")
+        first.wait_for_text(
+            "Choose a provider, model, or effort setting",
+            after=settings_mark,
+        )
+        first.send_line("/cancel")
+        first.wait_for_text("Select an agent to configure", after=settings_mark)
+        first.send_line("/cancel")
+        first.wait_for_text("Apply Changes (*Required)", after=settings_mark)
+        first.send_line("9")
+        first.wait_for_text("Discard changes?", after=settings_mark)
+        first.send_line("1")
+        first.wait_for_text("story[lobby]> ", after=settings_mark)
+        first.send_line("/quit")
+        self.assertEqual(first.wait_for_exit(), 0, first.normalized_text)
+        self.assertEqual(
+            first.final_terminal_attributes,
+            first.original_terminal_attributes,
+        )
+        self.assertIsNone(
+            self.workspace.read_json("config/agent_configs.json")["plot_architect"][
+                "backend"
+            ]
+        )
+
+        restarted = self._spawn_cli(())
+        restarted.wait_for_text("story[lobby]> ")
+        self.assertNotIn("Default provider", restarted.normalized_text)
+        restarted.send_line("/quit")
+        self.assertEqual(restarted.wait_for_exit(), 0, restarted.normalized_text)
+        self.assertEqual(
+            restarted.final_terminal_attributes,
+            restarted.original_terminal_attributes,
+        )
+
     def test_native_codex_login_inherits_tty_root_environment_and_reprobes(
         self,
     ) -> None:
@@ -4198,7 +4287,7 @@ print(
         self.assertEqual(process.wait_for_exit(), 0, process.normalized_text)
         self.assertEqual(
             self.workspace.read_json("config/system_defaults.json")["default_backend"],
-            None,
+            "codex",
         )
         self.assertFalse(self.provider_log.exists())
         self.assertNotIn(
@@ -4265,7 +4354,7 @@ print(
         self.assertEqual(process.wait_for_exit(), 0, process.normalized_text)
         self.assertEqual(
             self.workspace.read_json("config/system_defaults.json")["default_backend"],
-            None,
+            "codex",
         )
         self.assertEqual(
             self.workspace.read_json("config/agent_configs.json")["plot_architect"][
@@ -4739,6 +4828,7 @@ raise SystemExit(cli.main([]))
                 self.workspace = initialize_test_workspace(
                     self.temporary_root / f"workspace-welcome-{terminal_columns}"
                 )
+                self._set_existing_default()
                 process = self._spawn_cli(
                     (),
                     environment_overrides={
@@ -4777,6 +4867,18 @@ raise SystemExit(cli.main([]))
     ) -> None:
         """Prove lobby orientation, explicit creation, prompts, and safe quit."""
 
+        status_command = (
+            "git",
+            "status",
+            "--porcelain=v1",
+            "--untracked-files=all",
+        )
+        status_before = subprocess.run(
+            status_command,
+            cwd=self.workspace.root,
+            capture_output=True,
+            check=True,
+        ).stdout
         process = self._spawn_cli(())
         process.wait_for_text("story[lobby]> ")
         self.assertIn("--- Story chat ", process.normalized_text)
@@ -4787,18 +4889,17 @@ raise SystemExit(cli.main([]))
         self.assertIn("Session: lobby\n", process.normalized_text)
         self.assertEqual(
             subprocess.run(
-                ("git", "status", "--porcelain=v1", "--untracked-files=all"),
+                status_command,
                 cwd=self.workspace.root,
                 capture_output=True,
                 check=True,
             ).stdout,
-            b"",
+            status_before,
         )
 
-        self.assertIsNone(
-            self.workspace.read_json("config/system_defaults.json")[
-                "default_backend"
-            ]
+        self.assertEqual(
+            self.workspace.read_json("config/system_defaults.json")["default_backend"],
+            "codex",
         )
         self.assertFalse(
             self.workspace.path(
@@ -4824,12 +4925,12 @@ raise SystemExit(cli.main([]))
         self.assertNotIn("PTY_TEST_CREDENTIAL_MUST_NOT_APPEAR", process.normalized_text)
         self.assertEqual(
             subprocess.run(
-                ("git", "status", "--porcelain=v1", "--untracked-files=all"),
+                status_command,
                 cwd=self.workspace.root,
                 capture_output=True,
                 check=True,
             ).stdout,
-            b"",
+            status_before,
         )
 
     def test_incomplete_lead_answer_is_corrected_before_rendering(self) -> None:
