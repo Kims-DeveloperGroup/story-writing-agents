@@ -224,10 +224,25 @@ artifact-sensitive invocation, runtime derives a package-internal
 `SessionSourceWorkspace` from the same freshly validated exact-session binding
 as the artifact repository and lends it only to the active-debate and invoking-
 agent-state adapters. Its reads are descriptor-relative and pinned to the
-session worktree's physical `(st_dev, st_ino)` identity. A replaced or unsafe
-root is rejected before content returns; neither adapter can fall back to the
-control root, another session, or a previous binding. The view supplies no
-generic path, write, provider-filesystem, or Git authority.
+session worktree's physical `(st_dev, st_ino)` identity. The binding also pins
+the exact semantic READY branch/ref/worktree inspection. Every repository or
+session-source action enters a short synchronous cooperating-runtime guard,
+checks READY and the named physical root before and after its action, and then
+releases the Git lease and descriptors. The guard never spans the provider
+`await`; a later SEARCH, READ, ANSWER revalidation, reference-ledger action, or
+closure step reacquires it. A replaced or persistently non-ready root is
+therefore rejected before content returns or at the next checkpoint; neither
+adapter can fall back to the control root, another session, or a previous
+binding. The lease does not continuously exclude arbitrary external Git that
+does not cooperate with the runtime. The view supplies no generic path, write,
+provider-filesystem, or Git authority.
+
+The session-source reader accepts only canonical relative POSIX paths. It
+traverses without following symlinks and accepts only a stable, singly linked
+regular-file leaf whose named and opened identity, mode, size, and timestamps
+agree before and after reading. FIFOs, devices, hard links, replacements, and
+foreign embedded session/debate/agent ownership fail as source unavailability
+before evidence is accepted.
 
 `FocusedConversationSourceAdapter` reads canonical v2 events from the active
 store and applies `select_bounded_collaboration_context()`. Its default mode is

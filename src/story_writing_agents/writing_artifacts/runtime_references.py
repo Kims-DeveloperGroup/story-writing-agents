@@ -11,6 +11,9 @@ import asyncio
 import re
 import threading
 import uuid
+from collections.abc import Callable, Iterator
+from contextlib import AbstractContextManager, contextmanager
+from typing import TypeVar
 
 from .authorization import (
     AuthorizedArtifactReference,
@@ -32,8 +35,7 @@ from .repository import WritingArtifactRepository
 
 
 _INVOCATION_ID = re.compile(r"ri_[0-9a-f]{32}")
-
-
+_T = TypeVar("_T")
 def _operation_id(session_id: str) -> str:
     validate_reference_identity(session_id)
     if len(session_id) > 64:
@@ -117,17 +119,20 @@ class _TrackedReferenceReadInvocation:
         action: ReferenceReadAction,
     ) -> ReferenceReadResult:
         try:
-            return self._delegate.handle_reference_read_action(action)
+            with self._operation._open_repository_access():
+                return self._delegate.handle_reference_read_action(action)
         except BaseException:
             self._mark_terminal()
             raise
 
     def record_result_received(self) -> None:
-        self._delegate.record_result_received()
+        with self._operation._open_repository_access():
+            self._delegate.record_result_received()
 
     def accept(self) -> None:
         try:
-            self._delegate.accept()
+            with self._operation._open_repository_access():
+                self._delegate.accept()
         finally:
             self._mark_terminal()
 
@@ -135,7 +140,8 @@ class _TrackedReferenceReadInvocation:
         if self._terminal:
             return
         try:
-            self._delegate.terminate(outcome)
+            with self._operation._open_repository_access():
+                self._delegate.terminate(outcome)
         finally:
             self._mark_terminal()
 
@@ -156,6 +162,7 @@ class RuntimeReferenceOperation:
         "_next_ordinal",
         "_pending",
         "_repository",
+        "_repository_access",
         "_provider_text",
         "_source_text",
         "operation_id",
@@ -188,6 +195,9 @@ class RuntimeReferenceOperation:
         if bool(batch is not None and batch.references) != (authorization is not None):
             raise ValueError("reference operation capture does not match its batch")
         self._repository = repository
+        self._repository_access: (
+            Callable[[], AbstractContextManager[WritingArtifactRepository]] | None
+        ) = None
         self.session_id = session_id
         self._source_text = source_text
         self._provider_text = provider_text
@@ -260,18 +270,20 @@ class RuntimeReferenceOperation:
                 round_number=round_number,
                 attempt=1,
             )
-            try:
-                delegate = self._repository.begin_reference_invocation(
+            delegate, action_failure = self._repository_action(
+                lambda: self._repository.begin_reference_invocation(
                     authorization,
                     correlation,
                 )
-            except BaseException as exc:
+            )
+            if action_failure is not None:
                 code = _failure_code(
-                    exc,
+                    action_failure,
                     ReferenceAuthorizationErrorCode.WORKFLOW_FAILURE,
                 )
                 failure = self._fail_locked(code)
-                raise failure from exc
+                raise failure from action_failure
+            assert delegate is not None
             tracked = _TrackedReferenceReadInvocation(self, delegate)
             self._pending[invocation_id] = tracked
             self._next_ordinal += 1
@@ -308,21 +320,22 @@ class RuntimeReferenceOperation:
                     ReferenceAuthorizationErrorCode.INVALID_TRANSITION
                 )
                 raise failure
-            try:
-                self._repository.finish_reference_operation(
+            _, action_failure = self._repository_action(
+                lambda: self._repository.finish_reference_operation(
                     self._authorization,
                     outcome=None,
                 )
-            except BaseException as exc:
+            )
+            if action_failure is not None:
                 self._finished = True
                 code = _failure_code(
-                    exc,
+                    action_failure,
                     ReferenceAuthorizationErrorCode.WORKFLOW_FAILURE,
                 )
                 raise ReferenceOperationFailure(
                     self._required_operation_id(),
                     code,
-                ) from exc
+                ) from action_failure
             self._finished = True
 
     def failure(
@@ -355,10 +368,11 @@ class RuntimeReferenceOperation:
             except BaseException as exc:
                 code = _failure_code(exc, code)
         try:
-            self._repository.finish_reference_operation(
-                self._authorization,
-                outcome=code,
-            )
+            with self._open_repository_access():
+                self._repository.finish_reference_operation(
+                    self._authorization,
+                    outcome=code,
+                )
         except BaseException as exc:
             code = _failure_code(exc, code)
         self._finished = True
@@ -378,6 +392,29 @@ class RuntimeReferenceOperation:
         assert self.operation_id is not None
         return self.operation_id
 
+    def _repository_action(
+        self,
+        action: Callable[[], _T],
+    ) -> tuple[_T | None, BaseException | None]:
+        """Run one repository action while preserving guard failures verbatim."""
+
+        with self._open_repository_access():
+            try:
+                return action(), None
+            except BaseException as exc:
+                return None, exc
+
+    @contextmanager
+    def _open_repository_access(self) -> Iterator[WritingArtifactRepository]:
+        access = self._repository_access
+        if access is None:
+            yield self._repository
+            return
+        with access() as repository:
+            if repository is not self._repository:
+                raise TypeError("repository access changed its repository owner")
+            yield repository
+
 
 def prepare_runtime_reference_operation(
     repository: WritingArtifactRepository,
@@ -389,10 +426,52 @@ def prepare_runtime_reference_operation(
 
     if type(repository) is not WritingArtifactRepository:
         raise TypeError("repository must be a WritingArtifactRepository")
+    return _prepare_runtime_reference_operation(
+        repository,
+        session_id=session_id,
+        text=text,
+        repository_access=None,
+    )
+
+
+def prepare_guarded_runtime_reference_operation(
+    repository_access: Callable[
+        [], AbstractContextManager[WritingArtifactRepository]
+    ],
+    *,
+    session_id: str,
+    text: str,
+) -> RuntimeReferenceOperation:
+    """Prepare a package-internal operation with short guarded repository calls."""
+
+    if not callable(repository_access):
+        raise TypeError("repository_access must be callable")
+    with repository_access() as repository:
+        if type(repository) is not WritingArtifactRepository:
+            raise TypeError("repository access must yield a WritingArtifactRepository")
+        return _prepare_runtime_reference_operation(
+            repository,
+            session_id=session_id,
+            text=text,
+            repository_access=repository_access,
+        )
+
+
+def _prepare_runtime_reference_operation(
+    repository: WritingArtifactRepository,
+    *,
+    session_id: str,
+    text: str,
+    repository_access: Callable[
+        [], AbstractContextManager[WritingArtifactRepository]
+    ] | None,
+) -> RuntimeReferenceOperation:
+    """Implement public and package-internal reference preparation."""
+
     if not isinstance(text, str):
         raise TypeError("reference operation text must be a string")
     if not any(marker in text for marker in ("${", "$$", "\\$")):
-        return RuntimeReferenceOperation(
+        operation = RuntimeReferenceOperation(
             repository,
             session_id=session_id,
             batch=None,
@@ -401,9 +480,11 @@ def prepare_runtime_reference_operation(
             operation_id=None,
             authorization=None,
         )
+        operation._repository_access = repository_access
+        return operation
     batch = parse_artifact_references(text)
     if not batch.references:
-        return RuntimeReferenceOperation(
+        operation = RuntimeReferenceOperation(
             repository,
             session_id=session_id,
             batch=batch,
@@ -412,6 +493,8 @@ def prepare_runtime_reference_operation(
             operation_id=None,
             authorization=None,
         )
+        operation._repository_access = repository_access
+        return operation
     operation_id = _operation_id(session_id)
     try:
         authorization = repository.capture_reference_authorization(
@@ -430,7 +513,7 @@ def prepare_runtime_reference_operation(
             operation_id,
             ReferenceAuthorizationErrorCode.WORKFLOW_FAILURE,
         )
-    return RuntimeReferenceOperation(
+    operation = RuntimeReferenceOperation(
         repository,
         session_id=session_id,
         batch=batch,
@@ -439,3 +522,5 @@ def prepare_runtime_reference_operation(
         operation_id=operation_id,
         authorization=authorization,
     )
+    operation._repository_access = repository_access
+    return operation

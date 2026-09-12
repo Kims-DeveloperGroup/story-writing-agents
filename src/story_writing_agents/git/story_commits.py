@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import os
 import re
+import stat
 import threading
 import uuid
 from dataclasses import replace
@@ -19,7 +20,7 @@ from .process import (
     GitProcessResult,
     GitProcessRunner,
 )
-from .session_history import open_git_session_history
+from .session_history import GitSessionHistory, open_git_session_history
 from .session_history_contracts import (
     GitSessionCommitOperationRecord,
     GitSessionHistoryError,
@@ -31,7 +32,9 @@ from .story_commit_candidates import (
     StoryCommitCandidateBinding,
     StoryCommitRevalidation,
     load_story_commit_candidate,
+    prepare_identity_bound_story_commit_candidate,
     prepare_story_commit_candidate,
+    revalidate_identity_bound_story_commit_candidate,
     revalidate_story_commit_candidate,
 )
 from .story_commit_contracts import (
@@ -163,6 +166,7 @@ class StoryCommitService:
         "_allowed_worktree_changes",
         "_bindings",
         "_confirmation_ids",
+        "_expected_session_root_identity",
         "_manifest",
         "_owner",
         "_root",
@@ -193,6 +197,7 @@ class StoryCommitService:
             raise _error(StoryCommitFailureCode.INVALID_REQUEST)
         self._session_id = session_id
         self._allowed_worktree_changes = allowed_worktree_changes
+        self._expected_session_root_identity: tuple[int, int] | None = None
         self._owner = object()
         self._bindings: dict[str, StoryCommitCandidateBinding] = {}
         self._confirmation_ids: set[str] = set()
@@ -212,14 +217,25 @@ class StoryCommitService:
             or evidence.session_id != self._session_id
         ):
             raise _error(StoryCommitFailureCode.INVALID_REQUEST)
-        binding = prepare_story_commit_candidate(
-            self._root,
-            self._manifest,
-            evidence,
-            proposed_message,
-            impact_boundary,
-            allowed_worktree_changes=self._allowed_worktree_changes,
-        )
+        if self._expected_session_root_identity is None:
+            binding = prepare_story_commit_candidate(
+                self._root,
+                self._manifest,
+                evidence,
+                proposed_message,
+                impact_boundary,
+                allowed_worktree_changes=self._allowed_worktree_changes,
+            )
+        else:
+            binding = prepare_identity_bound_story_commit_candidate(
+                self._root,
+                self._manifest,
+                evidence,
+                proposed_message,
+                impact_boundary,
+                allowed_worktree_changes=self._allowed_worktree_changes,
+                expected_session_root_identity=self._expected_session_root_identity,
+            )
         self._bindings[binding.candidate.candidate_id] = binding
         self._root = binding.main_root
         return binding.candidate
@@ -238,10 +254,7 @@ class StoryCommitService:
         self._reserve_confirmation(decision.confirmation_id)
         binding = self._binding(value)
         self._require_not_revised(value)
-        revalidation = revalidate_story_commit_candidate(
-            binding,
-            allowed_worktree_changes=self._allowed_worktree_changes,
-        )
+        revalidation = self._revalidate_candidate(binding)
         return StoryCommitAuthority(
             _AUTHORITY_SENTINEL,
             owner=self._owner,
@@ -303,6 +316,7 @@ class StoryCommitService:
         branch_updated = False
         commit_id: str | None = None
         try:
+            self._require_bound_session_root()
             with open_git_session_history(
                 self._root,
                 self._manifest,
@@ -310,13 +324,13 @@ class StoryCommitService:
                 create=True,
                 allowed_worktree_changes=self._allowed_worktree_changes,
             ) as history:
-                revalidation = revalidate_story_commit_candidate(
+                revalidation = self._revalidate_candidate(
                     binding,
                     history=history,
-                    allowed_worktree_changes=self._allowed_worktree_changes,
                 )
                 if revalidation != authorized_revalidation:
                     raise _error(StoryCommitFailureCode.CANDIDATE_DRIFT)
+                self._require_bound_session_root()
                 operation = GitSessionCommitOperationRecord(
                     session_id=self._session_id,
                     operation_id=operation_id,
@@ -327,6 +341,7 @@ class StoryCommitService:
                     expected_branch_tip=candidate.branch_tip,
                 )
                 history.write_commit_operation(operation)
+                self._require_bound_session_root()
                 self._stage_git(revalidation)
                 operation = advance_commit_operation(
                     operation,
@@ -349,7 +364,7 @@ class StoryCommitService:
             )
         except StoryCommitError as exc:
             self._preserve_uncertain(operation, branch_updated)
-            if branch_updated or exc.code in {
+            if operation is not None or branch_updated or exc.code in {
                 StoryCommitFailureCode.GIT_FAILED,
                 StoryCommitFailureCode.HISTORY_FAILED,
             }:
@@ -361,6 +376,60 @@ class StoryCommitService:
         except BaseException:
             self._preserve_uncertain(operation, branch_updated)
             raise
+
+    def _bind_session_root_identity(
+        self,
+        expected_root_identity: tuple[int, int],
+    ) -> None:
+        """Bind this runtime-composed service to its successful Apply root."""
+
+        if (
+            type(expected_root_identity) is not tuple
+            or len(expected_root_identity) != 2
+            or any(
+                type(value) is not int or value <= 0
+                for value in expected_root_identity
+            )
+            or self._expected_session_root_identity is not None
+        ):
+            raise _error(StoryCommitFailureCode.INVALID_REQUEST)
+        self._expected_session_root_identity = expected_root_identity
+        self._require_bound_session_root()
+
+    def _require_bound_session_root(self) -> None:
+        expected = self._expected_session_root_identity
+        if expected is None:
+            return
+        root = _session_root(self._root, self._session_id)
+        if _directory_identity(root) != expected:
+            raise _error(StoryCommitFailureCode.CANDIDATE_DRIFT)
+
+    def _session_root_identity(self, root: Path) -> tuple[int, int]:
+        identity = _directory_identity(root)
+        expected = self._expected_session_root_identity
+        if expected is not None and identity != expected:
+            raise _error(StoryCommitFailureCode.CANDIDATE_DRIFT)
+        return identity
+
+    def _revalidate_candidate(
+        self,
+        binding: StoryCommitCandidateBinding,
+        *,
+        history: GitSessionHistory | None = None,
+    ) -> StoryCommitRevalidation:
+        expected = self._expected_session_root_identity
+        if expected is None:
+            return revalidate_story_commit_candidate(
+                binding,
+                history=history,
+                allowed_worktree_changes=self._allowed_worktree_changes,
+            )
+        return revalidate_identity_bound_story_commit_candidate(
+            binding,
+            expected,
+            history=history,
+            allowed_worktree_changes=self._allowed_worktree_changes,
+        )
 
     @_content_free_boundary
     def inspect(self, operation_id: str) -> StoryCommitResult:
@@ -573,7 +642,7 @@ class StoryCommitService:
 
     def _stage_git(self, value: StoryCommitRevalidation) -> None:
         root = _session_root(self._root, self._session_id)
-        identity = _directory_identity(root)
+        identity = self._session_root_identity(root)
         runner = GitProcessRunner(root)
         for item, (_path, content) in zip(
             value.candidate.paths, value.after_contents, strict=True
@@ -613,7 +682,7 @@ class StoryCommitService:
 
     def _create_commit(self, value: StoryCommitRevalidation) -> str:
         root = _session_root(self._root, self._session_id)
-        identity = _directory_identity(root)
+        identity = self._session_root_identity(root)
         runner = GitProcessRunner(root)
         commit = _object_id(
             _required(
@@ -634,7 +703,7 @@ class StoryCommitService:
 
     def _cas_branch(self, value: StoryCommitRevalidation, commit_id: str) -> None:
         root = _session_root(self._root, self._session_id)
-        identity = _directory_identity(root)
+        identity = self._session_root_identity(root)
         runner = GitProcessRunner(root)
         _required(
             runner,
@@ -653,7 +722,7 @@ class StoryCommitService:
         binding: StoryCommitCandidateBinding,
         commit_id: str,
     ) -> None:
-        session_identity = _directory_identity(binding.session_root)
+        session_identity = self._session_root_identity(binding.session_root)
         session_runner = GitProcessRunner(binding.session_root)
         tip = _object_id(
             _required(
@@ -758,6 +827,26 @@ class StoryCommitService:
                     return
         except BaseException:
             return
+
+
+def create_identity_bound_story_commit_service(
+    root: str | os.PathLike[str],
+    manifest: GitBaselineManifest,
+    session_id: str,
+    expected_session_root_identity: tuple[int, int],
+    *,
+    allowed_worktree_changes: tuple[str, ...] = (),
+) -> StoryCommitService:
+    """Create a package-internal commit service pinned to one Apply root."""
+
+    service = StoryCommitService(
+        root,
+        manifest,
+        session_id,
+        allowed_worktree_changes=allowed_worktree_changes,
+    )
+    service._bind_session_root_identity(expected_session_root_identity)
+    return service
 
 
 def _commit_matches(
@@ -938,8 +1027,10 @@ def _directory_identity(root: Path) -> tuple[int, int]:
     if (
         not root.is_absolute()
         or canonical != root
-        or not os.path.isdir(root)
-        or os.path.islink(root)
+        or not stat.S_ISDIR(value.st_mode)
+        or stat.S_ISLNK(value.st_mode)
+        or value.st_dev <= 0
+        or value.st_ino <= 0
     ):
         raise _error(StoryCommitFailureCode.CANDIDATE_DRIFT)
     return value.st_dev, value.st_ino

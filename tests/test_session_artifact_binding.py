@@ -4,8 +4,10 @@ from __future__ import annotations
 
 import os
 import subprocess
+from types import SimpleNamespace
 from unittest import mock
 
+import story_writing_agents.workspace as workspace_facade
 from story_writing_agents.agent_context.manifest import (
     ContextScope,
     ContextSubjectKind,
@@ -18,10 +20,15 @@ from story_writing_agents.agent_context.sources import (
     OwnAgentStateSourceAdapter,
 )
 from story_writing_agents.agents import LEAD_ORCHESTRATOR, PLOT_ARCHITECT
-from story_writing_agents.errors import WorkspaceSecurityError
+from story_writing_agents.conversations import (
+    CollaborationNextAction,
+    CollaborationStepState,
+)
+from story_writing_agents.errors import WorkspaceFormatError, WorkspaceSecurityError
 from story_writing_agents.models import AgentStateEntry, DebateMessage
-from story_writing_agents.workspace import SessionSourceWorkspace, Workspace
+from story_writing_agents.workspace import Workspace
 from story_writing_agents.workspace import core as workspace_core
+from story_writing_agents.workspace.core import SessionSourceWorkspace
 from story_writing_agents.workspace import initialization as initialization_module
 from story_writing_agents.workspace.initialization import (
     SessionArtifactBindingError,
@@ -98,6 +105,223 @@ class RuntimeSessionArtifactBindingTests(LeadOrchestrationTestCase):
                 self.session_id,
             )
         )
+
+    def test_session_source_workspace_is_internal_and_accepts_safe_posix_paths(
+        self,
+    ) -> None:
+        self.assertFalse(hasattr(workspace_facade, "SessionSourceWorkspace"))
+        self.assertNotIn("SessionSourceWorkspace", workspace_facade.__all__)
+        accepted = {
+            "core_documents/global_outline.md": (
+                "core_documents",
+                "global_outline.md",
+            ),
+            "manuscript/part-01/opening.md": (
+                "manuscript",
+                "part-01",
+                "opening.md",
+            ),
+            "discussion_logs/session/debate-검증.jsonl": (
+                "discussion_logs",
+                "session",
+                "debate-검증.jsonl",
+            ),
+        }
+        for relative, expected_parts in accepted.items():
+            with self.subTest(relative=relative):
+                self.assertEqual(
+                    SessionSourceWorkspace._safe_relative_parts(relative),
+                    expected_parts,
+                )
+
+        sources = self.source_workspace()
+        self.assertEqual(
+            sources._read_bound(
+                lambda root: sources._read_text_at(root, _OUTLINE)
+            ),
+            "Outline first line.\nOutline second line.\n",
+        )
+
+    def test_session_source_paths_reject_unsafe_lexical_forms_before_io(
+        self,
+    ) -> None:
+        rejected = (
+            "",
+            ".",
+            "./core_documents/global_outline.md",
+            "core_documents/./global_outline.md",
+            "../core_documents/global_outline.md",
+            "core_documents/../global_outline.md",
+            "core_documents//global_outline.md",
+            "core_documents/",
+            "/core_documents/global_outline.md",
+            "C:/core_documents/global_outline.md",
+            "core_documents\\global_outline.md",
+            "core_documents/global_outline.md\x00suffix",
+            "core_documents/\ud800.md",
+        )
+        for relative in rejected:
+            with self.subTest(relative=repr(relative)), mock.patch.object(
+                workspace_core.os,
+                "open",
+            ) as open_call, mock.patch.object(
+                workspace_core.os,
+                "dup",
+            ) as duplicate_call, self.assertRaises(WorkspaceSecurityError):
+                SessionSourceWorkspace._read_bytes_at(123456, relative)
+            open_call.assert_not_called()
+            duplicate_call.assert_not_called()
+
+    def test_session_source_rejects_fifo_and_hardlinked_owned_records(
+        self,
+    ) -> None:
+        self.append_source_state(self.workspace, "owned state")
+        self.append_source_debate(self.workspace, "owned debate")
+        debate_root = self.workspace.path(
+            f"discussion_logs/{self.session_id}"
+        )
+        result_path = debate_root / "source_debate.result.json"
+        self.workspace.write_json(
+            f"discussion_logs/{self.session_id}/source_debate.result.json",
+            {
+                "session_id": self.session_id,
+                "debate_id": "source_debate",
+                "input_kind": "prompt",
+                "status": "consensus",
+                "revision_id": "r1",
+                "rounds_completed": 1,
+                "final_candidate": "candidate",
+                "latest_candidate": "candidate",
+                "manuscript_path": None,
+                "core_updates": [],
+                "error": None,
+                "action_required": None,
+            },
+        )
+        sources = self.source_workspace()
+        state_path = self.workspace.path(
+            self.workspace._agent_state_relative(
+                PLOT_ARCHITECT,
+                self.session_id,
+                "source_debate",
+            )
+        )
+        owned_paths = (
+            (state_path, lambda: sources.read_agent_session_state(
+                PLOT_ARCHITECT, self.session_id
+            )),
+            (debate_root / "source_debate.state.json", lambda: sources.inspect_debate(
+                self.session_id, "source_debate"
+            )),
+            (result_path, lambda: sources.inspect_debate(
+                self.session_id, "source_debate"
+            )),
+            (debate_root / "source_debate.jsonl", lambda: sources.inspect_debate(
+                self.session_id, "source_debate"
+            )),
+        )
+        for index, (owned_path, read) in enumerate(owned_paths):
+            link = self.workspace.root.parent / f"foreign-hardlink-{index}"
+            os.link(owned_path, link)
+            try:
+                with self.subTest(path=owned_path.name), self.assertRaises(
+                    WorkspaceSecurityError
+                ):
+                    read()
+            finally:
+                link.unlink()
+
+        fifo = self.workspace.path("fifo-source")
+        os.mkfifo(fifo)
+        root_descriptor = os.open(self.workspace.root, os.O_RDONLY)
+        try:
+            with mock.patch.object(workspace_core.os, "read") as read_call, (
+                self.assertRaises(WorkspaceSecurityError)
+            ):
+                SessionSourceWorkspace._read_bytes_at(
+                    root_descriptor,
+                    "fifo-source",
+                )
+            read_call.assert_not_called()
+        finally:
+            os.close(root_descriptor)
+
+    def test_session_source_rejects_foreign_debate_ownership_and_metadata_drift(
+        self,
+    ) -> None:
+        self.append_source_debate(self.workspace, "owned debate")
+        state_relative = (
+            f"discussion_logs/{self.session_id}/source_debate.state.json"
+        )
+        state = self.workspace.read_json(state_relative)
+        sources = self.source_workspace()
+        for field, value in (
+            ("session_id", "foreign_session"),
+            ("debate_id", "foreign_debate"),
+        ):
+            foreign = dict(state)
+            foreign[field] = value
+            self.workspace.write_json(state_relative, foreign)
+            try:
+                with self.subTest(record="state", field=field), self.assertRaises(
+                    WorkspaceFormatError
+                ):
+                    sources.inspect_debate(self.session_id, "source_debate")
+            finally:
+                self.workspace.write_json(state_relative, state)
+
+        result_relative = (
+            f"discussion_logs/{self.session_id}/source_debate.result.json"
+        )
+        result = {
+            "session_id": self.session_id,
+            "debate_id": "source_debate",
+            "input_kind": "prompt",
+            "status": "consensus",
+            "revision_id": "r1",
+            "rounds_completed": 1,
+            "final_candidate": "candidate",
+            "latest_candidate": "candidate",
+            "manuscript_path": None,
+            "core_updates": [],
+            "error": None,
+            "action_required": None,
+        }
+        for field, value in (
+            ("session_id", "foreign_session"),
+            ("debate_id", "foreign_debate"),
+        ):
+            foreign = dict(result)
+            foreign[field] = value
+            self.workspace.write_json(result_relative, foreign)
+            try:
+                with self.subTest(record="result", field=field), self.assertRaises(
+                    WorkspaceFormatError
+                ):
+                    sources.inspect_debate(self.session_id, "source_debate")
+            finally:
+                self.workspace.path(result_relative).unlink(missing_ok=True)
+
+        root_descriptor = os.open(self.workspace.root, os.O_RDONLY)
+        initial = os.stat(self.workspace.path(_OUTLINE), follow_symlinks=False)
+        changed = SimpleNamespace(
+            st_mode=initial.st_mode,
+            st_nlink=initial.st_nlink,
+            st_dev=initial.st_dev,
+            st_ino=initial.st_ino,
+            st_size=initial.st_size,
+            st_mtime_ns=initial.st_mtime_ns + 1,
+            st_ctime_ns=initial.st_ctime_ns,
+        )
+        try:
+            with mock.patch.object(
+                workspace_core.os,
+                "fstat",
+                side_effect=(initial, changed),
+            ), self.assertRaises(WorkspaceSecurityError):
+                SessionSourceWorkspace._read_bytes_at(root_descriptor, _OUTLINE)
+        finally:
+            os.close(root_descriptor)
 
     def test_session_sources_ignore_conflicting_control_state_with_legacy_parity(
         self,
@@ -225,6 +449,69 @@ class RuntimeSessionArtifactBindingTests(LeadOrchestrationTestCase):
             if entered:
                 replacement_context.__exit__(None, None, None)
 
+    def test_session_sources_discard_bytes_when_ready_index_drifts_same_inode(
+        self,
+    ) -> None:
+        self.append_source_state(self.workspace, "semantic drift sentinel")
+        relative = self.workspace._agent_state_relative(
+            PLOT_ARCHITECT,
+            self.session_id,
+            "source_debate",
+        )
+        identity = (
+            os.stat(self.workspace.root).st_dev,
+            os.stat(self.workspace.root).st_ino,
+        )
+        sources = self.source_workspace()
+
+        def stage() -> None:
+            subprocess.run(
+                ["git", "add", "-f", "--", relative],
+                cwd=self.workspace.root,
+                check=True,
+                capture_output=True,
+            )
+
+        def unstage() -> None:
+            subprocess.run(
+                ["git", "reset", "--", relative],
+                cwd=self.workspace.root,
+                check=True,
+                capture_output=True,
+            )
+
+        stage()
+        try:
+            with self.assertRaises(SessionArtifactBindingError):
+                sources.read_agent_session_state(PLOT_ARCHITECT, self.session_id)
+        finally:
+            unstage()
+
+        original_read = SessionSourceWorkspace._read_text_at
+        drifted = False
+
+        def stage_during_read(root, path, *, missing_ok=False):
+            nonlocal drifted
+            if not drifted:
+                drifted = True
+                stage()
+            return original_read(root, path, missing_ok=missing_ok)
+
+        try:
+            with mock.patch.object(
+                SessionSourceWorkspace,
+                "_read_text_at",
+                side_effect=stage_during_read,
+            ), self.assertRaises(SessionArtifactBindingError):
+                sources.read_agent_session_state(PLOT_ARCHITECT, self.session_id)
+        finally:
+            if drifted:
+                unstage()
+        self.assertEqual(
+            (os.stat(self.workspace.root).st_dev, os.stat(self.workspace.root).st_ino),
+            identity,
+        )
+
     def test_binding_and_source_reads_close_descriptors_and_allow_core_deletion(
         self,
     ) -> None:
@@ -255,17 +542,19 @@ class RuntimeSessionArtifactBindingTests(LeadOrchestrationTestCase):
         self.append_source_state(self.workspace, "descriptor cleanup state")
         sources = SessionSourceWorkspace.from_artifact_binding(binding)
         source_descriptors: list[int] = []
-        original_source_open = workspace_core.open_workspace_root_directory
+        original_duplicate = (
+            initialization_module.SessionArtifactAccess.duplicate_worktree_descriptor
+        )
 
-        def record_source_open(workspace):
-            descriptor = original_source_open(workspace)
+        def record_source_open(access):
+            descriptor = original_duplicate(access)
             source_descriptors.append(descriptor)
             return descriptor
 
         with mock.patch.object(
-            workspace_core,
-            "open_workspace_root_directory",
-            side_effect=record_source_open,
+            initialization_module.SessionArtifactAccess,
+            "duplicate_worktree_descriptor",
+            record_source_open,
         ):
             self.assertTrue(
                 sources.read_agent_session_state(PLOT_ARCHITECT, self.session_id)
@@ -277,9 +566,9 @@ class RuntimeSessionArtifactBindingTests(LeadOrchestrationTestCase):
 
         source_descriptors.clear()
         with mock.patch.object(
-            workspace_core,
-            "open_workspace_root_directory",
-            side_effect=record_source_open,
+            initialization_module.SessionArtifactAccess,
+            "duplicate_worktree_descriptor",
+            record_source_open,
         ), mock.patch.object(
             SessionSourceWorkspace,
             "_read_text_at",
@@ -368,11 +657,17 @@ class RuntimeSessionArtifactBindingTests(LeadOrchestrationTestCase):
         control_before = self.control_snapshot()
         self.backend.enqueue(_visible_outcome("answer"))
 
-        with self.assertRaises(SessionArtifactBindingError):
-            await bound.lead_turn(
-                conversation,
-                f"Read ${{{_OUTLINE}}} before answering.",
-            )
+        blocked = await bound.lead_turn(
+            conversation,
+            f"Read ${{{_OUTLINE}}} before answering.",
+        )
+        self.assertIs(blocked.state, CollaborationStepState.RECOVERY_REQUIRED)
+        self.assertIs(
+            blocked.next_action,
+            CollaborationNextAction.REPAIR_AUTHORITATIVE_HISTORY,
+        )
+        self.assertIsNone(blocked.proposal)
+        self.assertIsNone(blocked.artifact_proposal)
 
         self.assertEqual(
             (len(self.backend.calls), len(self.backend.reference_calls)),

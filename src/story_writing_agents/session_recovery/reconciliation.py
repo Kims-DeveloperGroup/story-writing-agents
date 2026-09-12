@@ -41,13 +41,18 @@ from ..session_lifecycle import (
     SessionDurableState,
     SessionLifecycleState,
 )
-from ..workspace.initialization import inspect_session_history, inspect_session_resources
+from ..workspace.initialization import (
+    SessionArtifactBinding,
+    SessionArtifactBindingError,
+    compose_session_artifact_binding,
+    inspect_session_history,
+    inspect_session_resources,
+)
 from ..writing_artifacts import (
     ArtifactApplicationError,
     ArtifactApplicationErrorCode,
     ArtifactApplicationResult,
 )
-from ..writing_artifacts.repository import WritingArtifactRepository
 from .contracts import (
     SessionArtifactApplicationEvidence,
     SessionRecoveryError,
@@ -250,6 +255,25 @@ class SessionRecoveryReconciler:
         )
         if resource_blocker is not None:
             return resource_blocker
+        try:
+            artifact_binding = compose_session_artifact_binding(
+                self._workspace_root,
+                session_id,
+            )
+        except SessionArtifactBindingError:
+            return _owner_recovery(
+                session_id,
+                conversation,
+                tail,
+                SessionRecoveryOwner.SESSION_RESOURCES,
+            )
+        if artifact_binding.resources != resources_a:
+            return _owner_recovery(
+                session_id,
+                conversation,
+                tail,
+                SessionRecoveryOwner.SESSION_RESOURCES,
+            )
 
         snapshot_a = self._read_history(session_id, conversation, tail, False)
         if isinstance(snapshot_a, SessionRecoveryResult):
@@ -286,7 +310,7 @@ class SessionRecoveryReconciler:
 
         if application is not None:
             application_blocker = _inspect_application(
-                resources_a.identity.worktree_root,
+                artifact_binding,
                 application,
                 session_id,
                 conversation,
@@ -403,7 +427,12 @@ class SessionRecoveryReconciler:
             return history_b
         resources_b = self._read_resources(session_id, conversation, tail, True)
         if isinstance(resources_b, SessionRecoveryResult):
-            return resources_b
+            return _owner_recovery(
+                session_id,
+                conversation,
+                tail,
+                SessionRecoveryOwner.SESSION_RESOURCES,
+            )
         snapshot_b = self._read_history(session_id, conversation, tail, True)
         if isinstance(snapshot_b, SessionRecoveryResult):
             return snapshot_b
@@ -427,7 +456,25 @@ class SessionRecoveryReconciler:
         if history_a != history_b:
             return _owner_outcome(session_id, conversation, tail, SessionRecoveryOwner.COLLABORATION_HISTORY)
         if resources_a != resources_b:
-            return _owner_outcome(session_id, conversation, tail, SessionRecoveryOwner.SESSION_RESOURCES)
+            return _owner_recovery(
+                session_id,
+                conversation,
+                tail,
+                SessionRecoveryOwner.SESSION_RESOURCES,
+            )
+        try:
+            with artifact_binding.open_ready_resources() as access:
+                if access.resources != resources_b:
+                    raise SessionArtifactBindingError(
+                        "recovery session resources changed"
+                    )
+        except SessionArtifactBindingError:
+            return _owner_recovery(
+                session_id,
+                conversation,
+                tail,
+                SessionRecoveryOwner.SESSION_RESOURCES,
+            )
         if (
             snapshot_a.inspection.session_id != snapshot_b.inspection.session_id
             or snapshot_a.candidates != snapshot_b.candidates
@@ -777,16 +824,23 @@ def _history_blocker(
 
 
 def _inspect_application(
-    worktree_root: Path,
+    artifact_binding: SessionArtifactBinding,
     application: SessionArtifactApplicationEvidence,
     session_id: str,
     conversation_id: str,
     tail: int,
 ) -> SessionRecoveryResult | None:
     try:
-        repository = WritingArtifactRepository(worktree_root)
-        stored = repository.inspect_artifact_application(
-            application.application_result.application_id
+        with artifact_binding.open_ready_resources() as access:
+            stored = access.repository.inspect_artifact_application(
+                application.application_result.application_id
+            )
+    except SessionArtifactBindingError:
+        return _owner_recovery(
+            session_id,
+            conversation_id,
+            tail,
+            SessionRecoveryOwner.ARTIFACT_APPLICATION,
         )
     except ArtifactApplicationError as failure:
         failure_code = (

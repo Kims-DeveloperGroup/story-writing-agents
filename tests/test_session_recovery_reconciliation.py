@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import ast
-from contextlib import ExitStack
+from contextlib import ExitStack, contextmanager
 from dataclasses import dataclass, replace
 import hashlib
 import inspect
@@ -476,6 +476,8 @@ def _observe(
     reviewed: SessionReviewedProposalEvidence | None = None,
     application: SessionArtifactApplicationEvidence | None = None,
     stored_application: object | None = None,
+    binding_accesses: tuple[object, ...] | None = None,
+    binding_failure: BaseException | None = None,
     transition: bool = False,
 ) -> _Observation:
     trace: list[str] = []
@@ -484,6 +486,8 @@ def _observe(
     snapshot_values = list(snapshots or (_snapshot(), _snapshot()))
     external_values = list(externals or (_external(), _external()))
     status_values = list(statuses or (_status(), _status()))
+    initial_resources = resource_values[0]
+    access_values = list(binding_accesses or ())
     adapter_instances: list[object] = []
     repository_instances: list[object] = []
 
@@ -531,6 +535,33 @@ def _observe(
             self.apply_called = True
             raise AssertionError("Apply is forbidden during reconciliation")
 
+    class Access:
+        def __init__(self, resources):
+            self.resources = resources
+            self._repository = None
+
+        @property
+        def repository(self):
+            if self._repository is None:
+                self._repository = Repository(
+                    initial_resources.identity.worktree_root
+                )
+            return self._repository
+
+    class Binding:
+        resources = initial_resources
+
+        @contextmanager
+        def open_ready_resources(self):
+            if binding_failure is not None:
+                raise binding_failure
+            resources = (
+                next_value(access_values, "binding")
+                if access_values
+                else initial_resources
+            )
+            yield Access(resources)
+
     with ExitStack() as stack:
         stack.enter_context(
             mock.patch.object(
@@ -547,7 +578,13 @@ def _observe(
             )
         )
         stack.enter_context(mock.patch.object(reconciliation_module, "GitRepositoryAdapter", Adapter))
-        stack.enter_context(mock.patch.object(reconciliation_module, "WritingArtifactRepository", Repository))
+        stack.enter_context(
+            mock.patch.object(
+                reconciliation_module,
+                "compose_session_artifact_binding",
+                return_value=Binding(),
+            )
+        )
         owner = (
             SessionTransitionAssessor(_WORKSPACE)
             if transition else SessionRecoveryReconciler(_WORKSPACE, store)
@@ -1018,7 +1055,42 @@ class SessionRecoveryArtifactTests(unittest.TestCase):
 
 
 class SessionRecoveryDriftTests(unittest.TestCase):
-    def test_each_owner_generation_drift_returns_outcome_unknown_without_mixing_snapshots(self) -> None:
+    def test_pinned_generation_rejects_replacement_before_ledger_or_final_check(
+        self,
+    ) -> None:
+        reviewed, application = _artifact_facts()
+        before_ledger = _observe(
+            reviewed=reviewed,
+            application=application,
+            stored_application=application.application_result,
+            binding_failure=reconciliation_module.SessionArtifactBindingError(
+                "generation A unavailable"
+            ),
+        )
+        self.assertIs(
+            before_ledger.result.state,
+            SessionRecoveryState.RECOVERY_REQUIRED,
+        )
+        self.assertIs(
+            before_ledger.result.owner,
+            SessionRecoveryOwner.ARTIFACT_APPLICATION,
+        )
+        self.assertEqual(before_ledger.repository_instances, [])
+        self.assertNotIn("application", before_ledger.trace)
+
+        generation_b = replace(_resources(), current_branch_tip="6" * 40)
+        final_check = _observe(binding_accesses=(generation_b,))
+        self.assertIs(
+            final_check.result.state,
+            SessionRecoveryState.RECOVERY_REQUIRED,
+        )
+        self.assertIs(
+            final_check.result.owner,
+            SessionRecoveryOwner.SESSION_RESOURCES,
+        )
+        self.assertEqual(final_check.repository_instances, [])
+
+    def test_each_owner_generation_drift_fails_closed_without_mixing_snapshots(self) -> None:
         unrelated = _candidate(suffix="drift", correlation="unrelated")
         drift_snapshot = GitSessionHistorySnapshot(
             GitSessionHistoryInspection(_SESSION, (unrelated.candidate_id,), (), (), ()),
@@ -1064,9 +1136,19 @@ class SessionRecoveryDriftTests(unittest.TestCase):
                 statuses=(_status(), *(statuses_b or (_status(),))),
             )
             with self.subTest(owner=owner.value):
-                self.assertIs(observed.result.state, SessionRecoveryState.OUTCOME_UNKNOWN)
+                expected_state = (
+                    SessionRecoveryState.RECOVERY_REQUIRED
+                    if owner is SessionRecoveryOwner.SESSION_RESOURCES
+                    else SessionRecoveryState.OUTCOME_UNKNOWN
+                )
+                expected_action = (
+                    SessionRecoveryNextAction.OPERATOR_RECOVERY
+                    if owner is SessionRecoveryOwner.SESSION_RESOURCES
+                    else SessionRecoveryNextAction.INSPECT_OWNER_OUTCOME
+                )
+                self.assertIs(observed.result.state, expected_state)
                 self.assertIs(observed.result.owner, owner)
-                self.assertIs(observed.result.next_action, SessionRecoveryNextAction.INSPECT_OWNER_OUTCOME)
+                self.assertIs(observed.result.next_action, expected_action)
 
 
 class SessionRecoveryBoundaryTests(unittest.TestCase):

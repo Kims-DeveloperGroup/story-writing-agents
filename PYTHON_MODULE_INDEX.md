@@ -18,12 +18,12 @@ Package root: `src/story_writing_agents/`
 
 Importable production units indexed: 142.
 
-Direct internal dependency edges indexed: 567.
+Direct internal dependency edges indexed: 568.
 
 Directed internal dependency cycles indexed: 0.
 
 Edge and cycle totals exclude annotation-only `TYPE_CHECKING` imports. The
-all-import AST graph has 569 edges. Its two annotation-only edges are
+all-import AST graph has 570 edges. Its two annotation-only edges are
 `config -> workspace` and `interactive_terminal._core -> conversations`; the
 workspace cycle was already present in the 135-unit baseline
 (528 all-import / 526 runtime edges).
@@ -207,7 +207,7 @@ orchestrator -> agent_context.progress/artifact_proposals/backend/config/consens
              -> conversation_storage.composition/contracts
              -> errors/git.story_commit_contracts/git.story_commits
              -> models
-             -> prompts/specialist_routing/workspace/workspace.initialization
+             -> prompts/specialist_routing/workspace/workspace.core/workspace.initialization
              -> writing_artifacts/repository/runtime_references
 models -> conversations/agents/errors
 agent_context -> agent_context.accounting
@@ -273,7 +273,6 @@ session_recovery.reconciliation -> conversations/git/git.session_contracts
                                 -> git.session_history_contracts/session_lifecycle
                                 -> session_recovery.contracts
                                 -> workspace.initialization/writing_artifacts
-                                -> writing_artifacts.repository
 session_recovery.transition_assessment -> conversations/git/git.session_contracts
                                        -> git.session_history_contracts/session_lifecycle
                                        -> session_recovery.contracts
@@ -295,7 +294,7 @@ workspace -> conversation_storage.filesystem/workspace.core
 workspace.core -> agents/conversations/errors/models
                -> workspace.initialization/workspace.schema/writing_artifacts
 workspace.initialization -> agent_exchange_paths/config/errors/git/git.session_checkpoints
-                         -> git.session_contracts/git.session_history/git.session_resources/git.story_commits
+                         -> git.repository_lock/git.session_contracts/git.session_history/git.session_resources/git.story_commits
                          -> runtime_state_paths/workspace._policy_baselines/workspace.schema
                          -> writing_artifacts.repository
 workspace._policy_baselines -> (immutable data only)
@@ -737,7 +736,10 @@ every intermediate arrow. The current runtime graph is acyclic.
   `SessionHistorySourceAdapter`, and
   `WritingArtifactSourceAdapter`. The non-facade package-internal
   `writing_artifact_source_id(path)` helper is the single canonical source-ID
-  projection consumed by runtime composition. The writing-artifact adapter and
+  projection consumed by runtime composition. The package-internal
+  `create_guarded_writing_artifact_source_adapter(...)` factory injects a
+  caller-owned repository-access context manager without widening the facade
+  or the adapter's established constructor. The writing-artifact adapter and
   registry also expose one package-internal stable status capture for exactly
   the four `writing_artifacts.catalog.CORE_ARTIFACT_PATHS`, in canonical order.
   It double-captures present/zero-byte sources, proves exact absence without
@@ -785,8 +787,11 @@ every intermediate arrow. The current runtime graph is acyclic.
   captured immutable readable contexts are identity-validated once; search
   prechecks manifest byte facts, acquires sources in canonical manifest order,
   omits over-limit records without minting handles, and revalidates every
-  touched source after selection. All source bodies and normalization buffers
-  remain call-local. `SessionHistorySourceAdapter` borrows the same public
+  touched source after selection. A guarded writing-artifact adapter opens one
+  short synchronous access around each complete inventory, core-status, or
+  capture operation; its internal multi-read stability checks reuse that one
+  access and never nest it. All source bodies and normalization buffers remain
+  call-local. `SessionHistorySourceAdapter` borrows the same public
   catalog/event-store ports, includes archived conversations, reads each whole
   canonical history, and revalidates the catalog inventory. It never uses the
   bounded searchable selector, cache, source aliases, or evidence authority.
@@ -3057,7 +3062,9 @@ every intermediate arrow. The current runtime graph is acyclic.
   manifests, effective identities, applied change sets, and staging bytes from
   representations. Public functions expose only the typed boundary; no raw
   argv, environment, descriptor, repository lease, or reusable Git capability
-  crosses it.
+  crosses it. Named package-internal preparation and revalidation operations,
+  omitted from `__all__`, accept the Apply-bound physical session-root identity
+  without changing the exported binding shape or public function signatures.
   Candidate operations propagate an optional exact-config allowance through
   session readiness and history while remaining strict by default.
 - **Direct internal dependencies:** `git.contracts`, `git.process`,
@@ -3073,7 +3080,10 @@ every intermediate arrow. The current runtime graph is acyclic.
   worktree identity. It computes SHA-1/SHA-256 blob and recursive tree IDs
   locally, so it writes no Git index, object, ref, commit, or working file;
   only the session-history owner publishes the immutable candidate. Loading is
-  content-free. Revalidation repeats all facts under the caller's live history
+  content-free. Identity-bound preparation and revalidation require the named
+  worktree and every repository read to retain the Apply root's exact
+  `(st_dev, st_ino)`; ordinary direct-module calls retain their established
+  behavior. Revalidation repeats all facts under the caller's live history
   lease and returns exact hidden bytes solely for literal staging.
 - **Primary verification/documentation:**
   `tests/test_git_story_commit_candidates.py` verifies exact exports,
@@ -3098,8 +3108,12 @@ every intermediate arrow. The current runtime graph is acyclic.
   sentinel-closed; each instance is process-, service-, thread-, candidate-,
   confirmation-, and operation-bound, noncopyable, nonpickleable, and consumed
   once before execution I/O.
-  Workspace composition may bind a freshly validated exact-config allowance
-  into the service; direct construction remains strict by default.
+  The named package-internal
+  `create_identity_bound_story_commit_service(...)` factory is omitted from
+  `__all__`; workspace composition uses it to retain the successful Apply
+  root's physical identity without changing the public constructor, methods,
+  candidate values, or durable schemas. Direct construction remains strict by
+  default.
 - **Direct internal dependencies:** `git.contracts`, `git.process`,
   `git.session_history`, `git.session_history_contracts`,
   `git.story_commit_candidates`, and `git.story_commit_contracts`.
@@ -3110,8 +3124,9 @@ every intermediate arrow. The current runtime graph is acyclic.
   Commit requires a fresh confirmation and authority rather than replay.
   Revise records a deterministic rejection marker that prevents later
   authority for the old candidate. Execute holds the
-  shared session-history lease, revalidates all candidate facts, durably records
-  RUNNING before mutation and STAGED before commit creation, writes only exact
+  shared session-history lease, revalidates all candidate facts and the bound
+  physical session root, durably records RUNNING before mutation, rechecks the
+  root before staging, and records STAGED before commit creation. It writes only exact
   no-filter blobs and literal index entries/removals, verifies the expected
   tree, creates one captured-identity commit with one exact parent, and CAS-
   updates only the session branch before durable COMMITTED evidence. It verifies
@@ -7017,7 +7032,8 @@ every intermediate arrow. The current runtime graph is acyclic.
   `git.story_commit_contracts`, `git.story_commits`,
   `conversation_rag_runtime`, `conversation_storage.composition`,
   `conversation_storage.contracts`, `debug_log`, `directives`, `errors`,
-  `models`, `prompts`, `specialist_routing`, `workspace`, `workspace.initialization`,
+  `models`, `prompts`, `specialist_routing`, `workspace`, `workspace.core`,
+  `workspace.initialization`,
   `writing_artifacts`, `writing_artifacts.catalog`, `writing_artifacts.repository`, and
   `writing_artifacts.runtime_references`.
 - **State, resources, and side effects:** Retains workspace, prompt/config, one
@@ -7029,9 +7045,12 @@ every intermediate arrow. The current runtime graph is acyclic.
   binding state, per-conversation async locks,
   private confirmed-step, recommendation, and artifact-application capabilities,
   and live execution-attempt markers.
-  Every artifact-sensitive top-level operation freshly requires the exact
-  READY session resource identity and constructs a call-local repository at
-  that session worktree with its descriptor-verified physical root identity.
+  Every artifact-sensitive top-level operation freshly binds the exact READY
+  session resource and physical worktree identity. Direct reads use one short
+  synchronous guarded access; lazy provider reference and writing-artifact
+  adapters reacquire that same binding around each complete repository action,
+  so the blocking Git lease never spans an `await` and parallel specialist
+  provider calls retain their concurrency.
   Provider invocation, artifact-evidence resolution, and evidence
   revalidation derive the correlated call-local `SessionSourceWorkspace` from
   the same binding and lend it to every active-debate and invoking-agent-state
@@ -7050,8 +7069,9 @@ every intermediate arrow. The current runtime graph is acyclic.
   Apply confirmation produces the existing durable recovery-required/operator-
   recovery no-write result. Once repository application execution starts,
   an unclassified root, security, or format failure remains conservatively
-  outcome-unknown, while a repository-reported terminal recovery condition
-  retains recovery-required. Provider seams receive only bounded reference and
+  outcome-unknown, including a repository-reported failure after entry.
+  Successful Apply retains its exact binding for Commit candidate composition;
+  replacement before Commit staging fails closed. Provider seams receive only bounded reference and
   context capabilities, never a repository, root, write, or Git capability.
   Runtime and bound sessions expose the same storage bundle; no raw
   schema-v1 event-store injection or property remains. Explicit lead turns may
@@ -7311,16 +7331,19 @@ every intermediate arrow. The current runtime graph is acyclic.
 - **Direct internal dependencies:** `conversations`, `git`,
   `git.session_contracts`, `git.session_history_contracts`,
   `session_lifecycle`, `session_recovery.contracts`,
-  `workspace.initialization`, `writing_artifacts`, and
-  `writing_artifacts.repository`.
+  `workspace.initialization`, and `writing_artifacts`.
 - **State, resources, and side effects:** The constructor normalizes and
   validates inputs without I/O. Inspection requires a ready lifecycle held by
   this process. It observes collaboration, session resources, and session
-  history as generation A; performs the optional exact artifact inspection;
+  history as generation A; correlates one physical and semantic session
+  artifact binding to that generation and performs the optional ledger
+  inspection through its short guarded repository access;
   observes external Git and repository status A plus the conditional current-
   commit log; then observes all five owners as generation B before rejecting
-  drift, reselecting correlated records, and delegating one complete immutable
-  evidence graph to the pure classifier. It
+  drift, revalidating the same binding against generation B, reselecting
+  correlated records, and delegating one complete immutable evidence graph to
+  the pure classifier. Binding or ledger loss maps to content-free owner
+  recovery without adopting replacement bytes. It
   retains no live Git/history/repository value and owns no durable record,
   lease, capability, process, mutation, provider call, replay, cleanup, or
   lifecycle transition. Direct blocker results expose only content-safe
@@ -7475,14 +7498,13 @@ every intermediate arrow. The current runtime graph is acyclic.
   defining module. Workspace/root imports and pickle lookup through those
   canonical modules remain supported, while the intentionally breaking v2
   initializer removes the former prompt-overwrite parameter without a shim.
-  Package-internal `SessionSourceWorkspace`,
-  `open_workspace_root_directory`, `verify_workspace_root_directory`,
-  `WORKSPACE_DIRECTORIES`, and exact-v2 role-aware `discover_workspace` are
-  statically bound for internal consumers but are absent from `__all__` and
-  from the project-root facade. `SessionSourceWorkspace` is the narrow
-  descriptor-relative session debate/owner-state read authority derived from
-  an exact session artifact binding; no incidental core implementation global
-  or private helper is forwarded.
+  Package-internal `open_workspace_root_directory`,
+  `verify_workspace_root_directory`, `WORKSPACE_DIRECTORIES`, and exact-v2
+  role-aware `discover_workspace` are statically bound for internal consumers
+  but are absent from `__all__` and from the project-root facade.
+  `SessionSourceWorkspace` remains private to `workspace.core` and is not bound
+  on this facade; no incidental core implementation global or private helper
+  is forwarded.
 - **Direct internal dependencies:** `conversation_storage.filesystem` and
   `workspace.core`.
 - **State, resources, and side effects:** Owns no state or external resource.
@@ -7556,8 +7578,9 @@ every intermediate arrow. The current runtime graph is acyclic.
   `verify_workspace_root_directory`, and `WORKSPACE_DIRECTORIES` provide the
   identity-bound internal-storage and topology boundary used by orchestration,
   diagnostic, agent-exchange, disposable-generation, and smoke owners; they
-  remain deliberately absent from both public `__all__` declarations and the
-  project-root facade. `SessionSourceWorkspace` is derived only from an exact
+  remain deliberately absent from `workspace.core.__all__`, the stable
+  workspace facade, and the project-root facade. `SessionSourceWorkspace` is
+  derived only from an exact
   `workspace.initialization.SessionArtifactBinding`; it exposes the existing
   `Workspace` read shape needed by context adapters while rejecting inherited
   pathname I/O. Package-internal `discover_workspace` delegates nearest
@@ -7585,13 +7608,16 @@ every intermediate arrow. The current runtime graph is acyclic.
   initializer has no overwrite parameter or schema-v1 migration path. Generic writes
   reject marker/journal identities and normalized/case-folded writing-artifact
   namespaces before mutation. The package-internal session source view adopts
-  the root, session, and physical identity already validated by its artifact
   binding without rerunning full workspace readiness or re-admitting mutable
-  artifact scaffold. Each allowed debate or owner-state read opens that exact
-  no-follow root, traverses and reads descriptor-relative regular files only,
-  rechecks the named root before returning, and closes every call-local
-  descriptor on success or failure; it provides no generic path or write
-  authority. Package-internal root-descriptor helpers recheck
+  artifact scaffold. Each allowed debate or owner-state operation borrows one
+  short semantic-READY/physical-root access from that binding, traverses the
+  pinned descriptor with strict lexical and no-follow checks, and requires the
+  named leaf before and after reading to be the same unique regular file with
+  stable mode, size, mtime, and ctime. Debate result/state session and debate
+  identities, and every agent-state agent/session/debate identity, must match
+  their requested paths. The guard and every call-local descriptor close on
+  success or failure before bytes return; the view provides no generic path or
+  write authority. Package-internal root-descriptor helpers recheck
   the bound identity for storage owners. This module does not define marker,
   scaffold, journal, Git, discovery, or readiness policy; it owns no Git
   subprocess and no repository-mediated artifact write, commit, or rollback.
@@ -7621,7 +7647,8 @@ every intermediate arrow. The current runtime graph is acyclic.
   initialization and readiness lifecycle.
 - **Supported surface:** Internal-only `WorkspaceRootState`,
   `WorkspaceRootRole`, `WorkspaceRootInspection`, `WorkspaceRootDiscovery`,
-  `SessionArtifactBinding`, `SessionArtifactBindingError`,
+  `SessionArtifactBinding`, `SessionArtifactAccess`,
+  `SessionArtifactBindingError`,
   `compose_session_artifact_binding`,
   the inspect/initialize/require-ready and typed nearest-discovery operations,
   plus bounded `inspect_session_resources`, `inspect_session_history`,
@@ -7631,7 +7658,7 @@ every intermediate arrow. The current runtime graph is acyclic.
   module `__all__` is empty and neither the workspace nor project facade
   exports them.
 - **Direct internal dependencies:** `agent_exchange_paths`, `config`, `errors`, the public `git` facade,
-  `git.session_checkpoints`, `git.session_contracts`, `git.session_history`,
+  `git.repository_lock`, `git.session_checkpoints`, `git.session_contracts`, `git.session_history`,
   `git.session_resources`, `git.story_commits`, `runtime_state_paths`,
   `writing_artifacts.repository`, and
   `workspace._policy_baselines`/`workspace.schema`.
@@ -7679,20 +7706,30 @@ every intermediate arrow. The current runtime graph is acyclic.
   checks enforce its fixed root message, parent, tree, index, and topology.
   Schema-only empty runtime directories are main-initializer resources
   and are not required in a Git-materialized session root.
-  `compose_session_artifact_binding` first performs that same fresh exact READY
-  validation, opens and retains the physical worktree descriptor across a
-  second complete Git-session-resource READY validation, requires the second
-  immutable inspection to equal the first, and verifies that the named root
-  still has the same meaningful `(st_dev, st_ino)` identity. This composition
+  `compose_session_artifact_binding` performs two exact READY validations under
+  one identity-bound repository lease, retains their immutable inspection,
+  manifest, configuration allowance, and physical worktree identity, and
+  verifies that the named root still has the same meaningful `(st_dev, st_ino)`.
+  This composition
   does not re-admit the session scaffold or require clean artifact worktree
   content, so clean-index unstaged artifact modifications and deletions remain
   valid session state. It returns an immutable
-  call-local binding that carries that identity into a repository rooted at the
-  validated session worktree. Later path replacement therefore fails closed
-  before the replacement can become repository authority. It performs no fallback,
+  reusable binding that carries that identity into a repository rooted at the
+  validated session worktree. Its context-managed `SessionArtifactAccess`
+  holds one call-local Git lease and pinned root descriptor, requires the
+  current locked READY inspection to equal the binding before and after body
+  I/O, and closes both on every exit. Later path replacement and persistent
+  same-inode Git drift therefore fail closed before bytes return; orchestration
+  keeps each access synchronous and short. The advisory lease serializes
+  cooperating in-process Git owners; pre/post inspection detects persistent
+  external drift but cannot prove that a noncooperating external process did
+  not mutate and restore state between observations. It performs no fallback,
   provisioning, global mutation, provider work, or repository I/O during
   construction. Known readiness and workspace-validation failures become the
   content-free typed binding error; type/protocol defects are not normalized.
+  Identity-bound story-commit composition validates the successful Apply
+  binding and delegates to the Git owner's package-internal service factory;
+  ordinary direct construction remains compatible.
   Strict absent, empty, and journal-backed initialization retains the recursive
   snapshot, current-only scaffold, and registered runtime-directory predicates.
   No existing workspace or Git bytes are rewritten for baseline admission. Exact
@@ -8157,8 +8194,11 @@ every intermediate arrow. The current runtime graph is acyclic.
 - **Supported surface:** Package-internal `RuntimeReferenceOperation`,
   `prepare_runtime_reference_operation`, and
   `reference_operation_belongs_to_session`, plus the exact fail-closed
-  `reference_operation_session_id` decoder; none is re-exported by the
-  writing-artifact or project-root facade. Preparation preserves exact source
+  `reference_operation_session_id` decoder. Package-internal
+  `prepare_guarded_runtime_reference_operation(...)`, omitted from every
+  facade, injects a repository-access context-manager callback without changing
+  the established operation constructor or public preparation signature. None
+  is re-exported by the writing-artifact or project-root facade. Preparation preserves exact source
   and provider-text projections and uses a no-operation-ID fast path when no
   references exist. Each referenced provider attempt receives a fresh
   contiguous ordinal, UUID-backed invocation identity, and attempt value 1.
@@ -8174,8 +8214,12 @@ every intermediate arrow. The current runtime graph is acyclic.
   `writing_artifacts.references`, and `writing_artifacts.repository`.
 - **State, resources, and side effects:** One operation owns only a call-local
   reentrant lock, pending-invocation map, next ordinal, generated identities,
-  immutable source/provider projections, and a borrowed concrete repository.
-  It owns no filesystem, persistent-evidence, provider, process, or terminal
+  immutable source/provider projections, a borrowed concrete repository, and
+  an optional caller-owned access callback. Guarded preparation, invocation,
+  read, result, and terminal repository actions each open and close one short
+  synchronous access without nesting or spanning provider awaits. The module
+  imports no Git, workspace, controller, or orchestration implementation and
+  owns no filesystem, persistent-evidence, provider, process, or terminal
   resource; repository calls remain the only operational effects. Importing
   the module performs no I/O.
 - **Primary verification/documentation:**
@@ -8490,9 +8534,13 @@ every intermediate arrow. The current runtime graph is acyclic.
 
 ## Consistency Notes
 
-- The combined runtime has 142 production units, 567 runtime edges, 569
+- The combined runtime has 142 production units, 568 runtime edges, 570
   all-import edges, and no directed runtime cycle. Whole-source path parity is
-  exact. Specialist routing adds one pure module and five net inward runtime
+  exact. The private orchestrator-to-`workspace.core` edge supplies the
+  session-bound source reader without widening the stable workspace facade;
+  workspace initialization adds the repository-lock edge for guarded READY
+  access while recovery drops its former path-only artifact-repository edge.
+  Specialist routing adds one pure module and five net inward runtime
   edges over the provider-recovery baseline: artifact proposals replace their
   roster dependency with the policy, while relationship policy, conversation
   events/context, orchestration, and terminal projection consume that owner.

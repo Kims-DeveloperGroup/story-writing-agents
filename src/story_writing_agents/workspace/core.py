@@ -10,7 +10,7 @@ import stat
 import tempfile
 import unicodedata
 from datetime import UTC, datetime
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from types import TracebackType
 from typing import Any, Callable, Mapping
 
@@ -660,6 +660,10 @@ class Workspace:
             else None
         )
         state = self._read_debate_state(session, debate)
+        if result is not None:
+            self._require_debate_ownership(result, session, debate, "result")
+        if state is not None:
+            self._require_debate_ownership(state, session, debate, "state")
         messages = self.read_debate_messages(session, debate)
         if result is not None:
             status = result["status"]
@@ -912,6 +916,21 @@ class Workspace:
         return dict(value)
 
     @staticmethod
+    def _require_debate_ownership(
+        value: Mapping[str, Any],
+        session_id: str,
+        debate_id: str,
+        label: str,
+    ) -> None:
+        if (
+            value.get("session_id") != session_id
+            or value.get("debate_id") != debate_id
+        ):
+            raise WorkspaceFormatError(
+                f"debate {label} identity does not match its path"
+            )
+
+    @staticmethod
     def _serialize_debate_context_snapshot(
         snapshot: ConversationContextWindow,
     ) -> dict[str, Any]:
@@ -1156,12 +1175,15 @@ class Workspace:
 class SessionSourceWorkspace(Workspace):
     """Package-internal session-state reader pinned to one physical worktree."""
 
-    def __init__(
-        self,
-        root: Path,
-        session_id: str,
-        expected_root_identity: tuple[int, int],
-    ) -> None:
+    def __init__(self, binding: object) -> None:
+        from .initialization import SessionArtifactBinding
+
+        if type(binding) is not SessionArtifactBinding:
+            raise TypeError("binding must be a SessionArtifactBinding")
+        with binding.open_ready_resources() as access:
+            root = access.resources.identity.worktree_root
+            session_id = access.resources.identity.session_id
+            expected_root_identity = access.worktree_identity
         if not isinstance(root, Path) or not root.is_absolute():
             raise TypeError("session source root must be an absolute Path")
         normalized = Path(os.path.normpath(os.fspath(root)))
@@ -1182,6 +1204,7 @@ class SessionSourceWorkspace(Workspace):
         self._session_id = session
         self._ready = True
         self._initialization_failed = True
+        self._artifact_binding = binding
 
     def path(self, relative: str | os.PathLike[str]) -> Path:
         """Reject inherited pathname I/O outside the two source-read methods."""
@@ -1193,29 +1216,61 @@ class SessionSourceWorkspace(Workspace):
 
     @classmethod
     def from_artifact_binding(cls, binding: object) -> SessionSourceWorkspace:
-        """Derive source authority only from one exact session artifact binding."""
+        """Derive source authority from one reusable guarded artifact binding."""
 
         from .initialization import SessionArtifactBinding
 
         if type(binding) is not SessionArtifactBinding:
             raise TypeError("binding must be a SessionArtifactBinding")
-        return cls(
-            binding.resources.identity.worktree_root,
-            binding.resources.identity.session_id,
-            binding.worktree_identity,
-        )
+        return cls(binding)
 
     def _read_bound(self, reader: Callable[[int], Any]) -> Any:
-        descriptor = open_workspace_root_directory(self)
-        try:
-            value = reader(descriptor)
-            verify_workspace_root_directory(self, descriptor)
-            return value
-        finally:
-            os.close(descriptor)
+        with self._artifact_binding.open_ready_resources() as access:
+            descriptor = access.duplicate_worktree_descriptor()
+            try:
+                value = reader(descriptor)
+                verify_workspace_root_directory(self, descriptor)
+                access.require_active()
+                return value
+            finally:
+                os.close(descriptor)
 
     @staticmethod
-    def _open_directory_at(root: int, parts: tuple[str, ...]) -> int:
+    def _safe_relative_parts(relative: object) -> tuple[str, ...]:
+        if (
+            type(relative) is not str
+            or not relative
+            or "\\" in relative
+            or "\x00" in relative
+        ):
+            raise WorkspaceSecurityError(
+                "session source path must be relative POSIX text"
+            )
+        try:
+            relative.encode("utf-8", errors="strict")
+        except UnicodeEncodeError as exc:
+            raise WorkspaceSecurityError(
+                "session source path must be strict UTF-8"
+            ) from exc
+        parsed = PurePosixPath(relative)
+        parts = parsed.parts
+        if (
+            parsed.is_absolute()
+            or not parts
+            or parsed.as_posix() != relative
+            or any(part in {"", ".", ".."} for part in parts)
+            or (
+                len(relative) >= 3
+                and relative[0].isalpha()
+                and relative[1:3] == ":/"
+            )
+        ):
+            raise WorkspaceSecurityError("unsafe session source path")
+        return parts
+
+    @classmethod
+    def _open_directory_at(cls, root: int, relative: str) -> int:
+        parts = cls._safe_relative_parts(relative)
         flags = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW
         descriptor = os.dup(root)
         try:
@@ -1254,9 +1309,13 @@ class SessionSourceWorkspace(Workspace):
         *,
         missing_ok: bool = False,
     ) -> bytes | None:
-        parts = Path(relative).parts
+        parts = cls._safe_relative_parts(relative)
         try:
-            directory = cls._open_directory_at(root, parts[:-1])
+            directory = (
+                os.dup(root)
+                if len(parts) == 1
+                else cls._open_directory_at(root, "/".join(parts[:-1]))
+            )
         except FileNotFoundError:
             if missing_ok:
                 return None
@@ -1271,6 +1330,15 @@ class SessionSourceWorkspace(Workspace):
                     return None
                 raise
             initial = os.fstat(descriptor)
+            named_initial = os.stat(
+                parts[-1],
+                dir_fd=directory,
+                follow_symlinks=False,
+            )
+            identity = cls._require_unique_regular_file(
+                initial,
+                named_initial,
+            )
             chunks: list[bytes] = []
             while True:
                 chunk = os.read(descriptor, 64 * 1024)
@@ -1278,21 +1346,23 @@ class SessionSourceWorkspace(Workspace):
                     break
                 chunks.append(chunk)
             final = os.fstat(descriptor)
-            named = os.stat(
+            named_final = os.stat(
                 parts[-1],
                 dir_fd=directory,
                 follow_symlinks=False,
             )
-            identity = (initial.st_dev, initial.st_ino)
+            cls._require_unique_regular_file(final, named_final)
             if (
-                not stat.S_ISREG(initial.st_mode)
-                or not stat.S_ISREG(final.st_mode)
-                or not stat.S_ISREG(named.st_mode)
-                or identity != (final.st_dev, final.st_ino)
-                or identity != (named.st_dev, named.st_ino)
+                identity != (final.st_dev, final.st_ino)
+                or identity != (named_final.st_dev, named_final.st_ino)
+                or initial.st_mode != final.st_mode
+                or initial.st_mode != named_final.st_mode
                 or initial.st_size != final.st_size
+                or initial.st_size != named_final.st_size
                 or initial.st_mtime_ns != final.st_mtime_ns
+                or initial.st_mtime_ns != named_final.st_mtime_ns
                 or initial.st_ctime_ns != final.st_ctime_ns
+                or initial.st_ctime_ns != named_final.st_ctime_ns
             ):
                 raise WorkspaceSecurityError(
                     "session source file identity changed"
@@ -1302,6 +1372,28 @@ class SessionSourceWorkspace(Workspace):
             if descriptor >= 0:
                 os.close(descriptor)
             os.close(directory)
+
+    @staticmethod
+    def _require_unique_regular_file(
+        opened: os.stat_result,
+        named: os.stat_result,
+    ) -> tuple[int, int]:
+        identity = (opened.st_dev, opened.st_ino)
+        if (
+            not stat.S_ISREG(opened.st_mode)
+            or not stat.S_ISREG(named.st_mode)
+            or opened.st_nlink != 1
+            or named.st_nlink != 1
+            or identity != (named.st_dev, named.st_ino)
+            or opened.st_mode != named.st_mode
+            or opened.st_size != named.st_size
+            or opened.st_mtime_ns != named.st_mtime_ns
+            or opened.st_ctime_ns != named.st_ctime_ns
+        ):
+            raise WorkspaceSecurityError(
+                "session source file is not one unique regular file"
+            )
+        return identity
 
     @classmethod
     def _read_text_at(
@@ -1340,7 +1432,7 @@ class SessionSourceWorkspace(Workspace):
             try:
                 directory = self._open_directory_at(
                     root,
-                    Path(relative_directory).parts,
+                    relative_directory,
                 )
             except FileNotFoundError:
                 return ()
@@ -1426,6 +1518,20 @@ class SessionSourceWorkspace(Workspace):
                     if state_text is None
                     else self._validate_debate_state(json.loads(state_text))
                 )
+                if result is not None:
+                    self._require_debate_ownership(
+                        result,
+                        session,
+                        debate,
+                        "result",
+                    )
+                if state is not None:
+                    self._require_debate_ownership(
+                        state,
+                        session,
+                        debate,
+                        "state",
+                    )
             except json.JSONDecodeError as exc:
                 raise WorkspaceFormatError("invalid debate JSON state") from exc
             messages: list[DebateMessage] = []

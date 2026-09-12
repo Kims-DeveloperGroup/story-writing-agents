@@ -125,6 +125,77 @@ class StoryCommitServiceTests(StoryCommitGitTestCase):
             service.authorize(candidate, mismatched)
         self.assertIs(caught.exception.code, StoryCommitFailureCode.AUTHORITY_INVALID)
 
+    def test_apply_identity_blocks_pre_running_replacement_and_marks_post_running_unknown(
+        self,
+    ) -> None:
+        def prepared_bound(name):
+            root, session_root, evidence = self.applied_replace(name)
+            observed = os.stat(session_root)
+            service = commits_module.create_identity_bound_story_commit_service(
+                root,
+                manifest(),
+                "novel",
+                (observed.st_dev, observed.st_ino),
+            )
+            candidate = service.prepare(evidence, "Commit exact change", ("impact",))
+            authority = service.authorize(candidate, self.confirmation(candidate))
+            return root, session_root, service, authority
+
+        _root, session_root, service, authority = prepared_bound(
+            "pre-running-root-replacement"
+        )
+        before_head = self.run_git(session_root, "rev-parse", "HEAD").stdout
+        before_index = self.run_git(
+            session_root,
+            "diff",
+            "--cached",
+            "--name-only",
+        ).stdout
+        with self.replace_session_root(session_root), self.assertRaises(
+            StoryCommitError
+        ) as pre_running:
+            service.execute(authority)
+        self.assertIs(
+            pre_running.exception.code,
+            StoryCommitFailureCode.CANDIDATE_DRIFT,
+        )
+        self.assertEqual(self.run_git(session_root, "rev-parse", "HEAD").stdout, before_head)
+        self.assertEqual(
+            self.run_git(session_root, "diff", "--cached", "--name-only").stdout,
+            before_index,
+        )
+
+        _root, session_root, service, authority = prepared_bound(
+            "post-running-root-replacement"
+        )
+        before_head = self.run_git(session_root, "rev-parse", "HEAD").stdout
+        before_index = self.run_git(
+            session_root,
+            "diff",
+            "--cached",
+            "--name-only",
+        ).stdout
+        original_stage = service._stage_git
+
+        def replace_after_running(revalidation):
+            with self.replace_session_root(session_root):
+                return original_stage(revalidation)
+
+        with mock.patch.object(
+            StoryCommitService,
+            "_stage_git",
+            side_effect=replace_after_running,
+        ), self.assertRaises(StoryCommitError) as post_running:
+            service.execute(authority)
+        self.assertIs(
+            post_running.exception.code,
+            StoryCommitFailureCode.OUTCOME_UNKNOWN,
+        )
+        self.assertEqual(self.run_git(session_root, "rev-parse", "HEAD").stdout, before_head)
+        self.assertEqual(
+            self.run_git(session_root, "diff", "--cached", "--name-only").stdout,
+            before_index,
+        )
     def test_reject_and_revise_persist_result_without_git_or_artifact_mutation(
         self,
     ) -> None:

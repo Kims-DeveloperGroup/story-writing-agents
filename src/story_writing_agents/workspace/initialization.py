@@ -6,7 +6,8 @@ import errno
 import hashlib
 import os
 import stat
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
+from contextlib import ExitStack, contextmanager
 from dataclasses import dataclass, field
 from enum import StrEnum
 from pathlib import Path
@@ -18,6 +19,7 @@ from ..config import validate_persisted_configuration_bytes
 from ..errors import (
     ConfigurationError,
     SessionIdError,
+    StoryWritingAgentsError,
     WorkspaceFormatError,
     WorkspaceSecurityError,
     WorkspaceVersionUnsupportedError,
@@ -32,7 +34,15 @@ from ..git import (
     GitRepositoryState,
     GitTopologyKind,
 )
-from ..git.story_commits import StoryCommitService
+from ..git.story_commits import (
+    StoryCommitService,
+    create_identity_bound_story_commit_service,
+)
+from ..git.repository_lock import (
+    GitRepositoryLease,
+    GitRepositoryLockFailure,
+    lock_git_repository,
+)
 from ..git.session_checkpoints import SessionCheckpointService
 from ..git.session_contracts import (
     GIT_SESSION_WORKTREE_SIBLING_SUFFIX,
@@ -47,6 +57,7 @@ from ..git.session_resources import (
     list_git_session_resources as _list_git_session_resources,
     provision_git_session_resources as _provision_git_session_resources,
     require_ready_git_session_resources as _require_ready_git_session_resources,
+    require_ready_locked_git_session_resources as _require_ready_locked_git_session_resources,
 )
 from ..writing_artifacts.repository import WritingArtifactRepository
 from ._policy_baselines import LEGACY_V2_POLICY_FILES, OBJECTIVE_V2_POLICY_FILES, MAIN_V2_POLICY_FILES
@@ -389,6 +400,8 @@ class SessionArtifactBinding:
 
     resources: GitSessionResourceInspection
     worktree_identity: tuple[int, int]
+    manifest: GitBaselineManifest = field(repr=False)
+    allowed_worktree_changes: tuple[str, ...] = field(repr=False)
     repository: WritingArtifactRepository = field(init=False, repr=False)
 
     def __post_init__(self) -> None:
@@ -398,6 +411,13 @@ class SessionArtifactBinding:
             raise ValueError("session artifact resources must be READY")
         if not _valid_identity(self.worktree_identity):
             raise TypeError("worktree_identity must be a physical directory identity")
+        if type(self.manifest) is not GitBaselineManifest:
+            raise TypeError("manifest must be a GitBaselineManifest")
+        if type(self.allowed_worktree_changes) is not tuple or any(
+            type(path) is not str or not path
+            for path in self.allowed_worktree_changes
+        ):
+            raise TypeError("allowed_worktree_changes must be exact paths")
         object.__setattr__(
             self,
             "repository",
@@ -407,9 +427,170 @@ class SessionArtifactBinding:
             ),
         )
 
+    @contextmanager
+    def open_ready_resources(self) -> Iterator[SessionArtifactAccess]:
+        """Hold exact READY Git and physical-root authority for artifact I/O."""
 
-class SessionArtifactBindingError(RuntimeError):
+        access: SessionArtifactAccess | None = None
+        body_failed = False
+        stack = ExitStack()
+        try:
+            lease = stack.enter_context(
+                lock_git_repository(self.resources.identity.main_root)
+            )
+            confirmed = _require_ready_locked_git_session_resources(
+                lease,
+                self.manifest,
+                self.resources.identity.session_id,
+                allowed_worktree_changes=self.allowed_worktree_changes,
+            )
+            if confirmed != self.resources:
+                raise WorkspaceFormatError(
+                    "session artifact resources changed before access"
+                )
+            descriptor = _open_existing_root(
+                self.resources.identity.worktree_root,
+                self.worktree_identity,
+            )
+            access = SessionArtifactAccess(self, lease, descriptor)
+        except _SESSION_ARTIFACT_BINDING_FAILURES:
+            stack.close()
+            raise SessionArtifactBindingError(
+                "session artifact resources are unavailable"
+            ) from None
+
+        try:
+            with stack:
+                try:
+                    yield access
+                except BaseException:
+                    body_failed = True
+                    raise
+                else:
+                    access.require_ready()
+        except _SESSION_ARTIFACT_BINDING_FAILURES:
+            if body_failed:
+                raise
+            raise SessionArtifactBindingError(
+                "session artifact resources are unavailable"
+            ) from None
+        finally:
+            if access is not None:
+                access._close()
+
+
+class SessionArtifactAccess:
+    """One non-reentrant live view of a guarded session artifact binding."""
+
+    __slots__ = ("_active", "_binding", "_descriptor", "_lease", "repository")
+
+    def __init__(
+        self,
+        binding: SessionArtifactBinding,
+        lease: GitRepositoryLease,
+        descriptor: int,
+    ) -> None:
+        self._binding = binding
+        self._lease = lease
+        self._descriptor = descriptor
+        self.repository = binding.repository
+        self._active = True
+
+    @property
+    def resources(self) -> GitSessionResourceInspection:
+        self.require_active()
+        return self._binding.resources
+
+    @property
+    def worktree_identity(self) -> tuple[int, int]:
+        self.require_active()
+        return self._binding.worktree_identity
+
+    def duplicate_worktree_descriptor(self) -> int:
+        """Duplicate the guarded root descriptor for one bounded source read."""
+
+        self.require_active()
+        descriptor = -1
+        try:
+            descriptor = os.dup(self._descriptor)
+            opened = os.fstat(descriptor)
+            if _meaningful_directory_identity(opened) != self.worktree_identity:
+                raise OSError
+            return descriptor
+        except OSError:
+            if descriptor >= 0:
+                os.close(descriptor)
+            raise SessionArtifactBindingError(
+                "session artifact resources are unavailable"
+            ) from None
+
+    def require_active(self) -> None:
+        """Require the live lease, descriptor, and named worktree identity."""
+
+        if not self._active:
+            raise SessionArtifactBindingError(
+                "session artifact access is no longer active"
+            )
+        try:
+            self._lease.require_active()
+            _verify_named_identity(
+                self._binding.resources.identity.worktree_root,
+                self._descriptor,
+                self._binding.worktree_identity,
+            )
+        except _SESSION_ARTIFACT_BINDING_FAILURES:
+            raise SessionArtifactBindingError(
+                "session artifact resources are unavailable"
+            ) from None
+
+    def require_ready(self) -> None:
+        """Repeat exact READY inspection under the live repository lease."""
+
+        self.require_active()
+        try:
+            confirmed = _require_ready_locked_git_session_resources(
+                self._lease,
+                self._binding.manifest,
+                self._binding.resources.identity.session_id,
+                allowed_worktree_changes=(
+                    self._binding.allowed_worktree_changes
+                ),
+            )
+            if confirmed != self._binding.resources:
+                raise WorkspaceFormatError(
+                    "session artifact resources changed during access"
+                )
+            self.require_active()
+        except _SESSION_ARTIFACT_BINDING_FAILURES:
+            raise SessionArtifactBindingError(
+                "session artifact resources are unavailable"
+            ) from None
+
+    def _close(self) -> None:
+        if not self._active:
+            return
+        self._active = False
+        try:
+            os.close(self._descriptor)
+        except OSError:
+            pass
+
+
+class SessionArtifactBindingError(StoryWritingAgentsError, RuntimeError):
     """A content-free failure to bind exact READY session artifact resources."""
+
+
+_SESSION_ARTIFACT_BINDING_FAILURES = (
+    ConfigurationError,
+    GitRepositoryLockFailure,
+    GitSessionResourceError,
+    OSError,
+    SessionArtifactBindingError,
+    SessionIdError,
+    WorkspaceFormatError,
+    WorkspaceSecurityError,
+    WorkspaceVersionUnsupportedError,
+)
 
 
 def compose_session_artifact_binding(
@@ -419,46 +600,51 @@ def compose_session_artifact_binding(
     """Bind artifacts to one freshly validated READY session worktree."""
 
     try:
-        resources = require_ready_session_resources(root, session_id)
-        worktree_root = resources.identity.worktree_root
-        observed = os.stat(worktree_root, follow_symlinks=False)
-        worktree_identity = _meaningful_directory_identity(observed)
-        if worktree_identity is None:
-            raise WorkspaceSecurityError(
-                "session worktree root is not a safe directory"
-            )
-        descriptor = _open_existing_root(worktree_root, worktree_identity)
-        try:
-            confirmed_resources = require_ready_session_resources(
-                root,
+        main_root = _main_root(root)
+        manifest = _known_baseline_manifest(main_root)
+        allowance = _validated_configuration_allowance(main_root)
+        with lock_git_repository(main_root) as lease:
+            resources = _require_ready_locked_git_session_resources(
+                lease,
+                manifest,
                 session_id,
+                allowed_worktree_changes=allowance,
             )
-            if confirmed_resources != resources:
-                raise WorkspaceFormatError(
-                    "session artifact resources changed during binding"
+            worktree_root = resources.identity.worktree_root
+            observed = os.stat(worktree_root, follow_symlinks=False)
+            worktree_identity = _meaningful_directory_identity(observed)
+            if worktree_identity is None:
+                raise WorkspaceSecurityError(
+                    "session worktree root is not a safe directory"
                 )
-            _verify_named_identity(
-                worktree_root,
-                descriptor,
-                worktree_identity,
-            )
-        finally:
-            os.close(descriptor)
-    except (
-        ConfigurationError,
-        GitSessionResourceError,
-        OSError,
-        SessionIdError,
-        WorkspaceFormatError,
-        WorkspaceSecurityError,
-        WorkspaceVersionUnsupportedError,
-    ):
+            descriptor = _open_existing_root(worktree_root, worktree_identity)
+            try:
+                confirmed_resources = _require_ready_locked_git_session_resources(
+                    lease,
+                    manifest,
+                    session_id,
+                    allowed_worktree_changes=allowance,
+                )
+                if confirmed_resources != resources:
+                    raise WorkspaceFormatError(
+                        "session artifact resources changed during binding"
+                    )
+                _verify_named_identity(
+                    worktree_root,
+                    descriptor,
+                    worktree_identity,
+                )
+            finally:
+                os.close(descriptor)
+    except _SESSION_ARTIFACT_BINDING_FAILURES:
         raise SessionArtifactBindingError(
             "session artifact resources are unavailable"
         ) from None
     return SessionArtifactBinding(
         resources=confirmed_resources,
         worktree_identity=worktree_identity,
+        manifest=manifest,
+        allowed_worktree_changes=allowance,
     )
 
 
@@ -486,24 +672,48 @@ def _validated_configuration_allowance(root: Path) -> tuple[str, ...]:
     return tuple(sorted(_MUTABLE_CONFIGURATION_PATHS))
 
 
-def compose_story_commit_service(root: Path, session_id: str) -> StoryCommitService:
+def compose_story_commit_service(
+    root: Path,
+    session_id: str,
+    artifact_binding: SessionArtifactBinding | None = None,
+) -> StoryCommitService:
     """Compose commit authority for one already-ready workspace session."""
 
     main_root = _main_root(root)
     manifest = _known_baseline_manifest(main_root)
     allowance = _validated_configuration_allowance(main_root)
-    _require_ready_git_session_resources(
+    ready = _require_ready_git_session_resources(
         main_root,
         manifest,
         session_id,
         allowed_worktree_changes=allowance,
     )
-    return StoryCommitService(
-        main_root,
-        manifest,
-        session_id,
-        allowed_worktree_changes=allowance,
-    )
+    if artifact_binding is None:
+        return StoryCommitService(
+            main_root,
+            manifest,
+            session_id,
+            allowed_worktree_changes=allowance,
+        )
+    if (
+        type(artifact_binding) is not SessionArtifactBinding
+        or artifact_binding.resources != ready
+    ):
+        raise SessionArtifactBindingError(
+            "story commit binding does not match the ready session"
+        )
+    with artifact_binding.open_ready_resources() as access:
+        if access.resources != ready:
+            raise SessionArtifactBindingError(
+                "story commit binding changed during composition"
+            )
+        return create_identity_bound_story_commit_service(
+            main_root,
+            manifest,
+            session_id,
+            access.worktree_identity,
+            allowed_worktree_changes=allowance,
+        )
 
 
 def compose_session_checkpoint_service(

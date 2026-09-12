@@ -162,6 +162,53 @@ def prepare_story_commit_candidate(
 ) -> StoryCommitCandidateBinding:
     """Prepare and publish one candidate without mutating Git state."""
 
+    return _prepare_story_commit_candidate(
+        root,
+        manifest,
+        evidence,
+        proposed_message,
+        impact_boundary,
+        allowed_worktree_changes=allowed_worktree_changes,
+        expected_root_identity=None,
+    )
+
+
+def prepare_identity_bound_story_commit_candidate(
+    root: str | os.PathLike[str],
+    manifest: GitBaselineManifest,
+    evidence: StoryCommitApplicationEvidence,
+    proposed_message: str,
+    impact_boundary: tuple[str, ...],
+    *,
+    allowed_worktree_changes: tuple[str, ...],
+    expected_session_root_identity: tuple[int, int],
+) -> StoryCommitCandidateBinding:
+    """Package-internal preparation pinned to an Apply worktree identity."""
+
+    _require_directory_identity(expected_session_root_identity)
+    return _prepare_story_commit_candidate(
+        root,
+        manifest,
+        evidence,
+        proposed_message,
+        impact_boundary,
+        allowed_worktree_changes=allowed_worktree_changes,
+        expected_root_identity=expected_session_root_identity,
+    )
+
+
+def _prepare_story_commit_candidate(
+    root: str | os.PathLike[str],
+    manifest: GitBaselineManifest,
+    evidence: StoryCommitApplicationEvidence,
+    proposed_message: str,
+    impact_boundary: tuple[str, ...],
+    *,
+    allowed_worktree_changes: tuple[str, ...],
+    expected_root_identity: tuple[int, int] | None,
+) -> StoryCommitCandidateBinding:
+    """Implement bound and compatibility candidate preparation."""
+
     try:
         main_root = _root(root)
         expected_manifest = _reconstruct_manifest(manifest)
@@ -172,6 +219,14 @@ def prepare_story_commit_candidate(
             application.session_id,
             allowed_worktree_changes=allowed_worktree_changes,
         )
+        session_root_identity = _directory_identity(
+            ready.identity.worktree_root
+        )
+        if (
+            expected_root_identity is not None
+            and session_root_identity != expected_root_identity
+        ):
+            raise _error(StoryCommitFailureCode.CANDIDATE_DRIFT)
         with open_git_session_history(
             main_root,
             expected_manifest,
@@ -189,6 +244,7 @@ def prepare_story_commit_candidate(
                 application,
                 proposed_message,
                 impact_boundary,
+                expected_root_identity=session_root_identity,
             )
             history.write_candidate(_candidate_record(candidate))
         return StoryCommitCandidateBinding(
@@ -252,6 +308,42 @@ def revalidate_story_commit_candidate(
 ) -> StoryCommitRevalidation:
     """Recheck every candidate and repository fact immediately before staging."""
 
+    return _revalidate_story_commit_candidate(
+        binding,
+        history=history,
+        allowed_worktree_changes=allowed_worktree_changes,
+        expected_session_root_identity=None,
+    )
+
+
+@_content_free_boundary
+def revalidate_identity_bound_story_commit_candidate(
+    binding: StoryCommitCandidateBinding,
+    expected_session_root_identity: tuple[int, int],
+    *,
+    history: GitSessionHistory | None = None,
+    allowed_worktree_changes: tuple[str, ...] = (),
+) -> StoryCommitRevalidation:
+    """Package-internal revalidation pinned to an Apply worktree identity."""
+
+    _require_directory_identity(expected_session_root_identity)
+    return _revalidate_story_commit_candidate(
+        binding,
+        history=history,
+        allowed_worktree_changes=allowed_worktree_changes,
+        expected_session_root_identity=expected_session_root_identity,
+    )
+
+
+def _revalidate_story_commit_candidate(
+    binding: StoryCommitCandidateBinding,
+    *,
+    history: GitSessionHistory | None,
+    allowed_worktree_changes: tuple[str, ...],
+    expected_session_root_identity: tuple[int, int] | None,
+) -> StoryCommitRevalidation:
+    """Implement public and identity-bound candidate revalidation."""
+
     try:
         value = _reconstruct_binding(binding)
         if history is None:
@@ -276,13 +368,23 @@ def revalidate_story_commit_candidate(
                 value.candidate.session_id,
                 allowed_worktree_changes=allowed_worktree_changes,
             ) as opened:
-                return _revalidate_under_history(value, value.internal_ref, opened)
+                return _revalidate_under_history(
+                    value,
+                    value.internal_ref,
+                    opened,
+                    expected_session_root_identity,
+                )
         if type(history) is not GitSessionHistory:
             raise _error(StoryCommitFailureCode.INVALID_REQUEST)
         history.require_active()
         if history.session_id != value.candidate.session_id:
             raise _error(StoryCommitFailureCode.INVALID_REQUEST)
-        return _revalidate_under_history(value, value.internal_ref, history)
+        return _revalidate_under_history(
+            value,
+            value.internal_ref,
+            history,
+            expected_session_root_identity,
+        )
     except StoryCommitError:
         raise
     except GitSessionHistoryError:
@@ -295,12 +397,18 @@ def _revalidate_under_history(
     value: StoryCommitCandidateBinding,
     internal_ref: str,
     history: GitSessionHistory,
+    expected_session_root_identity: tuple[int, int] | None,
 ) -> StoryCommitRevalidation:
     durable = _candidate_from_record(
         history.read_candidate(value.candidate.candidate_id)
     )
     if durable != value.candidate:
         raise _error(StoryCommitFailureCode.CANDIDATE_DRIFT)
+    session_root_identity = (
+        _directory_identity(value.session_root)
+        if expected_session_root_identity is None
+        else expected_session_root_identity
+    )
     observed, identity, invariants = _capture(
         value.session_root,
         value.main_root,
@@ -311,6 +419,7 @@ def _revalidate_under_history(
         value.evidence,
         value.candidate.proposed_message,
         value.candidate.impact_boundary,
+        expected_root_identity=session_root_identity,
     )
     if observed != value.candidate or identity != value.effective_identity:
         raise _error(StoryCommitFailureCode.CANDIDATE_DRIFT)
@@ -320,7 +429,7 @@ def _revalidate_under_history(
         value.main_status_sha256,
     ):
         raise _error(StoryCommitFailureCode.CANDIDATE_DRIFT)
-    current = _current_artifact_state(value.session_root)
+    current = _current_artifact_state(value.session_root, session_root_identity)
     contents = tuple((item.path, current.get(item.path)) for item in observed.paths)
     return StoryCommitRevalidation(
         candidate=observed,
@@ -342,10 +451,17 @@ def _capture(
     evidence: StoryCommitApplicationEvidence,
     proposed_message: str,
     impact_boundary: tuple[str, ...],
+    *,
+    expected_root_identity: tuple[int, int] | None,
 ) -> tuple[StoryCommitCandidate, GitEffectiveIdentity, tuple[str, str, str]]:
     if branch_tip is None or internal_tip is None:
         raise _error(StoryCommitFailureCode.CANDIDATE_DRIFT)
     session_identity = _directory_identity(session_root)
+    if (
+        expected_root_identity is not None
+        and session_identity != expected_root_identity
+    ):
+        raise _error(StoryCommitFailureCode.CANDIDATE_DRIFT)
     runner = GitProcessRunner(session_root)
     symbolic = _required(runner, session_identity, ("symbolic-ref", "--quiet", "HEAD"))
     if _line(symbolic.stdout) != f"refs/heads/{branch}":
@@ -367,7 +483,7 @@ def _capture(
         projected = dict(project_artifact_change_set(base_state, evidence.change_set))
     except ArtifactChangeSetError:
         raise _error(StoryCommitFailureCode.APPLICATION_MISMATCH) from None
-    current = _current_artifact_state(session_root)
+    current = _current_artifact_state(session_root, session_identity)
     if (
         current != projected
         or evidence.applied_state_digest != evidence.change_set.projected_state_digest
@@ -505,8 +621,14 @@ def _candidate_paths(
     return tuple(sorted(paths, key=lambda item: item.path.encode("utf-8")))
 
 
-def _current_artifact_state(root: Path) -> dict[str, bytes]:
-    repository = WritingArtifactRepository(root)
+def _current_artifact_state(
+    root: Path,
+    expected_root_identity: tuple[int, int],
+) -> dict[str, bytes]:
+    repository = WritingArtifactRepository(
+        root,
+        expected_root_identity=expected_root_identity,
+    )
     paths = repository.list_paths()
     snapshots = repository.read_current(paths)
     if (
@@ -797,9 +919,21 @@ def _directory_identity(root: Path) -> tuple[int, int]:
         not stat.S_ISDIR(value.st_mode)
         or stat.S_ISLNK(value.st_mode)
         or canonical != root
+        or value.st_dev <= 0
+        or value.st_ino <= 0
     ):
         raise _error(StoryCommitFailureCode.CANDIDATE_DRIFT)
     return value.st_dev, value.st_ino
+
+
+def _require_directory_identity(value: object) -> tuple[int, int]:
+    if (
+        type(value) is not tuple
+        or len(value) != 2
+        or any(type(item) is not int or item <= 0 for item in value)
+    ):
+        raise _error(StoryCommitFailureCode.INVALID_REQUEST)
+    return value
 
 
 def _worktree_digest(root: Path, identity: tuple[int, int]) -> str:

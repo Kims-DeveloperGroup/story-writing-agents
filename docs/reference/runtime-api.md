@@ -53,9 +53,13 @@ Every artifact-sensitive runtime call instead derives the session ID already
 present in its public arguments or durable identity, freshly requires that
 session's exact READY branch/ref/sibling-worktree resources, and creates a
 call-local repository pinned to the validated worktree's physical
-`(st_dev, st_ino)` identity. Each later repository access reopens the named
-root without following symlinks and rejects replacement before the replacement
-can become artifact authority. This covers explicit
+`(st_dev, st_ino)` identity. Each synchronous repository step opens a short
+cooperating-runtime guard: it holds the common-Git lease, repeats the complete
+semantic READY inspection, opens the no-follow named root at the pinned
+identity, and repeats READY plus physical-root checks before releasing the
+guard. No such guard is held across a provider `await`, concurrent specialist
+execution, or other asynchronous wait; a later repository step reacquires a
+new guard and revalidates the same binding. This covers explicit
 and contextual references, source status and fingerprints, proposal and review
 revalidation, Apply and application-ledger access, recovery reads, consensus
 artifact material, and the interactive attachment picker. A
@@ -71,13 +75,23 @@ working directory, or a previously used session. Use Session Create or Reopen
 to establish the lifecycle precondition before calling an artifact-sensitive
 method. Existing public constructor and method signatures are unchanged.
 
+The common-Git lease serializes only operations that cooperate with this
+runtime. A persistent noncooperating Git change is rejected by a later READY
+checkpoint, but the runtime does not claim continuous exclusion of arbitrary
+external Git that changes and restores state between checkpoints. Stop all
+workspace processes before manual inspection or recovery.
+
 Provider context keeps the same ownership split. Focused conversation remains
 in the configured conversation store. Active-debate and invoking-agent-state
 reads use a package-internal, descriptor-relative `SessionSourceWorkspace`
 derived from the same call-local binding; it exposes no generic path, write, or
-Git authority. Each allowed read reopens and rechecks the exact physical
-session root before returning. A missing, replaced, or unsafe bound root fails
-closed instead of borrowing control-root or sibling-session state.
+Git authority. Source paths must be canonical relative POSIX text. Each allowed
+read reopens and rechecks the exact physical session root, accepts only one
+unique regular-file leaf, rejects FIFOs/devices/symlinks/hard links and
+identity/metadata drift, and checks embedded debate or agent-state ownership
+before returning. A missing, replaced, or unsafe bound root fails closed as a
+content-free `source_unavailable` instead of borrowing control-root or sibling-
+session state.
 
 ## Phase-confirmed consensus methods
 
@@ -926,19 +940,34 @@ only the correlated session worktree and its application ledger. Control-root
 and sibling-session bytes remain outside the operation.
 
 Commit remains a distinct decision and authority boundary. Its internal
-service independently requires and revalidates the same exact session
-worktree, branch, and candidate evidence before staging only the disclosed
-paths and creating a local commit. Apply never implies Commit, and neither
-operation pushes, merges, or grants a provider direct filesystem or Git
-authority.
+service carries the successful Apply binding's physical worktree identity into
+Commit-request preparation, candidate authorization, and execution. It also
+independently requires and revalidates the same exact READY session worktree,
+branch, and candidate evidence before staging only the disclosed paths and
+creating a local commit. A replacement discovered before the durable Commit
+operation starts is candidate drift and requires a fresh request; once a
+`running` operation exists, identity loss is conservatively
+`outcome_unknown` and requires inspection. Apply never implies Commit, and
+neither operation pushes, merges, or grants a provider direct filesystem or
+Git authority.
+
+After a successful Apply result is durable, the runtime currently prepares and
+publishes its follow-on Commit request in a later step. If that step fails, the
+Apply result remains durable and the returned message directs inspection, but
+there is not yet a dedicated durable Commit-request publication/failure state.
+That post-Apply state-machine work is intentionally outside this change and is
+tracked by
+[Issue #662](https://github.com/Kims-DeveloperGroup/story-writing-agents/issues/662).
 
 Known provider work is not replayed merely because session resources disappear
 during local closure. Binding loss while finalizing a completed artifact review
 durably closes the artifact and collaboration state as `recovery_required` and
 does not issue Apply authority. Binding loss while proving recommendation or
 reference closure returns the typed blocking recovery result and preserves the
-original attempt. Repair authoritative session resources/history before
-continuing.
+original attempt. This resource failure is not semantic staleness: true source,
+basis, relationship, or candidate drift remains `stale` and requires fresh
+planning/review, while loss of the exact bound resources requires recovery.
+Repair authoritative session resources/history before continuing.
 
 ### Free text and recovery
 

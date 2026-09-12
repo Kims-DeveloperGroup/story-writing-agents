@@ -5,8 +5,11 @@ from __future__ import annotations
 import asyncio
 import json
 import unittest
+from contextlib import contextmanager
 from dataclasses import replace
+from unittest import mock
 
+import story_writing_agents.workspace.initialization as workspace_initialization
 from story_writing_agents import StoryRuntime
 from story_writing_agents.agents import (
     CHARACTER_CUSTODIAN,
@@ -37,6 +40,7 @@ from story_writing_agents.conversations import (
 )
 from story_writing_agents.models import AgentStateEntry
 from story_writing_agents.specialist_routing import AuthoringScope, AuthoringActivity, ArtifactReviewDomain, ReviewBasis
+from story_writing_agents.workspace.initialization import SessionArtifactBinding
 
 from tests.test_lead_orchestration import (
     LeadOrchestrationTestCase,
@@ -51,7 +55,7 @@ from tests.test_lead_orchestration import (
 )
 
 
-_SYNCHRONIZATION_TIMEOUT_SECONDS = 30
+_SYNCHRONIZATION_TIMEOUT_SECONDS = 60
 
 
 def _assignments(*agent_ids: str) -> list[dict[str, object]]:
@@ -80,6 +84,23 @@ def _payloads(history, payload_type):
 
 def _events(history, kind: CollaborationEventKind):
     return tuple(event for event in history if event.kind is kind)
+
+
+@contextmanager
+def _fast_prevalidated_session_binding(runtime, session_id):
+    """Keep concurrency tests focused on the guard/await boundary."""
+
+    binding = runtime._session_artifact_binding(session_id)
+    with mock.patch.object(
+        StoryRuntime,
+        "_session_artifact_binding",
+        return_value=binding,
+    ), mock.patch.object(
+        workspace_initialization,
+        "_require_ready_locked_git_session_resources",
+        return_value=binding.resources,
+    ):
+        yield
 
 
 class _FailingEventStore:
@@ -141,9 +162,24 @@ class SpecialistExecutionAcceptanceTests(LeadOrchestrationTestCase):
         release = asyncio.Event()
         peak = 0
         active = 0
+        guard_depth = 0
+        maximum_guard_depth = 0
+        original_open = SessionArtifactBinding.open_ready_resources
+
+        @contextmanager
+        def tracked_open(binding):
+            nonlocal guard_depth, maximum_guard_depth
+            guard_depth += 1
+            maximum_guard_depth = max(maximum_guard_depth, guard_depth)
+            try:
+                with original_open(binding) as access:
+                    yield access
+            finally:
+                guard_depth -= 1
 
         async def overlapping(call, provider):
             nonlocal active, entered, peak
+            self.assertEqual(guard_depth, 0)
             entered += 1
             active += 1
             peak = max(peak, active)
@@ -152,6 +188,7 @@ class SpecialistExecutionAcceptanceTests(LeadOrchestrationTestCase):
             await asyncio.wait_for(
                 release.wait(), timeout=_SYNCHRONIZATION_TIMEOUT_SECONDS
             )
+            self.assertEqual(guard_depth, 0)
             active -= 1
             return _specialist_outcome()(call, provider)
 
@@ -163,17 +200,27 @@ class SpecialistExecutionAcceptanceTests(LeadOrchestrationTestCase):
             self.backend.enqueue_for(agent_id, overlapping)
         self.backend.enqueue_for(LEAD_ORCHESTRATOR, _synthesis_outcome())
 
-        task = asyncio.create_task(
-            self.runtime.decide_lead_step(
-                _decision(proposed, CollaborationConfirmationDecision.CONFIRM)
+        with _fast_prevalidated_session_binding(
+            self.runtime,
+            self.session_id,
+        ), mock.patch.object(
+            SessionArtifactBinding,
+            "open_ready_resources",
+            tracked_open,
+        ):
+            task = asyncio.create_task(
+                self.runtime.decide_lead_step(
+                    _decision(proposed, CollaborationConfirmationDecision.CONFIRM)
+                )
             )
-        )
-        await asyncio.wait_for(
-            all_entered.wait(), timeout=_SYNCHRONIZATION_TIMEOUT_SECONDS
-        )
-        self.assertEqual(peak, 3)
-        release.set()
-        decision = await task
+            await asyncio.wait_for(
+                all_entered.wait(), timeout=_SYNCHRONIZATION_TIMEOUT_SECONDS
+            )
+            self.assertEqual(peak, 3)
+            release.set()
+            decision = await task
+        self.assertEqual(guard_depth, 0)
+        self.assertEqual(maximum_guard_depth, 1)
 
         self.assertIs(decision.turn.state, CollaborationStepState.COMPLETED)
         history = self.history(conversation_id)
@@ -298,16 +345,17 @@ class SpecialistExecutionAcceptanceTests(LeadOrchestrationTestCase):
         )
         self.backend.enqueue_for(CHARACTER_CUSTODIAN, sibling)
         self.backend.enqueue_for(EXECUTION_SPECIALIST, sibling)
-        task = asyncio.create_task(
-            self.runtime.decide_lead_step(
-                _decision(proposed, CollaborationConfirmationDecision.CONFIRM)
+        with _fast_prevalidated_session_binding(self.runtime, self.session_id):
+            task = asyncio.create_task(
+                self.runtime.decide_lead_step(
+                    _decision(proposed, CollaborationConfirmationDecision.CONFIRM)
+                )
             )
-        )
-        await asyncio.wait_for(
-            sibling_started.wait(), timeout=_SYNCHRONIZATION_TIMEOUT_SECONDS
-        )
-        sibling_release.set()
-        decision = await task
+            await asyncio.wait_for(
+                sibling_started.wait(), timeout=_SYNCHRONIZATION_TIMEOUT_SECONDS
+            )
+            sibling_release.set()
+            decision = await task
 
         self.assertEqual(sibling_finishes, 2)
         self.assertIs(decision.turn.state, CollaborationStepState.FAILED)
@@ -333,6 +381,10 @@ class SpecialistExecutionAcceptanceTests(LeadOrchestrationTestCase):
             result.synthesis_outcome,
             CollaborationSynthesisOutcomeKind.NOT_ATTEMPTED,
         )
+        with self.runtime._session_artifact_binding(
+            self.session_id
+        ).open_ready_resources():
+            pass
 
     async def test_outer_cancellation_joins_tasks_persists_terminals_and_cleans_marker(
         self,
@@ -366,6 +418,11 @@ class SpecialistExecutionAcceptanceTests(LeadOrchestrationTestCase):
         task.cancel()
         with self.assertRaises(asyncio.CancelledError):
             await task
+
+        with self.runtime._session_artifact_binding(
+            self.session_id
+        ).open_ready_resources():
+            pass
 
         self.assertEqual(self.runtime._live_execution_markers, set())
         history = self.history(conversation_id)

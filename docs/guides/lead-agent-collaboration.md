@@ -54,19 +54,29 @@ The initialized `main` workspace is the runtime's control root: configuration,
 conversation history, and diagnostics stay there. Story artifacts do not.
 Before every artifact-sensitive operation, runtime freshly verifies the exact
 branch, internal ref, and sibling worktree for the selected session and binds
-the operation to that worktree's physical `(st_dev, st_ino)` identity. The
-picker follows the currently attached session, and switching or concurrent
-sessions never reuse another session's artifact source, active-debate or
-own-agent state, or application ledger. Conversation history keeps its
-separate control-root/configured-storage ownership. Replacing the worktree
-path before or during a bound operation is rejected rather than adopting the
-replacement.
+the operation to that worktree's physical `(st_dev, st_ino)` identity. Each
+repository or session-source action holds a short synchronous runtime guard,
+checks both the physical root and exact Git READY state before and after the
+action, then releases the guard. Provider waits and concurrent specialist work
+run without that guard; the next filesystem action reacquires it and rejects
+persistent drift. The picker follows the currently attached session, and
+switching or concurrent sessions never reuse another session's artifact
+source, active-debate or own-agent state, or application ledger. Conversation
+history keeps its separate control-root/configured-storage ownership. A
+worktree-path replacement observed before or during a guarded action is
+rejected rather than adopted.
 
 There is no fallback to `main`, the shell's current directory, or a previous
 session, and a Lead call does not provision missing resources. If the exact
 session binding is absent or unsafe, runtime reports a content-free failure
 before any provider or artifact I/O. Create or reopen the session resources,
-or follow operator recovery when the identity has drifted.
+or follow operator recovery when the identity has drifted. Session-state reads
+also reject unsafe relative paths, symlinks, FIFOs/devices, hard-linked or
+changing leaves, and embedded ownership that names another session, debate, or
+agent. The Git lease coordinates this runtime's cooperating operations; it is
+not continuous protection against arbitrary external Git that mutates and
+restores state between checks. Stop workspace processes before external
+recovery work.
 
 ## The normal request flow
 
@@ -651,8 +661,9 @@ Runtime: revalidates the candidate and current artifact state, writes the exact
 Lead: The artifact change applied successfully. Create the local story commit?
 You: structured Commit confirmation
 Runtime: stages only the disclosed changed paths and commits the local session
-         branch after independently revalidating the same worktree. It does not
-         push, merge, or mutate a remote.
+         branch after independently revalidating the same READY worktree and
+         the physical identity used by Apply. It does not push, merge, or
+         mutate a remote.
 ```
 
 Reject or Revise at Apply leaves the reviewed candidate unapplied. A stale
@@ -665,6 +676,13 @@ application and durably returns `recovery_required` with
 security, or format failure is instead
 `outcome_unknown` with `inspect_and_resolve_outcome`; inspect the exact
 application before any new write.
+
+The follow-on Commit request is prepared only after the Apply result is
+durable. If request preparation or publication then fails, the Apply remains
+durable and the runtime directs you to inspect the session; the current schema
+does not record a dedicated durable Commit-request publication failure. That
+separate state-machine change remains tracked by
+[Issue #662](https://github.com/Kims-DeveloperGroup/story-writing-agents/issues/662).
 
 ## Scenario 6: ordinary discussion
 

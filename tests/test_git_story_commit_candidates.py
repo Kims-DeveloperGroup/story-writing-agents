@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import os
 import unittest
+from contextlib import contextmanager
 from pathlib import Path
 from unittest import mock
 
@@ -125,6 +126,17 @@ class StoryCommitGitTestCase(GitSessionResourceGitTestCase):
             ("core outline now exposes the revised opening",),
         )
         return root, session_root, evidence, binding
+
+    @contextmanager
+    def replace_session_root(self, session_root: Path):
+        moved = session_root.with_name(f"{session_root.name}-generation-a")
+        session_root.rename(moved)
+        session_root.mkdir()
+        try:
+            yield moved
+        finally:
+            session_root.rmdir()
+            moved.rename(session_root)
 
 
 class StoryCommitCandidateContractTests(unittest.TestCase):
@@ -271,6 +283,77 @@ class StoryCommitCandidateContractTests(unittest.TestCase):
 
 
 class StoryCommitCandidateIntegrationTests(StoryCommitGitTestCase):
+    def test_apply_identity_rejects_root_replacement_at_every_candidate_read(
+        self,
+    ) -> None:
+        root, session_root, evidence = self.applied_replace("identity-bound")
+        observed = os.stat(session_root)
+        identity = (observed.st_dev, observed.st_ino)
+
+        with self.replace_session_root(session_root), self.assertRaises(
+            StoryCommitError
+        ) as before_prepare:
+            candidates_module.prepare_identity_bound_story_commit_candidate(
+                root,
+                manifest(),
+                evidence,
+                "Update opening",
+                ("impact",),
+                allowed_worktree_changes=(),
+                expected_session_root_identity=identity,
+            )
+        self.assertIs(
+            before_prepare.exception.code,
+            StoryCommitFailureCode.CANDIDATE_DRIFT,
+        )
+
+        original_state = candidates_module._current_artifact_state
+
+        def replace_during_state(current_root, expected_identity):
+            with self.replace_session_root(current_root):
+                return original_state(current_root, expected_identity)
+
+        with mock.patch.object(
+            candidates_module,
+            "_current_artifact_state",
+            side_effect=replace_during_state,
+        ), self.assertRaises(StoryCommitError) as during_prepare:
+            candidates_module.prepare_identity_bound_story_commit_candidate(
+                root,
+                manifest(),
+                evidence,
+                "Update opening",
+                ("impact",),
+                allowed_worktree_changes=(),
+                expected_session_root_identity=identity,
+            )
+        self.assertIs(
+            during_prepare.exception.code,
+            StoryCommitFailureCode.CANDIDATE_DRIFT,
+        )
+
+        binding = candidates_module.prepare_identity_bound_story_commit_candidate(
+            root,
+            manifest(),
+            evidence,
+            "Update opening",
+            ("impact",),
+            allowed_worktree_changes=(),
+            expected_session_root_identity=identity,
+        )
+        with mock.patch.object(
+            candidates_module,
+            "_current_artifact_state",
+            side_effect=replace_during_state,
+        ), self.assertRaises(StoryCommitError) as during_revalidation:
+            candidates_module.revalidate_identity_bound_story_commit_candidate(
+                binding,
+                identity,
+            )
+        self.assertIs(
+            during_revalidation.exception.code,
+            StoryCommitFailureCode.CANDIDATE_DRIFT,
+        )
     def test_prepare_is_git_read_only_durable_and_restart_loadable(self) -> None:
         root, session_root, evidence = self.applied_replace()
         before = self.repository_snapshot(root)

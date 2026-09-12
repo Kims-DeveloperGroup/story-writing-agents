@@ -165,12 +165,19 @@ The package-internal `SessionSourceWorkspace` is likewise not a public import.
 Runtime derives it only from a freshly validated session-artifact binding. It
 adopts that binding's exact session root and physical `(st_dev, st_ino)`
 identity, then provides only descriptor-relative active-debate and invoking-
-agent-state reads needed by context adapters. Every allowed read opens the
-no-follow root, traverses regular files relative to descriptors, verifies the
-named root again before returning, and closes its call-local descriptors on
-success or failure. Generic pathname access, writes, Git operations, control-
-root fallback, and sibling-session fallback are rejected. These internal
-semantics do not change any public constructor or method signature.
+agent-state reads needed by context adapters. It accepts only exact relative
+POSIX text: absolute, noncanonical, dot-segment, backslash, NUL, and drive-like
+paths are rejected. Every allowed read opens the no-follow root, traverses
+directories relative to descriptors, and accepts a leaf only when its opened
+and named views are the same unique regular file with link count one. FIFOs,
+devices, symlinks, hard-linked leaves, and identity/mode/size/time drift before
+or after the read fail closed. Debate state/results must embed the requested
+session and debate IDs; agent-state entries must embed the path's agent,
+session, and debate ownership. The reader verifies the named root again before
+returning and closes its call-local descriptors on success or failure.
+Generic pathname access, writes, Git operations, control-root fallback, and
+sibling-session fallback are rejected. These internal semantics do not change
+any public constructor or method signature.
 
 This explicit path contract is unchanged by opaque readiness. For example,
 readiness does not inspect an unknown symlink beneath `.antigravity/`, but a

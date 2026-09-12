@@ -182,13 +182,28 @@ Artifact-sensitive runtime and picker operations add no recovery shortcut.
 Each call freshly requires the exact READY identity and then uses only that
 session worktree for artifact source reads, references, proposals,
 application-ledger access, Apply, and recovery. The binding pins the physical
-`(st_dev, st_ino)` identity; repository and session debate/own-agent-state
-reads reject replacement before, between, or during calls. Conversation
+`(st_dev, st_ino)` identity and the exact semantic branch/ref/worktree READY
+inspection. Each repository or session-state action holds the cooperating-
+runtime Git lease only for its short synchronous body, checking semantic READY
+and the named root before and after it. No such guard spans a provider await or
+concurrent specialist execution; a later action reacquires it. Conversation
 history remains in its separately configured control-plane store. Absent
 resources are not provisioned; moved, mismatched, staged, or otherwise
 non-ready resources do not fall back to
 `main`, the current directory, a sibling session, or an older binding. The
 binding failure is content-free and occurs before provider or artifact I/O.
+
+Session-state source paths must be canonical relative POSIX text, and each leaf
+must remain one singly linked regular file throughout the read. Symlinks,
+FIFOs, devices, hard links, replacement or metadata drift, and embedded
+session/debate/agent ownership that disagrees with the requested path all fail
+closed without exposing the replacement as evidence.
+
+The common-Git lease coordinates this runtime's cooperating operations only.
+Persistent external Git drift is rejected by the before/after or next-action
+READY check. A noncooperating process that changes and restores Git state
+between checkpoints is outside the supported guarantee; stop all workspace
+processes before external inspection, repair, or recovery.
 
 If exact binding or physical-root validation fails after an Apply decision is
 durably recorded but before the repository's `apply_artifact_changes()` method
@@ -200,8 +215,19 @@ security, or format failure remains `outcome_unknown` with
 `inspect_and_resolve_outcome`; a repository-classified terminal recovery
 condition remains `recovery_required`. Preserve the session resources and
 authoritative history and inspect any uncertain application before another
-write. Commit remains a separate decision and independently revalidates the
-same session worktree.
+write. Commit remains a separate decision. Its runtime-composed service carries
+the Apply worktree's physical identity through request preparation,
+authorization, and execution while independently revalidating semantic READY.
+Replacement before the durable Commit operation starts requires repreparation;
+replacement after `running` is recorded leaves an uncertain operation to
+inspect.
+
+If Apply-result publication succeeds but the later Commit-request preparation
+or publication fails, the Apply result remains authoritative and no Commit is
+authorized. The current history has no dedicated durable state for that post-
+Apply Commit-request failure; operators must inspect before preparing again.
+[Issue #662](https://github.com/Kims-DeveloperGroup/story-writing-agents/issues/662)
+tracks that separate state-machine work and remains outside this change.
 
 Resource loss during local closure does not replay known provider work. A
 completed artifact-review result that cannot be finalized against its bound
@@ -351,8 +377,13 @@ application-ID owner lookup when application evidence exists, selects at most
 one correlated candidate/commit/checkpoint chain, and reads the current-`HEAD`
 log only when that chain claims a committed story operation. It then rereads
 collaboration, resources, history, external Git, and status as generation B.
-Any owner drift or second-read failure returns `outcome_unknown` for that owner
-instead of combining generations. Stable facts are selected again, any commit
+The exact artifact binding is established against generation A; application
+inspection runs through it, and a final guarded checkpoint requires the same
+physical root and semantic READY resources as generation B. Session-resource
+drift, a second resource-read failure, or binding loss at that checkpoint is
+`recovery_required` for the resource owner rather than permission to combine
+generations. Drift or second-read failure for the other owners remains
+`outcome_unknown` for that owner. Stable facts are selected again, any commit
 is checked against the nonempty newest-first log and stable status, and only
 then are they passed to the pure classifier.
 
@@ -367,16 +398,18 @@ The visible result fields answer different questions:
   blockers do not fabricate them.
 
 A first-read owner failure normally returns `recovery_required`; a second-read
-failure or changed A/B observation returns `outcome_unknown`. Resource
-provisioning also remains outcome-unknown, while absent resources are a
-missing predecessor. Artifact inspection distinguishes a recovered exact
-result from blocked outcomes: absence maps to `missing_predecessor`; drift,
-corruption, or a mismatched/foreign result maps to `correlation_mismatch`; and
-artifact `recovery_required` maps to `owner_recovery_required`. Its documented
-recovery-before-read may finish or verify an already-journaled application and
-create only its standard maintenance state. This is owner maintenance, not a
-new workflow mutation: reconciliation
-never calls Apply, invokes a provider, replays work, changes Git or lifecycle,
+failure or changed A/B observation normally returns `outcome_unknown`. Session
+resources are stricter: any A/B change, second-read failure, or exact-binding
+loss returns `recovery_required`. Resource provisioning remains outcome-
+unknown, while absent resources are a missing predecessor. Artifact inspection
+distinguishes a recovered exact result from blocked outcomes: absence maps to
+`missing_predecessor`; drift, corruption, or a mismatched/foreign result maps
+to `correlation_mismatch`; artifact `recovery_required` maps to
+`owner_recovery_required`; and loss of the binding during that inspection also
+requires owner recovery. Its documented recovery-before-read may finish or
+verify an already-journaled application and create only its standard
+maintenance state. This is owner maintenance, not a new workflow mutation:
+reconciliation never calls Apply, invokes a provider, replays work, changes Git or lifecycle,
 cleans evidence, or performs `next_action`.
 
 | Projected state | What it means to a user | Exact next action |

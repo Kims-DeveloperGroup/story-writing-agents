@@ -553,15 +553,22 @@ seam above `require one ready session`. Given the initialized `main` control
 root and a session ID, it freshly requires the exact READY identity, opens the
 worktree without following symlinks, captures a meaningful physical
 `(st_dev, st_ino)` identity, repeats complete READY inspection, and requires
-the named root to retain that identity. It returns a call-local
-writing-artifact repository rooted at and pinned to that session worktree.
+the named root to retain that identity. Each later repository or session-source
+action takes a short synchronous cooperating-runtime guard: the common-Git
+lease remains held while the exact semantic READY resources and pinned root are
+checked before and after that action, then the guard closes. A provider await
+or concurrent specialist execution never holds this lease; the next
+filesystem action reacquires and rechecks it. The binding supplies a writing-
+artifact repository rooted at and pinned to that session worktree.
 Binding itself performs no artifact I/O, provisioning, provider call, or global
 runtime mutation. Known readiness and workspace-validation failures become one
 content-free binding failure; malformed protocol/type defects remain visible.
 There is no fallback to the control root, current directory, another session,
 or a previously returned binding. Repository calls reopen and recheck the
-physical identity, so replacement before the first call, after an earlier
-call, or during I/O is rejected rather than granting the replacement authority.
+physical identity and READY semantics, so persistent replacement or Git drift
+is rejected rather than granting it authority. The lease serializes
+cooperating runtime operations only; it does not promise continuous exclusion
+of arbitrary external Git that mutates and restores state between checkpoints.
 
 For session `novel`, the exact identity is:
 
@@ -867,7 +874,9 @@ decision instead of presenting an old serialized decision again.
 `StoryCommitApplicationEvidence` binds the session, application/proposal/
 correlation IDs, exact `ArtifactChangeSet`, and its projected-state digest.
 Prepare requires that the change set is already applied exactly in the ready
-session worktree. It proves:
+session worktree. Runtime composition additionally pins preparation to the
+physical worktree identity that successfully completed Apply; the same pin is
+retained through authorization and execution. It proves:
 
 - symbolic `HEAD` names the exact session branch and equals the ready tip;
 - the real index has no pre-staged entry;
@@ -906,7 +915,11 @@ Artifact application operations normalize as follows:
 Authorize revalidates the process-local binding before minting one-use
 authority. Execute consumes that authority, takes the common-Git/session-history
 lease, independently requires the exact READY session resources, revalidates
-again, then follows this fixed order:
+again, and rechecks the Apply-bound physical root before durable start and each
+Git mutation phase. A replacement found before `RUNNING` is candidate drift and
+requires repreparation; after `RUNNING`, any such failure is preserved as an
+uncertain operation requiring inspection. Execution then follows this fixed
+order:
 
 ```text
 publish and fsync RUNNING operation evidence

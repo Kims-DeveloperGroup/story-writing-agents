@@ -280,12 +280,17 @@ bypass, consensus shell command, or general Git method. The package root no long
 Construct `StoryRuntime` from the initialized `main` workspace. That root is
 the control plane for configuration, conversation history, and diagnostics;
 it is not the story-artifact root for an active session. Every
-artifact-sensitive session operation freshly validates the session's exact
-branch/ref/sibling-worktree identity and pins the worktree's physical
-`(st_dev, st_ino)` identity. Artifact access and provider-visible active-debate
-or own-agent state then come only from that worktree; conversation history
-retains its separately configured control-plane storage. Replacing the named
-worktree does not transfer authority to the replacement.
+artifact-sensitive session operation freshly validates the session's exact branch/ref/
+sibling-worktree identity and pins the worktree's physical `(st_dev, st_ino)`
+identity. Each repository or session-source step uses a short synchronous
+guard: it holds the cooperating-runtime Git lease, verifies the exact semantic
+READY resources and named physical root before and after the step, then
+releases the guard. A guard never spans a provider await or specialist
+concurrency; the next filesystem step reacquires and revalidates it. Artifact
+access and provider-visible active-debate or own-agent state then come only
+from that worktree; conversation history retains its separately configured
+control-plane storage. Replacing the named worktree does not transfer
+authority to the replacement.
 The runtime never falls back to `main`, the current directory, or a previously
 used session, and it does not provision missing session resources as a side
 effect. Create or reopen the session through the lifecycle first.
@@ -372,6 +377,22 @@ durable identity-only indicators. See
   application. Once that method has started, an unclassified root, security,
   or format failure is conservatively
   `outcome_unknown` / `inspect_and_resolve_outcome`.
+- Session-source reads accept only canonical relative POSIX paths and unique
+  regular-file leaves. Symlinks, FIFOs, devices, hard-linked leaves, unstable
+  file identity/metadata, and foreign embedded session/debate/agent ownership
+  fail closed before content is accepted.
+- The cooperating-runtime Git lease is advisory to this runtime. Persistent
+  external Git drift is detected at the next guard checkpoint, but arbitrary
+  noncooperating Git that mutates and restores state between checkpoints is
+  outside the guarantee. Stop workspace processes before external recovery.
+- A Commit request prepared after successful Apply remains pinned to that
+  Apply worktree's physical identity through candidate preparation,
+  authorization, and execution. Replacement before durable Commit execution
+  requires repreparation; uncertainty after execution starts requires
+  inspection. Failure to publish the follow-on Commit request after the Apply
+  result is durable does not yet have its own durable failure-state record;
+  that separate work remains in
+  [Issue #662](https://github.com/Kims-DeveloperGroup/story-writing-agents/issues/662).
 - Smoke is intentionally provider-free and story-free.
 - Workspace configuration, histories, diagnostics, and artifacts are local
   plaintext unless the surrounding environment protects them.

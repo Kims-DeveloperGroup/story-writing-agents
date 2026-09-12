@@ -4,7 +4,6 @@ from ..conversation_storage.filesystem import (
     FilesystemConversationCatalog as FilesystemConversationCatalog,
 )
 from .core import (
-    SessionSourceWorkspace as SessionSourceWorkspace,
     WORKSPACE_DIRECTORIES as WORKSPACE_DIRECTORIES,
     Workspace as Workspace,
     discover_workspace as discover_workspace,
