@@ -474,30 +474,12 @@ object supplied on argv, whose canonical bytes must match exactly.
   "status": "SUCCESS",
   "conversation_id": "agy-c-1",
   "structured_output": {
-    "correlation": "<correlation-1>",
     "action": {
       "kind": "answer",
       "result": {
-        "scope": "workflow_meta",
-        "authoring_scope": {
-          "schema_version": 1,
-          "activity": "workflow",
-          "target_paths": [],
-          "domains": [],
-          "interpretation": "Answer the workflow question without story authoring.",
-          "task_id": "task_demo",
-          "task_revision": 1
-        },
-        "evidence_status": "not_applicable",
-        "evidence_ids": [],
         "kind": "answer",
-        "message": "<sanitized reply>",
-        "artifact_intent": null,
-        "proposal": null,
-        "objective_intent": null,
-        "recommended_action": null
-      },
-      "used_handles": []
+        "message": "<sanitized reply>"
+      }
     }
   },
   "json_schema": {"<documentation-placeholder>": "exact Antigravity-rendered wire-v7 schema object"},
@@ -505,16 +487,14 @@ object supplied on argv, whose canonical bytes must match exactly.
 }
 ```
 
-The example shows all ten fields of a `lead-outcome-v4` Lead ANSWER. The
-illustrative fresh workflow task `task_demo` at revision `1` must be offered by
-the current invocation; other calls require their selected result type.
-`recommended_action` is null for this answer. Fresh recommendations require
-one typed preparation action and null objective intent, then offer
+The example shows the minimal fields of a `lead-outcome-v5` Lead ANSWER. Other
+calls require the semantic fields for their selected result type. Fresh
+recommendations require one typed preparation action, then offer
 Confirm/Reject/Revise. Confirm prepares an exact proposal or asks a material
 question; specialist execution/review, Apply, and Commit need separate
 decisions. Ordinary contextual approval can supersede an unconfirmed
-recommendation as a new instruction. `objective_intent` is null here;
-contextual authoring can instead select `start`, `continue`, or `cancel`
+recommendation as a new instruction. Contextual authoring can select `start`,
+`continue`, or `cancel`
 under the [runtime contract](../reference/runtime-api.md#contextual-authoring-objectives).
 Story rejects invalid UTF-8, duplicate fields, non-finite numbers, additional
 JSON objects, and trailing non-whitespace data. It requires a safe
@@ -525,15 +505,13 @@ completed-error recovery below. It never falls back to a string-valued
 `response` field.
 Usage comes only from the terminal object's recognized exact nonnegative
 integer counters; absent or invalid counters remain unavailable. The complete
-closed SEARCH, READ, and ten-field Lead ANSWER branches are shown in
+closed SEARCH, READ, and minimal Lead ANSWER branches are shown in
 [What providers receive](lead-agent.md#what-providers-receive).
 
-Retained workspace Lead policies receive the runtime v4 overlay without being
-rewritten. Ordinary synthesis uses `lead-synthesis-v3` with nine fields,
-including `authoring_scope` and nullable `recommended_action`; the action is
-exclusive with `next_intent`. Specialist replies use `specialist-reply-v2`,
-artifact-review synthesis uses `artifact-review-synthesis-v2`, and contextual
-transport remains wire v7. Historical durable codecs stay readable. A known
+Lead policies use the v5 overlay. Ordinary synthesis uses the minimal
+`lead-synthesis-v3` contract. Specialist replies use `specialist-reply-v2`,
+artifact-review synthesis uses `artifact-review-synthesis-v3`, and contextual
+transport remains wire v7. A known
 read-only Lead failure after reference reads can expose `retry_lead_turn` once
 the exact attempt and reference accounting close. Its authoring objective
 stays open; explicit new input uses fresh evidence. Uncertain cleanup remains
@@ -591,10 +569,10 @@ alone never establishes domain acceptance.
 ### Shared structured-output contract
 
 Codex and Antigravity share provider-neutral result constraints and payload
-semantics. Typed wire v7 has a closed required root object with
-`correlation` and one closed `action`: SEARCH, READ, or ANSWER. ANSWER embeds
-the invocation-specific result object directly; there is no JSON-in-string
-result layer.
+semantics. Typed wire v7 has a closed required root object with one `action`:
+SEARCH, READ, or ANSWER. Runtime derives correlation and READ usage. ANSWER
+embeds the invocation-specific result object directly; there is no JSON-in-
+string result layer.
 
 Antigravity locally renders two equivalent constraints for its native
 function-schema conversion: `{"type":"null","enum":[null]}` becomes
@@ -616,7 +594,7 @@ bound. Shared accounting definitions and the exact payload remain unchanged.
 
 Antigravity's staged prompt also directs `finish` to receive the complete
 schema-selected outer object. For contextual calls, the specialist assessment
-belongs in `action.result` inside `correlation` and `action`. This rendering
+belongs in `action.result` inside `action`. This rendering
 changes no common prompt file, existing workspace prompt, or Codex adapter or
 transport.
 
@@ -791,7 +769,7 @@ The current routes are:
 | L05-MIXED | Configured Codex Lead, Antigravity Pro High plot specialist, and Sonnet character specialist. |
 | L06A-QUESTION | Flash: fresh workflow-only clarification. |
 | L06C-RECOMMENDATION | Flash: finished supplied outline, substantive Plot `REVIEW` scope, and an exact pending `prepare_consultation` recommendation for `plot_architect`. No preparation decision, consultation proposal, specialist execution, Apply, or Commit. |
-| L06B-CRITIQUE | Flash: critique unsafe workflow instructions about skipping confirmation. Whole-outline and ranged-manuscript reference preludes supply context; no story judgment is requested. |
+| L06B-CRITIQUE | Flash: critique unsafe workflow instructions about skipping confirmation. Locally loaded whole-outline and ranged-manuscript references supply context; no story judgment is requested. |
 | L07-SEARCH-READ | Flash: fresh workflow-only literal scheduling lookup and citation through SEARCH→READ→ANSWER, without story interpretation. |
 | L08-DECISIONS | Flash: finished inline outline review; exact Reject/Revise, stale/forged decisions, and ordinary `Yes`. |
 | L09-SECOND-ROUND | Pro High: finished inline outline with chronology ambiguity, reviewed in two actual rounds with separate confirmation and the same task/candidate. |

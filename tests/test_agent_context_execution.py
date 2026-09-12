@@ -200,13 +200,12 @@ def _answer(
     content: str = _PRIVATE_ANSWER,
     used_handles: tuple[str, ...] = (),
 ) -> str:
+    del call, used_handles
     return json.dumps(
         {
-            "correlation": _correlation(call),
             "action": {
                 "kind": "answer",
                 "result": {"content": content},
-                "used_handles": list(used_handles),
             },
         },
         ensure_ascii=False,
@@ -220,10 +219,8 @@ def _search(
 ) -> str:
     return json.dumps(
         {
-            "correlation": _correlation(call),
             "action": {
                 "kind": "search",
-                "path_prefix": None,
                 "queries": [
                     {"text": "needle", "source_kinds": ["writing_artifact"]}
                 ],
@@ -243,7 +240,6 @@ def _read_search_hit(
     provider.used_handles = (handle,)
     return json.dumps(
         {
-            "correlation": _correlation(call),
             "action": {"kind": "read", "handles": [handle]},
         },
         separators=(",", ":"),
@@ -266,7 +262,6 @@ def _lead_answer(
 ) -> str:
     return json.dumps(
         {
-            "correlation": _correlation(call),
             "action": {
                 "kind": "answer",
                 "result": {
@@ -274,7 +269,6 @@ def _lead_answer(
                     "message": "Visible lead answer.",
                     "proposal": None,
                 },
-                "used_handles": [],
             },
         },
         separators=(",", ":"),
@@ -289,7 +283,6 @@ def _lead_answer_with_read(
     assert isinstance(framed, list) and framed[0] == "r"
     return json.dumps(
         {
-            "correlation": _correlation(call),
             "action": {
                 "kind": "answer",
                 "result": {
@@ -297,7 +290,6 @@ def _lead_answer_with_read(
                     "message": "Visible grounded lead answer.",
                     "proposal": None,
                 },
-                "used_handles": list(provider.used_handles),
             },
         },
         separators=(",", ":"),
@@ -346,7 +338,6 @@ class _ScriptedProvider:
         provider_id: str = "codex",
         definition_fingerprint: str = _DEFINITION_DIGEST,
         usage: ProviderUsage | None = None,
-        reference_usage: ProviderUsage | None = None,
         reference_operation_id: str | None = None,
     ) -> None:
         self.provider_id = provider_id
@@ -354,7 +345,6 @@ class _ScriptedProvider:
         self.reference_operation_id = reference_operation_id
         self.responses = list(responses)
         self.usage = usage
-        self.reference_usage = reference_usage
         self.calls: list[ContextProviderCallRequest] = []
         self.application_bytes: list[bytes] = []
         self.threads: dict[tuple[object, str], str] = {}
@@ -440,39 +430,9 @@ class _ScriptedProvider:
         self,
         request: ContextReferencePreludeRequest,
     ) -> ContextReferencePreludeResult:
-        schema = {"type": "object"}
-        payload = {"references": [{"content": "PRIVATE_REFERENCE_BODY"}]}
-        payload_json, accounted = account_provider_payload(
-            schema,
-            payload,
-            call_kind=ProviderCallKind.WRITING_ARTIFACT_REFERENCE_READ,
-            component_paths={
-                ("references",): ContextComponentKind.MANDATORY_REFERENCE_DESCRIPTOR,
-                ("references", 0, "content"): (
-                    ContextComponentKind.MANDATORY_REFERENCE_CONTENT
-                ),
-            },
-            mandatory_reference_paths=(("references", 0, "content"),),
-        )
-        accounting = ProviderCallAccounting(
-            accounted,
-            state=ProviderCallState.SUBMITTED,
-            actual_transport_utf8_bytes=len(payload_json),
-            usage=self.reference_usage,
-        )
-        key = self._key(request.scope, request.policy_fingerprint)
-        current = self.threads.get(key)
-        if current != request.expected_thread_id:
-            raise AssertionError("reference continuation mismatch")
-        thread_id = current
-        if thread_id is None:
-            thread_id = f"thread-{self._next_thread}"
-            self._next_thread += 1
-        self.threads[key] = thread_id
+        del request
         return ContextReferencePreludeResult(
             ({"content": "PRIVATE_REFERENCE_BODY", "ordinal": 1},),
-            thread_id,
-            accounting,
         )
 
     def complete_references(self, _scope: object, _policy: str) -> None:
@@ -922,7 +882,7 @@ class ContextExecutionLifecycleTests(ContextExecutionTestCase):
             (2, 1, 0),
         )
 
-    async def test_reference_prelude_is_subordinate_to_lead_physical_limit(
+    async def test_local_reference_load_does_not_consume_lead_physical_limit(
         self,
     ) -> None:
         reference = MandatoryReferenceReservation(
@@ -940,7 +900,7 @@ class ContextExecutionLifecycleTests(ContextExecutionTestCase):
         request = self.request(
             invocation_kind=ContextInvocationKind.LEAD,
             result_contract=_LEAD_RESULT_CONTRACT,
-            physical_call_limit=2,
+            physical_call_limit=1,
             reference_operation_id="reference-operation",
             mandatory_references=(reference,),
         )
@@ -951,7 +911,7 @@ class ContextExecutionLifecycleTests(ContextExecutionTestCase):
 
         result = await self.invoke(provider, request)
 
-        self.assertEqual(len(result.provider_calls), 2)
+        self.assertEqual(len(result.provider_calls), 1)
         self.assertEqual(len(provider.calls), 1)
         self.assertEqual(provider.calls[0].payload["q"][1], "a")
         self.assertEqual(provider.calls[0].payload["q"][3][0], 0)
@@ -1044,14 +1004,11 @@ class ContextExecutionLifecycleTests(ContextExecutionTestCase):
             ),
         )
         schemas = tuple(canonical_provider_json(call.schema) for call in provider.calls)
-        self.assertEqual(len(set(schemas)), 3)
+        self.assertEqual(len(set(schemas)), 2)
         for call in provider.calls:
             outer = call.schema
             self.assertIs(outer["additionalProperties"], False)
-            self.assertEqual(
-                outer["properties"]["correlation"]["enum"],
-                [_correlation(call)],
-            )
+            self.assertEqual(set(outer["properties"]), {"action"})
             action = outer["properties"]["action"]
             variants = action.get("anyOf", [action])
             answer = next(
@@ -1059,10 +1016,7 @@ class ContextExecutionLifecycleTests(ContextExecutionTestCase):
                 for variant in variants
                 if variant["properties"]["kind"].get("enum") == ["answer"]
             )
-            self.assertEqual(
-                answer["properties"]["used_handles"]["maxItems"],
-                CONTEXT_ACTION_POLICY.max_cumulative_handles,
-            )
+            self.assertEqual(set(answer["properties"]), {"kind", "result"})
         self.assertTrue(all(len(_correlation(call)) == 43 for call in provider.calls))
         self.assertEqual(len({_correlation(call) for call in provider.calls}), 3)
         self.assertEqual(
@@ -1276,7 +1230,7 @@ class ContextExecutionLifecycleTests(ContextExecutionTestCase):
         )
         self.assertIs(result.projection_accounting.mode, ContextDeliveryMode.BOOTSTRAP)
 
-    async def test_reference_prelude_is_separate_and_preserves_authorization(
+    async def test_reference_load_is_local_and_preserves_authorization(
         self,
     ) -> None:
         reference = MandatoryReferenceReservation(
@@ -1300,10 +1254,10 @@ class ContextExecutionLifecycleTests(ContextExecutionTestCase):
             reference_operation_id="reference-operation",
         )
         result = await self.invoke(provider, request)
-        self.assertEqual(len(result.provider_calls), 2)
+        self.assertEqual(len(result.provider_calls), 1)
         self.assertIs(
             result.provider_calls[0].accounting.payload.call_kind,
-            ProviderCallKind.WRITING_ARTIFACT_REFERENCE_READ,
+            ProviderCallKind.CONVERSATION_RETRIEVAL_INITIAL,
         )
         self.assertEqual(result.authorization.mandatory_references, (reference,))
         self.assertEqual(provider.completed_references, 1)
@@ -1486,7 +1440,6 @@ class ContextExecutionFailureTests(ContextExecutionTestCase):
         ) -> str:
             return json.dumps(
                 {
-                    "correlation": _correlation(call),
                     "action": {
                         "kind": "read",
                         "handles": list(private_values),
@@ -1550,7 +1503,7 @@ class ContextExecutionFailureTests(ContextExecutionTestCase):
         )
         self.assertIsNone(inspection.record.ready_checkpoint)
 
-    async def test_correlation_mismatch_rejects_normally_and_during_redecode(
+    async def test_removed_correlation_field_is_rejected_without_disclosure(
         self,
     ) -> None:
         private_correlation = "PRIVATE critique prose\x1b]unsafe\x07"
@@ -1576,10 +1529,7 @@ class ContextExecutionFailureTests(ContextExecutionTestCase):
                 (_search, _read_search_hit, _search, _read_search_hit, mismatch),
             ),
         )
-        expected = (
-            "contextual provider response is invalid: `correlation` does not match the "
-            "current request correlation token"
-        )
+        expected = "contextual provider action is malformed"
         for label, responses in cases:
             with self.subTest(label=label):
                 request = self.request(
@@ -1625,7 +1575,7 @@ class ContextExecutionFailureTests(ContextExecutionTestCase):
                     [
                         (
                             "rejected",
-                            ContextProviderTerminalCode.RESPONSE_CORRELATION_MISMATCH,
+                            ContextProviderTerminalCode.MALFORMED_STRUCTURED_RESPONSE,
                         )
                     ],
                 )
@@ -1652,7 +1602,17 @@ class ContextExecutionFailureTests(ContextExecutionTestCase):
         def invalid_output(
             call: ContextProviderCallRequest, provider: _ScriptedProvider
         ) -> str:
-            return _answer(call, provider, used_handles=(forged,))
+            del call, provider
+            return json.dumps(
+                {
+                    "action": {
+                        "kind": "answer",
+                        "result": {"content": _PRIVATE_ANSWER},
+                        "used_handles": [forged],
+                    }
+                },
+                separators=(",", ":"),
+            )
 
         request = self.request(session_id="session-output")
         provider = _ScriptedProvider((invalid_output,))
@@ -2026,7 +1986,7 @@ class ContextExecutionObserverTests(ContextExecutionTestCase):
         ]
         self.assertEqual(terminal_indexes, [len(events) - 1])
 
-    async def test_reference_prelude_usage_is_aggregated_only_when_every_call_exact(
+    async def test_local_reference_load_does_not_change_provider_usage(
         self,
     ) -> None:
         reference = MandatoryReferenceReservation(
@@ -2041,15 +2001,9 @@ class ContextExecutionObserverTests(ContextExecutionTestCase):
             _digest(b"reference"),
             9,
         )
-        for label, reference_usage, answer_usage, expected in (
-            (
-                "exact",
-                ProviderUsage(input_tokens=11),
-                ProviderUsage(input_tokens=13),
-                24,
-            ),
-            ("missing-reference", None, ProviderUsage(input_tokens=13), None),
-            ("missing-answer", ProviderUsage(input_tokens=11), None, None),
+        for label, answer_usage, expected in (
+            ("exact", ProviderUsage(input_tokens=13), 13),
+            ("missing-answer", None, None),
         ):
             with self.subTest(label=label):
                 request = self.request(
@@ -2062,7 +2016,6 @@ class ContextExecutionObserverTests(ContextExecutionTestCase):
                 provider = _ScriptedProvider(
                     (_answer,),
                     reference_operation_id=f"reference-{label}",
-                    reference_usage=reference_usage,
                     usage=answer_usage,
                 )
                 events: list[ContextExecutionEvent] = []

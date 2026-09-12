@@ -121,18 +121,17 @@ class PromptAssemblerTests(unittest.TestCase):
             "no surrounding prose",
             "hidden reasoning",
             "For `lead_synthesis`",
-            '"reply_event_ids": ["every runtime-supplied reply event ID, in order"]',
-            '"unresolved_input_ids": ["unresolved original input IDs, in input order"]',
-            "`continue_lineage` proposal",
-            "Round two always sets `next_intent` to null",
+            '"message": "nonempty user-visible synthesis"',
+            "The runtime restores proposal identity",
+            "Round two omits `next_intent`",
             "does not make those decisions for the user",
             "own user confirmation",
         )
         for phrase in required:
             with self.subTest(phrase=phrase):
                 self.assertIn(phrase, normalized_prompt)
-        self.assertIn("set `proposal` to `null`", normalized_prompt)
-        self.assertIn('"relation": "new_step | revise_pending"', normalized_prompt)
+        self.assertIn("Omit unused fields instead of writing `null`", normalized_prompt)
+        self.assertIn("Runtime derives schema versions", normalized_prompt)
 
     def test_all_specialist_prompts_share_the_exact_bounded_assessment_contract(
         self,
@@ -165,10 +164,10 @@ class PromptAssemblerTests(unittest.TestCase):
         changed = {agent: PromptAssembler(self.workspace).build_definition(session_id="overlay", agent_id=agent).system_prompt_file.content for agent in ROSTER}
         lead = changed[LEAD_ORCHESTRATOR]
         self.assertIn(retained.strip(), lead)
-        self.assertIn(b"Runtime Lead contract overlay (lead-outcome-v4)", lead)
+        self.assertIn(b"Runtime Lead contract overlay (lead-outcome-v5)", lead)
         self.assertIn(b"objective_intent", lead)
         self.assertIn(b"recommended_action", lead)
-        self.assertIn(b"objective_intent=null", lead)
+        self.assertIn(b"omits objective_intent", lead)
         self.assertIn(b"current_response selects this exact visible recommendation", lead)
         self.assertIn(b"one preparation only", lead)
         self.assertIn(b"before its fresh Confirm", lead)

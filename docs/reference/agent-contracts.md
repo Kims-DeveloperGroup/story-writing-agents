@@ -79,11 +79,11 @@ change the stable definition fingerprint. Role-prompt and persona references
 remain content-backed at definition construction.
 
 The runtime appends a deterministic Lead contract overlay to the retained
-common and Lead policy snapshots. It specifies the current ten-field
-`lead-outcome-v4` contract and contextual objectives without rewriting an
+common and Lead policy snapshots. It specifies the current minimal
+`lead-outcome-v5` variants and contextual objectives without rewriting an
 existing workspace's policies. Fresh checked-in and embedded Lead defaults
-already describe v4. The overlay preserves the separate `lead_synthesis`
-result schema. Ordinary synthesis has a nullable `recommended_action`;
+already describe v5. The overlay preserves the separate `lead_synthesis`
+result schema. Ordinary synthesis has an optional `recommended_action`;
 specialist replies and artifact-review synthesis retain their own schemas.
 
 <a id="explicit-reference-read-contracts"></a>
@@ -134,21 +134,21 @@ lead invocation with the direct story-artifact inputs and all typed replies.
 ## Typed context action contract
 
 Every built-in contextual physical call supplies one generated wire-v7 JSON
-Schema. The schema's root is a closed required object with exactly
-`correlation` and `action`. `correlation` is restricted to the exact current
-input token. `action` is one or more of these closed variants, narrowed to the
+Schema. The schema's root is a closed required object with only `action`.
+Runtime derives the invocation correlation and action index locally. `action`
+is one or more of these closed variants, narrowed to the
 actions and bounds valid for that physical call:
 
 ```json
-{"correlation":"<exact-token>","action":{"kind":"search","path_prefix":"manuscript/part-01/","queries":[{"text":"opening causality","source_kinds":["writing_artifact"]}]}}
+{"action":{"kind":"search","path_prefix":"manuscript/part-01/","queries":[{"text":"opening causality","source_kinds":["writing_artifact"]}]}}
 ```
 
 ```json
-{"correlation":"<exact-token>","action":{"kind":"read","handles":["<issued-handle>"]}}
+{"action":{"kind":"read","handles":["<issued-handle>"]}}
 ```
 
 ```json
-{"correlation":"<exact-token>","action":{"kind":"answer","result":{"scope":"workflow_meta","authoring_scope":{"schema_version":1,"activity":"workflow","target_paths":[],"domains":[],"interpretation":"Answer the workflow question.","task_id":"task_demo","task_revision":1},"evidence_status":"not_applicable","evidence_ids":[],"kind":"answer","message":"Hello. What would you like to work on?","artifact_intent":null,"proposal":null,"objective_intent":null,"recommended_action":null},"used_handles":[]}}
+{"action":{"kind":"answer","result":{"message":"Hello. What would you like to work on?"}}}
 ```
 
 SEARCH has required `kind`, nullable `path_prefix`, and nonempty typed
@@ -161,15 +161,15 @@ canonical collection containing `writing_artifact` alone. The documented
 common provider-schema subset types and enums members; it does not claim JSON
 Schema enforces uniqueness or canonical order.
 READ has required `kind` and nonempty typed `handles`. ANSWER has required
-`kind`, the exact invocation-specific object in `result`, and typed
-`used_handles`. The Lead front-channel result in the example is the complete
-`lead-outcome-v4` value: it always has exactly ten fields, `scope`,
-`evidence_status`, `evidence_ids`, `kind`, `message`, `proposal`,
-`artifact_intent`, `objective_intent`, `recommended_action`, and
-`authoring_scope`, including explicit nulls for unused intents.
+`kind` and the exact invocation-specific object in `result`. The Lead front-
+channel example is a complete `lead-outcome-v5` direct-answer variant: only
+`message` is required. Questions and critiques add `kind`; authority-bearing
+variants add compact `authoring_scope` plus exactly one intent field. Runtime
+derives READ usage, evidence, IDs, revisions, interpretation, and other
+bookkeeping from the invocation and durable history.
 
-No action or result object is encoded as JSON text. Runtime still checks the closed schema, exact
-correlation, issued handles, result-domain contract, and current source
+No action or result object is encoded as JSON text. Runtime still checks the closed schema,
+issued handles, result-domain contract, and current source
 authority after a provider returns the object. See
 [Agent-context design](../design/agent-context.md#typed-provider-wire-v7).
 
@@ -307,12 +307,12 @@ nonempty candidate inputs and criteria. The conversations facade owns the exact
 `authoring_scope_to_dict`/`authoring_scope_from_dict` and
 `review_basis_to_dict`/`review_basis_from_dict` durable codecs.
 
-The strict provider contracts are `lead-outcome-v4`, `specialist-reply-v2`,
-`lead-synthesis-v3`, and `artifact-review-synthesis-v2`. Lead outcomes require
-scope; synthesis repeats the proposal's exact `authoring_scope`. Existing
-schema-v2 durable history retains optional omitted routing fields for historical
-compatibility; live output may not omit them. An old unscoped pending proposal
-needs fresh scope and confirmation, not reinterpretation as current authority.
+The strict provider contracts are `lead-outcome-v5`, `specialist-reply-v2`,
+`lead-synthesis-v3`, and `artifact-review-synthesis-v3`. Provider schemas contain
+only semantic choices. Runtime reconstructs attribution and routing metadata and
+never infers missing authority selectors. A structured-result rejection receives
+one bounded repair call; a second rejection becomes a visible safe answer with no
+action so the conversation can continue.
 
 ## Specialist reply and lead synthesis
 
