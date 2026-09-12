@@ -234,8 +234,10 @@ starts, runtime consumes that decision once and appends an
 `operator_recovery`, does not start artifact application, and emits no Commit
 request for that result. Once that method starts, an unclassified root,
 security, or format failure remains `outcome_unknown` with
-`inspect_and_resolve_outcome`; a repository-classified terminal recovery
-condition remains `recovery_required`. Preserve the session resources and
+`inspect_and_resolve_outcome`, including when the method returned before its
+outer binding postcheck rejected completion. Runtime publishes no optimistic
+application result or Commit request in that state. A repository-classified
+terminal recovery condition remains `recovery_required`. Preserve the session resources and
 authoritative history and inspect any uncertain application before another
 write. Commit remains a separate decision. Its runtime-composed service carries
 the Apply worktree's physical identity through request preparation,

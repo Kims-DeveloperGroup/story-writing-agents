@@ -3947,6 +3947,7 @@ class StoryRuntime:
                             WorkspaceSecurityError,
                         ):
                             if repository_execution_started:
+                                application_result = None
                                 outcome = ArtifactApplicationOutcomeKind.OUTCOME_UNKNOWN
                                 next_action = (
                                     ArtifactApplicationNextAction.INSPECT_AND_RESOLVE_OUTCOME
@@ -3975,18 +3976,7 @@ class StoryRuntime:
                                 "application was started; regenerate and review it."
                             )
                         except ArtifactApplicationError as exc:
-                            if repository_execution_started:
-                                outcome = (
-                                    ArtifactApplicationOutcomeKind.OUTCOME_UNKNOWN
-                                )
-                                next_action = (
-                                    ArtifactApplicationNextAction.INSPECT_AND_RESOLVE_OUTCOME
-                                )
-                                message = (
-                                    "The artifact application outcome is uncertain. "
-                                    "Inspect the exact application before any new write."
-                                )
-                            elif exc.code is ArtifactApplicationErrorCode.RECOVERY_REQUIRED:
+                            if exc.code is ArtifactApplicationErrorCode.RECOVERY_REQUIRED:
                                 outcome = (
                                     ArtifactApplicationOutcomeKind.RECOVERY_REQUIRED
                                 )
@@ -3996,6 +3986,17 @@ class StoryRuntime:
                                 message = (
                                     "Artifact application recovery is required. "
                                     "Do not retry the write."
+                                )
+                            elif repository_execution_started:
+                                outcome = (
+                                    ArtifactApplicationOutcomeKind.OUTCOME_UNKNOWN
+                                )
+                                next_action = (
+                                    ArtifactApplicationNextAction.INSPECT_AND_RESOLVE_OUTCOME
+                                )
+                                message = (
+                                    "The artifact application outcome is uncertain. "
+                                    "Inspect the exact application before any new write."
                                 )
                             elif exc.code in {
                                 ArtifactApplicationErrorCode.DRIFT,

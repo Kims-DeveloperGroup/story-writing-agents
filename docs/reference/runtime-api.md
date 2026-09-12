@@ -967,8 +967,10 @@ persisted application result is
 start and no provider call is attempted. Once that method has started, an
 unclassified root, security, or format failure is conservatively
 `outcome_unknown` with `inspect_and_resolve_outcome`; the exact application
-must be inspected before any new write. A terminal recovery condition reported
-by the repository remains `recovery_required`. Successful application affects
+must be inspected before any new write. This includes guard-exit rejection
+after the repository method returned: its optimistic terminal result is not
+published and no Commit request is created. A terminal recovery condition
+reported by the repository remains `recovery_required`. Successful application affects
 only the correlated session worktree and its application ledger. Control-root
 and sibling-session bytes remain outside the operation.
 

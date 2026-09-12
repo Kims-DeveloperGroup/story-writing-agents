@@ -28,7 +28,11 @@ from story_writing_agents.writing_artifacts import (
 )
 from story_writing_agents.writing_artifacts._storage import ArtifactRootSecurityError
 from story_writing_agents.writing_artifacts.repository import WritingArtifactRepository
-from story_writing_agents.workspace.initialization import provision_session_resources
+from story_writing_agents.workspace import initialization as initialization_module
+from story_writing_agents.workspace.initialization import (
+    SessionArtifactBindingError,
+    provision_session_resources,
+)
 
 from tests.test_artifact_proposal_orchestration import (
     _INDEX,
@@ -385,37 +389,43 @@ class LeadArtifactApplicationTests(LeadOrchestrationTestCase):
         self.assertEqual(self.artifact_snapshot(), relationship_before)
         self.assertEqual(self.git_snapshot(), relationship_git)
 
-    async def test_application_and_result_persistence_failures_map_safely(self) -> None:
-        for code, expected, next_action in (
-            (
-                ArtifactApplicationErrorCode.RECOVERY_REQUIRED,
-                ArtifactApplicationOutcomeKind.RECOVERY_REQUIRED,
-                ArtifactApplicationNextAction.OPERATOR_RECOVERY,
-            ),
-            (
-                ArtifactApplicationErrorCode.INVALID_SCHEMA,
-                ArtifactApplicationOutcomeKind.OUTCOME_UNKNOWN,
-                ArtifactApplicationNextAction.INSPECT_AND_RESOLVE_OUTCOME,
-            ),
+    async def _assert_application_failure_maps_safely(
+        self,
+        code: ArtifactApplicationErrorCode,
+        expected: ArtifactApplicationOutcomeKind,
+        next_action: ArtifactApplicationNextAction,
+    ) -> None:
+        turn = await self.reviewed_create(code.value)
+        before = self.artifact_snapshot()
+        git_before = self.git_snapshot()
+        with mock.patch.object(
+            WritingArtifactRepository,
+            "apply_artifact_changes",
+            side_effect=ArtifactApplicationError(code),
         ):
-            with self.subTest(code=code):
-                turn = await self.reviewed_create(code.value)
-                before = self.artifact_snapshot()
-                git_before = self.git_snapshot()
-                with mock.patch.object(
-                    WritingArtifactRepository,
-                    "apply_artifact_changes",
-                    side_effect=ArtifactApplicationError(code),
-                ):
-                    result = await self.runtime.decide_artifact_application(
-                        _application_decision(
-                            turn, ArtifactApplicationDecisionKind.APPLY
-                        )
-                    )
-                self.assertIs(result.outcome.outcome, expected)
-                self.assertIs(result.outcome.next_action, next_action)
-                self.assertEqual(self.artifact_snapshot(), before)
-                self.assertEqual(self.git_snapshot(), git_before)
+            result = await self.runtime.decide_artifact_application(
+                _application_decision(turn, ArtifactApplicationDecisionKind.APPLY)
+            )
+        self.assertIs(result.outcome.outcome, expected)
+        self.assertIs(result.outcome.next_action, next_action)
+        self.assertEqual(self.artifact_snapshot(), before)
+        self.assertEqual(self.git_snapshot(), git_before)
+
+    async def test_repository_recovery_required_maps_safely(self) -> None:
+        await self._assert_application_failure_maps_safely(
+            ArtifactApplicationErrorCode.RECOVERY_REQUIRED,
+            ArtifactApplicationOutcomeKind.RECOVERY_REQUIRED,
+            ArtifactApplicationNextAction.OPERATOR_RECOVERY,
+        )
+
+    async def test_repository_unclassified_failure_maps_outcome_unknown(self) -> None:
+        await self._assert_application_failure_maps_safely(
+            ArtifactApplicationErrorCode.INVALID_SCHEMA,
+            ArtifactApplicationOutcomeKind.OUTCOME_UNKNOWN,
+            ArtifactApplicationNextAction.INSPECT_AND_RESOLVE_OUTCOME,
+        )
+
+    async def test_result_persistence_failure_maps_safely(self) -> None:
 
         turn = await self.reviewed_create("Result persistence failure")
         original_append = self.runtime._append_drafts
@@ -574,6 +584,59 @@ class LeadArtifactApplicationTests(LeadOrchestrationTestCase):
         self.assertIsNone(result.commit_request)
         self.assertEqual(self.artifact_snapshot(), before)
         self.assertEqual(self.git_snapshot(), git_before)
+
+    async def test_apply_success_with_rejected_guard_exit_publishes_uncertainty(
+        self,
+    ) -> None:
+        turn = await self.reviewed_create("Apply postcheck loss")
+        original_apply = WritingArtifactRepository.apply_artifact_changes
+        original_postvalidate = (
+            initialization_module._postvalidate_session_artifact_access
+        )
+        applied = False
+
+        def apply_then_reject(repository, request):
+            nonlocal applied
+            result = original_apply(repository, request)
+            applied = True
+            return result
+
+        def reject_after_apply(access):
+            if applied:
+                raise SessionArtifactBindingError("injected Apply postcheck loss")
+            return original_postvalidate(access)
+
+        with mock.patch.object(
+            WritingArtifactRepository,
+            "apply_artifact_changes",
+            autospec=True,
+            side_effect=apply_then_reject,
+        ), mock.patch.object(
+            initialization_module,
+            "_postvalidate_session_artifact_access",
+            side_effect=reject_after_apply,
+        ):
+            result = await self.runtime.decide_artifact_application(
+                _application_decision(turn, ArtifactApplicationDecisionKind.APPLY)
+            )
+
+        self.assertTrue(applied)
+        self.assertIs(
+            result.outcome.outcome,
+            ArtifactApplicationOutcomeKind.OUTCOME_UNKNOWN,
+        )
+        self.assertIs(
+            result.outcome.next_action,
+            ArtifactApplicationNextAction.INSPECT_AND_RESOLVE_OUTCOME,
+        )
+        self.assertIsNone(result.outcome.result)
+        self.assertIsNone(result.commit_request)
+        self.assertTrue(self.workspace.path(_RULES).exists())
+        projection = project_collaboration_history(self.history(turn.conversation_id))
+        self.assertEqual(
+            projection.current_artifact_application_result,
+            result.outcome,
+        )
 
     async def test_commit_request_publication_binding_loss_discards_capability(
         self,
