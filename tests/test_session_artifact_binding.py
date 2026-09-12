@@ -770,6 +770,59 @@ class RuntimeSessionArtifactBindingTests(LeadOrchestrationTestCase):
             ):
                 operation()
 
+    def test_foreign_thread_access_surface_fails_and_exit_revokes_every_token(
+        self,
+    ) -> None:
+        binding = compose_session_artifact_binding(
+            self.control_workspace.root,
+            self.session_id,
+        )
+        manager = binding.open_ready_resources()
+        access = manager.__enter__()
+        descriptor = access._descriptor
+        operations = (
+            lambda: access.repository,
+            lambda: access.resources,
+            lambda: access.worktree_identity,
+            access.require_active,
+            access.require_ready,
+            access.duplicate_worktree_descriptor,
+            access._close,
+        )
+
+        def foreign_calls():
+            failures = []
+            for operation in operations:
+                try:
+                    operation()
+                except SessionArtifactBindingError as exc:
+                    failures.append(exc)
+            return tuple(failures)
+
+        with ThreadPoolExecutor(max_workers=1) as executor:
+            failures = executor.submit(foreign_calls).result(timeout=10)
+        self.assertEqual(len(failures), len(operations))
+        os.fstat(descriptor)
+        self.assertEqual(
+            binding._operation_tokens,
+            {access._owner_thread_id: [access]},
+        )
+
+        body_failure = RuntimeError("preserve artifact caller failure")
+        with ThreadPoolExecutor(max_workers=1) as executor:
+            suppresses = executor.submit(
+                manager.__exit__,
+                RuntimeError,
+                body_failure,
+                None,
+            ).result(timeout=10)
+        self.assertFalse(suppresses)
+        self.assertEqual(binding._operation_tokens, {})
+        with self.assertRaises(OSError):
+            os.fstat(descriptor)
+        with binding.open_ready_resources() as replacement:
+            replacement.require_ready()
+
     def test_postcheck_binding_loss_dominates_body_failure_and_preserves_clean_exit(
         self,
     ) -> None:

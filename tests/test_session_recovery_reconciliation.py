@@ -13,6 +13,7 @@ from unittest import mock
 
 import story_writing_agents
 import story_writing_agents.session_recovery as recovery_facade
+from story_writing_agents.git import story_commit_candidates as candidates_module
 from story_writing_agents.conversations import (
     CollaborationAgentProfile,
     CollaborationAssignment,
@@ -88,6 +89,7 @@ from story_writing_agents.session_recovery.transition_assessment import (
     SessionTransitionAssessor,
     SessionTransitionOperation,
 )
+from story_writing_agents.workspace.initialization import StoryCommitRecoverySnapshot
 from tests.collaboration_contract_fixture import (
     LEAD, USER, make_batch, make_draft, provider_call_drafts, store_batch,
 )
@@ -480,6 +482,7 @@ def _observe(
     binding_accesses: tuple[object, ...] | None = None,
     binding_failure: BaseException | None = None,
     binding_fail_on: int | None = None,
+    recovery_snapshot: object | None = None,
     transition: bool = False,
 ) -> _Observation:
     trace: list[str] = []
@@ -585,6 +588,23 @@ def _observe(
                 side_effect=lambda root, session: next_value(snapshot_values, "history"),
             )
         )
+        if recovery_snapshot is not None:
+            stack.enter_context(
+                mock.patch.object(
+                    reconciliation_module,
+                    "inspect_story_commit_recovery_snapshot",
+                    side_effect=(
+                        recovery_snapshot
+                        if isinstance(recovery_snapshot, BaseException)
+                        else None
+                    ),
+                    return_value=(
+                        None
+                        if isinstance(recovery_snapshot, BaseException)
+                        else recovery_snapshot
+                    ),
+                )
+            )
         stack.enter_context(mock.patch.object(reconciliation_module, "GitRepositoryAdapter", Adapter))
         stack.enter_context(
             mock.patch.object(
@@ -860,6 +880,56 @@ class SessionRecoveryLifecycleTests(unittest.TestCase):
 
 
 class SessionRecoveryStateTests(unittest.TestCase):
+    def test_exact_staged_recovery_routes_story_commit_and_dirty_fallback_stays_resources(
+        self,
+    ) -> None:
+        reviewed, application = _artifact_facts()
+        resources = _resources(GitSessionResourceState.RECOVERY_REQUIRED)
+        history = _snapshot(GitSessionHistoryState.STAGED)
+        candidate_record = history.candidates[0]
+        operation = history.commit_operations[0]
+        recovery = StoryCommitRecoverySnapshot(
+            resources,
+            candidates_module._candidate_from_record(candidate_record),
+            operation,
+        )
+        observed = _observe(
+            resources=(resources,),
+            reviewed=reviewed,
+            application=application,
+            stored_application=application.application_result,
+            recovery_snapshot=recovery,
+        )
+        self.assertIs(observed.result.state, SessionRecoveryState.RECOVERY_REQUIRED)
+        self.assertIs(observed.result.owner, SessionRecoveryOwner.STORY_COMMIT)
+
+        mismatched = _observe(
+            resources=(resources,),
+            reviewed=reviewed,
+            application=application,
+            stored_application=application.application_result,
+            recovery_snapshot=StoryCommitRecoverySnapshot(
+                resources,
+                replace(recovery.candidate, correlation_id="foreign-correlation"),
+                operation,
+            ),
+        )
+        self.assertIs(
+            mismatched.result.failure_code,
+            SessionRecoveryFailureCode.CORRELATION_MISMATCH,
+        )
+        self.assertIs(mismatched.result.owner, SessionRecoveryOwner.STORY_COMMIT)
+
+        fallback = _observe(
+            resources=(resources,),
+            reviewed=reviewed,
+            application=application,
+            stored_application=application.application_result,
+            recovery_snapshot=RuntimeError("arbitrary dirty topology"),
+        )
+        self.assertIs(fallback.result.state, SessionRecoveryState.RECOVERY_REQUIRED)
+        self.assertIs(fallback.result.owner, SessionRecoveryOwner.SESSION_RESOURCES)
+
     def test_applied_staged_and_committed_states_use_complete_correlated_predecessors(self) -> None:
         reviewed, application = _artifact_facts()
         cases = (
@@ -1250,7 +1320,7 @@ class SessionRecoveryBoundaryTests(unittest.TestCase):
         self.assertNotIn("git.session_history", dependencies)
         index = (_ROOT / "PYTHON_MODULE_INDEX.md").read_text()
         self.assertIn("Importable production units indexed: 142.", index)
-        self.assertIn("Direct internal dependency edges indexed: 570.", index)
+        self.assertIn("Direct internal dependency edges indexed: 572.", index)
         self.assertIn("Directed internal dependency cycles indexed: 0.", index)
         self.assertIn("tests/test_session_recovery_reconciliation.py", index)
 

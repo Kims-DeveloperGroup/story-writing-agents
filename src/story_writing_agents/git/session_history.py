@@ -7,6 +7,7 @@ import re
 import stat
 import uuid
 from contextlib import contextmanager
+from pathlib import Path
 from typing import Callable, Iterator, TypeVar
 
 from .contracts import GitBaselineManifest
@@ -44,8 +45,10 @@ from .session_history_contracts import (
     encode_commit_operation,
 )
 from .session_resources import (
+    GitSessionRecoveryTopology,
     require_ready_git_session_resources,
     require_ready_locked_git_session_resources,
+    require_story_commit_recovery_locked_git_session_resources,
 )
 
 
@@ -114,7 +117,7 @@ def open_git_session_history(
                 yield history
                 history.require_active()
             finally:
-                history.close()
+                history._close()
     except GitSessionHistoryError:
         raise
     except GitRepositoryLockFailure as exc:
@@ -228,6 +231,10 @@ class GitSessionHistory:
         return confirmed
 
     def close(self) -> None:
+        self.require_active()
+        self._close()
+
+    def _close(self) -> None:
         if not self._active:
             return
         self._active = False
@@ -393,6 +400,40 @@ class GitSessionHistory:
         if self.inspect() != inspection:
             raise _history_error(GitSessionHistoryFailureCode.RECOVERY_REQUIRED)
         return result
+
+    def capture_story_commit_records(
+        self,
+    ) -> tuple[
+        tuple[GitSessionCandidateRecord, ...],
+        tuple[GitSessionCommitOperationRecord, ...],
+    ]:
+        """Capture only bounded candidate and commit-operation inventories."""
+
+        self.require_active()
+        if self._descriptor is None:
+            return (), ()
+        candidates = self._inventory_records(
+            _CANDIDATE_DIRECTORY,
+            length=64,
+            decoder=decode_candidate_record,
+        )
+        commits = self._inventory_operations(
+            _COMMIT_DIRECTORY,
+            decoder=decode_commit_operation,
+        )
+        _require_allowed_names(
+            self._descriptor,
+            {
+                _CANDIDATE_DIRECTORY,
+                _COMMIT_DIRECTORY,
+                _CHECKPOINT_DIRECTORY,
+                _CHECKPOINT_INPUT_DIRECTORY,
+            },
+        )
+        return (
+            tuple(item[1] for item in candidates),
+            tuple(item[1] for item in commits),
+        )
 
     def _capture(
         self,
@@ -578,6 +619,156 @@ class GitSessionHistory:
             return tuple(result)
         finally:
             os.close(parent)
+
+
+class GitSessionRecoveryHistory:
+    """Read-only story-commit history under one index-tolerant recovery lease."""
+
+    __slots__ = (
+        "_allowed_worktree_changes",
+        "_history",
+        "_lease",
+        "_manifest",
+        "_topology",
+    )
+
+    def __init__(
+        self,
+        *,
+        history: GitSessionHistory,
+        lease: GitRepositoryLease,
+        manifest: GitBaselineManifest,
+        topology: GitSessionRecoveryTopology,
+        allowed_worktree_changes: tuple[str, ...],
+    ) -> None:
+        self._history = history
+        self._lease = lease
+        self._manifest = manifest
+        self._topology = topology
+        self._allowed_worktree_changes = allowed_worktree_changes
+
+    @property
+    def session_id(self) -> str:
+        self.require_active()
+        return self._history.session_id
+
+    @property
+    def topology(self) -> GitSessionRecoveryTopology:
+        self.require_active()
+        return self._topology
+
+    def require_active(self) -> None:
+        self._lease.require_active()
+        self._history.require_active()
+
+    def require_recovery_topology(self) -> GitSessionRecoveryTopology:
+        """Repeat exact index-tolerant topology inspection under the live lease."""
+
+        self.require_active()
+        confirmed = require_story_commit_recovery_locked_git_session_resources(
+            self._lease,
+            self._manifest,
+            self.session_id,
+            allowed_worktree_changes=self._allowed_worktree_changes,
+        )
+        if confirmed != self._topology:
+            raise _history_error(GitSessionHistoryFailureCode.RECOVERY_REQUIRED)
+        self.require_active()
+        return confirmed
+
+    def read_candidate(self, candidate_id: str) -> GitSessionCandidateRecord:
+        self.require_active()
+        return self._history.read_candidate(candidate_id)
+
+    def read_commit_operation(
+        self,
+        operation_id: str,
+    ) -> GitSessionCommitOperationRecord:
+        self.require_active()
+        return self._history.read_commit_operation(operation_id)
+
+    def capture_story_commit_records(
+        self,
+    ) -> tuple[
+        tuple[GitSessionCandidateRecord, ...],
+        tuple[GitSessionCommitOperationRecord, ...],
+    ]:
+        self.require_active()
+        return self._history.capture_story_commit_records()
+
+    def write_commit_operation(
+        self,
+        record: GitSessionCommitOperationRecord,
+    ) -> GitSessionCommitOperationRecord:
+        """Persist only a caller-validated story-commit recovery transition."""
+
+        self.require_active()
+        return self._history.write_commit_operation(record)
+
+    def close(self) -> None:
+        self.require_active()
+        self._close()
+
+    def _close(self) -> None:
+        self._history._close()
+
+
+@contextmanager
+def open_story_commit_recovery_history(
+    root: str | os.PathLike[str],
+    manifest: GitBaselineManifest,
+    session_id: str,
+    *,
+    allowed_worktree_changes: tuple[str, ...] = (),
+) -> Iterator[GitSessionRecoveryHistory]:
+    """Open bounded commit recovery history while tolerating only a dirty index."""
+
+    recovery: GitSessionRecoveryHistory | None = None
+    try:
+        with lock_git_repository(Path(root)) as lease:
+            topology = (
+                require_story_commit_recovery_locked_git_session_resources(
+                    lease,
+                    manifest,
+                    session_id,
+                    allowed_worktree_changes=allowed_worktree_changes,
+                )
+            )
+            descriptor = _open_history_root(
+                lease,
+                topology.resources.identity.session_id,
+                create=False,
+            )
+            history = GitSessionHistory(
+                lease=lease,
+                session_id=topology.resources.identity.session_id,
+                descriptor=descriptor,
+            )
+            recovery = GitSessionRecoveryHistory(
+                history=history,
+                lease=lease,
+                manifest=manifest,
+                topology=topology,
+                allowed_worktree_changes=allowed_worktree_changes,
+            )
+            try:
+                yield recovery
+                recovery.require_active()
+            finally:
+                recovery._close()
+    except GitSessionHistoryError:
+        raise
+    except GitRepositoryLockFailure as exc:
+        code = (
+            GitSessionHistoryFailureCode.UNSAFE_ROOT
+            if exc.code is GitRepositoryLockFailureCode.UNSAFE_ROOT
+            else GitSessionHistoryFailureCode.LOCK_UNAVAILABLE
+        )
+        raise _history_error(code) from None
+    except GitSessionResourceError:
+        raise _history_error(GitSessionHistoryFailureCode.RECOVERY_REQUIRED) from None
+    except (OSError, TypeError):
+        raise _history_error(GitSessionHistoryFailureCode.PERSISTENCE_FAILED) from None
 
 
 def _open_history_root(

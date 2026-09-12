@@ -178,6 +178,13 @@ content-free binding failure takes precedence; otherwise the original body
 error or cancellation is preserved. Descriptors and the cooperating-runtime
 lease close on every path.
 
+The live access and its underlying Git lease/history are creator-thread
+affine. A foreign thread cannot inspect or explicitly close them, duplicate the
+root descriptor, or use the repository transaction gate. If context-manager
+exit is driven from a foreign thread, private cleanup still revokes every
+access token and closes descriptors and the lease; it grants no foreign
+authority and does not suppress the caller's body failure.
+
 The package-internal `SessionSourceWorkspace` is likewise not a public import.
 Runtime derives it only from a freshly validated session-artifact binding. It
 adopts that binding's exact session root and physical `(st_dev, st_ino)`
@@ -293,10 +300,11 @@ runtime APIs; the first source list/read, catalog read, or artifact commit raise
 
 ## Internal session-resource composition
 
-`workspace.initialization` defines five package-internal typed operations for
+`workspace.initialization` defines six package-internal typed operations for
 #455: inspect one session, list the exhaustive correlated inventory, provision
 or resume one exact triple, require one exact ready triple, and capture one
-complete session-history snapshot. They are absent
+complete session-history snapshot or one exact staged Story Commit recovery
+snapshot. They are absent
 from `story_writing_agents`, `story_writing_agents.workspace`, and
 `story_writing_agents.git`; direct application code must not treat them as a
 stable public API.
@@ -336,6 +344,14 @@ provider call, reconciliation, index/ref/branch/worktree change, or UI action.
 The helper and snapshot type are absent from the root, workspace, and Git
 facades. #527 may consume the snapshot later; #536 itself does not decide or
 enforce session recovery. See the [complete snapshot contract](git-adapter.md#package-internal-session-history-snapshot).
+
+The sibling recovery-snapshot helper is also package-internal and read-only. It
+does not weaken ordinary READY: under one creator-thread-bound lease it defers
+only index cleanliness, requires exactly one eligible Story Commit operation
+and matching candidate, proves the exact correlated staged topology, and
+returns their closed recovery facts for reconciliation. Arbitrary non-READY
+dirty state still fails as session-resource recovery, and the helper performs
+no history transition. See the [Story Commit recovery contract](git-adapter.md#package-internal-exact-story-commits).
 
 ## Directive utility
 

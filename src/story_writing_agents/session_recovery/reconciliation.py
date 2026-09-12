@@ -44,9 +44,11 @@ from ..session_lifecycle import (
 from ..workspace.initialization import (
     SessionArtifactBinding,
     SessionArtifactBindingError,
+    StoryCommitRecoverySnapshot,
     compose_session_artifact_binding,
     inspect_session_history,
     inspect_session_resources,
+    inspect_story_commit_recovery_snapshot,
 )
 from ..writing_artifacts import (
     ArtifactApplicationError,
@@ -254,6 +256,57 @@ class SessionRecoveryReconciler:
             tail,
         )
         if resource_blocker is not None:
+            if resources_a.state is GitSessionResourceState.RECOVERY_REQUIRED:
+                try:
+                    recovery = inspect_story_commit_recovery_snapshot(
+                        self._workspace_root,
+                        session_id,
+                    )
+                except Exception:
+                    return resource_blocker
+                if (
+                    type(recovery) is not StoryCommitRecoverySnapshot
+                    or recovery.resources.identity.session_id != session_id
+                    or recovery.candidate.session_id != session_id
+                    or recovery.operation.session_id != session_id
+                    or recovery.operation.candidate_id
+                    != recovery.candidate.candidate_id
+                ):
+                    return resource_blocker
+                if application is None:
+                    return _blocked(
+                        session_id,
+                        conversation,
+                        tail,
+                        SessionRecoveryState.RECOVERY_REQUIRED,
+                        SessionRecoveryOwner.STORY_COMMIT,
+                        SessionRecoveryFailureCode.MISSING_PREDECESSOR,
+                    )
+                if (
+                    recovery.candidate.application_id
+                    != application.application_result.application_id
+                    or recovery.candidate.proposal_id != application.proposal_id
+                    or recovery.candidate.correlation_id
+                    != application.correlation_id
+                    or recovery.operation.correlation_id
+                    != application.correlation_id
+                    or {item.path for item in recovery.candidate.paths}
+                    != set(application.application_result.affected_paths)
+                ):
+                    return _blocked(
+                        session_id,
+                        conversation,
+                        tail,
+                        SessionRecoveryState.RECOVERY_REQUIRED,
+                        SessionRecoveryOwner.STORY_COMMIT,
+                        SessionRecoveryFailureCode.CORRELATION_MISMATCH,
+                    )
+                return _owner_recovery(
+                    session_id,
+                    conversation,
+                    tail,
+                    SessionRecoveryOwner.STORY_COMMIT,
+                )
             return resource_blocker
         try:
             artifact_binding = compose_session_artifact_binding(

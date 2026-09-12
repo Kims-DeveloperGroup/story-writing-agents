@@ -68,6 +68,12 @@ reference and source adapters instead retain an access factory and reacquire a
 guard for each operation. Guard exit revalidates after success, ordinary
 error, or cancellation. If the body and exit check both fail, binding loss is
 the authoritative failure; otherwise the original body failure is preserved.
+The underlying Git lease, session history, and artifact access are affine to
+their creator thread. Foreign-thread surface calls, including explicit close,
+fail; context-manager teardown instead privately revokes tokens and closes
+descriptors/leases so cleanup completes without granting foreign authority or
+suppressing the body failure.
+
 This covers explicit
 and contextual references, source status and fingerprints, proposal and review
 revalidation, Apply and application-ledger access, recovery reads, consensus
@@ -977,6 +983,14 @@ the final `committed` record also durably preserves the same operation as
 implies Commit, and neither operation pushes, merges, or grants a provider
 direct filesystem or Git authority.
 
+Identity-bound candidate preparation borrows the live session-history READY
+validator for canonical capture through the binding's one stable guarded
+repository generation. The artifact snapshot, Git invariants, and create-only
+candidate append stay under that same lease and READY authority; no second
+repository generation or independently reacquired Git lease is substituted.
+Likewise, merely constructing `running` in memory is not durable Commit start.
+Pre-durable error mapping remains in force until the history append succeeds.
+
 The identity-bound service applies the same Apply-root requirement to
 `inspect()` and `recover()`, checking before and between their owner reads and
 before every possible history transition. A replaced root returns
@@ -991,6 +1005,18 @@ than remain current `HEAD`. Reset/divergence, a missing or mismatched commit,
 or candidate mismatch fails `recovery_required`. Historical `rejected` and
 `recovery_required` records likewise remain immutable inspectable terminal
 evidence under current READY.
+
+If ordinary READY fails only because the index is staged, inspection and
+recovery may enter a recovery-only read admission under one lease. Admission
+requires the addressed, exactly correlated live Story Commit/candidate and
+revalidates the branch and internal ref, candidate tree, exact index and
+matching worktree, no untracked files or external Git operation, session-root/
+registered-worktree identity, main HEAD, and the main-worktree status plus
+allowed-path content fingerprint before and after. Unaddressed reconciliation
+also requires exactly one eligible operation/candidate pair. Only that Story
+Commit owner can receive or advance the correlated staged state. Arbitrary
+non-READY dirty or staged state remains a session-resource recovery failure;
+ordinary READY itself is unchanged and strict.
 
 After a successful Apply result is durable, the runtime prepares and publishes
 its follow-on Commit request in a later step under the exact Apply binding.

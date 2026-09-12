@@ -106,6 +106,58 @@ class GitRepositoryLockSafetyTests(DisposableGitTestCase):
             GitRepositoryLockFailureCode.UNSAFE_ROOT,
         )
 
+    def test_foreign_thread_cannot_observe_or_close_lease_and_exit_cleans_up(
+        self,
+    ) -> None:
+        root = self._repository("thread-affinity")
+        manager = lock_git_repository(root)
+        lease = manager.__enter__()
+        descriptor = lease.common_descriptor
+
+        operations = (
+            lambda: lease.main_root,
+            lambda: lease.common_git,
+            lambda: lease.root_identity,
+            lambda: lease.common_identity,
+            lambda: lease.common_descriptor,
+            lease.require_active,
+        )
+
+        def foreign_calls():
+            failures = []
+            for operation in operations:
+                try:
+                    operation()
+                except GitRepositoryLockFailure as exc:
+                    failures.append(exc)
+            return tuple(failures)
+
+        with ThreadPoolExecutor(max_workers=1) as executor:
+            failures = executor.submit(foreign_calls).result(timeout=5)
+        self.assertEqual(len(failures), len(operations))
+        self.assertTrue(
+            all(
+                failure.code is GitRepositoryLockFailureCode.LOCK_UNAVAILABLE
+                for failure in failures
+            )
+        )
+        os.fstat(descriptor)
+        lease.require_active()
+
+        body_failure = RuntimeError("preserve caller failure")
+        with ThreadPoolExecutor(max_workers=1) as executor:
+            suppresses = executor.submit(
+                manager.__exit__,
+                RuntimeError,
+                body_failure,
+                None,
+            ).result(timeout=5)
+        self.assertFalse(suppresses)
+        with self.assertRaises(OSError):
+            os.fstat(descriptor)
+        with lock_git_repository(root) as replacement:
+            replacement.require_active()
+
     def test_symlinked_root_or_common_directory_is_never_followed(self) -> None:
         root = self._repository("real")
         alias = self.test_root / "alias"

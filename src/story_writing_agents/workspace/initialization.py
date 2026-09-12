@@ -36,8 +36,10 @@ from ..git import (
     GitTopologyKind,
 )
 from ..git.story_commits import (
+    StoryCommitRecoverySnapshot,
     StoryCommitService,
     create_identity_bound_story_commit_service,
+    inspect_story_commit_recovery_history,
 )
 from ..git.repository_lock import (
     GitRepositoryLease,
@@ -356,6 +358,26 @@ def inspect_session_history(
         return history.snapshot()
 
 
+def inspect_story_commit_recovery_snapshot(
+    root: Path,
+    session_id: str,
+) -> StoryCommitRecoverySnapshot:
+    """Return only one exact staged story-commit recovery correlation."""
+
+    main_root = _main_root(root)
+    manifest = _known_baseline_manifest(main_root)
+    allowance = _validated_configuration_allowance(main_root)
+    with inspect_story_commit_recovery_history(
+        main_root,
+        manifest,
+        session_id,
+        None,
+        expected_session_root_identity=None,
+        allowed_worktree_changes=allowance,
+    ) as (_history, operation, candidate, resources):
+        return StoryCommitRecoverySnapshot(resources, candidate, operation)
+
+
 def list_session_resources(root: Path) -> GitSessionResourceInventory:
     """List the complete correlated session inventory without mutation."""
 
@@ -447,7 +469,10 @@ class SessionArtifactBinding:
             try:
                 yield nested
             except BaseException:
-                _postvalidate_session_artifact_access(nested)
+                try:
+                    _postvalidate_session_artifact_access(nested)
+                except _SESSION_ARTIFACT_BINDING_FAILURES:
+                    pass
                 raise
             else:
                 _postvalidate_session_artifact_access(nested)
@@ -491,12 +516,15 @@ class SessionArtifactBinding:
                         yield access
                     except BaseException as exc:
                         body_failure = exc
-                        _postvalidate_session_artifact_access(access)
+                        try:
+                            _postvalidate_session_artifact_access(access)
+                        except _SESSION_ARTIFACT_BINDING_FAILURES:
+                            pass
                         raise
                     else:
                         _postvalidate_session_artifact_access(access)
                 finally:
-                    access._close()
+                    access._revoke()
         except _SESSION_ARTIFACT_BINDING_FAILURES as exc:
             if exc is body_failure:
                 raise
@@ -506,18 +534,34 @@ class SessionArtifactBinding:
 
     def _activate_repository_access(self, access: SessionArtifactAccess) -> None:
         with self._operation_lock:
-            self._operation_tokens.setdefault(threading.get_ident(), []).append(access)
+            if threading.get_ident() != access._owner_thread_id:
+                raise SessionArtifactBindingError(
+                    "session artifact access token is invalid"
+                )
+            self._operation_tokens.setdefault(access._owner_thread_id, []).append(access)
 
     def _deactivate_repository_access(self, access: SessionArtifactAccess) -> None:
         with self._operation_lock:
-            tokens = self._operation_tokens.get(threading.get_ident())
+            if threading.get_ident() != access._owner_thread_id:
+                raise SessionArtifactBindingError(
+                    "session artifact access token is invalid"
+                )
+            tokens = self._operation_tokens.get(access._owner_thread_id)
             if not tokens or tokens[-1] is not access:
                 raise SessionArtifactBindingError(
                     "session artifact access token is invalid"
                 )
             tokens.pop()
             if not tokens:
-                self._operation_tokens.pop(threading.get_ident(), None)
+                self._operation_tokens.pop(access._owner_thread_id, None)
+
+    def _revoke_repository_access(self, access: SessionArtifactAccess) -> None:
+        with self._operation_lock:
+            tokens = self._operation_tokens.get(access._owner_thread_id)
+            if tokens and access in tokens:
+                tokens.remove(access)
+                if not tokens:
+                    self._operation_tokens.pop(access._owner_thread_id, None)
 
     def _current_repository_access(self) -> SessionArtifactAccess | None:
         with self._operation_lock:
@@ -538,20 +582,86 @@ class SessionArtifactBinding:
             finally:
                 access.require_ready()
 
+    @contextmanager
+    def open_story_commit_artifact_repository(
+        self,
+        validate_ready: Callable[[], GitSessionResourceInspection],
+    ) -> Iterator[WritingArtifactRepository]:
+        """Borrow one live history validator for exact artifact capture."""
+
+        access: SessionArtifactAccess | None = None
+        try:
+            confirmed = validate_ready()
+            if confirmed != self.resources:
+                raise WorkspaceFormatError(
+                    "session artifact resources changed before capture"
+                )
+            descriptor = _open_existing_root(
+                self.resources.identity.worktree_root,
+                self.worktree_identity,
+            )
+            access = SessionArtifactAccess(
+                self,
+                None,
+                descriptor,
+                ready_validator=validate_ready,
+            )
+        except _SESSION_ARTIFACT_BINDING_FAILURES:
+            raise SessionArtifactBindingError(
+                "session artifact resources are unavailable"
+            ) from None
+
+        body_failure: BaseException | None = None
+        try:
+            try:
+                yield access.repository
+            except BaseException as exc:
+                body_failure = exc
+                try:
+                    _postvalidate_session_artifact_access(access)
+                except _SESSION_ARTIFACT_BINDING_FAILURES:
+                    pass
+                raise
+            else:
+                _postvalidate_session_artifact_access(access)
+        except _SESSION_ARTIFACT_BINDING_FAILURES as exc:
+            if exc is body_failure:
+                raise
+            raise SessionArtifactBindingError(
+                "session artifact resources are unavailable"
+            ) from None
+        finally:
+            access._revoke()
+
 class SessionArtifactAccess:
     """One live same-thread view of a guarded session artifact binding."""
 
-    __slots__ = ("_active", "_binding", "_descriptor", "_lease")
+    __slots__ = (
+        "_active",
+        "_binding",
+        "_descriptor",
+        "_lease",
+        "_owner_thread_id",
+        "_ready_validator",
+    )
 
     def __init__(
         self,
         binding: SessionArtifactBinding,
-        lease: GitRepositoryLease,
+        lease: GitRepositoryLease | None,
         descriptor: int,
+        *,
+        ready_validator: Callable[[], GitSessionResourceInspection] | None = None,
     ) -> None:
+        if (lease is None) == (ready_validator is None):
+            raise SessionArtifactBindingError(
+                "session artifact access authority is invalid"
+            )
         self._binding = binding
         self._lease = lease
+        self._ready_validator = ready_validator
         self._descriptor = descriptor
+        self._owner_thread_id = threading.get_ident()
         self._active = True
         binding._activate_repository_access(self)
 
@@ -593,12 +703,16 @@ class SessionArtifactAccess:
     def require_active(self) -> None:
         """Require the live lease, descriptor, and named worktree identity."""
 
-        if not self._active:
+        if (
+            not self._active
+            or threading.get_ident() != self._owner_thread_id
+        ):
             raise SessionArtifactBindingError(
                 "session artifact access is no longer active"
             )
         try:
-            self._lease.require_active()
+            if self._lease is not None:
+                self._lease.require_active()
             _verify_named_identity(
                 self._binding.resources.identity.worktree_root,
                 self._descriptor,
@@ -614,14 +728,18 @@ class SessionArtifactAccess:
 
         self.require_active()
         try:
-            confirmed = _require_ready_locked_git_session_resources(
-                self._lease,
-                self._binding.manifest,
-                self._binding.resources.identity.session_id,
-                allowed_worktree_changes=(
-                    self._binding.allowed_worktree_changes
-                ),
-            )
+            if self._ready_validator is not None:
+                confirmed = self._ready_validator()
+            else:
+                assert self._lease is not None
+                confirmed = _require_ready_locked_git_session_resources(
+                    self._lease,
+                    self._binding.manifest,
+                    self._binding.resources.identity.session_id,
+                    allowed_worktree_changes=(
+                        self._binding.allowed_worktree_changes
+                    ),
+                )
             if confirmed != self._binding.resources:
                 raise WorkspaceFormatError(
                     "session artifact resources changed during access"
@@ -633,10 +751,19 @@ class SessionArtifactAccess:
             ) from None
 
     def _close(self) -> None:
+        self.require_active()
+        self._binding._deactivate_repository_access(self)
+        self._active = False
+        try:
+            os.close(self._descriptor)
+        except OSError:
+            pass
+
+    def _revoke(self) -> None:
         if not self._active:
             return
         try:
-            self._binding._deactivate_repository_access(self)
+            self._binding._revoke_repository_access(self)
         finally:
             self._active = False
             try:
@@ -793,6 +920,9 @@ def compose_story_commit_service(
             session_id,
             access.worktree_identity,
             allowed_worktree_changes=allowance,
+            artifact_repository_access=(
+                artifact_binding.open_story_commit_artifact_repository
+            ),
         )
 
 

@@ -7,7 +7,9 @@ import os
 import pickle
 import unittest
 from concurrent.futures import ThreadPoolExecutor
+from contextlib import contextmanager
 from dataclasses import replace
+from pathlib import Path
 from unittest import mock
 
 import story_writing_agents
@@ -15,13 +17,16 @@ import story_writing_agents.git as git_facade
 from story_writing_agents.git import story_commits as commits_module
 from story_writing_agents.git.session_history import (
     GitSessionHistory,
+    GitSessionRecoveryHistory,
     open_git_session_history,
 )
 from story_writing_agents.git.session_history_contracts import (
+    GitSessionCommitOperationRecord,
     GitSessionHistoryError,
     GitSessionHistoryFailureCode,
     GitSessionHistoryRecoveryAction,
     GitSessionHistoryState,
+    advance_commit_operation,
 )
 from story_writing_agents.git.story_commit_contracts import (
     StoryCommitApplicationEvidence,
@@ -33,6 +38,10 @@ from story_writing_agents.git.story_commit_contracts import (
     StoryCommitState,
 )
 from story_writing_agents.git.story_commits import StoryCommitService
+from story_writing_agents.workspace.initialization import (
+    SessionArtifactBindingError,
+    compose_session_artifact_binding,
+)
 from story_writing_agents.workspace.schema import canonical_initializer_scaffold
 from story_writing_agents.writing_artifacts import (
     ArtifactKind,
@@ -63,11 +72,15 @@ class StoryCommitServiceTests(StoryCommitGitTestCase):
     def prepared_bound(self, name: str):
         root, session_root, evidence = self.applied_replace(name)
         observed = os.stat(session_root)
+        artifact_binding = compose_session_artifact_binding(root, "novel")
         service = commits_module.create_identity_bound_story_commit_service(
             root,
             manifest(),
             "novel",
             (observed.st_dev, observed.st_ino),
+            artifact_repository_access=(
+                artifact_binding.open_story_commit_artifact_repository
+            ),
         )
         candidate = service.prepare(evidence, "Commit exact change", ("impact",))
         return root, session_root, service, candidate
@@ -303,12 +316,13 @@ class StoryCommitServiceTests(StoryCommitGitTestCase):
                     candidate,
                     self.confirmation(candidate, suffix=f"semantic-{ordinal}"),
                 )
-                calls = 0
+                phase_calls = 0
 
                 def fail_once(history, *args, **kwargs):
-                    nonlocal calls
-                    calls += 1
-                    if calls == ordinal:
+                    nonlocal phase_calls
+                    if kwargs.get("expected_internal_tip") is not None:
+                        phase_calls += 1
+                    if phase_calls == ordinal:
                         raise history_failure
                     return original(history, *args, **kwargs)
 
@@ -388,6 +402,399 @@ class StoryCommitServiceTests(StoryCommitGitTestCase):
                     operations[0].state,
                     GitSessionHistoryState.OUTCOME_UNKNOWN,
                 )
+
+    def test_bound_commit_reuses_one_guarded_repository_for_every_capture(
+        self,
+    ) -> None:
+        root, session_root, evidence = self.applied_replace("bound-captures")
+        observed = os.stat(session_root)
+        artifact_binding = compose_session_artifact_binding(root, "novel")
+        service = commits_module.create_identity_bound_story_commit_service(
+            root,
+            manifest(),
+            "novel",
+            (observed.st_dev, observed.st_ino),
+            artifact_repository_access=(
+                artifact_binding.open_story_commit_artifact_repository
+            ),
+        )
+        captures = []
+        original_capture = WritingArtifactRepository.capture_complete_state
+
+        def capture(repository):
+            value = original_capture(repository)
+            captures.append((id(repository), value))
+            return value
+
+        with mock.patch.object(
+            WritingArtifactRepository,
+            "__init__",
+            side_effect=AssertionError("bound capture created an independent repository"),
+        ), mock.patch.object(
+            WritingArtifactRepository,
+            "capture_complete_state",
+            autospec=True,
+            side_effect=capture,
+        ):
+            candidate = service.prepare(evidence, "Bound capture", ("impact",))
+            authority = service.authorize(
+                candidate,
+                self.confirmation(candidate, suffix="bound-capture"),
+            )
+            result = service.execute(authority)
+        self.assertIs(result.state, StoryCommitState.COMMITTED)
+        self.assertEqual(len(captures), 3)
+        self.assertEqual(len({repository for repository, _value in captures}), 1)
+        self.assertEqual(captures[0][1], captures[1][1])
+        self.assertEqual(captures[1][1], captures[2][1])
+
+    def test_bound_capture_loss_before_and_after_each_phase_prevents_git_entry(
+        self,
+    ) -> None:
+        for phase in ("prepare", "authorize", "execute"):
+            for position in ("before", "after"):
+                with self.subTest(phase=phase, position=position):
+                    root, session_root, evidence = self.applied_replace(
+                        f"bound-{phase}-{position}"
+                    )
+                    observed = os.stat(session_root)
+                    artifact_binding = compose_session_artifact_binding(root, "novel")
+
+                    @contextmanager
+                    def failing_access(validate):
+                        if position == "before":
+                            raise SessionArtifactBindingError("binding lost")
+                        with artifact_binding.open_story_commit_artifact_repository(
+                            validate
+                        ) as repository:
+                            yield repository
+                            raise SessionArtifactBindingError("binding lost")
+
+                    normal_access = (
+                        artifact_binding.open_story_commit_artifact_repository
+                    )
+                    service = commits_module.create_identity_bound_story_commit_service(
+                        root,
+                        manifest(),
+                        "novel",
+                        (observed.st_dev, observed.st_ino),
+                        artifact_repository_access=(
+                            failing_access if phase == "prepare" else normal_access
+                        ),
+                    )
+                    candidate = authority = None
+                    if phase != "prepare":
+                        candidate = service.prepare(
+                            evidence,
+                            f"Bound {phase}",
+                            ("impact",),
+                        )
+                        if phase == "execute":
+                            authority = service.authorize(
+                                candidate,
+                                self.confirmation(
+                                    candidate,
+                                    suffix=f"{phase}-{position}",
+                                ),
+                            )
+                        service._artifact_repository_access = failing_access
+
+                    with self.assertRaises(StoryCommitError) as caught:
+                        if phase == "prepare":
+                            service.prepare(evidence, "Bound prepare", ("impact",))
+                        elif phase == "authorize":
+                            assert candidate is not None
+                            service.authorize(
+                                candidate,
+                                self.confirmation(
+                                    candidate,
+                                    suffix=f"{phase}-{position}",
+                                ),
+                            )
+                        else:
+                            assert authority is not None
+                            service.execute(authority)
+                    self.assertIs(
+                        caught.exception.code,
+                        StoryCommitFailureCode.CANDIDATE_DRIFT,
+                    )
+                    self.assertEqual(
+                        self.run_git(
+                            session_root,
+                            "diff",
+                            "--cached",
+                            "--name-only",
+                        ).stdout,
+                        b"",
+                    )
+                    with open_git_session_history(
+                        root,
+                        manifest(),
+                        "novel",
+                    ) as history:
+                        snapshot = history.snapshot()
+                    self.assertEqual(snapshot.commit_operations, ())
+                    self.assertEqual(
+                        len(snapshot.candidates),
+                        0 if phase == "prepare" else 1,
+                    )
+
+    def test_exact_staged_recovery_is_inspectable_and_transitions_only_running(
+        self,
+    ) -> None:
+        for initial_state, expected_recovered in (
+            (GitSessionHistoryState.RUNNING, GitSessionHistoryState.STAGED),
+            (GitSessionHistoryState.STAGED, GitSessionHistoryState.STAGED),
+            (
+                GitSessionHistoryState.OUTCOME_UNKNOWN,
+                GitSessionHistoryState.OUTCOME_UNKNOWN,
+            ),
+        ):
+            with self.subTest(initial_state=initial_state):
+                root, _session_root, service, candidate = self.prepared_bound(
+                    f"staged-recovery-{initial_state.value}"
+                )
+                binding = service._bindings[candidate.candidate_id]
+                revalidation = service._revalidate_candidate(binding)
+                operation = GitSessionCommitOperationRecord(
+                    session_id="novel",
+                    operation_id={
+                        GitSessionHistoryState.RUNNING: "7" * 32,
+                        GitSessionHistoryState.STAGED: "8" * 32,
+                        GitSessionHistoryState.OUTCOME_UNKNOWN: "9" * 32,
+                    }[initial_state],
+                    candidate_id=candidate.candidate_id,
+                    correlation_id=candidate.correlation_id,
+                    state=GitSessionHistoryState.RUNNING,
+                    sequence=0,
+                    expected_branch_tip=candidate.branch_tip,
+                )
+                with open_git_session_history(root, manifest(), "novel") as history:
+                    history.write_commit_operation(operation)
+                    if initial_state is not GitSessionHistoryState.RUNNING:
+                        operation = advance_commit_operation(
+                            operation,
+                            initial_state,
+                        )
+                        history.write_commit_operation(operation)
+                service._stage_git(revalidation)
+
+                with mock.patch.object(
+                    commits_module,
+                    "advance_commit_operation",
+                    wraps=commits_module.advance_commit_operation,
+                ) as inspect_advance, mock.patch.object(
+                    GitSessionRecoveryHistory,
+                    "write_commit_operation",
+                    autospec=True,
+                ) as inspect_write:
+                    inspected = service.inspect(operation.operation_id)
+                self.assertIs(inspected.state, StoryCommitState(initial_state.value))
+                inspect_advance.assert_not_called()
+                inspect_write.assert_not_called()
+
+                original_topology = (
+                    GitSessionRecoveryHistory.require_recovery_topology
+                )
+                original_write = GitSessionRecoveryHistory.write_commit_operation
+                with mock.patch.object(
+                    GitSessionRecoveryHistory,
+                    "require_recovery_topology",
+                    autospec=True,
+                    side_effect=lambda current: original_topology(current),
+                ) as topology, mock.patch.object(
+                    GitSessionRecoveryHistory,
+                    "write_commit_operation",
+                    autospec=True,
+                    side_effect=lambda current, value: original_write(current, value),
+                ) as recovery_write, mock.patch.object(
+                    commits_module,
+                    "advance_commit_operation",
+                    wraps=commits_module.advance_commit_operation,
+                ) as recovery_advance:
+                    recovered = service.recover(operation.operation_id)
+                self.assertIs(
+                    recovered.state,
+                    StoryCommitState(expected_recovered.value),
+                )
+                self.assertGreaterEqual(topology.call_count, 2)
+                if initial_state is GitSessionHistoryState.RUNNING:
+                    self.assertEqual(recovery_advance.call_count, 1)
+                    self.assertEqual(recovery_write.call_count, 1)
+                else:
+                    recovery_advance.assert_not_called()
+                    recovery_write.assert_not_called()
+
+    def test_staged_recovery_rejects_every_nonexact_topology_without_mutation(
+        self,
+    ) -> None:
+        for variant in (
+            "wrong_tree",
+            "wrong_path",
+            "unstaged_content",
+            "untracked",
+            "unmerged",
+            "external_marker",
+            "branch",
+            "internal_ref",
+            "main_status",
+        ):
+            with self.subTest(variant=variant):
+                root, session_root, service, candidate = self.prepared_bound(
+                    f"staged-negative-{variant}"
+                )
+                binding = service._bindings[candidate.candidate_id]
+                revalidation = service._revalidate_candidate(binding)
+                operation = GitSessionCommitOperationRecord(
+                    session_id="novel",
+                    operation_id="a" * 32,
+                    candidate_id=candidate.candidate_id,
+                    correlation_id=candidate.correlation_id,
+                    state=GitSessionHistoryState.RUNNING,
+                    sequence=0,
+                    expected_branch_tip=candidate.branch_tip,
+                )
+                operation = advance_commit_operation(
+                    operation,
+                    GitSessionHistoryState.STAGED,
+                )
+                with open_git_session_history(root, manifest(), "novel") as history:
+                    history.write_commit_operation(
+                        replace(
+                            operation,
+                            state=GitSessionHistoryState.RUNNING,
+                            sequence=0,
+                        )
+                    )
+                    history.write_commit_operation(operation)
+                service._stage_git(revalidation)
+                path = candidate.paths[0].path
+
+                if variant == "wrong_tree":
+                    (session_root / path).write_bytes(b"wrong staged tree\n")
+                    self.run_git(session_root, "add", "--", path)
+                elif variant == "wrong_path":
+                    other = "core_documents/character_rules.md"
+                    (session_root / other).write_bytes(b"extra staged path\n")
+                    self.run_git(session_root, "add", "--", other)
+                elif variant == "unstaged_content":
+                    (session_root / path).write_bytes(b"unstaged content drift\n")
+                elif variant == "untracked":
+                    (session_root / "untracked-private.txt").write_bytes(b"untracked\n")
+                elif variant == "unmerged":
+                    first = self.run_git(
+                        session_root,
+                        "hash-object",
+                        "-w",
+                        "--stdin",
+                        input_bytes=b"conflict first\n",
+                    ).stdout.strip().decode()
+                    second = self.run_git(
+                        session_root,
+                        "hash-object",
+                        "-w",
+                        "--stdin",
+                        input_bytes=b"conflict second\n",
+                    ).stdout.strip().decode()
+                    zero = "0" * len(first)
+                    self.run_git(
+                        session_root,
+                        "update-index",
+                        "--index-info",
+                        input_bytes=(
+                            f"0 {zero}\t{path}\n"
+                            f"100644 {first} 1\t{path}\n"
+                            f"100644 {first} 2\t{path}\n"
+                            f"100644 {second} 3\t{path}\n"
+                        ).encode(),
+                    )
+                elif variant == "external_marker":
+                    marker = Path(
+                        self.run_git(
+                            session_root,
+                            "rev-parse",
+                            "--git-path",
+                            "MERGE_HEAD",
+                        ).stdout.strip().decode()
+                    )
+                    if not marker.is_absolute():
+                        marker = session_root / marker
+                    marker.write_text(candidate.branch_tip + "\n", encoding="ascii")
+                elif variant == "branch":
+                    self.run_git(session_root, "switch", "-c", "story/session/foreign")
+                elif variant == "internal_ref":
+                    self.run_git(root, "update-ref", "-d", binding.internal_ref)
+                elif variant == "main_status":
+                    (root / path).write_bytes(b"tracked main-worktree drift\n")
+
+                self.assert_terminal_reads_do_not_mutate(
+                    service,
+                    operation.operation_id,
+                    failure_code=StoryCommitFailureCode.RECOVERY_REQUIRED,
+                )
+
+    def test_initial_running_history_append_failure_is_predurable_and_never_enters_git(
+        self,
+    ) -> None:
+        for history_code, expected_code in (
+            (
+                GitSessionHistoryFailureCode.RECOVERY_REQUIRED,
+                StoryCommitFailureCode.RECOVERY_REQUIRED,
+            ),
+            (
+                GitSessionHistoryFailureCode.PERSISTENCE_FAILED,
+                StoryCommitFailureCode.HISTORY_FAILED,
+            ),
+        ):
+            with self.subTest(history_code=history_code):
+                root, session_root, service, candidate = self.prepared_bound(
+                    f"initial-running-history-{history_code.value}"
+                )
+                authority = service.authorize(
+                    candidate,
+                    self.confirmation(candidate, suffix=history_code.value),
+                )
+                before_head = self.run_git(session_root, "rev-parse", "HEAD").stdout
+                before_index = self.run_git(
+                    session_root,
+                    "diff",
+                    "--cached",
+                    "--name-only",
+                ).stdout
+                failure = GitSessionHistoryError(
+                    history_code,
+                    GitSessionHistoryRecoveryAction.OPERATOR_RECOVERY,
+                )
+
+                with mock.patch.object(
+                    GitSessionHistory,
+                    "write_commit_operation",
+                    autospec=True,
+                    side_effect=failure,
+                ), mock.patch.object(
+                    StoryCommitService,
+                    "_stage_git",
+                    autospec=True,
+                ) as stage_git, self.assertRaises(StoryCommitError) as caught:
+                    service.execute(authority)
+
+                self.assertIs(caught.exception.code, expected_code)
+                stage_git.assert_not_called()
+                self.assertEqual(
+                    self.run_git(session_root, "rev-parse", "HEAD").stdout,
+                    before_head,
+                )
+                self.assertEqual(
+                    self.run_git(
+                        session_root,
+                        "diff",
+                        "--cached",
+                        "--name-only",
+                    ).stdout,
+                    before_index,
+                )
+                with open_git_session_history(root, manifest(), "novel") as history:
+                    self.assertEqual(history.snapshot().commit_operations, ())
 
     def test_final_committed_history_write_failure_durably_preserves_unknown(
         self,

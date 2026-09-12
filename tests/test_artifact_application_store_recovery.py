@@ -432,7 +432,7 @@ class ArtifactApplicationBoundaryTests(_ApplicationStoreTestCase):
                     if resolved is not None and resolved != module:
                         edges.add((module, resolved))
         self.assertEqual(len(modules), 142)
-        self.assertEqual(len(edges), 570)
+        self.assertEqual(len(edges), 572)
         store = "story_writing_agents.writing_artifacts._application_store"
         repository = "story_writing_agents.writing_artifacts.repository"
         self.assertEqual(
@@ -478,7 +478,7 @@ class ArtifactApplicationBoundaryTests(_ApplicationStoreTestCase):
             visit(module)
         index = (_ROOT / "PYTHON_MODULE_INDEX.md").read_text(encoding="utf-8")
         self.assertIn("Importable production units indexed: 142.", index)
-        self.assertIn("Direct internal dependency edges indexed: 570.", index)
+        self.assertIn("Direct internal dependency edges indexed: 572.", index)
         self.assertIn("Directed internal dependency cycles indexed: 0.", index)
         self.assertIn(
             "### `story_writing_agents.writing_artifacts._application_store`",

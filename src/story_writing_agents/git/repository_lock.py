@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import os
 import stat
+import threading
 from contextlib import contextmanager
 from enum import StrEnum
 from pathlib import Path
@@ -44,6 +45,7 @@ class GitRepositoryLease:
         "_common_identity",
         "_main_root",
         "_root_identity",
+        "_thread_id",
     )
 
     def __init__(
@@ -60,6 +62,7 @@ class GitRepositoryLease:
         self._root_identity = root_identity
         self._common_identity = common_identity
         self._common_descriptor = common_descriptor
+        self._thread_id = threading.get_ident()
         self._active = True
 
     @property
@@ -90,7 +93,7 @@ class GitRepositoryLease:
     def require_active(self) -> None:
         """Revalidate both named directories and the live leased descriptor."""
 
-        if not self._active:
+        if not self._active or threading.get_ident() != self._thread_id:
             raise _failure(GitRepositoryLockFailureCode.LOCK_UNAVAILABLE)
         failure: GitRepositoryLockFailure | None = None
         try:

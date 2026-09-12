@@ -9,6 +9,7 @@ import stat
 import time
 import uuid
 from contextlib import contextmanager
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Iterator
 
@@ -63,6 +64,23 @@ _MAX_REFS = 65_536
 _MAX_WORKTREES = 65_536
 _MAX_ADMIN_FILE_BYTES = 64 * 1024
 _ZERO_BY_LENGTH = {40: "0" * 40, 64: "0" * 64}
+
+
+@dataclass(frozen=True, slots=True)
+class GitSessionRecoveryTopology:
+    """Exact session topology whose only deferred fact is index cleanliness."""
+
+    resources: GitSessionResourceInspection
+    main_status_sha256: str
+
+    def __post_init__(self) -> None:
+        if (
+            type(self.resources) is not GitSessionResourceInspection
+            or self.resources.state is not GitSessionResourceState.READY
+            or type(self.main_status_sha256) is not str
+            or re.fullmatch(r"[0-9a-f]{64}", self.main_status_sha256) is None
+        ):
+            raise TypeError("recovery topology requires exact ready resources")
 
 
 def inspect_git_session_resources(
@@ -221,6 +239,48 @@ def require_ready_locked_git_session_resources(
                 result.recovery_action,
             )
         return result
+    except GitSessionResourceError as exc:
+        failure = _clear_resource_error(exc)
+    raise failure
+
+
+def require_story_commit_recovery_locked_git_session_resources(
+    lease: GitRepositoryLease,
+    manifest: GitBaselineManifest,
+    session_id: str,
+    *,
+    allowed_worktree_changes: tuple[str, ...] = (),
+) -> GitSessionRecoveryTopology:
+    """Require exact recovery topology while deferring only session-index cleanliness."""
+
+    failure: GitSessionResourceError | None = None
+    try:
+        repository, expected_manifest, identity = _locked_request(
+            lease,
+            manifest,
+            session_id,
+        )
+        baseline = repository._verify_main(
+            expected_manifest,
+            allowed_worktree_changes=allowed_worktree_changes,
+        )
+        main_status_sha256 = repository._main_status_sha256(
+            allowed_worktree_changes=allowed_worktree_changes,
+        )
+        resources = repository._classify(
+            identity,
+            baseline,
+            repository._facts(),
+            require_clean_session_index=False,
+        )
+        if resources.state is not GitSessionResourceState.READY:
+            raise _resource_error(
+                GitSessionFailureCode.RECOVERY_REQUIRED,
+                GitSessionOperationKind.REQUIRE_READY,
+                resources.state,
+                resources.recovery_action,
+            )
+        return GitSessionRecoveryTopology(resources, main_status_sha256)
     except GitSessionResourceError as exc:
         failure = _clear_resource_error(exc)
     raise failure
@@ -506,6 +566,43 @@ class _Repository:
             )
         return baseline
 
+    def _main_status_sha256(
+        self,
+        *,
+        allowed_worktree_changes: tuple[str, ...],
+    ) -> str:
+        """Return exact allowed main-worktree status bytes under this lease."""
+
+        status_arguments = (
+            "status",
+            "--porcelain=v1",
+            "-z",
+            "--untracked-files=no",
+        )
+        diff_arguments = (
+            "diff",
+            "--no-ext-diff",
+            "--no-textconv",
+            "--binary",
+            "--",
+            *allowed_worktree_changes,
+        )
+        status = self._required(status_arguments, read_only=True).stdout
+        content_delta = self._required(diff_arguments, read_only=True).stdout
+        confirmed_status = self._required(status_arguments, read_only=True).stdout
+        confirmed_delta = self._required(diff_arguments, read_only=True).stdout
+        if not _status_matches_allowed_worktree_changes(
+            status,
+            allowed_worktree_changes,
+        ) or (status, content_delta) != (confirmed_status, confirmed_delta):
+            raise _resource_error(
+                GitSessionFailureCode.RECOVERY_REQUIRED,
+                GitSessionOperationKind.INSPECT,
+                GitSessionResourceState.RECOVERY_REQUIRED,
+                GitSessionRecoveryAction.OPERATOR_RECOVERY,
+            )
+        return hashlib.sha256(status + b"\0" + content_delta).hexdigest()
+
     def _tree_digests(self, commit: str) -> dict[str, str]:
         result = self._required(("ls-tree", "-r", "-z", commit), read_only=True)
         values: dict[str, str] = {}
@@ -755,6 +852,7 @@ class _Repository:
         facts: _Facts,
         *,
         journal: GitSessionProvisioningJournal | None = None,
+        require_clean_session_index: bool = True,
     ) -> GitSessionResourceInspection:
         journal = journal or facts.journals.get(identity.session_id)
         branch = facts.branches.get(identity.branch)
@@ -799,7 +897,10 @@ class _Repository:
                 return _recovery(identity, baseline)
             if (
                 not self._verify_worktree_indirection(identity)
-                or not self._session_index_is_clean(identity)
+                or (
+                    require_clean_session_index
+                    and not self._session_index_is_clean(identity)
+                )
             ):
                 return _recovery(identity, baseline)
         if present == (True, True, True):

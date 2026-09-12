@@ -158,6 +158,73 @@ class GitSessionHistorySafetyTests(GitSessionResourceGitTestCase):
                     GitSessionHistoryFailureCode.RECOVERY_REQUIRED,
                 )
 
+    def test_foreign_thread_history_surface_fails_without_mutation_and_exit_cleans_up(
+        self,
+    ) -> None:
+        root, tip = self._ready_root("history-thread-affinity")
+        manager = open_git_session_history(root, _manifest(), "novel", create=True)
+        history = manager.__enter__()
+        tree = self._tree(root)
+        candidate = history.write_candidate(_candidate(tip, tree))
+        commit = history.write_commit_operation(
+            replace(_running(tip), candidate_id=candidate.candidate_id)
+        )
+        checkpoint = history.write_checkpoint_operation(_checkpoint_running(tip))
+        before = history.snapshot()
+        operations = (
+            lambda: history.session_id,
+            history.require_active,
+            history.require_semantic_ready,
+            history.close,
+            lambda: history.write_candidate(candidate),
+            lambda: history.read_candidate(candidate.candidate_id),
+            lambda: history.write_commit_operation(commit),
+            lambda: history.read_commit_operation(commit.operation_id),
+            lambda: history.write_checkpoint_operation(checkpoint),
+            lambda: history.read_checkpoint_operation(checkpoint.operation_id),
+            history.inspect,
+            history.snapshot,
+            history.capture_story_commit_records,
+        )
+
+        def foreign_calls():
+            failures = []
+            for operation in operations:
+                try:
+                    operation()
+                except GitSessionHistoryError as exc:
+                    failures.append(exc)
+            return tuple(failures)
+
+        with ThreadPoolExecutor(max_workers=1) as executor:
+            failures = executor.submit(foreign_calls).result(timeout=10)
+        self.assertEqual(len(failures), len(operations))
+        self.assertTrue(
+            all(
+                failure.code
+                in {
+                    GitSessionHistoryFailureCode.LOCK_UNAVAILABLE,
+                    GitSessionHistoryFailureCode.UNSAFE_ROOT,
+                }
+                for failure in failures
+            )
+        )
+        self.assertEqual(history.snapshot(), before)
+
+        body_failure = RuntimeError("preserve history caller failure")
+        with ThreadPoolExecutor(max_workers=1) as executor:
+            suppresses = executor.submit(
+                manager.__exit__,
+                RuntimeError,
+                body_failure,
+                None,
+            ).result(timeout=10)
+        self.assertFalse(suppresses)
+        with self.assertRaises(GitSessionHistoryError):
+            history.require_active()
+        with open_git_session_history(root, _manifest(), "novel") as reopened:
+            self.assertEqual(reopened.snapshot(), before)
+
     def test_snapshot_empty_create_false_and_complete_records_are_exact(self) -> None:
         root, tip = self._ready_root("snapshot-positive")
         history_root = root / ".git" / GIT_SESSION_HISTORY_DIRECTORY / "novel"

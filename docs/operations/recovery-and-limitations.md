@@ -174,6 +174,10 @@ Concrete cases:
   change is recovery-required. Unstaged story work and untracked entries are
   allowed; the workspace layer still checks all 25 Git-materialized scaffold
   leaves, their ancestors, local configuration, and referenced personae.
+- Ordinary READY remains strict. A separate recovery-only Story Commit reader
+  may defer only index cleanliness, and only long enough to prove one exact
+  correlated staged operation under the narrower contract below. It does not
+  make arbitrary non-READY dirty or staged state ready.
 - Concurrent Create calls for the same or different session IDs serialize
   across the repository. Exact same-session calls converge; case-distinct IDs
   follow filesystem identity truth and a real alias fails closed.
@@ -348,6 +352,19 @@ For story commits specifically:
   `outcome_unknown`; this includes ambiguity while publishing the final
   `committed` record, which is durably downgraded to `outcome_unknown` when the
   phase can still be proved.
+- Constructing the initial `running` record in memory is not durable. Failures
+  keep their pre-durable mapping until its create-only history append returns
+  successfully; only a successfully appended `running` record crosses the
+  uncertain-outcome boundary.
+- Recovery-only staged admission holds one lease and requires an addressed,
+  exactly correlated `running`, `staged`, or `outcome_unknown` operation and
+  candidate. An unaddressed reconciliation snapshot requires exactly one
+  eligible pair. The guard revalidates the exact branch and internal ref,
+  candidate tree, staged index and matching worktree, absence of untracked
+  files and external Git activity, bound session root and registered worktree,
+  main HEAD, and main-worktree status plus allowed-path content fingerprint
+  before and after. Only the Story Commit recovery owner may perform a
+  monotonic transition after admission.
 - Terminal `inspect()` and `recover()` require current READY and never write or
   advance history. A historical `committed` record remains valid when its
   commit exactly matches its candidate and equals or is an ancestor of the
@@ -415,6 +432,14 @@ returns `outcome_unknown`; absent, paused, or claimable rather than held state
 returns `recovery_required`. When no authoritative collaboration read was
 accepted, `collaboration_tail_sequence=0` means “tail unavailable,” not
 “durable history is empty.”
+
+If the initial session-resource observation is recovery-required because of a
+staged index, reconciliation first attempts the recovery-only Story Commit
+snapshot. An exact staged topology with one candidate/operation correlated to
+the durable application is assigned to `story_commit`; missing or mismatched
+application correlation is also reported with that owner. If the narrow
+snapshot cannot prove those exact facts, the original arbitrary non-READY
+dirty/resource condition remains owned by `session_resources`.
 
 For an accepted lifecycle, the reconciler reads collaboration, the exact
 session-resource triple, complete session history, external Git operation, and

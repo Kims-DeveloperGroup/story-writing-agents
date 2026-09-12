@@ -570,6 +570,13 @@ repository, resources, or duplicated root descriptor expires when the outer
 guard exits. Every nested and outer exit revalidates after success, error, and
 cancellation. Binding loss found there dominates an earlier body failure;
 otherwise the original body failure is preserved.
+
+`GitRepositoryLease` properties/validation and all `SessionArtifactAccess`
+operations are affine to their creator thread. A foreign thread cannot observe
+lease facts or inspect, duplicate, transact through, or explicitly close the
+access. Context-manager cleanup may still run on a foreign thread: it privately
+revokes access, releases the flock, and closes descriptors without granting
+that thread authority or suppressing the caller's body failure.
 Binding itself performs no artifact I/O, provisioning, provider call, or global
 runtime mutation. Known readiness and workspace-validation failures become one
 content-free binding failure; malformed protocol/type defects remain visible.
@@ -690,6 +697,13 @@ through their separate orchestration boundaries.
 `git.process` owns the fixed process profiles. These modules are package-
 internal and add no name to `story_writing_agents`, `story_writing_agents.git`,
 or a workspace facade.
+
+`GitSessionHistory` inherits the creator-thread affinity of its
+`GitRepositoryLease`: reads, writes, READY validation, inspection, snapshots,
+and explicit `close()` fail from a foreign thread. Context-manager teardown is
+a private revocation path, so it can close the history descriptor and release
+the underlying lease after a foreign-thread exit without authorizing any
+history operation or mutating a record.
 
 Opening a history first requires the exact #504 session triple to be `ready`,
 then takes the same repository-wide lease used by provisioning and revalidates
@@ -886,7 +900,12 @@ correlation IDs, exact `ArtifactChangeSet`, and its projected-state digest.
 Prepare requires that the change set is already applied exactly in the ready
 session worktree. Runtime composition additionally pins preparation to the
 physical worktree identity that successfully completed Apply; the same pin is
-retained through authorization and execution. It proves:
+retained through authorization and execution. Identity-bound preparation opens
+session history first, then lends that live history's READY validator to the
+binding's one stable guarded repository generation for canonical artifact
+capture. Repository capture, Git checks, and create-only candidate publication
+therefore share one lease and repeat the same semantic READY authority instead
+of reacquiring or constructing another repository. It proves:
 
 - symbolic `HEAD` names the exact session branch and equals the ready tip;
 - the real index has no pre-staged entry;
@@ -951,6 +970,10 @@ publish and fsync RUNNING operation evidence
 -> publish and fsync COMMITTED evidence with the commit ID
 ```
 
+Constructing the `RUNNING` value in memory is not durable start. Error mapping
+stays on the pre-durable path until the create-only history append returns
+success; only then may later uncertainty be preserved as a running operation.
+
 If final COMMITTED publication fails after the branch update, the service
 records `outcome_unknown` for the same operation when it can still prove the
 phase-specific topology. It never reports an unproved commit as completed.
@@ -982,6 +1005,20 @@ live session-history lease. Inspection and recovery check READY around owner
 reads; recovery uses the same intentional-staged topology while classifying or
 advancing a staged operation, so ordinary READY's clean-index rule does not
 misclassify the service's own exact staging.
+
+That exception is recovery-only and read-only on admission. It accepts only an
+addressed, exactly correlated `running`, `staged`, or `outcome_unknown` Story
+Commit and its candidate while holding one common-Git/history lease. An
+unaddressed reconciliation snapshot additionally requires exactly one eligible
+operation and matching candidate. The guard
+revalidates branch and internal-ref facts, candidate tree, exact staged index
+and matching worktree, absence of untracked files and external Git operations,
+the bound session-root identity, registered worktree topology, main HEAD, and
+the main-worktree status plus allowed-path content fingerprint before and after
+the recovery body. Only the correlated recovery owner may then make a
+monotonic history transition. Ordinary READY remains strict—an arbitrary
+non-READY topology, including an uncorrelated staged index, is still
+`recovery_required` and receives no such admission.
 
 Terminal story-commit inspection and recovery are read-only with respect to
 session history and require the current session to remain READY. A historical
