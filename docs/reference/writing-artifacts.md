@@ -1348,16 +1348,33 @@ own ordered history:
 | `accepted` | Another full revalidation succeeded after the recorded result. | The exact invocation evidence chain was accepted before the backend returned its reply. The result's optional operation ID lets Python callers inspect the content-free history. |
 | `terminated` | A fixed coded failure ended the invocation. | No accepted reply exists for the attempt. A retry needs a fresh correlation, coordinator, and one-use capability; it cannot reuse this evidence. |
 
-If guarded repository access is rejected before entry, no invocation event is
-appended and the one-use capability is neither consumed nor retired. The live
-runtime coordinator keeps that invocation pending and the operation unfinished,
-so the same owning invocation can retry delivery or cleanup after its exact
-session resources are restored. That transient authority cannot be reconstructed
-after process loss. If exit revalidation fails after `delivered` was persisted,
-the capability is already consumed and delivery is non-replayable. Cleanup
-preserves the binding failure as authoritative and, after guarded access is
-available, terminates the invocation and operation rather than delivering the
-bytes again.
+Guarded `StoryRuntime` creation publishes ownership before its fallible access
+exit. As soon as capture or invocation authorization has created durable state,
+the runtime registers the operation or tracks the invocation while its exact
+transient owner still exists. A process-shared registry keyed by control
+workspace, session, and operation holds a strong cleanup owner until that
+operation is terminal; another `StoryRuntime` in the same process therefore
+does not mistake live work for a restart orphan.
+
+If a guard failure leaves termination uncertain, the runtime immediately closes
+every retained selected-byte result and the content-bearing authorization,
+which also makes its one-use capabilities unusable. It clears pending
+coordinators and retained repository access, leaving only content-free cleanup
+ownership and an unfinished operation marked for cleanup. The failed invocation
+and any known provider work are not replayed.
+At the next same-process artifact-sensitive boundary for that session, runtime
+creates a fresh exact binding and uses durable evidence to terminate unfinished
+invocations before terminating the operation. A candidate-only consensus call
+does the same only when the registry reports pending cleanup; otherwise that
+call remains worktree-free.
+
+After process restart, no transient registry owner survives. The next
+artifact-sensitive boundary inventories validated reference history and
+reconciles every nonterminal orphan. Reconciliation is idempotent: already
+terminal state is unchanged, and an interrupted invocation-termination prefix
+can resume before the operation is terminated. Missing, malformed, or
+inconsistent evidence fails closed as `evidence_corrupt` instead of being
+repaired or skipped.
 
 The durable schema-v2 history contains ordered path and optional range,
 content-free filesystem source identity, selected SHA-256 and byte count,

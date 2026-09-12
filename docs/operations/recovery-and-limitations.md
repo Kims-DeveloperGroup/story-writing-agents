@@ -1464,15 +1464,25 @@ Start a new operation with a new ID after correcting any source problem.
 For runtime-composed guarded references, selected-root security or binding
 loss is preserved for the orchestration recovery boundary rather than reduced
 to a generic workflow failure. No provider call or fallback source is
-authorized by that failure. Rejection before guarded repository entry leaves
-the live invocation pending, its one-use capability intact, and the operation
-unfinished; after repairing the exact session resources, the owning runtime
-can retry that same delivery or cleanup step. This transient authority does not
-survive process loss. A failed exit check after durable delivery is different:
-the capability is consumed, reference delivery is not replayable, and later
-cleanup terminates the invocation and operation while preserving the binding
-failure as authoritative. Inspect the resulting durable attempt before
-starting a new operation.
+authorized by that failure. Guarded creation publishes its exact operation or
+invocation owner before the access exit can fail. `StoryRuntime` retains that
+owner strongly in one process-shared workspace/session/operation registry, but
+deferred cleanup immediately closes selected-byte results, content-bearing
+authorization, and capability authority and drops the old binding. Only
+content-free cleanup ownership remains on an unfinished operation; neither the
+failed invocation nor known provider work is replayed.
+
+The next same-process artifact-sensitive boundary for the session creates a
+fresh exact binding and drains retained cleanup before new reference work. A
+candidate-only consensus call also drains known same-process pending cleanup,
+but remains worktree-free when none is registered. After restart, the next
+artifact-sensitive boundary inventories durable histories and reconciles
+unowned nonterminal operations. It terminates every unfinished invocation
+before the operation, is idempotent after interruption, and leaves already
+terminal evidence unchanged. A restart candidate-only consensus call does not
+scan the worktree, so an orphan waits for an artifact-sensitive boundary.
+Corrupt evidence fails closed and blocks the boundary; it is never skipped,
+rewritten, or used to authorize replay.
 
 `inspect_reference_operation()` distinguishes absence from corruption. It
 returns no history only when the named operation directory is absent. If any

@@ -29,6 +29,7 @@ from story_writing_agents.workspace.initialization import (
 )
 from story_writing_agents.writing_artifacts.runtime_references import (
     prepare_guarded_runtime_reference_operation,
+    prepare_registered_guarded_runtime_reference_operation,
     prepare_runtime_reference_operation,
     reference_operation_belongs_to_session,
     reference_operation_session_id,
@@ -90,6 +91,27 @@ class RuntimeExecutionRetirementTests(unittest.TestCase):
             round_number=None,
             attempt=1,
         )
+
+    def _assert_content_free_cleanup_pending(self, operation) -> None:
+        self.assertFalse(operation.finished)
+        self.assertTrue(operation.cleanup_is_pending())
+        self.assertEqual(operation._pending, {})
+        self.assertIsNone(operation._authorization)
+        self.assertIsNone(operation._repository)
+        self.assertIsNone(operation._repository_access)
+
+    def _complete_fresh_cleanup(self, binding, operation) -> None:
+        with binding.open_ready_resources() as access:
+            operation.reconcile_cleanup(access.repository)
+        operation.complete_reconciled_cleanup()
+        self.assertTrue(operation.finished)
+        self.assertFalse(operation.cleanup_is_pending())
+
+    def _cleanup_runtime_registry(self, workspace_root: str) -> None:
+        with StoryRuntime._reference_operation_registry_lock:
+            for key in tuple(StoryRuntime._reference_operation_registry):
+                if key[0] == workspace_root:
+                    StoryRuntime._reference_operation_registry.pop(key)
 
     def test_runtime_methods_aliases_and_forwarding_are_absent(self) -> None:
         for runtime_type in (StoryRuntime, RuntimeSession):
@@ -398,12 +420,13 @@ class RuntimeExecutionRetirementTests(unittest.TestCase):
                 round_number=None,
             )
         self.assertIs(begin.exception, begin_marker)
-        blocked[0] = None
+        self._assert_content_free_cleanup_pending(begin_operation)
         supplied_marker = SessionArtifactBindingError("supplied marker")
         with self.assertRaises(SessionArtifactBindingError) as supplied:
             begin_operation.failure(supplied_marker)
         self.assertIs(supplied.exception, supplied_marker)
-        self.assertTrue(begin_operation.finished)
+        blocked[0] = None
+        self._complete_fresh_cleanup(binding, begin_operation)
 
         action_operation = operation()
         invocation = action_operation.begin_invocation(
@@ -422,11 +445,12 @@ class RuntimeExecutionRetirementTests(unittest.TestCase):
         with self.assertRaises(SessionArtifactBindingError) as action_failure:
             invocation.handle_reference_read_action(action)
         self.assertIs(action_failure.exception, action_marker)
-        blocked[0] = None
+        self._assert_content_free_cleanup_pending(action_operation)
         with self.assertRaises(SessionArtifactBindingError) as action_cleanup:
             action_operation.failure(action_marker)
         self.assertIs(action_cleanup.exception, action_marker)
-        self.assertTrue(action_operation.finished)
+        blocked[0] = None
+        self._complete_fresh_cleanup(binding, action_operation)
 
         terminal_operation = operation()
         terminal_marker = SessionArtifactBindingError("terminal marker")
@@ -434,12 +458,12 @@ class RuntimeExecutionRetirementTests(unittest.TestCase):
         with self.assertRaises(SessionArtifactBindingError) as terminal:
             terminal_operation.finish()
         self.assertIs(terminal.exception, terminal_marker)
-        self.assertFalse(terminal_operation.finished)
-        blocked[0] = None
+        self._assert_content_free_cleanup_pending(terminal_operation)
         with self.assertRaises(SessionArtifactBindingError) as terminal_cleanup:
             terminal_operation.failure(terminal_marker)
         self.assertIs(terminal_cleanup.exception, terminal_marker)
-        self.assertTrue(terminal_operation.finished)
+        blocked[0] = None
+        self._complete_fresh_cleanup(binding, terminal_operation)
 
         deferred_operation = operation()
         deferred_invocation = deferred_operation.begin_invocation(
@@ -453,20 +477,9 @@ class RuntimeExecutionRetirementTests(unittest.TestCase):
         with self.assertRaises(SessionArtifactBindingError) as deferred:
             deferred_operation.failure(RuntimeError("provider failed"))
         self.assertIs(deferred.exception, deferred_marker)
-        self.assertFalse(deferred_operation.finished)
-        self.assertEqual(
-            tuple(deferred_operation._pending.values()),
-            (deferred_invocation,),
-        )
+        self._assert_content_free_cleanup_pending(deferred_operation)
         blocked[0] = None
-        deferred_failure = deferred_operation.failure(RuntimeError("provider failed"))
-        assert deferred_failure is not None
-        self.assertIs(
-            deferred_failure.code,
-            ReferenceAuthorizationErrorCode.WORKFLOW_FAILURE,
-        )
-        self.assertTrue(deferred_operation.finished)
-        self.assertEqual(deferred_operation._pending, {})
+        self._complete_fresh_cleanup(binding, deferred_operation)
 
         public_repository = WritingArtifactRepository(ready.identity.worktree_root)
         public_operation = prepare_runtime_reference_operation(
@@ -670,7 +683,7 @@ class RuntimeExecutionRetirementTests(unittest.TestCase):
                 outcome=ReferenceAuthorizationErrorCode.CANCELLED,
             )
 
-    def test_nested_guard_rejection_preserves_pending_invocation_for_cleanup(
+    def test_nested_guard_rejection_discards_content_and_defers_fresh_cleanup(
         self,
     ) -> None:
         workspace = pristine_initialized_workspace(self)
@@ -714,22 +727,12 @@ class RuntimeExecutionRetirementTests(unittest.TestCase):
         try:
             with self.assertRaises(SessionArtifactBindingError):
                 invocation.handle_reference_read_action(action)
-            self.assertFalse(operation.finished)
-            self.assertEqual(tuple(operation._pending.values()), (invocation,))
-            reject_inner[0] = False
-            operation.terminate_invocation(
-                invocation,
-                ReferenceAuthorizationErrorCode.CANCELLED,
-            )
-            failure = operation.failure(
-                RuntimeError("provider stopped after guard rejection"),
-                default=ReferenceAuthorizationErrorCode.CANCELLED,
-            )
-            self.assertIsNotNone(failure)
-            self.assertTrue(operation.finished)
-            self.assertEqual(operation._pending, {})
+            self._assert_content_free_cleanup_pending(operation)
         finally:
             repository._operation_access = original_operation_access
+
+        reject_inner[0] = False
+        self._complete_fresh_cleanup(binding, operation)
 
         with binding.open_ready_resources() as access:
             history = access.repository.inspect_reference_operation(
@@ -752,7 +755,7 @@ class RuntimeExecutionRetirementTests(unittest.TestCase):
             ReferenceOperationState.TERMINATED,
         )
 
-    def test_guard_postcheck_failure_cleanup_prevents_provider_replay(
+    def test_guard_postcheck_failure_closes_result_and_prevents_provider_replay(
         self,
     ) -> None:
         workspace = pristine_initialized_workspace(self)
@@ -785,27 +788,50 @@ class RuntimeExecutionRetirementTests(unittest.TestCase):
         )
         marker = SessionArtifactBindingError("postcheck rejected")
         postcheck_failure[0] = marker
+        produced = []
+        original_read = invocation._delegate.handle_reference_read_action
+
+        def capture_result(requested_action):
+            result = original_read(requested_action)
+            produced.append(result)
+            return result
+
         with mock.patch.object(
             operation._repository,
             "deliver_authorized_references",
             wraps=operation._repository.deliver_authorized_references,
-        ) as deliver:
+        ) as deliver, mock.patch.object(
+            type(invocation._delegate),
+            "handle_reference_read_action",
+            autospec=True,
+            side_effect=lambda _delegate, requested_action: capture_result(
+                requested_action
+            ),
+        ):
             with self.assertRaises(SessionArtifactBindingError) as rejected:
                 invocation.handle_reference_read_action(action)
             self.assertIs(rejected.exception, marker)
-            postcheck_failure[0] = None
+            self.assertEqual(len(produced), 1)
+            with self.assertRaises(ReferenceAuthorizationError) as closed:
+                produced[0].contents
+            self.assertIs(
+                closed.exception.code,
+                ReferenceAuthorizationErrorCode.CLOSED,
+            )
+            self._assert_content_free_cleanup_pending(operation)
             with self.assertRaises(SessionArtifactBindingError) as cleanup:
                 operation.failure(marker)
             self.assertIs(cleanup.exception, marker)
-            self.assertTrue(operation.finished)
-            self.assertEqual(operation._pending, {})
             with self.assertRaises(ReferenceAuthorizationError) as replay:
                 invocation.handle_reference_read_action(action)
             self.assertIs(
                 replay.exception.code,
-                ReferenceAuthorizationErrorCode.INVALID_TRANSITION,
+                ReferenceAuthorizationErrorCode.CLOSED,
             )
             self.assertEqual(deliver.call_count, 1)
+
+        postcheck_failure[0] = None
+        self._complete_fresh_cleanup(binding, operation)
 
         with binding.open_ready_resources() as access:
             history = access.repository.inspect_reference_operation(
@@ -824,6 +850,426 @@ class RuntimeExecutionRetirementTests(unittest.TestCase):
             history.operation_events[-1].operation_state,
             ReferenceOperationState.TERMINATED,
         )
+
+    def test_registered_capture_postcheck_retains_owner_until_fresh_terminalization(
+        self,
+    ) -> None:
+        workspace = pristine_initialized_workspace(self)
+        provision_session_resources(workspace.root, "novel")
+        binding = compose_session_artifact_binding(workspace.root, "novel")
+        runtime = StoryRuntime(workspace)
+        workspace_root = str(workspace.root)
+        self.addCleanup(self._cleanup_runtime_registry, workspace_root)
+        marker = SessionArtifactBindingError("capture postcheck rejected")
+        reject_postcheck = [True]
+        published = []
+
+        @contextmanager
+        def repository_access():
+            with binding.open_ready_resources() as access:
+                yield access.repository
+            if reject_postcheck[0]:
+                raise marker
+
+        def register(operation):
+            runtime._register_reference_operation(operation)
+            published.append(operation)
+
+        with self.assertRaises(SessionArtifactBindingError) as rejected:
+            prepare_registered_guarded_runtime_reference_operation(
+                repository_access,
+                session_id="novel",
+                text="Read ${core_documents/global_outline.md}.",
+                register=register,
+            )
+        self.assertIs(rejected.exception, marker)
+        self.assertEqual(len(published), 1)
+        operation = published[0]
+        self._assert_content_free_cleanup_pending(operation)
+        assert operation.operation_id is not None
+        self.assertEqual(
+            runtime._registered_reference_operation_ids("novel"),
+            frozenset((operation.operation_id,)),
+        )
+        with binding.open_ready_resources() as access:
+            history = access.repository.inspect_reference_operation(
+                operation.operation_id
+            )
+        assert history is not None
+        self.assertIs(
+            history.operation_events[-1].operation_state,
+            ReferenceOperationState.CAPTURED,
+        )
+
+        reject_postcheck[0] = False
+        fresh_binding = compose_session_artifact_binding(workspace.root, "novel")
+
+        @contextmanager
+        def fresh_repository_access():
+            with fresh_binding.open_ready_resources() as access:
+                yield access.repository
+
+        runtime._reconcile_reference_operations_at_boundary(
+            session_id="novel",
+            repository_access=fresh_repository_access,
+        )
+        self.assertTrue(operation.finished)
+        self.assertEqual(runtime._registered_reference_operation_ids("novel"), frozenset())
+        with fresh_binding.open_ready_resources() as access:
+            terminal = access.repository.inspect_reference_operation(
+                operation.operation_id
+            )
+        assert terminal is not None
+        self.assertIs(
+            terminal.operation_events[-1].operation_state,
+            ReferenceOperationState.TERMINATED,
+        )
+
+    def test_registered_authorized_postcheck_is_published_before_cleanup_defers(
+        self,
+    ) -> None:
+        workspace = pristine_initialized_workspace(self)
+        provision_session_resources(workspace.root, "novel")
+        binding = compose_session_artifact_binding(workspace.root, "novel")
+        runtime = StoryRuntime(workspace)
+        workspace_root = str(workspace.root)
+        self.addCleanup(self._cleanup_runtime_registry, workspace_root)
+
+        @contextmanager
+        def repository_access():
+            with binding.open_ready_resources() as access:
+                yield access.repository
+
+        operation = runtime._prepare_session_reference_operation(
+            repository_access,
+            session_id="novel",
+            text="Read ${core_documents/global_outline.md}.",
+        )
+        marker = SessionArtifactBindingError("authorization postcheck rejected")
+
+        @contextmanager
+        def rejected_repository_access():
+            with binding.open_ready_resources() as access:
+                yield access.repository
+            raise marker
+
+        operation._repository_access = rejected_repository_access
+        with self.assertRaises(SessionArtifactBindingError) as rejected:
+            operation.begin_invocation(
+                agent_id=PLOT_ARCHITECT,
+                phase="draft",
+                round_number=None,
+            )
+        self.assertIs(rejected.exception, marker)
+        self._assert_content_free_cleanup_pending(operation)
+        assert operation.operation_id is not None
+        with binding.open_ready_resources() as access:
+            history = access.repository.inspect_reference_operation(
+                operation.operation_id
+            )
+        assert history is not None
+        self.assertEqual(
+            tuple(
+                event.invocation_state
+                for event in history.invocation_events[0]
+            ),
+            (ReferenceInvocationState.AUTHORIZED,),
+        )
+        self.assertEqual(
+            runtime._registered_reference_operation_ids("novel"),
+            frozenset((operation.operation_id,)),
+        )
+
+        fresh_binding = compose_session_artifact_binding(workspace.root, "novel")
+
+        @contextmanager
+        def fresh_repository_access():
+            with fresh_binding.open_ready_resources() as access:
+                yield access.repository
+
+        runtime._reconcile_reference_operations_at_boundary(
+            session_id="novel",
+            repository_access=fresh_repository_access,
+        )
+        self.assertTrue(operation.finished)
+        with fresh_binding.open_ready_resources() as access:
+            terminal = access.repository.inspect_reference_operation(
+                operation.operation_id
+            )
+        assert terminal is not None
+        self.assertEqual(
+            tuple(
+                event.invocation_state
+                for event in terminal.invocation_events[0]
+            ),
+            (
+                ReferenceInvocationState.AUTHORIZED,
+                ReferenceInvocationState.TERMINATED,
+            ),
+        )
+
+    def test_restart_reconciles_every_nonterminal_reference_evidence_state(
+        self,
+    ) -> None:
+        workspace = pristine_initialized_workspace(self)
+        provision_session_resources(workspace.root, "novel")
+        binding = compose_session_artifact_binding(workspace.root, "novel")
+        operations = {}
+        reference = ArtifactReference("core_documents/global_outline.md")
+        action = None
+
+        with binding.open_ready_resources() as access:
+            for state in (
+                ReferenceOperationState.CAPTURED,
+                ReferenceInvocationState.AUTHORIZED,
+                ReferenceInvocationState.DELIVERED,
+                ReferenceInvocationState.RESULT_RECEIVED,
+            ):
+                operation = prepare_runtime_reference_operation(
+                    access.repository,
+                    session_id="novel",
+                    text="Read ${core_documents/global_outline.md}.",
+                )
+                operations[state] = operation.operation_id
+                if state is ReferenceOperationState.CAPTURED:
+                    continue
+                invocation = operation.begin_invocation(
+                    agent_id=PLOT_ARCHITECT,
+                    phase="draft",
+                    round_number=None,
+                )
+                assert invocation is not None
+                if state is ReferenceInvocationState.AUTHORIZED:
+                    continue
+                action = ReferenceReadAction(
+                    ReferenceReadActionKind.READ_WRITING_ARTIFACTS,
+                    invocation.request.correlation,
+                    (reference,),
+                )
+                result = invocation.handle_reference_read_action(action)
+                result.close()
+                if state is ReferenceInvocationState.RESULT_RECEIVED:
+                    invocation.record_result_received()
+
+        restarted = StoryRuntime(workspace)
+        fresh_binding = compose_session_artifact_binding(workspace.root, "novel")
+
+        @contextmanager
+        def repository_access():
+            with fresh_binding.open_ready_resources() as access:
+                yield access.repository
+
+        restarted._reconcile_reference_operations_at_boundary(
+            session_id="novel",
+            repository_access=repository_access,
+        )
+        with fresh_binding.open_ready_resources() as access:
+            for state, operation_id in operations.items():
+                with self.subTest(state=state):
+                    assert operation_id is not None
+                    history = access.repository.inspect_reference_operation(operation_id)
+                    assert history is not None
+                    self.assertIs(
+                        history.operation_events[-1].operation_state,
+                        ReferenceOperationState.TERMINATED,
+                    )
+                    if history.invocation_events:
+                        self.assertIs(
+                            history.invocation_events[0][-1].invocation_state,
+                            ReferenceInvocationState.TERMINATED,
+                        )
+
+    def test_interrupted_reconciliation_preserves_prefix_and_resumes_idempotently(
+        self,
+    ) -> None:
+        workspace = pristine_initialized_workspace(self)
+        provision_session_resources(workspace.root, "novel")
+        binding = compose_session_artifact_binding(workspace.root, "novel")
+        with binding.open_ready_resources() as access:
+            operation = prepare_runtime_reference_operation(
+                access.repository,
+                session_id="novel",
+                text="Read ${core_documents/global_outline.md}.",
+            )
+            for _ in range(2):
+                invocation = operation.begin_invocation(
+                    agent_id=PLOT_ARCHITECT,
+                    phase="draft",
+                    round_number=None,
+                )
+                assert invocation is not None
+            operation_id = operation.operation_id
+            assert operation_id is not None
+            evidence = access.repository._reference_evidence
+            original_append = evidence.append_invocation_event
+            termination_calls = [0]
+
+            def interrupt_second_termination(*args, **kwargs):
+                if args[2] is ReferenceInvocationState.TERMINATED:
+                    termination_calls[0] += 1
+                    if termination_calls[0] == 2:
+                        raise OSError("injected reconciliation interruption")
+                return original_append(*args, **kwargs)
+
+            with mock.patch.object(
+                evidence,
+                "append_invocation_event",
+                side_effect=interrupt_second_termination,
+            ), self.assertRaisesRegex(OSError, "interruption"):
+                access.repository.reconcile_reference_operation(
+                    "novel",
+                    operation_id,
+                )
+            prefix = access.repository.inspect_reference_operation(operation_id)
+            assert prefix is not None
+            self.assertEqual(
+                tuple(events[-1].invocation_state for events in prefix.invocation_events),
+                (
+                    ReferenceInvocationState.TERMINATED,
+                    ReferenceInvocationState.AUTHORIZED,
+                ),
+            )
+
+            self.assertTrue(
+                access.repository.reconcile_reference_operation("novel", operation_id)
+            )
+            resumed = access.repository.inspect_reference_operation(operation_id)
+            assert resumed is not None
+            self.assertEqual(
+                tuple(events[-1].invocation_state for events in resumed.invocation_events),
+                (
+                    ReferenceInvocationState.TERMINATED,
+                    ReferenceInvocationState.TERMINATED,
+                ),
+            )
+            self.assertIs(
+                resumed.operation_events[-1].operation_state,
+                ReferenceOperationState.TERMINATED,
+            )
+            self.assertTrue(
+                access.repository.reconcile_reference_operation("novel", operation_id)
+            )
+            self.assertEqual(
+                access.repository.inspect_reference_operation(operation_id),
+                resumed,
+            )
+
+    def test_live_operation_is_excluded_across_story_runtime_instances(self) -> None:
+        workspace = pristine_initialized_workspace(self)
+        provision_session_resources(workspace.root, "novel")
+        binding = compose_session_artifact_binding(workspace.root, "novel")
+        first = StoryRuntime(workspace)
+        second = StoryRuntime(workspace)
+        workspace_root = str(workspace.root)
+        self.addCleanup(self._cleanup_runtime_registry, workspace_root)
+
+        @contextmanager
+        def repository_access():
+            with binding.open_ready_resources() as access:
+                yield access.repository
+
+        operation = first._prepare_session_reference_operation(
+            repository_access,
+            session_id="novel",
+            text="Read ${core_documents/global_outline.md}.",
+        )
+        assert operation.operation_id is not None
+        second._reconcile_reference_operations_at_boundary(
+            session_id="novel",
+            repository_access=repository_access,
+        )
+        with binding.open_ready_resources() as access:
+            active = access.repository.inspect_reference_operation(
+                operation.operation_id
+            )
+        assert active is not None
+        self.assertIs(
+            active.operation_events[-1].operation_state,
+            ReferenceOperationState.CAPTURED,
+        )
+        self.assertFalse(operation.finished)
+        first._fail_reference_operation(operation, RuntimeError("owner stopped"))
+        self.assertTrue(operation.finished)
+        self.assertEqual(first._registered_reference_operation_ids("novel"), frozenset())
+
+    def test_terminal_postcheck_reconciles_before_runtime_marks_finished(self) -> None:
+        workspace = pristine_initialized_workspace(self)
+        provision_session_resources(workspace.root, "novel")
+        binding = compose_session_artifact_binding(workspace.root, "novel")
+        runtime = StoryRuntime(workspace)
+        workspace_root = str(workspace.root)
+        self.addCleanup(self._cleanup_runtime_registry, workspace_root)
+
+        @contextmanager
+        def repository_access():
+            with binding.open_ready_resources() as access:
+                yield access.repository
+
+        operation = runtime._prepare_session_reference_operation(
+            repository_access,
+            session_id="novel",
+            text="Read ${core_documents/global_outline.md}.",
+        )
+        invocation = operation.begin_invocation(
+            agent_id=PLOT_ARCHITECT,
+            phase="draft",
+            round_number=None,
+        )
+        assert invocation is not None
+        action = ReferenceReadAction(
+            ReferenceReadActionKind.READ_WRITING_ARTIFACTS,
+            invocation.request.correlation,
+            invocation.request.references,
+        )
+        result = invocation.handle_reference_read_action(action)
+        self.assertEqual(result.contents, (b"",))
+        invocation.record_result_received()
+        invocation.accept()
+        with self.assertRaises(ReferenceAuthorizationError) as closed:
+            result.contents
+        self.assertIs(closed.exception.code, ReferenceAuthorizationErrorCode.CLOSED)
+
+        marker = SessionArtifactBindingError("terminal postcheck rejected")
+
+        @contextmanager
+        def rejected_repository_access():
+            with binding.open_ready_resources() as access:
+                yield access.repository
+            raise marker
+
+        operation._repository_access = rejected_repository_access
+        with self.assertRaises(SessionArtifactBindingError) as rejected:
+            runtime._finish_reference_operation(operation)
+        self.assertIs(rejected.exception, marker)
+        self._assert_content_free_cleanup_pending(operation)
+        assert operation.operation_id is not None
+        self.assertEqual(
+            runtime._registered_reference_operation_ids("novel"),
+            frozenset((operation.operation_id,)),
+        )
+        with binding.open_ready_resources() as access:
+            durable = access.repository.inspect_reference_operation(
+                operation.operation_id
+            )
+        assert durable is not None
+        self.assertIs(
+            durable.operation_events[-1].operation_state,
+            ReferenceOperationState.ACCEPTED,
+        )
+
+        fresh_binding = compose_session_artifact_binding(workspace.root, "novel")
+
+        @contextmanager
+        def fresh_repository_access():
+            with fresh_binding.open_ready_resources() as access:
+                yield access.repository
+
+        runtime._reconcile_reference_operations_at_boundary(
+            session_id="novel",
+            repository_access=fresh_repository_access,
+        )
+        self.assertTrue(operation.finished)
+        self.assertEqual(runtime._registered_reference_operation_ids("novel"), frozenset())
 
     def test_long_lived_reference_and_source_adapter_reacquire_exact_access(
         self,

@@ -1108,7 +1108,7 @@ class RuntimeSessionArtifactBindingTests(LeadOrchestrationTestCase):
         )
         with mock.patch.object(
             orchestrator_module,
-            "prepare_guarded_runtime_reference_operation",
+            "prepare_registered_guarded_runtime_reference_operation",
             side_effect=failure,
         ) as prepare:
             result = await self.runtime.lead_turn(

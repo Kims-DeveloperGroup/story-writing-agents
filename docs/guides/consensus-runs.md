@@ -172,6 +172,14 @@ revalidates the path and digest and gives the provider an authorized read
 coordinator. Canonical bytes are not embedded in durable consensus events and
 the agent cannot bypass the reference.
 
+Candidate-only consensus normally reads unpublished candidate material without
+requesting a session worktree. If the process-shared runtime registry has
+pending reference cleanup for that session, the same call first creates a
+fresh exact binding and drains the content-free cleanup without replaying
+provider work. With no registered cleanup it remains worktree-free. A restart
+orphan is instead reconciled at the next artifact-sensitive boundary; a
+candidate-only call does not scan the worktree merely to discover one.
+
 ## Continue a deadlock without copying the candidate
 
 A terminal synthesis deadlock exposes `next_action=continue_deadlock`. The

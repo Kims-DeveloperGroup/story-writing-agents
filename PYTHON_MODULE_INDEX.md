@@ -7101,7 +7101,25 @@ every intermediate arrow. The current runtime graph is acyclic.
   runtime adapter, exact phase-request provider-task ownership, quiescent
   binding state, per-conversation async locks,
   private confirmed-step, recommendation, and artifact-application capabilities,
-  and live execution-attempt markers.
+  and live execution-attempt markers. A process-wide, lock-protected registry,
+  keyed by canonical control-workspace path, session, and reference-operation
+  identity, strongly retains exact live or deferred reference operations across
+  `StoryRuntime` instances. Registration occurs from the repository transaction
+  after durable capture and before its fallible guard exit. Lead,
+  collaboration, and artifact-backed consensus provider boundaries first retry
+  deferred operations through that boundary's fresh session repository and
+  then reconcile durable restart orphans. Candidate-backed consensus preserves
+  its reference-free, no-worktree admission path unless the shared same-process
+  registry already contains cleanup-pending authority for that workspace and
+  session; only that condition triggers fresh binding and cleanup before its
+  provider call. Restart-only orphans remain content-free and are reconciled at
+  the next artifact-sensitive boundary. The repository takes the live-ID
+  supplier snapshot while its source/evidence transaction is locked, so a
+  concurrent runtime cannot reconcile an operation between durable capture and
+  registry publication.
+  Deferred operations have already released transient bytes and their stale
+  repository binding; the runtime removes them only after fresh guarded access
+  passes its outer postcheck and durable terminalization is known.
   Every artifact-sensitive top-level operation freshly binds the exact READY
   session resource and physical worktree identity. Direct reads use one short
   synchronous guarded access; lazy provider reference and writing-artifact
@@ -8285,7 +8303,7 @@ every intermediate arrow. The current runtime graph is acyclic.
 
 - **Source:**
   `src/story_writing_agents/writing_artifacts/runtime_references.py`
-- **Responsibility:** Coordinate one call-local top-level runtime artifact-
+- **Responsibility:** Coordinate one top-level runtime artifact-
   reference operation across parse-once projection, repository capture,
   correlated provider invocations, and terminal finalization.
 - **Supported surface:** Package-internal `RuntimeReferenceOperation`,
@@ -8294,7 +8312,13 @@ every intermediate arrow. The current runtime graph is acyclic.
   `reference_operation_session_id` decoder. Package-internal
   `prepare_guarded_runtime_reference_operation(...)`, omitted from every
   facade, injects a repository-access context-manager callback without changing
-  the established operation constructor or public preparation signature. None
+  the established operation constructor or public preparation signature. The
+  sibling package-internal
+  `prepare_registered_guarded_runtime_reference_operation(...)` publishes a
+  newly captured operation to its runtime owner before the surrounding guard
+  can reject its return. Runtime-owned cleanup inspection, fresh-repository
+  reconciliation, and postcheck-completion methods expose only content-free
+  lifecycle state. None
   is re-exported by the writing-artifact or project-root facade. Preparation preserves exact source
   and provider-text projections and uses a no-operation-ID fast path when no
   references exist. Each referenced provider attempt receives a fresh
@@ -8309,20 +8333,27 @@ every intermediate arrow. The current runtime graph is acyclic.
 - **Direct internal dependencies:** `errors`, `writing_artifacts.authorization`,
   `writing_artifacts.directives`, `writing_artifacts.read_actions`,
   `writing_artifacts.references`, and `writing_artifacts.repository`.
-- **State, resources, and side effects:** One operation owns only a call-local
-  reentrant lock, pending-invocation map, next ordinal, generated identities,
-  immutable source/provider projections, a borrowed concrete repository, and
-  an optional caller-owned access callback. Guarded preparation, invocation,
+- **State, resources, and side effects:** One operation owns a reentrant lock,
+  pending-invocation map, next ordinal, generated identities, immutable
+  source/provider projections and content-free proofs, a borrowed concrete
+  repository, and an optional caller-owned access callback while provider work
+  is live. Each tracked invocation also retains every public transient result
+  it returned so guard failure can close those selected bytes without reaching
+  into the repository coordinator's private state. Guarded preparation, invocation,
   read, result, and terminal repository actions each open and close one short
   synchronous access without nesting or spanning provider awaits. With that
   callback present, the shared session-artifact guard marker propagates through
   preparation, repository actions, failure handling, terminalization, and
   cleanup so binding loss reaches the binding owner's typed recovery boundary;
   guarded capture also retains its established workspace-security propagation.
-  Guard rejection keeps the affected invocation pending and its top-level
-  operation unfinished until the same live owner can retry durable cleanup;
-  postcheck failure likewise leaves the local handle cleanup-eligible while
-  already-persisted repository evidence remains authoritative.
+  Guard rejection moves the registered operation to content-free cleanup-
+  pending state: transient results and authorization bytes are closed, pending
+  coordinators are discarded, and the stale repository/access callback is
+  detached. A later owner can reconcile the exact operation through a freshly
+  guarded repository; runtime state becomes finished only after the outer
+  postcheck accepts already-terminal durable evidence. Postcheck failure leaves
+  the retained handle cleanup-eligible while already-persisted repository
+  evidence remains authoritative.
   The unguarded preparation path continues to convert repository failures to
   the established content-free `ReferenceOperationFailure`. The module imports
   no Git, workspace, controller, or orchestration
@@ -8366,7 +8397,11 @@ every intermediate arrow. The current runtime graph is acyclic.
   absent valid operation, and treats an existing partial directory as
   corruption. Operation capture, revalidation,
   acceptance, and termination plus invocation authorization, delivery,
-  result-received, acceptance, and termination are exact state machines.
+  result-received, acceptance, and termination are exact state machines. Its
+  stable validated inventory and idempotent forward-reconciliation seam close
+  every nonterminal invocation before terminating an incomplete operation;
+  partial reconciliation can be safely resumed after a later failure and never
+  reconstructs a capability or artifact content.
   Accepted operations require all invocations terminal and at least one
   accepted invocation. The adapter retains no artifact bytes, opens no lock,
   does not enumerate repository transaction journals, and cannot make evidence
@@ -8568,7 +8603,12 @@ every intermediate arrow. The current runtime graph is acyclic.
   unanimous `commit_consensus` operations; plus capture, invocation
   authorization, one-use delivery, result receipt, invocation acceptance or
   termination, operation revalidation or finalization, and content-free
-  evidence inspection for explicit reference reads. Its
+  evidence inspection for explicit reference reads. Package-internal runtime
+  capture and invocation factories optionally publish newly created authority
+  to the caller while the same repository transaction remains locked. Exact
+  single-operation and inventory recovery methods terminate incomplete durable
+  reference history without reconstructing transient authority; inventory
+  recovery receives a live-ID supplier rather than a precomputed snapshot. Its
   `begin_reference_invocation(authorization, correlation)` factory returns the
   package-private synchronous coordinator that alone owns one repository-minted
   capability across provider action, delivery, result receipt, acceptance, or
@@ -8630,6 +8670,14 @@ every intermediate arrow. The current runtime graph is acyclic.
   termination persists its event before retiring the capability. Access-entry
   rejection therefore leaves authorized authority recoverable, while a later
   postcheck failure retains any already-persisted transition conservatively.
+  Runtime publication callbacks run after the matching CAPTURED or AUTHORIZED
+  event but before transaction and guard exit. Recovery validates that every
+  operation identity belongs to the exact supplied session, evaluates the
+  current live-operation exclusion supplier while the source/evidence lock is
+  held, and idempotently appends only content-free terminal events. This keeps
+  registry publication and recovery admission atomic across repository
+  instances without importing orchestration or holding a repository guard over
+  provider work.
   The repository imports
   no controller, terminal, provider, Git, lead, confirmation, or agent-context
   implementation and retains no viewer state or artifact bytes beyond a call.

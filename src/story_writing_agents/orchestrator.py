@@ -6,9 +6,10 @@ import asyncio
 import hashlib
 import inspect
 import json
+import threading
 import uuid
 from collections.abc import Callable, Iterator
-from contextlib import asynccontextmanager, contextmanager
+from contextlib import AbstractContextManager, asynccontextmanager, contextmanager
 from dataclasses import asdict, dataclass, replace
 from functools import partial
 from pathlib import Path
@@ -315,7 +316,7 @@ from .writing_artifacts import (
 from .writing_artifacts.repository import WritingArtifactRepository
 from .writing_artifacts.runtime_references import (
     RuntimeReferenceOperation,
-    prepare_guarded_runtime_reference_operation,
+    prepare_registered_guarded_runtime_reference_operation,
     reference_operation_belongs_to_session,
     reference_operation_session_id,
 )
@@ -1378,6 +1379,11 @@ class ConsensusArtifactReviewHandoff:
 class StoryRuntime:
     """Public management and lead front-channel/confirmation APIs."""
 
+    _reference_operation_registry_lock = threading.RLock()
+    _reference_operation_registry: dict[
+        tuple[str, str, str], RuntimeReferenceOperation
+    ] = {}
+
     def __init__(
         self,
         workspace: Workspace | str | Path,
@@ -1761,14 +1767,28 @@ class StoryRuntime:
         reference_operation: RuntimeReferenceOperation | None = None
         bound_agent: BoundAgent | None = None
         try:
-            artifact_binding = None
-            if invocation.input_material.locator.startswith("artifact:"):
+            artifact_input = invocation.input_material.locator.startswith("artifact:")
+            artifact_binding: SessionArtifactBinding | None = None
+            reference_boundary_reconciled = False
+            if artifact_input or self._has_cleanup_pending_reference_operation(
+                invocation.execution_identity.session_id
+            ):
                 artifact_binding = self._session_artifact_binding(
                     invocation.execution_identity.session_id
                 )
+                repository_access = partial(
+                    _open_session_artifact_repository,
+                    artifact_binding,
+                )
+                self._reconcile_reference_operations_at_boundary(
+                    session_id=invocation.execution_identity.session_id,
+                    repository_access=repository_access,
+                )
+                reference_boundary_reconciled = True
             input_text, reference_operation = self._resolve_consensus_input(
                 invocation,
                 artifact_binding=artifact_binding,
+                reference_boundary_reconciled=reference_boundary_reconciled,
             )
             candidate_text = self._resolve_consensus_candidate(invocation)
             if invocation.continuation is not None:
@@ -1816,7 +1836,7 @@ class StoryRuntime:
             )
             reply = await bound_agent.invoke(request, reference_read=reference_read)
             if reference_operation is not None:
-                reference_operation.finish()
+                self._finish_reference_operation(reference_operation)
             authored_material = None
             if invocation.phase in {ConsensusPhase.DRAFT, ConsensusPhase.REPAIR}:
                 authored_material = self._consensus_material_store.put_text(reply.content)
@@ -1834,7 +1854,7 @@ class StoryRuntime:
             )
         except BaseException as exc:
             if reference_operation is not None:
-                reference_operation.failure(exc)
+                self._fail_reference_operation(reference_operation, exc)
             raise
         finally:
             active_tasks.discard(current_task)
@@ -1878,6 +1898,7 @@ class StoryRuntime:
         invocation: ConsensusPhaseInvocation,
         *,
         artifact_binding: SessionArtifactBinding | None,
+        reference_boundary_reconciled: bool = False,
     ) -> tuple[str, RuntimeReferenceOperation | None]:
         handle = invocation.input_material
         if handle.locator.startswith("candidate:"):
@@ -1889,10 +1910,15 @@ class StoryRuntime:
                 "consensus artifact access is unavailable"
             )
         path = handle.locator.removeprefix("artifact:")
-        operation = prepare_guarded_runtime_reference_operation(
-            lambda: _open_session_artifact_repository(artifact_binding),
+        repository_access = partial(
+            _open_session_artifact_repository,
+            artifact_binding,
+        )
+        operation = self._prepare_session_reference_operation(
+            repository_access,
             session_id=invocation.execution_identity.session_id,
             text=f"${{{path}}}",
+            reconcile_existing=not reference_boundary_reconciled,
         )
         proofs = operation.reference_proofs
         if (
@@ -1901,7 +1927,10 @@ class StoryRuntime:
             or proofs[0].reference.line_range is not None
             or proofs[0].selected_sha256 != handle.digest
         ):
-            operation.failure(ValueError("artifact material digest changed"))
+            self._fail_reference_operation(
+                operation,
+                ValueError("artifact material digest changed"),
+            )
             raise ValueError("consensus artifact input authorization is stale")
         return operation.provider_text, operation
 
@@ -2310,6 +2339,159 @@ class StoryRuntime:
         artifact_binding = self._session_artifact_binding(session_id)
         with artifact_binding.open_ready_resources() as access:
             return access.repository.inspect_reference_operation(operation_id)
+
+    def _register_reference_operation(
+        self,
+        operation: RuntimeReferenceOperation,
+    ) -> None:
+        """Retain exact cleanup authority before guarded handle publication."""
+
+        operation_id = operation.operation_id
+        if operation_id is None:
+            return
+        if not reference_operation_belongs_to_session(
+            operation_id,
+            operation.session_id,
+        ):
+            raise BackendProtocolError("reference operation identity is invalid")
+        key = (str(self.workspace.root), operation.session_id, operation_id)
+        with StoryRuntime._reference_operation_registry_lock:
+            current = StoryRuntime._reference_operation_registry.get(key)
+            if current is not None and current is not operation:
+                raise BackendProtocolError("reference operation is already registered")
+            StoryRuntime._reference_operation_registry[key] = operation
+
+    def _unregister_terminal_reference_operation(
+        self,
+        operation: RuntimeReferenceOperation,
+    ) -> None:
+        operation_id = operation.operation_id
+        if operation_id is None or not operation.finished:
+            return
+        key = (str(self.workspace.root), operation.session_id, operation_id)
+        with StoryRuntime._reference_operation_registry_lock:
+            if StoryRuntime._reference_operation_registry.get(key) is operation:
+                StoryRuntime._reference_operation_registry.pop(key)
+
+    def _registered_reference_operation_ids(
+        self,
+        session_id: str,
+    ) -> frozenset[str]:
+        """Snapshot exact live IDs while the caller owns repository access."""
+
+        workspace_root = str(self.workspace.root)
+        with StoryRuntime._reference_operation_registry_lock:
+            return frozenset(
+                operation_id
+                for (owned_root, owned_session, operation_id) in (
+                    StoryRuntime._reference_operation_registry
+                )
+                if owned_root == workspace_root and owned_session == session_id
+            )
+
+    def _has_cleanup_pending_reference_operation(self, session_id: str) -> bool:
+        """Check a workspace/session snapshot without holding its registry lock."""
+
+        workspace_root = str(self.workspace.root)
+        with StoryRuntime._reference_operation_registry_lock:
+            registered = tuple(
+                operation
+                for (
+                    owned_root,
+                    owned_session,
+                    _,
+                ), operation in StoryRuntime._reference_operation_registry.items()
+                if owned_root == workspace_root and owned_session == session_id
+            )
+        return any(operation.cleanup_is_pending() for operation in registered)
+
+    def _reconcile_reference_operations_at_boundary(
+        self,
+        *,
+        session_id: str,
+        repository_access: Callable[
+            [], AbstractContextManager[WritingArtifactRepository]
+        ],
+    ) -> None:
+        """Retry retained and restarted cleanup before new provider work."""
+
+        workspace_root = str(self.workspace.root)
+        with StoryRuntime._reference_operation_registry_lock:
+            registered = tuple(
+                operation
+                for (
+                    owned_root,
+                    owned_session,
+                    _,
+                ), operation in StoryRuntime._reference_operation_registry.items()
+                if (
+                    owned_root == workspace_root
+                    and owned_session == session_id
+                )
+            )
+        retained = tuple(
+            operation for operation in registered if operation.cleanup_is_pending()
+        )
+        reconciled_retained: list[RuntimeReferenceOperation] = []
+        with repository_access() as repository:
+            for operation in retained:
+                operation.reconcile_cleanup(repository)
+                reconciled_retained.append(operation)
+            repository.reconcile_incomplete_reference_operations(
+                session_id,
+                excluded_ids_supplier=partial(
+                    self._registered_reference_operation_ids,
+                    session_id,
+                ),
+            )
+        for operation in reconciled_retained:
+            operation.complete_reconciled_cleanup()
+            self._unregister_terminal_reference_operation(operation)
+
+    def _prepare_session_reference_operation(
+        self,
+        repository_access: Callable[
+            [], AbstractContextManager[WritingArtifactRepository]
+        ],
+        *,
+        session_id: str,
+        text: str,
+        reconcile_existing: bool = True,
+    ) -> RuntimeReferenceOperation:
+        if reconcile_existing:
+            self._reconcile_reference_operations_at_boundary(
+                session_id=session_id,
+                repository_access=repository_access,
+            )
+        return prepare_registered_guarded_runtime_reference_operation(
+            repository_access,
+            session_id=session_id,
+            text=text,
+            register=self._register_reference_operation,
+        )
+
+    def _finish_reference_operation(
+        self,
+        operation: RuntimeReferenceOperation,
+    ) -> None:
+        try:
+            operation.finish()
+        finally:
+            self._unregister_terminal_reference_operation(operation)
+
+    def _fail_reference_operation(
+        self,
+        operation: RuntimeReferenceOperation,
+        failure: BaseException,
+        *,
+        default: ReferenceAuthorizationErrorCode = (
+            ReferenceAuthorizationErrorCode.WORKFLOW_FAILURE
+        ),
+    ) -> ReferenceOperationFailure | None:
+        try:
+            return operation.failure(failure, default=default)
+        finally:
+            self._unregister_terminal_reference_operation(operation)
 
     def _session_artifact_binding(self, session_id: str) -> SessionArtifactBinding:
         """Freshly require and bind one exact session worktree for artifact I/O."""
@@ -4909,7 +5091,7 @@ class StoryRuntime:
             session_sources = SessionSourceWorkspace.from_artifact_binding(
                 artifact_binding
             )
-            reference_operation = prepare_guarded_runtime_reference_operation(
+            reference_operation = self._prepare_session_reference_operation(
                 repository_access,
                 session_id=session_id,
                 text=" ".join(item.locator for item in artifact_inputs),
@@ -5034,14 +5216,14 @@ class StoryRuntime:
                 ),
             )
             value = decoded if decoded is not None else decoder(result.answer)
-            reference_operation.finish()
+            self._finish_reference_operation(reference_operation)
             return _CollaborationInvocationResult(
                 value,
                 provider.submitted_physical_calls,
             )
         except BaseException as failure:
             if reference_operation is not None:
-                reference_operation.failure(failure)
+                self._fail_reference_operation(reference_operation, failure)
             facts = context_provider_failure_facts(failure)
             submitted = (
                 provider.submitted_physical_calls
@@ -7020,7 +7202,7 @@ class StoryRuntime:
         session_sources = SessionSourceWorkspace.from_artifact_binding(
             artifact_binding
         )
-        reference_operation = prepare_guarded_runtime_reference_operation(
+        reference_operation = self._prepare_session_reference_operation(
             repository_access,
             session_id=session_id,
             text=text,
@@ -7509,7 +7691,10 @@ class StoryRuntime:
                 except asyncio.CancelledError:
                     raise
                 except Exception as correction_setup_failure:
-                    reference_operation.failure(correction_setup_failure)
+                    self._fail_reference_operation(
+                        reference_operation,
+                        correction_setup_failure,
+                    )
                     assert rejected_call_id is not None
                     assert correction_failure_code is not None
                     return self._lead_outcome_failure_result(
@@ -7543,7 +7728,10 @@ class StoryRuntime:
                         > submitted_before_correction
                     ):
                         raise
-                    reference_operation.failure(correction_failure)
+                    self._fail_reference_operation(
+                        reference_operation,
+                        correction_failure,
+                    )
                     assert rejected_call_id is not None
                     assert correction_failure_code is not None
                     return self._lead_outcome_failure_result(
@@ -7562,9 +7750,9 @@ class StoryRuntime:
                 result.authorization,
                 inputs,
             )
-            reference_operation.finish()
+            self._finish_reference_operation(reference_operation)
         except _LeadOutcomeValidationError as failure:
-            reference_operation.failure(failure)
+            self._fail_reference_operation(reference_operation, failure)
             if provider is None or provider.last_submitted_call_id is None:
                 raise
             return self._lead_outcome_failure_result(
@@ -7588,7 +7776,10 @@ class StoryRuntime:
                 ),
             )
         except BaseException as failure:
-            reference_failure = reference_operation.failure(failure)
+            reference_failure = self._fail_reference_operation(
+                reference_operation,
+                failure,
+            )
             if isinstance(failure, SessionContextCapacityError):
                 # Reference cleanup must not erase this safe, actionable exact-
                 # context failure, including preflight before any submission.

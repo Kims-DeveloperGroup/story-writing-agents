@@ -383,6 +383,98 @@ class ReferenceEvidenceStore:
         except (ArtifactEntrySecurityError, OSError, TypeError, ValueError):
             raise _corrupt() from None
 
+    def inventory(self) -> tuple[ReferenceOperationHistory, ...]:
+        """Return every validated reference history in stable identity order."""
+
+        try:
+            operation_ids = self._storage.list_names(self._snapshots_directory)
+        except (ArtifactEntrySecurityError, OSError):
+            raise _corrupt() from None
+        histories: list[ReferenceOperationHistory] = []
+        for operation_id in operation_ids:
+            try:
+                validate_reference_identity(operation_id)
+            except ReferenceAuthorizationError:
+                raise _corrupt() from None
+            history = self.inspect(operation_id)
+            if history is None:
+                raise _corrupt()
+            histories.append(history)
+        return tuple(histories)
+
+    def reconcile_incomplete(
+        self,
+        operation_id: str,
+        *,
+        outcome: ReferenceAuthorizationErrorCode,
+    ) -> bool:
+        """Idempotently advance one valid incomplete history to termination."""
+
+        if type(outcome) is not ReferenceAuthorizationErrorCode:
+            raise TypeError("outcome must be a ReferenceAuthorizationErrorCode")
+        history = self.inspect(operation_id)
+        if history is None:
+            raise _corrupt()
+        if history.operation_events[-1].operation_state in {
+            ReferenceOperationState.ACCEPTED,
+            ReferenceOperationState.TERMINATED,
+        }:
+            return False
+
+        terminal_invocations = {
+            ReferenceInvocationState.ACCEPTED,
+            ReferenceInvocationState.TERMINATED,
+        }
+        for invocation_events in history.invocation_events:
+            current = invocation_events[-1]
+            if current.invocation_state in terminal_invocations:
+                continue
+            correlation = current.correlation
+            if correlation is None:
+                raise _corrupt()
+            (
+                stored_correlation,
+                capability_id,
+                references,
+            ) = self._read_invocation_manifest(
+                operation_id,
+                correlation.invocation_id,
+            )
+            if stored_correlation != correlation:
+                raise _corrupt()
+            self.append_invocation_event(
+                correlation,
+                capability_id,
+                ReferenceInvocationState.TERMINATED,
+                references,
+                outcome=outcome,
+            )
+
+        history = self.inspect(operation_id)
+        if history is None:
+            raise _corrupt()
+        operation_state = history.operation_events[-1].operation_state
+        if operation_state in {
+            ReferenceOperationState.ACCEPTED,
+            ReferenceOperationState.TERMINATED,
+        }:
+            return True
+        captured = next(
+            (
+                event.references
+                for event in history.operation_events
+                if event.operation_state is ReferenceOperationState.CAPTURED
+            ),
+            (),
+        )
+        self.append_operation_event(
+            operation_id,
+            ReferenceOperationState.TERMINATED,
+            captured,
+            outcome=outcome,
+        )
+        return True
+
     def _operation_root(self, operation_id: str) -> str:
         # The authorization contract is the sole grammar authority.
         validate_reference_identity(operation_id)

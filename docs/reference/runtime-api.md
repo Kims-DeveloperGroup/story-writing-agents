@@ -1045,6 +1045,18 @@ basis, relationship, or candidate drift remains `stale` and requires fresh
 planning/review, while loss of the exact bound resources requires recovery.
 Repair authoritative session resources/history before continuing.
 
+For those guarded references, creation publishes the operation or invocation
+owner before a fallible access exit. A process-shared `StoryRuntime` registry
+retains strong content-free cleanup ownership while transient bytes, results,
+authorization, and capability authority are closed and retained access to the
+old binding is dropped. The operation remains unfinished with cleanup pending.
+The next same-process artifact-sensitive boundary uses a fresh exact binding
+to reconcile that cleanup. After restart, the next such boundary reconciles
+durable nonterminal orphans instead. Reconciliation is invocation-first,
+operation-second, idempotent, non-replaying, and fail-closed on corrupt
+evidence. See
+[Explicit-reference evidence recovery](../operations/recovery-and-limitations.md#explicit-reference-evidence-recovery).
+
 Guarded reference preparation preserves `WorkspaceSecurityError` and binding
 failures for runtime recovery mapping instead of flattening them into an
 ordinary reference workflow failure. Unguarded public repository composition

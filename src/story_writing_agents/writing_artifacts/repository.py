@@ -240,6 +240,21 @@ class WritingArtifactRepository:
     ) -> ReferenceAuthorization | None:
         """Capture one immutable filesystem-authorized reference snapshot."""
 
+        return self.capture_runtime_reference_authorization(
+            operation_id=operation_id,
+            batch=batch,
+            on_created=None,
+        )
+
+    def capture_runtime_reference_authorization(
+        self,
+        *,
+        operation_id: str,
+        batch: ArtifactReferenceBatch,
+        on_created: Callable[[ReferenceAuthorization], None] | None,
+    ) -> ReferenceAuthorization | None:
+        """Capture and optionally publish authority before guarded lock exit."""
+
         if type(batch) is not ArtifactReferenceBatch:
             raise TypeError("batch must be an ArtifactReferenceBatch")
         if not batch.references:
@@ -288,11 +303,14 @@ class WritingArtifactRepository:
                     ReferenceOperationState.CAPTURED,
                     proofs,
                 )
-                return ReferenceAuthorization(
+                authorization = ReferenceAuthorization(
                     manifest,
                     captured,
                     owner=self._reference_authorization_owner,
                 )
+                if on_created is not None:
+                    on_created(authorization)
+                return authorization
             except ReferenceAuthorizationError as exc:
                 if began:
                     self._reference_evidence.append_operation_event(
@@ -309,6 +327,21 @@ class WritingArtifactRepository:
         correlation: ReferenceInvocationCorrelation,
     ) -> ReadCapability:
         """Issue one durable, one-use capability over a captured operation."""
+
+        return self.authorize_runtime_reference_invocation(
+            authorization,
+            correlation,
+            on_created=None,
+        )
+
+    def authorize_runtime_reference_invocation(
+        self,
+        authorization: ReferenceAuthorization,
+        correlation: ReferenceInvocationCorrelation,
+        *,
+        on_created: Callable[[ReadCapability], None] | None,
+    ) -> ReadCapability:
+        """Issue and optionally publish capability authority before guard exit."""
 
         if type(authorization) is not ReferenceAuthorization:
             raise TypeError("authorization must be a ReferenceAuthorization")
@@ -327,13 +360,16 @@ class WritingArtifactRepository:
                 capability_id,
                 references,
             )
-        return ReadCapability(
-            authorization,
-            correlation,
-            capability_id=capability_id,
-            authorized_references=references,
-            owner=self._reference_authorization_owner,
-        )
+            capability = ReadCapability(
+                authorization,
+                correlation,
+                capability_id=capability_id,
+                authorized_references=references,
+                owner=self._reference_authorization_owner,
+            )
+            if on_created is not None:
+                on_created(capability)
+            return capability
 
     def begin_reference_invocation(
         self,
@@ -341,6 +377,21 @@ class WritingArtifactRepository:
         correlation: ReferenceInvocationCorrelation,
     ) -> ReferenceReadInvocation:
         """Begin one provider-observed read invocation over a captured batch."""
+
+        return self.begin_runtime_reference_invocation(
+            authorization,
+            correlation,
+            on_created=None,
+        )
+
+    def begin_runtime_reference_invocation(
+        self,
+        authorization: ReferenceAuthorization,
+        correlation: ReferenceInvocationCorrelation,
+        *,
+        on_created: Callable[[ReferenceReadInvocation], None] | None,
+    ) -> ReferenceReadInvocation:
+        """Begin and optionally publish a handle before guarded lock exit."""
 
         if type(authorization) is not ReferenceAuthorization:
             raise TypeError("authorization must be a ReferenceAuthorization")
@@ -350,11 +401,24 @@ class WritingArtifactRepository:
             correlation,
             authorization.manifest.references,
         )
-        capability = self.authorize_reference_invocation(
+        invocation: ReferenceReadInvocation | None = None
+
+        def publish(capability: ReadCapability) -> None:
+            nonlocal invocation
+            invocation = _RepositoryReferenceReadInvocation(self, request, capability)
+            if on_created is not None:
+                on_created(invocation)
+
+        self.authorize_runtime_reference_invocation(
             authorization,
             correlation,
+            on_created=publish,
         )
-        return _RepositoryReferenceReadInvocation(self, request, capability)
+        if invocation is None:
+            raise ReferenceAuthorizationError(
+                ReferenceAuthorizationErrorCode.WORKFLOW_FAILURE
+            )
+        return invocation
 
     def deliver_authorized_references(
         self,
@@ -553,6 +617,99 @@ class WritingArtifactRepository:
 
         with self._locked_sources(evidence=True):
             return self._reference_evidence.inspect(operation_id)
+
+    def reconcile_reference_operation(
+        self,
+        session_id: str,
+        operation_id: str,
+    ) -> bool:
+        """Forward-recover one exact session operation without transient bytes."""
+
+        self._require_reference_operation_session(operation_id, session_id)
+        with self._locked_sources(evidence=True):
+            self._reference_evidence.reconcile_incomplete(
+                operation_id,
+                outcome=ReferenceAuthorizationErrorCode.WORKFLOW_FAILURE,
+            )
+            history = self._reference_evidence.inspect(operation_id)
+            return bool(
+                history is not None
+                and history.operation_events[-1].operation_state
+                in {
+                    ReferenceOperationState.ACCEPTED,
+                    ReferenceOperationState.TERMINATED,
+                }
+            )
+
+    def reconcile_incomplete_reference_operations(
+        self,
+        session_id: str,
+        *,
+        excluded_ids_supplier: Callable[[], frozenset[str]],
+    ) -> tuple[str, ...]:
+        """Forward-recover orphans against one lease-atomic live snapshot."""
+
+        if not callable(excluded_ids_supplier):
+            raise TypeError("excluded_ids_supplier must be callable")
+        reconciled: list[str] = []
+        with self._locked_sources(evidence=True):
+            histories = self._reference_evidence.inventory()
+            excluded_operation_ids = excluded_ids_supplier()
+            if type(excluded_operation_ids) is not frozenset or any(
+                type(item) is not str for item in excluded_operation_ids
+            ):
+                raise TypeError(
+                    "excluded operation IDs must be a frozenset of strings"
+                )
+            for operation_id in excluded_operation_ids:
+                self._require_reference_operation_session(operation_id, session_id)
+            for history in histories:
+                operation_id = history.manifest.operation_id
+                self._require_reference_operation_session(operation_id, session_id)
+                if (
+                    operation_id in excluded_operation_ids
+                    or history.operation_events[-1].operation_state
+                    in {
+                        ReferenceOperationState.ACCEPTED,
+                        ReferenceOperationState.TERMINATED,
+                    }
+                ):
+                    continue
+                self._reference_evidence.reconcile_incomplete(
+                    operation_id,
+                    outcome=ReferenceAuthorizationErrorCode.WORKFLOW_FAILURE,
+                )
+                reconciled.append(operation_id)
+        return tuple(reconciled)
+
+    @staticmethod
+    def _require_reference_operation_session(
+        operation_id: str,
+        session_id: str,
+    ) -> None:
+        """Fail closed unless an operation embeds the exact supplied session."""
+
+        try:
+            if type(operation_id) is not str or type(session_id) is not str:
+                raise TypeError
+            validate_session = _SAFE_IDENTITY.fullmatch(session_id)
+            validate_operation = _SAFE_IDENTITY.fullmatch(operation_id)
+            prefix = f"rr_{len(session_id):02x}_{session_id}_"
+            suffix = operation_id.removeprefix(prefix)
+            valid = (
+                validate_session is not None
+                and len(session_id) <= 64
+                and validate_operation is not None
+                and operation_id.startswith(prefix)
+                and len(suffix) == 32
+                and all(character in "0123456789abcdef" for character in suffix)
+            )
+        except (TypeError, ValueError):
+            valid = False
+        if not valid:
+            raise ReferenceAuthorizationError(
+                ReferenceAuthorizationErrorCode.EVIDENCE_CORRUPT
+            )
 
     def _authorization_from_capability(
         self,

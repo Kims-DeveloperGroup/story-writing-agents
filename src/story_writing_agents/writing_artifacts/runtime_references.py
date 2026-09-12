@@ -23,6 +23,7 @@ from .authorization import (
     ReferenceAuthorizationErrorCode,
     ReferenceInvocationCorrelation,
     ReferenceOperationFailure,
+    ReferenceOperationState,
     validate_reference_identity,
 )
 from .directives import parse_artifact_references
@@ -103,7 +104,14 @@ def _failure_code(
 class _TrackedReferenceReadInvocation:
     """Notify one operation when its repository coordinator is terminal."""
 
-    __slots__ = ("_delegate", "_operation", "_terminal", "request")
+    __slots__ = (
+        "_delegate",
+        "_operation",
+        "_results",
+        "_results_lock",
+        "_terminal",
+        "request",
+    )
 
     def __init__(
         self,
@@ -113,6 +121,8 @@ class _TrackedReferenceReadInvocation:
         self._operation = operation
         self._delegate = delegate
         self.request = delegate.request
+        self._results: list[ReferenceReadResult] = []
+        self._results_lock = threading.Lock()
         self._terminal = False
 
     def handle_reference_read_action(
@@ -121,15 +131,25 @@ class _TrackedReferenceReadInvocation:
     ) -> ReferenceReadResult:
         try:
             with self._operation._open_repository_access():
-                return self._delegate.handle_reference_read_action(action)
+                result = self._delegate.handle_reference_read_action(action)
+                with self._results_lock:
+                    self._results.append(result)
+                return result
         except BaseException as exc:
-            if not self._operation._preserves_guard_failure(exc):
+            if self._operation._preserves_guard_failure(exc):
+                self._operation._defer_cleanup()
+            else:
                 self._mark_terminal()
             raise
 
     def record_result_received(self) -> None:
-        with self._operation._open_repository_access():
-            self._delegate.record_result_received()
+        try:
+            with self._operation._open_repository_access():
+                self._delegate.record_result_received()
+        except BaseException as exc:
+            if self._operation._preserves_guard_failure(exc):
+                self._operation._defer_cleanup()
+            raise
 
     def accept(self) -> None:
         preserve = False
@@ -138,6 +158,8 @@ class _TrackedReferenceReadInvocation:
                 self._delegate.accept()
         except BaseException as exc:
             preserve = self._operation._preserves_guard_failure(exc)
+            if preserve:
+                self._operation._defer_cleanup()
             raise
         finally:
             if not preserve:
@@ -152,6 +174,8 @@ class _TrackedReferenceReadInvocation:
                 self._delegate.terminate(outcome)
         except BaseException as exc:
             preserve = self._operation._preserves_guard_failure(exc)
+            if preserve:
+                self._operation._defer_cleanup()
             raise
         finally:
             if not preserve:
@@ -160,8 +184,18 @@ class _TrackedReferenceReadInvocation:
     def _mark_terminal(self) -> None:
         if self._terminal:
             return
+        self._close_transient_content()
         self._terminal = True
         self._operation._retire_invocation(self)
+
+    def _close_transient_content(self) -> None:
+        """Idempotently close every public result retained before guard exit."""
+
+        with self._results_lock:
+            results = tuple(self._results)
+            self._results.clear()
+        for result in results:
+            result.close()
 
 
 class RuntimeReferenceOperation:
@@ -169,13 +203,16 @@ class RuntimeReferenceOperation:
 
     __slots__ = (
         "_authorization",
+        "_cleanup_pending",
         "_finished",
+        "_guarded",
         "_lock",
         "_next_ordinal",
         "_pending",
         "_repository",
         "_repository_access",
         "_provider_text",
+        "_reference_proofs",
         "_source_text",
         "operation_id",
         "session_id",
@@ -206,7 +243,7 @@ class RuntimeReferenceOperation:
             raise ValueError("reference operation identity and authorization differ")
         if bool(batch is not None and batch.references) != (authorization is not None):
             raise ValueError("reference operation capture does not match its batch")
-        self._repository = repository
+        self._repository: WritingArtifactRepository | None = repository
         self._repository_access: (
             Callable[[], AbstractContextManager[WritingArtifactRepository]] | None
         ) = None
@@ -215,9 +252,14 @@ class RuntimeReferenceOperation:
         self._provider_text = provider_text
         self.operation_id = operation_id
         self._authorization = authorization
+        self._reference_proofs = (
+            () if authorization is None else authorization.authorized_references
+        )
         self._next_ordinal = 1
         self._pending: dict[str, _TrackedReferenceReadInvocation] = {}
+        self._cleanup_pending = False
         self._finished = False
+        self._guarded = False
         self._lock = threading.RLock()
 
     @property
@@ -230,7 +272,7 @@ class RuntimeReferenceOperation:
 
     @property
     def has_references(self) -> bool:
-        return self._authorization is not None
+        return self.operation_id is not None
 
     @property
     def reference_proofs(self) -> tuple[AuthorizedArtifactReference, ...]:
@@ -242,15 +284,18 @@ class RuntimeReferenceOperation:
         this operation's private lifecycle state.
         """
 
-        authorization = self._authorization
-        if authorization is None:
-            return ()
-        return authorization.authorized_references
+        return self._reference_proofs
 
     @property
     def finished(self) -> bool:
         with self._lock:
             return self._finished
+
+    def cleanup_is_pending(self) -> bool:
+        """Return whether only content-free durable cleanup remains."""
+
+        with self._lock:
+            return self._cleanup_pending
 
     def begin_invocation(
         self,
@@ -261,11 +306,16 @@ class RuntimeReferenceOperation:
     ) -> ReferenceReadInvocation | None:
         """Allocate one fresh, ordinally contiguous provider-read coordinator."""
 
-        authorization = self._authorization
-        if authorization is None:
+        if self.operation_id is None:
             return None
         with self._lock:
-            if self._finished:
+            if self._finished or self._cleanup_pending:
+                raise ReferenceOperationFailure(
+                    self._required_operation_id(),
+                    ReferenceAuthorizationErrorCode.CLOSED,
+                )
+            authorization = self._authorization
+            if authorization is None:
                 raise ReferenceOperationFailure(
                     self._required_operation_id(),
                     ReferenceAuthorizationErrorCode.CLOSED,
@@ -282,12 +332,26 @@ class RuntimeReferenceOperation:
                 round_number=round_number,
                 attempt=1,
             )
-            delegate, action_failure = self._repository_action(
-                lambda: self._repository.begin_reference_invocation(
-                    authorization,
-                    correlation,
+            tracked: _TrackedReferenceReadInvocation | None = None
+
+            def publish(delegate: ReferenceReadInvocation) -> None:
+                nonlocal tracked
+                tracked = _TrackedReferenceReadInvocation(self, delegate)
+                self._pending[invocation_id] = tracked
+                self._next_ordinal += 1
+
+            try:
+                delegate, action_failure = self._repository_action(
+                    lambda: self._required_repository().begin_runtime_reference_invocation(
+                        authorization,
+                        correlation,
+                        on_created=publish,
+                    )
                 )
-            )
+            except BaseException as exc:
+                if self._preserves_guard_failure(exc):
+                    self._defer_cleanup_locked()
+                raise
             if action_failure is not None:
                 code = _failure_code(
                     action_failure,
@@ -296,9 +360,11 @@ class RuntimeReferenceOperation:
                 failure = self._fail_locked(code)
                 raise failure from action_failure
             assert delegate is not None
-            tracked = _TrackedReferenceReadInvocation(self, delegate)
-            self._pending[invocation_id] = tracked
-            self._next_ordinal += 1
+            if tracked is None:
+                failure = self._fail_locked(
+                    ReferenceAuthorizationErrorCode.WORKFLOW_FAILURE
+                )
+                raise failure
             return tracked
 
     def terminate_invocation(
@@ -319,7 +385,7 @@ class RuntimeReferenceOperation:
     def finish(self) -> None:
         """Accept this operation once after all provider invocations completed."""
 
-        if self._authorization is None:
+        if self.operation_id is None:
             return
         with self._lock:
             if self._finished:
@@ -327,23 +393,43 @@ class RuntimeReferenceOperation:
                     self._required_operation_id(),
                     ReferenceAuthorizationErrorCode.CLOSED,
                 )
+            if self._cleanup_pending:
+                raise ReferenceOperationFailure(
+                    self._required_operation_id(),
+                    ReferenceAuthorizationErrorCode.WORKFLOW_FAILURE,
+                )
             if self._pending:
                 failure = self._fail_locked(
                     ReferenceAuthorizationErrorCode.INVALID_TRANSITION
                 )
                 raise failure
-            _, action_failure = self._repository_action(
-                lambda: self._repository.finish_reference_operation(
-                    self._authorization,
-                    outcome=None,
+            authorization = self._authorization
+            if authorization is None:
+                self._defer_cleanup_locked()
+                raise ReferenceOperationFailure(
+                    self._required_operation_id(),
+                    ReferenceAuthorizationErrorCode.CLOSED,
                 )
-            )
+            try:
+                _, action_failure = self._repository_action(
+                    lambda: self._required_repository().finish_reference_operation(
+                        authorization,
+                        outcome=None,
+                    )
+                )
+            except BaseException as exc:
+                if self._preserves_guard_failure(exc):
+                    self._defer_cleanup_locked()
+                raise
             if action_failure is not None:
-                self._finished = True
                 code = _failure_code(
                     action_failure,
                     ReferenceAuthorizationErrorCode.WORKFLOW_FAILURE,
                 )
+                if self._durably_terminal_locked():
+                    self._finished = True
+                else:
+                    self._defer_cleanup_locked()
                 raise ReferenceOperationFailure(
                     self._required_operation_id(),
                     code,
@@ -360,12 +446,16 @@ class RuntimeReferenceOperation:
     ) -> ReferenceOperationFailure | None:
         """Terminate unfinished state and return one safe structured failure."""
 
-        if self._authorization is None:
+        if self.operation_id is None:
             return None
         preserve_guard_failure = self._preserves_guard_failure(failure)
         code = _failure_code(failure, default)
         with self._lock:
             if self._finished:
+                if preserve_guard_failure:
+                    raise failure
+                return ReferenceOperationFailure(self._required_operation_id(), code)
+            if self._cleanup_pending:
                 if preserve_guard_failure:
                     raise failure
                 return ReferenceOperationFailure(self._required_operation_id(), code)
@@ -379,41 +469,117 @@ class RuntimeReferenceOperation:
         code: ReferenceAuthorizationErrorCode,
     ) -> ReferenceOperationFailure:
         operation_id = self._required_operation_id()
-        guard_failure: BaseException | None = None
         pending = tuple(self._pending.values())
         for invocation in pending:
             try:
                 invocation.terminate(code)
             except BaseException as exc:
                 if self._preserves_guard_failure(exc):
-                    if not invocation._terminal:
-                        raise
-                    if guard_failure is None:
-                        guard_failure = exc
+                    self._defer_cleanup_locked()
+                    raise
                 else:
                     code = _failure_code(exc, code)
         entered = False
         try:
             with self._open_repository_access():
                 entered = True
-                self._repository.finish_reference_operation(
-                    self._authorization,
+                authorization = self._authorization
+                if authorization is None:
+                    raise ReferenceAuthorizationError(
+                        ReferenceAuthorizationErrorCode.CLOSED
+                    )
+                self._required_repository().finish_reference_operation(
+                    authorization,
                     outcome=code,
                 )
         except BaseException as exc:
             if self._preserves_guard_failure(exc):
-                if not entered:
-                    if guard_failure is not None:
-                        raise guard_failure
-                    raise
-                if guard_failure is None:
-                    guard_failure = exc
+                self._defer_cleanup_locked()
+                raise
             else:
                 code = _failure_code(exc, code)
-        self._finished = True
-        if guard_failure is not None:
-            raise guard_failure
+        if entered and self._durably_terminal_locked():
+            self._finished = True
+        else:
+            self._defer_cleanup_locked()
         return ReferenceOperationFailure(operation_id, code)
+
+    def reconcile_cleanup(self, repository: WritingArtifactRepository) -> None:
+        """Reconcile through fresh access without accepting its outer postcheck."""
+
+        if type(repository) is not WritingArtifactRepository:
+            raise TypeError("repository must be a WritingArtifactRepository")
+        if self.operation_id is None:
+            return
+        with self._lock:
+            if self._finished:
+                return
+            self._reconcile_cleanup_locked(repository)
+
+    def _reconcile_cleanup_locked(
+        self,
+        repository: WritingArtifactRepository,
+    ) -> None:
+        self._defer_cleanup_locked()
+        terminal = repository.reconcile_reference_operation(
+            self.session_id,
+            self._required_operation_id(),
+        )
+        if not terminal:
+            raise ReferenceOperationFailure(
+                self._required_operation_id(),
+                ReferenceAuthorizationErrorCode.WORKFLOW_FAILURE,
+            )
+
+    def complete_reconciled_cleanup(self) -> None:
+        """Mark cleanup complete after fresh guarded access passes postchecks."""
+
+        with self._lock:
+            if self._finished:
+                return
+            if not self._cleanup_pending:
+                raise ReferenceOperationFailure(
+                    self._required_operation_id(),
+                    ReferenceAuthorizationErrorCode.INVALID_TRANSITION,
+                )
+            self._cleanup_pending = False
+            self._finished = True
+
+    def _durably_terminal_locked(self) -> bool:
+        try:
+            history, failure = self._repository_action(
+                lambda: self._required_repository().inspect_reference_operation(
+                    self._required_operation_id()
+                )
+            )
+        except BaseException as exc:
+            if self._preserves_guard_failure(exc):
+                self._defer_cleanup_locked()
+            raise
+        if failure is not None or history is None:
+            return False
+        return history.operation_events[-1].operation_state in {
+            ReferenceOperationState.ACCEPTED,
+            ReferenceOperationState.TERMINATED,
+        }
+
+    def _defer_cleanup(self) -> None:
+        with self._lock:
+            self._defer_cleanup_locked()
+
+    def _defer_cleanup_locked(self) -> None:
+        if self._finished or self.operation_id is None:
+            return
+        for invocation in tuple(self._pending.values()):
+            invocation._close_transient_content()
+        self._pending.clear()
+        authorization = self._authorization
+        if authorization is not None:
+            authorization.close()
+            self._authorization = None
+        self._repository = None
+        self._repository_access = None
+        self._cleanup_pending = True
 
     def _retire_invocation(
         self,
@@ -428,6 +594,14 @@ class RuntimeReferenceOperation:
     def _required_operation_id(self) -> str:
         assert self.operation_id is not None
         return self.operation_id
+
+    def _required_repository(self) -> WritingArtifactRepository:
+        repository = self._repository
+        if repository is None:
+            raise ReferenceAuthorizationError(
+                ReferenceAuthorizationErrorCode.CLOSED
+            )
+        return repository
 
     def _repository_action(
         self,
@@ -446,7 +620,7 @@ class RuntimeReferenceOperation:
     def _preserves_guard_failure(self, failure: BaseException) -> bool:
         """Return whether guarded access requires verbatim failure propagation."""
 
-        return self._repository_access is not None and isinstance(
+        return self._guarded and isinstance(
             failure,
             SessionArtifactGuardFailure,
         )
@@ -455,7 +629,7 @@ class RuntimeReferenceOperation:
     def _open_repository_access(self) -> Iterator[WritingArtifactRepository]:
         access = self._repository_access
         if access is None:
-            yield self._repository
+            yield self._required_repository()
             return
         with access() as repository:
             if repository is not self._repository:
@@ -501,7 +675,49 @@ def prepare_guarded_runtime_reference_operation(
             session_id=session_id,
             text=text,
             repository_access=repository_access,
+            operation_created=None,
         )
+
+
+def prepare_registered_guarded_runtime_reference_operation(
+    repository_access: Callable[
+        [], AbstractContextManager[WritingArtifactRepository]
+    ],
+    *,
+    session_id: str,
+    text: str,
+    register: Callable[[RuntimeReferenceOperation], None],
+) -> RuntimeReferenceOperation:
+    """Publish captured authority to its runtime owner before guard exit."""
+
+    if not callable(repository_access):
+        raise TypeError("repository_access must be callable")
+    if not callable(register):
+        raise TypeError("register must be callable")
+    operation: RuntimeReferenceOperation | None = None
+
+    def publish(created: RuntimeReferenceOperation) -> None:
+        nonlocal operation
+        operation = created
+        register(created)
+
+    try:
+        with repository_access() as repository:
+            if type(repository) is not WritingArtifactRepository:
+                raise TypeError(
+                    "repository access must yield a WritingArtifactRepository"
+                )
+            return _prepare_runtime_reference_operation(
+                repository,
+                session_id=session_id,
+                text=text,
+                repository_access=repository_access,
+                operation_created=publish,
+            )
+    except BaseException as exc:
+        if operation is not None and operation._preserves_guard_failure(exc):
+            operation._defer_cleanup()
+        raise
 
 
 def _prepare_runtime_reference_operation(
@@ -512,6 +728,7 @@ def _prepare_runtime_reference_operation(
     repository_access: Callable[
         [], AbstractContextManager[WritingArtifactRepository]
     ] | None,
+    operation_created: Callable[[RuntimeReferenceOperation], None] | None = None,
 ) -> RuntimeReferenceOperation:
     """Implement public and package-internal reference preparation."""
 
@@ -528,6 +745,7 @@ def _prepare_runtime_reference_operation(
             authorization=None,
         )
         operation._repository_access = repository_access
+        operation._guarded = repository_access is not None
         return operation
     batch = parse_artifact_references(text)
     if not batch.references:
@@ -541,13 +759,39 @@ def _prepare_runtime_reference_operation(
             authorization=None,
         )
         operation._repository_access = repository_access
+        operation._guarded = repository_access is not None
         return operation
     operation_id = _operation_id(session_id)
-    try:
-        authorization = repository.capture_reference_authorization(
-            operation_id=operation_id,
+    operation: RuntimeReferenceOperation | None = None
+
+    def publish(authorization: ReferenceAuthorization) -> None:
+        nonlocal operation
+        operation = RuntimeReferenceOperation(
+            repository,
+            session_id=session_id,
             batch=batch,
+            source_text=batch.source_text,
+            provider_text=batch.provider_text,
+            operation_id=operation_id,
+            authorization=authorization,
         )
+        operation._repository_access = repository_access
+        operation._guarded = repository_access is not None
+        if operation_created is not None:
+            operation_created(operation)
+
+    try:
+        if operation_created is None:
+            authorization = repository.capture_reference_authorization(
+                operation_id=operation_id,
+                batch=batch,
+            )
+        else:
+            authorization = repository.capture_runtime_reference_authorization(
+                operation_id=operation_id,
+                batch=batch,
+                on_created=publish,
+            )
     except ReferenceAuthorizationError as exc:
         raise ReferenceOperationFailure(operation_id, exc.code) from exc
     except BaseException as exc:
@@ -565,14 +809,16 @@ def _prepare_runtime_reference_operation(
             operation_id,
             ReferenceAuthorizationErrorCode.WORKFLOW_FAILURE,
         )
-    operation = RuntimeReferenceOperation(
-        repository,
-        session_id=session_id,
-        batch=batch,
-        source_text=batch.source_text,
-        provider_text=batch.provider_text,
-        operation_id=operation_id,
-        authorization=authorization,
-    )
-    operation._repository_access = repository_access
+    if operation is None:
+        operation = RuntimeReferenceOperation(
+            repository,
+            session_id=session_id,
+            batch=batch,
+            source_text=batch.source_text,
+            provider_text=batch.provider_text,
+            operation_id=operation_id,
+            authorization=authorization,
+        )
+        operation._repository_access = repository_access
+        operation._guarded = repository_access is not None
     return operation
