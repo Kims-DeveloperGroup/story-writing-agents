@@ -983,6 +983,17 @@ reads; recovery uses the same intentional-staged topology while classifying or
 advancing a staged operation, so ordinary READY's clean-index rule does not
 misclassify the service's own exact staging.
 
+Terminal story-commit inspection and recovery are read-only with respect to
+session history and require the current session to remain READY. A historical
+`committed` record does not require its commit to remain current `HEAD`: the
+recorded commit must exactly match its candidate's tree, sole parent, and
+message, and it must equal or be an ancestor of the current READY branch tip.
+A reset away from that commit, divergent history, a missing commit, or any
+candidate mismatch fails `recovery_required`. Historical `rejected` and
+`recovery_required` records remain immutable inspectable terminal evidence
+under current READY. Neither `inspect()` nor `recover()` writes or advances a
+terminal record.
+
 For a runtime-composed identity-bound service, inspection and recovery require
 the original Apply worktree identity before and between their owner reads and
 before any monotonic history transition. If that root has been replaced, they

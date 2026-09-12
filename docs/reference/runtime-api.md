@@ -983,6 +983,15 @@ before every possible history transition. A replaced root returns
 `recovery_required`; neither method reports or advances a staged, committed,
 or other durable operation state from replacement resources.
 
+Terminal inspection and recovery require the current session to be READY but
+perform no history transition. A historical `committed` operation remains
+inspectable after later commits: its recorded commit must exactly match its
+candidate and equal or be an ancestor of the current READY branch tip, rather
+than remain current `HEAD`. Reset/divergence, a missing or mismatched commit,
+or candidate mismatch fails `recovery_required`. Historical `rejected` and
+`recovery_required` records likewise remain immutable inspectable terminal
+evidence under current READY.
+
 After a successful Apply result is durable, the runtime prepares and publishes
 its follow-on Commit request in a later step under the exact Apply binding.
 That live guard covers the request append and service registration, but if the

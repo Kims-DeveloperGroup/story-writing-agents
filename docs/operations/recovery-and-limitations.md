@@ -323,7 +323,7 @@ and [workspace composition](../reference/workspace-api.md#workspace-session-hist
 | Story commit `running` / `inspect` | Commit authority was consumed and intent was durable before staging, but the resulting index/branch state is not yet proved. | Call the internal recovery classifier once writers are stopped. Do not replay confirmation or execute again. It may classify exact staging, an exact committed tip, ambiguity, or recovery-required state. |
 | Checkpoint `running` / `inspect` | Intent is durable against one expected internal tip, but CAS completion is not proved. | Stop repository writers and call the internal checkpoint recovery classifier. Do not resubmit the delta, rerun `commit-tree`, or retry CAS. |
 | Story commit `staged` / `operator_recovery` | The branch remains at the old tip and index/worktree exactly match the candidate tree, but no commit is proved. | Preserve worktree, index, objects, and records. Inspect and recover explicitly; the service never automatically commits, resets, cleans, or restages. |
-| Story commit or checkpoint `committed` / `none` | The terminal record names the exact commit and corresponding branch/internal-ref tip. Recovery can reach this state when a correlated commit was already CAS-installed but result persistence/reporting failed. | Treat the returned existing object as the result after verification. Do not create a duplicate commit. |
+| Story commit or checkpoint `committed` / `none` | The terminal record names the exact commit. Story Commit permits that commit to equal or be an ancestor of the current READY branch tip after later valid commits; checkpoint rules retain their internal-ref correlation. Recovery can reach this state when a correlated commit was already CAS-installed but result persistence/reporting failed. | Treat the returned existing object as the result after verification. Do not create a duplicate commit. |
 | Operation `outcome_unknown` / `inspect` | Git may have mutated, or the branch/index/result cannot be classified exactly. | Preserve all records, index, refs, and objects. Inspect; only an exact correlated tip may advance the same record to `committed`. Otherwise retain ambiguity or require operator recovery. |
 | Operation `recovery_required` / `operator_recovery` | State is inconsistent, unsafe, substituted, or no longer automatically reconcilable. It is terminal. | Perform explicit operator recovery or restore a complete trusted backup. Never edit the record or delete/reset evidence to force another transition. |
 | Missing/noncanonical/oversized record, unexpected entry, alias, symlink, hard link, or failed fsync | The store cannot trust the addressed history boundary. | Stop all writers, retain exact bytes and metadata, and investigate offline. Do not normalize, replace, or follow the rejected path. |
@@ -348,6 +348,13 @@ For story commits specifically:
   `outcome_unknown`; this includes ambiguity while publishing the final
   `committed` record, which is durably downgraded to `outcome_unknown` when the
   phase can still be proved.
+- Terminal `inspect()` and `recover()` require current READY and never write or
+  advance history. A historical `committed` record remains valid when its
+  commit exactly matches its candidate and equals or is an ancestor of the
+  current READY branch tip. Resetting away, divergent ancestry, a missing or
+  mismatched commit, or candidate mismatch is `recovery_required`. Historical
+  `rejected` and `recovery_required` records remain immutable inspectable
+  evidence under current READY.
 
 - If interruption leaves `running` but the old branch tip and exact candidate
   index/worktree are present, `recover()` records/returns `staged` with

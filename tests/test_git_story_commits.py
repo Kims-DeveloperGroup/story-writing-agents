@@ -7,6 +7,7 @@ import os
 import pickle
 import unittest
 from concurrent.futures import ThreadPoolExecutor
+from dataclasses import replace
 from unittest import mock
 
 import story_writing_agents
@@ -23,6 +24,7 @@ from story_writing_agents.git.session_history_contracts import (
     GitSessionHistoryState,
 )
 from story_writing_agents.git.story_commit_contracts import (
+    StoryCommitApplicationEvidence,
     StoryCommitConfirmation,
     StoryCommitDecision,
     StoryCommitError,
@@ -31,8 +33,20 @@ from story_writing_agents.git.story_commit_contracts import (
     StoryCommitState,
 )
 from story_writing_agents.git.story_commits import StoryCommitService
+from story_writing_agents.workspace.schema import canonical_initializer_scaffold
+from story_writing_agents.writing_artifacts import (
+    ArtifactKind,
+    ArtifactReplaceOperation,
+    build_artifact_change_set,
+    canonical_artifact_kind,
+)
+from story_writing_agents.writing_artifacts.repository import WritingArtifactRepository
 
-from tests.test_git_story_commit_candidates import StoryCommitGitTestCase, manifest
+from tests.test_git_story_commit_candidates import (
+    StoryCommitGitTestCase,
+    manifest,
+    sha,
+)
 
 
 class StoryCommitServiceTests(StoryCommitGitTestCase):
@@ -57,6 +71,70 @@ class StoryCommitServiceTests(StoryCommitGitTestCase):
         )
         candidate = service.prepare(evidence, "Commit exact change", ("impact",))
         return root, session_root, service, candidate
+
+    def apply_followup(
+        self,
+        session_root,
+        *,
+        suffix: str,
+    ) -> StoryCommitApplicationEvidence:
+        path = "core_documents/global_outline.md"
+        base = {
+            item.path: (session_root / item.path).read_bytes()
+            for item in canonical_initializer_scaffold()
+            if canonical_artifact_kind(item.path) is not None
+        }
+        after = f"Follow-up scene {suffix}.\n".encode()
+        change_set = build_artifact_change_set(
+            base,
+            (
+                ArtifactReplaceOperation(
+                    path,
+                    ArtifactKind.CORE_DOCUMENT,
+                    sha(base[path]),
+                    after,
+                    sha(after),
+                ),
+            ),
+        )
+        (session_root / path).write_bytes(after)
+        WritingArtifactRepository(session_root).list_paths()
+        return StoryCommitApplicationEvidence(
+            "novel",
+            f"application:{suffix}",
+            f"proposal:{suffix}",
+            f"correlation:{suffix}",
+            change_set,
+            change_set.projected_state_digest,
+        )
+
+    def assert_terminal_reads_do_not_mutate(
+        self,
+        service,
+        operation_id,
+        *,
+        expected=None,
+        failure_code=None,
+    ) -> None:
+        with mock.patch.object(
+            commits_module,
+            "advance_commit_operation",
+            wraps=commits_module.advance_commit_operation,
+        ) as advance, mock.patch.object(
+            GitSessionHistory,
+            "write_commit_operation",
+            autospec=True,
+        ) as write:
+            for action in (service.inspect, service.recover):
+                with self.subTest(action=action.__name__):
+                    if failure_code is None:
+                        self.assertEqual(action(operation_id), expected)
+                    else:
+                        with self.assertRaises(StoryCommitError) as caught:
+                            action(operation_id)
+                        self.assertIs(caught.exception.code, failure_code)
+            advance.assert_not_called()
+            write.assert_not_called()
 
     @staticmethod
     def confirmation(candidate, decision=StoryCommitDecision.COMMIT, suffix="1"):
@@ -628,6 +706,147 @@ class StoryCommitServiceTests(StoryCommitGitTestCase):
         self.assertIs(recovered.state, StoryCommitState.COMMITTED)
         self.assertIsNotNone(recovered.commit_id)
         self.assertEqual(restarted.inspect(operation_id), recovered)
+
+    def test_historical_committed_remains_read_only_after_later_commit(self) -> None:
+        for algorithm in ("sha1", "sha256"):
+            with self.subTest(algorithm=algorithm):
+                root, session_root, evidence = self.applied_replace(
+                    f"historical-committed-{algorithm}",
+                    object_format=algorithm,
+                )
+                first_service = StoryCommitService(root, manifest(), "novel")
+                first_candidate = first_service.prepare(
+                    evidence,
+                    "Commit generation A",
+                    ("generation A",),
+                )
+                first = first_service.execute(
+                    first_service.authorize(
+                        first_candidate,
+                        self.confirmation(first_candidate, suffix=f"A-{algorithm}"),
+                    )
+                )
+                followup = self.apply_followup(
+                    session_root,
+                    suffix=f"B-{algorithm}",
+                )
+                second_service = StoryCommitService(root, manifest(), "novel")
+                second_candidate = second_service.prepare(
+                    followup,
+                    "Commit generation B",
+                    ("generation B",),
+                )
+                second = second_service.execute(
+                    second_service.authorize(
+                        second_candidate,
+                        self.confirmation(second_candidate, suffix=f"B-{algorithm}"),
+                    )
+                )
+                self.assertIs(first.state, StoryCommitState.COMMITTED)
+                self.assertIs(second.state, StoryCommitState.COMMITTED)
+                self.assertNotEqual(first.commit_id, second.commit_id)
+                self.assertEqual(
+                    self.run_git(session_root, "rev-parse", "HEAD")
+                    .stdout.strip()
+                    .decode(),
+                    second.commit_id,
+                )
+                self.assert_terminal_reads_do_not_mutate(
+                    StoryCommitService(root, manifest(), "novel"),
+                    first.operation_id,
+                    expected=first,
+                )
+
+    def test_terminal_committed_reset_away_fails_closed_without_history_mutation(
+        self,
+    ) -> None:
+        root, session_root, service, candidate = self.prepared(
+            "terminal-reset-away"
+        )
+        committed = service.execute(
+            service.authorize(
+                candidate,
+                self.confirmation(candidate, suffix="reset-away"),
+            )
+        )
+        self.run_git(session_root, "reset", "--hard", candidate.branch_tip)
+        self.assertNotEqual(
+            self.run_git(session_root, "rev-parse", "HEAD").stdout.strip().decode(),
+            committed.commit_id,
+        )
+        self.assert_terminal_reads_do_not_mutate(
+            StoryCommitService(root, manifest(), "novel"),
+            committed.operation_id,
+            failure_code=StoryCommitFailureCode.RECOVERY_REQUIRED,
+        )
+
+    def test_terminal_committed_candidate_mismatch_fails_closed_without_history_mutation(
+        self,
+    ) -> None:
+        root, session_root, service, candidate = self.prepared(
+            "terminal-candidate-mismatch"
+        )
+        committed = service.execute(
+            service.authorize(
+                candidate,
+                self.confirmation(candidate, suffix="candidate-mismatch"),
+            )
+        )
+        self.assertEqual(
+            self.run_git(session_root, "rev-parse", "HEAD").stdout.strip().decode(),
+            committed.commit_id,
+        )
+        mismatched = replace(candidate, proposed_message="Mismatched candidate")
+        with mock.patch.object(
+            commits_module,
+            "load_story_commit_candidate",
+            return_value=mismatched,
+        ):
+            self.assert_terminal_reads_do_not_mutate(
+                StoryCommitService(root, manifest(), "novel"),
+                committed.operation_id,
+                failure_code=StoryCommitFailureCode.RECOVERY_REQUIRED,
+            )
+
+    def test_historical_rejected_remains_read_only_after_later_commit(self) -> None:
+        root, session_root, evidence = self.applied_replace("historical-rejected")
+        first_service = StoryCommitService(root, manifest(), "novel")
+        rejected_candidate = first_service.prepare(
+            evidence,
+            "Reject generation A",
+            ("generation A",),
+        )
+        rejected = first_service.reject(
+            rejected_candidate,
+            self.confirmation(
+                rejected_candidate,
+                StoryCommitDecision.REJECT,
+                "reject-A",
+            ),
+        )
+        second_service = StoryCommitService(root, manifest(), "novel")
+        second_candidate = second_service.prepare(
+            evidence,
+            "Commit generation B",
+            ("generation B",),
+        )
+        committed = second_service.execute(
+            second_service.authorize(
+                second_candidate,
+                self.confirmation(second_candidate, suffix="commit-B"),
+            )
+        )
+        self.assertIs(rejected.state, StoryCommitState.REJECTED)
+        self.assertIs(committed.state, StoryCommitState.COMMITTED)
+        self.assertEqual(
+            self.run_git(session_root, "rev-parse", "HEAD").stdout.strip().decode(),
+            committed.commit_id,
+        )
+        self.assert_terminal_reads_do_not_mutate(
+            StoryCommitService(root, manifest(), "novel"),
+            rejected.operation_id,
+            expected=rejected,
+        )
 
 
 if __name__ == "__main__":

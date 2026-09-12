@@ -511,9 +511,7 @@ class StoryCommitService:
             self._require_recovery_bound_session_root()
             operation = self._read_operation(operation_id)
             self._require_recovery_bound_session_root()
-            self._require_recovery_semantic_ready(
-                expected_branch_tip=_stable_operation_tip(operation),
-            )
+            self._require_recovery_semantic_ready()
             candidate = load_story_commit_candidate(
                 self._root,
                 self._manifest,
@@ -522,9 +520,7 @@ class StoryCommitService:
                 allowed_worktree_changes=self._allowed_worktree_changes,
             )
             self._require_recovery_bound_session_root()
-            self._require_recovery_semantic_ready(
-                expected_branch_tip=_stable_operation_tip(operation),
-            )
+            self._require_recovery_operation_ready(operation, candidate)
             return _operation_result(candidate, operation)
         except StoryCommitError:
             self._require_recovery_bound_session_root()
@@ -538,9 +534,7 @@ class StoryCommitService:
             self._require_recovery_bound_session_root()
             operation = self._read_operation(operation_id)
             self._require_recovery_bound_session_root()
-            self._require_recovery_semantic_ready(
-                expected_branch_tip=_stable_operation_tip(operation),
-            )
+            self._require_recovery_semantic_ready()
             candidate = load_story_commit_candidate(
                 self._root,
                 self._manifest,
@@ -549,9 +543,7 @@ class StoryCommitService:
                 allowed_worktree_changes=self._allowed_worktree_changes,
             )
             self._require_recovery_bound_session_root()
-            self._require_recovery_semantic_ready(
-                expected_branch_tip=_stable_operation_tip(operation),
-            )
+            self._require_recovery_semantic_ready()
             with open_git_session_history(
                 self._root,
                 self._manifest,
@@ -562,21 +554,18 @@ class StoryCommitService:
                 recovery_main_status_sha256 = self._main_status_sha256()
                 self._require_recovery_bound_session_root()
                 operation = history.read_commit_operation(operation_id)
-                ready = history.require_semantic_ready(
-                    expected_branch_tip=_stable_operation_tip(operation),
-                )
+                ready = history.require_semantic_ready()
                 self._require_recovery_bound_session_root()
                 if operation.state in {
                     GitSessionHistoryState.COMMITTED,
                     GitSessionHistoryState.REJECTED,
                     GitSessionHistoryState.RECOVERY_REQUIRED,
                 }:
-                    history.require_semantic_ready(
-                        expected_branch_tip=(
-                            operation.commit_id
-                            if operation.state is GitSessionHistoryState.COMMITTED
-                            else operation.expected_branch_tip
-                        )
+                    self._require_terminal_operation_ready(
+                        history,
+                        ready,
+                        operation,
+                        candidate,
                     )
                     self._require_recovery_bound_session_root()
                     return _operation_result(candidate, operation)
@@ -1203,11 +1192,7 @@ class StoryCommitService:
             }.get(exc.code, StoryCommitFailureCode.HISTORY_FAILED)
             raise _error(code) from None
 
-    def _require_recovery_semantic_ready(
-        self,
-        *,
-        expected_branch_tip: str | None,
-    ) -> None:
+    def _require_recovery_semantic_ready(self) -> None:
         """Require current session semantics before an inspect/recover boundary."""
 
         try:
@@ -1218,8 +1203,39 @@ class StoryCommitService:
                 self._session_id,
                 allowed_worktree_changes=self._allowed_worktree_changes,
             ) as history:
-                history.require_semantic_ready(
-                    expected_branch_tip=expected_branch_tip,
+                history.require_semantic_ready()
+            self._require_recovery_bound_session_root()
+        except StoryCommitError:
+            raise
+        except GitSessionHistoryError as exc:
+            code = (
+                StoryCommitFailureCode.RECOVERY_REQUIRED
+                if exc.code is GitSessionHistoryFailureCode.RECOVERY_REQUIRED
+                else StoryCommitFailureCode.HISTORY_FAILED
+            )
+            raise _error(code) from None
+
+    def _require_recovery_operation_ready(
+        self,
+        operation: GitSessionCommitOperationRecord,
+        candidate: StoryCommitCandidate,
+    ) -> None:
+        """Require current READY semantics and exact terminal commit ancestry."""
+
+        try:
+            self._require_recovery_bound_session_root()
+            with open_git_session_history(
+                self._root,
+                self._manifest,
+                self._session_id,
+                allowed_worktree_changes=self._allowed_worktree_changes,
+            ) as history:
+                ready = history.require_semantic_ready()
+                self._require_terminal_operation_ready(
+                    history,
+                    ready,
+                    operation,
+                    candidate,
                 )
             self._require_recovery_bound_session_root()
         except StoryCommitError:
@@ -1231,6 +1247,36 @@ class StoryCommitService:
                 else StoryCommitFailureCode.HISTORY_FAILED
             )
             raise _error(code) from None
+
+    def _require_terminal_operation_ready(
+        self,
+        history: GitSessionHistory,
+        ready: GitSessionResourceInspection,
+        operation: GitSessionCommitOperationRecord,
+        candidate: StoryCommitCandidate,
+    ) -> None:
+        """Validate a terminal operation against the current READY branch."""
+
+        if operation.state is not GitSessionHistoryState.COMMITTED:
+            history.require_semantic_ready()
+            return
+        commit_id = operation.commit_id
+        current_tip = ready.current_branch_tip
+        if commit_id is None or current_tip is None:
+            raise _error(StoryCommitFailureCode.RECOVERY_REQUIRED)
+        root = _session_root(self._root, self._session_id)
+        identity = self._session_root_identity(root)
+        runner = GitProcessRunner(root)
+        if not _commit_matches(runner, identity, commit_id, candidate) or not (
+            _commit_is_equal_or_ancestor(
+                runner,
+                identity,
+                commit_id,
+                current_tip,
+            )
+        ):
+            raise _error(StoryCommitFailureCode.RECOVERY_REQUIRED)
+        history.require_semantic_ready(expected_branch_tip=current_tip)
 
     def _preserve_uncertain(
         self,
@@ -1400,6 +1446,24 @@ def _commit_matches(
         return False
 
 
+def _commit_is_equal_or_ancestor(
+    runner: GitProcessRunner,
+    identity: tuple[int, int],
+    commit_id: str,
+    current_tip: str,
+) -> bool:
+    """Return whether one exact commit is reachable from the current tip."""
+
+    if commit_id == current_tip:
+        return True
+    result = _run_allowing_difference(
+        runner,
+        identity,
+        ("merge-base", "--is-ancestor", commit_id, current_tip),
+    )
+    return result.returncode == 0
+
+
 def _registered_worktree_matches(
     content: bytes,
     expected_root: Path,
@@ -1433,21 +1497,6 @@ def _registered_worktree_matches(
         and matches[0].get(b"branch")
         == f"refs/heads/{expected_branch}".encode("ascii")
     )
-
-
-def _stable_operation_tip(
-    operation: GitSessionCommitOperationRecord,
-) -> str | None:
-    """Return an exact branch tip only for operation states that pin one."""
-
-    if operation.state is GitSessionHistoryState.COMMITTED:
-        return operation.commit_id
-    if operation.state in {
-        GitSessionHistoryState.REJECTED,
-        GitSessionHistoryState.RECOVERY_REQUIRED,
-    }:
-        return operation.expected_branch_tip
-    return None
 
 
 def _index_matches_tree(
