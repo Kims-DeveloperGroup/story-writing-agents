@@ -561,8 +561,13 @@ or concurrent specialist execution never holds this lease; the next
 filesystem action reacquires and rechecks it. The binding supplies a writing-
 artifact repository rooted at and pinned to that session worktree only through
 the guard's live access object. The binding itself has no repository property,
-and access to the repository, resources, or duplicated root descriptor expires
-when the guard exits. Exit revalidation runs after success, error, and
+but it owns one stable exact repository object. Every repository transaction
+requires live access on the calling thread and semantic READY validation before
+and after; retaining the raw object or moving it to another thread grants no
+authority. Same-thread nested guards yield the current access, while long-lived
+reference/source adapters reacquire access per operation. Access to the
+repository, resources, or duplicated root descriptor expires when the outer
+guard exits. Every nested and outer exit revalidates after success, error, and
 cancellation. Binding loss found there dominates an earlier body failure;
 otherwise the original body failure is preserved.
 Binding itself performs no artifact I/O, provisioning, provider call, or global
@@ -919,12 +924,16 @@ Artifact application operations normalize as follows:
 
 Authorize revalidates the process-local binding before minting one-use
 authority. Execute consumes that authority, takes the common-Git/session-history
-lease, independently requires the exact READY session resources, revalidates
-again, and rechecks the Apply-bound physical root before durable start and each
-Git mutation phase. A replacement found before `RUNNING` is candidate drift and
-requires repreparation; after `RUNNING`, any such failure is preserved as an
-uncertain operation requiring inspection. Execution then follows this fixed
-order:
+lease, independently requires the exact READY session resources, and places
+semantic READY and Apply-root checks around durable observations and
+transitions. Before intentional staging, READY requires the clean index. After
+staging, phase-aware checks instead require the exact candidate index/worktree,
+branch and internal-ref tips, registered session worktree, main HEAD/status,
+and physical roots. READY/history resource loss detected before the `RUNNING`
+record is durable maps to `recovery_required`; ambiguity afterward is
+`outcome_unknown`. Candidate/root replacement found before execution remains
+candidate drift and requires
+repreparation. Execution then follows this fixed order:
 
 ```text
 publish and fsync RUNNING operation evidence
@@ -941,6 +950,10 @@ publish and fsync RUNNING operation evidence
    internal ref; literal targeting leaves main index and unrelated bytes alone
 -> publish and fsync COMMITTED evidence with the commit ID
 ```
+
+If final COMMITTED publication fails after the branch update, the service
+records `outcome_unknown` for the same operation when it can still prove the
+phase-specific topology. It never reports an unproved commit as completed.
 
 The branch update is compare-and-swap; it cannot silently replace a moved tip.
 The commit has exactly one parent, exact expected tree/message, no hook/signing/
@@ -963,6 +976,12 @@ state/recovery action, branch/tip, and optional committed object ID. Inspection
 reads durable evidence only. Recovery performs read-only Git classification
 plus monotonic history updates; it never resets the real index, stages again,
 reuses authority/confirmation, or creates a commit.
+
+Execution, inspection, and recovery keep their semantic checkpoints inside the
+live session-history lease. Inspection and recovery check READY around owner
+reads; recovery uses the same intentional-staged topology while classifying or
+advancing a staged operation, so ordinary READY's clean-index rule does not
+misclassify the service's own exact staging.
 
 For a runtime-composed identity-bound service, inspection and recovery require
 the original Apply worktree identity before and between their owner reads and

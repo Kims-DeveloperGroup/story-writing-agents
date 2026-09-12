@@ -187,10 +187,14 @@ inspection. Each repository or session-state action holds the cooperating-
 runtime Git lease only for its short synchronous body, checking semantic READY
 and the named root before and after it. No such guard spans a provider await or
 concurrent specialist execution; a later action reacquires it. The binding
-keeps its repository private and exposes it only through live access inside the
-guard. Exit revalidation runs on success, error, and cancellation. When both
-the body and exit fail, binding loss takes precedence; otherwise the original
-error or cancellation survives. Conversation history remains in its separately
+keeps one stable exact repository private and exposes it only through live
+same-thread access. Every transaction requires that access and its own
+before/after READY checks, so a retained raw repository or cross-thread use
+fails. Same-thread nested access is reentrant; long-lived reference/source
+adapters reacquire a guard for each operation. Exit revalidation runs on
+success, error, and cancellation. When both the body and exit fail, binding
+loss takes precedence; otherwise the original error or cancellation survives.
+Conversation history remains in its separately
 configured control-plane store. Absent
 resources are not provisioned; moved, mismatched, staged, or otherwise
 non-ready resources do not fall back to
@@ -201,7 +205,11 @@ Session-state source paths must be canonical relative POSIX text, and each leaf
 must remain one singly linked regular file throughout the read. Symlinks,
 FIFOs, devices, hard links, replacement or metadata drift, and embedded
 session/debate/agent ownership that disagrees with the requested path all fail
-closed without exposing the replacement as evidence.
+closed without exposing the replacement as evidence. Compound agent-state and
+debate reads additionally pin the intermediate parent descriptor and compare
+the exact whole inventory—names plus device, inode, type, link count, size,
+nanosecond modification time, and nanosecond change time—before returning.
+Parent swaps and added, removed, or changed entries therefore fail closed.
 
 The common-Git lease coordinates this runtime's cooperating operations only.
 Persistent external Git drift is rejected by the before/after or next-action
@@ -222,19 +230,30 @@ authoritative history and inspect any uncertain application before another
 write. Commit remains a separate decision. Its runtime-composed service carries
 the Apply worktree's physical identity through request preparation,
 authorization, and execution while independently revalidating semantic READY.
-Replacement before the durable Commit operation starts requires repreparation;
-replacement after `running` is recorded leaves an uncertain operation to
-inspect.
+Runtime also reopens the Apply binding around the `story_commit_request` append
+and in-memory service registration. Detected binding loss suppresses the
+returned request and removes the in-memory service, but cannot roll back an
+already-durable append. Commit execution/inspection/recovery keeps the session-
+history lease around its semantic READY checkpoints and durable transitions.
+Before intentional staging it requires ordinary READY; afterward phase-aware
+checks require the exact candidate index/worktree and the complete registered
+session/main-root topology. READY/history resource loss detected before the
+`running` record is durable maps to `recovery_required`; any ambiguity after
+that record is durable maps to `outcome_unknown`. Candidate/root replacement
+before execution still requires
+repreparation. Failure to publish the final `committed` transition durably
+preserves `outcome_unknown` when exact phase authority can be proved.
 
 Identity-bound Commit `inspect()` and `recover()` check the Apply root before
 and between durable-owner observations and immediately before any recovery
 transition. Replacement becomes `recovery_required`; neither path advances an
 operation from facts read through the replacement.
 
-If Apply-result publication succeeds but the later Commit-request preparation
-or publication fails, the Apply result remains authoritative and no Commit is
-authorized. The current history has no dedicated durable state for that post-
-Apply Commit-request failure; operators must inspect before preparing again.
+If Apply-result publication succeeds but the later Commit-request preparation,
+publication, or service registration fails, the Apply result remains
+authoritative and no Commit is authorized. The current history has no dedicated
+durable state, schema field, or restart projection for that post-Apply Commit-
+request failure; operators must inspect before preparing again.
 [Issue #662](https://github.com/Kims-DeveloperGroup/story-writing-agents/issues/662)
 tracks that separate state-machine work and remains outside this change.
 
@@ -318,6 +337,17 @@ or cleanup. Process exit, session pause/close, and a later successful operation
 do not erase earlier evidence.
 
 For story commits specifically:
+
+- Execution, inspection, and recovery place semantic READY checks before and
+  after durable history observations/transitions while the session-history
+  lease is live. Once the candidate is intentionally staged, exact phase
+  topology replaces the ordinary clean-index READY assertion; unrelated
+  staging, worktree/ref drift, or registration/main-root drift fails closed.
+- A READY/history resource failure before a `running` operation is durable is
+  `recovery_required`. Once `running` is durable, an unproved outcome is
+  `outcome_unknown`; this includes ambiguity while publishing the final
+  `committed` record, which is durably downgraded to `outcome_unknown` when the
+  phase can still be proved.
 
 - If interruption leaves `running` but the old branch tip and exact candidate
   index/worktree are present, `recover()` records/returns `staged` with

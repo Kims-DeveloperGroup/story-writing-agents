@@ -1373,6 +1373,84 @@ class SessionSourceWorkspace(Workspace):
                 os.close(descriptor)
             os.close(directory)
 
+    @classmethod
+    def _verify_directory_at(
+        cls,
+        root: int,
+        relative: str,
+        descriptor: int,
+        inventory: tuple[tuple[str, tuple[int, int, int, int, int, int, int]], ...],
+    ) -> None:
+        """Require one retained directory and its exact leaf facts to persist."""
+
+        try:
+            rebound = cls._open_directory_at(root, relative)
+        except (FileNotFoundError, OSError):
+            raise WorkspaceSecurityError(
+                "session source directory identity changed"
+            ) from None
+        try:
+            opened = os.fstat(descriptor)
+            named = os.fstat(rebound)
+            if (
+                not stat.S_ISDIR(opened.st_mode)
+                or (opened.st_dev, opened.st_ino) != (named.st_dev, named.st_ino)
+                or cls._capture_directory_inventory(descriptor) != inventory
+            ):
+                raise WorkspaceSecurityError(
+                    "session source directory identity changed"
+                )
+        finally:
+            os.close(rebound)
+
+    @staticmethod
+    def _capture_directory_inventory(
+        descriptor: int,
+    ) -> tuple[tuple[str, tuple[int, int, int, int, int, int, int]], ...]:
+        """Capture names and identity/type/link/metadata facts through one parent."""
+
+        try:
+            names = tuple(sorted(os.listdir(descriptor)))
+            facts = []
+            for name in names:
+                observed = os.stat(
+                    name,
+                    dir_fd=descriptor,
+                    follow_symlinks=False,
+                )
+                facts.append(
+                    (
+                        name,
+                        (
+                            observed.st_dev,
+                            observed.st_ino,
+                            stat.S_IFMT(observed.st_mode),
+                            observed.st_nlink,
+                            observed.st_size,
+                            observed.st_mtime_ns,
+                            observed.st_ctime_ns,
+                        ),
+                    )
+                )
+            return tuple(facts)
+        except OSError:
+            raise WorkspaceSecurityError(
+                "session source directory inventory is unavailable"
+            ) from None
+
+    @classmethod
+    def _require_directory_absent_at(cls, root: int, relative: str) -> None:
+        try:
+            descriptor = cls._open_directory_at(root, relative)
+        except FileNotFoundError:
+            return
+        except OSError:
+            raise WorkspaceSecurityError(
+                "session source directory inventory is unavailable"
+            ) from None
+        os.close(descriptor)
+        raise WorkspaceSecurityError("session source directory inventory changed")
+
     @staticmethod
     def _require_unique_regular_file(
         opened: os.stat_result,
@@ -1435,50 +1513,54 @@ class SessionSourceWorkspace(Workspace):
                     relative_directory,
                 )
             except FileNotFoundError:
+                self._require_directory_absent_at(root, relative_directory)
                 return ()
             try:
-                names = os.listdir(directory)
+                inventory = self._capture_directory_inventory(directory)
+                ordered: list[tuple[str, str, int, int, AgentStateEntry]] = []
+                state_files = tuple(
+                    name for name, _fact in inventory if name.endswith(".jsonl")
+                )
+                for file_index, filename in enumerate(state_files):
+                    debate_id = filename[: -len(".jsonl")]
+                    self.validate_identifier(debate_id, label="debate ID")
+                    text = self._read_text_at(directory, filename)
+                    assert text is not None
+                    for line_number, line in enumerate(text.splitlines(), 1):
+                        try:
+                            raw = json.loads(line)
+                            value = self._validate_agent_state_entry(raw)
+                            if (
+                                value["agent_id"] != agent_id
+                                or value["session_id"] != session
+                                or value["debate_id"] != debate_id
+                            ):
+                                raise TypeError(
+                                    "agent state ownership does not match its path"
+                                )
+                            entry = AgentStateEntry(**value)
+                        except (json.JSONDecodeError, TypeError) as exc:
+                            raise WorkspaceFormatError(
+                                "invalid agent state entry in "
+                                f"{filename} at line {line_number}"
+                            ) from exc
+                        ordered.append(
+                            (
+                                entry.timestamp,
+                                debate_id,
+                                file_index,
+                                line_number,
+                                entry,
+                            )
+                        )
+                ordered.sort(key=lambda item: item[:4])
+                result = tuple(item[4] for item in ordered)
+                self._verify_directory_at(
+                    root, relative_directory, directory, inventory
+                )
+                return result
             finally:
                 os.close(directory)
-            ordered: list[tuple[str, str, int, int, AgentStateEntry]] = []
-            state_files = sorted(
-                name for name in names if name.endswith(".jsonl")
-            )
-            for file_index, filename in enumerate(state_files):
-                debate_id = filename[: -len(".jsonl")]
-                self.validate_identifier(debate_id, label="debate ID")
-                relative = f"{relative_directory}/{filename}"
-                text = self._read_text_at(root, relative)
-                assert text is not None
-                for line_number, line in enumerate(text.splitlines(), 1):
-                    try:
-                        raw = json.loads(line)
-                        value = self._validate_agent_state_entry(raw)
-                        if (
-                            value["agent_id"] != agent_id
-                            or value["session_id"] != session
-                            or value["debate_id"] != debate_id
-                        ):
-                            raise TypeError(
-                                "agent state ownership does not match its path"
-                            )
-                        entry = AgentStateEntry(**value)
-                    except (json.JSONDecodeError, TypeError) as exc:
-                        raise WorkspaceFormatError(
-                            "invalid agent state entry in "
-                            f"{filename} at line {line_number}"
-                        ) from exc
-                    ordered.append(
-                        (
-                            entry.timestamp,
-                            debate_id,
-                            file_index,
-                            line_number,
-                            entry,
-                        )
-                    )
-            ordered.sort(key=lambda item: item[:4])
-            return tuple(item[4] for item in ordered)
 
         return self._read_bound(read)
 
@@ -1491,113 +1573,143 @@ class SessionSourceWorkspace(Workspace):
             raise WorkspaceSecurityError("session source authority does not match")
 
         def read(root: int) -> dict[str, Any]:
-            prefix = f"discussion_logs/{session}/{debate}"
-            result_text = self._read_text_at(
-                root,
-                f"{prefix}.result.json",
-                missing_ok=True,
-            )
-            state_text = self._read_text_at(
-                root,
-                f"{prefix}.state.json",
-                missing_ok=True,
-            )
-            message_text = self._read_text_at(
-                root,
-                f"{prefix}.jsonl",
-                missing_ok=True,
-            )
+            relative_directory = f"discussion_logs/{session}"
+            directory: int | None = None
+            inventory: (
+                tuple[
+                    tuple[str, tuple[int, int, int, int, int, int, int]],
+                    ...,
+                ]
+                | None
+            ) = None
             try:
-                result = (
-                    None
-                    if result_text is None
-                    else self._validate_debate_result(json.loads(result_text))
-                )
-                state = (
-                    None
-                    if state_text is None
-                    else self._validate_debate_state(json.loads(state_text))
-                )
-                if result is not None:
-                    self._require_debate_ownership(
-                        result,
-                        session,
-                        debate,
-                        "result",
-                    )
-                if state is not None:
-                    self._require_debate_ownership(
-                        state,
-                        session,
-                        debate,
-                        "state",
-                    )
-            except json.JSONDecodeError as exc:
-                raise WorkspaceFormatError("invalid debate JSON state") from exc
-            messages: list[DebateMessage] = []
-            for line_number, line in enumerate(
-                (() if message_text is None else message_text.splitlines()),
-                1,
-            ):
                 try:
-                    value = json.loads(line)
-                    expected = {
-                        "sender",
-                        "phase",
-                        "round",
-                        "revision",
-                        "kind",
-                        "content",
-                        "timestamp",
-                    }
-                    if not isinstance(value, dict) or set(value) != expected:
-                        raise TypeError("debate log entry has an invalid schema")
-                    string_fields = expected.difference({"round"})
-                    if any(
-                        not isinstance(value[field], str)
-                        for field in string_fields
-                    ):
-                        raise TypeError("debate log string field has an invalid type")
-                    round_number = value["round"]
-                    if (
-                        isinstance(round_number, bool)
-                        or not isinstance(round_number, int)
-                        or round_number < 0
-                    ):
-                        raise TypeError(
-                            "debate log round must be a non-negative integer"
+                    directory = self._open_directory_at(root, relative_directory)
+                except FileNotFoundError:
+                    self._require_directory_absent_at(root, relative_directory)
+                    result_text = state_text = message_text = None
+                else:
+                    inventory = self._capture_directory_inventory(directory)
+                    result_text = self._read_text_at(
+                        directory, f"{debate}.result.json", missing_ok=True
+                    )
+                    state_text = self._read_text_at(
+                        directory, f"{debate}.state.json", missing_ok=True
+                    )
+                    message_text = self._read_text_at(
+                        directory, f"{debate}.jsonl", missing_ok=True
+                    )
+                try:
+                    result = (
+                        None
+                        if result_text is None
+                        else self._validate_debate_result(json.loads(result_text))
+                    )
+                    state = (
+                        None
+                        if state_text is None
+                        else self._validate_debate_state(json.loads(state_text))
+                    )
+                    if result is not None:
+                        self._require_debate_ownership(
+                            result,
+                            session,
+                            debate,
+                            "result",
                         )
-                    messages.append(DebateMessage(**value))
-                except (json.JSONDecodeError, TypeError) as exc:
-                    raise WorkspaceFormatError(
-                        f"invalid debate log entry at line {line_number}"
-                    ) from exc
-            if result is not None:
-                status = result["status"]
-                terminal = True
-            elif state is not None:
-                status = state["status"]
-                terminal = state["terminal"]
-            elif messages:
-                status = "interrupted"
-                terminal = True
-            else:
-                status = "not_found"
-                terminal = False
-            public_state = (
-                {key: value for key, value in state.items() if key != "owner_token"}
-                if state is not None
-                else None
-            )
-            return {
-                "session_id": session,
-                "debate_id": debate,
-                "status": status,
-                "terminal": terminal,
-                "state": public_state,
-                "result": result,
-                "messages": [message.to_dict() for message in messages],
-            }
+                    if state is not None:
+                        self._require_debate_ownership(
+                            state,
+                            session,
+                            debate,
+                            "state",
+                        )
+                except json.JSONDecodeError as exc:
+                    raise WorkspaceFormatError("invalid debate JSON state") from exc
+                messages: list[DebateMessage] = []
+                for line_number, line in enumerate(
+                    (() if message_text is None else message_text.splitlines()),
+                    1,
+                ):
+                    try:
+                        value = json.loads(line)
+                        expected = {
+                            "sender",
+                            "phase",
+                            "round",
+                            "revision",
+                            "kind",
+                            "content",
+                            "timestamp",
+                        }
+                        if not isinstance(value, dict) or set(value) != expected:
+                            raise TypeError("debate log entry has an invalid schema")
+                        string_fields = expected.difference({"round"})
+                        if any(
+                            not isinstance(value[field], str)
+                            for field in string_fields
+                        ):
+                            raise TypeError(
+                                "debate log string field has an invalid type"
+                            )
+                        round_number = value["round"]
+                        if (
+                            isinstance(round_number, bool)
+                            or not isinstance(round_number, int)
+                            or round_number < 0
+                        ):
+                            raise TypeError(
+                                "debate log round must be a non-negative integer"
+                            )
+                        messages.append(DebateMessage(**value))
+                    except (json.JSONDecodeError, TypeError) as exc:
+                        raise WorkspaceFormatError(
+                            f"invalid debate log entry at line {line_number}"
+                        ) from exc
+                if result is not None:
+                    status = result["status"]
+                    terminal = True
+                elif state is not None:
+                    status = state["status"]
+                    terminal = state["terminal"]
+                elif messages:
+                    status = "interrupted"
+                    terminal = True
+                else:
+                    status = "not_found"
+                    terminal = False
+                public_state = (
+                    {
+                        key: value
+                        for key, value in state.items()
+                        if key != "owner_token"
+                    }
+                    if state is not None
+                    else None
+                )
+                inspected = {
+                    "session_id": session,
+                    "debate_id": debate,
+                    "status": status,
+                    "terminal": terminal,
+                    "state": public_state,
+                    "result": result,
+                    "messages": [message.to_dict() for message in messages],
+                }
+                if directory is None:
+                    self._require_directory_absent_at(root, relative_directory)
+                else:
+                    assert inventory is not None
+                    self._verify_directory_at(
+                        root,
+                        relative_directory,
+                        directory,
+                        inventory,
+                    )
+                return inspected
+            finally:
+                if directory is not None:
+                    os.close(directory)
 
         return self._read_bound(read)
 

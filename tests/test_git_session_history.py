@@ -6,11 +6,13 @@ import hashlib
 import os
 import unittest
 from concurrent.futures import ThreadPoolExecutor
+from dataclasses import replace
 from pathlib import Path
 from unittest import mock
 
 from story_writing_agents.git import GitBaselineManifest, GitManifestEntry
 from story_writing_agents.git import session_history as history_module
+from story_writing_agents.git.session_contracts import GitSessionResourceState
 from story_writing_agents.git.session_history import open_git_session_history
 from story_writing_agents.git.session_history_contracts import (
     GIT_SESSION_HISTORY_DIRECTORY,
@@ -111,6 +113,50 @@ class GitSessionHistorySafetyTests(GitSessionResourceGitTestCase):
 
     def _tree(self, root: Path) -> str:
         return self.run_git(root, "rev-parse", "HEAD^{tree}").stdout.decode().strip()
+
+    def test_semantic_ready_revalidates_identity_branch_index_and_internal_tip(
+        self,
+    ) -> None:
+        root, tip = self._ready_root("semantic-ready")
+        with open_git_session_history(root, _manifest(), "novel") as history:
+            ready = history.require_semantic_ready()
+            self.assertEqual(ready.current_branch_tip, tip)
+            history.require_semantic_ready(
+                expected_branch_tip=ready.current_branch_tip,
+                expected_internal_tip=ready.current_internal_tip,
+            )
+            variants = (
+                replace(
+                    ready,
+                    state=GitSessionResourceState.RECOVERY_REQUIRED,
+                    recovery_action=(
+                        type(ready.recovery_action).OPERATOR_RECOVERY
+                    ),
+                ),
+                replace(
+                    ready,
+                    identity=type(ready.identity)(
+                        ready.identity.main_root,
+                        "foreign",
+                    ),
+                ),
+                replace(ready, current_branch_tip="0" * len(tip)),
+                replace(ready, current_internal_tip="1" * len(tip)),
+            )
+            for confirmed in variants:
+                with self.subTest(confirmed=confirmed), mock.patch.object(
+                    history_module,
+                    "require_ready_locked_git_session_resources",
+                    return_value=confirmed,
+                ), self.assertRaises(GitSessionHistoryError) as caught:
+                    history.require_semantic_ready(
+                        expected_branch_tip=ready.current_branch_tip,
+                        expected_internal_tip=ready.current_internal_tip,
+                    )
+                self.assertIs(
+                    caught.exception.code,
+                    GitSessionHistoryFailureCode.RECOVERY_REQUIRED,
+                )
 
     def test_snapshot_empty_create_false_and_complete_records_are_exact(self) -> None:
         root, tip = self._ready_root("snapshot-positive")

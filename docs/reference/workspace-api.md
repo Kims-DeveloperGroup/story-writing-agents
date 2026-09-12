@@ -164,11 +164,19 @@ storage owners, but they are not public imports.
 The package-internal session-artifact binding keeps its repository private.
 Only `open_ready_resources()` yields a live access object whose `repository`,
 resources, and descriptor duplication are valid inside that context. The
-access expires before exit completes. Exit always repeats semantic READY and
-physical-root validation after a successful body, an ordinary error, or
-cancellation. If that check finds binding loss, the content-free binding
-failure takes precedence; otherwise the original body error or cancellation is
-preserved. Descriptors and the cooperating-runtime lease close on every path.
+exact `WritingArtifactRepository` object is stable for the binding, but every
+transaction on it requires a live access on the calling thread and repeats
+semantic READY before and after the transaction. Retaining that raw repository
+does not retain authority: a later or cross-thread transaction fails outside a
+live access. Same-thread nested `open_ready_resources()` calls are reentrant
+and yield the current access; long-lived reference and source adapters retain
+only an access factory and reacquire a guarded access for each operation. The
+access expires before its outer exit completes. Each nested and outer exit
+repeats semantic READY and physical-root validation after a successful body,
+an ordinary error, or cancellation. If that check finds binding loss, the
+content-free binding failure takes precedence; otherwise the original body
+error or cancellation is preserved. Descriptors and the cooperating-runtime
+lease close on every path.
 
 The package-internal `SessionSourceWorkspace` is likewise not a public import.
 Runtime derives it only from a freshly validated session-artifact binding. It
@@ -180,10 +188,16 @@ paths are rejected. Every allowed read opens the no-follow root, traverses
 directories relative to descriptors, and accepts a leaf only when its opened
 and named views are the same unique regular file with link count one. FIFOs,
 devices, symlinks, hard-linked leaves, and identity/mode/size/time drift before
-or after the read fail closed. Debate state/results must embed the requested
-session and debate IDs; agent-state entries must embed the path's agent,
-session, and debate ownership. The reader verifies the named root again before
-returning and closes its call-local descriptors on success or failure.
+or after the read fail closed. Compound agent-state and debate reads also pin
+the intermediate parent-directory descriptor. They accept a result only while
+the complete directory inventory is unchanged: every name and its device,
+inode, file type, link count, size, nanosecond modification time, and
+nanosecond change time must match. A parent-directory swap, added or removed
+entry, or metadata drift therefore fails closed. Debate state/results must
+embed the requested session and debate IDs; agent-state entries must embed the
+path's agent, session, and debate ownership. The reader verifies the named root
+again before returning and closes its call-local descriptors on success or
+failure.
 Generic pathname access, writes, Git operations, control-root fallback, and
 sibling-session fallback are rejected. These internal semantics do not change
 any public constructor or method signature.

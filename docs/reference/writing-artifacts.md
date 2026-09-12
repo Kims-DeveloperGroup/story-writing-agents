@@ -1552,6 +1552,14 @@ in-process repository lock
 -> release the lease
 ```
 
+The runtime-composed session variant adds an outer READY gate without changing
+that repository API. One exact repository object belongs to the binding, but
+each transaction requires a live same-thread binding access and semantic READY
+validation before and after. A retained raw repository therefore fails outside
+access. Long-lived runtime reference/source adapters retain an access factory,
+not authority, and reacquire the guard for each operation; same-thread nested
+binding access is reentrant.
+
 The private store, not `repository.py` or `_storage.py`, is the sole interpreter
 of application journals, immutable records, catalog transitions, completed
 lookup, audit, and recovery. The existing secure-storage primitive still owns

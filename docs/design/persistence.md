@@ -1023,6 +1023,15 @@ calls a provider or agent, nor stages or commits Git. Reject and Revise mean
 runtime does not invoke it. A later story-commit action must independently inspect
 the applied state and obtain fresh Git-specific authority.
 
+For a successful runtime Apply, the exact physical/semantic session binding is
+reopened across follow-on `story_commit_request` publication and in-memory
+service registration. Detected binding loss suppresses the returned request
+and removes the in-memory service, while the already published Apply result and
+any already-completed request append remain durable. There is intentionally no
+durable post-Apply handoff-failure state, schema field, or restart projection
+yet; that separate persistence change is deferred to sibling
+[Issue #662](https://github.com/Kims-DeveloperGroup/story-writing-agents/issues/662).
+
 The additive `inspect_artifact_application(application_id)` method shares the
 same repository boundary but never calls the apply path. It validates one exact
 safe built-in string before locking, then acquires one process lock and lease,

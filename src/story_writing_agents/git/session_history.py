@@ -17,7 +17,11 @@ from .repository_lock import (
     GitRepositoryLockFailureCode,
     lock_git_repository,
 )
-from .session_contracts import GitSessionResourceError, GitSessionResourceState
+from .session_contracts import (
+    GitSessionResourceError,
+    GitSessionResourceInspection,
+    GitSessionResourceState,
+)
 from .session_history_contracts import (
     GIT_SESSION_HISTORY_DIRECTORY,
     GIT_SESSION_HISTORY_MAX_RECORD_BYTES,
@@ -101,6 +105,11 @@ def open_git_session_history(
                 session_id=ready.identity.session_id,
                 descriptor=descriptor,
             )
+            history._bind_ready_context(
+                manifest,
+                ready,
+                allowed_worktree_changes,
+            )
             try:
                 yield history
                 history.require_active()
@@ -124,7 +133,15 @@ def open_git_session_history(
 class GitSessionHistory:
     """One live descriptor-relative session-history transaction."""
 
-    __slots__ = ("_active", "_descriptor", "_lease", "_session_id")
+    __slots__ = (
+        "_active",
+        "_allowed_worktree_changes",
+        "_descriptor",
+        "_lease",
+        "_manifest",
+        "_resources",
+        "_session_id",
+    )
 
     def __init__(
         self,
@@ -136,7 +153,22 @@ class GitSessionHistory:
         self._lease = lease
         self._session_id = session_id
         self._descriptor = descriptor
+        self._manifest: GitBaselineManifest | None = None
+        self._resources: GitSessionResourceInspection | None = None
+        self._allowed_worktree_changes: tuple[str, ...] = ()
         self._active = True
+
+    def _bind_ready_context(
+        self,
+        manifest: GitBaselineManifest,
+        resources: GitSessionResourceInspection,
+        allowed_worktree_changes: tuple[str, ...],
+    ) -> None:
+        if self._manifest is not None or self._resources is not None:
+            raise _history_error(GitSessionHistoryFailureCode.INVALID_REQUEST)
+        self._manifest = manifest
+        self._resources = resources
+        self._allowed_worktree_changes = allowed_worktree_changes
 
     @property
     def session_id(self) -> str:
@@ -154,6 +186,46 @@ class GitSessionHistory:
                     raise OSError
         except (GitRepositoryLockFailure, OSError):
             raise _history_error(GitSessionHistoryFailureCode.UNSAFE_ROOT) from None
+
+    def require_semantic_ready(
+        self,
+        *,
+        expected_branch_tip: str | None = None,
+        expected_internal_tip: str | None = None,
+    ) -> GitSessionResourceInspection:
+        """Revalidate exact READY session semantics under this live Git lease."""
+
+        self.require_active()
+        manifest = self._manifest
+        resources = self._resources
+        if manifest is None or resources is None:
+            raise _history_error(GitSessionHistoryFailureCode.INVALID_REQUEST)
+        try:
+            confirmed = require_ready_locked_git_session_resources(
+                self._lease,
+                manifest,
+                self._session_id,
+                allowed_worktree_changes=self._allowed_worktree_changes,
+            )
+        except GitSessionResourceError:
+            raise _history_error(
+                GitSessionHistoryFailureCode.RECOVERY_REQUIRED
+            ) from None
+        if (
+            confirmed.state is not GitSessionResourceState.READY
+            or confirmed.identity != resources.identity
+            or (
+                expected_branch_tip is not None
+                and confirmed.current_branch_tip != expected_branch_tip
+            )
+            or (
+                expected_internal_tip is not None
+                and confirmed.current_internal_tip != expected_internal_tip
+            )
+        ):
+            raise _history_error(GitSessionHistoryFailureCode.RECOVERY_REQUIRED)
+        self.require_active()
+        return confirmed
 
     def close(self) -> None:
         if not self._active:

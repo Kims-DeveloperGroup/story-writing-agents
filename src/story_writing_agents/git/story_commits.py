@@ -13,7 +13,12 @@ from functools import wraps
 from pathlib import Path
 from typing import Callable, ParamSpec, TypeVar
 
-from .contracts import GitBaselineManifest, GitEffectiveIdentity, GitManifestEntry
+from .contracts import (
+    GIT_BASELINE_BRANCH,
+    GitBaselineManifest,
+    GitEffectiveIdentity,
+    GitManifestEntry,
+)
 from .process import (
     GitProcessFailure,
     GitProcessProfile,
@@ -21,6 +26,7 @@ from .process import (
     GitProcessRunner,
 )
 from .session_history import GitSessionHistory, open_git_session_history
+from .session_contracts import GitSessionResourceInspection
 from .session_history_contracts import (
     GitSessionCommitOperationRecord,
     GitSessionHistoryError,
@@ -324,6 +330,10 @@ class StoryCommitService:
                 create=True,
                 allowed_worktree_changes=self._allowed_worktree_changes,
             ) as history:
+                history.require_semantic_ready(
+                    expected_branch_tip=candidate.branch_tip,
+                    expected_internal_tip=binding.internal_tip,
+                )
                 revalidation = self._revalidate_candidate(
                     binding,
                     history=history,
@@ -331,6 +341,10 @@ class StoryCommitService:
                 if revalidation != authorized_revalidation:
                     raise _error(StoryCommitFailureCode.CANDIDATE_DRIFT)
                 self._require_bound_session_root()
+                history.require_semantic_ready(
+                    expected_branch_tip=candidate.branch_tip,
+                    expected_internal_tip=binding.internal_tip,
+                )
                 operation = GitSessionCommitOperationRecord(
                     session_id=self._session_id,
                     operation_id=operation_id,
@@ -341,23 +355,59 @@ class StoryCommitService:
                     expected_branch_tip=candidate.branch_tip,
                 )
                 history.write_commit_operation(operation)
-                self._require_bound_session_root()
-                self._stage_git(revalidation)
-                operation = advance_commit_operation(
-                    operation,
-                    GitSessionHistoryState.STAGED,
-                )
-                history.write_commit_operation(operation)
-                commit_id = self._create_commit(revalidation)
-                self._cas_branch(revalidation, commit_id)
-                branch_updated = True
-                self._verify_invariants(binding, commit_id)
-                operation = advance_commit_operation(
-                    operation,
-                    GitSessionHistoryState.COMMITTED,
-                    commit_id=commit_id,
-                )
-                history.write_commit_operation(operation)
+                try:
+                    self._require_bound_session_root()
+                    history.require_semantic_ready(
+                        expected_branch_tip=candidate.branch_tip,
+                        expected_internal_tip=binding.internal_tip,
+                    )
+                    self._stage_git(revalidation)
+                    self._require_staged_candidate(
+                        revalidation,
+                        binding.internal_ref,
+                    )
+                    operation = advance_commit_operation(
+                        operation,
+                        GitSessionHistoryState.STAGED,
+                    )
+                    history.write_commit_operation(operation)
+                    self._require_staged_candidate(
+                        revalidation,
+                        binding.internal_ref,
+                    )
+                    commit_id = self._create_commit(revalidation)
+                    self._require_staged_candidate(
+                        revalidation,
+                        binding.internal_ref,
+                    )
+                    self._cas_branch(revalidation, commit_id)
+                    branch_updated = True
+                    history.require_semantic_ready(
+                        expected_branch_tip=commit_id,
+                        expected_internal_tip=binding.internal_tip,
+                    )
+                    self._verify_invariants(binding, commit_id)
+                    history.require_semantic_ready(
+                        expected_branch_tip=commit_id,
+                        expected_internal_tip=binding.internal_tip,
+                    )
+                    operation = advance_commit_operation(
+                        operation,
+                        GitSessionHistoryState.COMMITTED,
+                        commit_id=commit_id,
+                    )
+                    history.write_commit_operation(operation)
+                    history.require_semantic_ready(
+                        expected_branch_tip=commit_id,
+                        expected_internal_tip=binding.internal_tip,
+                    )
+                except BaseException:
+                    self._preserve_uncertain(
+                        operation,
+                        branch_updated,
+                        history=history,
+                    )
+                    raise
             self._bindings.pop(candidate.candidate_id, None)
             return _result(
                 candidate, operation_id, StoryCommitState.COMMITTED, commit_id
@@ -370,8 +420,20 @@ class StoryCommitService:
             }:
                 raise _error(StoryCommitFailureCode.OUTCOME_UNKNOWN) from None
             raise
-        except (GitSessionHistoryError, GitProcessFailure):
+        except GitSessionHistoryError as exc:
             self._preserve_uncertain(operation, branch_updated)
+            if operation is None:
+                code = (
+                    StoryCommitFailureCode.RECOVERY_REQUIRED
+                    if exc.code is GitSessionHistoryFailureCode.RECOVERY_REQUIRED
+                    else StoryCommitFailureCode.HISTORY_FAILED
+                )
+                raise _error(code) from None
+            raise _error(StoryCommitFailureCode.OUTCOME_UNKNOWN) from None
+        except GitProcessFailure:
+            self._preserve_uncertain(operation, branch_updated)
+            if operation is None:
+                raise _error(StoryCommitFailureCode.GIT_FAILED) from None
             raise _error(StoryCommitFailureCode.OUTCOME_UNKNOWN) from None
         except BaseException:
             self._preserve_uncertain(operation, branch_updated)
@@ -449,6 +511,9 @@ class StoryCommitService:
             self._require_recovery_bound_session_root()
             operation = self._read_operation(operation_id)
             self._require_recovery_bound_session_root()
+            self._require_recovery_semantic_ready(
+                expected_branch_tip=_stable_operation_tip(operation),
+            )
             candidate = load_story_commit_candidate(
                 self._root,
                 self._manifest,
@@ -457,6 +522,9 @@ class StoryCommitService:
                 allowed_worktree_changes=self._allowed_worktree_changes,
             )
             self._require_recovery_bound_session_root()
+            self._require_recovery_semantic_ready(
+                expected_branch_tip=_stable_operation_tip(operation),
+            )
             return _operation_result(candidate, operation)
         except StoryCommitError:
             self._require_recovery_bound_session_root()
@@ -470,6 +538,9 @@ class StoryCommitService:
             self._require_recovery_bound_session_root()
             operation = self._read_operation(operation_id)
             self._require_recovery_bound_session_root()
+            self._require_recovery_semantic_ready(
+                expected_branch_tip=_stable_operation_tip(operation),
+            )
             candidate = load_story_commit_candidate(
                 self._root,
                 self._manifest,
@@ -478,22 +549,39 @@ class StoryCommitService:
                 allowed_worktree_changes=self._allowed_worktree_changes,
             )
             self._require_recovery_bound_session_root()
+            self._require_recovery_semantic_ready(
+                expected_branch_tip=_stable_operation_tip(operation),
+            )
             with open_git_session_history(
                 self._root,
                 self._manifest,
                 self._session_id,
                 allowed_worktree_changes=self._allowed_worktree_changes,
             ) as history:
+                ready = history.require_semantic_ready()
+                recovery_main_status_sha256 = self._main_status_sha256()
                 self._require_recovery_bound_session_root()
                 operation = history.read_commit_operation(operation_id)
+                ready = history.require_semantic_ready(
+                    expected_branch_tip=_stable_operation_tip(operation),
+                )
                 self._require_recovery_bound_session_root()
                 if operation.state in {
                     GitSessionHistoryState.COMMITTED,
                     GitSessionHistoryState.REJECTED,
                     GitSessionHistoryState.RECOVERY_REQUIRED,
                 }:
+                    history.require_semantic_ready(
+                        expected_branch_tip=(
+                            operation.commit_id
+                            if operation.state is GitSessionHistoryState.COMMITTED
+                            else operation.expected_branch_tip
+                        )
+                    )
                     self._require_recovery_bound_session_root()
                     return _operation_result(candidate, operation)
+                history.require_semantic_ready()
+                self._require_recovery_bound_session_root()
                 root = _session_root(self._root, self._session_id)
                 identity = self._session_root_identity(root)
                 runner = GitProcessRunner(root)
@@ -505,6 +593,7 @@ class StoryCommitService:
                         GitProcessProfile.READ_ONLY,
                     ).stdout
                 )
+                history.require_semantic_ready(expected_branch_tip=tip)
                 if tip == candidate.branch_tip:
                     expected_index = _index_matches_tree(
                         runner,
@@ -521,38 +610,90 @@ class StoryCommitService:
                         and operation.state is GitSessionHistoryState.RUNNING
                     ):
                         self._require_recovery_bound_session_root()
+                        self._require_recovery_staged_candidate(
+                            candidate,
+                            ready,
+                            recovery_main_status_sha256,
+                        )
                         operation = advance_commit_operation(
                             operation, GitSessionHistoryState.STAGED
                         )
                         history.write_commit_operation(operation)
+                        self._require_recovery_staged_candidate(
+                            candidate,
+                            ready,
+                            recovery_main_status_sha256,
+                        )
                     elif not expected_index and not parent_index:
                         if (
                             operation.state
                             is not GitSessionHistoryState.RECOVERY_REQUIRED
                         ):
                             self._require_recovery_bound_session_root()
+                            self._require_recovery_session_topology(
+                                candidate,
+                                ready,
+                                recovery_main_status_sha256,
+                            )
                             operation = advance_commit_operation(
                                 operation,
                                 GitSessionHistoryState.RECOVERY_REQUIRED,
                             )
                             history.write_commit_operation(operation)
+                            self._require_recovery_session_topology(
+                                candidate,
+                                ready,
+                                recovery_main_status_sha256,
+                            )
                     elif operation.state is GitSessionHistoryState.RUNNING:
                         self._require_recovery_bound_session_root()
+                        history.require_semantic_ready(
+                            expected_branch_tip=candidate.branch_tip,
+                        )
                         operation = advance_commit_operation(
                             operation, GitSessionHistoryState.OUTCOME_UNKNOWN
                         )
                         history.write_commit_operation(operation)
+                        history.require_semantic_ready(
+                            expected_branch_tip=candidate.branch_tip,
+                        )
                     elif (
                         operation.state is GitSessionHistoryState.STAGED
                         and not expected_index
                     ):
                         self._require_recovery_bound_session_root()
+                        self._require_recovery_session_topology(
+                            candidate,
+                            ready,
+                            recovery_main_status_sha256,
+                        )
                         operation = advance_commit_operation(
                             operation,
                             GitSessionHistoryState.RECOVERY_REQUIRED,
                         )
                         history.write_commit_operation(operation)
+                        self._require_recovery_session_topology(
+                            candidate,
+                            ready,
+                            recovery_main_status_sha256,
+                        )
                     self._require_recovery_bound_session_root()
+                    if operation.state is GitSessionHistoryState.STAGED:
+                        self._require_recovery_staged_candidate(
+                            candidate,
+                            ready,
+                            recovery_main_status_sha256,
+                        )
+                    elif operation.state is GitSessionHistoryState.RECOVERY_REQUIRED:
+                        self._require_recovery_session_topology(
+                            candidate,
+                            ready,
+                            recovery_main_status_sha256,
+                        )
+                    else:
+                        history.require_semantic_ready(
+                            expected_branch_tip=candidate.branch_tip,
+                        )
                     return _operation_result(candidate, operation)
                 if _commit_matches(runner, identity, tip, candidate):
                     if operation.state in {
@@ -561,32 +702,42 @@ class StoryCommitService:
                     }:
                         if operation.state is GitSessionHistoryState.RUNNING:
                             self._require_recovery_bound_session_root()
+                            history.require_semantic_ready(expected_branch_tip=tip)
                             operation = advance_commit_operation(
                                 operation, GitSessionHistoryState.STAGED
                             )
                             history.write_commit_operation(operation)
                     self._require_recovery_bound_session_root()
+                    history.require_semantic_ready(expected_branch_tip=tip)
                     committed = advance_commit_operation(
                         operation,
                         GitSessionHistoryState.COMMITTED,
                         commit_id=tip,
                     )
                     history.write_commit_operation(committed)
+                    history.require_semantic_ready(expected_branch_tip=tip)
                     return _operation_result(candidate, committed)
                 if operation.state is not GitSessionHistoryState.OUTCOME_UNKNOWN:
                     self._require_recovery_bound_session_root()
+                    history.require_semantic_ready(expected_branch_tip=tip)
                     operation = advance_commit_operation(
                         operation, GitSessionHistoryState.OUTCOME_UNKNOWN
                     )
                     history.write_commit_operation(operation)
                 self._require_recovery_bound_session_root()
+                history.require_semantic_ready(expected_branch_tip=tip)
                 return _operation_result(candidate, operation)
         except StoryCommitError:
             self._require_recovery_bound_session_root()
             raise
-        except GitSessionHistoryError:
+        except GitSessionHistoryError as exc:
             self._require_recovery_bound_session_root()
-            raise _error(StoryCommitFailureCode.HISTORY_FAILED) from None
+            code = (
+                StoryCommitFailureCode.RECOVERY_REQUIRED
+                if exc.code is GitSessionHistoryFailureCode.RECOVERY_REQUIRED
+                else StoryCommitFailureCode.HISTORY_FAILED
+            )
+            raise _error(code) from None
         except Exception:
             self._require_recovery_bound_session_root()
             raise _error(StoryCommitFailureCode.RECOVERY_REQUIRED) from None
@@ -650,7 +801,14 @@ class StoryCommitService:
                 allowed_worktree_changes=self._allowed_worktree_changes,
                 create=True,
             ) as history:
+                self._require_bound_session_root()
+                history.require_semantic_ready(
+                    expected_branch_tip=candidate.branch_tip,
+                )
                 durable = history.read_candidate(candidate.candidate_id)
+                history.require_semantic_ready(
+                    expected_branch_tip=candidate.branch_tip,
+                )
                 if durable.candidate_id != candidate.candidate_id:
                     raise _error(StoryCommitFailureCode.CANDIDATE_DRIFT)
                 record = GitSessionCommitOperationRecord(
@@ -663,17 +821,39 @@ class StoryCommitService:
                     expected_branch_tip=candidate.branch_tip,
                 )
                 try:
+                    self._require_bound_session_root()
+                    history.require_semantic_ready(
+                        expected_branch_tip=candidate.branch_tip,
+                    )
                     history.write_commit_operation(record)
+                    history.require_semantic_ready(
+                        expected_branch_tip=candidate.branch_tip,
+                    )
                 except GitSessionHistoryError as exc:
                     if exc.code is not GitSessionHistoryFailureCode.RECORD_EXISTS:
                         raise
-                    if history.read_commit_operation(operation_id) != record:
+                    history.require_semantic_ready(
+                        expected_branch_tip=candidate.branch_tip,
+                    )
+                    existing = history.read_commit_operation(operation_id)
+                    history.require_semantic_ready(
+                        expected_branch_tip=candidate.branch_tip,
+                    )
+                    if existing != record:
                         raise _error(StoryCommitFailureCode.HISTORY_FAILED)
+                history.require_semantic_ready(
+                    expected_branch_tip=candidate.branch_tip,
+                )
             return _result(candidate, operation_id, StoryCommitState.REJECTED, None)
         except StoryCommitError:
             raise
-        except GitSessionHistoryError:
-            raise _error(StoryCommitFailureCode.HISTORY_FAILED) from None
+        except GitSessionHistoryError as exc:
+            code = (
+                StoryCommitFailureCode.RECOVERY_REQUIRED
+                if exc.code is GitSessionHistoryFailureCode.RECOVERY_REQUIRED
+                else StoryCommitFailureCode.HISTORY_FAILED
+            )
+            raise _error(code) from None
 
     def _stage_git(self, value: StoryCommitRevalidation) -> None:
         root = _session_root(self._root, self._session_id)
@@ -713,6 +893,197 @@ class StoryCommitService:
             ).stdout
         )
         if tree != value.candidate.expected_tree:
+            raise _error(StoryCommitFailureCode.CANDIDATE_DRIFT)
+
+    def _require_staged_candidate(
+        self,
+        value: StoryCommitRevalidation,
+        internal_ref: str,
+    ) -> None:
+        """Require the intentional staged index without ordinary READY semantics."""
+
+        self._require_staged_topology(
+            value.candidate,
+            internal_ref=internal_ref,
+            expected_internal_tip=value.internal_tip,
+            expected_main_head=value.main_head,
+            expected_main_status_sha256=value.main_status_sha256,
+        )
+
+    def _require_recovery_staged_candidate(
+        self,
+        candidate: StoryCommitCandidate,
+        ready: GitSessionResourceInspection,
+        main_status_sha256: str,
+    ) -> None:
+        """Require one intentional staged candidate during live recovery."""
+
+        if (
+            ready.current_internal_tip is None
+            or ready.baseline_commit_id is None
+        ):
+            raise _error(StoryCommitFailureCode.RECOVERY_REQUIRED)
+        self._require_staged_topology(
+            candidate,
+            internal_ref=ready.identity.internal_ref,
+            expected_internal_tip=ready.current_internal_tip,
+            expected_main_head=ready.baseline_commit_id,
+            expected_main_status_sha256=main_status_sha256,
+        )
+
+    def _require_recovery_session_topology(
+        self,
+        candidate: StoryCommitCandidate,
+        ready: GitSessionResourceInspection,
+        main_status_sha256: str,
+    ) -> None:
+        """Require bound session topology while allowing a damaged index."""
+
+        if (
+            ready.current_internal_tip is None
+            or ready.baseline_commit_id is None
+        ):
+            raise _error(StoryCommitFailureCode.RECOVERY_REQUIRED)
+        self._require_session_topology(
+            candidate,
+            internal_ref=ready.identity.internal_ref,
+            expected_internal_tip=ready.current_internal_tip,
+            expected_main_head=ready.baseline_commit_id,
+            expected_main_status_sha256=main_status_sha256,
+            expected_branch_tip=candidate.branch_tip,
+            expected_index_tree=None,
+        )
+
+    def _main_status_sha256(self) -> str:
+        identity = _directory_identity(self._root)
+        status = _required(
+            GitProcessRunner(self._root),
+            identity,
+            ("status", "--porcelain=v2", "-z", "--untracked-files=all"),
+            GitProcessProfile.READ_ONLY,
+        ).stdout
+        return hashlib.sha256(status).hexdigest()
+
+    def _require_staged_topology(
+        self,
+        candidate: StoryCommitCandidate,
+        *,
+        internal_ref: str,
+        expected_internal_tip: str,
+        expected_main_head: str,
+        expected_main_status_sha256: str,
+    ) -> None:
+        """Require staged content plus exact registered session topology."""
+
+        self._require_session_topology(
+            candidate,
+            internal_ref=internal_ref,
+            expected_internal_tip=expected_internal_tip,
+            expected_main_head=expected_main_head,
+            expected_main_status_sha256=expected_main_status_sha256,
+            expected_branch_tip=candidate.branch_tip,
+            expected_index_tree=candidate.expected_tree,
+        )
+
+    def _require_session_topology(
+        self,
+        candidate: StoryCommitCandidate,
+        *,
+        internal_ref: str,
+        expected_internal_tip: str,
+        expected_main_head: str,
+        expected_main_status_sha256: str,
+        expected_branch_tip: str,
+        expected_index_tree: str | None,
+    ) -> None:
+        """Require exact session topology with an optional intentional index."""
+
+        root = _session_root(self._root, self._session_id)
+        identity = self._session_root_identity(root)
+        runner = GitProcessRunner(root)
+        tip = _object_id(
+            _required(
+                runner,
+                identity,
+                ("rev-parse", "--verify", "HEAD"),
+                GitProcessProfile.READ_ONLY,
+            ).stdout
+        )
+        symbolic = _required(
+            runner,
+            identity,
+            ("symbolic-ref", "--quiet", "HEAD"),
+            GitProcessProfile.READ_ONLY,
+        ).stdout.strip()
+        main_identity = _directory_identity(self._root)
+        main_runner = GitProcessRunner(self._root)
+        main_symbolic = _required(
+            main_runner,
+            main_identity,
+            ("symbolic-ref", "--quiet", "HEAD"),
+            GitProcessProfile.READ_ONLY,
+        ).stdout.strip()
+        internal = _object_id(
+            _required(
+                main_runner,
+                main_identity,
+                ("rev-parse", "--verify", internal_ref),
+                GitProcessProfile.READ_ONLY,
+            ).stdout
+        )
+        main_head = _object_id(
+            _required(
+                main_runner,
+                main_identity,
+                ("rev-parse", "--verify", "HEAD"),
+                GitProcessProfile.READ_ONLY,
+            ).stdout
+        )
+        main_status = _required(
+            main_runner,
+            main_identity,
+            ("status", "--porcelain=v2", "-z", "--untracked-files=all"),
+            GitProcessProfile.READ_ONLY,
+        ).stdout
+        registered = _required(
+            main_runner,
+            main_identity,
+            ("worktree", "list", "--porcelain", "-z"),
+            GitProcessProfile.READ_ONLY,
+        ).stdout
+        common_git = _required(
+            runner,
+            identity,
+            ("rev-parse", "--path-format=absolute", "--git-common-dir"),
+            GitProcessProfile.READ_ONLY,
+        ).stdout.rstrip(b"\n")
+        try:
+            common_path = Path(common_git.decode("utf-8", errors="strict"))
+        except UnicodeDecodeError:
+            raise _error(StoryCommitFailureCode.CANDIDATE_DRIFT) from None
+        if (
+            tip != expected_branch_tip
+            or symbolic != f"refs/heads/{candidate.branch}".encode("ascii")
+            or (
+                expected_index_tree is not None
+                and (
+                    not _index_matches_tree(runner, identity, expected_index_tree)
+                    or not _worktree_matches_index(runner, identity)
+                )
+            )
+            or internal != expected_internal_tip
+            or main_head != expected_main_head
+            or main_symbolic != f"refs/heads/{GIT_BASELINE_BRANCH}".encode("ascii")
+            or hashlib.sha256(main_status).hexdigest()
+            != expected_main_status_sha256
+            or common_path != self._root / ".git"
+            or not _registered_worktree_matches(
+                registered,
+                root,
+                expected_branch_tip,
+                candidate.branch,
+            )
+        ):
             raise _error(StoryCommitFailureCode.CANDIDATE_DRIFT)
 
     def _create_commit(self, value: StoryCommitRevalidation) -> str:
@@ -810,17 +1181,53 @@ class StoryCommitService:
 
     def _read_operation(self, operation_id: str) -> GitSessionCommitOperationRecord:
         try:
+            self._require_bound_session_root()
             with open_git_session_history(
                 self._root,
                 self._manifest,
                 self._session_id,
                 allowed_worktree_changes=self._allowed_worktree_changes,
             ) as history:
-                return history.read_commit_operation(operation_id)
+                history.require_semantic_ready()
+                operation = history.read_commit_operation(operation_id)
+                history.require_semantic_ready()
+                return operation
+        except GitSessionHistoryError as exc:
+            code = {
+                GitSessionHistoryFailureCode.RECORD_NOT_FOUND: (
+                    StoryCommitFailureCode.CANDIDATE_NOT_FOUND
+                ),
+                GitSessionHistoryFailureCode.RECOVERY_REQUIRED: (
+                    StoryCommitFailureCode.RECOVERY_REQUIRED
+                ),
+            }.get(exc.code, StoryCommitFailureCode.HISTORY_FAILED)
+            raise _error(code) from None
+
+    def _require_recovery_semantic_ready(
+        self,
+        *,
+        expected_branch_tip: str | None,
+    ) -> None:
+        """Require current session semantics before an inspect/recover boundary."""
+
+        try:
+            self._require_recovery_bound_session_root()
+            with open_git_session_history(
+                self._root,
+                self._manifest,
+                self._session_id,
+                allowed_worktree_changes=self._allowed_worktree_changes,
+            ) as history:
+                history.require_semantic_ready(
+                    expected_branch_tip=expected_branch_tip,
+                )
+            self._require_recovery_bound_session_root()
+        except StoryCommitError:
+            raise
         except GitSessionHistoryError as exc:
             code = (
-                StoryCommitFailureCode.CANDIDATE_NOT_FOUND
-                if exc.code is GitSessionHistoryFailureCode.RECORD_NOT_FOUND
+                StoryCommitFailureCode.RECOVERY_REQUIRED
+                if exc.code is GitSessionHistoryFailureCode.RECOVERY_REQUIRED
                 else StoryCommitFailureCode.HISTORY_FAILED
             )
             raise _error(code) from None
@@ -829,39 +1236,118 @@ class StoryCommitService:
         self,
         operation: GitSessionCommitOperationRecord | None,
         branch_updated: bool,
+        *,
+        history: GitSessionHistory | None = None,
     ) -> None:
         if operation is None or operation.state in {
-            GitSessionHistoryState.COMMITTED,
             GitSessionHistoryState.REJECTED,
             GitSessionHistoryState.RECOVERY_REQUIRED,
         }:
             return
-        try:
-            with open_git_session_history(
-                self._root,
-                self._manifest,
-                self._session_id,
-                allowed_worktree_changes=self._allowed_worktree_changes,
-                create=True,
-            ) as history:
-                current = history.read_commit_operation(operation.operation_id)
-                if current.state in {
-                    GitSessionHistoryState.RUNNING,
-                    GitSessionHistoryState.STAGED,
-                }:
-                    history.write_commit_operation(
-                        advance_commit_operation(
-                            current,
-                            GitSessionHistoryState.OUTCOME_UNKNOWN,
-                        )
+        if (
+            history is None
+            and operation.state is GitSessionHistoryState.COMMITTED
+        ):
+            return
+        binding = self._bindings.get(operation.candidate_id)
+        if binding is None:
+            return
+        if history is None:
+            try:
+                with open_git_session_history(
+                    self._root,
+                    self._manifest,
+                    self._session_id,
+                    allowed_worktree_changes=self._allowed_worktree_changes,
+                    create=True,
+                ) as opened:
+                    self._preserve_uncertain(
+                        operation,
+                        branch_updated,
+                        history=opened,
                     )
-                elif (
-                    branch_updated
-                    and current.state is GitSessionHistoryState.OUTCOME_UNKNOWN
-                ):
-                    return
+            except BaseException:
+                return
+            return
+        try:
+            self._require_bound_session_root()
+            current = history.read_commit_operation(operation.operation_id)
+            if current.state in {
+                GitSessionHistoryState.REJECTED,
+                GitSessionHistoryState.RECOVERY_REQUIRED,
+            }:
+                return
+            self._require_uncertain_phase_authority(
+                binding,
+                current,
+                branch_updated=branch_updated,
+            )
+            if current.state in {
+                GitSessionHistoryState.RUNNING,
+                GitSessionHistoryState.STAGED,
+            }:
+                self._require_bound_session_root()
+                self._require_uncertain_phase_authority(
+                    binding,
+                    current,
+                    branch_updated=branch_updated,
+                )
+                uncertain = advance_commit_operation(
+                    current,
+                    GitSessionHistoryState.OUTCOME_UNKNOWN,
+                )
+                history.write_commit_operation(uncertain)
+                self._require_uncertain_phase_authority(
+                    binding,
+                    current,
+                    branch_updated=branch_updated,
+                )
+            elif current.state in {
+                GitSessionHistoryState.COMMITTED,
+                GitSessionHistoryState.OUTCOME_UNKNOWN,
+            }:
+                return
         except BaseException:
             return
+
+    def _require_uncertain_phase_authority(
+        self,
+        binding: StoryCommitCandidateBinding,
+        operation: GitSessionCommitOperationRecord,
+        *,
+        branch_updated: bool,
+    ) -> None:
+        """Require exact topology before preserving one uncertain transition."""
+
+        candidate = binding.candidate
+        expected_tip = candidate.branch_tip
+        expected_index_tree: str | None = None
+        if branch_updated:
+            root = _session_root(self._root, self._session_id)
+            identity = self._session_root_identity(root)
+            runner = GitProcessRunner(root)
+            expected_tip = _object_id(
+                _required(
+                    runner,
+                    identity,
+                    ("rev-parse", "--verify", "HEAD"),
+                    GitProcessProfile.READ_ONLY,
+                ).stdout
+            )
+            if not _commit_matches(runner, identity, expected_tip, candidate):
+                raise _error(StoryCommitFailureCode.RECOVERY_REQUIRED)
+            expected_index_tree = candidate.expected_tree
+        elif operation.state is GitSessionHistoryState.STAGED:
+            expected_index_tree = candidate.expected_tree
+        self._require_session_topology(
+            candidate,
+            internal_ref=binding.internal_ref,
+            expected_internal_tip=binding.internal_tip,
+            expected_main_head=binding.main_head,
+            expected_main_status_sha256=binding.main_status_sha256,
+            expected_branch_tip=expected_tip,
+            expected_index_tree=expected_index_tree,
+        )
 
 
 def create_identity_bound_story_commit_service(
@@ -912,6 +1398,56 @@ def _commit_matches(
         )
     except (StoryCommitError, ValueError):
         return False
+
+
+def _registered_worktree_matches(
+    content: bytes,
+    expected_root: Path,
+    expected_tip: str,
+    expected_branch: str,
+) -> bool:
+    """Require the session root's unique registered branch/tip topology."""
+
+    records: list[dict[bytes, bytes]] = []
+    current: dict[bytes, bytes] = {}
+    for field in content.split(b"\x00"):
+        if not field:
+            if current:
+                records.append(current)
+                current = {}
+            continue
+        key, separator, value = field.partition(b" ")
+        if not key or key in current or (not separator and key not in {b"bare"}):
+            return False
+        current[key] = value
+    if current:
+        records.append(current)
+    paths = [record.get(b"worktree") for record in records]
+    target = os.fsencode(expected_root)
+    matches = [record for record in records if record.get(b"worktree") == target]
+    return (
+        None not in paths
+        and len(paths) == len(set(paths))
+        and len(matches) == 1
+        and matches[0].get(b"HEAD") == expected_tip.encode("ascii")
+        and matches[0].get(b"branch")
+        == f"refs/heads/{expected_branch}".encode("ascii")
+    )
+
+
+def _stable_operation_tip(
+    operation: GitSessionCommitOperationRecord,
+) -> str | None:
+    """Return an exact branch tip only for operation states that pin one."""
+
+    if operation.state is GitSessionHistoryState.COMMITTED:
+        return operation.commit_id
+    if operation.state in {
+        GitSessionHistoryState.REJECTED,
+        GitSessionHistoryState.RECOVERY_REQUIRED,
+    }:
+        return operation.expected_branch_tip
+    return None
 
 
 def _index_matches_tree(

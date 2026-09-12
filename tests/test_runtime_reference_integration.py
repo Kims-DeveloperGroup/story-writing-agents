@@ -9,10 +9,20 @@ from unittest import mock
 
 import story_writing_agents
 from story_writing_agents import RuntimeSession, StoryRuntime
+from story_writing_agents.agent_context.manifest import (
+    ContextScope,
+    ContextSubjectKind,
+)
+from story_writing_agents.agent_context.sources import (
+    CONTEXT_SOURCE_POLICY,
+    create_guarded_writing_artifact_source_adapter,
+)
+from story_writing_agents.agents import PLOT_ARCHITECT
 from story_writing_agents import orchestrator as orchestrator_module
 from story_writing_agents.errors import WorkspaceSecurityError
 
 from story_writing_agents.workspace.initialization import (
+    SessionArtifactBindingError,
     compose_session_artifact_binding,
     provision_session_resources,
 )
@@ -290,6 +300,58 @@ class RuntimeExecutionRetirementTests(unittest.TestCase):
                 public.exception.code,
                 ReferenceAuthorizationErrorCode.WORKFLOW_FAILURE,
             )
+
+    def test_long_lived_reference_and_source_adapter_reacquire_exact_access(
+        self,
+    ) -> None:
+        workspace = pristine_initialized_workspace(self)
+        ready = provision_session_resources(workspace.root, "novel")
+        ready.identity.worktree_root.joinpath(
+            "core_documents/global_outline.md"
+        ).write_text("Session-only guarded source.\n", encoding="utf-8")
+        binding = compose_session_artifact_binding(workspace.root, "novel")
+
+        @contextmanager
+        def repository_access():
+            with binding.open_ready_resources() as access:
+                yield access.repository
+
+        with binding.open_ready_resources() as access:
+            retained_repository = access.repository
+        with self.assertRaises(SessionArtifactBindingError):
+            retained_repository.list_paths()
+
+        operation = prepare_guarded_runtime_reference_operation(
+            repository_access,
+            session_id="novel",
+            text="Read ${core_documents/global_outline.md}.",
+        )
+        invocation = operation.begin_invocation(
+            agent_id=PLOT_ARCHITECT,
+            phase="draft",
+            round_number=None,
+        )
+        self.assertIsNotNone(invocation)
+        operation.terminate_invocation(
+            invocation,
+            ReferenceAuthorizationErrorCode.CANCELLED,
+        )
+
+        adapter = create_guarded_writing_artifact_source_adapter(
+            repository_access,
+            ContextScope(
+                "workspace",
+                "novel",
+                ContextSubjectKind.CONVERSATION,
+                "conversation",
+                PLOT_ARCHITECT,
+            ),
+        )
+        captured = adapter.capture(
+            "core_documents/global_outline.md",
+            CONTEXT_SOURCE_POLICY,
+        )
+        self.assertEqual(captured.content, b"Session-only guarded source.\n")
 
 
 if __name__ == "__main__":

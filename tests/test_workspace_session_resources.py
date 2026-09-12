@@ -11,6 +11,7 @@ from unittest import mock
 import story_writing_agents
 import story_writing_agents.git as git_facade
 import story_writing_agents.workspace as workspace_facade
+import story_writing_agents.writing_artifacts as artifact_facade
 from story_writing_agents import Workspace
 from story_writing_agents.errors import WorkspaceFormatError
 from story_writing_agents.git.session_contracts import GitSessionResourceState
@@ -28,6 +29,7 @@ from story_writing_agents.workspace.initialization import (
     require_ready_session_resources,
 )
 from story_writing_agents.writing_artifacts.repository import WritingArtifactRepository
+from story_writing_agents.writing_artifacts import repository as repository_module
 
 from tests.test_git_session_resources import GitSessionResourceGitTestCase
 
@@ -61,6 +63,10 @@ class WorkspaceSessionResourceCompositionTests(GitSessionResourceGitTestCase):
         ):
             self.assertFalse(hasattr(workspace_facade, name))
             self.assertFalse(hasattr(story_writing_agents, name))
+        guarded_factory = "create_guarded_writing_artifact_repository"
+        self.assertTrue(callable(getattr(repository_module, guarded_factory)))
+        self.assertFalse(hasattr(artifact_facade, guarded_factory))
+        self.assertFalse(hasattr(story_writing_agents, guarded_factory))
 
     def test_artifact_binding_is_lazy_and_exactly_uses_ready_session_root(self) -> None:
         root = self.initialize_workspace("artifact-binding")

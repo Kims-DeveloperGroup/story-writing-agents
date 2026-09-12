@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import os
 import subprocess
+from concurrent.futures import ThreadPoolExecutor
 from types import SimpleNamespace
 from unittest import mock
 
@@ -322,6 +323,120 @@ class RuntimeSessionArtifactBindingTests(LeadOrchestrationTestCase):
         finally:
             os.close(root_descriptor)
 
+    def test_agent_state_parent_swap_and_inventory_change_fail_closed(self) -> None:
+        self.append_source_state(self.workspace, "retained agent state")
+        sources = self.source_workspace()
+        directory = self.workspace.path(
+            self.workspace._agent_state_relative(
+                PLOT_ARCHITECT,
+                self.session_id,
+                "source_debate",
+            )
+        ).parent
+
+        def read():
+            return sources.read_agent_session_state(PLOT_ARCHITECT, self.session_id)
+        original_read = SessionSourceWorkspace._read_text_at
+
+        moved = directory.with_name(f"{directory.name}.generation-a")
+        swapped = False
+
+        def swap_after_read(root, relative, *, missing_ok=False):
+            nonlocal swapped
+            value = original_read(root, relative, missing_ok=missing_ok)
+            if not swapped:
+                swapped = True
+                directory.rename(moved)
+                directory.mkdir()
+            return value
+
+        try:
+            with mock.patch.object(
+                SessionSourceWorkspace,
+                "_read_text_at",
+                side_effect=swap_after_read,
+            ), self.assertRaises(WorkspaceSecurityError):
+                read()
+        finally:
+            if swapped:
+                directory.rmdir()
+                moved.rename(directory)
+
+        extra = directory / "unexpected-inventory-entry"
+        changed = False
+
+        def add_after_read(root, relative, *, missing_ok=False):
+            nonlocal changed
+            value = original_read(root, relative, missing_ok=missing_ok)
+            if not changed:
+                changed = True
+                extra.write_bytes(b"replacement inventory must not be accepted")
+            return value
+
+        try:
+            with mock.patch.object(
+                SessionSourceWorkspace,
+                "_read_text_at",
+                side_effect=add_after_read,
+            ), self.assertRaises(WorkspaceSecurityError):
+                read()
+        finally:
+            extra.unlink(missing_ok=True)
+
+    def test_debate_parent_swap_and_inventory_change_fail_closed(self) -> None:
+        self.append_source_debate(self.workspace, "retained debate")
+        sources = self.source_workspace()
+        directory = self.workspace.path(f"discussion_logs/{self.session_id}")
+
+        def read():
+            return sources.inspect_debate(self.session_id, "source_debate")
+        original_read = SessionSourceWorkspace._read_text_at
+
+        moved = directory.with_name(f"{directory.name}.generation-a")
+        swapped = False
+
+        def swap_after_read(root, relative, *, missing_ok=False):
+            nonlocal swapped
+            value = original_read(root, relative, missing_ok=missing_ok)
+            if not swapped:
+                swapped = True
+                directory.rename(moved)
+                directory.mkdir()
+            return value
+
+        try:
+            with mock.patch.object(
+                SessionSourceWorkspace,
+                "_read_text_at",
+                side_effect=swap_after_read,
+            ), self.assertRaises(WorkspaceSecurityError):
+                read()
+        finally:
+            if swapped:
+                directory.rmdir()
+                moved.rename(directory)
+
+        extra = directory / "unexpected-inventory-entry"
+        changed = False
+
+        def add_after_read(root, relative, *, missing_ok=False):
+            nonlocal changed
+            value = original_read(root, relative, missing_ok=missing_ok)
+            if not changed:
+                changed = True
+                extra.write_bytes(b"replacement inventory must not be accepted")
+            return value
+
+        try:
+            with mock.patch.object(
+                SessionSourceWorkspace,
+                "_read_text_at",
+                side_effect=add_after_read,
+            ), self.assertRaises(WorkspaceSecurityError):
+                read()
+        finally:
+            extra.unlink(missing_ok=True)
+
     def test_session_sources_ignore_conflicting_control_state_with_legacy_parity(
         self,
     ) -> None:
@@ -597,6 +712,58 @@ class RuntimeSessionArtifactBindingTests(LeadOrchestrationTestCase):
             lambda: access.repository,
             lambda: access.resources,
             lambda: access.duplicate_worktree_descriptor(),
+        ):
+            with self.subTest(operation=operation), self.assertRaises(
+                SessionArtifactBindingError
+            ):
+                operation()
+
+    def test_repository_operations_require_live_same_thread_nested_access(
+        self,
+    ) -> None:
+        binding = compose_session_artifact_binding(
+            self.control_workspace.root,
+            self.session_id,
+        )
+        with binding.open_ready_resources() as outer:
+            repository = outer.repository
+            with binding.open_ready_resources() as nested:
+                self.assertIs(nested, outer)
+                self.assertEqual(
+                    repository.read_text(_OUTLINE),
+                    "Outline first line.\nOutline second line.\n",
+                )
+
+                def foreign_read() -> BaseException | None:
+                    try:
+                        repository.read_text(_OUTLINE)
+                    except BaseException as exc:
+                        return exc
+                    return None
+
+                with ThreadPoolExecutor(max_workers=1) as executor:
+                    foreign = executor.submit(foreign_read).result()
+                self.assertIs(type(foreign), SessionArtifactBindingError)
+
+            self.assertEqual(
+                repository.read_text(_OUTLINE),
+                "Outline first line.\nOutline second line.\n",
+            )
+            with mock.patch.object(
+                repository,
+                "_ensure_source_directories",
+                side_effect=RuntimeError("injected repository setup failure"),
+            ), self.assertRaisesRegex(RuntimeError, "repository setup failure"):
+                repository.read_text(_OUTLINE)
+            self.assertEqual(
+                repository.read_text(_OUTLINE),
+                "Outline first line.\nOutline second line.\n",
+            )
+
+        for operation in (
+            lambda: repository.read_text(_OUTLINE),
+            repository.capture_complete_state,
+            repository.list_paths,
         ):
             with self.subTest(operation=operation), self.assertRaises(
                 SessionArtifactBindingError

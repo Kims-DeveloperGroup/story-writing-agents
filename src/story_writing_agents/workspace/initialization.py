@@ -6,6 +6,7 @@ import errno
 import hashlib
 import os
 import stat
+import threading
 from collections.abc import Callable, Iterator
 from contextlib import ExitStack, contextmanager
 from dataclasses import dataclass, field
@@ -59,7 +60,10 @@ from ..git.session_resources import (
     require_ready_git_session_resources as _require_ready_git_session_resources,
     require_ready_locked_git_session_resources as _require_ready_locked_git_session_resources,
 )
-from ..writing_artifacts.repository import WritingArtifactRepository
+from ..writing_artifacts.repository import (
+    WritingArtifactRepository,
+    create_guarded_writing_artifact_repository,
+)
 from ._policy_baselines import LEGACY_V2_POLICY_FILES, OBJECTIVE_V2_POLICY_FILES, MAIN_V2_POLICY_FILES
 from .schema import (
     WORKSPACE_DIRECTORIES,
@@ -403,6 +407,10 @@ class SessionArtifactBinding:
     manifest: GitBaselineManifest = field(repr=False)
     allowed_worktree_changes: tuple[str, ...] = field(repr=False)
     _repository: WritingArtifactRepository = field(init=False, repr=False)
+    _operation_lock: threading.RLock = field(init=False, repr=False, compare=False)
+    _operation_tokens: dict[int, list[SessionArtifactAccess]] = field(
+        init=False, repr=False, compare=False
+    )
 
     def __post_init__(self) -> None:
         if type(self.resources) is not GitSessionResourceInspection:
@@ -418,18 +426,32 @@ class SessionArtifactBinding:
             for path in self.allowed_worktree_changes
         ):
             raise TypeError("allowed_worktree_changes must be exact paths")
+        object.__setattr__(self, "_operation_lock", threading.RLock())
+        object.__setattr__(self, "_operation_tokens", {})
         object.__setattr__(
             self,
             "_repository",
-            WritingArtifactRepository(
+            create_guarded_writing_artifact_repository(
                 self.resources.identity.worktree_root,
                 expected_root_identity=self.worktree_identity,
+                operation_access=self._open_repository_operation,
             ),
         )
 
     @contextmanager
     def open_ready_resources(self) -> Iterator[SessionArtifactAccess]:
         """Hold exact READY Git and physical-root authority for artifact I/O."""
+
+        nested = self._current_repository_access()
+        if nested is not None:
+            try:
+                yield nested
+            except BaseException:
+                _postvalidate_session_artifact_access(nested)
+                raise
+            else:
+                _postvalidate_session_artifact_access(nested)
+            return
 
         access: SessionArtifactAccess | None = None
         stack = ExitStack()
@@ -482,9 +504,42 @@ class SessionArtifactBinding:
                 "session artifact resources are unavailable"
             ) from None
 
+    def _activate_repository_access(self, access: SessionArtifactAccess) -> None:
+        with self._operation_lock:
+            self._operation_tokens.setdefault(threading.get_ident(), []).append(access)
+
+    def _deactivate_repository_access(self, access: SessionArtifactAccess) -> None:
+        with self._operation_lock:
+            tokens = self._operation_tokens.get(threading.get_ident())
+            if not tokens or tokens[-1] is not access:
+                raise SessionArtifactBindingError(
+                    "session artifact access token is invalid"
+                )
+            tokens.pop()
+            if not tokens:
+                self._operation_tokens.pop(threading.get_ident(), None)
+
+    def _current_repository_access(self) -> SessionArtifactAccess | None:
+        with self._operation_lock:
+            tokens = self._operation_tokens.get(threading.get_ident())
+            return None if not tokens else tokens[-1]
+
+    @contextmanager
+    def _open_repository_operation(self) -> Iterator[None]:
+        with self._operation_lock:
+            access = self._current_repository_access()
+            if access is None:
+                raise SessionArtifactBindingError(
+                    "session artifact repository access is not active"
+                )
+            access.require_ready()
+            try:
+                yield
+            finally:
+                access.require_ready()
 
 class SessionArtifactAccess:
-    """One non-reentrant live view of a guarded session artifact binding."""
+    """One live same-thread view of a guarded session artifact binding."""
 
     __slots__ = ("_active", "_binding", "_descriptor", "_lease")
 
@@ -498,6 +553,7 @@ class SessionArtifactAccess:
         self._lease = lease
         self._descriptor = descriptor
         self._active = True
+        binding._activate_repository_access(self)
 
     @property
     def repository(self) -> WritingArtifactRepository:
@@ -579,11 +635,14 @@ class SessionArtifactAccess:
     def _close(self) -> None:
         if not self._active:
             return
-        self._active = False
         try:
-            os.close(self._descriptor)
-        except OSError:
-            pass
+            self._binding._deactivate_repository_access(self)
+        finally:
+            self._active = False
+            try:
+                os.close(self._descriptor)
+            except OSError:
+                pass
 
 
 def _postvalidate_session_artifact_access(access: SessionArtifactAccess) -> None:

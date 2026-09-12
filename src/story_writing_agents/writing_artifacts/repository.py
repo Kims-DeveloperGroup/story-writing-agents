@@ -5,6 +5,8 @@ from __future__ import annotations
 import hashlib
 import re
 import threading
+from collections.abc import Callable
+from contextlib import AbstractContextManager, nullcontext
 from pathlib import Path
 from typing import Mapping, NoReturn
 from uuid import uuid4
@@ -115,6 +117,7 @@ class WritingArtifactRepository:
             ARTIFACT_SNAPSHOTS_DIRECTORY,
             ARTIFACT_STAGING_DIRECTORY,
         )
+        self._operation_access: Callable[[], AbstractContextManager[None]] | None = None
 
     def catalog(self) -> ArtifactCatalog:
         """Return only current, provenance-backed canonical entries."""
@@ -678,6 +681,10 @@ class WritingArtifactRepository:
     def _locked_sources(self, *, evidence: bool = False):
         return _RepositorySourceLock(self, evidence=evidence)
 
+    def _open_operation_access(self) -> AbstractContextManager[None]:
+        access = self._operation_access
+        return nullcontext() if access is None else access()
+
     def _ensure_source_directories(self, *, evidence: bool) -> None:
         self._applications.ensure_directories()
 
@@ -852,8 +859,11 @@ class _RepositoryLock:
     def __init__(self, repository: WritingArtifactRepository) -> None:
         self._repository = repository
         self._file_lock = None
+        self._operation_context = None
 
     def __enter__(self) -> None:
+        self._operation_context = self._repository._open_operation_access()
+        self._operation_context.__enter__()
         self._repository._lock.acquire()
         try:
             self._repository._ensure_state_directories()
@@ -868,6 +878,7 @@ class _RepositoryLock:
                     self._file_lock.__exit__(None, None, None)
             finally:
                 self._repository._lock.release()
+                self._operation_context.__exit__(None, None, None)
             raise
 
     def __exit__(self, exc_type, exc, traceback) -> None:
@@ -875,7 +886,11 @@ class _RepositoryLock:
             if self._file_lock is not None:
                 self._file_lock.__exit__(exc_type, exc, traceback)
         finally:
-            self._repository._lock.release()
+            try:
+                self._repository._lock.release()
+            finally:
+                assert self._operation_context is not None
+                self._operation_context.__exit__(exc_type, exc, traceback)
 
 
 class _RepositorySourceLock:
@@ -890,8 +905,11 @@ class _RepositorySourceLock:
         self._repository = repository
         self._evidence = evidence
         self._file_lock = None
+        self._operation_context = None
 
     def __enter__(self) -> None:
+        self._operation_context = self._repository._open_operation_access()
+        self._operation_context.__enter__()
         self._repository._lock.acquire()
         try:
             self._repository._ensure_source_directories(evidence=self._evidence)
@@ -906,6 +924,7 @@ class _RepositorySourceLock:
                     self._file_lock.__exit__(None, None, None)
             finally:
                 self._repository._lock.release()
+                self._operation_context.__exit__(None, None, None)
             raise
 
     def __exit__(self, exc_type, exc, traceback) -> None:
@@ -913,4 +932,26 @@ class _RepositorySourceLock:
             if self._file_lock is not None:
                 self._file_lock.__exit__(exc_type, exc, traceback)
         finally:
-            self._repository._lock.release()
+            try:
+                self._repository._lock.release()
+            finally:
+                assert self._operation_context is not None
+                self._operation_context.__exit__(exc_type, exc, traceback)
+
+
+def create_guarded_writing_artifact_repository(
+    workspace_root: str | Path,
+    *,
+    expected_root_identity: tuple[int, int],
+    operation_access: Callable[[], AbstractContextManager[None]],
+) -> WritingArtifactRepository:
+    """Create one package-internal repository with a per-transaction caller gate."""
+
+    if not callable(operation_access):
+        raise TypeError("operation_access must be callable")
+    repository = WritingArtifactRepository(
+        workspace_root,
+        expected_root_identity=expected_root_identity,
+    )
+    repository._operation_access = operation_access
+    return repository

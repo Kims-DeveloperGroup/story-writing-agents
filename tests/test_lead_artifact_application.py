@@ -8,7 +8,9 @@ from dataclasses import replace
 from unittest import mock
 
 from story_writing_agents import StoryRuntime
+from story_writing_agents import orchestrator as orchestrator_module
 from story_writing_agents.agents import LEAD_ORCHESTRATOR
+from story_writing_agents.git.story_commits import StoryCommitService
 from story_writing_agents.conversations import (
     ArtifactApplicationDecision,
     ArtifactApplicationDecisionKind,
@@ -43,7 +45,6 @@ from tests.test_lead_orchestration import (
     _LeadBackend,
     _decision,
     _specialist_outcome,
-    _visible_outcome,
 )
 
 
@@ -573,6 +574,49 @@ class LeadArtifactApplicationTests(LeadOrchestrationTestCase):
         self.assertIsNone(result.commit_request)
         self.assertEqual(self.artifact_snapshot(), before)
         self.assertEqual(self.git_snapshot(), git_before)
+
+    async def test_commit_request_publication_binding_loss_discards_capability(
+        self,
+    ) -> None:
+        turn = await self.reviewed_create("Commit handoff binding loss")
+        decision = _application_decision(
+            turn,
+            ArtifactApplicationDecisionKind.APPLY,
+        )
+        key = (decision.session_id, decision.conversation_id, decision.step_id)
+        original_prepare = StoryCommitService.prepare
+        replacement = self.replace_session_worktree()
+        entered = False
+
+        def replace_after_prepare(service, *args, **kwargs):
+            nonlocal entered
+            candidate = original_prepare(service, *args, **kwargs)
+            replacement.__enter__()
+            entered = True
+            return candidate
+
+        try:
+            with mock.patch.object(
+                StoryCommitService,
+                "prepare",
+                autospec=True,
+                side_effect=replace_after_prepare,
+            ), mock.patch.object(
+                orchestrator_module,
+                "build_story_commit_request_payload",
+                wraps=orchestrator_module.build_story_commit_request_payload,
+            ) as build_request:
+                result = await self.runtime.decide_artifact_application(decision)
+            build_request.assert_not_called()
+        finally:
+            if entered:
+                replacement.__exit__(None, None, None)
+
+        self.assertIsNotNone(result.outcome.result)
+        self.assertIsNone(result.commit_request)
+        self.assertNotIn(key, self.runtime._story_commit_services)
+        projection = project_collaboration_history(self.history(turn.conversation_id))
+        self.assertIsNone(projection.current_story_commit_request)
 
 
 if __name__ == "__main__":

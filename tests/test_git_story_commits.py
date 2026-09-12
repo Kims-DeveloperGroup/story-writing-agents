@@ -12,7 +12,16 @@ from unittest import mock
 import story_writing_agents
 import story_writing_agents.git as git_facade
 from story_writing_agents.git import story_commits as commits_module
-from story_writing_agents.git.session_history import open_git_session_history
+from story_writing_agents.git.session_history import (
+    GitSessionHistory,
+    open_git_session_history,
+)
+from story_writing_agents.git.session_history_contracts import (
+    GitSessionHistoryError,
+    GitSessionHistoryFailureCode,
+    GitSessionHistoryRecoveryAction,
+    GitSessionHistoryState,
+)
 from story_writing_agents.git.story_commit_contracts import (
     StoryCommitConfirmation,
     StoryCommitDecision,
@@ -201,6 +210,158 @@ class StoryCommitServiceTests(StoryCommitGitTestCase):
             before_index,
         )
 
+    def test_semantic_ready_loss_obeys_pre_and_post_running_cutoffs(self) -> None:
+        history_failure = GitSessionHistoryError(
+            GitSessionHistoryFailureCode.RECOVERY_REQUIRED,
+            GitSessionHistoryRecoveryAction.OPERATOR_RECOVERY,
+        )
+        original = GitSessionHistory.require_semantic_ready
+        for ordinal in range(1, 7):
+            with self.subTest(ordinal=ordinal):
+                root, _session_root, service, candidate = self.prepared_bound(
+                    f"semantic-ready-cutoff-{ordinal}"
+                )
+                authority = service.authorize(
+                    candidate,
+                    self.confirmation(candidate, suffix=f"semantic-{ordinal}"),
+                )
+                calls = 0
+
+                def fail_once(history, *args, **kwargs):
+                    nonlocal calls
+                    calls += 1
+                    if calls == ordinal:
+                        raise history_failure
+                    return original(history, *args, **kwargs)
+
+                with mock.patch.object(
+                    GitSessionHistory,
+                    "require_semantic_ready",
+                    autospec=True,
+                    side_effect=fail_once,
+                ), self.assertRaises(StoryCommitError) as caught:
+                    service.execute(authority)
+                self.assertIs(
+                    caught.exception.code,
+                    (
+                        StoryCommitFailureCode.RECOVERY_REQUIRED
+                        if ordinal <= 2
+                        else StoryCommitFailureCode.OUTCOME_UNKNOWN
+                    ),
+                )
+                with open_git_session_history(root, manifest(), "novel") as history:
+                    operations = history.snapshot().commit_operations
+                if ordinal <= 2:
+                    self.assertEqual(operations, ())
+                else:
+                    self.assertEqual(len(operations), 1)
+                    self.assertIs(
+                        operations[0].state,
+                        (
+                            GitSessionHistoryState.COMMITTED
+                            if ordinal == 6
+                            else GitSessionHistoryState.OUTCOME_UNKNOWN
+                        ),
+                    )
+
+    def test_staged_topology_loss_is_always_post_running_uncertainty(self) -> None:
+        original = StoryCommitService._require_staged_candidate
+        for ordinal in range(1, 4):
+            with self.subTest(ordinal=ordinal):
+                root, session_root, service, candidate = self.prepared_bound(
+                    f"staged-topology-cutoff-{ordinal}"
+                )
+                authority = service.authorize(
+                    candidate,
+                    self.confirmation(candidate, suffix=f"staged-{ordinal}"),
+                )
+                calls = 0
+
+                def fail_once(current, *args, **kwargs):
+                    nonlocal calls
+                    calls += 1
+                    if calls == ordinal:
+                        raise StoryCommitError(
+                            StoryCommitFailureCode.CANDIDATE_DRIFT
+                        )
+                    return original(current, *args, **kwargs)
+
+                with mock.patch.object(
+                    StoryCommitService,
+                    "_require_staged_candidate",
+                    autospec=True,
+                    side_effect=fail_once,
+                ), self.assertRaises(StoryCommitError) as caught:
+                    service.execute(authority)
+                self.assertIs(
+                    caught.exception.code,
+                    StoryCommitFailureCode.OUTCOME_UNKNOWN,
+                )
+                self.run_git(
+                    session_root,
+                    "reset",
+                    "--",
+                    *(item.path for item in candidate.paths),
+                )
+                with open_git_session_history(root, manifest(), "novel") as history:
+                    operations = history.snapshot().commit_operations
+                self.assertEqual(len(operations), 1)
+                self.assertIs(
+                    operations[0].state,
+                    GitSessionHistoryState.OUTCOME_UNKNOWN,
+                )
+
+    def test_final_committed_history_write_failure_durably_preserves_unknown(
+        self,
+    ) -> None:
+        root, session_root, service, candidate = self.prepared_bound(
+            "final-history-write-failure"
+        )
+        authority = service.authorize(
+            candidate,
+            self.confirmation(candidate, suffix="final-history-write"),
+        )
+        original = GitSessionHistory.write_commit_operation
+        calls = 0
+
+        def fail_final_write(history, record):
+            nonlocal calls
+            calls += 1
+            if calls == 3:
+                raise GitSessionHistoryError(
+                    GitSessionHistoryFailureCode.PERSISTENCE_FAILED,
+                    GitSessionHistoryRecoveryAction.OPERATOR_RECOVERY,
+                )
+            return original(history, record)
+
+        with mock.patch.object(
+            GitSessionHistory,
+            "write_commit_operation",
+            autospec=True,
+            side_effect=fail_final_write,
+        ), self.assertRaises(StoryCommitError) as caught:
+            service.execute(authority)
+        self.assertIs(
+            caught.exception.code,
+            StoryCommitFailureCode.OUTCOME_UNKNOWN,
+        )
+        self.assertEqual(
+            self.run_git(session_root, "diff", "--cached", "--name-only").stdout,
+            b"",
+        )
+        self.assertEqual(
+            self.run_git(session_root, "status", "--porcelain=v1").stdout,
+            b"",
+        )
+        with open_git_session_history(root, manifest(), "novel") as history:
+            operations = history.snapshot().commit_operations
+        self.assertEqual(len(operations), 1)
+        self.assertIs(
+            operations[0].state,
+            GitSessionHistoryState.OUTCOME_UNKNOWN,
+        )
+        self.assertIsNone(operations[0].commit_id)
+
     def test_inspect_and_recover_revalidate_apply_root_without_state_advancement(
         self,
     ) -> None:
@@ -265,6 +426,65 @@ class StoryCommitServiceTests(StoryCommitGitTestCase):
                                 history.read_commit_operation(result.operation_id),
                                 before,
                             )
+
+    def test_inspect_and_recover_semantic_loss_never_advances_state(self) -> None:
+        failure = GitSessionHistoryError(
+            GitSessionHistoryFailureCode.RECOVERY_REQUIRED,
+            GitSessionHistoryRecoveryAction.OPERATOR_RECOVERY,
+        )
+        original = GitSessionHistory.require_semantic_ready
+        for action_name, guard_ordinals in (
+            ("inspect", range(1, 5)),
+            ("recover", range(1, 8)),
+        ):
+            with self.subTest(action=action_name):
+                root, _session_root, service, candidate = self.prepared_bound(
+                    f"{action_name}-semantic-revalidation"
+                )
+                result = service.reject(
+                    candidate,
+                    self.confirmation(
+                        candidate,
+                        StoryCommitDecision.REJECT,
+                        f"{action_name}-semantic",
+                    ),
+                )
+                with open_git_session_history(root, manifest(), "novel") as history:
+                    before = history.read_commit_operation(result.operation_id)
+
+                for ordinal in guard_ordinals:
+                    calls = 0
+
+                    def fail_once(history, *args, **kwargs):
+                        nonlocal calls
+                        calls += 1
+                        if calls == ordinal:
+                            raise failure
+                        return original(history, *args, **kwargs)
+
+                    with self.subTest(ordinal=ordinal), mock.patch.object(
+                        GitSessionHistory,
+                        "require_semantic_ready",
+                        autospec=True,
+                        side_effect=fail_once,
+                    ), mock.patch.object(
+                        commits_module,
+                        "advance_commit_operation",
+                        wraps=commits_module.advance_commit_operation,
+                    ) as advance, self.assertRaises(StoryCommitError) as caught:
+                        getattr(service, action_name)(result.operation_id)
+                    self.assertIs(
+                        caught.exception.code,
+                        StoryCommitFailureCode.RECOVERY_REQUIRED,
+                    )
+                    advance.assert_not_called()
+                    with open_git_session_history(
+                        root, manifest(), "novel"
+                    ) as history:
+                        self.assertEqual(
+                            history.read_commit_operation(result.operation_id),
+                            before,
+                        )
 
     def test_reject_and_revise_persist_result_without_git_or_artifact_mutation(
         self,

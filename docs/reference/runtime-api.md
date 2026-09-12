@@ -59,12 +59,16 @@ semantic READY inspection, opens the no-follow named root at the pinned
 identity, and repeats READY plus physical-root checks before releasing the
 guard. No such guard is held across a provider `await`, concurrent specialist
 execution, or other asynchronous wait; a later repository step reacquires a
-new guard and revalidates the same binding. The binding's repository is private
-and can be obtained only from a live guarded access; it cannot be reused after
-that access exits. Guard exit revalidates after success, ordinary error, or
-cancellation. If the body and exit check both fail, binding loss is the
-authoritative failure; otherwise the original body failure is preserved. This
-covers explicit
+new guard and revalidates the same binding. The binding keeps one stable exact
+repository object private. It can be obtained only from a live guarded access,
+and every transaction on it requires live same-thread access and READY checks
+before and after; retaining the raw object grants no later or cross-thread
+authority. Same-thread nested guards reuse the current access. Long-lived
+reference and source adapters instead retain an access factory and reacquire a
+guard for each operation. Guard exit revalidates after success, ordinary
+error, or cancellation. If the body and exit check both fail, binding loss is
+the authoritative failure; otherwise the original body failure is preserved.
+This covers explicit
 and contextual references, source status and fingerprints, proposal and review
 revalidation, Apply and application-ledger access, recovery reads, consensus
 artifact material, and the interactive attachment picker. A
@@ -98,9 +102,13 @@ Git authority. Source paths must be canonical relative POSIX text. Each allowed
 read reopens and rechecks the exact physical session root, accepts only one
 unique regular-file leaf, rejects FIFOs/devices/symlinks/hard links and
 identity/metadata drift, and checks embedded debate or agent-state ownership
-before returning. A missing, replaced, or unsafe bound root fails closed as a
-content-free `source_unavailable` instead of borrowing control-root or sibling-
-session state.
+before returning. A compound agent-state or debate read pins its intermediate
+parent descriptor and rechecks the complete inventory: names plus device,
+inode, type, link count, size, nanosecond modification time, and nanosecond
+change time. Parent replacement or any inventory drift fails closed. A missing,
+replaced, or unsafe bound root fails closed as a content-free
+`source_unavailable` instead of borrowing control-root or sibling-session
+state.
 
 ## Phase-confirmed consensus methods
 
@@ -950,15 +958,24 @@ and sibling-session bytes remain outside the operation.
 
 Commit remains a distinct decision and authority boundary. Its internal
 service carries the successful Apply binding's physical worktree identity into
-Commit-request preparation, candidate authorization, and execution. It also
-independently requires and revalidates the same exact READY session worktree,
-branch, and candidate evidence before staging only the disclosed paths and
-creating a local commit. A replacement discovered before the durable Commit
-operation starts is candidate drift and requires a fresh request; once a
-`running` operation exists, identity loss is conservatively
-`outcome_unknown` and requires inspection. Apply never implies Commit, and
-neither operation pushes, merges, or grants a provider direct filesystem or
-Git authority.
+Commit-request preparation, candidate authorization, and execution. Runtime
+reopens that exact binding and holds it through the `story_commit_request`
+append and in-memory service registration. A detected binding loss suppresses
+the returned request and removes the in-memory service, but it cannot roll back
+an append that already became durable. The Commit service also independently
+holds its session-history lease and places semantic READY checkpoints around execution,
+inspection, recovery, and every durable history transition. Normal phases
+require a clean READY index; after intentional staging, phase-aware topology
+checks instead require exactly the candidate index/worktree, branch and
+internal-ref tips, registered worktree, main-root HEAD/status, and bound
+physical root. READY/history resource loss detected before the `running`
+record is durable maps to `recovery_required`; failure after it is durable maps
+to `outcome_unknown`. A candidate/root replacement found before execution
+remains candidate drift and requires a fresh request. Failure while publishing
+the final `committed` record also durably preserves the same operation as
+`outcome_unknown` when the phase topology can still be proved. Apply never
+implies Commit, and neither operation pushes, merges, or grants a provider
+direct filesystem or Git authority.
 
 The identity-bound service applies the same Apply-root requirement to
 `inspect()` and `recover()`, checking before and between their owner reads and
@@ -966,12 +983,14 @@ before every possible history transition. A replaced root returns
 `recovery_required`; neither method reports or advances a staged, committed,
 or other durable operation state from replacement resources.
 
-After a successful Apply result is durable, the runtime currently prepares and
-publishes its follow-on Commit request in a later step. If that step fails, the
-Apply result remains durable and the returned message directs inspection, but
-there is not yet a dedicated durable Commit-request publication/failure state.
-That post-Apply state-machine work is intentionally outside this change and is
-tracked by
+After a successful Apply result is durable, the runtime prepares and publishes
+its follow-on Commit request in a later step under the exact Apply binding.
+That live guard covers the request append and service registration, but if the
+handoff fails, the Apply result remains durable, any already-completed append
+remains durable, and the returned message directs inspection. There is not yet
+a dedicated durable Commit-request publication/failure state, schema, or
+restart projection. That post-Apply
+state-machine work is intentionally outside this change and is tracked by
 [Issue #662](https://github.com/Kims-DeveloperGroup/story-writing-agents/issues/662).
 
 Known provider work is not replayed merely because session resources disappear

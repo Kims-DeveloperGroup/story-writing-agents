@@ -3904,28 +3904,31 @@ class StoryRuntime:
                             f"commit {len(application_result.affected_paths)} reviewed artifact paths",
                         ),
                     )
-                    commit_request = build_story_commit_request_payload(
-                        confirmation_request_id=self._new_id("g"),
-                        application_result_event_id=result_event_id,
-                        candidate=candidate,
-                    )
-                    result_history = self.conversation_storage_services.event_store.read(
-                        decision.session_id, decision.conversation_id
-                    )
-                    self._append_drafts(
-                        result_history[-1].sequence,
-                        (self._draft(
-                            session_id=decision.session_id,
-                            conversation_id=decision.conversation_id,
-                            turn_id=result_history[-1].turn_id,
-                            step_id=decision.step_id,
-                            kind=CollaborationEventKind.STORY_COMMIT_REQUEST,
-                            sender=_LEAD_ACTOR,
-                            recipient=_USER_ACTOR,
-                            payload=commit_request,
-                        ),),
-                    )
-                    self._story_commit_services[key] = service
+                    with artifact_binding.open_ready_resources():
+                        commit_request = build_story_commit_request_payload(
+                            confirmation_request_id=self._new_id("g"),
+                            application_result_event_id=result_event_id,
+                            candidate=candidate,
+                        )
+                        result_history = (
+                            self.conversation_storage_services.event_store.read(
+                                decision.session_id, decision.conversation_id
+                            )
+                        )
+                        self._append_drafts(
+                            result_history[-1].sequence,
+                            (self._draft(
+                                session_id=decision.session_id,
+                                conversation_id=decision.conversation_id,
+                                turn_id=result_history[-1].turn_id,
+                                step_id=decision.step_id,
+                                kind=CollaborationEventKind.STORY_COMMIT_REQUEST,
+                                sender=_LEAD_ACTOR,
+                                recipient=_USER_ACTOR,
+                                payload=commit_request,
+                            ),),
+                        )
+                        self._story_commit_services[key] = service
             except Exception:
                 commit_request = None
                 self._story_commit_services.pop(key, None)
