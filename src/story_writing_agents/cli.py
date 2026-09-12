@@ -988,8 +988,16 @@ def _run_interactive_cli(arguments: argparse.Namespace) -> int:
                 )
                 return 0
             snapshot, default_provider = default_selection
-            establish_default_backend(workspace, default_provider)
-            configuration = manager.load_configuration_snapshot()
+            try:
+                establish_default_backend(workspace, default_provider)
+            except SettingsError as exc:
+                if exc.kind is not SettingsErrorKind.CONFLICT:
+                    raise
+                configuration = manager.load_configuration_snapshot()
+                if configuration.system_defaults.default_backend is None:
+                    raise
+            else:
+                configuration = manager.load_configuration_snapshot()
         runtime_backend_overrides = dict(backend_overrides)
         effective_providers = _effective_interactive_providers(
             manager,

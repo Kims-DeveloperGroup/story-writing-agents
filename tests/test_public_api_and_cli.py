@@ -71,6 +71,10 @@ from story_writing_agents.interactive_auth import (
     InteractiveAuthResult,
     InteractiveAuthResultKind,
 )
+from story_writing_agents.interactive_settings import (
+    SettingsError,
+    SettingsErrorKind,
+)
 from story_writing_agents.provider_auth import (
     ProviderAuthSnapshot,
     ProviderAuthState,
@@ -2147,13 +2151,13 @@ class CliTests(unittest.TestCase):
         controller = mock.Mock()
         controller.run_session_lobby.return_value = 0
 
-        def concurrent_winner(current: Workspace, proposed: str) -> bool:
+        def concurrent_winner(current: Workspace, proposed: str) -> None:
             self.assertIs(current, workspace)
             self.assertEqual(proposed, "codex")
             system = current.read_json("config/system_defaults.json")
             system["default_backend"] = "antigravity"
             current.write_json("config/system_defaults.json", system)
-            return False
+            raise SettingsError(SettingsErrorKind.CONFLICT)
 
         with (
             mock.patch.object(sys, "stdin", TtyStringIO(is_terminal=True)),
@@ -2308,6 +2312,67 @@ class CliTests(unittest.TestCase):
         self.assertEqual(
             workspace.path("config/system_defaults.json").read_bytes(),
             before,
+        )
+
+        workspace = initialized_workspace(self)
+        system_before = workspace.path("config/system_defaults.json").read_bytes()
+        agents_before = workspace.path("config/agent_configs.json").read_bytes()
+        coordinator = ScriptedCliCoordinator(
+            [],
+            snapshots=(both,),
+            default_results=(provider_result(both, "codex"),),
+        )
+        stderr = io.StringIO()
+        with (
+            mock.patch.object(sys, "stdin", TtyStringIO(is_terminal=True)),
+            mock.patch.object(sys, "stdout", TtyStringIO(is_terminal=True)),
+            mock.patch.object(sys, "stderr", stderr),
+            mock.patch.object(cli_module, "resolve_workspace", return_value=workspace),
+            mock.patch.object(
+                cli_module,
+                "build_stream_terminal",
+                return_value=InteractiveTerminal(lambda _prompt: "", lambda _text: None),
+            ),
+            mock.patch.object(cli_module, "ProviderAuthService", return_value=object()),
+            mock.patch.object(
+                cli_module,
+                "InteractiveAuthCoordinator",
+                return_value=coordinator,
+            ),
+            mock.patch.object(
+                cli_module,
+                "establish_default_backend",
+                side_effect=SettingsError(SettingsErrorKind.CONFLICT),
+            ),
+            mock.patch.object(cli_module, "load_cli_context") as context,
+            mock.patch.object(cli_module, "AgentBackend") as backend,
+            mock.patch.object(cli_module, "InteractiveController") as controller,
+        ):
+            self.assertEqual(main(["chat"]), 2)
+        self.assertEqual(
+            stderr.getvalue(),
+            expected_interactive_error(
+                InteractiveErrorCode.CONFIGURATION_INVALID,
+                debug_log_available=True,
+            ),
+        )
+        context.assert_not_called()
+        backend.assert_not_called()
+        controller.assert_not_called()
+        self.assertEqual(
+            workspace.path("config/system_defaults.json").read_bytes(),
+            system_before,
+        )
+        self.assertEqual(
+            workspace.path("config/agent_configs.json").read_bytes(),
+            agents_before,
+        )
+        self.assertFalse(
+            tuple(
+                workspace.path(
+                    "agent_states/orchestrator_state/provider_sessions"
+                ).glob("*.json")
+            )
         )
 
     def test_storage_activation_cas_remains_after_later_provider_interrupt(
