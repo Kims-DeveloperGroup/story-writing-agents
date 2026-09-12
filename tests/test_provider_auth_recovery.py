@@ -276,9 +276,8 @@ class AuthClassificationTests(unittest.IsolatedAsyncioTestCase):
 
 class AuthContextProvider(context._ScriptedProvider):
     """Explicitly model provider-owned proof, accounting, admission, and veto."""
-    def __init__(self, responses, *, reference_failure=None, **kwargs):
+    def __init__(self, responses, **kwargs):
         super().__init__(responses, provider_id="antigravity", **kwargs)
-        self.reference_failure = reference_failure
         self.prelude_calls = []
 
     async def invoke_context(self, request):
@@ -297,14 +296,7 @@ class AuthContextProvider(context._ScriptedProvider):
         async with provider_activity(self.provider_id) as generation:
             validate_provider_replay()
             self.prelude_calls.append(request)
-            result = await super().prepare_references(request)
-            if self.reference_failure is not None:
-                failure, self.reference_failure = self.reference_failure, None
-                self.threads.clear()  # The synthetic rejected process never made a native thread.
-                failure.auth_generation = generation
-                record_context_provider_failure(failure, ContextProviderFailureFacts(result.accounting))
-                raise failure
-            return result
+            return await super().prepare_references(request)
 
 
 class ContextRecoveryTests(context.ContextExecutionTestCase):
@@ -326,25 +318,26 @@ class ContextRecoveryTests(context.ContextExecutionTestCase):
         return self.request(reference_operation_id="reference-operation", mandatory_references=(reference,),
                             physical_call_limit=limit)
 
-    async def test_prelude_replay_reserves_room_for_substantive_call(self):
+    async def test_local_reference_load_does_not_consume_provider_capacity(self):
         request = self.reference_request()
-        provider = AuthContextProvider((context._answer,), reference_failure=auth_failure(),
-                                      reference_operation_id=request.reference_operation_id)
-        result, keys = await drive_recovery(self.invoke(provider, request))
-        self.assertEqual(len(result.provider_calls), 3)
-        self.assertEqual(len(keys), 1)
-        a, b = provider.prelude_calls
-        self.assertEqual(replace(a, call_id=b.call_id), b)
-        self.assertNotEqual(a.call_id, b.call_id)
-        self.assertEqual(provider.completed_references, 1)
-        constrained = self.reference_request(limit=2)
-        constrained = replace(constrained, operation_id="limited", result_correlation_id="limited")
-        provider = AuthContextProvider((context._answer,), reference_failure=auth_failure(),
-                                      reference_operation_id=constrained.reference_operation_id)
-        with self.assertRaises(ProviderAuthenticationRequiredError):
-            await drive_recovery(self.invoke(provider, constrained))
+        provider = AuthContextProvider(
+            (context._answer,),
+            reference_operation_id=request.reference_operation_id,
+        )
+        result = await self.invoke(provider, request)
+        self.assertEqual(len(result.provider_calls), 1)
         self.assertEqual(len(provider.prelude_calls), 1)
-        self.assertEqual(provider.calls, [])
+        self.assertEqual(provider.completed_references, 1)
+        constrained = self.reference_request(limit=1)
+        constrained = replace(constrained, operation_id="limited", result_correlation_id="limited")
+        provider = AuthContextProvider(
+            (context._answer,),
+            reference_operation_id=constrained.reference_operation_id,
+        )
+        constrained_result = await self.invoke(provider, constrained)
+        self.assertEqual(len(provider.prelude_calls), 1)
+        self.assertEqual(len(provider.calls), 1)
+        self.assertEqual(len(constrained_result.provider_calls), 1)
 
     async def test_later_action_recovery_preserves_prior_evidence_and_per_call_cap(self):
         provider = AuthContextProvider((auth_failure(), context._search, auth_failure(), context._answer))

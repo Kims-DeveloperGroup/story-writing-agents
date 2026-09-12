@@ -681,12 +681,12 @@ class AntigravityAdapterTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn(original_role_clause, captured_prompt)
         self.assertEqual(
             definition.fingerprint,
-            "12659933975453e30a05cba5372a0e852fa93abc7c04373355e12fa99579dacc",
+            "a7bb90c92173fdd52ad5ff1ad1ef47325dde328094987dd57f9e648c58848e0b",
         )
-        self.assertEqual(len(codex_bytes), 9767)
+        self.assertEqual(len(codex_bytes), 9626)
         self.assertEqual(
             hashlib.sha256(codex_bytes).hexdigest(),
-            "0ff2984d747e441a041233a3669b0919b9dd9cc0745bda3aca5c6cab0ceeea85",
+            "dbcc2bdf0141b35a3c51e41f1455e1acbf9842cfdf0d58ec2f6300203fc9fcf6",
         )
         expected_role = _expected_antigravity_role(captured_prompt)
         provider_constraint_bytes = next(
@@ -723,7 +723,7 @@ class AntigravityAdapterTests(unittest.IsolatedAsyncioTestCase):
         }
         self.assertEqual(
             tuple(item.serialized_utf8_bytes for item in codex_components),
-            (4, 8851, 251, 10, 651),
+            (4, 8710, 251, 10, 651),
         )
         for codex_component, antigravity_component in zip(
             codex_components, antigravity_components, strict=True

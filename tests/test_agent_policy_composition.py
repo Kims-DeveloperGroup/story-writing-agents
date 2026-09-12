@@ -161,7 +161,7 @@ class AgentPolicyCompositionTests(unittest.TestCase):
             b"Return exactly one JSON object with this shape and no additional fields:",
             b"The specialist assessment in action.result has exactly this shape and\n"
             b"no additional fields. Submit the complete schema-selected outer object\n"
-            b"with correlation and action through finish; do not submit this inner\n"
+            b"with action through finish; do not submit this inner\n"
             b"assessment alone:",
         )
         self.assertIn(expected, antigravity_bytes)
