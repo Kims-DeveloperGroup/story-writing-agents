@@ -622,7 +622,7 @@ class RuntimeReferenceOperation:
 
         return self._guarded and isinstance(
             failure,
-            SessionArtifactGuardFailure,
+            (SessionArtifactGuardFailure, WorkspaceSecurityError),
         )
 
     @contextmanager

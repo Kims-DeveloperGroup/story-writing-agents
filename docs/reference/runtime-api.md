@@ -63,7 +63,8 @@ new guard and revalidates the same binding. The binding keeps one stable exact
 repository object private. It can be obtained only from a live guarded access,
 and every transaction on it requires live same-thread access and READY checks
 before and after; retaining the raw object grants no later or cross-thread
-authority. Same-thread nested guards reuse the current access. Long-lived
+authority. Same-thread nested guards repeat READY validation before entering
+their body, then reuse the current access. Long-lived
 reference and source adapters instead retain an access factory and reacquire a
 guard for each operation. Nested, outer, and borrowed Commit access exits
 revalidate after success, `RuntimeError`, or cancellation. If the body and exit
@@ -83,6 +84,10 @@ artifact material, and the interactive attachment picker. A
 `RuntimeSession` forwards the same session ID; switching between two ready
 sessions or using them concurrently cannot borrow the control root or the
 other session's repository.
+
+Lead current-state capture reads both session runtime overrides and canonical
+core snapshots through that same exact binding and within one guarded access.
+It cannot combine control-root overrides with session-worktree story state.
 
 The interactive picker performs its path inventory and selected-file read as
 separate guarded operations. The range viewer receives only the bytes returned
@@ -1062,7 +1067,9 @@ failures for runtime recovery mapping instead of flattening them into an
 ordinary reference workflow failure. Unguarded public repository composition
 retains its fixed `ReferenceOperationFailure` conversion. Thus loss of the
 selected session root remains a typed recovery boundary and does not authorize
-provider work or fallback.
+provider work or fallback. If either preserved failure arrives after guarded
+authority publication, runtime closes transient content and retains only the
+content-free cleanup operation for fresh-binding reconciliation.
 
 ### Free text and recovery
 

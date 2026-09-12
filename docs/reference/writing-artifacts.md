@@ -1356,12 +1356,13 @@ workspace, session, and operation holds a strong cleanup owner until that
 operation is terminal; another `StoryRuntime` in the same process therefore
 does not mistake live work for a restart orphan.
 
-If a guard failure leaves termination uncertain, the runtime immediately closes
-every retained selected-byte result and the content-bearing authorization,
-which also makes its one-use capabilities unusable. It clears pending
-coordinators and retained repository access, leaving only content-free cleanup
-ownership and an unfinished operation marked for cleanup. The failed invocation
-and any known provider work are not replayed.
+If a guard failure or preserved guarded `WorkspaceSecurityError` leaves
+termination uncertain, the runtime immediately closes every retained
+selected-byte result and the content-bearing authorization, which also makes
+its one-use capabilities unusable. It clears pending coordinators and retained
+repository access, leaving only content-free cleanup ownership and an
+unfinished operation marked for cleanup. The failed invocation and any known
+provider work are not replayed.
 At the next same-process artifact-sensitive boundary for that session, runtime
 creates a fresh exact binding and uses durable evidence to terminate unfinished
 invocations before terminating the operation. A candidate-only consensus call
@@ -1593,8 +1594,9 @@ Guarded runtime references preserve the package-internal
 `SessionArtifactGuardFailure` classification, including its existing concrete
 `story_writing_agents.workspace.initialization.SessionArtifactBindingError`,
 through preparation, read action, explicit failure, terminalization, and
-cleanup. A later guard failure also takes precedence while closing an earlier
-provider or workflow failure. Lead maps that resource loss to
+cleanup. A later guard or preserved workspace-security failure also takes
+precedence while closing an earlier provider or workflow failure. Lead maps
+that resource loss to
 `recovery_required` before any provider or fallback call. Guarded preparation
 continues to propagate `WorkspaceSecurityError`. None of this changes the
 unguarded repository contract: public preparation and operation failure still

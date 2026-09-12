@@ -925,6 +925,55 @@ class RuntimeExecutionRetirementTests(unittest.TestCase):
             ReferenceOperationState.TERMINATED,
         )
 
+    def test_registered_workspace_security_postcheck_defers_content_free_cleanup(
+        self,
+    ) -> None:
+        workspace = pristine_initialized_workspace(self)
+        provision_session_resources(workspace.root, "novel")
+        binding = compose_session_artifact_binding(workspace.root, "novel")
+        runtime = StoryRuntime(workspace)
+        workspace_root = str(workspace.root)
+        self.addCleanup(self._cleanup_runtime_registry, workspace_root)
+        marker = WorkspaceSecurityError("capture root security changed")
+        published = []
+
+        @contextmanager
+        def repository_access():
+            with binding.open_ready_resources() as access:
+                yield access.repository
+            raise marker
+
+        def register(operation):
+            runtime._register_reference_operation(operation)
+            published.append(operation)
+
+        with self.assertRaises(WorkspaceSecurityError) as rejected:
+            prepare_registered_guarded_runtime_reference_operation(
+                repository_access,
+                session_id="novel",
+                text="Read ${core_documents/global_outline.md}.",
+                register=register,
+            )
+        self.assertIs(rejected.exception, marker)
+        self.assertEqual(len(published), 1)
+        operation = published[0]
+        self._assert_content_free_cleanup_pending(operation)
+
+        @contextmanager
+        def fresh_repository_access():
+            with binding.open_ready_resources() as access:
+                yield access.repository
+
+        runtime._reconcile_reference_operations_at_boundary(
+            session_id="novel",
+            repository_access=fresh_repository_access,
+        )
+        self.assertTrue(operation.finished)
+        self.assertEqual(
+            runtime._registered_reference_operation_ids("novel"),
+            frozenset(),
+        )
+
     def test_registered_authorized_postcheck_is_published_before_cleanup_defers(
         self,
     ) -> None:

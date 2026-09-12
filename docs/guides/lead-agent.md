@@ -1640,6 +1640,9 @@ Apply or Commit confirmation.
 `StoryRuntime` is constructed from the initialized `main` control workspace,
 but every artifact read, reference, proposal check, Apply, application-ledger
 lookup, and recovery operation freshly binds the exact READY session worktree.
+The Lead current-state payload reads session runtime overrides and canonical
+core snapshots inside one access on that same binding, so it cannot mix control
+configuration state with session-worktree story state.
 The interactive picker uses the exact attached session as well. There is no
 fallback to the control root, current directory, or another session and no
 automatic provisioning. A binding failure occurs before provider or artifact

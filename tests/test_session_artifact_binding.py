@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import os
 import subprocess
 import threading
@@ -145,6 +146,31 @@ class RuntimeSessionArtifactBindingTests(LeadOrchestrationTestCase):
             ),
             "Outline first line.\nOutline second line.\n",
         )
+
+    def test_session_context_state_reads_overrides_from_bound_session_root(
+        self,
+    ) -> None:
+        control_overrides = {
+            "language": "CONTROL",
+            "agents": {"lead_orchestrator": {"provider": "control"}},
+        }
+        session_overrides = {
+            "language": "SESSION",
+            "agents": {"lead_orchestrator": {"provider": "session"}},
+        }
+        self.control_workspace.save_session_overrides(
+            self.session_id,
+            control_overrides,
+        )
+        self.workspace.save_session_overrides(
+            self.session_id,
+            session_overrides,
+        )
+
+        state = json.loads(self.runtime._session_context_state(self.session_id))
+
+        self.assertEqual(state["runtime_overrides"], session_overrides)
+        self.assertNotEqual(state["runtime_overrides"], control_overrides)
 
     def test_session_source_paths_reject_unsafe_lexical_forms_before_io(
         self,
@@ -819,6 +845,20 @@ class RuntimeSessionArtifactBindingTests(LeadOrchestrationTestCase):
                 SessionArtifactBindingError
             ):
                 operation()
+
+    def test_nested_access_requires_ready_before_entering_body(self) -> None:
+        binding = compose_session_artifact_binding(
+            self.control_workspace.root,
+            self.session_id,
+        )
+        with binding.open_ready_resources() as outer:
+            entered = False
+            with self.replace_session_worktree():
+                with self.assertRaises(SessionArtifactBindingError):
+                    with binding.open_ready_resources():
+                        entered = True
+            self.assertFalse(entered)
+            outer.require_ready()
 
     def test_foreign_thread_access_surface_fails_and_exit_revokes_every_token(
         self,

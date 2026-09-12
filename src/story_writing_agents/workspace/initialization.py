@@ -467,6 +467,7 @@ class SessionArtifactBinding:
 
         nested = self._current_repository_access()
         if nested is not None:
+            nested.require_ready()
             try:
                 yield nested
             except BaseException:

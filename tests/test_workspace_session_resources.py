@@ -103,7 +103,7 @@ class WorkspaceSessionResourceCompositionTests(GitSessionResourceGitTestCase):
         root = self.initialize_workspace("artifact-binding-failures")
         before = self.repository_snapshot(root)
         with mock.patch.object(
-            initialization_module,
+            repository_module,
             "WritingArtifactRepository",
             side_effect=AssertionError("repository was constructed for absent resources"),
         ) as repository:

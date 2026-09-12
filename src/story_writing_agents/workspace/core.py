@@ -1207,7 +1207,7 @@ class SessionSourceWorkspace(Workspace):
         self._artifact_binding = binding
 
     def path(self, relative: str | os.PathLike[str]) -> Path:
-        """Reject inherited pathname I/O outside the two source-read methods."""
+        """Reject inherited pathname I/O outside bounded source-read methods."""
 
         del relative
         raise WorkspaceSecurityError(
@@ -1490,6 +1490,56 @@ class SessionSourceWorkspace(Workspace):
             raise WorkspaceFormatError(
                 f"file is not valid UTF-8: {relative}"
             ) from exc
+
+    def load_session_overrides(self, session_id: str) -> dict[str, Any]:
+        """Read exact session overrides through the pinned root descriptor."""
+
+        session = self.validate_identifier(session_id)
+        if session != self._session_id:
+            raise WorkspaceSecurityError("session source authority does not match")
+        relative_directory = "agent_states/orchestrator_state/sessions"
+
+        def read(root: int) -> dict[str, Any]:
+            directory: int | None = None
+            try:
+                try:
+                    directory = self._open_directory_at(root, relative_directory)
+                except FileNotFoundError:
+                    self._require_directory_absent_at(root, relative_directory)
+                if directory is None:
+                    self._require_directory_absent_at(root, relative_directory)
+                    return {"language": None, "agents": {}}
+                inventory = self._capture_directory_inventory(directory)
+                text = self._read_text_at(
+                    directory,
+                    f"{session}.json",
+                    missing_ok=True,
+                )
+                if text is None:
+                    value: object = {"language": None, "agents": {}}
+                else:
+                    try:
+                        value = json.loads(text)
+                    except json.JSONDecodeError as exc:
+                        raise WorkspaceFormatError(
+                            "session override state is not valid JSON"
+                        ) from exc
+                    if not isinstance(value, dict):
+                        raise WorkspaceFormatError(
+                            "session override state must be a JSON object"
+                        )
+                self._verify_directory_at(
+                    root,
+                    relative_directory,
+                    directory,
+                    inventory,
+                )
+                return value
+            finally:
+                if directory is not None:
+                    os.close(directory)
+
+        return self._read_bound(read)
 
     def read_agent_session_state(
         self,

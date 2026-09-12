@@ -7129,9 +7129,11 @@ every intermediate arrow. The current runtime graph is acyclic.
   Provider invocation, artifact-evidence resolution, and evidence
   revalidation derive the correlated call-local `SessionSourceWorkspace` from
   the same binding and lend it to every active-debate and invoking-agent-state
-  context adapter. Those adapters never receive the control-root workspace,
-  fall back to it, or acquire Git authority; conversation sources retain their
-  separate conversation-storage owners.
+  context adapter. Lead current-state capture also reads session runtime
+  overrides and canonical core snapshots inside one access on that same
+  binding. Those readers never receive the control-root workspace, fall back
+  to it, or acquire independent Git authority; conversation sources retain
+  their separate conversation-storage owners.
   Reference lookup, evidence capture/revalidation,
   candidate construction, Apply, and artifact-ledger inspection never fall
   back to the control root. Private review/input/finalization consumers receive
@@ -7667,8 +7669,9 @@ every intermediate arrow. The current runtime graph is acyclic.
   workspace facade, and the project-root facade. `SessionSourceWorkspace` is
   derived only from an exact
   `workspace.initialization.SessionArtifactBinding`; it exposes the existing
-  `Workspace` read shape needed by context adapters while rejecting inherited
-  pathname I/O. Package-internal `discover_workspace` delegates nearest
+  `Workspace` read shape needed by context adapters, including exact
+  descriptor-relative session runtime-override reads, while rejecting
+  inherited pathname I/O. Package-internal `discover_workspace` delegates nearest
   recognizable-boundary selection and constructs an exactly ready workspace.
   `Workspace.inspect_debate_context` is the strict, separate context-sidecar
   inspection operation. `Workspace.read_agent_session_state` returns one
@@ -7697,9 +7700,9 @@ every intermediate arrow. The current runtime graph is acyclic.
   artifact scaffold. Each allowed debate or owner-state operation borrows one
   short semantic-READY/physical-root access from that binding, traverses the
   pinned descriptor with strict lexical and no-follow checks, pins the nested
-  agent-state session or discussion-log session directory for the complete
-  logical read, and captures its sorted leaf inventory with device, inode,
-  type, link count, size, mtime, and ctime. Every selected leaf is read relative
+  override, agent-state session, or discussion-log session directory for the
+  complete logical read, and captures its sorted leaf inventory with device,
+  inode, type, link count, size, mtime, and ctime. Every selected leaf is read relative
   to that retained directory; before return, the directory must still be its
   named identity and its complete metadata inventory must match. Each leaf is
   also required during its read to remain the same unique regular file with
@@ -7814,8 +7817,9 @@ every intermediate arrow. The current runtime graph is acyclic.
   binding-owned reentrant, non-recyclable thread-tokened operation gate
   surrounds every repository transaction, requires the current access to
   remain semantic-READY before and after that transaction, and rejects retained
-  repository use after access exit. Same-thread nested binding access reuses
-  the exact active lease and descriptor; deactivation serializes with
+  repository use after access exit. Same-thread nested binding access first
+  repeats READY validation, then reuses the exact active lease and descriptor;
+  deactivation serializes with
   synchronous repository work.
   The access holds one call-local Git lease and pinned root descriptor, keys
   nested access by the repository-lock owner's process-aware opaque thread
@@ -8346,8 +8350,9 @@ every intermediate arrow. The current runtime graph is acyclic.
   preparation, repository actions, failure handling, terminalization, and
   cleanup so binding loss reaches the binding owner's typed recovery boundary;
   guarded capture also retains its established workspace-security propagation.
-  Guard rejection moves the registered operation to content-free cleanup-
-  pending state: transient results and authorization bytes are closed, pending
+  Guard rejection or a preserved guarded `WorkspaceSecurityError` moves the
+  registered operation to content-free cleanup-pending state: transient
+  results and authorization bytes are closed, pending
   coordinators are discarded, and the stale repository/access callback is
   detached. A later owner can reconcile the exact operation through a freshly
   guarded repository; runtime state becomes finished only after the outer
