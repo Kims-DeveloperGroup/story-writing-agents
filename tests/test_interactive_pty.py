@@ -4155,7 +4155,7 @@ print(
         self.workspace.write_json("config/system_defaults.json", defaults)
 
         first = self._spawn_cli(())
-        onboarding = first.wait_for_text("Default provider")
+        onboarding = first.wait_for_text("Default provider > ")
         compact_onboarding = "".join(onboarding.split())
         self.assertIn("Choosetheworkspacedefaultprovider.", compact_onboarding)
         self.assertIn("Storysavesthischoiceforlatershells", compact_onboarding)
@@ -4173,11 +4173,9 @@ print(
         first.wait_for_text("  7. Agents", after=settings_mark)
         first.send_line("7")
         first.wait_for_text("Select an agent to configure", after=settings_mark)
+        fields_mark = first.output_mark()
         first.send_line("2")
-        fields = first.wait_for_text(
-            "Choose a provider, model, or effort setting",
-            after=settings_mark,
-        )
+        fields = first.wait_for_text("Choice > ", after=fields_mark)
         self.assertIn("1. Provider", fields)
         self.assertIn("Current: Codex", fields)
         self.assertNotIn("Provider (disabled)", fields)
