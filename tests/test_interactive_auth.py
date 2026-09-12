@@ -363,6 +363,113 @@ class InteractiveAuthCoordinatorTests(unittest.TestCase):
                 self.assertEqual(picker.notice.label, "authentication")
                 self.assertEqual(picker.notice.role, SemanticRole.INFO)
 
+    def test_default_picker_is_highlight_only_and_accepts_authenticated_alternate(
+        self,
+    ) -> None:
+        current = snapshot(
+            ProviderAuthState.AUTHENTICATED,
+            ProviderAuthState.AUTHENTICATED,
+        )
+        auth = ScriptedAuthService()
+        harness = TerminalHarness(
+            ControlOutcome(ControlOutcomeKind.COMMIT, text="antigravity")
+        )
+
+        result = harness.coordinator(auth).select_default(
+            current,
+            selected_provider="codex",
+        )
+
+        self.assertIs(result.kind, InteractiveAuthResultKind.AUTHENTICATED)
+        self.assertEqual(result.provider, "antigravity")
+        self.assertIs(result.snapshot, current)
+        self.assertEqual(auth.events, [])
+        state = harness.picker_states[0]
+        picker = state.picker  # type: ignore[attr-defined]
+        self.assertEqual(picker.prompt.name, "Default provider")
+        self.assertEqual(
+            picker.prompt.instruction,
+            "Choose the workspace default provider. Story saves this choice "
+            "for later shells; selecting an unauthenticated provider starts "
+            "native sign-in.",
+        )
+        self.assertEqual(picker.highlighted_id, "codex")
+        self.assertIsNone(picker.selected_id)
+        self.assertIs(picker.presentation, InputPresentation.STANDARD)
+        self.assertEqual(picker.notice.label, "default provider")
+        self.assertEqual(
+            picker.notice.text,
+            "Agents without their own provider setting inherit this workspace "
+            "default.",
+        )
+        self.assertIs(picker.notice.role, SemanticRole.INFO)
+        self.assertTrue(
+            all("Current selection." not in choice.description for choice in picker.choices)
+        )
+
+    def test_default_picker_native_login_failure_can_retry_to_authentication(
+        self,
+    ) -> None:
+        initial = snapshot(
+            ProviderAuthState.AUTHENTICATED,
+            ProviderAuthState.UNAUTHENTICATED,
+        )
+        refreshed_failure = snapshot(
+            ProviderAuthState.AUTHENTICATED,
+            ProviderAuthState.UNAUTHENTICATED,
+        )
+        refreshed_success = snapshot(
+            ProviderAuthState.AUTHENTICATED,
+            ProviderAuthState.AUTHENTICATED,
+        )
+        auth = ScriptedAuthService()
+        auth.login_results.extend(
+            (
+                ProviderLoginResult(
+                    "antigravity",
+                    1,
+                    status("antigravity", ProviderAuthState.UNAUTHENTICATED),
+                ),
+                ProviderLoginResult(
+                    "antigravity",
+                    0,
+                    status("antigravity", ProviderAuthState.AUTHENTICATED),
+                ),
+            )
+        )
+        auth.probe_all_results.extend((refreshed_failure, refreshed_success))
+        harness = TerminalHarness(
+            ControlOutcome(ControlOutcomeKind.COMMIT, text="antigravity"),
+            ControlOutcome(ControlOutcomeKind.COMMIT, text="antigravity"),
+        )
+        coordinator = harness.coordinator(auth)
+
+        failed = coordinator.select_default(initial, selected_provider="codex")
+        succeeded = coordinator.select_default(
+            failed.snapshot,
+            selected_provider=failed.provider,
+        )
+
+        self.assertIs(failed.kind, InteractiveAuthResultKind.NOT_AUTHENTICATED)
+        self.assertEqual(failed.provider, "antigravity")
+        self.assertIs(succeeded.kind, InteractiveAuthResultKind.AUTHENTICATED)
+        self.assertEqual(succeeded.provider, "antigravity")
+        self.assertIs(succeeded.snapshot, refreshed_success)
+        self.assertEqual(
+            auth.events,
+            [
+                ("login", "antigravity"),
+                ("probe_all", None),
+                ("login", "antigravity"),
+                ("probe_all", None),
+            ],
+        )
+        pickers = [state.picker for state in harness.picker_states]
+        self.assertEqual(
+            [(picker.highlighted_id, picker.selected_id) for picker in pickers],
+            [("codex", None), ("antigravity", None)],
+        )
+
     def test_explicit_form_presentation_is_forwarded_without_auth_side_effects(
         self,
     ) -> None:
@@ -575,6 +682,14 @@ class InteractiveAuthBoundaryTests(unittest.TestCase):
                 "presentation",
                 "selected_provider",
             ),
+        )
+        self.assertEqual(
+            tuple(
+                inspect.signature(
+                    InteractiveAuthCoordinator.select_default
+                ).parameters
+            ),
+            ("self", "snapshot", "selected_provider"),
         )
         repository_root = Path(__file__).resolve().parents[1]
         source_root = repository_root / "src"

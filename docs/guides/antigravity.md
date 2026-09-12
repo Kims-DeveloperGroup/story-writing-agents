@@ -222,6 +222,18 @@ both providers and open the same native authentication picker. A completed new
 authentication may fill a missing workspace default; cancellation keeps any
 existing default and explicit routes unchanged.
 
+First-start onboarding is separate from that global command. Initial
+authentication establishes access only. If `default_backend` is still absent,
+Story opens a standard **Default provider** picker before the lobby. The
+newly authenticated or sole authenticated provider—or Codex when both
+authenticate—is only highlighted as a recommendation; nothing is preselected.
+Choose either enabled provider. Choosing unauthenticated Antigravity runs the
+same native bare-`agy` sign-in and retries the picker if authentication does not
+succeed. Only an authenticated choice reaches the guarded absent-only save.
+Cancel, interrupt, or EOF exits before that save or runtime construction. The
+saved choice is inherited by agents without their own route, whose Provider
+setting remains editable, and later shells skip this onboarding picker.
+
 For a persistent route, use global `/settings`, choose Agents, choose an agent,
 and select Antigravity. If needed, native authentication runs as a subordinate
 Provider-editor action and returns to Provider. The route and any missing
@@ -236,7 +248,8 @@ After that full-path Apply Changes is confirmed, Apply-time authentication may
 rebase a missing workspace default only in the pending candidate. It becomes
 durable only when conversation-storage readiness, parity, and the final guarded
 settings write complete. This does not change startup authentication or
-explicit global `/auth`, which retain immediate absent-default durability.
+the separate first-start default choice, or explicit global `/auth`, which
+retains its established immediate absent-default behavior.
 Direct JSON editing is also supported; this excerpt routes only the plot
 architect and leaves omitted agents to inherit the workspace default:
 

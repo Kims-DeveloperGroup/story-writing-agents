@@ -55,13 +55,27 @@ to use `antigravity`. The repeatable CLI
 rewrites configuration. Per-agent routes and the workspace default may be null;
 new workspaces initialize both that way.
 
-Interactive startup first establishes a missing workspace default from fresh
-authentication, preserving existing defaults and explicit routes, then applies
-this precedence and freshly gates every distinct effective provider. A newly
-authenticated provider wins the absent-default choice; otherwise a sole
-authenticated provider wins, or Codex wins when both already authenticate.
-Noninteractive paths do not perform this onboarding write and use the same
-precedence directly.
+Interactive startup first completes its initial authentication access check.
+Only when the workspace default is missing does a separate standard **Default
+provider** picker follow. A newly authenticated provider, otherwise the sole
+authenticated provider, otherwise Codex when both authenticate is highlighted
+as a recommendation; it is neither preselected nor an automatic durable
+choice. The user may choose either enabled provider. Selecting an
+unauthenticated provider runs its existing native sign-in and returns to the
+picker after an unsuccessful attempt. Only an authenticated selection reaches
+the guarded absent-only persistence step.
+
+After that step, startup reloads configuration so a concurrently persisted
+default remains authoritative, then applies normal precedence and freshly
+gates every distinct effective provider. An existing default skips this picker,
+and existing defaults and explicit per-agent routes are never rewritten.
+Startup no longer synthesizes per-agent overrides from the recommendation;
+agents inheriting the saved default therefore retain an editable Provider
+setting. Only explicit `--backend` mappings remain one-run read-only launch
+overrides. Cancel, interrupt, or EOF at the default picker exits before default
+persistence, CLI context, backend, controller, or session construction. A later
+shell sees the persisted default and skips onboarding. Noninteractive paths do
+not perform this onboarding write and use the same precedence directly.
 
 Provider model and effort resolution is independent of the language/persona
 and backend-routing cascades. First non-null value wins:
@@ -116,9 +130,9 @@ conversation-storage readiness, parity, and the final guarded
 system/agent/optional-route settings write complete. A provider change advances
 its durable route generation and starts a fresh target-provider thread; a
 same-provider model/effort change remains eligible to reuse its native thread.
-This `/settings` boundary does not change startup authentication or global
-`/auth`, which retain immediate absent-default
-durability.
+This `/settings` boundary does not change the separate first-start default
+choice described above or global `/auth`, which retains its established
+immediate absent-default behavior.
 
 Persisted Codex reasoning accepts any forward-compatible lowercase token
 matching `[a-z][a-z0-9_-]{0,31}`. Interactive Effort choices come from the
