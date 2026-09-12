@@ -363,6 +363,13 @@ do not erase earlier evidence.
 
 For story commits specifically:
 
+- Commit, Reject, and Revise operation IDs are the first 32 lowercase
+  hexadecimal characters of SHA-256 over ASCII
+  `<commit|reject|revise>\0<candidate_id>`. Inspection and recovery recompute
+  this ownership: `rejected` accepts only the Reject or Revise identity, while
+  every other state requires Commit. Pre-#661 random Commit or
+  confirmation-salted Reject evidence is `recovery_required`; no migration or
+  compatibility reader rewrites it.
 - Execution, inspection, and recovery place semantic READY checks before and
   after durable history observations/transitions while the session-history
   lease is live. Once the candidate is intentionally staged, exact phase
@@ -386,6 +393,13 @@ For story commits specifically:
   main HEAD, and main-worktree status plus allowed-path content fingerprint
   before and after. Only the Story Commit recovery owner may perform a
   monotonic transition after admission.
+- Session recovery attributes an exact staged snapshot to Story Commit only
+  when reviewed/application provenance, relationship and change-set coherence,
+  normalized Create/Patch/Replace/Delete/Rename effects, candidate
+  before/after digests, affected paths, final artifacts, rename lineage, and
+  deletion provenance all agree. The expected-tree proof remains the separate
+  exact staged-index/worktree topology from the recovery snapshot. A mismatch
+  fails closed instead of borrowing Story Commit ownership from path names.
 - Terminal `inspect()` and `recover()` require current READY and never write or
   advance history. A historical `committed` record remains valid when its
   commit exactly matches its candidate and equals or is an ancestor of the
@@ -456,11 +470,15 @@ accepted, `collaboration_tail_sequence=0` means “tail unavailable,” not
 
 If the initial session-resource observation is recovery-required because of a
 staged index, reconciliation first attempts the recovery-only Story Commit
-snapshot. An exact staged topology with one candidate/operation correlated to
-the durable application is assigned to `story_commit`; missing or mismatched
-application correlation is also reported with that owner. If the narrow
-snapshot cannot prove those exact facts, the original arbitrary non-READY
-dirty/resource condition remains owned by `session_resources`.
+snapshot. An exact staged topology is assigned to `story_commit` only when one
+candidate/operation also matches the reviewed change-set and relationship
+digests, application provenance and result digests, and normalized operation
+effects with exact before/after, affected-path, final-artifact, rename, and
+deletion facts. Expected-tree authority still comes from that staged snapshot,
+not from caller-supplied review evidence alone. Missing or mismatched
+application correlation is reported with the Story Commit owner; if the narrow
+snapshot itself cannot prove its exact topology, the original arbitrary
+non-READY dirty/resource condition remains owned by `session_resources`.
 
 For an accepted lifecycle, the reconciler reads collaboration, the exact
 session-resource triple, complete session history, external Git operation, and
@@ -889,6 +907,14 @@ once runtime closes the exact attempt and reference accounting. Retry requires
 explicit new input and reacquires current evidence. Failed closure or uncertain
 reference cleanup remains recovery-gated; a recorded provider timeout alone
 does not establish that cleanup succeeded.
+
+If a provider invocation already has durable `SUBMITTED` call events and
+reference cleanup then loses its session-artifact binding, that binding failure
+remains the primary failure. Runtime still preserves the exact submitted-call
+count in assignment/result/terminal evidence and carries forward the original
+submission-uncertainty classification; cleanup failure neither resets the
+count nor invents certainty. The durable count remains matched to `SUBMITTED`
+events and never authorizes provider replay.
 
 The owner-conversation authoring objective survives clarification, side
 discussion, consultation, review, rejection, staleness, failure, and restart.

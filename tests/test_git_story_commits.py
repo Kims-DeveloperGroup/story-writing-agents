@@ -23,12 +23,14 @@ from story_writing_agents.git.session_history import (
     open_git_session_history,
 )
 from story_writing_agents.git.session_history_contracts import (
+    GIT_SESSION_HISTORY_DIRECTORY,
     GitSessionCommitOperationRecord,
     GitSessionHistoryError,
     GitSessionHistoryFailureCode,
     GitSessionHistoryRecoveryAction,
     GitSessionHistoryState,
     advance_commit_operation,
+    encode_commit_operation,
 )
 from story_writing_agents.git.story_commit_contracts import (
     StoryCommitApplicationEvidence,
@@ -267,7 +269,11 @@ class StoryCommitServiceTests(StoryCommitGitTestCase):
                     caught.exception.code, StoryCommitFailureCode.AUTHORITY_INVALID
                 )
         confirmation = self.confirmation(candidate, suffix="exact")
-        service.authorize(candidate, confirmation)
+        authority = service.authorize(candidate, confirmation)
+        self.assertEqual(
+            authority._operation_id,
+            commits_module._candidate_operation_id("commit", candidate.candidate_id),
+        )
         with self.assertRaises(StoryCommitError) as caught:
             service.authorize(candidate, confirmation)
         self.assertIs(caught.exception.code, StoryCommitFailureCode.AUTHORITY_INVALID)
@@ -603,11 +609,9 @@ class StoryCommitServiceTests(StoryCommitGitTestCase):
                 revalidation = service._revalidate_candidate(binding)
                 operation = GitSessionCommitOperationRecord(
                     session_id="novel",
-                    operation_id={
-                        GitSessionHistoryState.RUNNING: "7" * 32,
-                        GitSessionHistoryState.STAGED: "8" * 32,
-                        GitSessionHistoryState.OUTCOME_UNKNOWN: "9" * 32,
-                    }[initial_state],
+                    operation_id=commits_module._candidate_operation_id(
+                        "commit", candidate.candidate_id
+                    ),
                     candidate_id=candidate.candidate_id,
                     correlation_id=candidate.correlation_id,
                     state=GitSessionHistoryState.RUNNING,
@@ -692,7 +696,9 @@ class StoryCommitServiceTests(StoryCommitGitTestCase):
                 revalidation = service._revalidate_candidate(binding)
                 operation = GitSessionCommitOperationRecord(
                     session_id="novel",
-                    operation_id="a" * 32,
+                    operation_id=commits_module._candidate_operation_id(
+                        "commit", candidate.candidate_id
+                    ),
                     candidate_id=candidate.candidate_id,
                     correlation_id=candidate.correlation_id,
                     state=GitSessionHistoryState.RUNNING,
@@ -1039,6 +1045,13 @@ class StoryCommitServiceTests(StoryCommitGitTestCase):
                 result = action(
                     candidate, self.confirmation(candidate, decision, decision.value)
                 )
+                self.assertEqual(
+                    result.operation_id,
+                    commits_module._candidate_operation_id(
+                        decision.value,
+                        candidate.candidate_id,
+                    ),
+                )
                 self.assertIs(result.state, StoryCommitState.REJECTED)
                 self.assertIs(result.recovery_action, StoryCommitRecoveryAction.NONE)
                 self.assertEqual(self.repository_snapshot(root), before)
@@ -1295,6 +1308,60 @@ class StoryCommitServiceTests(StoryCommitGitTestCase):
                     rejected.operation_id,
                     failure_code=StoryCommitFailureCode.RECOVERY_REQUIRED,
                 )
+
+    def test_terminal_operation_repointed_to_second_valid_candidate_fails_without_mutation(
+        self,
+    ) -> None:
+        root, _session_root, evidence = self.applied_replace(
+            "terminal-operation-repoint"
+        )
+        first_service = StoryCommitService(root, manifest(), "novel")
+        first_candidate = first_service.prepare(
+            evidence,
+            "Reject candidate A",
+            ("candidate A",),
+        )
+        rejected = first_service.reject(
+            first_candidate,
+            self.confirmation(
+                first_candidate,
+                StoryCommitDecision.REJECT,
+                "candidate-A",
+            ),
+        )
+        second_candidate = StoryCommitService(root, manifest(), "novel").prepare(
+            evidence,
+            "Prepare candidate B",
+            ("candidate B",),
+        )
+        self.assertNotEqual(first_candidate.candidate_id, second_candidate.candidate_id)
+        self.assertEqual(first_candidate.session_id, second_candidate.session_id)
+        self.assertEqual(first_candidate.correlation_id, second_candidate.correlation_id)
+        self.assertEqual(first_candidate.branch_tip, second_candidate.branch_tip)
+
+        with open_git_session_history(root, manifest(), "novel") as history:
+            original = history.read_commit_operation(rejected.operation_id)
+            candidate_ids = history.inspect().candidate_ids
+        self.assertIn(first_candidate.candidate_id, candidate_ids)
+        self.assertIn(second_candidate.candidate_id, candidate_ids)
+        repointed = replace(original, candidate_id=second_candidate.candidate_id)
+        operation_path = (
+            root
+            / ".git"
+            / GIT_SESSION_HISTORY_DIRECTORY
+            / "novel"
+            / "commit-operations"
+            / f"{rejected.operation_id}.json"
+        )
+        operation_path.write_bytes(encode_commit_operation(repointed))
+        corrupted_payload = operation_path.read_bytes()
+
+        self.assert_terminal_reads_do_not_mutate(
+            StoryCommitService(root, manifest(), "novel"),
+            rejected.operation_id,
+            failure_code=StoryCommitFailureCode.RECOVERY_REQUIRED,
+        )
+        self.assertEqual(operation_path.read_bytes(), corrupted_payload)
 
     def test_historical_rejected_remains_read_only_after_later_commit(self) -> None:
         root, session_root, evidence = self.applied_replace("historical-rejected")

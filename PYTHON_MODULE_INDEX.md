@@ -3173,7 +3173,14 @@ every intermediate arrow. The current runtime graph is acyclic.
   tree, creates one captured-identity commit with one exact parent, and CAS-
   updates only the session branch before durable COMMITTED evidence. It verifies
   the internal ref and original main-root state remain invariant. Interrupted
-  states are preserved as outcome-unknown. Identity-bound inspection and
+  states are preserved as outcome-unknown. Generated Commit, Reject, and Revise
+  operation IDs are deterministic action-and-candidate identities. Inspection,
+  recovery, and staged-recovery admission recompute that binding before trusting
+  an operation: rejected evidence accepts only its Reject or Revise identity,
+  while every other story-commit state accepts only its Commit identity.
+  Historical random Commit or confirmation-salted Reject identities fail closed
+  as recovery-required; no compatibility reader, schema field, schema version,
+  or migration is added. Identity-bound inspection and
   recovery require both the successful Apply root and phase-appropriate
   semantic topology before and between owner observations and before and after
   every durable recovery transition. Ordinary READY and recovery-only reads
@@ -7170,7 +7177,12 @@ every intermediate arrow. The current runtime graph is acyclic.
   authorization/capability material. Confirmed consultations additionally
   create invocation-local exact reference operations, retain isolated bindings,
   account calls synchronously between awaits, cancel and join parallel tasks,
-  and append idempotently derived start/result/finalization batches. Advisory
+  and append idempotently derived start/result/finalization batches. If terminal
+  reference cleanup loses its session binding after one or more durably observed
+  submissions, the invocation preserves the existing content-free submitted-call
+  count and any original submission uncertainty while the binding failure retains
+  failure precedence; it retains no provider content or reference authority.
+  Advisory
   action progress is synchronously forwarded through an optional package-internal
   sink for Lead, preparation, assignment, advisory, revision, and synthesis calls;
   it is never stored or added to durable results. Advisory
@@ -7421,8 +7433,14 @@ every intermediate arrow. The current runtime graph is acyclic.
   validates inputs without I/O. Inspection requires a ready lifecycle held by
   this process. An index-only resource blocker first uses the workspace's
   validated recovery snapshot; only one exactly correlated staged story-commit
-  operation is attributed to the STORY_COMMIT owner, while unrelated dirty or
-  malformed state remains owned by SESSION_RESOURCES. It observes collaboration, session resources, and session
+  operation is attributed to the STORY_COMMIT owner. Before that early return,
+  it requires reviewed change-set and relationship-validation coherence,
+  application provenance, and the candidate's normalized create/update/delete
+  path operations and before/after digests to match the reviewed change set and
+  the application result's affected paths, final artifacts, rename lineage, and
+  deletion provenance exactly. The recovery snapshot continues to own the
+  staged-topology and expected-tree proof. Unrelated dirty or malformed state
+  remains owned by SESSION_RESOURCES. It observes collaboration, session resources, and session
   history as generation A; correlates one physical and semantic session
   artifact binding to that generation and performs the optional ledger
   inspection through its short guarded repository access. It also observes
@@ -8714,7 +8732,12 @@ every intermediate arrow. The current runtime graph is acyclic.
 
 - The combined runtime has 142 production units, 573 runtime edges, 575
   all-import edges, and no directed runtime cycle. Whole-source path parity is
-  exact. The private orchestrator-to-`workspace.core` edge supplies the
+  exact. Deterministic story-commit operation binding, exact staged-recovery
+  provenance, and submitted-call preservation across reference-cleanup binding
+  loss change no module, import edge, export, schema field, or schema version.
+  Pre-change random Commit and confirmation-salted Reject operation identities
+  are intentionally not migrated and fail closed as recovery-required. The
+  private orchestrator-to-`workspace.core` edge supplies the
   session-bound source reader without widening the stable workspace facade;
   workspace initialization adds the repository-lock edge for guarded READY
   access while recovery drops its former path-only artifact-repository edge.

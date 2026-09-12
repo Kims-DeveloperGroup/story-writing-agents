@@ -1007,6 +1007,17 @@ under the deterministic revision identity, removes the live binding, and makes
 that candidate ineligible for later authorization. A changed proposal therefore
 requires newly applied evidence, a new candidate, and fresh confirmation.
 
+Commit, Reject, and Revise operation IDs are deterministic action/candidate
+identities: the first 32 lowercase hexadecimal characters of SHA-256 over the
+ASCII bytes `<action>\0<candidate_id>`, where action is `commit`, `reject`, or
+`revise`. Confirmation IDs still enforce one-use decisions but do not salt the
+durable operation identity. Inspection and recovery recompute the compatible
+identity from the loaded candidate: a `rejected` record may match only its
+Reject or Revise identity; every other state must match Commit. Pre-#661 random
+Commit identities and confirmation-salted Reject identities therefore fail
+closed as `recovery_required`. There is no #661 migration or compatibility
+reader for that evidence.
+
 `StoryCommitResult` is content-free: session/candidate/operation/correlation,
 state/recovery action, branch/tip, and optional committed object ID. Inspection
 reads durable evidence only. Recovery performs read-only Git classification
@@ -1034,6 +1045,17 @@ the recovery body. Only the correlated recovery owner may then make a
 monotonic history transition. Ordinary READY remains strict—an arbitrary
 non-READY topology, including an uncorrelated staged index, is still
 `recovery_required` and receives no such admission.
+
+The higher-level session reconciler attributes that staged recovery to the
+Story Commit owner only when the recovery snapshot also matches exact reviewed
+and application provenance. It requires relationship base/projected/change-set
+digests to agree with the reviewed change set; application candidate identity,
+revision, candidate/change-set/relationship digests to agree with that review;
+and normalized Create, Patch/Replace, Delete, and Rename effects to match the
+candidate paths, before/after digests, affected paths, final artifacts, rename
+lineage, and deletion provenance. This owner correlation does not replace the
+Git proof: the expected tree still comes from the exact staged snapshot
+topology and candidate.
 
 Terminal story-commit inspection and recovery are read-only with respect to
 session history and require the current session to remain READY. A historical

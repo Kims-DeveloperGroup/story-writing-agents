@@ -7,7 +7,6 @@ import os
 import re
 import stat
 import threading
-import uuid
 from contextlib import contextmanager
 from dataclasses import dataclass, replace
 from functools import wraps
@@ -297,7 +296,7 @@ class StoryCommitService:
             owner=self._owner,
             binding=binding,
             confirmation=decision,
-            operation_id=uuid.uuid4().hex,
+            operation_id=_candidate_operation_id("commit", value.candidate_id),
             revalidation=revalidation,
         )
 
@@ -313,7 +312,7 @@ class StoryCommitService:
         if decision.decision is not StoryCommitDecision.REJECT:
             raise _error(StoryCommitFailureCode.INVALID_REQUEST)
         self._reserve_confirmation(decision.confirmation_id)
-        operation_id = _decision_operation_id("reject", value, decision.confirmation_id)
+        operation_id = _candidate_operation_id("reject", value.candidate_id)
         return self._record_rejection(value, operation_id)
 
     @_content_free_boundary
@@ -328,7 +327,7 @@ class StoryCommitService:
         if decision.decision is not StoryCommitDecision.REVISE:
             raise _error(StoryCommitFailureCode.INVALID_REQUEST)
         self._reserve_confirmation(decision.confirmation_id)
-        operation_id = _revision_operation_id(value.candidate_id)
+        operation_id = _candidate_operation_id("revise", value.candidate_id)
         result = self._record_rejection(value, operation_id)
         self._bindings.pop(value.candidate_id, None)
         return result
@@ -843,7 +842,7 @@ class StoryCommitService:
             self._confirmation_ids.add(confirmation_id)
 
     def _require_not_revised(self, candidate: StoryCommitCandidate) -> None:
-        operation_id = _revision_operation_id(candidate.candidate_id)
+        operation_id = _candidate_operation_id("revise", candidate.candidate_id)
         try:
             operation = self._read_operation(operation_id)
         except StoryCommitError as exc:
@@ -1887,9 +1886,18 @@ def _require_operation_candidate_ownership(
 ) -> None:
     """Require one exact operation-to-candidate ownership tuple."""
 
+    expected_operation_ids = (
+        {
+            _candidate_operation_id("reject", candidate.candidate_id),
+            _candidate_operation_id("revise", candidate.candidate_id),
+        }
+        if operation.state is GitSessionHistoryState.REJECTED
+        else {_candidate_operation_id("commit", candidate.candidate_id)}
+    )
     if (
         operation.session_id != session_id
         or candidate.session_id != session_id
+        or operation.operation_id not in expected_operation_ids
         or operation.candidate_id != candidate.candidate_id
         or operation.correlation_id != candidate.correlation_id
         or operation.expected_branch_tip != candidate.branch_tip
@@ -1993,16 +2001,8 @@ def _session_root(main_root: Path, session_id: str) -> Path:
     return main_root.with_name(f"{main_root.name}.story-worktrees") / session_id
 
 
-def _decision_operation_id(
-    kind: str, candidate: StoryCommitCandidate, confirmation_id: str
-) -> str:
-    return hashlib.sha256(
-        f"{kind}\0{candidate.candidate_id}\0{confirmation_id}".encode("ascii")
-    ).hexdigest()[:32]
-
-
-def _revision_operation_id(candidate_id: str) -> str:
-    return hashlib.sha256(f"revise\0{candidate_id}".encode("ascii")).hexdigest()[:32]
+def _candidate_operation_id(action: str, candidate_id: str) -> str:
+    return hashlib.sha256(f"{action}\0{candidate_id}".encode("ascii")).hexdigest()[:32]
 
 
 def _reconstruct_manifest(value: object) -> GitBaselineManifest:

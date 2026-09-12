@@ -54,6 +54,11 @@ from ..writing_artifacts import (
     ArtifactApplicationError,
     ArtifactApplicationErrorCode,
     ArtifactApplicationResult,
+    ArtifactCreateOperation,
+    ArtifactDeleteOperation,
+    ArtifactPatchOperation,
+    ArtifactRenameOperation,
+    ArtifactReplaceOperation,
 )
 from .contracts import (
     SessionArtifactApplicationEvidence,
@@ -282,16 +287,10 @@ class SessionRecoveryReconciler:
                         SessionRecoveryOwner.STORY_COMMIT,
                         SessionRecoveryFailureCode.MISSING_PREDECESSOR,
                     )
-                if (
-                    recovery.candidate.application_id
-                    != application.application_result.application_id
-                    or recovery.candidate.proposal_id != application.proposal_id
-                    or recovery.candidate.correlation_id
-                    != application.correlation_id
-                    or recovery.operation.correlation_id
-                    != application.correlation_id
-                    or {item.path for item in recovery.candidate.paths}
-                    != set(application.application_result.affected_paths)
+                if not _staged_recovery_evidence_matches(
+                    recovery,
+                    reviewed,
+                    application,
                 ):
                     return _blocked(
                         session_id,
@@ -975,6 +974,151 @@ def _inspect_application(
             SessionRecoveryFailureCode.CORRELATION_MISMATCH,
         )
     return None
+
+
+def _staged_recovery_evidence_matches(
+    recovery: StoryCommitRecoverySnapshot,
+    reviewed: SessionReviewedProposalEvidence | None,
+    application: SessionArtifactApplicationEvidence,
+) -> bool:
+    """Match staged candidate paths and application truth to reviewed intent."""
+
+    if reviewed is None:
+        return False
+    result = application.application_result
+    provenance = result.provenance
+    if (
+        reviewed.change_set.base_state_digest
+        != reviewed.relationship_validation.base_state_digest
+        or reviewed.change_set.projected_state_digest
+        != reviewed.relationship_validation.projected_state_digest
+        or reviewed.change_set.change_set_digest
+        != reviewed.relationship_validation.change_set_digest
+        or application.proposal_id != reviewed.proposal_id
+        or application.correlation_id != reviewed.correlation_id
+        or recovery.candidate.application_id != result.application_id
+        or recovery.candidate.proposal_id != application.proposal_id
+        or recovery.candidate.correlation_id != application.correlation_id
+        or recovery.operation.correlation_id != application.correlation_id
+        or provenance.candidate_id != reviewed.candidate_id
+        or provenance.candidate_revision != reviewed.candidate_revision
+        or provenance.candidate_digest != reviewed.candidate_digest
+        or provenance.change_set_digest != reviewed.change_set.change_set_digest
+        or provenance.relationship_validation_digest
+        != reviewed.relationship_validation_digest
+    ):
+        return False
+
+    candidate_paths: list[tuple[str, str, str | None, str | None]] = []
+    affected_paths: set[str] = set()
+    final_artifacts: list[tuple[str, object, str]] = []
+    rename_lineage: list[tuple[str, str, str]] = []
+    deletion_provenance: list[tuple[str, str]] = []
+    for operation in reviewed.change_set.operations:
+        if type(operation) is ArtifactCreateOperation:
+            candidate_paths.append(
+                (operation.path, "create", None, operation.projected_digest)
+            )
+            affected_paths.add(operation.path)
+            final_artifacts.append(
+                (operation.path, operation.artifact_kind, operation.projected_digest)
+            )
+        elif type(operation) in {ArtifactPatchOperation, ArtifactReplaceOperation}:
+            candidate_paths.append(
+                (
+                    operation.path,
+                    "update",
+                    operation.base_digest,
+                    operation.projected_digest,
+                )
+            )
+            affected_paths.add(operation.path)
+            final_artifacts.append(
+                (operation.path, operation.artifact_kind, operation.projected_digest)
+            )
+        elif type(operation) is ArtifactDeleteOperation:
+            candidate_paths.append(
+                (operation.path, "delete", operation.base_digest, None)
+            )
+            affected_paths.add(operation.path)
+            deletion_provenance.append((operation.path, operation.base_digest))
+        elif type(operation) is ArtifactRenameOperation:
+            candidate_paths.extend(
+                (
+                    (
+                        operation.source_path,
+                        "delete",
+                        operation.base_digest,
+                        None,
+                    ),
+                    (
+                        operation.destination_path,
+                        "create",
+                        None,
+                        operation.projected_digest,
+                    ),
+                )
+            )
+            affected_paths.update(
+                (operation.source_path, operation.destination_path)
+            )
+            final_artifacts.append(
+                (
+                    operation.destination_path,
+                    operation.artifact_kind,
+                    operation.projected_digest,
+                )
+            )
+            rename_lineage.append(
+                (
+                    operation.source_path,
+                    operation.destination_path,
+                    operation.projected_digest,
+                )
+            )
+        else:
+            return False
+
+    def sort_text(value: str) -> bytes:
+        return value.encode("utf-8")
+
+    expected_candidate_paths = tuple(
+        sorted(candidate_paths, key=lambda item: sort_text(item[0]))
+    )
+    observed_candidate_paths = tuple(
+        (
+            item.path,
+            item.operation.value,
+            item.before_sha256,
+            item.after_sha256,
+        )
+        for item in recovery.candidate.paths
+    )
+    return (
+        observed_candidate_paths == expected_candidate_paths
+        and result.affected_paths
+        == tuple(sorted(affected_paths, key=sort_text))
+        and tuple(
+            (item.path, item.artifact_kind, item.sha256)
+            for item in result.final_artifacts
+        )
+        == tuple(sorted(final_artifacts, key=lambda item: sort_text(item[0])))
+        and tuple(
+            (item.source_path, item.destination_path, item.sha256)
+            for item in result.rename_lineage
+        )
+        == tuple(
+            sorted(
+                rename_lineage,
+                key=lambda item: (sort_text(item[0]), sort_text(item[1])),
+            )
+        )
+        and tuple(
+            (item.path, item.prior_sha256)
+            for item in result.deletion_provenance
+        )
+        == tuple(sorted(deletion_provenance, key=lambda item: sort_text(item[0])))
+    )
 
 
 def _select_history(

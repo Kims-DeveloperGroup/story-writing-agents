@@ -5223,14 +5223,22 @@ class StoryRuntime:
                 provider.submitted_physical_calls,
             )
         except BaseException as failure:
+            cleanup_binding_failure: SessionArtifactBindingError | None = None
             if reference_operation is not None:
-                self._fail_reference_operation(reference_operation, failure)
+                try:
+                    self._fail_reference_operation(reference_operation, failure)
+                except SessionArtifactBindingError as cleanup_failure:
+                    cleanup_binding_failure = cleanup_failure
             facts = context_provider_failure_facts(failure)
             submitted = (
                 provider.submitted_physical_calls
                 if provider is not None
                 else len(facts.submitted_accountings)
             )
+            if cleanup_binding_failure is not None:
+                if submitted == 0:
+                    raise cleanup_binding_failure
+                failure = cleanup_binding_failure
             return _CollaborationInvocationResult(
                 None,
                 submitted,

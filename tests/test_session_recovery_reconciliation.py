@@ -96,13 +96,20 @@ from tests.collaboration_contract_fixture import (
 from story_writing_agents.writing_artifacts import (
     ArtifactApplicationError,
     ArtifactApplicationErrorCode,
+    ArtifactDeletionProvenance,
     ArtifactApplicationFinalArtifact,
     ArtifactApplicationProvenance,
     ArtifactApplicationResult,
     ArtifactApplicationState,
     ArtifactCreateOperation,
+    ArtifactDeleteOperation,
     ArtifactKind,
+    ArtifactPatchOperation,
     ArtifactRelationshipValidation,
+    ArtifactRenameLineage,
+    ArtifactRenameOperation,
+    ArtifactReplaceOperation,
+    ArtifactTextHunk,
     build_artifact_change_set,
 )
 
@@ -292,12 +299,26 @@ def _resources(
 
 def _artifact_facts(
     state: ArtifactApplicationState = ArtifactApplicationState.APPLIED,
+    *,
+    base_content: bytes | None = None,
 ) -> tuple[SessionReviewedProposalEvidence, SessionArtifactApplicationEvidence]:
     content = b"opening"
     digest = hashlib.sha256(content).hexdigest()
+    base = {} if base_content is None else {_PATH: base_content}
+    operation = (
+        ArtifactCreateOperation(_PATH, ArtifactKind.MANUSCRIPT, content, digest)
+        if base_content is None
+        else ArtifactReplaceOperation(
+            _PATH,
+            ArtifactKind.MANUSCRIPT,
+            hashlib.sha256(base_content).hexdigest(),
+            content,
+            digest,
+        )
+    )
     change_set = build_artifact_change_set(
-        {},
-        (ArtifactCreateOperation(_PATH, ArtifactKind.MANUSCRIPT, content, digest),),
+        base,
+        (operation,),
     )
     relationship = ArtifactRelationshipValidation(
         1, change_set.base_state_digest, change_set.projected_state_digest,
@@ -349,7 +370,11 @@ def _candidate(
     correlation: str = _CORRELATION,
     application_id: str = "application-1",
     proposal_id: str = "proposal-1",
+    base_content: bytes | None = None,
 ) -> GitSessionCandidateRecord:
+    before_digest = (
+        None if base_content is None else hashlib.sha256(base_content).hexdigest()
+    )
     return GitSessionCandidateRecord(
         session_id=_SESSION,
         branch=f"story/session/{_SESSION}",
@@ -362,8 +387,12 @@ def _candidate(
         paths=(
             GitSessionCandidatePath(
                 _PATH,
-                GitSessionCandidatePathOperation.CREATE,
-                None,
+                (
+                    GitSessionCandidatePathOperation.CREATE
+                    if base_content is None
+                    else GitSessionCandidatePathOperation.UPDATE
+                ),
+                before_digest,
                 hashlib.sha256(b"opening").hexdigest(),
             ),
         ),
@@ -880,6 +909,290 @@ class SessionRecoveryLifecycleTests(unittest.TestCase):
 
 
 class SessionRecoveryStateTests(unittest.TestCase):
+    def test_staged_recovery_normalizes_every_exact_artifact_operation(self) -> None:
+        before = b"before opening"
+        after = b"after opening"
+        before_digest = hashlib.sha256(before).hexdigest()
+        after_digest = hashlib.sha256(after).hexdigest()
+        renamed_path = "manuscript/part-01/renamed.md"
+        cases = (
+            (
+                "create",
+                {},
+                ArtifactCreateOperation(
+                    _PATH,
+                    ArtifactKind.MANUSCRIPT,
+                    after,
+                    after_digest,
+                ),
+                (
+                    GitSessionCandidatePath(
+                        _PATH,
+                        GitSessionCandidatePathOperation.CREATE,
+                        None,
+                        after_digest,
+                    ),
+                ),
+                (
+                    ArtifactApplicationFinalArtifact(
+                        _PATH,
+                        ArtifactKind.MANUSCRIPT,
+                        after_digest,
+                    ),
+                ),
+                (),
+                (),
+            ),
+            (
+                "patch",
+                {_PATH: before},
+                ArtifactPatchOperation(
+                    _PATH,
+                    ArtifactKind.MANUSCRIPT,
+                    before_digest,
+                    (
+                        ArtifactTextHunk(
+                            before_digest,
+                            0,
+                            len(before),
+                            before,
+                            after,
+                        ),
+                    ),
+                    after_digest,
+                ),
+                (
+                    GitSessionCandidatePath(
+                        _PATH,
+                        GitSessionCandidatePathOperation.UPDATE,
+                        before_digest,
+                        after_digest,
+                    ),
+                ),
+                (
+                    ArtifactApplicationFinalArtifact(
+                        _PATH,
+                        ArtifactKind.MANUSCRIPT,
+                        after_digest,
+                    ),
+                ),
+                (),
+                (),
+            ),
+            (
+                "replace",
+                {_PATH: before},
+                ArtifactReplaceOperation(
+                    _PATH,
+                    ArtifactKind.MANUSCRIPT,
+                    before_digest,
+                    after,
+                    after_digest,
+                ),
+                (
+                    GitSessionCandidatePath(
+                        _PATH,
+                        GitSessionCandidatePathOperation.UPDATE,
+                        before_digest,
+                        after_digest,
+                    ),
+                ),
+                (
+                    ArtifactApplicationFinalArtifact(
+                        _PATH,
+                        ArtifactKind.MANUSCRIPT,
+                        after_digest,
+                    ),
+                ),
+                (),
+                (),
+            ),
+            (
+                "delete",
+                {_PATH: before},
+                ArtifactDeleteOperation(
+                    _PATH,
+                    ArtifactKind.MANUSCRIPT,
+                    before_digest,
+                ),
+                (
+                    GitSessionCandidatePath(
+                        _PATH,
+                        GitSessionCandidatePathOperation.DELETE,
+                        before_digest,
+                        None,
+                    ),
+                ),
+                (),
+                (),
+                (ArtifactDeletionProvenance(_PATH, before_digest),),
+            ),
+            (
+                "rename",
+                {_PATH: before},
+                ArtifactRenameOperation(
+                    _PATH,
+                    renamed_path,
+                    ArtifactKind.MANUSCRIPT,
+                    before_digest,
+                    before_digest,
+                ),
+                (
+                    GitSessionCandidatePath(
+                        _PATH,
+                        GitSessionCandidatePathOperation.DELETE,
+                        before_digest,
+                        None,
+                    ),
+                    GitSessionCandidatePath(
+                        renamed_path,
+                        GitSessionCandidatePathOperation.CREATE,
+                        None,
+                        before_digest,
+                    ),
+                ),
+                (
+                    ArtifactApplicationFinalArtifact(
+                        renamed_path,
+                        ArtifactKind.MANUSCRIPT,
+                        before_digest,
+                    ),
+                ),
+                (ArtifactRenameLineage(_PATH, renamed_path, before_digest),),
+                (),
+            ),
+        )
+        exact_values = {}
+        for label, base, artifact_operation, paths, finals, lineage, deletion in cases:
+            with self.subTest(label=label):
+                change_set = build_artifact_change_set(base, (artifact_operation,))
+                relationship = ArtifactRelationshipValidation(
+                    1,
+                    change_set.base_state_digest,
+                    change_set.projected_state_digest,
+                    change_set.change_set_digest,
+                    (),
+                    (),
+                    (),
+                    (),
+                    (),
+                )
+                reviewed = SessionReviewedProposalEvidence(
+                    session_id=_SESSION,
+                    conversation_id=_CONVERSATION,
+                    collaboration_tail_sequence=4,
+                    proposal_id="proposal-1",
+                    proposal_revision=1,
+                    proposal_digest=_proposal().proposal_digest,
+                    candidate_id="reviewed-candidate",
+                    candidate_revision=1,
+                    candidate_digest=_tagged("6"),
+                    change_set=change_set,
+                    relationship_validation=relationship,
+                    relationship_validation_digest=_tagged("7"),
+                    correlation_id=_CORRELATION,
+                    application_confirmation_request_id=None,
+                    confirmation_choices=(),
+                )
+                result = ArtifactApplicationResult(
+                    1,
+                    ArtifactApplicationProvenance(
+                        "application-1",
+                        reviewed.candidate_id,
+                        reviewed.candidate_revision,
+                        reviewed.candidate_digest,
+                        change_set.change_set_digest,
+                        reviewed.relationship_validation_digest,
+                    ),
+                    ArtifactApplicationState.APPLIED,
+                    tuple(
+                        sorted(
+                            {
+                                item.path
+                                for item in paths
+                            },
+                            key=lambda value: value.encode("utf-8"),
+                        )
+                    ),
+                    finals,
+                    lineage,
+                    deletion,
+                )
+                application = SessionArtifactApplicationEvidence(
+                    session_id=_SESSION,
+                    conversation_id=_CONVERSATION,
+                    collaboration_tail_sequence=4,
+                    proposal_id="proposal-1",
+                    correlation_id=_CORRELATION,
+                    application_result=result,
+                )
+                candidate_record = GitSessionCandidateRecord(
+                    _SESSION,
+                    f"story/session/{_SESSION}",
+                    _TIP,
+                    _TREE,
+                    _WORKTREE_DIGEST,
+                    result.application_id,
+                    application.proposal_id,
+                    application.correlation_id,
+                    paths,
+                    f"Apply exact {label}",
+                    ("plot",),
+                    GitSessionIdentitySource.REPOSITORY,
+                    GitSessionIdentitySource.REPOSITORY,
+                )
+                candidate = candidates_module._candidate_from_record(candidate_record)
+                recovery = StoryCommitRecoverySnapshot(
+                    _resources(GitSessionResourceState.RECOVERY_REQUIRED),
+                    candidate,
+                    GitSessionCommitOperationRecord(
+                        _SESSION,
+                        "a" * 32,
+                        candidate.candidate_id,
+                        _CORRELATION,
+                        GitSessionHistoryState.STAGED,
+                        1,
+                        _TIP,
+                    ),
+                )
+                self.assertTrue(
+                    reconciliation_module._staged_recovery_evidence_matches(
+                        recovery,
+                        reviewed,
+                        application,
+                    )
+                )
+                exact_values[label] = (recovery, reviewed, application)
+
+        recovery, reviewed, application = exact_values["replace"]
+        wrong_path = GitSessionCandidatePath(
+            _PATH,
+            GitSessionCandidatePathOperation.DELETE,
+            before_digest,
+            None,
+        )
+        wrong_record = replace(
+            candidates_module._candidate_record(recovery.candidate),
+            paths=(wrong_path,),
+            candidate_id="",
+        )
+        wrong_candidate = candidates_module._candidate_from_record(wrong_record)
+        wrong_recovery = replace(
+            recovery,
+            candidate=wrong_candidate,
+            operation=replace(
+                recovery.operation,
+                candidate_id=wrong_candidate.candidate_id,
+            ),
+        )
+        self.assertFalse(
+            reconciliation_module._staged_recovery_evidence_matches(
+                wrong_recovery,
+                reviewed,
+                application,
+            )
+        )
+
     def test_exact_staged_recovery_routes_story_commit_and_dirty_fallback_stays_resources(
         self,
     ) -> None:
@@ -929,6 +1242,95 @@ class SessionRecoveryStateTests(unittest.TestCase):
         )
         self.assertIs(fallback.result.state, SessionRecoveryState.RECOVERY_REQUIRED)
         self.assertIs(fallback.result.owner, SessionRecoveryOwner.SESSION_RESOURCES)
+
+    def test_staged_recovery_requires_exact_candidate_digests_and_provenance(
+        self,
+    ) -> None:
+        base_content = b"earlier opening"
+        reviewed, application = _artifact_facts(base_content=base_content)
+        resources = _resources(GitSessionResourceState.RECOVERY_REQUIRED)
+        candidate_record = _candidate(base_content=base_content)
+        candidate_path = candidate_record.paths[0]
+        original_candidate = candidates_module._candidate_from_record(candidate_record)
+
+        def recovery_for(candidate):
+            return StoryCommitRecoverySnapshot(
+                resources,
+                candidate,
+                GitSessionCommitOperationRecord(
+                    _SESSION,
+                    "a" * 32,
+                    candidate.candidate_id,
+                    _CORRELATION,
+                    GitSessionHistoryState.STAGED,
+                    1,
+                    _TIP,
+                ),
+            )
+
+        wrong_digest = hashlib.sha256(b"different content").hexdigest()
+        mismatched_candidates = (
+            candidates_module._candidate_from_record(
+                replace(
+                    candidate_record,
+                    paths=(
+                        replace(candidate_path, before_sha256=wrong_digest),
+                    ),
+                    candidate_id="",
+                )
+            ),
+            candidates_module._candidate_from_record(
+                replace(
+                    candidate_record,
+                    paths=(
+                        replace(candidate_path, after_sha256=wrong_digest),
+                    ),
+                    candidate_id="",
+                )
+            ),
+        )
+        mismatched_result = replace(
+            application.application_result,
+            provenance=replace(
+                application.application_result.provenance,
+                candidate_digest=_tagged("8"),
+            ),
+        )
+        cases = (
+            (
+                "candidate-before-digest",
+                recovery_for(mismatched_candidates[0]),
+                application,
+            ),
+            (
+                "candidate-after-digest",
+                recovery_for(mismatched_candidates[1]),
+                application,
+            ),
+            (
+                "application-provenance",
+                recovery_for(original_candidate),
+                replace(application, application_result=mismatched_result),
+            ),
+        )
+        for label, recovery, observed_application in cases:
+            with self.subTest(label=label):
+                observed = _observe(
+                    resources=(resources,),
+                    reviewed=reviewed,
+                    application=observed_application,
+                    stored_application=observed_application.application_result,
+                    recovery_snapshot=recovery,
+                )
+                self.assertIs(
+                    observed.result.state,
+                    SessionRecoveryState.RECOVERY_REQUIRED,
+                )
+                self.assertIs(observed.result.owner, SessionRecoveryOwner.STORY_COMMIT)
+                self.assertIs(
+                    observed.result.failure_code,
+                    SessionRecoveryFailureCode.CORRELATION_MISMATCH,
+                )
 
     def test_applied_staged_and_committed_states_use_complete_correlated_predecessors(self) -> None:
         reviewed, application = _artifact_facts()

@@ -70,10 +70,17 @@ from story_writing_agents.writing_artifacts.read_actions import (
     ReferenceReadAction,
     ReferenceReadActionKind,
 )
-from story_writing_agents.workspace.initialization import provision_session_resources
+from story_writing_agents.workspace.initialization import (
+    SessionArtifactBindingError,
+    provision_session_resources,
+)
 
 from tests.collaboration_contract_fixture import contract_batches
-from story_writing_agents.specialist_routing import AuthoringScope, AuthoringActivity, ArtifactReviewDomain, ReviewBasis
+from story_writing_agents.specialist_routing import (
+    ArtifactReviewDomain,
+    AuthoringActivity,
+    AuthoringScope,
+)
 
 
 _Response = (
@@ -1277,6 +1284,93 @@ class LeadDecisionAuthorityTests(LeadOrchestrationTestCase):
             await self.runtime.decide_lead_step(
                 _decision(proposed, CollaborationConfirmationDecision.CONFIRM)
             )
+
+    async def test_submitted_assignment_keeps_accounting_when_reference_cleanup_loses_binding(
+        self,
+    ) -> None:
+        conversation_id = self.conversation("Reference cleanup accounting")
+        proposed = await self.proposal(conversation_id)
+        calls_before = len(self.backend.calls)
+        references_before = len(self.backend.reference_calls)
+        self.backend.enqueue_for(PLOT_ARCHITECT, _specialist_outcome())
+        finish_failure = SessionArtifactBindingError("finish guard lost")
+        cleanup_failure = SessionArtifactBindingError("cleanup guard lost")
+        cleanup_inputs = []
+        persisted_results = []
+        original_persist = self.runtime._persist_collaboration_results_locked
+
+        def fail_finish(_operation):
+            raise finish_failure
+
+        def fail_cleanup(_operation, failure, **_kwargs):
+            cleanup_inputs.append(failure)
+            raise cleanup_failure
+
+        def capture_persist(_runtime, **arguments):
+            persisted_results.extend(arguments["assignment_results"])
+            return original_persist(**arguments)
+
+        with mock.patch.object(
+            orchestrator_module.RuntimeReferenceOperation,
+            "finish",
+            autospec=True,
+            side_effect=fail_finish,
+        ) as finish, mock.patch.object(
+            orchestrator_module.RuntimeReferenceOperation,
+            "failure",
+            autospec=True,
+            side_effect=fail_cleanup,
+        ) as cleanup, mock.patch.object(
+            StoryRuntime,
+            "_persist_collaboration_results_locked",
+            autospec=True,
+            side_effect=capture_persist,
+        ):
+            decided = await self.runtime.decide_lead_step(
+                _decision(proposed, CollaborationConfirmationDecision.CONFIRM)
+            )
+
+        self.assertIs(decided.turn.state, CollaborationStepState.FAILED)
+        self.assertEqual(finish.call_count, 1)
+        self.assertEqual(cleanup.call_count, 1)
+        self.assertEqual(cleanup_inputs, [finish_failure])
+        self.assertEqual(len(persisted_results), 1)
+        self.assertIs(persisted_results[0].failure, cleanup_failure)
+        self.assertEqual(persisted_results[0].submitted_physical_calls, 1)
+        self.assertFalse(persisted_results[0].submission_uncertain)
+        self.assertEqual(len(self.backend.calls) - calls_before, 1)
+        self.assertEqual(len(self.backend.reference_calls) - references_before, 0)
+
+        history = self.history(conversation_id)
+        submitted = tuple(
+            event.payload
+            for event in history
+            if type(event.payload) is CollaborationProviderCallPayload
+            and event.payload.invocation_kind
+            in {
+                CollaborationInvocationKind.SPECIALIST_ADVISORY,
+                CollaborationInvocationKind.SPECIALIST_ASSIGNMENT,
+            }
+            and event.payload.state is CollaborationProviderCallState.SUBMITTED
+        )
+        self.assertEqual(len(submitted), 1)
+        result = next(
+            event.payload
+            for event in history
+            if type(event.payload) is CollaborationExecutionResult
+        )
+        self.assertEqual(len(result.assignment_outcomes), 1)
+        self.assertEqual(
+            result.assignment_outcomes[0].submitted_physical_calls,
+            len(submitted),
+        )
+        terminals = tuple(
+            event.payload
+            for event in history
+            if event.kind is CollaborationEventKind.TERMINAL_OUTCOME
+        )
+        self.assertEqual(len(terminals), 1)
+        self.assertEqual(terminals[0].submitted_physical_calls, len(submitted))
 
     async def test_mismatch_reject_revise_and_free_text_are_non_authorizing(
         self,

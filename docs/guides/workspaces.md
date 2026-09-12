@@ -414,6 +414,15 @@ prompt/reply, raw Git output, credential, descriptor, writable capability, or
 serialized confirmation authority. A real Git commit still retains
 its effective author/committer identity and message in ordinary Git history.
 
+Story Commit decision operation IDs are derived from the action and immutable
+candidate: SHA-256 of the ASCII bytes `<commit|reject|revise>\0<candidate_id>`,
+truncated to 32 lowercase hexadecimal characters. A `rejected` record can
+therefore identify either Reject or Revise; every other operation state must
+identify Commit. Inspection and recovery recompute that relationship instead
+of trusting an arbitrary 32-hex name. Pre-#661 random Commit IDs and Reject IDs
+salted by a confirmation ID are incompatible evidence and fail closed as
+`recovery_required`; they are not migrated.
+
 The common-Git layout is local and per-session:
 
 ```text
@@ -564,7 +573,12 @@ state, and unrelated noncanonical working bytes remain invariant.
 - **Interrupted after staging:** restart can prove the branch stayed at the old
   tip and the worktree/index exactly matches the expected tree. It reports
   `staged` with `operator_recovery`; it never resets, commits, cleans, or replays
-  the consumed confirmation automatically.
+  the consumed confirmation automatically. Session recovery attributes this
+  state to Story Commit only when the reviewed change set, relationship
+  digests, application provenance/results, and normalized candidate path
+  effects—including before/after digests, final artifacts, rename lineage, and
+  deletion provenance—also agree exactly. The expected-tree proof still comes
+  from the exact staged snapshot topology.
 - **Commit exists after a lost result:** if the session branch already points
   to the exact one-parent candidate commit, recovery records `committed` and
   returns that object ID without creating another commit.
