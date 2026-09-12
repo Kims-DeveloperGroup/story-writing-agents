@@ -149,8 +149,8 @@ class PromptAssemblerTests(unittest.TestCase):
                     "provides a scoped assessment for the lead",
                     "Return exactly one JSON object",
                     '"assessment": "drafted | supports | concern | conflict | insufficient_evidence"',
-                    '"assignment_id": "runtime-supplied assignment ID"',
-                    '"input_ids": ["runtime-supplied input IDs in exact order"]',
+                    '"message": "nonempty visible assessment"',
+                    "runtime attaches the supplied assignment ID, mode, and ordered input IDs",
                 ):
                     self.assertIn(phrase, normalized)
 
