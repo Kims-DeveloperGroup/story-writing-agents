@@ -369,32 +369,32 @@ class WritingArtifactRepository:
             type(item) is not ArtifactReference for item in requested
         ):
             raise TypeError("requested references must be an ArtifactReference tuple")
-        authorization = capability.consume(self._reference_authorization_owner)
-        try:
-            references, contents = authorization.delivery_snapshot(
-                self._reference_authorization_owner
-            )
-        except ReferenceAuthorizationError as exc:
-            self._terminate_invocation_after_failure(capability, exc.code)
-            raise
-        if references != capability.authorized_references:
-            self._terminate_invocation_after_failure(
-                capability,
-                ReferenceAuthorizationErrorCode.CORRELATION_MISMATCH,
-            )
-            raise ReferenceAuthorizationError(
-                ReferenceAuthorizationErrorCode.CORRELATION_MISMATCH
-            )
-        if requested != authorization.manifest.references:
-            self._terminate_invocation_after_failure(
-                capability,
-                ReferenceAuthorizationErrorCode.CORRELATION_MISMATCH,
-            )
-            raise ReferenceAuthorizationError(
-                ReferenceAuthorizationErrorCode.CORRELATION_MISMATCH
-            )
-        try:
-            with self._locked_sources(evidence=True):
+        with self._locked_sources(evidence=True):
+            authorization = capability.consume(self._reference_authorization_owner)
+            try:
+                references, contents = authorization.delivery_snapshot(
+                    self._reference_authorization_owner
+                )
+            except ReferenceAuthorizationError as exc:
+                self._append_invocation_failure_under_lock(capability, exc.code)
+                raise
+            if references != capability.authorized_references:
+                self._append_invocation_failure_under_lock(
+                    capability,
+                    ReferenceAuthorizationErrorCode.CORRELATION_MISMATCH,
+                )
+                raise ReferenceAuthorizationError(
+                    ReferenceAuthorizationErrorCode.CORRELATION_MISMATCH
+                )
+            if requested != authorization.manifest.references:
+                self._append_invocation_failure_under_lock(
+                    capability,
+                    ReferenceAuthorizationErrorCode.CORRELATION_MISMATCH,
+                )
+                raise ReferenceAuthorizationError(
+                    ReferenceAuthorizationErrorCode.CORRELATION_MISMATCH
+                )
+            try:
                 self._revalidate_reference_authorization(authorization)
                 self._reference_evidence.append_invocation_event(
                     capability.correlation,
@@ -402,14 +402,14 @@ class WritingArtifactRepository:
                     ReferenceInvocationState.DELIVERED,
                     references,
                 )
-        except ReferenceAuthorizationError as exc:
-            self._terminate_invocation_after_failure(capability, exc.code)
-            raise
-        return ArtifactReferenceDelivery(
-            capability.correlation,
-            references,
-            contents,
-        )
+            except ReferenceAuthorizationError as exc:
+                self._append_invocation_failure_under_lock(capability, exc.code)
+                raise
+            return ArtifactReferenceDelivery(
+                capability.correlation,
+                references,
+                contents,
+            )
 
     def record_reference_result_received(
         self,
@@ -455,8 +455,11 @@ class WritingArtifactRepository:
             raise TypeError("outcome must be a ReferenceAuthorizationErrorCode")
         if type(capability) is not ReadCapability:
             raise TypeError("capability must be a ReadCapability")
-        authorization = capability.retire(self._reference_authorization_owner)
         with self._locked_sources(evidence=True):
+            authorization = self._authorization_from_capability(
+                capability,
+                require_consumed=False,
+            )
             self._reference_evidence.append_invocation_event(
                 capability.correlation,
                 capability.capability_id,
@@ -464,6 +467,7 @@ class WritingArtifactRepository:
                 authorization.authorized_references,
                 outcome=outcome,
             )
+            capability.retire(self._reference_authorization_owner)
 
     def revalidate_reference_operation(
         self,
@@ -569,13 +573,22 @@ class WritingArtifactRepository:
         outcome: ReferenceAuthorizationErrorCode,
     ) -> None:
         with self._locked_sources(evidence=True):
-            self._reference_evidence.append_invocation_event(
-                capability.correlation,
-                capability.capability_id,
-                ReferenceInvocationState.TERMINATED,
-                capability.authorized_references,
-                outcome=outcome,
-            )
+            self._append_invocation_failure_under_lock(capability, outcome)
+
+    def _append_invocation_failure_under_lock(
+        self,
+        capability: ReadCapability,
+        outcome: ReferenceAuthorizationErrorCode,
+    ) -> None:
+        """Append failure termination while the caller holds source authority."""
+
+        self._reference_evidence.append_invocation_event(
+            capability.correlation,
+            capability.capability_id,
+            ReferenceInvocationState.TERMINATED,
+            capability.authorized_references,
+            outcome=outcome,
+        )
 
     def _revalidate_reference_authorization(
         self,
@@ -849,7 +862,7 @@ class _RepositoryReferenceReadInvocation:
                 outcome,
             )
         except BaseException:
-            pass
+            return
         self._state = "terminated"
 
 

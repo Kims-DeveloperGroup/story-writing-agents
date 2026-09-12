@@ -122,8 +122,9 @@ class _TrackedReferenceReadInvocation:
         try:
             with self._operation._open_repository_access():
                 return self._delegate.handle_reference_read_action(action)
-        except BaseException:
-            self._mark_terminal()
+        except BaseException as exc:
+            if not self._operation._preserves_guard_failure(exc):
+                self._mark_terminal()
             raise
 
     def record_result_received(self) -> None:
@@ -131,20 +132,30 @@ class _TrackedReferenceReadInvocation:
             self._delegate.record_result_received()
 
     def accept(self) -> None:
+        preserve = False
         try:
             with self._operation._open_repository_access():
                 self._delegate.accept()
+        except BaseException as exc:
+            preserve = self._operation._preserves_guard_failure(exc)
+            raise
         finally:
-            self._mark_terminal()
+            if not preserve:
+                self._mark_terminal()
 
     def terminate(self, outcome: ReferenceAuthorizationErrorCode) -> None:
         if self._terminal:
             return
+        preserve = False
         try:
             with self._operation._open_repository_access():
                 self._delegate.terminate(outcome)
+        except BaseException as exc:
+            preserve = self._operation._preserves_guard_failure(exc)
+            raise
         finally:
-            self._mark_terminal()
+            if not preserve:
+                self._mark_terminal()
 
     def _mark_terminal(self) -> None:
         if self._terminal:
@@ -375,18 +386,26 @@ class RuntimeReferenceOperation:
                 invocation.terminate(code)
             except BaseException as exc:
                 if self._preserves_guard_failure(exc):
+                    if not invocation._terminal:
+                        raise
                     if guard_failure is None:
                         guard_failure = exc
                 else:
                     code = _failure_code(exc, code)
+        entered = False
         try:
             with self._open_repository_access():
+                entered = True
                 self._repository.finish_reference_operation(
                     self._authorization,
                     outcome=code,
                 )
         except BaseException as exc:
             if self._preserves_guard_failure(exc):
+                if not entered:
+                    if guard_failure is not None:
+                        raise guard_failure
+                    raise
                 if guard_failure is None:
                     guard_failure = exc
             else:

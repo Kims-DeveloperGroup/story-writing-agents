@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import inspect
+import threading
 import unittest
 from contextlib import contextmanager
 from unittest import mock
@@ -34,7 +35,11 @@ from story_writing_agents.writing_artifacts.runtime_references import (
 )
 from story_writing_agents.writing_artifacts.authorization import (
     ReferenceAuthorizationErrorCode,
+    ReferenceAuthorizationError,
+    ReferenceInvocationCorrelation,
+    ReferenceInvocationState,
     ReferenceOperationFailure,
+    ReferenceOperationState,
 )
 from story_writing_agents.writing_artifacts.read_actions import (
     ReferenceReadAction,
@@ -42,6 +47,10 @@ from story_writing_agents.writing_artifacts.read_actions import (
 )
 from story_writing_agents.writing_artifacts.repository import (
     WritingArtifactRepository,
+)
+from story_writing_agents.writing_artifacts.references import (
+    ArtifactReference,
+    ArtifactReferenceBatch,
 )
 
 from tests.helpers import initialized_workspace, pristine_initialized_workspace
@@ -56,6 +65,32 @@ REMOVED_RUNTIME_METHODS = (
 
 
 class RuntimeExecutionRetirementTests(unittest.TestCase):
+    @staticmethod
+    def _reference_batch(
+        reference: ArtifactReference,
+    ) -> ArtifactReferenceBatch:
+        return ArtifactReferenceBatch(
+            "Read one guarded reference.",
+            "Read one guarded reference.",
+            (reference,),
+        )
+
+    @staticmethod
+    def _reference_correlation(
+        operation_id: str,
+        invocation_id: str,
+        ordinal: int,
+    ) -> ReferenceInvocationCorrelation:
+        return ReferenceInvocationCorrelation(
+            operation_id=operation_id,
+            invocation_id=invocation_id,
+            invocation_ordinal=ordinal,
+            agent_id=PLOT_ARCHITECT,
+            phase="draft",
+            round_number=None,
+            attempt=1,
+        )
+
     def test_runtime_methods_aliases_and_forwarding_are_absent(self) -> None:
         for runtime_type in (StoryRuntime, RuntimeSession):
             for name in REMOVED_RUNTIME_METHODS:
@@ -418,9 +453,20 @@ class RuntimeExecutionRetirementTests(unittest.TestCase):
         with self.assertRaises(SessionArtifactBindingError) as deferred:
             deferred_operation.failure(RuntimeError("provider failed"))
         self.assertIs(deferred.exception, deferred_marker)
+        self.assertFalse(deferred_operation.finished)
+        self.assertEqual(
+            tuple(deferred_operation._pending.values()),
+            (deferred_invocation,),
+        )
+        blocked[0] = None
+        deferred_failure = deferred_operation.failure(RuntimeError("provider failed"))
+        assert deferred_failure is not None
+        self.assertIs(
+            deferred_failure.code,
+            ReferenceAuthorizationErrorCode.WORKFLOW_FAILURE,
+        )
         self.assertTrue(deferred_operation.finished)
         self.assertEqual(deferred_operation._pending, {})
-        blocked[0] = None
 
         public_repository = WritingArtifactRepository(ready.identity.worktree_root)
         public_operation = prepare_runtime_reference_operation(
@@ -436,6 +482,347 @@ class RuntimeExecutionRetirementTests(unittest.TestCase):
         self.assertIs(
             public_failure.code,
             ReferenceAuthorizationErrorCode.WORKFLOW_FAILURE,
+        )
+
+    def test_retained_guarded_repository_delivery_rejection_preserves_retry(
+        self,
+    ) -> None:
+        workspace = pristine_initialized_workspace(self)
+        provision_session_resources(workspace.root, "novel")
+        binding = compose_session_artifact_binding(workspace.root, "novel")
+        reference = ArtifactReference("core_documents/global_outline.md")
+        with binding.open_ready_resources() as access:
+            repository = access.repository
+            authorization = repository.capture_reference_authorization(
+                operation_id="guarded_delivery_retry",
+                batch=self._reference_batch(reference),
+            )
+            assert authorization is not None
+            capability = repository.authorize_reference_invocation(
+                authorization,
+                self._reference_correlation(
+                    "guarded_delivery_retry",
+                    "invoke",
+                    1,
+                ),
+            )
+
+        with self.assertRaises(SessionArtifactBindingError):
+            repository.deliver_authorized_references(capability, (reference,))
+
+        with binding.open_ready_resources() as access:
+            history = access.repository.inspect_reference_operation(
+                "guarded_delivery_retry"
+            )
+            assert history is not None
+            self.assertEqual(
+                tuple(
+                    event.invocation_state
+                    for event in history.invocation_events[0]
+                ),
+                (ReferenceInvocationState.AUTHORIZED,),
+            )
+            delivery = access.repository.deliver_authorized_references(
+                capability,
+                (reference,),
+            )
+            self.assertEqual(delivery.contents, (b"",))
+            delivery.close()
+            access.repository.terminate_reference_invocation(
+                capability,
+                ReferenceAuthorizationErrorCode.CANCELLED,
+            )
+            access.repository.finish_reference_operation(
+                authorization,
+                outcome=ReferenceAuthorizationErrorCode.CANCELLED,
+            )
+
+    def test_retained_guarded_repository_termination_rejection_preserves_cleanup(
+        self,
+    ) -> None:
+        workspace = pristine_initialized_workspace(self)
+        provision_session_resources(workspace.root, "novel")
+        binding = compose_session_artifact_binding(workspace.root, "novel")
+        reference = ArtifactReference("core_documents/global_outline.md")
+        with binding.open_ready_resources() as access:
+            repository = access.repository
+            authorization = repository.capture_reference_authorization(
+                operation_id="guarded_termination_retry",
+                batch=self._reference_batch(reference),
+            )
+            assert authorization is not None
+            capability = repository.authorize_reference_invocation(
+                authorization,
+                self._reference_correlation(
+                    "guarded_termination_retry",
+                    "invoke",
+                    1,
+                ),
+            )
+
+        with self.assertRaises(SessionArtifactBindingError):
+            repository.terminate_reference_invocation(
+                capability,
+                ReferenceAuthorizationErrorCode.CANCELLED,
+            )
+
+        with binding.open_ready_resources() as access:
+            history = access.repository.inspect_reference_operation(
+                "guarded_termination_retry"
+            )
+            assert history is not None
+            self.assertEqual(
+                tuple(
+                    event.invocation_state
+                    for event in history.invocation_events[0]
+                ),
+                (ReferenceInvocationState.AUTHORIZED,),
+            )
+            access.repository.terminate_reference_invocation(
+                capability,
+                ReferenceAuthorizationErrorCode.CANCELLED,
+            )
+            access.repository.finish_reference_operation(
+                authorization,
+                outcome=ReferenceAuthorizationErrorCode.CANCELLED,
+            )
+
+    def test_foreign_thread_cannot_consume_or_retire_retained_guarded_authority(
+        self,
+    ) -> None:
+        workspace = pristine_initialized_workspace(self)
+        provision_session_resources(workspace.root, "novel")
+        binding = compose_session_artifact_binding(workspace.root, "novel")
+        reference = ArtifactReference("core_documents/global_outline.md")
+        with binding.open_ready_resources() as access:
+            repository = access.repository
+            authorization = repository.capture_reference_authorization(
+                operation_id="foreign_guarded_authority",
+                batch=self._reference_batch(reference),
+            )
+            assert authorization is not None
+            deliver_capability = repository.authorize_reference_invocation(
+                authorization,
+                self._reference_correlation(
+                    "foreign_guarded_authority",
+                    "deliver",
+                    1,
+                ),
+            )
+            terminate_capability = repository.authorize_reference_invocation(
+                authorization,
+                self._reference_correlation(
+                    "foreign_guarded_authority",
+                    "terminate",
+                    2,
+                ),
+            )
+            failures: list[BaseException] = []
+
+            def misuse_retained_authority() -> None:
+                for action in (
+                    lambda: repository.deliver_authorized_references(
+                        deliver_capability,
+                        (reference,),
+                    ),
+                    lambda: repository.terminate_reference_invocation(
+                        terminate_capability,
+                        ReferenceAuthorizationErrorCode.CANCELLED,
+                    ),
+                ):
+                    try:
+                        action()
+                    except BaseException as exc:
+                        failures.append(exc)
+
+            thread = threading.Thread(target=misuse_retained_authority)
+            thread.start()
+            thread.join(timeout=3)
+            self.assertFalse(thread.is_alive())
+            self.assertEqual(len(failures), 2)
+            self.assertTrue(
+                all(type(failure) is SessionArtifactBindingError for failure in failures)
+            )
+            history = repository.inspect_reference_operation(
+                "foreign_guarded_authority"
+            )
+            assert history is not None
+            self.assertEqual(
+                tuple(
+                    tuple(event.invocation_state for event in events)
+                    for events in history.invocation_events
+                ),
+                (
+                    (ReferenceInvocationState.AUTHORIZED,),
+                    (ReferenceInvocationState.AUTHORIZED,),
+                ),
+            )
+            repository.terminate_reference_invocation(
+                deliver_capability,
+                ReferenceAuthorizationErrorCode.CANCELLED,
+            )
+            repository.terminate_reference_invocation(
+                terminate_capability,
+                ReferenceAuthorizationErrorCode.CANCELLED,
+            )
+            repository.finish_reference_operation(
+                authorization,
+                outcome=ReferenceAuthorizationErrorCode.CANCELLED,
+            )
+
+    def test_nested_guard_rejection_preserves_pending_invocation_for_cleanup(
+        self,
+    ) -> None:
+        workspace = pristine_initialized_workspace(self)
+        provision_session_resources(workspace.root, "novel")
+        binding = compose_session_artifact_binding(workspace.root, "novel")
+
+        @contextmanager
+        def repository_access():
+            with binding.open_ready_resources() as access:
+                yield access.repository
+
+        operation = prepare_guarded_runtime_reference_operation(
+            repository_access,
+            session_id="novel",
+            text="Read ${core_documents/global_outline.md}.",
+        )
+        invocation = operation.begin_invocation(
+            agent_id=PLOT_ARCHITECT,
+            phase="draft",
+            round_number=None,
+        )
+        assert invocation is not None
+        action = ReferenceReadAction(
+            ReferenceReadActionKind.READ_WRITING_ARTIFACTS,
+            invocation.request.correlation,
+            invocation.request.references,
+        )
+        repository = operation._repository
+        original_operation_access = repository._operation_access
+        reject_inner = [True]
+
+        @contextmanager
+        def inner_operation_access():
+            if reject_inner[0]:
+                raise SessionArtifactBindingError("inner operation rejected")
+            assert original_operation_access is not None
+            with original_operation_access():
+                yield
+
+        repository._operation_access = inner_operation_access
+        try:
+            with self.assertRaises(SessionArtifactBindingError):
+                invocation.handle_reference_read_action(action)
+            self.assertFalse(operation.finished)
+            self.assertEqual(tuple(operation._pending.values()), (invocation,))
+            reject_inner[0] = False
+            operation.terminate_invocation(
+                invocation,
+                ReferenceAuthorizationErrorCode.CANCELLED,
+            )
+            failure = operation.failure(
+                RuntimeError("provider stopped after guard rejection"),
+                default=ReferenceAuthorizationErrorCode.CANCELLED,
+            )
+            self.assertIsNotNone(failure)
+            self.assertTrue(operation.finished)
+            self.assertEqual(operation._pending, {})
+        finally:
+            repository._operation_access = original_operation_access
+
+        with binding.open_ready_resources() as access:
+            history = access.repository.inspect_reference_operation(
+                operation.operation_id
+            )
+        assert history is not None
+        self.assertEqual(
+            tuple(event.invocation_state for event in history.invocation_events[0]),
+            (
+                ReferenceInvocationState.AUTHORIZED,
+                ReferenceInvocationState.TERMINATED,
+            ),
+        )
+        self.assertNotIn(
+            ReferenceInvocationState.DELIVERED,
+            tuple(event.invocation_state for event in history.invocation_events[0]),
+        )
+        self.assertIs(
+            history.operation_events[-1].operation_state,
+            ReferenceOperationState.TERMINATED,
+        )
+
+    def test_guard_postcheck_failure_cleanup_prevents_provider_replay(
+        self,
+    ) -> None:
+        workspace = pristine_initialized_workspace(self)
+        provision_session_resources(workspace.root, "novel")
+        binding = compose_session_artifact_binding(workspace.root, "novel")
+        postcheck_failure: list[BaseException | None] = [None]
+
+        @contextmanager
+        def repository_access():
+            with binding.open_ready_resources() as access:
+                yield access.repository
+                if postcheck_failure[0] is not None:
+                    raise postcheck_failure[0]
+
+        operation = prepare_guarded_runtime_reference_operation(
+            repository_access,
+            session_id="novel",
+            text="Read ${core_documents/global_outline.md}.",
+        )
+        invocation = operation.begin_invocation(
+            agent_id=PLOT_ARCHITECT,
+            phase="draft",
+            round_number=None,
+        )
+        assert invocation is not None
+        action = ReferenceReadAction(
+            ReferenceReadActionKind.READ_WRITING_ARTIFACTS,
+            invocation.request.correlation,
+            invocation.request.references,
+        )
+        marker = SessionArtifactBindingError("postcheck rejected")
+        postcheck_failure[0] = marker
+        with mock.patch.object(
+            operation._repository,
+            "deliver_authorized_references",
+            wraps=operation._repository.deliver_authorized_references,
+        ) as deliver:
+            with self.assertRaises(SessionArtifactBindingError) as rejected:
+                invocation.handle_reference_read_action(action)
+            self.assertIs(rejected.exception, marker)
+            postcheck_failure[0] = None
+            with self.assertRaises(SessionArtifactBindingError) as cleanup:
+                operation.failure(marker)
+            self.assertIs(cleanup.exception, marker)
+            self.assertTrue(operation.finished)
+            self.assertEqual(operation._pending, {})
+            with self.assertRaises(ReferenceAuthorizationError) as replay:
+                invocation.handle_reference_read_action(action)
+            self.assertIs(
+                replay.exception.code,
+                ReferenceAuthorizationErrorCode.INVALID_TRANSITION,
+            )
+            self.assertEqual(deliver.call_count, 1)
+
+        with binding.open_ready_resources() as access:
+            history = access.repository.inspect_reference_operation(
+                operation.operation_id
+            )
+        assert history is not None
+        self.assertEqual(
+            tuple(event.invocation_state for event in history.invocation_events[0]),
+            (
+                ReferenceInvocationState.AUTHORIZED,
+                ReferenceInvocationState.DELIVERED,
+                ReferenceInvocationState.TERMINATED,
+            ),
+        )
+        self.assertIs(
+            history.operation_events[-1].operation_state,
+            ReferenceOperationState.TERMINATED,
         )
 
     def test_long_lived_reference_and_source_adapter_reacquire_exact_access(

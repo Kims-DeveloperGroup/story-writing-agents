@@ -1348,6 +1348,17 @@ own ordered history:
 | `accepted` | Another full revalidation succeeded after the recorded result. | The exact invocation evidence chain was accepted before the backend returned its reply. The result's optional operation ID lets Python callers inspect the content-free history. |
 | `terminated` | A fixed coded failure ended the invocation. | No accepted reply exists for the attempt. A retry needs a fresh correlation, coordinator, and one-use capability; it cannot reuse this evidence. |
 
+If guarded repository access is rejected before entry, no invocation event is
+appended and the one-use capability is neither consumed nor retired. The live
+runtime coordinator keeps that invocation pending and the operation unfinished,
+so the same owning invocation can retry delivery or cleanup after its exact
+session resources are restored. That transient authority cannot be reconstructed
+after process loss. If exit revalidation fails after `delivered` was persisted,
+the capability is already consumed and delivery is non-replayable. Cleanup
+preserves the binding failure as authoritative and, after guarded access is
+available, terminates the invocation and operation rather than delivering the
+bytes again.
+
 The durable schema-v2 history contains ordered path and optional range,
 content-free filesystem source identity, selected SHA-256 and byte count,
 source line count, agent/invocation
@@ -1404,8 +1415,9 @@ out-of-bounds range or a value above either limit fails with a fixed,
 content-free code. These authorization limits are separate from the ranged
 viewer's 8 MiB defensive source limit.
 
-Delivery consumes the capability before checking the caller's requested tuple,
-so a mismatched order, path, or range cannot be retried with that capability.
+After guarded repository access is entered, delivery consumes the capability
+before checking the caller's requested tuple, so a mismatched order, path, or
+range cannot be retried with that capability.
 Before delivery, invocation acceptance, operation checkpoints, and final
 operation acceptance, the repository compares the complete current filesystem
 source identity and full-file hash with the original capture. The selected

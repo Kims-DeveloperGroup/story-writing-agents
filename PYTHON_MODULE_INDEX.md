@@ -8319,6 +8319,10 @@ every intermediate arrow. The current runtime graph is acyclic.
   preparation, repository actions, failure handling, terminalization, and
   cleanup so binding loss reaches the binding owner's typed recovery boundary;
   guarded capture also retains its established workspace-security propagation.
+  Guard rejection keeps the affected invocation pending and its top-level
+  operation unfinished until the same live owner can retry durable cleanup;
+  postcheck failure likewise leaves the local handle cleanup-eligible while
+  already-persisted repository evidence remains authoritative.
   The unguarded preparation path continues to convert repository failures to
   the established content-free `ReferenceOperationFailure`. The module imports
   no Git, workspace, controller, or orchestration
@@ -8618,7 +8622,15 @@ every intermediate arrow. The current runtime graph is acyclic.
   rules. Explicit-reference capture, one-use delivery, result receipt,
   revalidation, acceptance/termination, retry correlation, and content-free
   evidence inspection retain their schema-version-2 behavior; however each now
-  follows application recovery under the shared lease. The repository imports
+  follows application recovery under the shared lease. Guarded delivery and
+  invocation termination admit the injected caller access before consuming or
+  retiring their one-use capability. Capability transition and its durable
+  delivered or terminated event share that source/evidence transaction;
+  delivery failure appends termination without reacquiring access, and explicit
+  termination persists its event before retiring the capability. Access-entry
+  rejection therefore leaves authorized authority recoverable, while a later
+  postcheck failure retains any already-persisted transition conservatively.
+  The repository imports
   no controller, terminal, provider, Git, lead, confirmation, or agent-context
   implementation and retains no viewer state or artifact bytes beyond a call.
 - **Primary verification/documentation:**

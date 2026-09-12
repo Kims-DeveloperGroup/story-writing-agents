@@ -1464,8 +1464,15 @@ Start a new operation with a new ID after correcting any source problem.
 For runtime-composed guarded references, selected-root security or binding
 loss is preserved for the orchestration recovery boundary rather than reduced
 to a generic workflow failure. No provider call or fallback source is
-authorized by that failure; repair the exact session resources and inspect the
-closed attempt before starting a new operation.
+authorized by that failure. Rejection before guarded repository entry leaves
+the live invocation pending, its one-use capability intact, and the operation
+unfinished; after repairing the exact session resources, the owning runtime
+can retry that same delivery or cleanup step. This transient authority does not
+survive process loss. A failed exit check after durable delivery is different:
+the capability is consumed, reference delivery is not replayable, and later
+cleanup terminates the invocation and operation while preserving the binding
+failure as authoritative. Inspect the resulting durable attempt before
+starting a new operation.
 
 `inspect_reference_operation()` distinguishes absence from corruption. It
 returns no history only when the named operation directory is absent. If any
