@@ -11465,18 +11465,14 @@ class StoryRuntime:
 
         if artifact_binding is None:
             artifact_binding = self._session_artifact_binding(session_id)
-        session_sources = SessionSourceWorkspace.from_artifact_binding(
-            artifact_binding
-        )
         with artifact_binding.open_ready_resources() as access:
             snapshots = {
                 item.path: item
                 for item in access.repository.capture_complete_state()
                 if item.path in CORE_ARTIFACT_PATHS
             }
-            runtime_overrides = session_sources.load_session_overrides(session_id)
         value = {
-            "runtime_overrides": runtime_overrides,
+            "runtime_overrides": self.workspace.load_session_overrides(session_id),
             "core_documents": [
                 {"path": path, "present": path in snapshots,
                  "content": (

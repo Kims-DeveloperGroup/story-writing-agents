@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import asyncio
-import json
 import os
 import subprocess
 import threading
@@ -147,18 +146,20 @@ class RuntimeSessionArtifactBindingTests(LeadOrchestrationTestCase):
             "Outline first line.\nOutline second line.\n",
         )
 
-    def test_session_context_state_reads_overrides_from_bound_session_root(
+    def test_session_context_state_reads_overrides_from_control_owner(
         self,
     ) -> None:
         control_overrides = {
-            "language": "CONTROL",
-            "agents": {"lead_orchestrator": {"provider": "control"}},
+            "language": "EN",
+            "persona": None,
+            "agents": {},
         }
         session_overrides = {
-            "language": "SESSION",
-            "agents": {"lead_orchestrator": {"provider": "session"}},
+            "language": "KO",
+            "persona": None,
+            "agents": {},
         }
-        self.control_workspace.save_session_overrides(
+        self.runtime.set_runtime_overrides(
             self.session_id,
             control_overrides,
         )
@@ -167,10 +168,10 @@ class RuntimeSessionArtifactBindingTests(LeadOrchestrationTestCase):
             session_overrides,
         )
 
-        state = json.loads(self.runtime._session_context_state(self.session_id))
+        state = self.runtime._session_context_state(self.session_id)
 
-        self.assertEqual(state["runtime_overrides"], session_overrides)
-        self.assertNotEqual(state["runtime_overrides"], control_overrides)
+        self.assertIn('"language":"EN"', state)
+        self.assertNotIn('"language":"KO"', state)
 
     def test_session_source_paths_reject_unsafe_lexical_forms_before_io(
         self,

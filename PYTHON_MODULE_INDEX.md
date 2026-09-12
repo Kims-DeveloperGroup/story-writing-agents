@@ -7129,11 +7129,11 @@ every intermediate arrow. The current runtime graph is acyclic.
   Provider invocation, artifact-evidence resolution, and evidence
   revalidation derive the correlated call-local `SessionSourceWorkspace` from
   the same binding and lend it to every active-debate and invoking-agent-state
-  context adapter. Lead current-state capture also reads session runtime
-  overrides and canonical core snapshots inside one access on that same
-  binding. Those readers never receive the control-root workspace, fall back
-  to it, or acquire independent Git authority; conversation sources retain
-  their separate conversation-storage owners.
+  context adapter. Those adapters never receive the control-root workspace,
+  fall back to it, or acquire Git authority; conversation sources retain their
+  separate conversation-storage owners. Lead current-state capture combines
+  canonical core snapshots from the bound session worktree with runtime
+  overrides from their authoritative control-workspace writer.
   Reference lookup, evidence capture/revalidation,
   candidate construction, Apply, and artifact-ledger inspection never fall
   back to the control root. Private review/input/finalization consumers receive
@@ -7669,9 +7669,8 @@ every intermediate arrow. The current runtime graph is acyclic.
   workspace facade, and the project-root facade. `SessionSourceWorkspace` is
   derived only from an exact
   `workspace.initialization.SessionArtifactBinding`; it exposes the existing
-  `Workspace` read shape needed by context adapters, including exact
-  descriptor-relative session runtime-override reads, while rejecting
-  inherited pathname I/O. Package-internal `discover_workspace` delegates nearest
+  `Workspace` read shape needed by context adapters while rejecting inherited
+  pathname I/O. Package-internal `discover_workspace` delegates nearest
   recognizable-boundary selection and constructs an exactly ready workspace.
   `Workspace.inspect_debate_context` is the strict, separate context-sidecar
   inspection operation. `Workspace.read_agent_session_state` returns one
@@ -7700,9 +7699,9 @@ every intermediate arrow. The current runtime graph is acyclic.
   artifact scaffold. Each allowed debate or owner-state operation borrows one
   short semantic-READY/physical-root access from that binding, traverses the
   pinned descriptor with strict lexical and no-follow checks, pins the nested
-  override, agent-state session, or discussion-log session directory for the
-  complete logical read, and captures its sorted leaf inventory with device,
-  inode, type, link count, size, mtime, and ctime. Every selected leaf is read relative
+  agent-state session or discussion-log session directory for the complete
+  logical read, and captures its sorted leaf inventory with device, inode,
+  type, link count, size, mtime, and ctime. Every selected leaf is read relative
   to that retained directory; before return, the directory must still be its
   named identity and its complete metadata inventory must match. Each leaf is
   also required during its read to remain the same unique regular file with

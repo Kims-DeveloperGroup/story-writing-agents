@@ -85,9 +85,10 @@ artifact material, and the interactive attachment picker. A
 sessions or using them concurrently cannot borrow the control root or the
 other session's repository.
 
-Lead current-state capture reads both session runtime overrides and canonical
-core snapshots through that same exact binding and within one guarded access.
-It cannot combine control-root overrides with session-worktree story state.
+Lead current-state capture reads canonical core snapshots through the exact
+session binding. Its runtime overrides remain control-plane state: the same
+control workspace owns `set_runtime_overrides()`, directives, and their reads,
+so an uncommitted stale copy in a session worktree is never treated as current.
 
 The interactive picker performs its path inventory and selected-file read as
 separate guarded operations. The range viewer receives only the bytes returned
