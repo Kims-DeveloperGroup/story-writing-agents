@@ -18,12 +18,12 @@ Package root: `src/story_writing_agents/`
 
 Importable production units indexed: 142.
 
-Direct internal dependency edges indexed: 572.
+Direct internal dependency edges indexed: 573.
 
 Directed internal dependency cycles indexed: 0.
 
 Edge and cycle totals exclude annotation-only `TYPE_CHECKING` imports. The
-all-import AST graph has 574 edges. Its two annotation-only edges are
+all-import AST graph has 575 edges. Its two annotation-only edges are
 `config -> workspace` and `interactive_terminal._core -> conversations`; the
 workspace cycle was already present in the 135-unit baseline
 (528 all-import / 526 runtime edges).
@@ -262,7 +262,7 @@ git.story_commit_candidates -> git.contracts/git.process/git.session_history
                             -> git.session_history_contracts/git.session_resources
                             -> git.story_commit_contracts/writing_artifacts
                             -> writing_artifacts.repository
-git.story_commits -> git.contracts/git.process/git.session_contracts
+git.story_commits -> git.contracts/git.process/git.repository_lock/git.session_contracts
                   -> git.session_history/git.session_history_contracts
                   -> git.story_commit_candidates/git.story_commit_contracts
 session_recovery -> session_recovery.contracts
@@ -2760,14 +2760,22 @@ every intermediate arrow. The current runtime graph is acyclic.
 - **Supported surface:** Internal-only `GitRepositoryLease`,
   `GitRepositoryLockFailure`, `GitRepositoryLockFailureCode`, and
   `lock_git_repository` in direct-module `__all__`; no facade re-exports them.
+  Package-internal `current_thread_token`, omitted from `__all__`, supplies one
+  opaque process-bound token for the current Python thread state to Git and
+  workspace capability owners.
 - **Direct internal dependencies:** None.
 - **State, resources, and side effects:** Opening the context binds the exact
   lexical standalone root and `.git` directory without following symlinks,
   locks the common-directory descriptor, and revalidates names, identities,
-  and the descriptor before release. Every lease operation is creator-thread
-  confined; cross-thread use fails content-free while cleanup still revokes
-  the lease, unlocks, and closes its descriptor. Bind, open, lock, and revalidation
-  failures expose cleared content-free exception graphs; exceptions from the
+  and the descriptor before release. A lazy thread-local token is stable only
+  for the current Python thread state and process generation; a PID change
+  replaces it, and a later thread cannot inherit authority from a recycled
+  numeric thread identifier. Every lease operation is creator-thread confined;
+  cross-thread use fails content-free while private cleanup still revokes the
+  lease, unlocks, and closes its descriptor. Thread-local token initialization
+  performs no I/O and its per-thread state is released by Python's thread
+  lifecycle. Bind, open, lock, and revalidation failures expose cleared
+  content-free exception graphs; exceptions from the
   caller body remain owned by that caller rather than being relabeled as lock
   failures. The lease becomes unusable after release. Import and value
   construction perform no I/O.
@@ -2937,8 +2945,12 @@ every intermediate arrow. The current runtime graph is acyclic.
   revalidation against optional expected branch and internal-ref tips through
   its already-held repository lease; this method is not a facade export.
   A separate package-internal recovery context, also omitted from `__all__`,
-  borrows one thread-affine lease for bounded story-candidate/commit reads and
-  caller-validated recovery transitions while deferring index cleanliness.
+  borrows one non-recyclable thread-token-affine lease for bounded story-
+  candidate/commit reads and caller-validated recovery transitions while
+  deferring index cleanliness. Every recovery property, read, write, topology,
+  and public-close surface normalizes lease-affinity loss to the history-owned
+  content-free unsafe-root failure, while private context teardown and
+  descriptor cleanup remain unconditional.
   Opening accepts an optional exact-config worktree allowance for workspace
   composition and otherwise retains strict session-resource validation.
 - **Direct internal dependencies:** `git.contracts`, `git.process`,
@@ -3126,7 +3138,9 @@ every intermediate arrow. The current runtime graph is acyclic.
   `revise`, `execute`, `inspect`, and `recover`. Authority construction is
   sentinel-closed; each instance is process-, service-, thread-, candidate-,
   confirmation-, and operation-bound, noncopyable, nonpickleable, and consumed
-  once before execution I/O.
+  once before execution I/O. Thread affinity uses the repository-lock owner's
+  opaque process-aware token, so a successor thread with the same recycled
+  numeric identifier cannot consume a dead creator's authority.
   The named package-internal
   `create_identity_bound_story_commit_service(...)` factory is omitted from
   `__all__`; workspace composition uses it to retain the successful Apply
@@ -3135,7 +3149,7 @@ every intermediate arrow. The current runtime graph is acyclic.
   candidate values, or durable schemas. Direct construction remains strict by
   default.
 - **Direct internal dependencies:** `git.adapter`, `git.contracts`, `git.process`,
-  `git.session_contracts`, `git.session_history`,
+  `git.repository_lock`, `git.session_contracts`, `git.session_history`,
   `git.session_history_contracts`, `git.story_commit_candidates`, and
   `git.story_commit_contracts`.
 - **State, resources, and side effects:** Construction retains only validated
@@ -4988,6 +5002,9 @@ every intermediate arrow. The current runtime graph is acyclic.
   whole-turn budget, and synchronous progress-observer failures.
   `WorkspaceVersionUnsupportedError` specializes `WorkspaceFormatError`; all
   three session transition/access failures specialize `BackendProtocolError`.
+  Package-internal `SessionArtifactGuardFailure`, omitted from the project-root
+  facade, is the shared marker for authoritative guarded session-artifact loss;
+  the workspace lifecycle supplies its concrete binding-error subtype.
 - **Authentication contract:** Module-supported
   `ProviderAuthenticationRequiredError` specializes `BackendProtocolError` and
   is absent from the package-root exports. It exposes fixed provider-safe text,
@@ -7668,8 +7685,9 @@ every intermediate arrow. The current runtime graph is acyclic.
   to that retained directory; before return, the directory must still be its
   named identity and its complete metadata inventory must match. Each leaf is
   also required during its read to remain the same unique regular file with
-  stable metadata, while a missing nested directory must remain absent across
-  the complete operation. Debate result/state session and debate
+  stable metadata, while a missing nested directory is rechecked immediately
+  before an empty result returns and must remain absent across the complete
+  operation. Debate result/state session and debate
   identities, and every agent-state agent/session/debate identity, must match
   their requested paths. The guard and every call-local descriptor close on
   success or failure before bytes return; the view provides no generic path or
@@ -7686,6 +7704,7 @@ every intermediate arrow. The current runtime graph is acyclic.
   `tests/test_debug_log.py`, `tests/test_agent_state.py`,
   `tests/test_public_api_and_cli.py`,
   `tests/test_workspace_session_resources.py`,
+  `tests/test_session_artifact_binding.py`,
   `tests/conversation_catalog_contract.py`,
   `tests/test_conversation_catalog.py`,
   `tests/test_filesystem_collaboration_event_store.py`,
@@ -7712,7 +7731,9 @@ every intermediate arrow. The current runtime graph is acyclic.
   `list_session_resources`, `provision_session_resources`, and
   `require_ready_session_resources` for the future #455 composition. The
   module `__all__` is empty and neither the workspace nor project facade
-  exports them.
+  exports them. `SessionArtifactBindingError` retains this owning import path
+  and specializes the package-internal
+  `errors.SessionArtifactGuardFailure` marker plus `RuntimeError`.
 - **Direct internal dependencies:** `agent_exchange_paths`, `config`, `errors`, the public `git` facade,
   `git.repository_lock`, `git.session_checkpoints`, `git.session_contracts`, `git.session_history`,
   `git.session_resources`, `git.story_commits`, `runtime_state_paths`,
@@ -7772,20 +7793,26 @@ every intermediate arrow. The current runtime graph is acyclic.
   valid session state. It returns an immutable
   reusable binding that privately retains the identity-pinned repository; only
   a live `SessionArtifactAccess` exposes it to package-internal consumers. A
-  binding-owned reentrant, thread-tokened operation gate surrounds every
-  repository transaction, requires the current access to remain semantic-READY
-  before and after that transaction, and rejects retained repository use after
-  access exit. Same-thread nested binding access reuses the exact active lease
-  and descriptor; deactivation serializes with synchronous repository work.
-  The access holds one call-local Git lease and pinned root descriptor, requires
-  its creator thread for every getter, READY check, descriptor duplication, and
-  normal close; foreign-thread exit still revokes tokens and closes resources.
+  binding-owned reentrant, non-recyclable thread-tokened operation gate
+  surrounds every repository transaction, requires the current access to
+  remain semantic-READY before and after that transaction, and rejects retained
+  repository use after access exit. Same-thread nested binding access reuses
+  the exact active lease and descriptor; deactivation serializes with
+  synchronous repository work.
+  The access holds one call-local Git lease and pinned root descriptor, keys
+  nested access by the repository-lock owner's process-aware opaque thread
+  token, and requires that creator thread state for every getter, READY check,
+  descriptor duplication, and normal close. Numeric thread-ID reuse grants no
+  access; foreign-thread exit still revokes the retained token entry and closes
+  resources.
   Borrowed story-commit artifact access uses the live history validator instead
-  of acquiring a second Git lease and remains synchronous. The access requires
-  the current locked READY inspection to equal the binding before and after
-  body I/O on successful, exceptional, and cancellation exits, and closes both
-  on every exit. An original body failure is preserved when postvalidation
-  succeeds, while binding loss on exit becomes the typed binding error. Later
+  of acquiring a second Git lease and remains synchronous. The nested, outer,
+  and borrowed story-commit access exits each require the current locked READY
+  inspection to equal the binding after body I/O on successful, exceptional,
+  and cancellation paths, and close their owned resources on every exit. An
+  original body failure is preserved when postvalidation succeeds, while
+  binding loss on any of those exits becomes the authoritative typed binding
+  error. Later
   path replacement and persistent
   same-inode Git drift therefore fail closed before bytes return; orchestration
   keeps each access and repository operation synchronous and short, never
@@ -8287,10 +8314,14 @@ every intermediate arrow. The current runtime graph is acyclic.
   immutable source/provider projections, a borrowed concrete repository, and
   an optional caller-owned access callback. Guarded preparation, invocation,
   read, result, and terminal repository actions each open and close one short
-  synchronous access without nesting or spanning provider awaits. Guarded
-  capture preserves a workspace-security failure so root loss reaches the
-  binding owner's typed recovery boundary instead of a generic workflow
-  failure. The module imports no Git, workspace, controller, or orchestration
+  synchronous access without nesting or spanning provider awaits. With that
+  callback present, the shared session-artifact guard marker propagates through
+  preparation, repository actions, failure handling, terminalization, and
+  cleanup so binding loss reaches the binding owner's typed recovery boundary;
+  guarded capture also retains its established workspace-security propagation.
+  The unguarded preparation path continues to convert repository failures to
+  the established content-free `ReferenceOperationFailure`. The module imports
+  no Git, workspace, controller, or orchestration
   implementation and owns no filesystem, persistent-evidence, provider,
   process, or terminal resource; repository calls remain the only operational
   effects. Importing the module performs no I/O.
@@ -8614,16 +8645,16 @@ every intermediate arrow. The current runtime graph is acyclic.
 
 ## Consistency Notes
 
-- The combined runtime has 142 production units, 572 runtime edges, 574
+- The combined runtime has 142 production units, 573 runtime edges, 575
   all-import edges, and no directed runtime cycle. Whole-source path parity is
   exact. The private orchestrator-to-`workspace.core` edge supplies the
   session-bound source reader without widening the stable workspace facade;
   workspace initialization adds the repository-lock edge for guarded READY
   access while recovery drops its former path-only artifact-repository edge.
   Story-commit candidates add one inward `git.session_contracts` edge for the
-  typed guarded-capture boundary, and story commits add one inward
-  `git.adapter` edge for external-operation recovery checks; no runtime
-  cycle or facade export results.
+  typed guarded-capture boundary, and story commits add inward `git.adapter`
+  and `git.repository_lock` edges for external-operation recovery checks and
+  non-recyclable thread authority; no runtime cycle or facade export results.
   Guarded runtime-reference capture adds one inward edge to the stable
   content-free `errors` boundary.
   Specialist routing adds one pure module and five net inward runtime

@@ -7,6 +7,10 @@ class StoryWritingAgentsError(Exception):
     """Base class for expected runtime errors."""
 
 
+class SessionArtifactGuardFailure(StoryWritingAgentsError):
+    """Package-internal marker for loss of guarded session artifact access."""
+
+
 class WorkspaceSecurityError(StoryWritingAgentsError):
     """Raised when a path would escape the configured workspace."""
 

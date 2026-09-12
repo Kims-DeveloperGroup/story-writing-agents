@@ -65,14 +65,16 @@ and every transaction on it requires live same-thread access and READY checks
 before and after; retaining the raw object grants no later or cross-thread
 authority. Same-thread nested guards reuse the current access. Long-lived
 reference and source adapters instead retain an access factory and reacquire a
-guard for each operation. Guard exit revalidates after success, ordinary
-error, or cancellation. If the body and exit check both fail, binding loss is
-the authoritative failure; otherwise the original body failure is preserved.
-The underlying Git lease, session history, and artifact access are affine to
-their creator thread. Foreign-thread surface calls, including explicit close,
-fail; context-manager teardown instead privately revokes tokens and closes
-descriptors/leases so cleanup completes without granting foreign authority or
-suppressing the body failure.
+guard for each operation. Nested, outer, and borrowed Commit access exits
+revalidate after success, `RuntimeError`, or cancellation. If the body and exit
+check both fail, binding loss is authoritative; a clean postcheck preserves the
+original exception, and cleanup completes in either case. The underlying Git
+lease, session history, artifact access, and Commit authority are affine to a
+package-internal, process-aware opaque token for the creator's thread state,
+not its numeric identifier. A later thread state cannot inherit authority after
+numeric identifier reuse. Foreign-thread surface calls, including explicit
+close, fail; context-manager teardown instead privately revokes tokens and
+closes descriptors/leases without granting foreign authority.
 
 This covers explicit
 and contextual references, source status and fingerprints, proposal and review
@@ -111,10 +113,12 @@ identity/metadata drift, and checks embedded debate or agent-state ownership
 before returning. A compound agent-state or debate read pins its intermediate
 parent descriptor and rechecks the complete inventory: names plus device,
 inode, type, link count, size, nanosecond modification time, and nanosecond
-change time. Parent replacement or any inventory drift fails closed. A missing,
-replaced, or unsafe bound root fails closed as a content-free
-`source_unavailable` instead of borrowing control-root or sibling-session
-state.
+change time. Parent replacement or any inventory drift fails closed. A missing
+agent-state parent produces an empty result only after absence is checked when
+the open fails and again immediately before return; creation between those
+observations fails closed. A missing, replaced, or unsafe bound root fails
+closed as a content-free `source_unavailable` instead of borrowing control-root
+or sibling-session state.
 
 ## Phase-confirmed consensus methods
 
@@ -1033,15 +1037,20 @@ during local closure. Binding loss while finalizing a completed artifact review
 durably closes the artifact and collaboration state as `recovery_required` and
 does not issue Apply authority. Binding loss while proving recommendation or
 reference closure returns the typed blocking recovery result and preserves the
-original attempt. This resource failure is not semantic staleness: true source,
+original attempt. Guarded explicit-reference binding loss is likewise preserved
+through preparation, read action, failure, terminalization, and cleanup, so
+Lead returns `recovery_required` with no provider or fallback call. This
+resource failure is not semantic staleness: true source,
 basis, relationship, or candidate drift remains `stale` and requires fresh
 planning/review, while loss of the exact bound resources requires recovery.
 Repair authoritative session resources/history before continuing.
 
-Guarded reference preparation preserves root-security and binding failures for
-the runtime recovery mapping instead of flattening them into an ordinary
-reference workflow failure. Thus loss of the selected session root remains a
-typed recovery boundary and does not authorize provider work or fallback.
+Guarded reference preparation preserves `WorkspaceSecurityError` and binding
+failures for runtime recovery mapping instead of flattening them into an
+ordinary reference workflow failure. Unguarded public repository composition
+retains its fixed `ReferenceOperationFailure` conversion. Thus loss of the
+selected session root remains a typed recovery boundary and does not authorize
+provider work or fallback.
 
 ### Free text and recovery
 

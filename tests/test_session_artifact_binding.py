@@ -5,11 +5,14 @@ from __future__ import annotations
 import asyncio
 import os
 import subprocess
+import threading
 from concurrent.futures import ThreadPoolExecutor
+from contextlib import contextmanager
 from types import SimpleNamespace
 from unittest import mock
 
 import story_writing_agents.workspace as workspace_facade
+from story_writing_agents import orchestrator as orchestrator_module
 from story_writing_agents.agent_context.manifest import (
     ContextScope,
     ContextSubjectKind,
@@ -27,6 +30,7 @@ from story_writing_agents.conversations import (
     CollaborationStepState,
 )
 from story_writing_agents.errors import WorkspaceFormatError, WorkspaceSecurityError
+from story_writing_agents.git import repository_lock as lock_module
 from story_writing_agents.models import AgentStateEntry, DebateMessage
 from story_writing_agents.workspace import Workspace
 from story_writing_agents.workspace import core as workspace_core
@@ -382,6 +386,52 @@ class RuntimeSessionArtifactBindingTests(LeadOrchestrationTestCase):
                 read()
         finally:
             extra.unlink(missing_ok=True)
+
+    def test_agent_state_parent_stable_absence_is_empty_but_late_creation_fails(
+        self,
+    ) -> None:
+        sources = self.source_workspace()
+        directory = self.workspace.path(
+            self.workspace._agent_state_relative(
+                PLOT_ARCHITECT,
+                self.session_id,
+                "source_debate",
+            )
+        ).parent
+        self.assertFalse(directory.exists())
+        original = SessionSourceWorkspace._require_directory_absent_at
+
+        with mock.patch.object(
+            SessionSourceWorkspace,
+            "_require_directory_absent_at",
+            wraps=original,
+        ) as stable_absence:
+            self.assertEqual(
+                sources.read_agent_session_state(PLOT_ARCHITECT, self.session_id),
+                (),
+            )
+        self.assertEqual(stable_absence.call_count, 2)
+
+        calls = 0
+
+        def create_after_first_check(root, relative):
+            nonlocal calls
+            result = original(root, relative)
+            calls += 1
+            if calls == 1:
+                directory.mkdir(parents=True)
+            return result
+
+        try:
+            with mock.patch.object(
+                SessionSourceWorkspace,
+                "_require_directory_absent_at",
+                side_effect=create_after_first_check,
+            ), self.assertRaises(WorkspaceSecurityError):
+                sources.read_agent_session_state(PLOT_ARCHITECT, self.session_id)
+        finally:
+            directory.rmdir()
+        self.assertEqual(calls, 1)
 
     def test_debate_parent_swap_and_inventory_change_fail_closed(self) -> None:
         self.append_source_debate(self.workspace, "retained debate")
@@ -805,18 +855,68 @@ class RuntimeSessionArtifactBindingTests(LeadOrchestrationTestCase):
         os.fstat(descriptor)
         self.assertEqual(
             binding._operation_tokens,
-            {access._owner_thread_id: [access]},
+            {access._owner_thread_token: [access]},
         )
 
         body_failure = RuntimeError("preserve artifact caller failure")
+
+        def foreign_exit():
+            try:
+                manager.__exit__(RuntimeError, body_failure, None)
+            except SessionArtifactBindingError as exc:
+                return exc
+            return None
+
         with ThreadPoolExecutor(max_workers=1) as executor:
-            suppresses = executor.submit(
-                manager.__exit__,
-                RuntimeError,
-                body_failure,
-                None,
-            ).result(timeout=10)
-        self.assertFalse(suppresses)
+            exit_failure = executor.submit(foreign_exit).result(timeout=10)
+        self.assertIs(type(exit_failure), SessionArtifactBindingError)
+        self.assertEqual(binding._operation_tokens, {})
+        with self.assertRaises(OSError):
+            os.fstat(descriptor)
+        with binding.open_ready_resources() as replacement:
+            replacement.require_ready()
+
+    def test_recycled_numeric_ident_cannot_discover_or_reuse_artifact_access(
+        self,
+    ) -> None:
+        binding = compose_session_artifact_binding(
+            self.control_workspace.root,
+            self.session_id,
+        )
+        manager = binding.open_ready_resources()
+        access = manager.__enter__()
+        descriptor = access._descriptor
+        creator_token = lock_module.current_thread_token()
+        numeric_ident = threading.get_ident()
+        successor_token = object()
+        lock_module._THREAD_STATE.token = successor_token
+        try:
+            self.assertEqual(threading.get_ident(), numeric_ident)
+            self.assertIsNone(binding._current_repository_access())
+            self.assertEqual(
+                binding._operation_tokens,
+                {creator_token: [access]},
+            )
+            operations = (
+                lambda: access.repository,
+                lambda: access.resources,
+                lambda: access.worktree_identity,
+                access.duplicate_worktree_descriptor,
+                access.require_active,
+                access.require_ready,
+                access._close,
+            )
+            for operation in operations:
+                with self.subTest(operation=operation), self.assertRaises(
+                    SessionArtifactBindingError
+                ):
+                    operation()
+            os.fstat(descriptor)
+            with self.assertRaises(SessionArtifactBindingError):
+                manager.__exit__(RuntimeError, RuntimeError("body failure"), None)
+        finally:
+            lock_module._THREAD_STATE.token = creator_token
+
         self.assertEqual(binding._operation_tokens, {})
         with self.assertRaises(OSError):
             os.fstat(descriptor)
@@ -882,6 +982,155 @@ class RuntimeSessionArtifactBindingTests(LeadOrchestrationTestCase):
         for descriptor in opened:
             with self.assertRaises(OSError):
                 os.fstat(descriptor)
+
+    def test_nested_and_story_commit_postchecks_preserve_exception_precedence(
+        self,
+    ) -> None:
+        for holder in ("nested_ready", "story_commit"):
+            for body_failure in (
+                RuntimeError(f"{holder} body failure"),
+                asyncio.CancelledError(),
+            ):
+                with self.subTest(holder=holder, failure=type(body_failure).__name__):
+                    binding = compose_session_artifact_binding(
+                        self.control_workspace.root,
+                        self.session_id,
+                    )
+                    opened: list[int] = []
+                    original_open = initialization_module._open_existing_root
+
+                    def record_open(root, expected):
+                        descriptor = original_open(root, expected)
+                        opened.append(descriptor)
+                        return descriptor
+
+                    if holder == "nested_ready":
+                        with binding.open_ready_resources() as outer:
+                            replacement = self.replace_session_worktree()
+                            entered = False
+                            try:
+                                replacement.__enter__()
+                                entered = True
+                                with self.assertRaises(
+                                    SessionArtifactBindingError
+                                ):
+                                    with binding.open_ready_resources() as nested:
+                                        self.assertIs(nested, outer)
+                                        raise body_failure
+                            finally:
+                                if entered:
+                                    replacement.__exit__(None, None, None)
+                            outer.require_ready()
+                    else:
+                        replacement = self.replace_session_worktree()
+                        entered = False
+                        repository = None
+                        try:
+                            with mock.patch.object(
+                                initialization_module,
+                                "_open_existing_root",
+                                side_effect=record_open,
+                            ), self.assertRaises(SessionArtifactBindingError):
+                                with binding.open_story_commit_artifact_repository(
+                                    lambda: binding.resources
+                                ) as repository:
+                                    replacement.__enter__()
+                                    entered = True
+                                    raise body_failure
+                        finally:
+                            if entered:
+                                replacement.__exit__(None, None, None)
+                        assert repository is not None
+                        with self.assertRaises(SessionArtifactBindingError):
+                            repository.list_paths()
+                        self.assertTrue(opened)
+                        for descriptor in opened:
+                            with self.assertRaises(OSError):
+                                os.fstat(descriptor)
+                    self.assertEqual(binding._operation_tokens, {})
+
+        for holder in ("nested_ready", "story_commit"):
+            for body_failure in (
+                RuntimeError(f"clean {holder} body failure"),
+                asyncio.CancelledError(),
+            ):
+                with self.subTest(clean_holder=holder, failure=type(body_failure).__name__):
+                    binding = compose_session_artifact_binding(
+                        self.control_workspace.root,
+                        self.session_id,
+                    )
+
+                    @contextmanager
+                    def holder_access():
+                        if holder == "nested_ready":
+                            with binding.open_ready_resources():
+                                with binding.open_ready_resources():
+                                    yield
+                        else:
+                            with binding.open_story_commit_artifact_repository(
+                                lambda: binding.resources
+                            ):
+                                yield
+
+                    observed = None
+                    observed_traceback = None
+                    original_traceback = None
+                    try:
+                        raise body_failure
+                    except BaseException as seeded:
+                        original_traceback = seeded.__traceback__
+                        try:
+                            with holder_access():
+                                raise
+                        except BaseException as caught:
+                            observed = caught
+                            observed_traceback = caught.__traceback__
+                    self.assertIs(observed, body_failure)
+                    self.assertIsNotNone(original_traceback)
+                    self.assertIsNotNone(observed_traceback)
+                    chain = []
+                    while observed_traceback is not None:
+                        chain.append(observed_traceback)
+                        observed_traceback = observed_traceback.tb_next
+                    self.assertIn(original_traceback, chain)
+                    self.assertEqual(binding._operation_tokens, {})
+
+    async def test_guarded_reference_binding_loss_maps_to_recovery_before_provider(
+        self,
+    ) -> None:
+        conversation = self.conversation("Guarded reference binding loss")
+        failure = SessionArtifactBindingError("exact guarded marker")
+        before = (
+            len(self.backend.calls),
+            len(self.backend.reference_calls),
+            len(self.backend.providers),
+            len(self.backend.definitions),
+        )
+        with mock.patch.object(
+            orchestrator_module,
+            "prepare_guarded_runtime_reference_operation",
+            side_effect=failure,
+        ) as prepare:
+            result = await self.runtime.lead_turn(
+                self.session_id,
+                conversation,
+                f"Read ${{{_OUTLINE}}} before answering.",
+            )
+        self.assertIs(result.state, CollaborationStepState.RECOVERY_REQUIRED)
+        self.assertIs(
+            result.next_action,
+            CollaborationNextAction.REPAIR_AUTHORITATIVE_HISTORY,
+        )
+        self.assertEqual(
+            (
+                len(self.backend.calls),
+                len(self.backend.reference_calls),
+                len(self.backend.providers),
+                len(self.backend.definitions),
+            ),
+            before,
+        )
+        prepare.assert_called_once()
 
     async def test_two_ready_sessions_read_and_inspect_only_their_own_ledger(
         self,

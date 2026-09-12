@@ -5,6 +5,7 @@ from __future__ import annotations
 import copy
 import os
 import pickle
+import threading
 import unittest
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import contextmanager
@@ -15,6 +16,7 @@ from unittest import mock
 import story_writing_agents
 import story_writing_agents.git as git_facade
 from story_writing_agents.git import story_commits as commits_module
+from story_writing_agents.git import repository_lock as lock_module
 from story_writing_agents.git.session_history import (
     GitSessionHistory,
     GitSessionRecoveryHistory,
@@ -195,6 +197,49 @@ class StoryCommitServiceTests(StoryCommitGitTestCase):
         self.assertIs(error.code, StoryCommitFailureCode.AUTHORITY_INVALID)
         result = service.execute(authority)
         self.assertIs(result.state, StoryCommitState.COMMITTED)
+        with self.assertRaises(StoryCommitError) as caught:
+            service.execute(authority)
+        self.assertIs(caught.exception.code, StoryCommitFailureCode.AUTHORITY_CONSUMED)
+
+    def test_recycled_numeric_ident_cannot_consume_story_commit_authority(
+        self,
+    ) -> None:
+        _root, _session_root, service, candidate = self.prepared_bound(
+            "recycled-authority-token"
+        )
+        authority = service.authorize(
+            candidate,
+            self.confirmation(candidate, suffix="recycled-token"),
+        )
+        creator_token = lock_module.current_thread_token()
+        numeric_ident = threading.get_ident()
+        successor_token = object()
+        lock_module._THREAD_STATE.token = successor_token
+        try:
+            self.assertEqual(threading.get_ident(), numeric_ident)
+            with mock.patch.object(
+                commits_module,
+                "open_git_session_history",
+                side_effect=AssertionError("history I/O was attempted"),
+            ) as history_io, mock.patch.object(
+                StoryCommitService,
+                "_stage_git",
+                autospec=True,
+            ) as stage_git, self.assertRaises(StoryCommitError) as caught:
+                service.execute(authority)
+            self.assertIs(
+                caught.exception.code,
+                StoryCommitFailureCode.AUTHORITY_INVALID,
+            )
+            self.assertFalse(authority._consumed)
+            history_io.assert_not_called()
+            stage_git.assert_not_called()
+        finally:
+            lock_module._THREAD_STATE.token = creator_token
+
+        committed = service.execute(authority)
+        self.assertIs(committed.state, StoryCommitState.COMMITTED)
+        self.assertTrue(authority._consumed)
         with self.assertRaises(StoryCommitError) as caught:
             service.execute(authority)
         self.assertIs(caught.exception.code, StoryCommitFailureCode.AUTHORITY_CONSUMED)

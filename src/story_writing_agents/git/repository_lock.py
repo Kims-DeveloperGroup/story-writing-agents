@@ -16,6 +16,21 @@ except ImportError:  # pragma: no cover - exercised on unsupported platforms
     _fcntl = None  # type: ignore[assignment]
 
 
+_THREAD_STATE = threading.local()
+
+
+def current_thread_token() -> object:
+    """Return one process-bound token for the current Python thread state."""
+
+    pid = os.getpid()
+    token = getattr(_THREAD_STATE, "token", None)
+    if getattr(_THREAD_STATE, "pid", None) != pid or token is None:
+        _THREAD_STATE.pid = pid
+        token = object()
+        _THREAD_STATE.token = token
+    return token
+
+
 class GitRepositoryLockFailureCode(StrEnum):
     """Closed failure facts emitted by the shared repository-lock owner."""
 
@@ -45,7 +60,7 @@ class GitRepositoryLease:
         "_common_identity",
         "_main_root",
         "_root_identity",
-        "_thread_id",
+        "_thread_token",
     )
 
     def __init__(
@@ -62,7 +77,7 @@ class GitRepositoryLease:
         self._root_identity = root_identity
         self._common_identity = common_identity
         self._common_descriptor = common_descriptor
-        self._thread_id = threading.get_ident()
+        self._thread_token = current_thread_token()
         self._active = True
 
     @property
@@ -93,7 +108,7 @@ class GitRepositoryLease:
     def require_active(self) -> None:
         """Revalidate both named directories and the live leased descriptor."""
 
-        if not self._active or threading.get_ident() != self._thread_id:
+        if not self._active or current_thread_token() is not self._thread_token:
             raise _failure(GitRepositoryLockFailureCode.LOCK_UNAVAILABLE)
         failure: GitRepositoryLockFailure | None = None
         try:

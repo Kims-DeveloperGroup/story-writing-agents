@@ -15,7 +15,7 @@ from collections.abc import Callable, Iterator
 from contextlib import AbstractContextManager, contextmanager
 from typing import TypeVar
 
-from ..errors import WorkspaceSecurityError
+from ..errors import SessionArtifactGuardFailure, WorkspaceSecurityError
 from .authorization import (
     AuthorizedArtifactReference,
     ReferenceAuthorization,
@@ -351,23 +351,34 @@ class RuntimeReferenceOperation:
 
         if self._authorization is None:
             return None
+        preserve_guard_failure = self._preserves_guard_failure(failure)
         code = _failure_code(failure, default)
         with self._lock:
             if self._finished:
+                if preserve_guard_failure:
+                    raise failure
                 return ReferenceOperationFailure(self._required_operation_id(), code)
-            return self._fail_locked(code)
+            result = self._fail_locked(code)
+            if preserve_guard_failure:
+                raise failure
+            return result
 
     def _fail_locked(
         self,
         code: ReferenceAuthorizationErrorCode,
     ) -> ReferenceOperationFailure:
         operation_id = self._required_operation_id()
+        guard_failure: BaseException | None = None
         pending = tuple(self._pending.values())
         for invocation in pending:
             try:
                 invocation.terminate(code)
             except BaseException as exc:
-                code = _failure_code(exc, code)
+                if self._preserves_guard_failure(exc):
+                    if guard_failure is None:
+                        guard_failure = exc
+                else:
+                    code = _failure_code(exc, code)
         try:
             with self._open_repository_access():
                 self._repository.finish_reference_operation(
@@ -375,8 +386,14 @@ class RuntimeReferenceOperation:
                     outcome=code,
                 )
         except BaseException as exc:
-            code = _failure_code(exc, code)
+            if self._preserves_guard_failure(exc):
+                if guard_failure is None:
+                    guard_failure = exc
+            else:
+                code = _failure_code(exc, code)
         self._finished = True
+        if guard_failure is not None:
+            raise guard_failure
         return ReferenceOperationFailure(operation_id, code)
 
     def _retire_invocation(
@@ -403,7 +420,17 @@ class RuntimeReferenceOperation:
             try:
                 return action(), None
             except BaseException as exc:
+                if self._preserves_guard_failure(exc):
+                    raise
                 return None, exc
+
+    def _preserves_guard_failure(self, failure: BaseException) -> bool:
+        """Return whether guarded access requires verbatim failure propagation."""
+
+        return self._repository_access is not None and isinstance(
+            failure,
+            SessionArtifactGuardFailure,
+        )
 
     @contextmanager
     def _open_repository_access(self) -> Iterator[WritingArtifactRepository]:
@@ -505,7 +532,10 @@ def _prepare_runtime_reference_operation(
     except ReferenceAuthorizationError as exc:
         raise ReferenceOperationFailure(operation_id, exc.code) from exc
     except BaseException as exc:
-        if repository_access is not None and isinstance(exc, WorkspaceSecurityError):
+        if repository_access is not None and isinstance(
+            exc,
+            (SessionArtifactGuardFailure, WorkspaceSecurityError),
+        ):
             raise
         raise ReferenceOperationFailure(
             operation_id,

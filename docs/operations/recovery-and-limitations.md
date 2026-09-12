@@ -194,10 +194,13 @@ concurrent specialist execution; a later action reacquires it. The binding
 keeps one stable exact repository private and exposes it only through live
 same-thread access. Every transaction requires that access and its own
 before/after READY checks, so a retained raw repository or cross-thread use
-fails. Same-thread nested access is reentrant; long-lived reference/source
-adapters reacquire a guard for each operation. Exit revalidation runs on
-success, error, and cancellation. When both the body and exit fail, binding
-loss takes precedence; otherwise the original error or cancellation survives.
+fails. Access, Git leases, and Commit authority use opaque process-aware thread-
+state tokens rather than numeric identifiers, so identifier reuse grants no
+authority. Same-thread nested access is reentrant; long-lived reference/source
+adapters reacquire a guard for each operation. Nested, outer, and borrowed
+Commit exits revalidate on success, `RuntimeError`, and cancellation. When both
+the body and exit fail, binding loss takes precedence; a clean postcheck
+preserves the original exception, and cleanup remains guaranteed.
 Conversation history remains in its separately
 configured control-plane store. Absent
 resources are not provisioned; moved, mismatched, staged, or otherwise
@@ -214,6 +217,9 @@ debate reads additionally pin the intermediate parent descriptor and compare
 the exact whole inventory—names plus device, inode, type, link count, size,
 nanosecond modification time, and nanosecond change time—before returning.
 Parent swaps and added, removed, or changed entries therefore fail closed.
+An absent agent-state parent is accepted as empty only after absence is checked
+at the failed open and again immediately before return; late creation fails
+closed.
 
 The common-Git lease coordinates this runtime's cooperating operations only.
 Persistent external Git drift is rejected by the before/after or next-action
@@ -260,14 +266,24 @@ durable state, schema field, or restart projection for that post-Apply Commit-
 request failure; operators must inspect before preparing again.
 [Issue #662](https://github.com/Kims-DeveloperGroup/story-writing-agents/issues/662)
 tracks that separate state-machine work and remains outside this change.
+This change covers only the #661 Git/session resource path. Conversation-side
+occurrence remains follow-up work in
+[Issue #668](https://github.com/Kims-DeveloperGroup/story-writing-agents/issues/668),
+and adjacent topology resource translation remains follow-up work in
+[Issue #669](https://github.com/Kims-DeveloperGroup/story-writing-agents/issues/669);
+neither is shipped behavior here.
 
 Resource loss during local closure does not replay known provider work. A
 completed artifact-review result that cannot be finalized against its bound
 session closes durably as artifact/collaboration `recovery_required`, without
 Apply authority. Recommendation or reference closure that cannot prove its
 correlated session evidence returns a typed blocking recovery result and keeps
-the original attempt closed. Repair the exact resources and authoritative
-history instead of retrying that provider call.
+the original attempt closed. Guarded reference binding loss retains its
+resource classification through preparation, read action, failure,
+terminalization, and cleanup, then maps to `recovery_required` without a
+provider or fallback call. Public unguarded references retain their fixed
+`ReferenceOperationFailure` conversion. Repair the exact resources and
+authoritative history instead of retrying that provider call.
 
 The runtime never automatically removes a named branch, internal ref,
 worktree, worktree-administration entry, seed object, journal-backed recovery

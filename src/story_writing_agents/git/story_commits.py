@@ -28,6 +28,7 @@ from .process import (
     GitProcessResult,
     GitProcessRunner,
 )
+from .repository_lock import current_thread_token
 from .session_history import (
     GitSessionHistory,
     GitSessionRecoveryHistory,
@@ -108,7 +109,7 @@ class StoryCommitAuthority:
         "_owner",
         "_pid",
         "_revalidation",
-        "_thread_id",
+        "_thread_token",
     )
 
     def __init__(
@@ -129,7 +130,7 @@ class StoryCommitAuthority:
         self._operation_id = operation_id
         self._revalidation = revalidation
         self._pid = os.getpid()
-        self._thread_id = threading.get_ident()
+        self._thread_token = current_thread_token()
         self._consumed = False
         self._lock = threading.Lock()
 
@@ -163,7 +164,7 @@ class StoryCommitAuthority:
             if (
                 self._owner is not owner
                 or self._pid != os.getpid()
-                or self._thread_id != threading.get_ident()
+                or self._thread_token is not current_thread_token()
             ):
                 raise _error(StoryCommitFailureCode.AUTHORITY_INVALID)
             if self._consumed:

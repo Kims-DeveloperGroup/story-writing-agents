@@ -1560,6 +1560,18 @@ access. Long-lived runtime reference/source adapters retain an access factory,
 not authority, and reacquire the guard for each operation; same-thread nested
 binding access is reentrant.
 
+Guarded runtime references preserve the package-internal
+`SessionArtifactGuardFailure` classification, including its existing concrete
+`story_writing_agents.workspace.initialization.SessionArtifactBindingError`,
+through preparation, read action, explicit failure, terminalization, and
+cleanup. A later guard failure also takes precedence while closing an earlier
+provider or workflow failure. Lead maps that resource loss to
+`recovery_required` before any provider or fallback call. Guarded preparation
+continues to propagate `WorkspaceSecurityError`. None of this changes the
+unguarded repository contract: public preparation and operation failure still
+convert ordinary failures to the fixed content-free `ReferenceOperationFailure`
+result. The internal marker adds no project-root or subpackage-facade export.
+
 The private store, not `repository.py` or `_storage.py`, is the sole interpreter
 of application journals, immutable records, catalog transitions, completed
 lookup, audit, and recovery. The existing secure-storage primitive still owns

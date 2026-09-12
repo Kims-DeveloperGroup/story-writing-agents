@@ -1507,15 +1507,18 @@ class SessionSourceWorkspace(Workspace):
         relative_directory = f"agent_states/{state_directory}/debates/{session}"
 
         def read(root: int) -> tuple[AgentStateEntry, ...]:
+            directory: int | None = None
             try:
-                directory = self._open_directory_at(
-                    root,
-                    relative_directory,
-                )
-            except FileNotFoundError:
-                self._require_directory_absent_at(root, relative_directory)
-                return ()
-            try:
+                try:
+                    directory = self._open_directory_at(
+                        root,
+                        relative_directory,
+                    )
+                except FileNotFoundError:
+                    self._require_directory_absent_at(root, relative_directory)
+                if directory is None:
+                    self._require_directory_absent_at(root, relative_directory)
+                    return ()
                 inventory = self._capture_directory_inventory(directory)
                 ordered: list[tuple[str, str, int, int, AgentStateEntry]] = []
                 state_files = tuple(
@@ -1560,7 +1563,8 @@ class SessionSourceWorkspace(Workspace):
                 )
                 return result
             finally:
-                os.close(directory)
+                if directory is not None:
+                    os.close(directory)
 
         return self._read_bound(read)
 

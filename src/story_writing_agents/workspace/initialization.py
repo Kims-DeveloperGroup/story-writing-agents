@@ -19,8 +19,8 @@ from ..runtime_state_paths import is_orchestrator_runtime_directory
 from ..config import validate_persisted_configuration_bytes
 from ..errors import (
     ConfigurationError,
+    SessionArtifactGuardFailure,
     SessionIdError,
-    StoryWritingAgentsError,
     WorkspaceFormatError,
     WorkspaceSecurityError,
     WorkspaceVersionUnsupportedError,
@@ -44,6 +44,7 @@ from ..git.story_commits import (
 from ..git.repository_lock import (
     GitRepositoryLease,
     GitRepositoryLockFailure,
+    current_thread_token,
     lock_git_repository,
 )
 from ..git.session_checkpoints import SessionCheckpointService
@@ -430,7 +431,7 @@ class SessionArtifactBinding:
     allowed_worktree_changes: tuple[str, ...] = field(repr=False)
     _repository: WritingArtifactRepository = field(init=False, repr=False)
     _operation_lock: threading.RLock = field(init=False, repr=False, compare=False)
-    _operation_tokens: dict[int, list[SessionArtifactAccess]] = field(
+    _operation_tokens: dict[object, list[SessionArtifactAccess]] = field(
         init=False, repr=False, compare=False
     )
 
@@ -469,10 +470,7 @@ class SessionArtifactBinding:
             try:
                 yield nested
             except BaseException:
-                try:
-                    _postvalidate_session_artifact_access(nested)
-                except _SESSION_ARTIFACT_BINDING_FAILURES:
-                    pass
+                _postvalidate_session_artifact_access(nested)
                 raise
             else:
                 _postvalidate_session_artifact_access(nested)
@@ -516,10 +514,7 @@ class SessionArtifactBinding:
                         yield access
                     except BaseException as exc:
                         body_failure = exc
-                        try:
-                            _postvalidate_session_artifact_access(access)
-                        except _SESSION_ARTIFACT_BINDING_FAILURES:
-                            pass
+                        _postvalidate_session_artifact_access(access)
                         raise
                     else:
                         _postvalidate_session_artifact_access(access)
@@ -534,38 +529,41 @@ class SessionArtifactBinding:
 
     def _activate_repository_access(self, access: SessionArtifactAccess) -> None:
         with self._operation_lock:
-            if threading.get_ident() != access._owner_thread_id:
+            if current_thread_token() is not access._owner_thread_token:
                 raise SessionArtifactBindingError(
                     "session artifact access token is invalid"
                 )
-            self._operation_tokens.setdefault(access._owner_thread_id, []).append(access)
+            self._operation_tokens.setdefault(
+                access._owner_thread_token,
+                [],
+            ).append(access)
 
     def _deactivate_repository_access(self, access: SessionArtifactAccess) -> None:
         with self._operation_lock:
-            if threading.get_ident() != access._owner_thread_id:
+            if current_thread_token() is not access._owner_thread_token:
                 raise SessionArtifactBindingError(
                     "session artifact access token is invalid"
                 )
-            tokens = self._operation_tokens.get(access._owner_thread_id)
+            tokens = self._operation_tokens.get(access._owner_thread_token)
             if not tokens or tokens[-1] is not access:
                 raise SessionArtifactBindingError(
                     "session artifact access token is invalid"
                 )
             tokens.pop()
             if not tokens:
-                self._operation_tokens.pop(access._owner_thread_id, None)
+                self._operation_tokens.pop(access._owner_thread_token, None)
 
     def _revoke_repository_access(self, access: SessionArtifactAccess) -> None:
         with self._operation_lock:
-            tokens = self._operation_tokens.get(access._owner_thread_id)
+            tokens = self._operation_tokens.get(access._owner_thread_token)
             if tokens and access in tokens:
                 tokens.remove(access)
                 if not tokens:
-                    self._operation_tokens.pop(access._owner_thread_id, None)
+                    self._operation_tokens.pop(access._owner_thread_token, None)
 
     def _current_repository_access(self) -> SessionArtifactAccess | None:
         with self._operation_lock:
-            tokens = self._operation_tokens.get(threading.get_ident())
+            tokens = self._operation_tokens.get(current_thread_token())
             return None if not tokens else tokens[-1]
 
     @contextmanager
@@ -617,10 +615,7 @@ class SessionArtifactBinding:
                 yield access.repository
             except BaseException as exc:
                 body_failure = exc
-                try:
-                    _postvalidate_session_artifact_access(access)
-                except _SESSION_ARTIFACT_BINDING_FAILURES:
-                    pass
+                _postvalidate_session_artifact_access(access)
                 raise
             else:
                 _postvalidate_session_artifact_access(access)
@@ -641,7 +636,7 @@ class SessionArtifactAccess:
         "_binding",
         "_descriptor",
         "_lease",
-        "_owner_thread_id",
+        "_owner_thread_token",
         "_ready_validator",
     )
 
@@ -661,7 +656,7 @@ class SessionArtifactAccess:
         self._lease = lease
         self._ready_validator = ready_validator
         self._descriptor = descriptor
-        self._owner_thread_id = threading.get_ident()
+        self._owner_thread_token = current_thread_token()
         self._active = True
         binding._activate_repository_access(self)
 
@@ -705,7 +700,7 @@ class SessionArtifactAccess:
 
         if (
             not self._active
-            or threading.get_ident() != self._owner_thread_id
+            or current_thread_token() is not self._owner_thread_token
         ):
             raise SessionArtifactBindingError(
                 "session artifact access is no longer active"
@@ -783,7 +778,7 @@ def _postvalidate_session_artifact_access(access: SessionArtifactAccess) -> None
         ) from None
 
 
-class SessionArtifactBindingError(StoryWritingAgentsError, RuntimeError):
+class SessionArtifactBindingError(SessionArtifactGuardFailure, RuntimeError):
     """A content-free failure to bind exact READY session artifact resources."""
 
 

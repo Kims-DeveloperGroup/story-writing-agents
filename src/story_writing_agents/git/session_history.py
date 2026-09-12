@@ -658,7 +658,13 @@ class GitSessionRecoveryHistory:
         return self._topology
 
     def require_active(self) -> None:
-        self._lease.require_active()
+        failure: GitSessionHistoryError | None = None
+        try:
+            self._lease.require_active()
+        except GitRepositoryLockFailure:
+            failure = _history_error(GitSessionHistoryFailureCode.UNSAFE_ROOT)
+        if failure is not None:
+            raise failure from None
         self._history.require_active()
 
     def require_recovery_topology(self) -> GitSessionRecoveryTopology:

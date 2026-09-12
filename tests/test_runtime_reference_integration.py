@@ -36,6 +36,10 @@ from story_writing_agents.writing_artifacts.authorization import (
     ReferenceAuthorizationErrorCode,
     ReferenceOperationFailure,
 )
+from story_writing_agents.writing_artifacts.read_actions import (
+    ReferenceReadAction,
+    ReferenceReadActionKind,
+)
 from story_writing_agents.writing_artifacts.repository import (
     WritingArtifactRepository,
 )
@@ -300,6 +304,139 @@ class RuntimeExecutionRetirementTests(unittest.TestCase):
                 public.exception.code,
                 ReferenceAuthorizationErrorCode.WORKFLOW_FAILURE,
             )
+
+    def test_guarded_binding_failure_identity_survives_every_reference_phase(
+        self,
+    ) -> None:
+        workspace = pristine_initialized_workspace(self)
+        ready = provision_session_resources(workspace.root, "novel")
+        binding = compose_session_artifact_binding(workspace.root, "novel")
+        blocked: list[BaseException | None] = [None]
+
+        @contextmanager
+        def repository_access():
+            if blocked[0] is not None:
+                raise blocked[0]
+            with binding.open_ready_resources() as access:
+                yield access.repository
+
+        def operation():
+            return prepare_guarded_runtime_reference_operation(
+                repository_access,
+                session_id="novel",
+                text="Read ${core_documents/global_outline.md}.",
+            )
+
+        preparation_marker = SessionArtifactBindingError("preparation marker")
+        with mock.patch.object(
+            WritingArtifactRepository,
+            "capture_reference_authorization",
+            side_effect=preparation_marker,
+        ), self.assertRaises(SessionArtifactBindingError) as preparation:
+            operation()
+        self.assertIs(preparation.exception, preparation_marker)
+
+        with binding.open_ready_resources() as access:
+            with mock.patch.object(
+                WritingArtifactRepository,
+                "capture_reference_authorization",
+                side_effect=preparation_marker,
+            ), self.assertRaises(ReferenceOperationFailure) as public_prepare:
+                prepare_runtime_reference_operation(
+                    access.repository,
+                    session_id="novel",
+                    text="Read ${core_documents/global_outline.md}.",
+                )
+        self.assertIs(
+            public_prepare.exception.code,
+            ReferenceAuthorizationErrorCode.WORKFLOW_FAILURE,
+        )
+        self.assertIs(public_prepare.exception.__cause__, preparation_marker)
+
+        begin_operation = operation()
+        begin_marker = SessionArtifactBindingError("begin marker")
+        blocked[0] = begin_marker
+        with self.assertRaises(SessionArtifactBindingError) as begin:
+            begin_operation.begin_invocation(
+                agent_id=PLOT_ARCHITECT,
+                phase="draft",
+                round_number=None,
+            )
+        self.assertIs(begin.exception, begin_marker)
+        blocked[0] = None
+        supplied_marker = SessionArtifactBindingError("supplied marker")
+        with self.assertRaises(SessionArtifactBindingError) as supplied:
+            begin_operation.failure(supplied_marker)
+        self.assertIs(supplied.exception, supplied_marker)
+        self.assertTrue(begin_operation.finished)
+
+        action_operation = operation()
+        invocation = action_operation.begin_invocation(
+            agent_id=PLOT_ARCHITECT,
+            phase="draft",
+            round_number=None,
+        )
+        assert invocation is not None
+        action = ReferenceReadAction(
+            ReferenceReadActionKind.READ_WRITING_ARTIFACTS,
+            invocation.request.correlation,
+            invocation.request.references,
+        )
+        action_marker = SessionArtifactBindingError("action marker")
+        blocked[0] = action_marker
+        with self.assertRaises(SessionArtifactBindingError) as action_failure:
+            invocation.handle_reference_read_action(action)
+        self.assertIs(action_failure.exception, action_marker)
+        blocked[0] = None
+        with self.assertRaises(SessionArtifactBindingError) as action_cleanup:
+            action_operation.failure(action_marker)
+        self.assertIs(action_cleanup.exception, action_marker)
+        self.assertTrue(action_operation.finished)
+
+        terminal_operation = operation()
+        terminal_marker = SessionArtifactBindingError("terminal marker")
+        blocked[0] = terminal_marker
+        with self.assertRaises(SessionArtifactBindingError) as terminal:
+            terminal_operation.finish()
+        self.assertIs(terminal.exception, terminal_marker)
+        self.assertFalse(terminal_operation.finished)
+        blocked[0] = None
+        with self.assertRaises(SessionArtifactBindingError) as terminal_cleanup:
+            terminal_operation.failure(terminal_marker)
+        self.assertIs(terminal_cleanup.exception, terminal_marker)
+        self.assertTrue(terminal_operation.finished)
+
+        deferred_operation = operation()
+        deferred_invocation = deferred_operation.begin_invocation(
+            agent_id=PLOT_ARCHITECT,
+            phase="draft",
+            round_number=None,
+        )
+        assert deferred_invocation is not None
+        deferred_marker = SessionArtifactBindingError("deferred cleanup marker")
+        blocked[0] = deferred_marker
+        with self.assertRaises(SessionArtifactBindingError) as deferred:
+            deferred_operation.failure(RuntimeError("provider failed"))
+        self.assertIs(deferred.exception, deferred_marker)
+        self.assertTrue(deferred_operation.finished)
+        self.assertEqual(deferred_operation._pending, {})
+        blocked[0] = None
+
+        public_repository = WritingArtifactRepository(ready.identity.worktree_root)
+        public_operation = prepare_runtime_reference_operation(
+            public_repository,
+            session_id="novel",
+            text="Read ${core_documents/global_outline.md}.",
+        )
+        public_failure = public_operation.failure(
+            SessionArtifactBindingError("public marker")
+        )
+        self.assertIs(type(public_failure), ReferenceOperationFailure)
+        assert public_failure is not None
+        self.assertIs(
+            public_failure.code,
+            ReferenceAuthorizationErrorCode.WORKFLOW_FAILURE,
+        )
 
     def test_long_lived_reference_and_source_adapter_reacquire_exact_access(
         self,

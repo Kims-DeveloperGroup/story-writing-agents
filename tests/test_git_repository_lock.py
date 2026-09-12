@@ -158,6 +158,49 @@ class GitRepositoryLockSafetyTests(DisposableGitTestCase):
         with lock_git_repository(root) as replacement:
             replacement.require_active()
 
+    def test_recycled_numeric_ident_cannot_reuse_lease_token_and_teardown_unlocks(
+        self,
+    ) -> None:
+        root = self._repository("recycled-thread-token")
+        manager = lock_git_repository(root)
+        lease = manager.__enter__()
+        descriptor = lease.common_descriptor
+        creator_token = lock_module.current_thread_token()
+        numeric_ident = threading.get_ident()
+        successor_token = object()
+        lock_module._THREAD_STATE.token = successor_token
+        try:
+            self.assertEqual(threading.get_ident(), numeric_ident)
+            self.assertIs(lock_module.current_thread_token(), successor_token)
+            self.assertIsNot(successor_token, creator_token)
+            operations = (
+                lambda: lease.main_root,
+                lambda: lease.common_git,
+                lambda: lease.root_identity,
+                lambda: lease.common_identity,
+                lambda: lease.common_descriptor,
+                lease.require_active,
+            )
+            for operation in operations:
+                with self.subTest(operation=operation), self.assertRaises(
+                    GitRepositoryLockFailure
+                ) as caught:
+                    operation()
+                self.assertIs(
+                    caught.exception.code,
+                    GitRepositoryLockFailureCode.LOCK_UNAVAILABLE,
+                )
+            os.fstat(descriptor)
+            with self.assertRaises(GitRepositoryLockFailure):
+                manager.__exit__(None, None, None)
+        finally:
+            lock_module._THREAD_STATE.token = creator_token
+
+        with self.assertRaises(OSError):
+            os.fstat(descriptor)
+        with lock_git_repository(root) as replacement:
+            replacement.require_active()
+
     def test_symlinked_root_or_common_directory_is_never_followed(self) -> None:
         root = self._repository("real")
         alias = self.test_root / "alias"

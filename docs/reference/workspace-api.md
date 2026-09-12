@@ -171,19 +171,21 @@ does not retain authority: a later or cross-thread transaction fails outside a
 live access. Same-thread nested `open_ready_resources()` calls are reentrant
 and yield the current access; long-lived reference and source adapters retain
 only an access factory and reacquire a guarded access for each operation. The
-access expires before its outer exit completes. Each nested and outer exit
-repeats semantic READY and physical-root validation after a successful body,
-an ordinary error, or cancellation. If that check finds binding loss, the
-content-free binding failure takes precedence; otherwise the original body
-error or cancellation is preserved. Descriptors and the cooperating-runtime
-lease close on every path.
+access expires before its outer exit completes. Each nested, outer, and
+borrowed Story Commit access exit repeats semantic READY and physical-root
+validation after a successful body, `RuntimeError`, or cancellation. If that
+check finds binding loss, the content-free binding failure takes precedence; a
+clean postcheck preserves the original exception. Descriptors, access tokens,
+and the cooperating-runtime lease close on every path.
 
-The live access and its underlying Git lease/history are creator-thread
-affine. A foreign thread cannot inspect or explicitly close them, duplicate the
-root descriptor, or use the repository transaction gate. If context-manager
-exit is driven from a foreign thread, private cleanup still revokes every
-access token and closes descriptors and the lease; it grants no foreign
-authority and does not suppress the caller's body failure.
+The live access and its underlying Git lease/history are affine to a package-
+internal, process-aware opaque token for the creator's thread state, not a
+numeric identifier. Numeric identifier reuse cannot expose or inherit access,
+lease, or Commit authority. A foreign thread cannot inspect or explicitly close
+them, duplicate the root descriptor, or use the repository transaction gate.
+Same-thread nesting remains reentrant. If context-manager exit is driven from a
+foreign thread, private cleanup still revokes every access token and closes
+descriptors and the lease; it grants no foreign authority.
 
 The package-internal `SessionSourceWorkspace` is likewise not a public import.
 Runtime derives it only from a freshly validated session-artifact binding. It
@@ -202,9 +204,11 @@ inode, file type, link count, size, nanosecond modification time, and
 nanosecond change time must match. A parent-directory swap, added or removed
 entry, or metadata drift therefore fails closed. Debate state/results must
 embed the requested session and debate IDs; agent-state entries must embed the
-path's agent, session, and debate ownership. The reader verifies the named root
-again before returning and closes its call-local descriptors on success or
-failure.
+path's agent, session, and debate ownership. If the agent-state parent is
+missing, absence is checked at the failed open and again immediately before an
+empty tuple is returned; creation between those observations fails closed with
+`WorkspaceSecurityError`. The reader verifies the named root again before
+returning and closes its call-local descriptors on success or failure.
 Generic pathname access, writes, Git operations, control-root fallback, and
 sibling-session fallback are rejected. These internal semantics do not change
 any public constructor or method signature.

@@ -567,16 +567,23 @@ and after; retaining the raw object or moving it to another thread grants no
 authority. Same-thread nested guards yield the current access, while long-lived
 reference/source adapters reacquire access per operation. Access to the
 repository, resources, or duplicated root descriptor expires when the outer
-guard exits. Every nested and outer exit revalidates after success, error, and
-cancellation. Binding loss found there dominates an earlier body failure;
-otherwise the original body failure is preserved.
+guard exits. Every nested, outer, and borrowed Story Commit access exit
+revalidates after success, `RuntimeError`, or cancellation. Binding loss found
+there dominates the body failure; a clean postcheck preserves the original
+exception. Cleanup still revokes access and closes its descriptors on either
+path.
 
 `GitRepositoryLease` properties/validation and all `SessionArtifactAccess`
-operations are affine to their creator thread. A foreign thread cannot observe
-lease facts or inspect, duplicate, transact through, or explicitly close the
-access. Context-manager cleanup may still run on a foreign thread: it privately
-revokes access, releases the flock, and closes descriptors without granting
-that thread authority or suppressing the caller's body failure.
+operations are affine to a package-internal, process-aware opaque token for
+their creator's thread state, never a numeric thread identifier. A later thread
+state cannot discover or inherit a lease, access, or Commit authority even if
+the runtime reuses the same numeric identifier. Same-thread nesting still
+reuses the active access. A foreign thread cannot observe lease facts or
+inspect, duplicate, transact through, or explicitly close the access.
+Context-manager cleanup may still run on a foreign thread: it privately revokes
+access, releases the flock, and closes descriptors without granting that thread
+authority. The required postcheck still reports binding loss with the same
+failure precedence described above.
 Binding itself performs no artifact I/O, provisioning, provider call, or global
 runtime mutation. Known readiness and workspace-validation failures become one
 content-free binding failure; malformed protocol/type defects remain visible.
@@ -704,6 +711,12 @@ and explicit `close()` fail from a foreign thread. Context-manager teardown is
 a private revocation path, so it can close the history descriptor and release
 the underlying lease after a foreign-thread exit without authorizing any
 history operation or mutating a record.
+
+The recovery-only history wrapper normalizes a direct lease rejection from any
+of its surfaces or teardown to a sanitized
+`GitSessionHistoryError(GitSessionHistoryFailureCode.UNSAFE_ROOT)` without
+exposing a chained repository-lock failure. It remains read-only and grants no
+replacement history authority.
 
 Opening a history first requires the exact #504 session triple to be `ready`,
 then takes the same repository-wide lease used by provisioning and revalidates
