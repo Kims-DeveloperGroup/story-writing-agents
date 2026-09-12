@@ -701,7 +701,6 @@ class CompactWireDecoderTests(unittest.TestCase):
     def test_schema_is_action_only_and_runtime_correlation_is_exact(self) -> None:
         limits = [4, 2, 2, 4, 8, 8, 16, 200]
         schema = service_module._context_action_schema(
-            correlation=self.correlation,
             allowed_actions=("search", "read", "answer"),
             result_contract=self.result_contract,
             allowed_search_source_kinds=service_module._SEARCH_SOURCE_KIND_ORDER,

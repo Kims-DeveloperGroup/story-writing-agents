@@ -309,7 +309,8 @@ class CollaborationViewTests(unittest.TestCase):
                                   request.expected_result, request.user_impact,
                                   *request.target_paths,
                                   *(item.locator for item in request.basis.inputs)):
-                        self.assertIn(" ".join(value.split()), compact)
+                        for line in value.splitlines() or (value,):
+                            self.assertIn(" ".join(line.split()), compact)
                     self.assertIn(f"At most {request.max_preparation_physical_calls} provider calls", compact)
                     self.assertIn(f"{request.physical_calls_spent} already spent", compact)
                     self.assertNotIn("provider_private", plain)
