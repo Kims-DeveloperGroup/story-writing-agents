@@ -26,7 +26,10 @@ from story_writing_agents.git.story_commit_contracts import (
     StoryCommitFailureCode,
     StoryCommitPathOperation,
 )
-from story_writing_agents.workspace.initialization import provision_session_resources
+from story_writing_agents.workspace.initialization import (
+    compose_session_artifact_binding,
+    provision_session_resources,
+)
 from story_writing_agents.workspace.schema import canonical_initializer_scaffold
 from story_writing_agents.writing_artifacts import (
     ArtifactCreateOperation,
@@ -289,6 +292,10 @@ class StoryCommitCandidateIntegrationTests(StoryCommitGitTestCase):
         root, session_root, evidence = self.applied_replace("identity-bound")
         observed = os.stat(session_root)
         identity = (observed.st_dev, observed.st_ino)
+        artifact_binding = compose_session_artifact_binding(root, "novel")
+        artifact_repository_access = (
+            artifact_binding.open_story_commit_artifact_repository
+        )
 
         with self.replace_session_root(session_root), self.assertRaises(
             StoryCommitError
@@ -301,6 +308,7 @@ class StoryCommitCandidateIntegrationTests(StoryCommitGitTestCase):
                 ("impact",),
                 allowed_worktree_changes=(),
                 expected_session_root_identity=identity,
+                artifact_repository_access=artifact_repository_access,
             )
         self.assertIs(
             before_prepare.exception.code,
@@ -309,9 +317,9 @@ class StoryCommitCandidateIntegrationTests(StoryCommitGitTestCase):
 
         original_state = candidates_module._current_artifact_state
 
-        def replace_during_state(current_root, expected_identity):
-            with self.replace_session_root(current_root):
-                return original_state(current_root, expected_identity)
+        def replace_during_state(repository):
+            with self.replace_session_root(session_root):
+                return original_state(repository)
 
         with mock.patch.object(
             candidates_module,
@@ -326,6 +334,7 @@ class StoryCommitCandidateIntegrationTests(StoryCommitGitTestCase):
                 ("impact",),
                 allowed_worktree_changes=(),
                 expected_session_root_identity=identity,
+                artifact_repository_access=artifact_repository_access,
             )
         self.assertIs(
             during_prepare.exception.code,
@@ -340,6 +349,7 @@ class StoryCommitCandidateIntegrationTests(StoryCommitGitTestCase):
             ("impact",),
             allowed_worktree_changes=(),
             expected_session_root_identity=identity,
+            artifact_repository_access=artifact_repository_access,
         )
         with mock.patch.object(
             candidates_module,
@@ -349,6 +359,7 @@ class StoryCommitCandidateIntegrationTests(StoryCommitGitTestCase):
             candidates_module.revalidate_identity_bound_story_commit_candidate(
                 binding,
                 identity,
+                artifact_repository_access=artifact_repository_access,
             )
         self.assertIs(
             during_revalidation.exception.code,

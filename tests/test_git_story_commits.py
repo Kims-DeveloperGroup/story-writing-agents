@@ -1260,6 +1260,42 @@ class StoryCommitServiceTests(StoryCommitGitTestCase):
                 failure_code=StoryCommitFailureCode.RECOVERY_REQUIRED,
             )
 
+    def test_terminal_operation_candidate_cross_links_fail_without_mutation(
+        self,
+    ) -> None:
+        root, _session_root, service, candidate = self.prepared(
+            "terminal-operation-candidate-cross-links"
+        )
+        rejected = service.reject(
+            candidate,
+            self.confirmation(
+                candidate,
+                StoryCommitDecision.REJECT,
+                "cross-links",
+            ),
+        )
+        variants = (
+            replace(
+                candidate,
+                session_id="foreign",
+                branch="story/session/foreign",
+            ),
+            replace(candidate, candidate_id="0" * 64),
+            replace(candidate, correlation_id="foreign-correlation"),
+            replace(candidate, branch_tip="0" * len(candidate.branch_tip)),
+        )
+        for mismatched in variants:
+            with self.subTest(mismatched=mismatched), mock.patch.object(
+                commits_module,
+                "load_story_commit_candidate",
+                return_value=mismatched,
+            ):
+                self.assert_terminal_reads_do_not_mutate(
+                    StoryCommitService(root, manifest(), "novel"),
+                    rejected.operation_id,
+                    failure_code=StoryCommitFailureCode.RECOVERY_REQUIRED,
+                )
+
     def test_historical_rejected_remains_read_only_after_later_commit(self) -> None:
         root, session_root, evidence = self.applied_replace("historical-rejected")
         first_service = StoryCommitService(root, manifest(), "novel")

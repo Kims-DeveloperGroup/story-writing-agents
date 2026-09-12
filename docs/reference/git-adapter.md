@@ -1015,9 +1015,11 @@ reuses authority/confirmation, or creates a commit.
 
 Execution, inspection, and recovery keep their semantic checkpoints inside the
 live session-history lease. Inspection and recovery check READY around owner
-reads; recovery uses the same intentional-staged topology while classifying or
-advancing a staged operation, so ordinary READY's clean-index rule does not
-misclassify the service's own exact staging.
+reads. Before either path returns or transitions state, it requires the
+operation and candidate to match the exact session, candidate identity,
+correlation, and expected branch tip. Recovery uses the same intentional-staged
+topology while classifying or advancing a staged operation, so ordinary READY's
+clean-index rule does not misclassify the service's own exact staging.
 
 That exception is recovery-only and read-only on admission. It accepts only an
 addressed, exactly correlated `running`, `staged`, or `outcome_unknown` Story

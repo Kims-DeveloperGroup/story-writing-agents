@@ -258,8 +258,11 @@ preserves `outcome_unknown` when exact phase authority can be proved.
 
 Identity-bound Commit `inspect()` and `recover()` check the Apply root before
 and between durable-owner observations and immediately before any recovery
-transition. Replacement becomes `recovery_required`; neither path advances an
-operation from facts read through the replacement.
+transition. Both ordinary READY and staged-recovery admission require the
+operation and candidate to share the exact session, candidate identity,
+correlation, and expected branch tip. Replacement or cross-linked records
+become `recovery_required`; neither path advances an operation from those
+facts.
 
 If Apply-result publication succeeds but the later Commit-request preparation,
 publication, or service registration fails, the Apply result remains

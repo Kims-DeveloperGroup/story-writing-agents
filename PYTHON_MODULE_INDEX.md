@@ -3176,7 +3176,10 @@ every intermediate arrow. The current runtime graph is acyclic.
   states are preserved as outcome-unknown. Identity-bound inspection and
   recovery require both the successful Apply root and phase-appropriate
   semantic topology before and between owner observations and before and after
-  every durable recovery transition; root or semantic-owner loss becomes
+  every durable recovery transition. Ordinary READY and recovery-only reads
+  both require the operation and candidate to match the exact session,
+  candidate identity, correlation, and expected branch tip before returning or
+  transitioning state; root, semantic-owner, or cross-record loss becomes
   operator recovery and cannot advance state from replacement evidence.
   Recovery-only inspection uses one index-tolerant, thread-affine history lease
   solely for a uniquely correlated RUNNING, STAGED, or OUTCOME_UNKNOWN

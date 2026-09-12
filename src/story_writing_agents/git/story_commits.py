@@ -581,6 +581,11 @@ class StoryCommitService:
                 operation.candidate_id,
                 allowed_worktree_changes=self._allowed_worktree_changes,
             )
+            _require_operation_candidate_ownership(
+                operation,
+                candidate,
+                self._session_id,
+            )
             self._require_recovery_bound_session_root()
             self._require_recovery_operation_ready(operation, candidate)
             return _operation_result(candidate, operation)
@@ -618,6 +623,11 @@ class StoryCommitService:
                 recovery_main_status_sha256 = self._main_status_sha256()
                 self._require_recovery_bound_session_root()
                 operation = history.read_commit_operation(operation_id)
+                _require_operation_candidate_ownership(
+                    operation,
+                    candidate,
+                    self._session_id,
+                )
                 ready = history.require_semantic_ready()
                 self._require_recovery_bound_session_root()
                 if operation.state in {
@@ -1620,14 +1630,11 @@ def inspect_story_commit_recovery_history(
                 history,
                 operation.candidate_id,
             )
-            if (
-                operation.session_id != session_id
-                or candidate.session_id != session_id
-                or operation.candidate_id != candidate.candidate_id
-                or operation.correlation_id != candidate.correlation_id
-                or operation.expected_branch_tip != candidate.branch_tip
-            ):
-                raise _error(StoryCommitFailureCode.RECOVERY_REQUIRED)
+            _require_operation_candidate_ownership(
+                operation,
+                candidate,
+                session_id,
+            )
             _require_story_commit_recovery_topology(
                 topology.resources,
                 candidate,
@@ -1871,6 +1878,23 @@ def _run_allowing_difference(
     if result.returncode not in {0, 1}:
         raise _error(StoryCommitFailureCode.GIT_FAILED)
     return result
+
+
+def _require_operation_candidate_ownership(
+    operation: GitSessionCommitOperationRecord,
+    candidate: StoryCommitCandidate,
+    session_id: str,
+) -> None:
+    """Require one exact operation-to-candidate ownership tuple."""
+
+    if (
+        operation.session_id != session_id
+        or candidate.session_id != session_id
+        or operation.candidate_id != candidate.candidate_id
+        or operation.correlation_id != candidate.correlation_id
+        or operation.expected_branch_tip != candidate.branch_tip
+    ):
+        raise _error(StoryCommitFailureCode.RECOVERY_REQUIRED)
 
 
 def _operation_result(
