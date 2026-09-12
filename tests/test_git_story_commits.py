@@ -37,6 +37,18 @@ class StoryCommitServiceTests(StoryCommitGitTestCase):
         )
         return root, session_root, service, candidate
 
+    def prepared_bound(self, name: str):
+        root, session_root, evidence = self.applied_replace(name)
+        observed = os.stat(session_root)
+        service = commits_module.create_identity_bound_story_commit_service(
+            root,
+            manifest(),
+            "novel",
+            (observed.st_dev, observed.st_ino),
+        )
+        candidate = service.prepare(evidence, "Commit exact change", ("impact",))
+        return root, session_root, service, candidate
+
     @staticmethod
     def confirmation(candidate, decision=StoryCommitDecision.COMMIT, suffix="1"):
         return StoryCommitConfirmation(
@@ -129,15 +141,7 @@ class StoryCommitServiceTests(StoryCommitGitTestCase):
         self,
     ) -> None:
         def prepared_bound(name):
-            root, session_root, evidence = self.applied_replace(name)
-            observed = os.stat(session_root)
-            service = commits_module.create_identity_bound_story_commit_service(
-                root,
-                manifest(),
-                "novel",
-                (observed.st_dev, observed.st_ino),
-            )
-            candidate = service.prepare(evidence, "Commit exact change", ("impact",))
+            root, session_root, service, candidate = self.prepared_bound(name)
             authority = service.authorize(candidate, self.confirmation(candidate))
             return root, session_root, service, authority
 
@@ -196,6 +200,72 @@ class StoryCommitServiceTests(StoryCommitGitTestCase):
             self.run_git(session_root, "diff", "--cached", "--name-only").stdout,
             before_index,
         )
+
+    def test_inspect_and_recover_revalidate_apply_root_without_state_advancement(
+        self,
+    ) -> None:
+        for action_name, guard_ordinals in (
+            ("inspect", range(1, 4)),
+            ("recover", range(1, 7)),
+        ):
+            with self.subTest(action=action_name):
+                root, session_root, service, candidate = self.prepared_bound(
+                    f"{action_name}-root-revalidation"
+                )
+                result = service.reject(
+                    candidate,
+                    self.confirmation(
+                        candidate,
+                        StoryCommitDecision.REJECT,
+                        action_name,
+                    ),
+                )
+                with open_git_session_history(root, manifest(), "novel") as history:
+                    before = history.read_commit_operation(result.operation_id)
+
+                for ordinal in guard_ordinals:
+                    with self.subTest(action=action_name, guard_ordinal=ordinal):
+                        original_guard = service._require_recovery_bound_session_root
+                        replacement = None
+                        calls = 0
+
+                        def replace_before_guard(_service):
+                            nonlocal calls, replacement
+                            calls += 1
+                            if calls == ordinal:
+                                replacement = self.replace_session_root(session_root)
+                                replacement.__enter__()
+                            return original_guard()
+
+                        try:
+                            with mock.patch.object(
+                                StoryCommitService,
+                                "_require_recovery_bound_session_root",
+                                autospec=True,
+                                side_effect=replace_before_guard,
+                            ), mock.patch.object(
+                                commits_module,
+                                "advance_commit_operation",
+                                wraps=commits_module.advance_commit_operation,
+                            ) as advance, self.assertRaises(StoryCommitError) as caught:
+                                getattr(service, action_name)(result.operation_id)
+                            self.assertIs(
+                                caught.exception.code,
+                                StoryCommitFailureCode.RECOVERY_REQUIRED,
+                            )
+                            advance.assert_not_called()
+                        finally:
+                            if replacement is not None:
+                                replacement.__exit__(None, None, None)
+
+                        with open_git_session_history(
+                            root, manifest(), "novel"
+                        ) as history:
+                            self.assertEqual(
+                                history.read_commit_operation(result.operation_id),
+                                before,
+                            )
+
     def test_reject_and_revise_persist_result_without_git_or_artifact_mutation(
         self,
     ) -> None:

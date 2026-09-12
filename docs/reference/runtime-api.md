@@ -52,20 +52,29 @@ repository.
 Every artifact-sensitive runtime call instead derives the session ID already
 present in its public arguments or durable identity, freshly requires that
 session's exact READY branch/ref/sibling-worktree resources, and creates a
-call-local repository pinned to the validated worktree's physical
+call-local binding pinned to the validated worktree's physical
 `(st_dev, st_ino)` identity. Each synchronous repository step opens a short
 cooperating-runtime guard: it holds the common-Git lease, repeats the complete
 semantic READY inspection, opens the no-follow named root at the pinned
 identity, and repeats READY plus physical-root checks before releasing the
 guard. No such guard is held across a provider `await`, concurrent specialist
 execution, or other asynchronous wait; a later repository step reacquires a
-new guard and revalidates the same binding. This covers explicit
+new guard and revalidates the same binding. The binding's repository is private
+and can be obtained only from a live guarded access; it cannot be reused after
+that access exits. Guard exit revalidates after success, ordinary error, or
+cancellation. If the body and exit check both fail, binding loss is the
+authoritative failure; otherwise the original body failure is preserved. This
+covers explicit
 and contextual references, source status and fingerprints, proposal and review
 revalidation, Apply and application-ledger access, recovery reads, consensus
 artifact material, and the interactive attachment picker. A
 `RuntimeSession` forwards the same session ID; switching between two ready
 sessions or using them concurrently cannot borrow the control root or the
 other session's repository.
+
+The interactive picker performs its path inventory and selected-file read as
+separate guarded operations. The range viewer receives only the bytes returned
+by that guarded read; neither the picker nor viewer retains repository access.
 
 Binding is validation only. It never provisions resources, calls a provider,
 or performs artifact I/O. Absent, moved, mismatched, staged, or otherwise
@@ -951,6 +960,12 @@ operation starts is candidate drift and requires a fresh request; once a
 neither operation pushes, merges, or grants a provider direct filesystem or
 Git authority.
 
+The identity-bound service applies the same Apply-root requirement to
+`inspect()` and `recover()`, checking before and between their owner reads and
+before every possible history transition. A replaced root returns
+`recovery_required`; neither method reports or advances a staged, committed,
+or other durable operation state from replacement resources.
+
 After a successful Apply result is durable, the runtime currently prepares and
 publishes its follow-on Commit request in a later step. If that step fails, the
 Apply result remains durable and the returned message directs inspection, but
@@ -968,6 +983,11 @@ original attempt. This resource failure is not semantic staleness: true source,
 basis, relationship, or candidate drift remains `stale` and requires fresh
 planning/review, while loss of the exact bound resources requires recovery.
 Repair authoritative session resources/history before continuing.
+
+Guarded reference preparation preserves root-security and binding failures for
+the runtime recovery mapping instead of flattening them into an ordinary
+reference workflow failure. Thus loss of the selected session root remains a
+typed recovery boundary and does not authorize provider work or fallback.
 
 ### Free text and recovery
 

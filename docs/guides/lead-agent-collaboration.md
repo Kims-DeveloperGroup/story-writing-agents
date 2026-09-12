@@ -59,12 +59,16 @@ repository or session-source action holds a short synchronous runtime guard,
 checks both the physical root and exact Git READY state before and after the
 action, then releases the guard. Provider waits and concurrent specialist work
 run without that guard; the next filesystem action reacquires it and rejects
-persistent drift. The picker follows the currently attached session, and
-switching or concurrent sessions never reuse another session's artifact
-source, active-debate or own-agent state, or application ledger. Conversation
-history keeps its separate control-root/configured-storage ownership. A
-worktree-path replacement observed before or during a guarded action is
-rejected rather than adopted.
+persistent drift. Repository access exists only inside that guard and expires
+on exit. The exit check also runs when the action raises or is cancelled; a
+binding loss found there is reported instead of treating the earlier result as
+authoritative. The picker follows the currently attached session, guards its
+path list and selected-file read separately, and never lends repository access
+to the range viewer. Switching or concurrent sessions never reuse another
+session's artifact source, active-debate or own-agent state, or application
+ledger. Conversation history keeps its separate control-root/configured-
+storage ownership. A worktree-path replacement observed before or during a
+guarded action is rejected rather than adopted.
 
 There is no fallback to `main`, the shell's current directory, or a previous
 session, and a Lead call does not provision missing resources. If the exact
@@ -676,6 +680,10 @@ application and durably returns `recovery_required` with
 security, or format failure is instead
 `outcome_unknown` with `inspect_and_resolve_outcome`; inspect the exact
 application before any new write.
+
+Later Commit inspection and recovery remain bound to the same physical root
+used by Apply. If that root was replaced, they return operator recovery without
+advancing the recorded Commit operation from the replacement's Git state.
 
 The follow-on Commit request is prepared only after the Apply result is
 durable. If request preparation or publication then fails, the Apply remains

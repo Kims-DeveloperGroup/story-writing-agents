@@ -462,6 +462,7 @@ class _Observation:
     trace: list[str]
     adapter_instances: list[object]
     repository_instances: list[object]
+    binding_open_count: int
 
 
 def _observe(
@@ -478,6 +479,7 @@ def _observe(
     stored_application: object | None = None,
     binding_accesses: tuple[object, ...] | None = None,
     binding_failure: BaseException | None = None,
+    binding_fail_on: int | None = None,
     transition: bool = False,
 ) -> _Observation:
     trace: list[str] = []
@@ -490,6 +492,7 @@ def _observe(
     access_values = list(binding_accesses or ())
     adapter_instances: list[object] = []
     repository_instances: list[object] = []
+    binding_open_count = 0
 
     def next_value(values: list[object], label: str):
         trace.append(label)
@@ -553,7 +556,12 @@ def _observe(
 
         @contextmanager
         def open_ready_resources(self):
-            if binding_failure is not None:
+            nonlocal binding_open_count
+            binding_open_count += 1
+            if binding_failure is not None and (
+                binding_fail_on is None
+                or binding_open_count == binding_fail_on
+            ):
                 raise binding_failure
             resources = (
                 next_value(access_values, "binding")
@@ -596,7 +604,14 @@ def _observe(
             artifact_application=application,
             **({"collaboration_store": store} if transition else {}),
         )
-    return _Observation(result, store, trace, adapter_instances, repository_instances)
+    return _Observation(
+        result,
+        store,
+        trace,
+        adapter_instances,
+        repository_instances,
+        binding_open_count,
+    )
 
 
 class SessionRecoveryReconcilerContractTests(unittest.TestCase):
@@ -1055,6 +1070,59 @@ class SessionRecoveryArtifactTests(unittest.TestCase):
 
 
 class SessionRecoveryDriftTests(unittest.TestCase):
+    def test_each_git_observation_uses_generation_a_binding_and_drift_is_recovery(
+        self,
+    ) -> None:
+        failure = reconciliation_module.SessionArtifactBindingError(
+            "generation A unavailable"
+        )
+        for ordinal, observation in enumerate(
+            ("external_a", "status_a", "external_b", "status_b", "final"),
+            start=1,
+        ):
+            observed = _observe(
+                binding_failure=failure,
+                binding_fail_on=ordinal,
+            )
+            with self.subTest(observation=observation):
+                self.assertIs(
+                    observed.result.state,
+                    SessionRecoveryState.RECOVERY_REQUIRED,
+                )
+                self.assertIs(
+                    observed.result.owner,
+                    SessionRecoveryOwner.SESSION_RESOURCES,
+                )
+                self.assertIs(
+                    observed.result.next_action,
+                    SessionRecoveryNextAction.OPERATOR_RECOVERY,
+                )
+                self.assertEqual(observed.binding_open_count, ordinal)
+
+        reviewed, application = _artifact_facts()
+        snapshot = _snapshot(GitSessionHistoryState.COMMITTED)
+        resources = replace(_resources(), current_branch_tip=_COMMIT)
+        log_blocked = _observe(
+            resources=(resources, resources),
+            snapshots=(snapshot, snapshot),
+            statuses=(_status(head=_COMMIT), _status(head=_COMMIT)),
+            log=GitLogMetadata((_metadata(),)),
+            reviewed=reviewed,
+            application=application,
+            stored_application=application.application_result,
+            binding_failure=failure,
+            binding_fail_on=4,
+        )
+        self.assertIs(
+            log_blocked.result.state,
+            SessionRecoveryState.RECOVERY_REQUIRED,
+        )
+        self.assertIs(
+            log_blocked.result.owner,
+            SessionRecoveryOwner.SESSION_RESOURCES,
+        )
+        self.assertEqual(log_blocked.binding_open_count, 4)
+
     def test_pinned_generation_rejects_replacement_before_ledger_or_final_check(
         self,
     ) -> None:
@@ -1079,7 +1147,9 @@ class SessionRecoveryDriftTests(unittest.TestCase):
         self.assertNotIn("application", before_ledger.trace)
 
         generation_b = replace(_resources(), current_branch_tip="6" * 40)
-        final_check = _observe(binding_accesses=(generation_b,))
+        final_check = _observe(
+            binding_accesses=(_resources(),) * 4 + (generation_b,)
+        )
         self.assertIs(
             final_check.result.state,
             SessionRecoveryState.RECOVERY_REQUIRED,
@@ -1172,7 +1242,6 @@ class SessionRecoveryBoundaryTests(unittest.TestCase):
             "contracts", "conversations", "git", "git.session_contracts",
             "git.session_history_contracts", "session_lifecycle",
             "workspace.initialization", "writing_artifacts",
-            "writing_artifacts.repository",
         })
         forbidden = ("provider", "controller", "apply_artifact_changes")
         for value in forbidden:
@@ -1181,7 +1250,7 @@ class SessionRecoveryBoundaryTests(unittest.TestCase):
         self.assertNotIn("git.session_history", dependencies)
         index = (_ROOT / "PYTHON_MODULE_INDEX.md").read_text()
         self.assertIn("Importable production units indexed: 142.", index)
-        self.assertIn("Direct internal dependency edges indexed: 567.", index)
+        self.assertIn("Direct internal dependency edges indexed: 569.", index)
         self.assertIn("Directed internal dependency cycles indexed: 0.", index)
         self.assertIn("tests/test_session_recovery_reconciliation.py", index)
 

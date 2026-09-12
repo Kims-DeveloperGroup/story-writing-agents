@@ -13,6 +13,7 @@ import sys
 import tempfile
 import unittest
 from collections.abc import Callable
+from contextlib import contextmanager
 from dataclasses import FrozenInstanceError, fields, replace
 from pathlib import Path
 from types import SimpleNamespace
@@ -2286,6 +2287,53 @@ class ControllerConversationStartupTests(ControllerTestCase):
                 controller._lead_reference_paths()
         self.assertIs(caught.exception.kind, ReferenceInputFailureKind.UNAVAILABLE)
 
+        unavailable = SessionArtifactBindingError(
+            "session artifact resources are unavailable"
+        )
+        for method, arguments in (
+            (controller._lead_reference_paths, ()),
+            (
+                controller._lead_reference_text,
+                ("core_documents/global_outline.md",),
+            ),
+        ):
+            with self.subTest(method=method.__name__, failure="open"):
+                binding = mock.Mock()
+                binding.open_ready_resources.side_effect = unavailable
+                with mock.patch.object(
+                    controller_core_module,
+                    "compose_session_artifact_binding",
+                    return_value=binding,
+                ), self.assertRaises(ReferenceInputFailure) as caught:
+                    method(*arguments)
+                self.assertIs(
+                    caught.exception.kind,
+                    ReferenceInputFailureKind.UNAVAILABLE,
+                )
+
+            with self.subTest(method=method.__name__, failure="postcheck"):
+                repository = mock.Mock()
+                repository.list_paths.return_value = ()
+                repository.read_text.return_value = "session bytes"
+
+                @contextmanager
+                def postcheck_failure():
+                    yield SimpleNamespace(repository=repository)
+                    raise unavailable
+
+                binding = mock.Mock()
+                binding.open_ready_resources.side_effect = postcheck_failure
+                with mock.patch.object(
+                    controller_core_module,
+                    "compose_session_artifact_binding",
+                    return_value=binding,
+                ), self.assertRaises(ReferenceInputFailure) as caught:
+                    method(*arguments)
+                self.assertIs(
+                    caught.exception.kind,
+                    ReferenceInputFailureKind.UNAVAILABLE,
+                )
+
         with mock.patch.object(
             controller_core_module,
             "compose_session_artifact_binding",
@@ -2295,6 +2343,22 @@ class ControllerConversationStartupTests(ControllerTestCase):
                 controller._lead_reference_text(
                     "core_documents/global_outline.md"
                 )
+
+        repository = mock.Mock()
+        repository.read_text.side_effect = TypeError("unexpected read defect")
+        access_context = mock.MagicMock()
+        access_context.__enter__.return_value = SimpleNamespace(
+            repository=repository
+        )
+        binding = mock.Mock()
+        binding.open_ready_resources.return_value = access_context
+        with mock.patch.object(
+            controller_core_module,
+            "compose_session_artifact_binding",
+            return_value=binding,
+        ), self.assertRaisesRegex(TypeError, "unexpected read defect"):
+            controller._lead_reference_text("core_documents/global_outline.md")
+        access_context.__exit__.assert_called_once()
 
         controller._attached_session_id = None
         with self.assertRaises(ReferenceInputFailure) as detached:

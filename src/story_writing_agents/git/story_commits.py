@@ -404,6 +404,16 @@ class StoryCommitService:
         if _directory_identity(root) != expected:
             raise _error(StoryCommitFailureCode.CANDIDATE_DRIFT)
 
+    def _require_recovery_bound_session_root(self) -> None:
+        """Require the Apply root for an inspection or recovery operation."""
+
+        try:
+            self._require_bound_session_root()
+        except StoryCommitError as exc:
+            if exc.code is StoryCommitFailureCode.CANDIDATE_DRIFT:
+                raise _error(StoryCommitFailureCode.RECOVERY_REQUIRED) from None
+            raise
+
     def _session_root_identity(self, root: Path) -> tuple[int, int]:
         identity = _directory_identity(root)
         expected = self._expected_session_root_identity
@@ -435,22 +445,10 @@ class StoryCommitService:
     def inspect(self, operation_id: str) -> StoryCommitResult:
         """Return one durable content-free operation classification."""
 
-        operation = self._read_operation(operation_id)
-        candidate = load_story_commit_candidate(
-            self._root,
-            self._manifest,
-            self._session_id,
-            operation.candidate_id,
-            allowed_worktree_changes=self._allowed_worktree_changes,
-        )
-        return _operation_result(candidate, operation)
-
-    @_content_free_boundary
-    def recover(self, operation_id: str) -> StoryCommitResult:
-        """Conservatively classify restart state without reset, replay, or cleanup."""
-
         try:
+            self._require_recovery_bound_session_root()
             operation = self._read_operation(operation_id)
+            self._require_recovery_bound_session_root()
             candidate = load_story_commit_candidate(
                 self._root,
                 self._manifest,
@@ -458,21 +456,46 @@ class StoryCommitService:
                 operation.candidate_id,
                 allowed_worktree_changes=self._allowed_worktree_changes,
             )
+            self._require_recovery_bound_session_root()
+            return _operation_result(candidate, operation)
+        except StoryCommitError:
+            self._require_recovery_bound_session_root()
+            raise
+
+    @_content_free_boundary
+    def recover(self, operation_id: str) -> StoryCommitResult:
+        """Conservatively classify restart state without reset, replay, or cleanup."""
+
+        try:
+            self._require_recovery_bound_session_root()
+            operation = self._read_operation(operation_id)
+            self._require_recovery_bound_session_root()
+            candidate = load_story_commit_candidate(
+                self._root,
+                self._manifest,
+                self._session_id,
+                operation.candidate_id,
+                allowed_worktree_changes=self._allowed_worktree_changes,
+            )
+            self._require_recovery_bound_session_root()
             with open_git_session_history(
                 self._root,
                 self._manifest,
                 self._session_id,
                 allowed_worktree_changes=self._allowed_worktree_changes,
             ) as history:
+                self._require_recovery_bound_session_root()
                 operation = history.read_commit_operation(operation_id)
+                self._require_recovery_bound_session_root()
                 if operation.state in {
                     GitSessionHistoryState.COMMITTED,
                     GitSessionHistoryState.REJECTED,
                     GitSessionHistoryState.RECOVERY_REQUIRED,
                 }:
+                    self._require_recovery_bound_session_root()
                     return _operation_result(candidate, operation)
                 root = _session_root(self._root, self._session_id)
-                identity = _directory_identity(root)
+                identity = self._session_root_identity(root)
                 runner = GitProcessRunner(root)
                 tip = _object_id(
                     _required(
@@ -497,6 +520,7 @@ class StoryCommitService:
                         expected_index
                         and operation.state is GitSessionHistoryState.RUNNING
                     ):
+                        self._require_recovery_bound_session_root()
                         operation = advance_commit_operation(
                             operation, GitSessionHistoryState.STAGED
                         )
@@ -506,12 +530,14 @@ class StoryCommitService:
                             operation.state
                             is not GitSessionHistoryState.RECOVERY_REQUIRED
                         ):
+                            self._require_recovery_bound_session_root()
                             operation = advance_commit_operation(
                                 operation,
                                 GitSessionHistoryState.RECOVERY_REQUIRED,
                             )
                             history.write_commit_operation(operation)
                     elif operation.state is GitSessionHistoryState.RUNNING:
+                        self._require_recovery_bound_session_root()
                         operation = advance_commit_operation(
                             operation, GitSessionHistoryState.OUTCOME_UNKNOWN
                         )
@@ -520,11 +546,13 @@ class StoryCommitService:
                         operation.state is GitSessionHistoryState.STAGED
                         and not expected_index
                     ):
+                        self._require_recovery_bound_session_root()
                         operation = advance_commit_operation(
                             operation,
                             GitSessionHistoryState.RECOVERY_REQUIRED,
                         )
                         history.write_commit_operation(operation)
+                    self._require_recovery_bound_session_root()
                     return _operation_result(candidate, operation)
                 if _commit_matches(runner, identity, tip, candidate):
                     if operation.state in {
@@ -532,10 +560,12 @@ class StoryCommitService:
                         GitSessionHistoryState.OUTCOME_UNKNOWN,
                     }:
                         if operation.state is GitSessionHistoryState.RUNNING:
+                            self._require_recovery_bound_session_root()
                             operation = advance_commit_operation(
                                 operation, GitSessionHistoryState.STAGED
                             )
                             history.write_commit_operation(operation)
+                    self._require_recovery_bound_session_root()
                     committed = advance_commit_operation(
                         operation,
                         GitSessionHistoryState.COMMITTED,
@@ -544,16 +574,21 @@ class StoryCommitService:
                     history.write_commit_operation(committed)
                     return _operation_result(candidate, committed)
                 if operation.state is not GitSessionHistoryState.OUTCOME_UNKNOWN:
+                    self._require_recovery_bound_session_root()
                     operation = advance_commit_operation(
                         operation, GitSessionHistoryState.OUTCOME_UNKNOWN
                     )
                     history.write_commit_operation(operation)
+                self._require_recovery_bound_session_root()
                 return _operation_result(candidate, operation)
         except StoryCommitError:
+            self._require_recovery_bound_session_root()
             raise
         except GitSessionHistoryError:
+            self._require_recovery_bound_session_root()
             raise _error(StoryCommitFailureCode.HISTORY_FAILED) from None
         except Exception:
+            self._require_recovery_bound_session_root()
             raise _error(StoryCommitFailureCode.RECOVERY_REQUIRED) from None
 
     def _decision(

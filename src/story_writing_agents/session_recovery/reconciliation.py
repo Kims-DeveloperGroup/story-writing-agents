@@ -321,7 +321,15 @@ class SessionRecoveryReconciler:
 
         try:
             adapter = GitRepositoryAdapter(resources_a.identity.worktree_root)
-            external_a = adapter.inspect_external_operation()
+            with artifact_binding.open_ready_resources():
+                external_a = adapter.inspect_external_operation()
+        except SessionArtifactBindingError:
+            return _owner_recovery(
+                session_id,
+                conversation,
+                tail,
+                SessionRecoveryOwner.SESSION_RESOURCES,
+            )
         except GitOperationError:
             return _blocked(
                 session_id,
@@ -348,7 +356,15 @@ class SessionRecoveryReconciler:
                 SessionRecoveryOwner.EXTERNAL_GIT,
             )
         try:
-            status_a = adapter.status()
+            with artifact_binding.open_ready_resources():
+                status_a = adapter.status()
+        except SessionArtifactBindingError:
+            return _owner_recovery(
+                session_id,
+                conversation,
+                tail,
+                SessionRecoveryOwner.SESSION_RESOURCES,
+            )
         except GitOperationError:
             return _owner_recovery(
                 session_id,
@@ -394,7 +410,15 @@ class SessionRecoveryReconciler:
         log_metadata: GitLogMetadata | None = None
         if commit_a is not None and commit_a.state is GitSessionHistoryState.COMMITTED:
             try:
-                log_metadata = adapter.log_metadata()
+                with artifact_binding.open_ready_resources():
+                    log_metadata = adapter.log_metadata()
+            except SessionArtifactBindingError:
+                return _owner_recovery(
+                    session_id,
+                    conversation,
+                    tail,
+                    SessionRecoveryOwner.SESSION_RESOURCES,
+                )
             except GitOperationError:
                 return _owner_recovery(
                     session_id,
@@ -437,7 +461,15 @@ class SessionRecoveryReconciler:
         if isinstance(snapshot_b, SessionRecoveryResult):
             return snapshot_b
         try:
-            external_b = adapter.inspect_external_operation()
+            with artifact_binding.open_ready_resources():
+                external_b = adapter.inspect_external_operation()
+        except SessionArtifactBindingError:
+            return _owner_recovery(
+                session_id,
+                conversation,
+                tail,
+                SessionRecoveryOwner.SESSION_RESOURCES,
+            )
         except GitOperationError:
             return _owner_outcome(session_id, conversation, tail, SessionRecoveryOwner.EXTERNAL_GIT)
         except Exception:
@@ -445,7 +477,15 @@ class SessionRecoveryReconciler:
         if not _exact_owner_value(external_b, GitExternalOperationInspection):
             return _owner_outcome(session_id, conversation, tail, SessionRecoveryOwner.EXTERNAL_GIT)
         try:
-            status_b = adapter.status()
+            with artifact_binding.open_ready_resources():
+                status_b = adapter.status()
+        except SessionArtifactBindingError:
+            return _owner_recovery(
+                session_id,
+                conversation,
+                tail,
+                SessionRecoveryOwner.SESSION_RESOURCES,
+            )
         except GitOperationError:
             return _owner_outcome(session_id, conversation, tail, SessionRecoveryOwner.REPOSITORY_STATUS)
         except Exception:

@@ -345,7 +345,7 @@ class RagModuleBoundaryTests(unittest.TestCase):
         modules = _module_inventory()
         edges = _internal_edges(modules)
         self.assertEqual(len(modules), 142)
-        self.assertEqual(len(edges), 567)
+        self.assertEqual(len(edges), 569)
         self.assertIsNone(_cycle_witness(modules, edges))
         conversation_dependencies = {
             "story_writing_agents.conversations": {
@@ -398,6 +398,7 @@ class RagModuleBoundaryTests(unittest.TestCase):
                 "story_writing_agents.config",
                 "story_writing_agents.errors",
                 "story_writing_agents.git",
+                "story_writing_agents.git.repository_lock",
                 "story_writing_agents.git.session_contracts",
                 "story_writing_agents.git.session_checkpoints",
                 "story_writing_agents.git.session_history",
@@ -532,6 +533,7 @@ class RagModuleBoundaryTests(unittest.TestCase):
                 "story_writing_agents.conversation_storage.selection",
                 "story_writing_agents.conversation_storage.sqlite",
                 "story_writing_agents.conversation_storage.sqlite_database",
+                "story_writing_agents.orchestrator",
                 "story_writing_agents.workspace",
             },
         )

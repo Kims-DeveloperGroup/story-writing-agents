@@ -233,9 +233,14 @@ releases the Git lease and descriptors. The guard never spans the provider
 closure step reacquires it. A replaced or persistently non-ready root is
 therefore rejected before content returns or at the next checkpoint; neither
 adapter can fall back to the control root, another session, or a previous
-binding. The lease does not continuously exclude arbitrary external Git that
-does not cooperate with the runtime. The view supplies no generic path, write,
-provider-filesystem, or Git authority.
+binding. The repository is private to the binding and is available only
+through the live access yielded by that guard; the access expires when the
+guard closes. Closing revalidates after a successful action, raised error, or
+cancellation. If closing detects binding loss, that content-free failure
+dominates an otherwise concurrent body failure; with a valid binding, the
+original error or cancellation is preserved. The lease does not continuously
+exclude arbitrary external Git that does not cooperate with the runtime. The
+view supplies no generic path, write, provider-filesystem, or Git authority.
 
 The session-source reader accepts only canonical relative POSIX paths. It
 traverses without following symlinks and accepts only a stable, singly linked
@@ -243,6 +248,11 @@ regular-file leaf whose named and opened identity, mode, size, and timestamps
 agree before and after reading. FIFOs, devices, hard links, replacements, and
 foreign embedded session/debate/agent ownership fail as source unavailability
 before evidence is accepted.
+
+The guarded reference-operation variant deliberately preserves a root-security
+failure for orchestration instead of converting it to a generic reference
+workflow failure. Orchestration can therefore close exact binding loss as
+typed recovery without provider replay or repository fallback.
 
 `FocusedConversationSourceAdapter` reads canonical v2 events from the active
 store and applies `select_bounded_collaboration_context()`. Its default mode is

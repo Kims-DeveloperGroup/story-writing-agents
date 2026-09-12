@@ -1823,11 +1823,12 @@ class InteractiveController:
         try:
             if self._attached_session_id is None:
                 raise ReferenceInputFailure(ReferenceInputFailureKind.UNAVAILABLE)
-            artifacts = compose_session_artifact_binding(
+            binding = compose_session_artifact_binding(
                 self._workspace.root,
                 self._attached_session_id,
-            ).repository
-            return artifacts.list_paths()
+            )
+            with binding.open_ready_resources() as access:
+                return access.repository.list_paths()
         except ReferenceInputFailure:
             raise
         except (
@@ -1846,11 +1847,12 @@ class InteractiveController:
         try:
             if self._attached_session_id is None:
                 raise ReferenceInputFailure(ReferenceInputFailureKind.UNAVAILABLE)
-            artifacts = compose_session_artifact_binding(
+            binding = compose_session_artifact_binding(
                 self._workspace.root,
                 self._attached_session_id,
-            ).repository
-            return artifacts.read_text(path)
+            )
+            with binding.open_ready_resources() as access:
+                return access.repository.read_text(path)
         except ReferenceInputFailure:
             raise
         except FileNotFoundError:

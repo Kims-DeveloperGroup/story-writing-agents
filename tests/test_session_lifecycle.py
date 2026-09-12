@@ -602,7 +602,7 @@ class SessionLifecycleContractTests(unittest.TestCase):
             encoding="utf-8"
         )
         self.assertIn("Importable production units indexed: 142.", index)
-        self.assertIn("Direct internal dependency edges indexed: 567.", index)
+        self.assertIn("Direct internal dependency edges indexed: 569.", index)
         self.assertIn("Directed internal dependency cycles indexed: 0.", index)
         headings = tuple(re.findall(r"^### `([^`]+)`$", index, flags=re.MULTILINE))
         expected_modules: set[str] = set()

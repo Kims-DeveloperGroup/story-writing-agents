@@ -402,7 +402,7 @@ class SessionArtifactBinding:
     worktree_identity: tuple[int, int]
     manifest: GitBaselineManifest = field(repr=False)
     allowed_worktree_changes: tuple[str, ...] = field(repr=False)
-    repository: WritingArtifactRepository = field(init=False, repr=False)
+    _repository: WritingArtifactRepository = field(init=False, repr=False)
 
     def __post_init__(self) -> None:
         if type(self.resources) is not GitSessionResourceInspection:
@@ -420,7 +420,7 @@ class SessionArtifactBinding:
             raise TypeError("allowed_worktree_changes must be exact paths")
         object.__setattr__(
             self,
-            "repository",
+            "_repository",
             WritingArtifactRepository(
                 self.resources.identity.worktree_root,
                 expected_root_identity=self.worktree_identity,
@@ -432,7 +432,6 @@ class SessionArtifactBinding:
         """Hold exact READY Git and physical-root authority for artifact I/O."""
 
         access: SessionArtifactAccess | None = None
-        body_failed = False
         stack = ExitStack()
         try:
             lease = stack.enter_context(
@@ -454,35 +453,40 @@ class SessionArtifactBinding:
             )
             access = SessionArtifactAccess(self, lease, descriptor)
         except _SESSION_ARTIFACT_BINDING_FAILURES:
-            stack.close()
+            try:
+                stack.close()
+            except _SESSION_ARTIFACT_BINDING_FAILURES:
+                pass
             raise SessionArtifactBindingError(
                 "session artifact resources are unavailable"
             ) from None
 
+        body_failure: BaseException | None = None
         try:
             with stack:
                 try:
-                    yield access
-                except BaseException:
-                    body_failed = True
-                    raise
-                else:
-                    access.require_ready()
-        except _SESSION_ARTIFACT_BINDING_FAILURES:
-            if body_failed:
+                    try:
+                        yield access
+                    except BaseException as exc:
+                        body_failure = exc
+                        _postvalidate_session_artifact_access(access)
+                        raise
+                    else:
+                        _postvalidate_session_artifact_access(access)
+                finally:
+                    access._close()
+        except _SESSION_ARTIFACT_BINDING_FAILURES as exc:
+            if exc is body_failure:
                 raise
             raise SessionArtifactBindingError(
                 "session artifact resources are unavailable"
             ) from None
-        finally:
-            if access is not None:
-                access._close()
 
 
 class SessionArtifactAccess:
     """One non-reentrant live view of a guarded session artifact binding."""
 
-    __slots__ = ("_active", "_binding", "_descriptor", "_lease", "repository")
+    __slots__ = ("_active", "_binding", "_descriptor", "_lease")
 
     def __init__(
         self,
@@ -493,8 +497,14 @@ class SessionArtifactAccess:
         self._binding = binding
         self._lease = lease
         self._descriptor = descriptor
-        self.repository = binding.repository
         self._active = True
+
+    @property
+    def repository(self) -> WritingArtifactRepository:
+        """Return the repository only while this exact access is live."""
+
+        self.require_active()
+        return self._binding._repository
 
     @property
     def resources(self) -> GitSessionResourceInspection:
@@ -574,6 +584,17 @@ class SessionArtifactAccess:
             os.close(self._descriptor)
         except OSError:
             pass
+
+
+def _postvalidate_session_artifact_access(access: SessionArtifactAccess) -> None:
+    """Translate only a failed exit check, preserving an original body failure."""
+
+    try:
+        access.require_ready()
+    except _SESSION_ARTIFACT_BINDING_FAILURES:
+        raise SessionArtifactBindingError(
+            "session artifact resources are unavailable"
+        ) from None
 
 
 class SessionArtifactBindingError(StoryWritingAgentsError, RuntimeError):

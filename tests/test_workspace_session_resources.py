@@ -79,10 +79,14 @@ class WorkspaceSessionResourceCompositionTests(GitSessionResourceGitTestCase):
 
         self.assertIs(type(binding), SessionArtifactBinding)
         self.assertEqual(binding.resources, ready)
-        self.assertEqual(
-            binding.repository.read_text("core_documents/global_outline.md"),
-            "Session-only outline.\n",
-        )
+        self.assertFalse(hasattr(binding, "repository"))
+        with binding.open_ready_resources() as access:
+            self.assertEqual(
+                access.repository.read_text("core_documents/global_outline.md"),
+                "Session-only outline.\n",
+            )
+        with self.assertRaises(SessionArtifactBindingError):
+            _ = access.repository
         self.assertEqual(self.repository_snapshot(root), before)
         self.assertEqual(
             (root / "core_documents/global_outline.md").read_bytes(),

@@ -286,11 +286,14 @@ identity. Each repository or session-source step uses a short synchronous
 guard: it holds the cooperating-runtime Git lease, verifies the exact semantic
 READY resources and named physical root before and after the step, then
 releases the guard. A guard never spans a provider await or specialist
-concurrency; the next filesystem step reacquires and revalidates it. Artifact
-access and provider-visible active-debate or own-agent state then come only
-from that worktree; conversation history retains its separately configured
-control-plane storage. Replacing the named worktree does not transfer
-authority to the replacement.
+concurrency; the next filesystem step reacquires and revalidates it. The
+binding does not expose its repository directly: only live guarded access does,
+and that access expires on exit. Exit revalidation runs after success, error,
+or cancellation; detected binding loss takes precedence over the body result.
+Artifact access and provider-visible active-debate or own-agent state then come
+only from that worktree; conversation history retains its separately configured
+control-plane storage. Replacing the named worktree does not transfer authority
+to the replacement.
 The runtime never falls back to `main`, the current directory, or a previously
 used session, and it does not provision missing session resources as a side
 effect. Create or reopen the session through the lifecycle first.
@@ -340,9 +343,10 @@ a separate mandatory read from the exact session worktree before the substantive
 lead call and retains only
 the indicator/range/revision facts in the proposal. In focused Lead input, `$`
 opens the canonical-artifact picker and `$$` opens the same picker followed by
-the independent range viewer. Picker inventory and viewing follow the currently
-attached session and are freshly validated on each operation. Both insert
-durable identity-only indicators. See
+the independent range viewer. Picker inventory and each selected-file read use
+their own short guarded access, follow the currently attached session, and are
+freshly validated on entry and exit. Both insert durable identity-only
+indicators. See
 [artifact references](docs/guides/artifact-references.md).
 
 ## Important limits
@@ -389,8 +393,10 @@ durable identity-only indicators. See
   Apply worktree's physical identity through candidate preparation,
   authorization, and execution. Replacement before durable Commit execution
   requires repreparation; uncertainty after execution starts requires
-  inspection. Failure to publish the follow-on Commit request after the Apply
-  result is durable does not yet have its own durable failure-state record;
+  inspection. Identity-bound Commit inspection and recovery also require the
+  original Apply root and never advance durable operation state after detecting
+  a replacement. Failure to publish the follow-on Commit request after the
+  Apply result is durable does not yet have its own durable failure-state record;
   that separate work remains in
   [Issue #662](https://github.com/Kims-DeveloperGroup/story-writing-agents/issues/662).
 - Smoke is intentionally provider-free and story-free.

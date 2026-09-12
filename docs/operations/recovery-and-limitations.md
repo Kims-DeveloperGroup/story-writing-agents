@@ -186,8 +186,12 @@ application-ledger access, Apply, and recovery. The binding pins the physical
 inspection. Each repository or session-state action holds the cooperating-
 runtime Git lease only for its short synchronous body, checking semantic READY
 and the named root before and after it. No such guard spans a provider await or
-concurrent specialist execution; a later action reacquires it. Conversation
-history remains in its separately configured control-plane store. Absent
+concurrent specialist execution; a later action reacquires it. The binding
+keeps its repository private and exposes it only through live access inside the
+guard. Exit revalidation runs on success, error, and cancellation. When both
+the body and exit fail, binding loss takes precedence; otherwise the original
+error or cancellation survives. Conversation history remains in its separately
+configured control-plane store. Absent
 resources are not provisioned; moved, mismatched, staged, or otherwise
 non-ready resources do not fall back to
 `main`, the current directory, a sibling session, or an older binding. The
@@ -221,6 +225,11 @@ authorization, and execution while independently revalidating semantic READY.
 Replacement before the durable Commit operation starts requires repreparation;
 replacement after `running` is recorded leaves an uncertain operation to
 inspect.
+
+Identity-bound Commit `inspect()` and `recover()` check the Apply root before
+and between durable-owner observations and immediately before any recovery
+transition. Replacement becomes `recovery_required`; neither path advances an
+operation from facts read through the replacement.
 
 If Apply-result publication succeeds but the later Commit-request preparation
 or publication fails, the Apply result remains authoritative and no Commit is
@@ -378,14 +387,16 @@ one correlated candidate/commit/checkpoint chain, and reads the current-`HEAD`
 log only when that chain claims a committed story operation. It then rereads
 collaboration, resources, history, external Git, and status as generation B.
 The exact artifact binding is established against generation A; application
-inspection runs through it, and a final guarded checkpoint requires the same
-physical root and semantic READY resources as generation B. Session-resource
-drift, a second resource-read failure, or binding loss at that checkpoint is
-`recovery_required` for the resource owner rather than permission to combine
-generations. Drift or second-read failure for the other owners remains
-`outcome_unknown` for that owner. Stable facts are selected again, any commit
-is checked against the nonempty newest-first log and stable status, and only
-then are they passed to the pure classifier.
+inspection runs through it. Each generation's external-operation and linked-
+status observation, plus the conditional committed-`HEAD` log read, has its own
+short guarded access through that same binding. A final guarded checkpoint then
+requires the same physical root and semantic READY resources as generation B.
+Session-resource drift, a second resource-read failure, or binding loss at any
+of these guarded observations is `recovery_required` for session resources
+rather than permission to combine generations. Drift or second-read failure
+for the other owners remains `outcome_unknown` for that owner. Stable facts are
+selected again, any commit is checked against the nonempty newest-first log and
+stable status, and only then are they passed to the pure classifier.
 
 The visible result fields answer different questions:
 
@@ -1371,6 +1382,12 @@ top-level operation only after every invocation is terminal and final
 revalidation passes. After process loss, history can be inspected but an
 interrupted authorization cannot be resumed or used to reconstruct content.
 Start a new operation with a new ID after correcting any source problem.
+
+For runtime-composed guarded references, selected-root security or binding
+loss is preserved for the orchestration recovery boundary rather than reduced
+to a generic workflow failure. No provider call or fallback source is
+authorized by that failure; repair the exact session resources and inspect the
+closed attempt before starting a new operation.
 
 `inspect_reference_operation()` distinguishes absence from corruption. It
 returns no history only when the named operation directory is absent. If any

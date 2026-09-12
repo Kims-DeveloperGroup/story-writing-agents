@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import os
 import subprocess
 from types import SimpleNamespace
@@ -36,8 +37,6 @@ from story_writing_agents.workspace.initialization import (
     inspect_session_resources,
     provision_session_resources,
 )
-from story_writing_agents.writing_artifacts._storage import ArtifactRootSecurityError
-
 from tests.test_lead_orchestration import (
     LeadOrchestrationTestCase,
     _visible_outcome,
@@ -580,6 +579,90 @@ class RuntimeSessionArtifactBindingTests(LeadOrchestrationTestCase):
             with self.assertRaises(OSError):
                 os.fstat(descriptor)
 
+    def test_binding_repository_is_private_and_access_expires_at_exit(self) -> None:
+        binding = compose_session_artifact_binding(
+            self.control_workspace.root,
+            self.session_id,
+        )
+        self.assertFalse(hasattr(binding, "repository"))
+        with binding.open_ready_resources() as access:
+            repository = access.repository
+            self.assertEqual(
+                repository.read_text(_OUTLINE),
+                "Outline first line.\nOutline second line.\n",
+            )
+            duplicate = access.duplicate_worktree_descriptor()
+            os.close(duplicate)
+        for operation in (
+            lambda: access.repository,
+            lambda: access.resources,
+            lambda: access.duplicate_worktree_descriptor(),
+        ):
+            with self.subTest(operation=operation), self.assertRaises(
+                SessionArtifactBindingError
+            ):
+                operation()
+
+    def test_postcheck_binding_loss_dominates_body_failure_and_preserves_clean_exit(
+        self,
+    ) -> None:
+        binding = compose_session_artifact_binding(
+            self.control_workspace.root,
+            self.session_id,
+        )
+        original_open = initialization_module._open_existing_root
+        opened: list[int] = []
+
+        def record_open(root, expected):
+            descriptor = original_open(root, expected)
+            opened.append(descriptor)
+            return descriptor
+
+        for body_failure in (
+            None,
+            RuntimeError("body failure"),
+            asyncio.CancelledError(),
+        ):
+            with self.subTest(body_failure=type(body_failure).__name__):
+                replacement = self.replace_session_worktree()
+                entered = False
+                access = None
+                try:
+                    with mock.patch.object(
+                        initialization_module,
+                        "_open_existing_root",
+                        side_effect=record_open,
+                    ), self.assertRaises(SessionArtifactBindingError):
+                        with binding.open_ready_resources() as access:
+                            replacement.__enter__()
+                            entered = True
+                            if body_failure is not None:
+                                raise body_failure
+                finally:
+                    if entered:
+                        replacement.__exit__(None, None, None)
+                assert access is not None
+                with self.assertRaises(SessionArtifactBindingError):
+                    _ = access.repository
+
+        for body_failure in (
+            RuntimeError("clean-root body failure"),
+            asyncio.CancelledError(),
+        ):
+            with self.subTest(clean_root=type(body_failure).__name__):
+                access = None
+                with self.assertRaises(type(body_failure)) as caught:
+                    with binding.open_ready_resources() as access:
+                        raise body_failure
+                self.assertIs(caught.exception, body_failure)
+                assert access is not None
+                with self.assertRaises(SessionArtifactBindingError):
+                    _ = access.repository
+        self.assertTrue(opened)
+        for descriptor in opened:
+            with self.assertRaises(OSError):
+                os.fstat(descriptor)
+
     async def test_two_ready_sessions_read_and_inspect_only_their_own_ledger(
         self,
     ) -> None:
@@ -698,10 +781,11 @@ class RuntimeSessionArtifactBindingTests(LeadOrchestrationTestCase):
                     self.session_id,
                 )
                 if read_before_replacement:
-                    self.assertEqual(
-                        binding.repository.read_text(_OUTLINE),
-                        "Outline first line.\nOutline second line.\n",
-                    )
+                    with binding.open_ready_resources() as access:
+                        self.assertEqual(
+                            access.repository.read_text(_OUTLINE),
+                            "Outline first line.\nOutline second line.\n",
+                        )
                 with self.replace_session_worktree() as (moved, replacement):
                     replacement_source = replacement / _OUTLINE
                     replacement_source.parent.mkdir(parents=True)
@@ -711,11 +795,9 @@ class RuntimeSessionArtifactBindingTests(LeadOrchestrationTestCase):
                     )
                     moved_before = (moved / _OUTLINE).read_bytes()
 
-                    with self.assertRaisesRegex(
-                        ArtifactRootSecurityError,
-                        "workspace root identity changed",
-                    ):
-                        binding.repository.read_text(_OUTLINE)
+                    with self.assertRaises(SessionArtifactBindingError):
+                        with binding.open_ready_resources() as access:
+                            access.repository.read_text(_OUTLINE)
 
                     self.assertEqual(
                         replacement_source.read_text(encoding="utf-8"),

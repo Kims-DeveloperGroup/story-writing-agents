@@ -4,20 +4,30 @@ from __future__ import annotations
 
 import inspect
 import unittest
+from contextlib import contextmanager
 from unittest import mock
 
 import story_writing_agents
 from story_writing_agents import RuntimeSession, StoryRuntime
 from story_writing_agents import orchestrator as orchestrator_module
+from story_writing_agents.errors import WorkspaceSecurityError
 
 from story_writing_agents.workspace.initialization import (
     compose_session_artifact_binding,
     provision_session_resources,
 )
 from story_writing_agents.writing_artifacts.runtime_references import (
+    prepare_guarded_runtime_reference_operation,
     prepare_runtime_reference_operation,
     reference_operation_belongs_to_session,
     reference_operation_session_id,
+)
+from story_writing_agents.writing_artifacts.authorization import (
+    ReferenceAuthorizationErrorCode,
+    ReferenceOperationFailure,
+)
+from story_writing_agents.writing_artifacts.repository import (
+    WritingArtifactRepository,
 )
 
 from tests.helpers import initialized_workspace, pristine_initialized_workspace
@@ -180,11 +190,12 @@ class RuntimeExecutionRetirementTests(unittest.TestCase):
         source = ready.identity.worktree_root / "core_documents/global_outline.md"
         source.write_text("Session-only reference.\n", encoding="utf-8")
         binding = compose_session_artifact_binding(workspace.root, "novel")
-        operation = prepare_runtime_reference_operation(
-            binding.repository,
-            session_id="novel",
-            text="Read ${core_documents/global_outline.md}.",
-        )
+        with binding.open_ready_resources() as access:
+            operation = prepare_runtime_reference_operation(
+                access.repository,
+                session_id="novel",
+                text="Read ${core_documents/global_outline.md}.",
+            )
         operation_id = operation.operation_id
         assert operation_id is not None
 
@@ -209,14 +220,16 @@ class RuntimeExecutionRetirementTests(unittest.TestCase):
             / "core_documents/global_outline.md"
         )
         foreign_source.write_text("Foreign reference.\n", encoding="utf-8")
-        foreign = prepare_runtime_reference_operation(
-            compose_session_artifact_binding(
-                workspace.root,
-                "foreign",
-            ).repository,
-            session_id="foreign",
-            text="Read ${core_documents/global_outline.md}.",
-        ).operation_id
+        foreign_binding = compose_session_artifact_binding(
+            workspace.root,
+            "foreign",
+        )
+        with foreign_binding.open_ready_resources() as access:
+            foreign = prepare_runtime_reference_operation(
+                access.repository,
+                session_id="foreign",
+                text="Read ${core_documents/global_outline.md}.",
+            ).operation_id
         assert foreign is not None
         with self.assertRaisesRegex(ValueError, "does not belong"):
             restarted.session("novel").inspect_reference_operation(foreign)
@@ -239,6 +252,44 @@ class RuntimeExecutionRetirementTests(unittest.TestCase):
                 )
                 with self.assertRaises(ValueError):
                     restarted.inspect_reference_operation(invalid)
+
+    def test_guarded_security_failure_propagates_while_public_reference_api_converts(
+        self,
+    ) -> None:
+        workspace = pristine_initialized_workspace(self)
+        provision_session_resources(workspace.root, "novel")
+        binding = compose_session_artifact_binding(workspace.root, "novel")
+
+        @contextmanager
+        def repository_access():
+            with binding.open_ready_resources() as access:
+                yield access.repository
+
+        failure = WorkspaceSecurityError("guarded root identity changed")
+        with mock.patch.object(
+            WritingArtifactRepository,
+            "capture_reference_authorization",
+            side_effect=failure,
+        ):
+            with self.assertRaises(WorkspaceSecurityError) as guarded:
+                prepare_guarded_runtime_reference_operation(
+                    repository_access,
+                    session_id="novel",
+                    text="Read ${core_documents/global_outline.md}.",
+                )
+            self.assertIs(guarded.exception, failure)
+
+            with binding.open_ready_resources() as access:
+                with self.assertRaises(ReferenceOperationFailure) as public:
+                    prepare_runtime_reference_operation(
+                        access.repository,
+                        session_id="novel",
+                        text="Read ${core_documents/global_outline.md}.",
+                    )
+            self.assertIs(
+                public.exception.code,
+                ReferenceAuthorizationErrorCode.WORKFLOW_FAILURE,
+            )
 
 
 if __name__ == "__main__":

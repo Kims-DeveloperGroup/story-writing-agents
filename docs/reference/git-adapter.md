@@ -559,7 +559,12 @@ lease remains held while the exact semantic READY resources and pinned root are
 checked before and after that action, then the guard closes. A provider await
 or concurrent specialist execution never holds this lease; the next
 filesystem action reacquires and rechecks it. The binding supplies a writing-
-artifact repository rooted at and pinned to that session worktree.
+artifact repository rooted at and pinned to that session worktree only through
+the guard's live access object. The binding itself has no repository property,
+and access to the repository, resources, or duplicated root descriptor expires
+when the guard exits. Exit revalidation runs after success, error, and
+cancellation. Binding loss found there dominates an earlier body failure;
+otherwise the original body failure is preserved.
 Binding itself performs no artifact I/O, provisioning, provider call, or global
 runtime mutation. Known readiness and workspace-validation failures become one
 content-free binding failure; malformed protocol/type defects remain visible.
@@ -958,6 +963,12 @@ state/recovery action, branch/tip, and optional committed object ID. Inspection
 reads durable evidence only. Recovery performs read-only Git classification
 plus monotonic history updates; it never resets the real index, stages again,
 reuses authority/confirmation, or creates a commit.
+
+For a runtime-composed identity-bound service, inspection and recovery require
+the original Apply worktree identity before and between their owner reads and
+before any monotonic history transition. If that root has been replaced, they
+return `recovery_required` and make no transition from the replacement's
+operation, status, index, tree, or commit facts.
 
 - Exact expected staging with the old branch tip is returned as `staged` /
   `operator_recovery`.

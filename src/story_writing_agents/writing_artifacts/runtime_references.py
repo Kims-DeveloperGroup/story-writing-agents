@@ -15,6 +15,7 @@ from collections.abc import Callable, Iterator
 from contextlib import AbstractContextManager, contextmanager
 from typing import TypeVar
 
+from ..errors import WorkspaceSecurityError
 from .authorization import (
     AuthorizedArtifactReference,
     ReferenceAuthorization,
@@ -504,6 +505,8 @@ def _prepare_runtime_reference_operation(
     except ReferenceAuthorizationError as exc:
         raise ReferenceOperationFailure(operation_id, exc.code) from exc
     except BaseException as exc:
+        if repository_access is not None and isinstance(exc, WorkspaceSecurityError):
+            raise
         raise ReferenceOperationFailure(
             operation_id,
             ReferenceAuthorizationErrorCode.WORKFLOW_FAILURE,

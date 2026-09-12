@@ -161,6 +161,15 @@ malformed structures where the consuming contract performs schema validation.
 Package-internal root helpers recheck the bound identity for diagnostic and
 storage owners, but they are not public imports.
 
+The package-internal session-artifact binding keeps its repository private.
+Only `open_ready_resources()` yields a live access object whose `repository`,
+resources, and descriptor duplication are valid inside that context. The
+access expires before exit completes. Exit always repeats semantic READY and
+physical-root validation after a successful body, an ordinary error, or
+cancellation. If that check finds binding loss, the content-free binding
+failure takes precedence; otherwise the original body error or cancellation is
+preserved. Descriptors and the cooperating-runtime lease close on every path.
+
 The package-internal `SessionSourceWorkspace` is likewise not a public import.
 Runtime derives it only from a freshly validated session-artifact binding. It
 adopts that binding's exact session root and physical `(st_dev, st_ino)`
