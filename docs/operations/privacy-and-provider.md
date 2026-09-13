@@ -1107,10 +1107,37 @@ summaries use a separate boundary.
 
 ## Provider processes and credentials
 
-Codex runs without shell evaluation in isolated staging: read-only sandbox, no
-approvals, ignored project/user configuration, and disabled shell, web, app,
-and multi-agent tools. Installation-level or vendor-global instructions can
-still apply, and the vendor may retain remote conversations.
+Codex story calls run without shell evaluation from the descriptor-selected
+exact READY session worktree, with native project root `--cd .`: read-only
+sandbox, no approvals, ignored project/user configuration, and disabled shell,
+web, app, and multi-agent tools. On Darwin, a second default-deny process
+sandbox permits reads beneath the session worktree except `.git`, denies every
+session write, and denies unspecified locations such as the initialization and
+control roots, sibling worktrees, traversal targets, symlink escape targets,
+and prompt staging. Exact opaque exceptions admit the resolved executable and
+runtime, schema/result transport, provider-native state, required system files,
+and outbound network/system sockets. This is filesystem confinement, not a
+claim that the executable or remote provider is trusted: all readable session
+content is locally exposed to that provider process.
+
+Stable instructions are prepared outside story Git, read before launch, and
+passed as a `developer_instructions` configuration argument; their text can be
+visible to local process inspection. The schema has one exact external read
+path and the result one exact external write path. Codex cannot read its prompt
+staging after launch, and none of those definition or output files is created
+in the story worktree or committed as story residue. Installation-level or
+vendor-global instructions can still apply, and the vendor may retain remote
+conversations. Apple's `sandbox-exec` facility is deprecated; if it is missing,
+the host is unsupported, or exact sandbox inputs are invalid, the story call
+fails before submission instead of running without confinement.
+
+These controls apply to provider-bound story calls, including direct bound-
+agent, Lead, specialist, synthesis, and consensus paths. Native authentication,
+model-catalog discovery, `--help`, and other management probes are excluded and
+keep the distinct workspace/environment exposure documented in their own
+sections. Antigravity does not yet inherit the Codex worktree capability or
+outer sandbox; that work remains
+[Issue #706](https://github.com/Kims-DeveloperGroup/story-writing-agents/issues/706).
 
 Antigravity also runs without shell evaluation. The backend passes the exact
 confidential story request JSON as one `--print` argument, uses

@@ -301,10 +301,19 @@ control-plane storage. Replacing the named worktree does not transfer authority
 to the replacement.
 The runtime never falls back to `main`, the current directory, or a previously
 used session, and it does not provision missing session resources as a side
-effect. This artifact binding does not set or confine the provider working
-directory or project root; that separate story-runtime boundary remains
-tracked by
-[Issue #670](https://github.com/Kims-DeveloperGroup/story-writing-agents/issues/670).
+effect. For every Codex Lead, specialist, synthesis, consensus, or direct bound-
+agent call, the runtime derives a call-local execution capability from that
+binding. The child enters the descriptor-selected exact session worktree and
+uses `--cd .`, so both its OS working directory and native project root are the
+same pinned generation, never prompt staging or the control workspace. On
+Darwin, a second default-deny sandbox admits read-only session content except
+`.git`, exact provider/runtime transport and native-state resources, and
+network access; it denies session writes and all other workspace paths. Bound
+instructions, schema, and response transport remain outside story Git. The
+deprecated Darwin sandbox facility is fail-closed when unavailable, and an
+unsupported host does not fall back to an unconfined Codex story call.
+Antigravity adopts the corresponding worktree boundary separately in
+[Issue #706](https://github.com/Kims-DeveloperGroup/story-writing-agents/issues/706).
 Create or reopen the session through the lifecycle first.
 
 ```python

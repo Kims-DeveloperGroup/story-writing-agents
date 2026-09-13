@@ -202,6 +202,40 @@ I/O. Close is still idempotent; after a fork, the child-safe close path releases
 only the child's inherited descriptor copies without entering inherited locks
 or granting generation authority.
 
+For each Codex story call, and only for that call, the session-artifact owner
+uses the same physical facts to mint an opaque provider-execution capability.
+It opens the exact session root, retains the full lower generation pin, and
+transfers one non-inheritable duplicate to a fixed isolated exec helper. The
+helper uses descriptor-relative `fchdir`, closes the transfer descriptor, and
+executes Codex with `--cd .`. The child therefore starts on the retained
+original inode without changing the parent process working directory or
+reopening the named path. The capability is immutable, rejects copying and
+serialization, is process/thread-affine, and is closed after the invocation;
+it is never stored on a provider binding, adapter, durable record, or deferred
+callback.
+
+Codex process creation requires Darwin's `sandbox-exec` and canonicalized
+resource paths. The compiled SBPL profile denies by default. It admits reads of
+the exact session subtree, then overrides that allowance to deny session
+`.git` reads/writes and every session write. Because no other workspace path is
+allowed, the initialization/control root, sibling worktrees, lexical traversal,
+and symlink escape targets remain denied. Prompt staging is explicitly denied.
+The closed non-session allowances cover the resolved executable directory,
+required system runtime files, the exact schema read and output write, the
+provider-native state subtree, null/random devices, process support, and
+outbound network/system sockets. Instructions are injected after a prelaunch
+staging read; schema and output stay in external temporary storage. The call
+therefore creates no provider-definition or output residue in the story Git
+tree.
+
+The generation is checked before descriptor duplication, after child creation,
+after process return, and before result/ledger acceptance. A deleted, replaced,
+or symlinked named session root cannot acquire the old descriptor authority or
+redirect a call. Unsupported hosts, a missing deprecated sandbox facility, an
+executable mismatch, or a noncanonical exception path fail before provider
+submission; there is no path-only working-directory or unconfined fallback.
+This Codex boundary does not cover the separately tracked Antigravity adapter.
+
 Ordinary artifact access retains the stronger semantic boundary: one outer
 synchronous transaction performs a complete READY validation before and after
 its body. Nested access and repository calls reuse that transaction with only

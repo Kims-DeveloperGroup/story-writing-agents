@@ -82,8 +82,10 @@ from .backend import (
     BackendRuntimeConfigurationCandidate,
     BoundAgent,
     backend_configuration_snapshot,
+    invoke_story_bound_agent,
     release_bound_agent,
 )
+from .provider_execution_workspace import ProviderExecutionWorkspace
 from .artifact_proposals import (
     ArtifactCreateIntent,
     ArtifactDeleteIntent,
@@ -334,6 +336,17 @@ def _open_session_artifact_repository(
 
     with binding.open_ready_resources() as access:
         yield access.repository
+
+
+def _codex_execution_workspace_manager(
+    bound_agent: BoundAgent,
+    binding: SessionArtifactBinding,
+) -> AbstractContextManager[ProviderExecutionWorkspace] | None:
+    """Return capability acquisition only for a concretely bound Codex call."""
+
+    if bound_agent.vendor != "codex":
+        return None
+    return binding.open_provider_execution_workspace()
 
 
 def _duplicate_session_worktree_descriptor(
@@ -1100,22 +1113,31 @@ class _AccountingContextProvider:
         policy_fingerprint: str,
         *,
         continuation_identity: ContextContinuationIdentity | None = None,
+        execution_workspace: ProviderExecutionWorkspace | None = None,
     ) -> AsyncContextManager[None]:
         if continuation_identity is not None:
             return getattr(self._delegate, "invocation")(
                 scope, policy_fingerprint,
                 continuation_identity=continuation_identity,
+                execution_workspace=execution_workspace,
             )
-        return getattr(self._delegate, "invocation")(scope, policy_fingerprint)
+        return getattr(self._delegate, "invocation")(
+            scope,
+            policy_fingerprint,
+            execution_workspace=execution_workspace,
+        )
 
     def inspect_context_thread(
         self,
         scope: ContextScope,
         policy_fingerprint: str,
+        *,
+        execution_workspace: ProviderExecutionWorkspace | None = None,
     ) -> str | None:
         return getattr(self._delegate, "inspect_context_thread")(
             scope,
             policy_fingerprint,
+            execution_workspace=execution_workspace,
         )
 
     async def prepare_references(
@@ -1209,8 +1231,14 @@ class _AccountingContextProvider:
         self,
         scope: ContextScope,
         policy_fingerprint: str,
+        *,
+        execution_workspace: ProviderExecutionWorkspace | None = None,
     ) -> None:
-        getattr(self._delegate, "taint_context_thread")(scope, policy_fingerprint)
+        getattr(self._delegate, "taint_context_thread")(
+            scope,
+            policy_fingerprint,
+            execution_workspace=execution_workspace,
+        )
 
     def _prepare(self, call_id: str, kind: CollaborationProviderCallKind) -> int:
         if call_id in self._ordinals:
@@ -1929,7 +1957,31 @@ class StoryRuntime:
                 user_payload=input_text,
                 candidate_payload=candidate_text,
             )
-            reply = await bound_agent.invoke(request, reference_read=reference_read)
+            if bound_agent.vendor == "codex":
+                execution_binding = (
+                    artifact_binding
+                    if artifact_binding is not None
+                    else self._session_artifact_binding(
+                        invocation.execution_identity.session_id
+                    )
+                )
+                workspace_manager = _codex_execution_workspace_manager(
+                    bound_agent,
+                    execution_binding,
+                )
+                assert workspace_manager is not None
+                with workspace_manager as workspace:
+                    reply = await invoke_story_bound_agent(
+                        bound_agent,
+                        request,
+                        workspace,
+                        reference_read=reference_read,
+                    )
+            else:
+                reply = await bound_agent.invoke(
+                    request,
+                    reference_read=reference_read,
+                )
             if reference_operation is not None:
                 self._finish_reference_operation(reference_operation)
             authored_material = None
@@ -5482,6 +5534,10 @@ class StoryRuntime:
         bound_agent: BoundAgent | None = None
         provider: _AccountingContextProvider | None = None
         generation_pin: SessionArtifactGenerationPin | None = None
+        execution_workspace_manager: AbstractContextManager[
+            ProviderExecutionWorkspace
+        ] | None = None
+        execution_workspace: ProviderExecutionWorkspace | None = None
         try:
             if agent_id == LEAD_ORCHESTRATOR:
                 generation_pin = artifact_binding.acquire_generation_pin()
@@ -5508,6 +5564,12 @@ class StoryRuntime:
                 agent_id=agent_id,
             )
             bound_agent = await self._acquire_bound_agent(definition)
+            execution_workspace_manager = _codex_execution_workspace_manager(
+                bound_agent,
+                artifact_binding,
+            )
+            if execution_workspace_manager is not None:
+                execution_workspace = execution_workspace_manager.__enter__()
             reference_read = reference_operation.begin_invocation(
                 agent_id=agent_id,
                 phase=context_invocation_kind.value,
@@ -5594,6 +5656,7 @@ class StoryRuntime:
                     )
                     if agent_id == LEAD_ORCHESTRATOR else None
                 ),
+                execution_workspace=execution_workspace,
             )
             decoded: object | None = None
 
@@ -5697,6 +5760,24 @@ class StoryRuntime:
             if bound_agent is not None:
                 try:
                     await self._release_bound_agent_use(bound_agent)
+                except BaseException as failure:
+                    cleanup_primary = (
+                        primary if primary is not None else cleanup_failure
+                    )
+                    if cleanup_primary is None:
+                        cleanup_failure = failure
+                    else:
+                        _add_story_commit_cleanup_note(
+                            cleanup_primary,
+                            failure,
+                        )
+            if execution_workspace_manager is not None:
+                try:
+                    execution_workspace_manager.__exit__(
+                        None if primary is None else type(primary),
+                        primary,
+                        None if primary is None else primary.__traceback__,
+                    )
                 except BaseException as failure:
                     cleanup_primary = (
                         primary if primary is not None else cleanup_failure
@@ -7808,7 +7889,18 @@ class StoryRuntime:
         bound_agent = await self._acquire_bound_agent(definition)
         reference_read: object | None = None
         provider: _AccountingContextProvider | None = None
+        execution_workspace_manager: AbstractContextManager[
+            ProviderExecutionWorkspace
+        ] | None = None
+        execution_workspace: ProviderExecutionWorkspace | None = None
         try:
+            candidate_workspace_manager = _codex_execution_workspace_manager(
+                bound_agent,
+                artifact_binding,
+            )
+            if candidate_workspace_manager is not None:
+                execution_workspace = candidate_workspace_manager.__enter__()
+                execution_workspace_manager = candidate_workspace_manager
             reference_read = reference_operation.begin_invocation(
                 agent_id=LEAD_ORCHESTRATOR,
                 phase=ContextInvocationKind.LEAD.value,
@@ -7987,6 +8079,7 @@ class StoryRuntime:
                     session_id,
                     artifact_binding=artifact_binding,
                 ),
+                execution_workspace=execution_workspace,
             )
             decoded: LeadProviderOutcome | None = None
             decoded_evidence: CollaborationLeadEvidence | None = None
@@ -8400,7 +8493,36 @@ class StoryRuntime:
             raise
 
         finally:
-            await self._release_bound_agent_use(bound_agent)
+            primary = sys.exception()
+            cleanup_failure: BaseException | None = None
+            try:
+                await self._release_bound_agent_use(bound_agent)
+            except BaseException as failure:
+                if primary is None:
+                    cleanup_failure = failure
+                else:
+                    _add_story_commit_cleanup_note(primary, failure)
+            if execution_workspace_manager is not None:
+                cleanup_primary = (
+                    primary if primary is not None else cleanup_failure
+                )
+                try:
+                    execution_workspace_manager.__exit__(
+                        None if cleanup_primary is None else type(cleanup_primary),
+                        cleanup_primary,
+                        (
+                            None
+                            if cleanup_primary is None
+                            else cleanup_primary.__traceback__
+                        ),
+                    )
+                except BaseException as failure:
+                    if cleanup_primary is None:
+                        cleanup_failure = failure
+                    else:
+                        _add_story_commit_cleanup_note(cleanup_primary, failure)
+            if primary is None and cleanup_failure is not None:
+                raise cleanup_failure
 
         if outcome.kind is LeadOutcomeKind.PROPOSAL:
             if outcome.artifact_intent is not None:

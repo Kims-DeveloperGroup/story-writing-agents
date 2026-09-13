@@ -98,6 +98,51 @@ capability removal. See the
 [sanitized command and JSON result](../guides/antigravity.md#sanitized-provider-call-and-json-result),
 including process-argument visibility and plan-mode limitations.
 
+<a id="codex-session-execution-boundary"></a>
+
+## Codex session execution boundary
+
+Every Codex story invocation uses the exact READY session named by its request.
+This includes `BoundAgent.invoke()`, `converse()`,
+`converse_with_retrieval()`, the contextual Lead and specialist paths, every
+synthesis phase, and consensus calls without artifact input. The
+`SessionArtifactBinding` is the sole minter of an immutable, opaque,
+nonserializable, process- and thread-affine execution capability. The
+capability is created for one call, is never cached on a binding or adapter,
+and retains the content-free physical-generation proof without retaining a Git
+lease across the provider await.
+
+Launch transfers a non-inheritable duplicate of the pinned session-root
+descriptor to a fixed isolated helper. The helper enters that directory with
+`fchdir`, closes the descriptor, and replaces itself with the provider. Codex
+receives `--cd .`; therefore its OS working directory and native project root
+refer to the selected original inode rather than a reopened path, prompt
+staging, the initialization root, or the controller's current directory.
+Capability checks run before launch, immediately after process creation, after
+the process returns, and before result acceptance. A missing, replaced, or
+aliased named root fails the invocation rather than transferring authority to
+another generation.
+
+On Darwin the native process is additionally wrapped by a default-deny SBPL
+profile and retains Codex's own `--sandbox read-only` setting. The profile
+allows session-tree reads but explicitly denies session `.git` reads and all
+session writes. Unspecified paths are denied, including the initialization and
+control roots, sibling worktrees, traversal targets, symlink escape targets,
+and provider-definition staging. Its closed external allowances cover the
+resolved provider executable/runtime, the exact schema read and response write,
+the provider-native state subtree, required system runtime files, and outbound
+network/system sockets. Staged instructions are read before launch and supplied
+as native developer instructions; neither the staging directory nor response
+transport becomes a Codex project or story-Git residue.
+
+Apple's `sandbox-exec` facility is deprecated. A missing facility, non-Darwin
+host, noncanonical resource, or executable mismatch fails before provider
+submission; there is no path-only or unconfined fallback. Authentication,
+model-catalog discovery, help, and other management probes are not story
+invocations and retain their separately documented process boundaries.
+Antigravity is intentionally unchanged here and remains tracked by
+[Issue #706](https://github.com/Kims-DeveloperGroup/story-writing-agents/issues/706).
+
 ## Lead session continuation
 
 The runtime's ordinary Lead turns and consultation/artifact-review syntheses
@@ -111,8 +156,14 @@ scoped. The new session namespace bootstraps while old conversation namespace
 bytes remain untouched. See [Lead session memory](../guides/agent-context.md#lead-session-memory)
 for exact history/current-state delivery and capacity limits.
 
-Missing, tainted, or incompatible continuation bootstraps on the next safe
-authorized work. An eligible failed read-only Lead attempt exposes
+For Codex, the compatibility fingerprints also include a domain-separated
+digest of the exact session physical generation. Replacing the worktree at the
+same pathname therefore makes the retained continuation incompatible and
+selects a fresh bootstrap without rewriting the old record. Missing, tainted,
+or otherwise incompatible continuation bootstraps on the next safe authorized
+work. If generation authority is lost after submission, the apparent provider
+success is not accepted, the exact continuation is tainted where present, and
+the binding failure remains primary. An eligible failed read-only Lead attempt exposes
 `retry_lead_turn`, including an exact unstarted, prepared-only, or unmatched
 submitted request recovered after restart. Explicit new input in that same
 conversation closes any unclosed prior attempt before starting a fresh turn;

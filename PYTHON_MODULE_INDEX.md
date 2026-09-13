@@ -16,14 +16,14 @@ Source root: `src/`
 
 Package root: `src/story_writing_agents/`
 
-Importable production units indexed: 142.
+Importable production units indexed: 143.
 
-Direct internal dependency edges indexed: 576.
+Direct internal dependency edges indexed: 585.
 
 Directed internal dependency cycles indexed: 0.
 
 Edge and cycle totals exclude annotation-only `TYPE_CHECKING` imports. The
-all-import AST graph has 578 edges. Its two annotation-only edges are
+all-import AST graph has 587 edges. Its two annotation-only edges are
 `config -> workspace` and `interactive_terminal._core -> conversations`; the
 workspace cycle was already present in the 135-unit baseline
 (528 all-import / 526 runtime edges).
@@ -52,7 +52,7 @@ __main__ -> cli -> conversation_rag_cli
                  |               -> conversation_rag_runtime
                  |               -> conversation_storage.composition/contracts
                  |               -> consensus.contracts/consensus.execution/consensus.event_store/consensus.material_store/consensus.runtime_adapter
-                 |               -> errors/prompts/workspace
+                 |               -> errors/prompts/provider_execution_workspace/workspace
                  |               -> writing_artifacts/catalog/repository/runtime_references
                  -> backend -> agent_context/agent_context.manifest/agent_context.service
                  |          -> conversations.session_context
@@ -62,12 +62,13 @@ __main__ -> cli -> conversation_rag_cli
                  |          |                        -> provider_process
                  |          -> codex_adapter -> agent_context/agents/config
                  |          |                 -> errors/models
-                 |          |                 -> provider_adapter/provider_process
+                 |          |                 -> provider_adapter/provider_execution_workspace/provider_process
                  |          -> config/conversation_retrieval/debug_log
                  |          -> git.session_contracts
                  |          -> interactive_settings
                  |          -> workspace/models/errors/agents
-                 |          -> provider_adapter/provider_auth_recovery/provider_error_artifacts/provider_process
+                 |          -> provider_adapter/provider_auth_recovery/provider_error_artifacts
+                 |          -> provider_execution_workspace/provider_process
                  |          -> conversations/session_lifecycle
                  |          -> session_recovery
                  |          -> session_recovery.transition_assessment
@@ -207,7 +208,7 @@ orchestrator -> agent_context.progress/artifact_proposals/backend/config/consens
              -> conversation_storage.composition/contracts
              -> errors/git.story_commit_contracts/git.story_commits
              -> models
-             -> prompts/specialist_routing/workspace/workspace.core/workspace.initialization
+             -> prompts/provider_execution_workspace/specialist_routing/workspace/workspace.core/workspace.initialization
              -> writing_artifacts/repository/runtime_references
 models -> conversations/agents/errors
 agent_context -> agent_context.accounting
@@ -219,7 +220,7 @@ agent_context.ledger -> agent_context.accounting/manifest/planning
 agent_context.manifest -> (standard library only)
 agent_context.planning -> agent_context.manifest
 agent_context.progress -> agent_context.actions/agent_context.manifest
-agent_context.service -> errors/provider_auth_recovery
+agent_context.service -> errors/provider_auth_recovery/provider_execution_workspace
                       -> agent_context.accounting/actions/continuation/ledger
                       -> agent_context.manifest/planning/progress/sources
                       -> conversations.session_context/workspace
@@ -235,12 +236,13 @@ agent_exchanges.capture -> agent_exchanges.contracts/storage
 agent_exchanges.contracts -> agents/errors
 agent_exchange_paths -> agents
 agent_exchanges.storage -> agent_exchange_paths/agents/agent_exchanges.contracts/workspace
-provider_adapter -> agent_context/errors/models
+provider_adapter -> agent_context/errors/models/provider_execution_workspace
 provider_auth_recovery -> errors
 provider_error_artifacts -> agents/workspace
+provider_execution_workspace -> git.repository_lock/git.session_resources
 provider_auth -> (standard library only)
 provider_catalog -> (standard library only)
-provider_process -> (standard library only)
+provider_process -> provider_execution_workspace
 git -> git.adapter/git.contracts
 git.adapter -> git.contracts/git.process
 git.contracts -> (standard library only)
@@ -295,7 +297,7 @@ workspace.core -> agents/conversations/errors/models
                -> workspace.initialization/workspace.schema/writing_artifacts
 workspace.initialization -> agent_exchange_paths/config/errors/git/git.session_checkpoints
                          -> git.repository_lock/git.session_contracts/git.session_history/git.session_resources/git.story_commits
-                         -> runtime_state_paths/workspace._policy_baselines/workspace.schema
+                         -> provider_execution_workspace/runtime_state_paths/workspace._policy_baselines/workspace.schema
                          -> writing_artifacts.repository
 workspace._policy_baselines -> (immutable data only)
 workspace.schema -> agents/errors/git.session_contracts
@@ -980,8 +982,8 @@ every intermediate arrow. The current runtime graph is acyclic.
   `agent_context.actions`, `agent_context.continuation`, `agent_context.ledger`,
   `agent_context.manifest`, `agent_context.planning`, `agent_context.progress`,
   `agent_context.sources`,
-  `conversations.session_context`, `errors`, `provider_auth_recovery`, and
-  `workspace`.
+  `conversations.session_context`, `errors`, `provider_auth_recovery`,
+  `provider_execution_workspace`, and `workspace`.
 - **State, resources, and side effects:** A workspace-scoped service retains
   immutable planning/action/source policies, one ledger collaborator, the
   content-free workspace digest, and process-local async locks keyed by exact
@@ -992,7 +994,11 @@ every intermediate arrow. The current runtime graph is acyclic.
   receipts are cleared on answer or failure. Source I/O is
   delegated to the injected registry adapters, ledger persistence remains
   ledger-owned, and provider transport/native-thread storage remains delegated
-  through `ContextProvider`. Every physical call is appended in order; only a
+  through `ContextProvider`. Requests may carry one repr-hidden,
+  comparison-excluded call-local provider workspace; the service validates its
+  exact session identity at admission and revalidates it around provider return,
+  reference completion, and checkpoint authorization without retaining it.
+  Every physical call is appended in order; only a
   revalidated and synchronously domain-validated terminal answer may commit
   READY. For an explicit session continuation, `session_continuation()` lends
   a transaction and `invoke()` stages READY/coverage/finalizer commitment until
@@ -1263,8 +1269,14 @@ every intermediate arrow. The current runtime graph is acyclic.
   the same immutable construction-time configuration to the bound runtime
   without exposing the backend's private storage; unexported package-internal
   `release_bound_agent(bound_agent)` requests exact binding retirement without
-  exposing or mutating backend collections. `BoundAgent.context_provider()` is
-  the synchronous package-internal contextual transport capability, with the
+  exposing or mutating backend collections. The named package-internal
+  `invoke_story_bound_agent(...)` seam carries an already-open call-local
+  provider workspace from StoryRuntime without cross-module private access.
+  Public direct Codex BoundAgent operations instead compose and close that
+  capability after request/reference validation; Antigravity retains its
+  established path without capability acquisition.
+  `BoundAgent.context_provider()` is the synchronous package-internal contextual
+  transport capability, with the
   original private spelling retained as a compatibility delegate. Its pure
   `decode_context_conversation_answer`, `decode_context_retrieval_answer`, and
   `decode_context_agent_answer` helpers reuse the backend's canonical domain
@@ -1297,7 +1309,7 @@ every intermediate arrow. The current runtime graph is acyclic.
   `conversation_retrieval`, `debug_log`, `errors`, `git.session_contracts`,
   `interactive_settings`,
   `models`, `provider_adapter`, `provider_auth_recovery`,
-  `provider_error_artifacts`, `provider_process`,
+  `provider_error_artifacts`, `provider_execution_workspace`, `provider_process`,
   `runtime_state_paths`,
   `session_lifecycle`, `session_recovery`,
   `session_recovery.transition_assessment`, `workspace`, and
@@ -1338,7 +1350,11 @@ every intermediate arrow. The current runtime graph is acyclic.
   already-entered call, and the final exit asks the selected adapter to release
   that exact binding once. Codex removes exact ephemeral staging idempotently;
   Antigravity retains provider-native definition state. Binding validation
-  failure removes provisional Codex staging before propagation.
+  failure removes provisional Codex staging before propagation. Codex calls
+  bind persisted legacy and contextual continuation fingerprints to the current
+  session-worktree generation and revalidate the borrowed capability after
+  provider submission and before thread persistence; no capability is retained
+  by the backend, BoundAgent, binding, or adapter generation.
   Backend close is terminal and idempotent: it retires all concrete bindings
   immediately, then defers access-claim release, in-memory thread-lock cleanup,
   and remaining adapter cleanup until no active binding can use them. One
@@ -1753,7 +1769,8 @@ every intermediate arrow. The current runtime graph is acyclic.
   retain no fabricated native output. Default event parsing and argv remain
   unchanged. Native login and any recovery decision belong to other owners.
 - **Direct internal dependencies:** `agent_context`, `agents`, `config`,
-  `errors`, `models`, `provider_adapter`, and `provider_process`.
+  `errors`, `models`, `provider_adapter`, `provider_execution_workspace`, and
+  `provider_process`.
 - **State, resources, and side effects:** Owns construction-time Codex
   executable/model/reasoning settings, isolated binding directories and their
   generated `AGENTS.md` files plus exact same-snapshot content-free component
@@ -1789,9 +1806,13 @@ every intermediate arrow. The current runtime graph is acyclic.
   source for command flags; the older private resolution path remains a
   compatibility fallback for direct adapter construction. Exact per-binding
   release removes only that binding's tracked ephemeral staging idempotently; close
-  removes any remaining tracked bindings. Binding and invocation read
-  allowlisted definition files, create and remove temporary files, and request
-  subprocess execution through `provider_process`; `close()` removes all
+  removes any remaining tracked bindings. Each invocation requires the exact
+  call-local provider workspace, embeds the staged `AGENTS.md` bytes in native
+  developer instructions without exposing the staging path to the child, and
+  requests descriptor-relative `--cd .` execution plus exact Codex resource
+  requirements from `provider_process`; no staging-directory or path-only
+  launch fallback remains. It creates and removes temporary schema/response
+  files; `close()` removes all
   retained binding directories idempotently. Optional `--model` and `--config
   model_reasoning_effort="LEVEL"` arguments retain their exact order after
   `exec` and before any resume marker. Importing performs no I/O.
@@ -1817,8 +1838,9 @@ every intermediate arrow. The current runtime graph is acyclic.
   provider/model/effort identity and authoritative source of every effective
   value. Frozen `ProviderBinding` carries an exact binding-component snapshot;
   `ProviderInvocation` retains compatibility mappings while hiding those
-  content-bearing mappings and canonical payload bytes from representation and
-  exposes prepared content-free accounting;
+  content-bearing mappings, canonical payload bytes, and its optional
+  call-local `ProviderExecutionWorkspace` from representation and value
+  equality, and exposes prepared content-free accounting;
   `ProviderResult` additively carries optional exact usage, transport-byte facts,
   and a repr-hidden `response_diagnostic` without changing value equality.
   Frozen slotted `ProviderResponseDiagnostic` validates exact stdout/stderr
@@ -1844,7 +1866,8 @@ every intermediate arrow. The current runtime graph is acyclic.
   enriches that same typed failure. The separately validated optional
   `timed_out` fact can coexist with authentication and conservatively veto its
   replay. This contract owns neither login nor replay.
-- **Direct internal dependencies:** `agent_context`, `errors`, and `models`.
+- **Direct internal dependencies:** `agent_context`, `errors`, `models`, and
+  `provider_execution_workspace`.
 - **State, resources, and side effects:** Owns no mutable module state or
   external resource. Construction creates only immutable mappings, canonical
   call-local bytes, content-free accounting, and optional immutable diagnostic
@@ -1906,18 +1929,51 @@ every intermediate arrow. The current runtime graph is acyclic.
   `docs/operations/privacy-and-provider.md#rejected-provider-response-artifacts`, and
   `docs/reference/configuration/session-storage.md#rejected-provider-response-storage`.
 
+### `story_writing_agents.provider_execution_workspace`
+
+- **Source:** `src/story_writing_agents/provider_execution_workspace.py`
+- **Responsibility:** Own one opaque call-local physical session-worktree
+  authority for provider execution.
+- **Supported surface:** No facade or project-root export. Package-internal
+  `ProviderExecutionWorkspace` exposes only content-free session/generation
+  identity, current-generation validation, continuation-digest derivation,
+  one duplicated launch descriptor, and idempotent close;
+  `mint_provider_execution_workspace(...)` is the token-gated package-private
+  mint used solely by `SessionArtifactBinding`.
+- **Direct internal dependencies:** `git.repository_lock` and
+  `git.session_resources`.
+- **State, resources, and side effects:** Each instance exclusively retains one
+  exact session-root descriptor and one public `GitSessionGenerationPin`, plus
+  immutable device/inode and generation provenance. It is creator-process and
+  non-recyclable-thread-token bound, immutable, noncopyable, nonserializable,
+  repr-opaque, and closes transferred resources exactly once without replacing
+  a primary failure. Currentness checks validate the descriptor, named root,
+  and Git generation; import performs no I/O or resource acquisition.
+- **Primary verification/documentation:** `tests/test_codex_backend.py`,
+  `tests/test_workspace_session_resources.py`,
+  `docs/reference/backend-and-sessions.md`, and
+  `docs/operations/filesystem-safety.md`.
+
 ### `story_writing_agents.provider_process`
 
 - **Source:** `src/story_writing_agents/provider_process.py`
 - **Responsibility:** Execute bounded asynchronous provider subprocesses.
 - **Supported surface:** No package-supported API. Package-internal immutable
-  process request/result values, value-free launch/timeout failures,
+  process request/result values, exact Darwin sandbox requirements,
+  value-free launch/timeout failures,
   `run_process`, and `stop_process` are consumed by provider adapters; the
   backend retains only a private compatibility delegate for process stopping.
-- **Direct internal dependencies:** None.
+- **Direct internal dependencies:** `provider_execution_workspace`.
 - **State, resources, and side effects:** `run_process` launches one child with
   piped stdin/stdout/stderr, drains both streams concurrently through
-  `communicate`, and enforces the supplied timeout. On timeout, cancellation,
+  `communicate`, and enforces the supplied timeout. A supplied provider
+  workspace transfers only a duplicated root descriptor to an isolated helper,
+  which selects the physical child cwd with `fchdir` before exact process exec;
+  the parent closes its duplicate after launch and validates authority before
+  spawn, after spawn, and after communication. On Darwin, this module compiles
+  provider-declared exact resource requirements into the shared default-deny
+  SBPL boundary and fails closed when that platform mechanism is unavailable.
+  On timeout, cancellation,
   or any other post-launch communication failure, it stops a still-running
   child by requesting termination, waiting up to two seconds, then killing and
   joining when necessary; completed children are not signaled. Optional cwd
@@ -7185,8 +7241,10 @@ every intermediate arrow. The current runtime graph is acyclic.
   same seam; candidate-only consensus retains its reference-free control-policy
   definition only when it has no binding. Configuration snapshots, runtime and
   backend overrides, provider-route generation, persona selection, and the
-  runtime policy overlay remain control-owned. This changes neither provider
-  CWD nor provider project-root selection.
+  runtime policy overlay remain control-owned. After concrete binding, only
+  Codex consensus, collaboration, and Lead calls borrow a call-local execution
+  workspace and pass it through the named backend/context seams; Antigravity
+  receives `None` and retains its established CWD and project-root behavior.
 - **Direct internal dependencies:** `agent_context.accounting`,
   `agent_context.continuation`, `agent_context.manifest`, `agent_context.planning`, `agent_context.service`,
   `agent_context.progress`, `agent_context.sources`, `agents`, `artifact_proposals`, `backend`, `config`,
@@ -7196,7 +7254,8 @@ every intermediate arrow. The current runtime graph is acyclic.
   `git.story_commit_contracts`, `git.story_commits`,
   `conversation_rag_runtime`, `conversation_storage.composition`,
   `conversation_storage.contracts`, `debug_log`, `directives`, `errors`,
-  `models`, `prompts`, `specialist_routing`, `workspace`, `workspace.core`,
+  `models`, `prompts`, `provider_execution_workspace`, `specialist_routing`,
+  `workspace`, `workspace.core`,
   `workspace.initialization`,
   `writing_artifacts`, `writing_artifacts.catalog`, `writing_artifacts.repository`, and
   `writing_artifacts.runtime_references`.
@@ -7968,7 +8027,8 @@ every intermediate arrow. The current runtime graph is acyclic.
   `errors.SessionArtifactGuardFailure` marker plus `RuntimeError`.
 - **Direct internal dependencies:** `agent_exchange_paths`, `config`, `errors`, the public `git` facade,
   `git.repository_lock`, `git.session_checkpoints`, `git.session_contracts`, `git.session_history`,
-  `git.session_resources`, `git.story_commits`, `runtime_state_paths`,
+  `git.session_resources`, `git.story_commits`, `provider_execution_workspace`,
+  `runtime_state_paths`,
   `writing_artifacts.repository`, and
   `workspace._policy_baselines`/`workspace.schema`.
 - **State, resources, and side effects:** Classifies absent, empty,
@@ -8058,7 +8118,12 @@ every intermediate arrow. The current runtime graph is acyclic.
   generation revalidation through another short identity lock; it is
   nonserializable, exposes no descriptor or traversal authority, and is absent
   from every facade and the module's empty `__all__`. The binding and wrapper
-  pin retain the creator process and non-recyclable thread token, reject
+  pin also remain the sole production minting boundary for a call-local
+  `ProviderExecutionWorkspace`: `open_provider_execution_workspace()` acquires
+  a fresh Git generation pin, opens and identity-checks the exact session root,
+  transfers both resources to the opaque capability, and closes them at context
+  exit without retaining a Git repository lease across provider work. The
+  binding and wrapper pin retain the creator process and non-recyclable thread token, reject
   cross-process or cross-thread acquisition/recheck before any copied lock or
   lower-level I/O, and close a fork child's copied pin without entering an
   inherited lock. This continuity check

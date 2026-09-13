@@ -251,10 +251,14 @@ definitions, sources, or provider work. It retains the exact control-root,
 common-Git, worktree-administration, session-worktree, `.git`, and `commondir`
 relationship through durable result publication, then rechecks and closes.
 This pin can span the provider await because it retains no Git lease and grants
-no traversal, content, mutation, or semantic READY authority. It does not set
-or confine the provider's working directory or project root; that separate
-story-runtime boundary remains tracked by
-[Issue #670](https://github.com/Kims-DeveloperGroup/story-writing-agents/issues/670).
+no traversal, content, mutation, or semantic READY authority. The pin itself
+does not set a process working directory. For each Codex story call, the same
+session binding separately mints an opaque call-local capability that selects
+the retained session-root descriptor as OS working directory and native
+project root `--cd .`. See the
+[Codex session execution boundary](../reference/backend-and-sessions.md#codex-session-execution-boundary).
+Antigravity adoption remains
+[Issue #706](https://github.com/Kims-DeveloperGroup/story-writing-agents/issues/706).
 
 The session-source reader accepts only canonical relative POSIX paths. It
 traverses without following symlinks, retains the complete root-to-parent

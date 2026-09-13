@@ -127,10 +127,14 @@ content-free exception type, never its message or payload.
 Lead and collaboration pin finalization is primary-aware: it preserves an
 active failure and cannot skip the remaining bound-agent or sibling cleanup.
 
-This continuity mechanism does not set or confine a story-runtime provider's
-working directory or project root. That separate execution boundary remains
-tracked by
-[Issue #670](https://github.com/Kims-DeveloperGroup/story-writing-agents/issues/670).
+The continuity pin alone grants no process working-directory authority. For
+each Codex story invocation, the same `SessionArtifactBinding` separately mints
+an opaque call-local execution capability: the provider enters the retained
+session-root descriptor and receives native project root `--cd .` under the
+fail-closed Darwin boundary. See the
+[Codex session execution boundary](backend-and-sessions.md#codex-session-execution-boundary).
+Antigravity adoption remains
+[Issue #706](https://github.com/Kims-DeveloperGroup/story-writing-agents/issues/706).
 
 This covers explicit and contextual references, source status and
 fingerprints, proposal and review
@@ -356,11 +360,12 @@ input retains the normal provider-read reference authorization and digest
 revalidation. Artifact-backed consensus therefore binds the exact physical
 session worktree, reconciles only cleanup owned by that identity, and builds
 the agent definition from its guarded policy bytes. Candidate-only consensus
-with no same-process pending reference cleanup remains worktree-free and uses
-the control-owned definition. If such cleanup is pending, it first binds the
-current worktree and reconciles only identity-matching ownership; its definition
-then uses that binding's session policy. Durable events contain handles/digests
-rather than file bytes.
+with no same-process pending reference cleanup performs no artifact/reference
+worktree read and uses the control-owned definition. Each Codex provider call
+still opens the exact session binding for its call-local execution capability.
+If cleanup is pending, that binding also reconciles only identity-matching
+ownership; its definition then uses the binding's session policy. Durable
+events contain handles/digests rather than file bytes.
 See [Consensus runs](../guides/consensus-runs.md) for examples and user-visible
 state meanings, and [Consensus design](../design/consensus-workflow.md) for the
 event/authority mechanism.

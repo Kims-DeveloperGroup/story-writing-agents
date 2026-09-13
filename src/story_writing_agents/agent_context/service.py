@@ -19,6 +19,7 @@ from typing import AsyncContextManager, Protocol, cast, runtime_checkable
 
 from ..errors import ProviderAuthenticationRequiredError
 from ..provider_auth_recovery import authentication_replay, request_authentication
+from ..provider_execution_workspace import ProviderExecutionWorkspace
 from ..workspace import Workspace
 from ..conversations.session_context import (
     MAX_SESSION_CONTEXT_UTF8_BYTES,
@@ -1228,6 +1229,11 @@ class ContextInvocationRequest:
     physical_call_limit: int | None = None
     include_core_statuses: bool = False
     session_state_json: str | None = field(default=None, repr=False)
+    execution_workspace: ProviderExecutionWorkspace | None = field(
+        default=None,
+        repr=False,
+        compare=False,
+    )
 
     def __post_init__(self) -> None:
         _safe_identity(self.session_id)
@@ -1315,6 +1321,11 @@ class ContextInvocationRequest:
                 _canonical_bytes(state)
             except (TypeError, ValueError):
                 raise _execution_error(ContextExecutionErrorCode.INVALID_VALUE) from None
+        if self.execution_workspace is not None and (
+            type(self.execution_workspace) is not ProviderExecutionWorkspace
+            or self.execution_workspace.session_id != self.session_id
+        ):
+            raise _execution_error(ContextExecutionErrorCode.INVALID_VALUE)
 
 
 class ContextContinuationRejection(StrEnum):
@@ -1492,6 +1503,11 @@ class ContextProviderCallRequest:
     mandatory_reference_paths: tuple[JsonPath, ...] = ()
     expected_thread_id: str | None = None
     continuation_identity: ContextContinuationIdentity | None = None
+    execution_workspace: ProviderExecutionWorkspace | None = field(
+        default=None,
+        repr=False,
+        compare=False,
+    )
 
     def __post_init__(self) -> None:
         if type(self.scope) is not ContextScope:
@@ -1519,6 +1535,11 @@ class ContextProviderCallRequest:
             raise _execution_error(ContextExecutionErrorCode.INVALID_VALUE)
         if self.expected_thread_id is not None:
             _safe_identity(self.expected_thread_id)
+        if self.execution_workspace is not None and (
+            type(self.execution_workspace) is not ProviderExecutionWorkspace
+            or self.execution_workspace.session_id != self.scope.session_id
+        ):
+            raise _execution_error(ContextExecutionErrorCode.INVALID_VALUE)
         object.__setattr__(self, "schema", MappingProxyType(dict(self.schema)))
         object.__setattr__(self, "payload", MappingProxyType(dict(self.payload)))
         object.__setattr__(
@@ -1559,6 +1580,11 @@ class ContextReferencePreludeRequest:
     reference_operation_id: str
     expected_thread_id: str | None
     continuation_identity: ContextContinuationIdentity | None = None
+    execution_workspace: ProviderExecutionWorkspace | None = field(
+        default=None,
+        repr=False,
+        compare=False,
+    )
 
     def __post_init__(self) -> None:
         if type(self.scope) is not ContextScope:
@@ -1573,6 +1599,11 @@ class ContextReferencePreludeRequest:
         _safe_identity(self.reference_operation_id)
         if self.expected_thread_id is not None:
             _safe_identity(self.expected_thread_id)
+        if self.execution_workspace is not None and (
+            type(self.execution_workspace) is not ProviderExecutionWorkspace
+            or self.execution_workspace.session_id != self.scope.session_id
+        ):
+            raise _execution_error(ContextExecutionErrorCode.INVALID_VALUE)
 
 
 @dataclass(frozen=True, slots=True)
@@ -1612,6 +1643,7 @@ class ContextProvider(Protocol):
         policy_fingerprint: str,
         *,
         continuation_identity: ContextContinuationIdentity | None = None,
+        execution_workspace: ProviderExecutionWorkspace | None = None,
     ) -> AsyncContextManager[None]:
         """Retain the provider binding for one complete contextual lifecycle."""
 
@@ -1619,6 +1651,8 @@ class ContextProvider(Protocol):
         self,
         scope: ContextScope,
         policy_fingerprint: str,
+        *,
+        execution_workspace: ProviderExecutionWorkspace | None = None,
     ) -> str | None:
         """Return one usable exact scoped continuation, if present."""
 
@@ -1655,6 +1689,8 @@ class ContextProvider(Protocol):
         self,
         scope: ContextScope,
         policy_fingerprint: str,
+        *,
+        execution_workspace: ProviderExecutionWorkspace | None = None,
     ) -> None:
         """Best-effort mark the exact scoped native continuation unusable."""
 
@@ -4229,6 +4265,8 @@ class AgentContextService:
             raise _execution_error(ContextExecutionErrorCode.INVALID_VALUE)
         if type(request) is not ContextInvocationRequest:
             raise _execution_error(ContextExecutionErrorCode.INVALID_VALUE)
+        if request.execution_workspace is not None:
+            request.execution_workspace.require_current()
         physical_call_limit = (
             self._action_policy.max_provider_calls
             if request.physical_call_limit is None
@@ -4274,13 +4312,31 @@ class AgentContextService:
             raise _execution_error(ContextExecutionErrorCode.INVALID_VALUE)
         lock = self._lock_for(scope, provider_id, definition_fingerprint)
         policy_fingerprint = self._execution_policy_fingerprint
-        context_manager = (
-            provider.invocation(scope, policy_fingerprint)
-            if continuation is None else provider.invocation(
-                scope, policy_fingerprint,
-                continuation_identity=continuation.identity,
+        if request.execution_workspace is None:
+            context_manager = (
+                provider.invocation(scope, policy_fingerprint)
+                if continuation is None
+                else provider.invocation(
+                    scope,
+                    policy_fingerprint,
+                    continuation_identity=continuation.identity,
+                )
             )
-        )
+        else:
+            context_manager = (
+                provider.invocation(
+                    scope,
+                    policy_fingerprint,
+                    execution_workspace=request.execution_workspace,
+                )
+                if continuation is None
+                else provider.invocation(
+                    scope,
+                    policy_fingerprint,
+                    continuation_identity=continuation.identity,
+                    execution_workspace=request.execution_workspace,
+                )
+            )
         if not hasattr(context_manager, "__aenter__") or not hasattr(
             context_manager,
             "__aexit__",
@@ -4299,8 +4355,23 @@ class AgentContextService:
                         # Invalidate first: a crash during native retirement must
                         # still force the next owner to bootstrap, never resume.
                         self._ledger.invalidate(key, expected_generation=inspection.generation)
-                        provider.taint_context_thread(scope, policy_fingerprint)
-                        if provider.inspect_context_thread(scope, policy_fingerprint) is not None:
+                        if request.execution_workspace is None:
+                            provider.taint_context_thread(scope, policy_fingerprint)
+                            remaining_thread = provider.inspect_context_thread(
+                                scope, policy_fingerprint
+                            )
+                        else:
+                            provider.taint_context_thread(
+                                scope,
+                                policy_fingerprint,
+                                execution_workspace=request.execution_workspace,
+                            )
+                            remaining_thread = provider.inspect_context_thread(
+                                scope,
+                                policy_fingerprint,
+                                execution_workspace=request.execution_workspace,
+                            )
+                        if remaining_thread is not None:
                             raise _execution_error(ContextExecutionErrorCode.PROVIDER_CONTRACT)
                 return await self._invoke_locked(
                     request,
@@ -4346,6 +4417,27 @@ class AgentContextService:
         publication_validator: Callable[[], bool] | None,
     ) -> ContextInvocationResult:
         policy_fingerprint = self._execution_policy_fingerprint
+        operation_id = request.operation_id
+
+        def inspect_provider_thread() -> str | None:
+            if request.execution_workspace is None:
+                return provider.inspect_context_thread(scope, policy_fingerprint)
+            return provider.inspect_context_thread(
+                scope,
+                policy_fingerprint,
+                execution_workspace=request.execution_workspace,
+            )
+
+        def taint_provider_thread() -> None:
+            if request.execution_workspace is None:
+                provider.taint_context_thread(scope, policy_fingerprint)
+                return
+            provider.taint_context_thread(
+                scope,
+                policy_fingerprint,
+                execution_workspace=request.execution_workspace,
+            )
+
         checkpoint_scope = (
             scope if continuation is None else continuation.identity.checkpoint_scope()
         )
@@ -4376,7 +4468,7 @@ class AgentContextService:
             return ContextExecutionEvent(
                 kind,
                 scope,
-                request.operation_id,
+                operation_id,
                 phase=phase,
                 round_number=round_number,
                 **facts,
@@ -4390,7 +4482,7 @@ class AgentContextService:
             return ContextActionProgressEvent(
                 kind=kind,
                 agent_id=scope.agent_id,
-                operation_id=request.operation_id,
+                operation_id=operation_id,
                 action_index=action_index,
                 **facts,
             )
@@ -4425,10 +4517,7 @@ class AgentContextService:
                 else ()
             )
             stage = "preflight"
-            active_thread_id = provider.inspect_context_thread(
-                scope,
-                policy_fingerprint,
-            )
+            active_thread_id = inspect_provider_thread()
             if active_thread_id is not None:
                 _safe_identity(active_thread_id)
             execution_conditions = ContextPlanningConditions(
@@ -4551,11 +4640,8 @@ class AgentContextService:
                 retired_thread_id = active_thread_id
                 if retired_thread_id is not None:
                     stage = "thread_reset"
-                    provider.taint_context_thread(scope, policy_fingerprint)
-                    remaining_thread = provider.inspect_context_thread(
-                        scope,
-                        policy_fingerprint,
-                    )
+                    taint_provider_thread()
+                    remaining_thread = inspect_provider_thread()
                     if remaining_thread is not None:
                         raise _execution_error(
                             ContextExecutionErrorCode.PROVIDER_CONTRACT
@@ -4650,6 +4736,7 @@ class AgentContextService:
                     f"{attempt_id}_call_{len(calls) + 1}",
                     request.reference_operation_id, current_thread_id,
                     None if continuation is None else continuation.identity,
+                    request.execution_workspace,
                 )
                 for auth_attempt in range(2):
                     call_id = prelude_request.call_id
@@ -4863,6 +4950,7 @@ class AgentContextService:
                     continuation_identity=(
                         None if continuation is None else continuation.identity
                     ),
+                    execution_workspace=request.execution_workspace,
                 )
                 if continuation is not None and (
                     len(_canonical_bytes(payload)) > MAX_SESSION_CONTEXT_UTF8_BYTES
@@ -4958,6 +5046,8 @@ class AgentContextService:
                     call_id,
                     result.accounting,
                 )
+                if request.execution_workspace is not None:
+                    request.execution_workspace.require_current()
                 if result.accounting.payload.call_kind is not call_kind:
                     finalizer = call_finalizer
                     call_finalizer = None
@@ -5154,6 +5244,8 @@ class AgentContextService:
                     finalizer = call_finalizer
                     call_finalizer = None
                     if finalizer is not None:
+                        if request.execution_workspace is not None:
+                            request.execution_workspace.require_current()
                         _accept_provider_call_without_replacing(finalizer)
                     continue
                 if type(action) is ContextReadAction:
@@ -5221,6 +5313,8 @@ class AgentContextService:
                     finalizer = call_finalizer
                     call_finalizer = None
                     if finalizer is not None:
+                        if request.execution_workspace is not None:
+                            request.execution_workspace.require_current()
                         _accept_provider_call_without_replacing(finalizer)
                     continue
 
@@ -5257,8 +5351,12 @@ class AgentContextService:
                 )
                 if request.mandatory_references:
                     stage = "reference_complete"
+                    if request.execution_workspace is not None:
+                        request.execution_workspace.require_current()
                     provider.complete_references(scope, policy_fingerprint)
                 stage = "commit"
+                if request.execution_workspace is not None:
+                    request.execution_workspace.require_current()
                 assert current_thread_id is not None
                 assert terminal_call_id is not None
                 commit_authorization = ContextLedgerCommitAuthorization(
@@ -5315,6 +5413,8 @@ class AgentContextService:
                         ))
 
                     continuation.stage(commit_published, abort_unpublished, publication_validator)
+                    if request.execution_workspace is not None:
+                        request.execution_workspace.require_current()
                     return ContextInvocationResult(
                         action.answer, authorization, projection.accounting,
                         current_thread_id, tuple(calls), generation,
@@ -5324,6 +5424,8 @@ class AgentContextService:
                     key, expected_generation=generation,
                     authorization=commit_authorization,
                 )
+                if request.execution_workspace is not None:
+                    request.execution_workspace.require_current()
                 terminal_provider_succeeded = False
                 checkpoint_committed = True
                 finalizer = call_finalizer
@@ -5447,7 +5549,7 @@ class AgentContextService:
             )
             if should_taint:
                 try:
-                    provider.taint_context_thread(scope, policy_fingerprint)
+                    taint_provider_thread()
                 except BaseException:
                     pass
                 _emit_context_event_without_replacing(

@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import json
 import math
+import os
 import re
 import shutil
 import tempfile
@@ -35,6 +36,7 @@ from .provider_adapter import (
 )
 from .provider_process import (
     CreateProcess,
+    DarwinSandboxRequirements,
     ProcessExecutableNotFound,
     ProcessRequest,
     ProcessStartFailed,
@@ -42,6 +44,7 @@ from .provider_process import (
     WaitFor,
     run_process,
 )
+from .provider_execution_workspace import ProviderExecutionWorkspace
 
 
 _SAFE_THREAD_ID = re.compile(r"[A-Za-z0-9][A-Za-z0-9_-]{0,127}")
@@ -303,6 +306,17 @@ class CodexAdapter:
     ) -> ProviderResult:
         """Run one Codex structured turn and validate its thread envelope."""
 
+        execution_workspace = invocation.execution_workspace
+        if (
+            type(execution_workspace) is not ProviderExecutionWorkspace
+            or execution_workspace.session_id != invocation.session_id
+        ):
+            raise ProviderInvocationError(
+                "Codex execution workspace is unavailable",
+                taint_existing_thread=False,
+            )
+        execution_workspace.require_current()
+
         temporary_directory = Path(
             self._make_temporary_directory()(prefix="story-codex-output-")
         )
@@ -322,12 +336,13 @@ class CodexAdapter:
                     taint_existing_thread=False,
                 ) from None
             schema_path.write_bytes(schema_json)
-            command = self.command(
+            command, darwin_sandbox = self._confined_command(
                 binding.staging_directory,
                 schema_path,
                 output_path,
                 invocation.thread_id,
                 binding.definition.agent_id,
+                execution_workspace,
             )
             stdin = invocation.payload_json
             submitted = False
@@ -348,6 +363,8 @@ class CodexAdapter:
                         command=command,
                         stdin=stdin,
                         timeout_seconds=self.timeout_seconds,
+                        execution_workspace=execution_workspace,
+                        darwin_sandbox=darwin_sandbox,
                     ),
                     create_process=tracked_create_process,
                     wait_for=self._wait_for(),
@@ -440,6 +457,7 @@ class CodexAdapter:
                             taint_existing_thread=False,
                         )
                 try:
+                    execution_workspace.require_current()
                     response_text = output_path.read_text(encoding="utf-8")
                 except OSError as exc:
                     raise ProviderInvocationError(
@@ -451,12 +469,14 @@ class CodexAdapter:
                         "Codex CLI returned malformed structured output",
                         taint_existing_thread=True,
                     ) from exc
-                return ProviderResult(
+                provider_result = ProviderResult(
                     thread_id=thread_id,
                     response_text=response_text,
                     usage=self.provider_usage(events),
                     actual_transport_utf8_bytes=len(stdin),
                 )
+                execution_workspace.require_current()
+                return provider_result
             except BaseException as exc:
                 if isinstance(exc, ProviderInvocationError):
                     exc.record_response_diagnostic(response_diagnostic)
@@ -468,6 +488,109 @@ class CodexAdapter:
                 raise
         finally:
             shutil.rmtree(temporary_directory, ignore_errors=True)
+
+    def _confined_command(
+        self,
+        staging_directory: Path,
+        schema_path: Path,
+        output_path: Path,
+        thread_id: str | None,
+        agent_id: str | None,
+        execution_workspace: ProviderExecutionWorkspace,
+    ) -> tuple[list[str], DarwinSandboxRequirements]:
+        """Build a native Codex command and its exact process requirements."""
+
+        execution_workspace.require_current()
+        resolved_executable = self._which()(self.executable)
+        if resolved_executable is None:
+            raise ProviderInvocationError(
+                f"Codex CLI executable was not found: {self.executable}",
+                taint_existing_thread=False,
+            )
+        executable = Path(os.path.realpath(resolved_executable))
+        staging = Path(os.path.realpath(staging_directory))
+        schema = Path(os.path.realpath(schema_path))
+        output = Path(os.path.realpath(output_path))
+        native_state = Path(
+            os.path.realpath(
+                os.environ.get("CODEX_HOME", os.fspath(Path.home() / ".codex"))
+            )
+        )
+        session_root = Path(os.path.realpath(execution_workspace.worktree_root))
+        definition_path = staging / "AGENTS.md"
+        try:
+            developer_instructions = definition_path.read_text(
+                encoding="utf-8",
+                errors="strict",
+            )
+        except (OSError, UnicodeError) as exc:
+            raise ProviderInvocationError(
+                "Codex bound instructions are unavailable",
+                taint_existing_thread=False,
+            ) from exc
+        sandbox = DarwinSandboxRequirements(
+            executable=executable,
+            read_subpaths=(executable.parent, session_root),
+            read_paths=(schema,),
+            write_subpaths=(native_state,),
+            write_paths=(output,),
+            deny_subpaths=(session_root / ".git", staging),
+            deny_write_subpaths=(session_root,),
+            network=True,
+        )
+        command = [
+            os.fspath(executable),
+            "--ask-for-approval",
+            "never",
+            "--sandbox",
+            "read-only",
+            "--cd",
+            ".",
+            "exec",
+        ]
+        model, reasoning_effort = self.invocation_settings(agent_id)
+        if model is not None:
+            command.extend(["--model", model])
+        if reasoning_effort is not None:
+            command.extend(
+                ["--config", f'model_reasoning_effort="{reasoning_effort}"']
+            )
+        if thread_id is not None:
+            command.append("resume")
+        command.extend(
+            [
+                "--json",
+                "--skip-git-repo-check",
+                "--ignore-user-config",
+                "--ignore-rules",
+                "--disable",
+                "apps",
+                "--disable",
+                "multi_agent",
+                "--disable",
+                "shell_tool",
+                "--disable",
+                "web_search",
+                "--config",
+                'web_search="disabled"',
+                "--config",
+                "project_root_markers=[]",
+                "--config",
+                "developer_instructions=" + json.dumps(
+                    developer_instructions,
+                    ensure_ascii=False,
+                ),
+                "--output-schema",
+                os.fspath(schema),
+                "--output-last-message",
+                os.fspath(output),
+            ]
+        )
+        if thread_id is not None:
+            command.append(thread_id)
+        command.append("-")
+        execution_workspace.require_current()
+        return command, sandbox
 
     def command(
         self,

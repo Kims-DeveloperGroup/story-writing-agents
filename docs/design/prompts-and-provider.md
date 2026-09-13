@@ -201,10 +201,11 @@ are preserved. Artifact-sensitive Lead, specialist, and consensus composition
 captures those canonical ordered policy bytes through the exact guarded session
 worktree. Configuration, runtime overrides, backend/route choice, and persona
 remain control-workspace authorities. Candidate-only consensus without pending
-same-process reference cleanup remains worktree-free and uses the control-owned
-definition; an artifact input or pending cleanup establishes a binding and uses
-its session policy. Updating the runtime policy invalidates incompatible
-bindings.
+same-process reference cleanup may still use the control-owned definition, but
+every Codex physical call nevertheless obtains its exact session execution
+capability. An artifact input or pending cleanup additionally establishes the
+session binding used for policy composition. Updating the runtime policy or
+changing the Codex session generation invalidates incompatible continuations.
 This does not make modified main-root policies admissible. Journal-free
 workspace readiness recognizes only the complete current policy set or one of
 three exact published v2 sets (pre-routing `68a0782`, contextual-objective
@@ -465,19 +466,32 @@ and [privacy boundary](../operations/privacy-and-provider.md#agent-exchange-priv
 
 ## Provider process boundaries
 
-The backend launches a constrained Codex subprocess from isolated staging.
-Verified stable context reaches its temporary top-level `AGENTS.md`; request
-JSON reaches standard input. The exact per-call schema is passed by
+The backend stages verified stable Codex instructions outside story Git, reads
+that immutable snapshot before launch, and supplies it through native developer
+instructions. It does not use staging as the project. Each story call carries
+an opaque call-local capability minted only by the exact READY
+`SessionArtifactBinding`; a fixed exec helper selects the retained session-root
+descriptor as the child OS working directory, closes the transferred
+descriptor, and launches Codex with native project root `--cd .`. Request JSON
+reaches standard input. The exact per-call schema is passed by
 `--output-schema <schema-file>` and the structured last message becomes the
-provider-neutral result. OpenAI Structured Outputs requires a supported root
-object schema, required fields, closed objects, and explicitly typed array
-items; Story generates those constraints for every nested action/result node.
+provider-neutral result in a separate exact external output path. Neither
+instructions nor output are written to the session worktree. OpenAI Structured
+Outputs requires a supported root object schema, required fields, closed
+objects, and explicitly typed array items; Story generates those constraints
+for every nested action/result node.
 See the official
 [Structured Outputs guide](https://developers.openai.com/api/docs/guides/structured-outputs).
 Replies still pass Story's correlation, handle, evidence, semantic, and phase
 checks.
-The exact sandbox, approval, tool, configuration, and instruction controls live
-in [Privacy and provider exposure](../operations/privacy-and-provider.md).
+On Darwin, a default-deny outer sandbox admits the exact runtime, transport,
+native-state, session-read, and network resources while denying session writes,
+session `.git`, staging, the control/initialization roots, siblings, traversal,
+and symlink escapes. Generation checks bracket process creation, return, and
+acceptance; post-submission loss rejects the result and taints the compatible
+continuation. The exact sandbox, approval, tool, configuration, and instruction
+controls live in
+[Privacy and provider exposure](../operations/privacy-and-provider.md#provider-processes-and-credentials).
 
 The Antigravity adapter binds the same verified definition and request models
 to an isolated session/agent/fingerprint provider root. It installs the bound

@@ -164,7 +164,9 @@ class _LeadContextProvider:
     async def invocation(
         self, scope: object, policy_fingerprint: str, *,
         continuation_identity: object | None = None,
+        execution_workspace: object | None = None,
     ):
+        self.backend.execution_workspaces.append(execution_workspace)
         self._active = (scope, policy_fingerprint)
         self._continuation_identity = continuation_identity
         try:
@@ -184,7 +186,10 @@ class _LeadContextProvider:
         self,
         scope: object,
         policy_fingerprint: str,
+        *,
+        execution_workspace: object | None = None,
     ) -> str | None:
+        del execution_workspace
         self._require_active(scope, policy_fingerprint)
         return self._threads.get(self._thread_key(scope, policy_fingerprint))
 
@@ -339,7 +344,14 @@ class _LeadContextProvider:
         self.reference_read.terminate(code)
         self._reference_terminal = True
 
-    def taint_context_thread(self, scope: object, policy_fingerprint: str) -> None:
+    def taint_context_thread(
+        self,
+        scope: object,
+        policy_fingerprint: str,
+        *,
+        execution_workspace: object | None = None,
+    ) -> None:
+        del execution_workspace
         thread_id = self._threads.pop(self._thread_key(scope, policy_fingerprint), None)
         if thread_id is not None:
             self.backend.tainted_thread_ids.append(thread_id)
@@ -349,6 +361,7 @@ class _LeadBoundAgent:
     def __init__(self, backend: "_LeadBackend", definition: object) -> None:
         self.backend = backend
         self.definition = definition
+        self.vendor = backend.vendor
 
     def context_provider(self, reference_read: object | None) -> _LeadContextProvider:
         agent_id = self.definition.agent_id
@@ -380,7 +393,9 @@ class _LeadBackend:
         *,
         bind_failure: BaseException | None = None,
         persist_context_threads: bool = False,
+        vendor: str = "antigravity",
     ) -> None:
+        self.vendor = vendor
         self.bind_failure = bind_failure
         self.scripts: list[tuple[_Response | _SubmittedFailure, ...]] = []
         self.scripts_by_agent: dict[
@@ -398,6 +413,7 @@ class _LeadBackend:
             {} if persist_context_threads else None
         )
         self.tainted_thread_ids: list[str] = []
+        self.execution_workspaces: list[object | None] = []
 
     def enqueue(self, *responses: _Response | _SubmittedFailure) -> None:
         self.scripts.append(tuple(responses))

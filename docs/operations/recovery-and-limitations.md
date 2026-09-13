@@ -340,9 +340,11 @@ and is not shipped behavior here. Direct recovery-topology validation now
 normalizes a delegated session-resource failure to the history-owned
 `recovery_required` / `operator_recovery` contract, without mutation or an
 exposed lower-layer exception chain.
-Issue #661 does not confine the provider working directory or project root;
-that separate boundary remains tracked by
-[Issue #670](https://github.com/Kims-DeveloperGroup/story-writing-agents/issues/670).
+The same session binding now mints the call-local Codex execution-worktree
+capability described in
+[Codex execution-worktree recovery](#codex-execution-worktree-recovery).
+Antigravity adoption remains separately tracked by
+[Issue #706](https://github.com/Kims-DeveloperGroup/story-writing-agents/issues/706).
 
 Resource loss during local closure does not replay known provider work. A
 completed artifact-review result that cannot be finalized against its bound
@@ -1600,10 +1602,12 @@ transient owner, and does not include its operation ID in the replacement root's
 live-owner exclusion set. Terminal success or failure, reconciled completion,
 stale-owner abandonment, and every unretained preparation path each close the
 pin exactly once. The original durable history remains
-unchanged. A candidate-only consensus call enters this boundary only for known
-same-process pending cleanup and otherwise stays worktree-free. After restart,
-the next artifact-sensitive boundary inventories durable histories and
-reconciles unowned nonterminal operations. It terminates every unfinished
+unchanged. A candidate-only consensus call enters this reference-cleanup
+boundary only for known same-process pending cleanup and otherwise performs no
+artifact/reference worktree read. It still opens the exact session execution
+capability for each Codex provider call. After restart, the next artifact-
+sensitive boundary inventories durable histories and reconciles unowned
+nonterminal operations. It terminates every unfinished
 invocation before the operation, is idempotent after interruption, and leaves
 already terminal evidence unchanged. A restart candidate-only consensus call
 does not scan the worktree, so an orphan waits for an artifact-sensitive
@@ -1671,6 +1675,41 @@ reference history and the Lead attempt allows `retry_lead_turn`, including
 after reference content was delivered. The failure and open authoring
 objective remain durable. A new turn creates a new reference operation;
 uncertain cleanup or corrupt accounting keeps the existing recovery block.
+
+<a id="codex-execution-worktree-recovery"></a>
+
+## Codex execution-worktree recovery
+
+Every Codex story call binds its provider continuation to a domain-separated
+digest of the exact session physical generation. If the named worktree is
+missing, replaced, symlinked, or otherwise no longer matches before launch,
+the call fails without a provider process and without falling back to the
+control root, current directory, staging, or another session. Restore or
+reopen the exact READY session resources, then submit fresh authorized work;
+the runtime does not replay the failed call automatically.
+
+A valid replacement generation at the same pathname is intentionally
+incompatible with prior Codex continuation state. The next safe authorized
+call bootstraps a fresh provider thread while retaining the old content-free
+record for history. It does not relabel the old checkpoint or treat path
+equality as generation equality.
+
+If generation authority is lost after process submission, or after a response
+returns but before acceptance/publication, the binding failure outranks the
+apparent provider result. The call retains submitted accounting where known,
+does not durably accept the response, and best-effort taints the exact existing
+continuation so later work cannot assume it is clean. An explicit retry needs
+new top-level authority and, for references, a new operation, capture,
+coordinator, and capability. Never infer non-execution from a missing accepted
+result.
+
+Darwin sandbox unavailability, an unsupported host, or invalid canonical
+resources fails before submission and has no unconfined fallback. Apple's
+underlying `sandbox-exec` facility is deprecated, so deployment checks must
+treat its absence as loss of Codex story-call capability. Authentication,
+catalog, help, and other management probes are outside this story boundary.
+Antigravity recovery remains unchanged until
+[Issue #706](https://github.com/Kims-DeveloperGroup/story-writing-agents/issues/706).
 
 ## Controller cancellation proof
 
