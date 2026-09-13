@@ -6671,6 +6671,10 @@ class InteractiveController:
                 raise ConversationCatalogProtocolFailure(
                     "archived conversation metadata is not archived"
                 )
+            self._runtime.retire_archived_conversation(
+                session_id,
+                target.conversation_id,
+            )
         except Exception as exc:
             self._present_conversation_failure(exc)
             return
@@ -6753,6 +6757,14 @@ class InteractiveController:
             return False
 
         self._focused_conversation = successor
+        try:
+            self._runtime.retire_archived_conversation(
+                session_id,
+                target.conversation_id,
+            )
+        except Exception as exc:
+            self._present_conversation_failure(exc)
+            return False
         status = f"Archived {target_handle} | Subject: {archived.subject}"
         if successor is None:
             status += "; current focus is none."

@@ -11345,7 +11345,16 @@ class ControllerConversationCommandTests(ControllerTestCase):
                         selected_id=selected.conversation_id,
                     )
                 )
-                self.assertEqual(controller.run_session_lobby(), 0)
+                with mock.patch.object(
+                    controller._runtime,
+                    "retire_archived_conversation",
+                    wraps=controller._runtime.retire_archived_conversation,
+                ) as retire:
+                    self.assertEqual(controller.run_session_lobby(), 0)
+                retire.assert_called_once_with(
+                    "session",
+                    selected.conversation_id,
+                )
                 self.assertIs(
                     catalog.entries[0].status,
                     ConversationStatus.ARCHIVED,
@@ -11383,7 +11392,13 @@ class ControllerConversationCommandTests(ControllerTestCase):
             selected_id=selected.conversation_id,
         )
         archived_before = archived.to_dict()
-        self.assertEqual(controller.run_session_lobby(), 0)
+        with mock.patch.object(
+            controller._runtime,
+            "retire_archived_conversation",
+            wraps=controller._runtime.retire_archived_conversation,
+        ) as retire:
+            self.assertEqual(controller.run_session_lobby(), 0)
+        retire.assert_called_once_with("session", other.conversation_id)
         self.assertEqual(catalog.entries[2].to_dict(), archived_before)
         self.assertIs(catalog.entries[1].status, ConversationStatus.ARCHIVED)
         self.assertEqual(
@@ -12163,8 +12178,13 @@ class ControllerConversationCommandTests(ControllerTestCase):
             controller_core_module,
             "save_default_conversation",
             side_effect=OSError("selection-secret"),
-        ):
+        ), mock.patch.object(
+            controller._runtime,
+            "retire_archived_conversation",
+            wraps=controller._runtime.retire_archived_conversation,
+        ) as retire:
             self.assertEqual(controller.run_session_lobby(), 0)
+        retire.assert_not_called()
         self.assertIs(catalog.entries[0].status, ConversationStatus.ACTIVE)
         self.assertEqual(
             load_default_conversation(workspace, "session"),

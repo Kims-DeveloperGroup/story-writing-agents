@@ -5,6 +5,7 @@ from __future__ import annotations
 import os
 import subprocess
 import unittest
+from contextlib import contextmanager
 from dataclasses import replace
 from unittest import mock
 
@@ -831,8 +832,30 @@ class LeadArtifactApplicationTests(LeadOrchestrationTestCase):
         self.commit_session_fixture_state()
         turn = await self.reviewed_create("Pending commit generation replacement")
         milestones = []
+        generation_pins = []
+        guard_depth = 0
         original_prepare = StoryCommitService.prepare
         original_build = orchestrator_module.build_story_commit_request_payload
+        original_acquire = SessionArtifactBinding.acquire_generation_pin
+        original_open = SessionArtifactBinding.open_ready_resources
+
+        def acquire(binding):
+            self.assertEqual(guard_depth, 0)
+            pin = original_acquire(binding)
+            generation_pins.append(pin)
+            milestones.append("pin")
+            return pin
+
+        @contextmanager
+        def open_ready(binding):
+            nonlocal guard_depth
+            with original_open(binding) as access:
+                guard_depth += 1
+                milestones.append("guard_enter")
+                try:
+                    yield access
+                finally:
+                    guard_depth -= 1
 
         def prepare(service, *args, **kwargs):
             milestones.append("prepare_enter")
@@ -863,6 +886,16 @@ class LeadArtifactApplicationTests(LeadOrchestrationTestCase):
             orchestrator_module,
             "build_story_commit_request_payload",
             side_effect=build,
+        ), mock.patch.object(
+            SessionArtifactBinding,
+            "acquire_generation_pin",
+            autospec=True,
+            side_effect=acquire,
+        ), mock.patch.object(
+            SessionArtifactBinding,
+            "open_ready_resources",
+            autospec=True,
+            side_effect=open_ready,
         ):
             applied = await self.runtime.decide_artifact_application(
                 _application_decision(turn, ArtifactApplicationDecisionKind.APPLY)
@@ -875,6 +908,16 @@ class LeadArtifactApplicationTests(LeadOrchestrationTestCase):
         pending = self.runtime._pending_story_commits[key]
         pin = pending._generation_pin
         assert pin is not None
+        self.assertEqual(generation_pins, [pin])
+        self.assertEqual(milestones[0], "pin")
+        prepare_index = milestones.index("prepare_enter")
+        guard_indexes = [
+            index
+            for index, milestone in enumerate(milestones)
+            if milestone == "guard_enter"
+        ]
+        self.assertTrue(guard_indexes)
+        self.assertLess(guard_indexes[0], prepare_index)
         descriptors = pin._pin._descriptors
         close_calls = []
         original_close = type(pin).close

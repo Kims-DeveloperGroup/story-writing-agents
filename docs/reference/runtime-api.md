@@ -102,7 +102,8 @@ content-read, mutation, or repository authority and is not a substitute for a
 guarded READY transaction. Generation directory/file opens and duplicates,
 and initial binding composition, retain local descriptor ownership until
 transfer. Every `BaseException` closes those local descriptors without
-replacing the primary failure; cleanup failures remain diagnostic only.
+replacing the primary failure. Batch cleanup attempts every close despite an
+earlier close failure and preserves the active primary exception.
 
 Direct Lead and Lead-synthesis invocations acquire this pin before any
 session-derived definition, source, or provider work and retain it through the
@@ -1054,10 +1055,12 @@ and sibling-session bytes remain outside the operation.
 Commit remains a distinct decision and authority boundary. Its internal
 service carries the successful Apply binding's physical worktree identity into
 Commit-request preparation, candidate authorization, and execution. Runtime
-continues with that same invocation binding and, before publishing the
-`story_commit_request`,
-transfers one six-descriptor physical-generation pin to the in-memory pending
-request owner. The owner retains that non-recyclable identity through the
+continues with that same invocation binding and acquires one six-descriptor
+physical-generation pin immediately before entering the Apply guard. After a
+successful Apply, the same pin continuously retains that generation through
+result/request preparation and transfers to the in-memory pending request owner
+before the `story_commit_request` is published. The owner retains that
+non-recyclable identity through the
 terminal decision and result publication and closes it exactly once on
 success, failure, cancellation, replacement, or best-effort runtime
 abandonment. A request-preparation or publication failure closes the new owner
@@ -1102,6 +1105,9 @@ fails, that owner and pin likewise remain available for a later exact decision.
 After decision publication succeeds, terminal cleanup retires precisely the
 owner observed when processing began—even when its request no longer matches
 the durable tail—and never closes a replacement installed concurrently.
+A definitive conversation archive likewise retires the exact pending Commit
+authority; verified compensation that unarchives a focused conversation does
+not perform that retirement.
 
 The identity-bound service applies the same Apply-root requirement to
 `inspect()` and `recover()`, checking before and between their owner reads and

@@ -218,8 +218,10 @@ binding lock, Git lease, READY callback, descriptor open, or I/O. Factory-local
 descriptors and
 leases remain owned there until access activation transfers them; any
 `BaseException` before transfer closes and unwinds them while preserving the
-primary failure. A fork-child revoke avoids the copied binding lock and closes
-only the child's worktree descriptor. Its inherited Git lease closes the child
+primary failure. Descriptor-batch cleanup attempts every close despite a prior
+close failure and preserves an active primary exception. A fork-child revoke
+avoids the copied binding lock and closes only the child's worktree descriptor.
+Its inherited Git lease closes the child
 common-Git descriptor without `LOCK_UN`, so the parent's exclusion remains in
 force. A copied Story Commit authority likewise rejects on PID/thread affinity
 before its one-use lock and leaves the parent's authority unconsumed.
@@ -230,16 +232,21 @@ provider work and retain it through durable persistence. Its short-lock
 acquisition/recheck grants no semantic READY or artifact authority and retains
 no Git lease across the provider await.
 
-The later Commit-request owner uses another identity-only six-descriptor pin.
-Runtime acquires it before request publication and retains it through terminal
-decision/result publication. Request preparation/publication failure closes
-the local owner; a mismatched decision or failed decision append preserves an
+The later Commit-request owner uses the identity-only six-descriptor pin that
+runtime acquires immediately before the Apply guard. After successful Apply,
+that same pin continuously retains the physical generation through result and
+request preparation, transfers to the pending owner before publication, and
+remains through terminal decision/result publication. Request preparation or
+publication failure closes the local owner; a mismatched decision or failed decision append preserves an
 already published owner. Once the decision is durable, cleanup closes exactly
 the owner observed at entry, including a stale mismatched owner, without
 closing a concurrently installed replacement. Terminal success, failure, or
 cancellation and exact-owner replacement also close once; abandoned runtime
 owners have an idempotent best-effort final release. This pin prevents physical
 identity recycling only and does not exclude an external Git writer.
+A definitive conversation archive retires the exact pending Commit authority;
+successful focused-archive compensation verifies unarchive and does not retire
+it.
 
 The corresponding runtime-bound `StoryCommitService` is creator-process/thread
 affine for Prepare, Authorize, Reject, Revise, Execute, Inspect, Recover, and

@@ -2690,6 +2690,30 @@ class StoryRuntime:
                 raise
             _add_story_commit_cleanup_note(failure, cleanup_failure)
 
+    def retire_archived_conversation(
+        self,
+        session_id: str,
+        conversation_id: str,
+    ) -> None:
+        """Release package-internal Commit owners after a durable archive."""
+
+        self.workspace.validate_identifier(session_id)
+        self.workspace.validate_identifier(conversation_id)
+        failure: BaseException | None = None
+        for key, pending in tuple(self._pending_story_commits.items()):
+            if key[:2] != (session_id, conversation_id):
+                continue
+            try:
+                self._retire_pending_story_commit(
+                    key,
+                    pending,
+                    failure=failure,
+                )
+            except BaseException as cleanup_failure:
+                failure = cleanup_failure
+        if failure is not None:
+            raise failure
+
     @staticmethod
     def _close_story_commit_generation_pin(
         generation_pin: SessionArtifactGenerationPin,
@@ -4097,6 +4121,7 @@ class StoryRuntime:
             next_action: ArtifactApplicationNextAction
             application_result = None
             artifact_binding: SessionArtifactBinding | None = None
+            generation_pin: SessionArtifactGenerationPin | None = None
             key = (decision.session_id, decision.conversation_id, decision.step_id)
             if decision.kind is ArtifactApplicationDecisionKind.REJECT:
                 self._artifact_application_capabilities.pop(key, None)
@@ -4175,6 +4200,7 @@ class StoryRuntime:
                             artifact_binding = self._session_artifact_binding(
                                 decision.session_id
                             )
+                            generation_pin = artifact_binding.acquire_generation_pin()
                             with artifact_binding.open_ready_resources() as access:
                                 artifacts = access.repository
                                 snapshots = artifacts.capture_complete_state()
@@ -4282,6 +4308,14 @@ class StoryRuntime:
                                     "The artifact application outcome is uncertain. "
                                     "Inspect the exact application before any new write."
                                 )
+                        except BaseException as failure:
+                            if generation_pin is not None:
+                                self._close_story_commit_generation_pin(
+                                    generation_pin,
+                                    failure,
+                                )
+                                generation_pin = None
+                            raise
                         else:
                             outcome = ArtifactApplicationOutcomeKind(
                                 application_result.state.value
@@ -4294,26 +4328,25 @@ class StoryRuntime:
                                 "atomically. No Git staging or commit occurred."
                             )
 
-            result_payload = ArtifactApplicationResultPayload(
-                confirmation_request_id=request.confirmation_request_id,
-                decision_event_id=decision_event_id,
-                reviewed_proposal_id=reviewed.proposal_id,
-                reviewed_proposal_digest=reviewed.proposal_digest,
-                application_id=application.application_id,
-                application_request_digest=request.application_request_digest,
-                outcome=outcome,
-                next_action=next_action,
-                result=application_result,
-            )
-            post_decision = self.conversation_storage_services.event_store.read(
-                decision.session_id, decision.conversation_id
-            )
-            result_event_id = self._new_id("e")
             commit_request = None
             result_persisted = False
-            generation_pin: SessionArtifactGenerationPin | None = None
             pending_commit: _PendingStoryCommit | None = None
             try:
+                result_payload = ArtifactApplicationResultPayload(
+                    confirmation_request_id=request.confirmation_request_id,
+                    decision_event_id=decision_event_id,
+                    reviewed_proposal_id=reviewed.proposal_id,
+                    reviewed_proposal_digest=reviewed.proposal_digest,
+                    application_id=application.application_id,
+                    application_request_digest=request.application_request_digest,
+                    outcome=outcome,
+                    next_action=next_action,
+                    result=application_result,
+                )
+                post_decision = self.conversation_storage_services.event_store.read(
+                    decision.session_id, decision.conversation_id
+                )
+                result_event_id = self._new_id("e")
                 self._append_drafts(
                     post_decision[-1].sequence,
                     (self._draft_with_id(
@@ -4334,7 +4367,7 @@ class StoryRuntime:
                     self._retire_pending_story_commit(key, previous_commit)
                 if application_result is not None:
                     assert artifact_binding is not None
-                    generation_pin = artifact_binding.acquire_generation_pin()
+                    assert generation_pin is not None
                     service = compose_story_commit_service(
                         self.workspace.root,
                         decision.session_id,
@@ -4385,6 +4418,10 @@ class StoryRuntime:
                                 payload=commit_request,
                             ),),
                         )
+                elif generation_pin is not None:
+                    pin = generation_pin
+                    generation_pin = None
+                    pin.close()
             except BaseException as failure:
                 commit_request = None
                 if pending_commit is not None:

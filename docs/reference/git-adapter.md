@@ -563,7 +563,8 @@ six corresponding non-inheritable descriptors, closes every descriptor on
 mismatch or partial construction, retains them after successful transfer, and
 closes idempotently. Each directory/file open or duplicate remains locally
 owned until transfer. Any `BaseException` closes that local descriptor while
-preserving the primary failure; a cleanup failure is diagnostic only.
+preserving the primary failure; batch cleanup still attempts every descriptor
+after a close failure and keeps the active primary authoritative.
 
 Pin acquisition and current-generation recheck take the repository lock only
 for the bounded no-follow relationship proof and release it before returning.
@@ -993,11 +994,11 @@ filesystem, or Git operation.
 `StoryCommitApplicationEvidence` binds the session, application/proposal/
 correlation IDs, exact `ArtifactChangeSet`, and its projected-state digest.
 Prepare requires that the change set is already applied exactly in the ready
-session worktree. Runtime composition additionally pins preparation to the
-physical worktree identity that successfully completed Apply. Before it
-publishes the Commit request, runtime acquires one opaque six-descriptor
-generation pin and transfers it to the pending request owner. That pin remains
-live through the terminal decision and result publication, and closes exactly
+session worktree. Immediately before entering the Apply guard, runtime acquires
+one opaque six-descriptor generation pin. A successful Apply retains that same
+physical generation continuously through result/request preparation and
+transfers the pin to the pending request owner before publication. That pin
+remains live through the terminal decision and result publication, and closes exactly
 once after success, failure, cancellation, replacement by another exact owner,
 or best-effort cleanup when the runtime and owner are abandoned. A failure
 before request publication closes the new owner or untransferred pin. A
@@ -1007,6 +1008,10 @@ owner it observed at entry, even if it was stale, without retiring a
 replacement installed meanwhile. The pin prevents physical identity recycling
 only; it does not exclude an external Git process or confer repository
 authority.
+
+A definitive conversation archive retires the exact pending Commit owner and
+authority for that conversation. A focused archive that is durably compensated
+by verified unarchive does not retire them.
 
 Identity-bound preparation opens session history first, then lends that live
 history's READY validator to the

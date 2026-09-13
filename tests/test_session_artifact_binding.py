@@ -1041,6 +1041,71 @@ class RuntimeSessionArtifactBindingTests(LeadOrchestrationTestCase):
                     with self.assertRaises(OSError):
                         os.fstat(opened[0])
 
+    def test_generation_descriptor_batch_cleanup_preserves_primary_and_closes_all(
+        self,
+    ) -> None:
+        original_close = os.close
+
+        for has_primary in (True, False):
+            with self.subTest(has_primary=has_primary):
+                descriptors = tuple(os.dup(0) for _ in range(3))
+                close_failures = {
+                    descriptors[2]: KeyboardInterrupt("last close interrupted"),
+                    descriptors[0]: SystemExit("first close exited"),
+                }
+                closed = []
+
+                def close(descriptor):
+                    closed.append(descriptor)
+                    original_close(descriptor)
+                    failure = close_failures.get(descriptor)
+                    if failure is not None:
+                        raise failure
+
+                primary = RuntimeError("generation capture failed")
+                with mock.patch.object(
+                    session_resources_module.os,
+                    "close",
+                    side_effect=close,
+                ):
+                    if has_primary:
+                        session_resources_module._close_generation_descriptors(
+                            descriptors,
+                            failure=primary,
+                        )
+                        observed = primary
+                    else:
+                        try:
+                            session_resources_module._close_generation_descriptors(
+                                descriptors
+                            )
+                        except BaseException as failure:
+                            observed = failure
+                        else:
+                            self.fail("batch descriptor cleanup did not raise")
+
+                self.assertEqual(closed, list(reversed(descriptors)))
+                for descriptor in descriptors:
+                    with self.assertRaises(OSError):
+                        os.fstat(descriptor)
+                if has_primary:
+                    self.assertIs(observed, primary)
+                    self.assertIn(
+                        "Git session generation descriptor cleanup failed: "
+                        "KeyboardInterrupt",
+                        primary.__notes__,
+                    )
+                    self.assertIn(
+                        "Git session generation descriptor cleanup failed: SystemExit",
+                        primary.__notes__,
+                    )
+                else:
+                    self.assertIs(observed, close_failures[descriptors[2]])
+                    self.assertIn(
+                        "Git session generation descriptor cleanup failed: SystemExit",
+                        observed.__notes__,
+                    )
+
     def test_binding_composition_preserves_primary_failure_over_close_failure(
         self,
     ) -> None:

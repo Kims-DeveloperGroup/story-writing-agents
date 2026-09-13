@@ -191,7 +191,8 @@ traversal, read, mutation, or repository authority.
 Generation directory/file opens and duplicates, plus initial binding
 composition, keep each descriptor locally owned until transfer. Every
 `BaseException` closes the locally owned descriptor while preserving the
-primary failure; cleanup failure details are diagnostic only.
+primary failure. Batch cleanup continues through every descriptor after a
+close failure and keeps an active primary authoritative.
 
 The generation identity, binding, and pin are confined to the creator process
 and opaque thread token. Foreign-thread and forked-child acquisition or recheck
@@ -287,15 +288,19 @@ Revise, Execute, Inspect, Recover, and internal repository-access binding has
 the same creator-process/thread boundary, checked before service state, locks,
 filesystem access, or Git work.
 
-Before publishing a Commit request, runtime transfers one six-descriptor
-physical-generation pin to its pending owner. The identity-only pin cannot be
-traversed and does not exclude noncooperating Git; semantic READY checks remain
-authoritative. It closes exactly once after terminal decision/result
+Immediately before entering the Apply guard, runtime acquires one six-
+descriptor physical-generation pin. A successful Apply retains that generation
+continuously through result/request preparation, then transfers the same pin to
+its pending owner before publishing the Commit request. The identity-only pin
+cannot be traversed and does not exclude noncooperating Git; semantic READY
+checks remain authoritative. It closes exactly once after terminal decision/result
 publication, failure, cancellation, exact-owner replacement, or best-effort
 runtime abandonment. Failure before request publication closes the new local
 owner. A mismatched decision or failed decision append preserves the published
 owner; after a durable decision, cleanup retires only the exact owner observed
 at entry and leaves any replacement live.
+A definitive conversation archive also retires the exact pending Commit owner;
+a verified compensating unarchive of a focused conversation does not.
 
 Under the lease,
 the executor synchronizes `running` evidence before the first mutation, then

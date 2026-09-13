@@ -3051,7 +3051,10 @@ every intermediate arrow. The current runtime graph is acyclic.
   its descriptor factory-local until successful return; every setup
   `BaseException` closes that local ownership without replacing the primary,
   while an original `OSError` retains the established content-free generation
-  failure translation. Generation identities and pins retain their
+  failure translation. Descriptor-batch cleanup attempts every owned close;
+  an active primary always wins, while no-primary cleanup suppresses `OSError`
+  and delays the first non-`OSError` until the batch is exhausted. Generation
+  identities and pins retain their
   creator process and non-recyclable thread token. Acquisition and recheck
   reject a foreign process or thread before any inherited per-pin lock,
   repository lock, descriptor validation, or Git I/O; close remains
@@ -5241,7 +5244,10 @@ every intermediate arrow. The current runtime graph is acyclic.
   pause is assessed immediately before the combined durable pause and access
   release. A denial releases only an uncommitted destination when applicable,
   preserves the source, and renders fixed content-safe assessment fields without
-  executing the denied operation.
+  executing the denied operation. After a focused or unfocused archive and any
+  required default-conversation persistence succeed, the controller calls the
+  runtime-owned retirement seam for that exact session/conversation; it never
+  reaches into the runtime's pending-Commit registry.
 - **Primary verification/documentation:** `tests/test_interactive_controller.py`
   (including `test_status_and_history_explain_every_next_action_without_authority`),
   `tests/test_interactive_management.py`,
@@ -7293,15 +7299,20 @@ every intermediate arrow. The current runtime graph is acyclic.
   request. A matching single-use Commit decision delegates staging and the
   literal local commit to the established story-commit service. One private
   runtime-owned pending entry retains that exact identity-bound service and a
-  non-recyclable six-descriptor session-generation pin from request publication
-  through the user's decision, service action, and result-publication attempt;
+  non-recyclable six-descriptor session-generation pin acquired before the Apply
+  READY guard and held continuously through Apply, result and request
+  publication, the user's decision, service action, and result-publication attempt;
   it retains no Git lease and spans no provider await. Failed preparation or
   publication, Commit/Reject/Revise completion, service or result failure,
   cancellation, and exact replacement release the pin exactly once; runtime
   abandonment invokes the owner's idempotent best-effort final release. A
   failed decision append preserves the pending owner; after a durable decision
   the exact observed owner is retired even when its request cannot be used,
-  without removing a concurrently replaced entry. No path
+  without removing a concurrently replaced entry. The package-internal
+  runtime-owned archive seam retires every exact session/conversation pending
+  owner after durable focused or unfocused archive completion, exhausting the
+  set while preserving the first cleanup failure. It is not a facade or
+  `RuntimeSession` supported surface. No path
   performs a remote Git mutation or merge or exposes provider-native agent
   orchestration. Consensus submissions persist digest-addressed material;
   confirmed phases resolve candidate handles only through the material store,
@@ -8978,12 +8989,16 @@ every intermediate arrow. The current runtime graph is acyclic.
   Identity-bound Story Commit services now apply that creator confinement at
   every retained service entry before locks or operational work. Generation
   descriptor construction and binding composition preserve primary
-  `BaseException` ownership while closing factory-local descriptors, and the
-  runtime's private pending-Commit owner holds a non-recyclable generation pin
-  through durable decision/result handling before exact-once terminal,
+  `BaseException` ownership while closing factory-local descriptors; batch
+  cleanup exhausts every close while preserving an active primary or delaying
+  the first no-primary non-`OSError`. The runtime's private pending-Commit owner
+  holds a non-recyclable generation pin continuously from before the Apply
+  READY guard through durable decision/result handling before exact-once terminal,
   replacement, failure, or cancellation cleanup, with idempotent best-effort
-  final release on runtime abandonment. No Git lease spans the user wait or
-  provider work. These changes add no module, import
+  final release on runtime abandonment. Successful focused and unfocused
+  archives invoke the runtime-owned exact-conversation retirement seam without
+  exposing the pending registry or widening a facade. No Git lease spans the
+  user wait or provider work. These changes add no module, import
   edge, export, facade API, persisted field, schema version, or #670 runtime-
   agent CWD responsibility.
   Specialist routing adds one pure module and five net inward runtime

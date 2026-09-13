@@ -186,11 +186,15 @@ class GitSessionGenerationPin:
                 lease,
                 identity.session,
             )
+            failure: BaseException | None = None
             try:
                 if current != identity:
                     raise _generation_error()
+            except BaseException as exc:
+                failure = exc
+                raise
             finally:
-                _close_generation_descriptors(descriptors)
+                _close_generation_descriptors(descriptors, failure=failure)
             with self._lock:
                 retained = self._descriptors
                 if not retained:
@@ -236,12 +240,16 @@ def capture_locked_git_session_generation(
         lease,
         resources.identity,
     )
+    failure: BaseException | None = None
     try:
         if identity.worktree_identity != expected_worktree_identity:
             raise _generation_error()
         return identity
+    except BaseException as exc:
+        failure = exc
+        raise
     finally:
-        _close_generation_descriptors(descriptors)
+        _close_generation_descriptors(descriptors, failure=failure)
 
 
 def acquire_git_session_generation_pin(
@@ -265,10 +273,16 @@ def acquire_git_session_generation_pin(
             pin = GitSessionGenerationPin(identity, descriptors)
             descriptors = ()
         return pin
-    except BaseException:
-        _close_generation_descriptors(descriptors)
+    except BaseException as failure:
+        _close_generation_descriptors(descriptors, failure=failure)
         if pin is not None:
-            pin.close()
+            try:
+                pin.close()
+            except BaseException as cleanup_failure:
+                _add_generation_descriptor_cleanup_note(
+                    failure,
+                    cleanup_failure,
+                )
         raise
 
 
@@ -1775,14 +1789,15 @@ def _capture_git_session_generation(
         )
         descriptors.clear()
         return generation, ordered
-    except (GitRepositoryLockFailure, GitSessionResourceError):
-        _close_generation_descriptors(tuple(descriptors))
+    except (GitRepositoryLockFailure, GitSessionResourceError) as failure:
+        _close_generation_descriptors(tuple(descriptors), failure=failure)
         raise
     except (OSError, UnicodeError, ValueError):
-        _close_generation_descriptors(tuple(descriptors))
-        raise _generation_error() from None
-    except BaseException:
-        _close_generation_descriptors(tuple(descriptors))
+        failure = _generation_error()
+        _close_generation_descriptors(tuple(descriptors), failure=failure)
+        raise failure from None
+    except BaseException as failure:
+        _close_generation_descriptors(tuple(descriptors), failure=failure)
         raise
 
 
@@ -1957,12 +1972,36 @@ def _require_retained_generation_descriptors(
         raise _generation_error() from None
 
 
-def _close_generation_descriptors(descriptors: tuple[int, ...]) -> None:
+def _close_generation_descriptors(
+    descriptors: tuple[int, ...],
+    *,
+    failure: BaseException | None = None,
+) -> None:
+    cleanup_failure: BaseException | None = None
     for descriptor in reversed(descriptors):
         try:
             os.close(descriptor)
-        except OSError:
-            pass
+        except BaseException as exc:
+            primary = failure if failure is not None else cleanup_failure
+            if primary is not None:
+                _add_generation_descriptor_cleanup_note(primary, exc)
+            elif not isinstance(exc, OSError):
+                cleanup_failure = exc
+    if cleanup_failure is not None:
+        raise cleanup_failure
+
+
+def _add_generation_descriptor_cleanup_note(
+    failure: BaseException,
+    cleanup_failure: BaseException,
+) -> None:
+    try:
+        failure.add_note(
+            "Git session generation descriptor cleanup failed: "
+            f"{type(cleanup_failure).__name__}"
+        )
+    except BaseException:
+        pass
 
 
 def _close_generation_descriptor(
@@ -1976,13 +2015,7 @@ def _close_generation_descriptor(
     try:
         os.close(descriptor)
     except BaseException as cleanup_failure:
-        try:
-            failure.add_note(
-                "Git session generation descriptor cleanup failed: "
-                f"{type(cleanup_failure).__name__}"
-            )
-        except BaseException:
-            pass
+        _add_generation_descriptor_cleanup_note(failure, cleanup_failure)
 
 
 def _generation_error() -> GitSessionResourceError:
