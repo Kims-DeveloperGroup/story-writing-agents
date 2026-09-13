@@ -8,7 +8,6 @@ import os
 import sqlite3
 import stat
 import sys
-import tempfile
 from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
@@ -29,7 +28,7 @@ from story_writing_agents.conversation_storage.sqlite import (
 from story_writing_agents.conversations import CollaborationEventBatch
 
 from tests.collaboration_contract_fixture import contract_batches
-from tests.helpers import initialize_test_workspace
+from tests.helpers import pristine_initialized_workspace
 
 
 @dataclass(frozen=True, slots=True)
@@ -42,11 +41,9 @@ class NamespaceEntry:
 
 
 def initialized_workspace(test_case: TestCase) -> Workspace:
-    """Return one initialized temporary workspace owned by ``test_case``."""
+    """Return one independent already-ready workspace owned by ``test_case``."""
 
-    temporary = tempfile.TemporaryDirectory(prefix="sqlite-storage-test-")
-    test_case.addCleanup(temporary.cleanup)
-    return initialize_test_workspace(temporary.name)
+    return pristine_initialized_workspace(test_case)
 
 
 def database_path(workspace: Workspace) -> Path:

@@ -56,7 +56,7 @@ from story_writing_agents.workspace.schema import (
     DEFAULT_SYSTEM_CONFIG,
 )
 
-from tests.helpers import initialized_workspace
+from tests.helpers import initialized_workspace, validated_initialized_workspace
 
 
 _CONTEXT_TIMESTAMP = "2026-08-15T01:02:03+00:00"
@@ -221,7 +221,7 @@ class WorkspaceContractTests(unittest.TestCase):
     def test_generic_writes_reject_canonical_artifacts_but_keep_other_helpers(
         self,
     ) -> None:
-        workspace = initialized_workspace(self)
+        workspace = validated_initialized_workspace(self)
         canonical_paths = (
             *(f"core_documents/{filename}" for filename in CORE_DOCUMENTS),
             "manuscript/part-01/chapter.md",
@@ -258,7 +258,7 @@ class WorkspaceContractTests(unittest.TestCase):
     def test_generic_writes_reject_reserved_case_and_normalization_aliases(
         self,
     ) -> None:
-        workspace = initialized_workspace(self)
+        workspace = validated_initialized_workspace(self)
         cases = (
             (
                 "Core_Documents/global_outline.md",
@@ -321,7 +321,7 @@ class WorkspaceContractTests(unittest.TestCase):
         )
 
     def test_utf8_and_json_read_errors_are_explicit_and_nonmutating(self) -> None:
-        workspace = initialized_workspace(self)
+        workspace = validated_initialized_workspace(self)
         invalid_utf8 = workspace.path("discussion_logs/invalid-utf8.txt")
         invalid_utf8.write_bytes(b"\xff")
         with self.assertRaisesRegex(WorkspaceFormatError, "not valid UTF-8"):
@@ -337,7 +337,7 @@ class WorkspaceContractTests(unittest.TestCase):
     def test_path_traversal_absolute_paths_and_symlink_escape_are_rejected(
         self,
     ) -> None:
-        workspace = initialized_workspace(self)
+        workspace = validated_initialized_workspace(self)
         with tempfile.TemporaryDirectory() as temporary:
             outside = Path(temporary)
             secret = outside / "secret.txt"
@@ -362,7 +362,7 @@ class WorkspaceContractTests(unittest.TestCase):
     def test_session_state_symlink_alias_is_rejected_without_target_mutation(
         self,
     ) -> None:
-        workspace = initialized_workspace(self)
+        workspace = validated_initialized_workspace(self)
         workspace.save_session_overrides(
             "session_original",
             {"language": "EN", "persona": None, "agents": {}},
