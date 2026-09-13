@@ -200,6 +200,8 @@ class StoryCommitService:
         "_artifact_repository_access",
         "_bindings",
         "_confirmation_ids",
+        "_creator_pid",
+        "_creator_thread_token",
         "_expected_session_root_identity",
         "_manifest",
         "_owner",
@@ -234,6 +236,8 @@ class StoryCommitService:
         self._artifact_repository_access: (
             StoryCommitArtifactRepositoryAccess | None
         ) = None
+        self._creator_pid: int | None = None
+        self._creator_thread_token: object | None = None
         self._expected_session_root_identity: tuple[int, int] | None = None
         self._owner = object()
         self._bindings: dict[str, StoryCommitCandidateBinding] = {}
@@ -249,6 +253,7 @@ class StoryCommitService:
     ) -> StoryCommitCandidate:
         """Prepare and retain one process-local binding for a lead projection."""
 
+        self._require_creator()
         if (
             type(evidence) is not StoryCommitApplicationEvidence
             or evidence.session_id != self._session_id
@@ -289,13 +294,14 @@ class StoryCommitService:
     ) -> StoryCommitAuthority:
         """Issue authority only for an exact fresh structured Commit decision."""
 
+        self._require_creator()
         value, decision = self._decision(candidate, confirmation)
         if decision.decision is not StoryCommitDecision.COMMIT:
             raise _error(StoryCommitFailureCode.AUTHORITY_INVALID)
         self._reserve_confirmation(decision.confirmation_id)
         binding = self._binding(value)
-        self._require_not_revised(value)
         revalidation = self._revalidate_candidate(binding)
+        self._require_not_revised(value)
         return StoryCommitAuthority(
             _AUTHORITY_SENTINEL,
             owner=self._owner,
@@ -313,6 +319,7 @@ class StoryCommitService:
     ) -> StoryCommitResult:
         """Persist Reject without changing Git or applied artifact files."""
 
+        self._require_creator()
         value, decision = self._decision(candidate, confirmation)
         if decision.decision is not StoryCommitDecision.REJECT:
             raise _error(StoryCommitFailureCode.INVALID_REQUEST)
@@ -328,6 +335,7 @@ class StoryCommitService:
     ) -> StoryCommitResult:
         """Persist a deterministic revision marker requiring a new candidate."""
 
+        self._require_creator()
         value, decision = self._decision(candidate, confirmation)
         if decision.decision is not StoryCommitDecision.REVISE:
             raise _error(StoryCommitFailureCode.INVALID_REQUEST)
@@ -341,6 +349,7 @@ class StoryCommitService:
     def execute(self, authority: StoryCommitAuthority) -> StoryCommitResult:
         """Consume authority, durably start, and perform only the exact commit."""
 
+        self._require_creator()
         if type(authority) is not StoryCommitAuthority:
             raise _error(StoryCommitFailureCode.AUTHORITY_INVALID)
         binding, confirmation, operation_id, authorized_revalidation = (
@@ -504,8 +513,23 @@ class StoryCommitService:
             or self._expected_session_root_identity is not None
         ):
             raise _error(StoryCommitFailureCode.INVALID_REQUEST)
+        self._creator_pid = os.getpid()
+        self._creator_thread_token = current_thread_token()
         self._expected_session_root_identity = expected_root_identity
         self._require_bound_session_root()
+
+    def _require_creator(self) -> None:
+        """Reject foreign use before bound service state, locks, or I/O."""
+
+        creator_pid = self._creator_pid
+        creator_thread_token = self._creator_thread_token
+        if creator_pid is None and creator_thread_token is None:
+            return
+        if (
+            creator_pid != os.getpid()
+            or creator_thread_token is not current_thread_token()
+        ):
+            raise _error(StoryCommitFailureCode.AUTHORITY_INVALID)
 
     def _require_bound_session_root(self) -> None:
         expected = self._expected_session_root_identity
@@ -565,6 +589,7 @@ class StoryCommitService:
         self,
         access: StoryCommitArtifactRepositoryAccess,
     ) -> None:
+        self._require_creator()
         if not callable(access) or self._artifact_repository_access is not None:
             raise _error(StoryCommitFailureCode.INVALID_REQUEST)
         self._artifact_repository_access = access
@@ -573,6 +598,7 @@ class StoryCommitService:
     def inspect(self, operation_id: str) -> StoryCommitResult:
         """Return one durable content-free operation classification."""
 
+        self._require_creator()
         try:
             self._require_recovery_bound_session_root()
             operation = self._read_operation(operation_id)
@@ -603,6 +629,7 @@ class StoryCommitService:
     def recover(self, operation_id: str) -> StoryCommitResult:
         """Conservatively classify restart state without reset, replay, or cleanup."""
 
+        self._require_creator()
         try:
             self._require_recovery_bound_session_root()
             operation = self._read_operation(operation_id)

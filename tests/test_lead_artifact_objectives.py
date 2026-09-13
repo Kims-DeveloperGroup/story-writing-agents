@@ -269,7 +269,9 @@ class LeadArtifactObjectiveTests(objectives.ObjectiveCase):
                 prepared = await case.prepare(conversation_id)
                 applied = await case.apply(await case.review(prepared))
                 reviewed = applied.request.reviewed_proposal
-                service = case.runtime._story_commit_services[(case.session_id, conversation_id, reviewed.step_id)]
+                service = case.runtime._pending_story_commits[
+                    (case.session_id, conversation_id, reviewed.step_id)
+                ].service
                 with mock.patch.object(type(service), "execute", side_effect=StoryCommitError(code)):
                     await case.runtime.decide_story_commit(commit._commit_decision(applied, commit.StoryCommitDecision.COMMIT))
                 history, calls, before = case.history(conversation_id), len(case.backend.calls), case.snapshots()

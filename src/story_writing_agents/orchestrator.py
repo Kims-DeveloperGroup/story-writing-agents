@@ -1342,6 +1342,60 @@ class _LeadSynthesisResult:
     recommended_action: LeadRecommendedAction | None
 
 
+class _PendingStoryCommit:
+    """Own one exact service and physical-generation pin until publication."""
+
+    __slots__ = ("request", "service", "_generation_pin")
+
+    def __init__(
+        self,
+        request: StoryCommitRequestPayload,
+        service: StoryCommitService,
+        generation_pin: SessionArtifactGenerationPin,
+    ) -> None:
+        if (
+            type(request) is not StoryCommitRequestPayload
+            or type(service) is not StoryCommitService
+            or type(generation_pin) is not SessionArtifactGenerationPin
+        ):
+            raise TypeError("pending story commit is invalid")
+        self.request = request
+        self.service = service
+        self._generation_pin: SessionArtifactGenerationPin | None = generation_pin
+
+    def close(self) -> None:
+        """Release the retained generation exactly once."""
+
+        generation_pin = self._generation_pin
+        if generation_pin is None:
+            return
+        self._generation_pin = None
+        generation_pin.close()
+
+    def __del__(self) -> None:
+        """Best-effort final release when an owning runtime is abandoned."""
+
+        try:
+            self.close()
+        except BaseException:
+            pass
+
+
+def _add_story_commit_cleanup_note(
+    failure: BaseException,
+    cleanup_failure: BaseException,
+) -> None:
+    """Attach only a cleanup exception type without replacing the primary failure."""
+
+    try:
+        failure.add_note(
+            "pending story commit cleanup failed: "
+            f"{type(cleanup_failure).__name__}"
+        )
+    except BaseException:
+        pass
+
+
 class _RecommendationCapability:
     """One live decision/start chain; never reconstructed from durable history."""
 
@@ -1493,8 +1547,8 @@ class StoryRuntime:
         self._artifact_application_capabilities: dict[
             tuple[str, str, str], _ArtifactApplicationCapability
         ] = {}
-        self._story_commit_services: dict[
-            tuple[str, str, str], StoryCommitService
+        self._pending_story_commits: dict[
+            tuple[str, str, str], _PendingStoryCommit
         ] = {}
         self._live_execution_markers: set[tuple[str, str, str, str]] = set()
         self._consensus_event_store = ConsensusEventStore(self.workspace)
@@ -2605,6 +2659,48 @@ class StoryRuntime:
         """Freshly require and bind one exact session worktree for artifact I/O."""
 
         return compose_session_artifact_binding(self.workspace.root, session_id)
+
+    def _install_pending_story_commit(
+        self,
+        key: tuple[str, str, str],
+        pending: _PendingStoryCommit,
+    ) -> None:
+        """Install one exact owner and retire only the observed predecessor."""
+
+        previous = self._pending_story_commits.get(key)
+        self._pending_story_commits[key] = pending
+        if previous is not None and previous is not pending:
+            previous.close()
+
+    def _retire_pending_story_commit(
+        self,
+        key: tuple[str, str, str],
+        pending: _PendingStoryCommit,
+        *,
+        failure: BaseException | None = None,
+    ) -> None:
+        """Remove only the exact registered owner, then close it idempotently."""
+
+        if self._pending_story_commits.get(key) is pending:
+            del self._pending_story_commits[key]
+        try:
+            pending.close()
+        except BaseException as cleanup_failure:
+            if failure is None:
+                raise
+            _add_story_commit_cleanup_note(failure, cleanup_failure)
+
+    @staticmethod
+    def _close_story_commit_generation_pin(
+        generation_pin: SessionArtifactGenerationPin,
+        failure: BaseException,
+    ) -> None:
+        """Close untransferred pin ownership without masking a primary failure."""
+
+        try:
+            generation_pin.close()
+        except BaseException as cleanup_failure:
+            _add_story_commit_cleanup_note(failure, cleanup_failure)
 
     def _build_guarded_contextual_definition(
         self,
@@ -4215,6 +4311,8 @@ class StoryRuntime:
             result_event_id = self._new_id("e")
             commit_request = None
             result_persisted = False
+            generation_pin: SessionArtifactGenerationPin | None = None
+            pending_commit: _PendingStoryCommit | None = None
             try:
                 self._append_drafts(
                     post_decision[-1].sequence,
@@ -4231,8 +4329,12 @@ class StoryRuntime:
                     ),),
                 )
                 result_persisted = True
+                previous_commit = self._pending_story_commits.get(key)
+                if previous_commit is not None:
+                    self._retire_pending_story_commit(key, previous_commit)
                 if application_result is not None:
                     assert artifact_binding is not None
+                    generation_pin = artifact_binding.acquire_generation_pin()
                     service = compose_story_commit_service(
                         self.workspace.root,
                         decision.session_id,
@@ -4258,6 +4360,13 @@ class StoryRuntime:
                             application_result_event_id=result_event_id,
                             candidate=candidate,
                         )
+                        pending_commit = _PendingStoryCommit(
+                            commit_request,
+                            service,
+                            generation_pin,
+                        )
+                        generation_pin = None
+                        self._install_pending_story_commit(key, pending_commit)
                         result_history = (
                             self.conversation_storage_services.event_store.read(
                                 decision.session_id, decision.conversation_id
@@ -4276,10 +4385,21 @@ class StoryRuntime:
                                 payload=commit_request,
                             ),),
                         )
-                        self._story_commit_services[key] = service
-            except Exception:
+            except BaseException as failure:
                 commit_request = None
-                self._story_commit_services.pop(key, None)
+                if pending_commit is not None:
+                    self._retire_pending_story_commit(
+                        key,
+                        pending_commit,
+                        failure=failure,
+                    )
+                if generation_pin is not None:
+                    self._close_story_commit_generation_pin(
+                        generation_pin,
+                        failure,
+                    )
+                if not isinstance(failure, Exception):
+                    raise
                 if result_persisted:
                     message = (
                         "The artifact result is durable, but a commit request could "
@@ -4339,107 +4459,170 @@ class StoryRuntime:
             )
             if not exact:
                 raise ValueError("story commit decision does not match tail")
-            decision_event_id = self._new_id("e")
-            decision_payload = StoryCommitDecisionPayload(
-                confirmation_request_id=request.confirmation_request_id,
-                confirmation_request_event_id=events[-1].event_id,
-                application_result_event_id=request.application_result_event_id,
-                candidate_id=request.candidate.candidate_id,
-                request_digest=request.request_digest,
-                confirmation_id=decision.confirmation_id,
-                decision=decision.kind,
-                revision_request=decision.revision_request,
-            )
-            self._append_drafts(
-                projection.last_sequence,
-                (self._draft_with_id(
-                    event_id=decision_event_id,
-                    session_id=decision.session_id,
-                    conversation_id=decision.conversation_id,
-                    turn_id=self._new_id("t"),
-                    step_id=decision.step_id,
-                    kind=CollaborationEventKind.STORY_COMMIT_DECISION,
-                    sender=_USER_ACTOR,
-                    recipient=_RUNTIME_ACTOR,
-                    payload=decision_payload,
-                ),),
-            )
             key = (decision.session_id, decision.conversation_id, decision.step_id)
-            service = self._story_commit_services.pop(key, None)
-            result = None
-            if service is None:
-                outcome = StoryCommitOutcomeKind.STALE
-                next_action = StoryCommitNextAction.REPREPARE
-                message = "This runtime did not prepare the commit request. No Git mutation occurred; prepare a new request."
-            else:
-                confirmation = StoryCommitConfirmation(
-                    confirmation_id=decision.confirmation_id,
-                    candidate_id=request.candidate.candidate_id,
-                    proposal_id=request.candidate.proposal_id,
-                    correlation_id=request.candidate.correlation_id,
-                    decision=decision.kind,
-                )
-                try:
-                    if decision.kind is StoryCommitDecision.COMMIT:
-                        authority = service.authorize(request.candidate, confirmation)
-                        result = service.execute(authority)
-                        outcome = StoryCommitOutcomeKind.COMMITTED
-                        next_action = StoryCommitNextAction.CONTINUE_WITH_LEAD
-                        message = "The exact prepared artifact paths were staged and committed locally. No remote operation occurred."
-                    elif decision.kind is StoryCommitDecision.REJECT:
-                        result = service.reject(request.candidate, confirmation)
-                        outcome = StoryCommitOutcomeKind.REJECTED
-                        next_action = StoryCommitNextAction.CONTINUE_WITH_LEAD
-                        message = "The local commit was rejected. Applied artifact files and Git state were preserved."
-                    else:
-                        result = service.revise(request.candidate, confirmation)
-                        outcome = StoryCommitOutcomeKind.SUPERSEDED
-                        next_action = StoryCommitNextAction.REPREPARE
-                        message = "The commit request was superseded for revision. Applied artifact files and Git state were preserved."
-                except StoryCommitError as exc:
-                    outcome, next_action = {
-                        StoryCommitRecoveryAction.REPREPARE: (StoryCommitOutcomeKind.STALE, StoryCommitNextAction.REPREPARE),
-                        StoryCommitRecoveryAction.INSPECT: (StoryCommitOutcomeKind.OUTCOME_UNKNOWN, StoryCommitNextAction.INSPECT),
-                        StoryCommitRecoveryAction.OPERATOR_RECOVERY: (StoryCommitOutcomeKind.RECOVERY_REQUIRED, StoryCommitNextAction.OPERATOR_RECOVERY),
-                    }.get(exc.recovery_action, (StoryCommitOutcomeKind.STALE, StoryCommitNextAction.REPREPARE))
-                    message = "The local commit did not complete safely. Follow the single reported recovery action before preparing another request."
-            result_payload = StoryCommitResultPayload(
-                confirmation_request_id=request.confirmation_request_id,
-                decision_event_id=decision_event_id,
-                candidate_id=request.candidate.candidate_id,
-                request_digest=request.request_digest,
-                outcome=outcome,
-                next_action=next_action,
-                result=result,
+            observed_pending = self._pending_story_commits.get(key)
+            pending = (
+                observed_pending
+                if observed_pending is not None
+                and observed_pending.request == request
+                else None
             )
-            post_decision = self.conversation_storage_services.event_store.read(
-                decision.session_id, decision.conversation_id
-            )
+            decision_consumed = False
+            escaping_failure: BaseException | None = None
             try:
+                decision_event_id = self._new_id("e")
+                decision_payload = StoryCommitDecisionPayload(
+                    confirmation_request_id=request.confirmation_request_id,
+                    confirmation_request_event_id=events[-1].event_id,
+                    application_result_event_id=request.application_result_event_id,
+                    candidate_id=request.candidate.candidate_id,
+                    request_digest=request.request_digest,
+                    confirmation_id=decision.confirmation_id,
+                    decision=decision.kind,
+                    revision_request=decision.revision_request,
+                )
                 self._append_drafts(
-                    post_decision[-1].sequence,
-                    (self._draft(
+                    projection.last_sequence,
+                    (self._draft_with_id(
+                        event_id=decision_event_id,
                         session_id=decision.session_id,
                         conversation_id=decision.conversation_id,
-                        turn_id=post_decision[-1].turn_id,
+                        turn_id=self._new_id("t"),
                         step_id=decision.step_id,
-                        kind=CollaborationEventKind.STORY_COMMIT_RESULT,
-                        sender=CollaborationActor(CollaborationActorKind.GIT),
-                        recipient=_USER_ACTOR,
-                        payload=result_payload,
+                        kind=CollaborationEventKind.STORY_COMMIT_DECISION,
+                        sender=_USER_ACTOR,
+                        recipient=_RUNTIME_ACTOR,
+                        payload=decision_payload,
                     ),),
                 )
-            except Exception:
+                decision_consumed = True
+                result = None
+                if pending is None:
+                    outcome = StoryCommitOutcomeKind.STALE
+                    next_action = StoryCommitNextAction.REPREPARE
+                    message = (
+                        "This runtime did not prepare the commit request. No Git "
+                        "mutation occurred; prepare a new request."
+                    )
+                else:
+                    service = pending.service
+                    confirmation = StoryCommitConfirmation(
+                        confirmation_id=decision.confirmation_id,
+                        candidate_id=request.candidate.candidate_id,
+                        proposal_id=request.candidate.proposal_id,
+                        correlation_id=request.candidate.correlation_id,
+                        decision=decision.kind,
+                    )
+                    try:
+                        if decision.kind is StoryCommitDecision.COMMIT:
+                            authority = service.authorize(
+                                request.candidate,
+                                confirmation,
+                            )
+                            result = service.execute(authority)
+                            outcome = StoryCommitOutcomeKind.COMMITTED
+                            next_action = StoryCommitNextAction.CONTINUE_WITH_LEAD
+                            message = (
+                                "The exact prepared artifact paths were staged and "
+                                "committed locally. No remote operation occurred."
+                            )
+                        elif decision.kind is StoryCommitDecision.REJECT:
+                            result = service.reject(request.candidate, confirmation)
+                            outcome = StoryCommitOutcomeKind.REJECTED
+                            next_action = StoryCommitNextAction.CONTINUE_WITH_LEAD
+                            message = (
+                                "The local commit was rejected. Applied artifact files "
+                                "and Git state were preserved."
+                            )
+                        else:
+                            result = service.revise(request.candidate, confirmation)
+                            outcome = StoryCommitOutcomeKind.SUPERSEDED
+                            next_action = StoryCommitNextAction.REPREPARE
+                            message = (
+                                "The commit request was superseded for revision. "
+                                "Applied artifact files and Git state were preserved."
+                            )
+                    except StoryCommitError as exc:
+                        outcome, next_action = {
+                            StoryCommitRecoveryAction.REPREPARE: (
+                                StoryCommitOutcomeKind.STALE,
+                                StoryCommitNextAction.REPREPARE,
+                            ),
+                            StoryCommitRecoveryAction.INSPECT: (
+                                StoryCommitOutcomeKind.OUTCOME_UNKNOWN,
+                                StoryCommitNextAction.INSPECT,
+                            ),
+                            StoryCommitRecoveryAction.OPERATOR_RECOVERY: (
+                                StoryCommitOutcomeKind.RECOVERY_REQUIRED,
+                                StoryCommitNextAction.OPERATOR_RECOVERY,
+                            ),
+                        }.get(
+                            exc.recovery_action,
+                            (
+                                StoryCommitOutcomeKind.STALE,
+                                StoryCommitNextAction.REPREPARE,
+                            ),
+                        )
+                        message = (
+                            "The local commit did not complete safely. Follow the "
+                            "single reported recovery action before preparing another "
+                            "request."
+                        )
                 result_payload = StoryCommitResultPayload(
                     confirmation_request_id=request.confirmation_request_id,
                     decision_event_id=decision_event_id,
                     candidate_id=request.candidate.candidate_id,
                     request_digest=request.request_digest,
-                    outcome=StoryCommitOutcomeKind.OUTCOME_UNKNOWN,
-                    next_action=StoryCommitNextAction.INSPECT,
+                    outcome=outcome,
+                    next_action=next_action,
+                    result=result,
                 )
-                message = "The commit decision is durable but its result is not visible. Inspect the session; do not retry."
-            return StoryCommitDecisionResult(request, decision.kind, result_payload, message)
+                post_decision = self.conversation_storage_services.event_store.read(
+                    decision.session_id, decision.conversation_id
+                )
+                try:
+                    self._append_drafts(
+                        post_decision[-1].sequence,
+                        (self._draft(
+                            session_id=decision.session_id,
+                            conversation_id=decision.conversation_id,
+                            turn_id=post_decision[-1].turn_id,
+                            step_id=decision.step_id,
+                            kind=CollaborationEventKind.STORY_COMMIT_RESULT,
+                            sender=CollaborationActor(CollaborationActorKind.GIT),
+                            recipient=_USER_ACTOR,
+                            payload=result_payload,
+                        ),),
+                    )
+                except Exception:
+                    result_payload = StoryCommitResultPayload(
+                        confirmation_request_id=request.confirmation_request_id,
+                        decision_event_id=decision_event_id,
+                        candidate_id=request.candidate.candidate_id,
+                        request_digest=request.request_digest,
+                        outcome=StoryCommitOutcomeKind.OUTCOME_UNKNOWN,
+                        next_action=StoryCommitNextAction.INSPECT,
+                    )
+                    message = (
+                        "The commit decision is durable but its result is not visible. "
+                        "Inspect the session; do not retry."
+                    )
+                return StoryCommitDecisionResult(
+                    request,
+                    decision.kind,
+                    result_payload,
+                    message,
+                )
+            except BaseException as failure:
+                escaping_failure = failure
+                raise
+            finally:
+                if decision_consumed and observed_pending is not None:
+                    self._retire_pending_story_commit(
+                        key,
+                        observed_pending,
+                        failure=escaping_failure,
+                    )
 
     async def _execute_confirmed_step_locked(
         self,

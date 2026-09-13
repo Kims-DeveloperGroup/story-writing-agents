@@ -229,6 +229,24 @@ physical-generation pin before session-derived sources, definitions, or
 provider work and retain it through durable persistence. Its short-lock
 acquisition/recheck grants no semantic READY or artifact authority and retains
 no Git lease across the provider await.
+
+The later Commit-request owner uses another identity-only six-descriptor pin.
+Runtime acquires it before request publication and retains it through terminal
+decision/result publication. Request preparation/publication failure closes
+the local owner; a mismatched decision or failed decision append preserves an
+already published owner. Once the decision is durable, cleanup closes exactly
+the owner observed at entry, including a stale mismatched owner, without
+closing a concurrently installed replacement. Terminal success, failure, or
+cancellation and exact-owner replacement also close once; abandoned runtime
+owners have an idempotent best-effort final release. This pin prevents physical
+identity recycling only and does not exclude an external Git writer.
+
+The corresponding runtime-bound `StoryCommitService` is creator-process/thread
+affine for Prepare, Authorize, Reject, Revise, Execute, Inspect, Recover, and
+internal repository-access binding. Foreign-thread or fork-child use fails
+before process-local service state, locks, filesystem access, or Git I/O.
+Direct-module unbound compatibility is unchanged.
+
 Conversation history remains in its separately
 configured control-plane store. Absent
 resources are not provisioned; moved, mismatched, staged, or otherwise
@@ -418,6 +436,10 @@ For story commits specifically:
   `outcome_unknown`; this includes ambiguity while publishing the final
   `committed` record, which is durably downgraded to `outcome_unknown` when the
   phase can still be proved.
+- Candidate and clean-index revalidation occurs before revision-history
+  inspection. External pre-staging observed before durable `running` is stale
+  candidate drift with `reprepare`, not recovery-only staged admission; the
+  staged index and working bytes remain untouched.
 - Constructing the initial `running` record in memory is not durable. Failures
   keep their pre-durable mapping until its create-only history append returns
   successfully; only a successfully appended `running` record crosses the

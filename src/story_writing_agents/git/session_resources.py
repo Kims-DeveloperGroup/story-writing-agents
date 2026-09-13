@@ -1793,11 +1793,12 @@ def _open_generation_directory(path: Path, identity: tuple[int, int]) -> int:
         if os.get_inheritable(descriptor):
             raise OSError
         return descriptor
-    except BaseException:
-        try:
-            os.close(descriptor)
-        except OSError:
-            pass
+    except OSError:
+        failure = _generation_error()
+        _close_generation_descriptor(descriptor, failure)
+        raise failure from None
+    except BaseException as failure:
+        _close_generation_descriptor(descriptor, failure)
         raise
 
 
@@ -1818,12 +1819,12 @@ def _duplicate_generation_directory(
             raise OSError
         return duplicate
     except OSError:
-        if duplicate >= 0:
-            try:
-                os.close(duplicate)
-            except OSError:
-                pass
-        raise _generation_error() from None
+        failure = _generation_error()
+        _close_generation_descriptor(duplicate, failure)
+        raise failure from None
+    except BaseException as failure:
+        _close_generation_descriptor(duplicate, failure)
+        raise
 
 
 def _open_generation_file(
@@ -1863,12 +1864,12 @@ def _open_generation_file(
             raise OSError
         return descriptor, bytes(content), facts
     except OSError:
-        if descriptor >= 0:
-            try:
-                os.close(descriptor)
-            except OSError:
-                pass
-        raise _generation_error() from None
+        failure = _generation_error()
+        _close_generation_descriptor(descriptor, failure)
+        raise failure from None
+    except BaseException as failure:
+        _close_generation_descriptor(descriptor, failure)
+        raise
 
 
 def _require_named_generation_file(
@@ -1961,6 +1962,26 @@ def _close_generation_descriptors(descriptors: tuple[int, ...]) -> None:
         try:
             os.close(descriptor)
         except OSError:
+            pass
+
+
+def _close_generation_descriptor(
+    descriptor: int,
+    failure: BaseException,
+) -> None:
+    """Close one factory-local descriptor without replacing its primary failure."""
+
+    if descriptor < 0:
+        return
+    try:
+        os.close(descriptor)
+    except BaseException as cleanup_failure:
+        try:
+            failure.add_note(
+                "Git session generation descriptor cleanup failed: "
+                f"{type(cleanup_failure).__name__}"
+            )
+        except BaseException:
             pass
 
 
@@ -2073,24 +2094,31 @@ def _bind_directory(path: Path) -> tuple[int, int]:
 
 def _open_bound_directory(path: Path, identity: tuple[int, int]) -> int:
     flags = os.O_RDONLY | getattr(os, "O_DIRECTORY", 0) | getattr(os, "O_NOFOLLOW", 0)
+    descriptor = -1
     try:
         descriptor = os.open(path, flags)
         opened = os.fstat(descriptor)
     except OSError:
-        raise _resource_error(
-            GitSessionFailureCode.UNSAFE_ROOT,
-            GitSessionOperationKind.INSPECT,
-            GitSessionResourceState.RECOVERY_REQUIRED,
-            GitSessionRecoveryAction.OPERATOR_RECOVERY,
-        ) from None
-    if (opened.st_dev, opened.st_ino) != identity or not stat.S_ISDIR(opened.st_mode):
-        os.close(descriptor)
-        raise _resource_error(
+        failure = _resource_error(
             GitSessionFailureCode.UNSAFE_ROOT,
             GitSessionOperationKind.INSPECT,
             GitSessionResourceState.RECOVERY_REQUIRED,
             GitSessionRecoveryAction.OPERATOR_RECOVERY,
         )
+        _close_generation_descriptor(descriptor, failure)
+        raise failure from None
+    except BaseException as failure:
+        _close_generation_descriptor(descriptor, failure)
+        raise
+    if (opened.st_dev, opened.st_ino) != identity or not stat.S_ISDIR(opened.st_mode):
+        failure = _resource_error(
+            GitSessionFailureCode.UNSAFE_ROOT,
+            GitSessionOperationKind.INSPECT,
+            GitSessionResourceState.RECOVERY_REQUIRED,
+            GitSessionRecoveryAction.OPERATOR_RECOVERY,
+        )
+        _close_generation_descriptor(descriptor, failure)
+        raise failure
     return descriptor
 
 

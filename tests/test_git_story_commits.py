@@ -263,6 +263,129 @@ class StoryCommitServiceTests(StoryCommitGitTestCase):
         result = service.execute(authority)
         self.assertIs(result.state, StoryCommitState.COMMITTED)
 
+    def test_identity_bound_service_rejects_foreign_thread_and_fork_before_io(
+        self,
+    ) -> None:
+        if "fork" not in multiprocessing.get_all_start_methods():
+            self.skipTest("requires POSIX fork semantics")
+        _root, _session_root, service, candidate = self.prepared_bound(
+            "service-affinity"
+        )
+        authority = service.authorize(
+            candidate,
+            self.confirmation(candidate, suffix="creator-authority"),
+        )
+
+        class PoisonLock:
+            def __enter__(self):
+                raise AssertionError("foreign service touched state lock")
+
+            def __exit__(self, _exc_type, _exc, _traceback):
+                return False
+
+        class PoisonBindings(dict):
+            def __getitem__(self, key):
+                raise AssertionError("foreign service read candidate map")
+
+            def get(self, key, default=None):
+                del key, default
+                raise AssertionError("foreign service read candidate map")
+
+            def pop(self, key, default=None):
+                del key, default
+                raise AssertionError("foreign service mutated candidate map")
+
+        actions = (
+            lambda: service.prepare(None, "foreign", ()),
+            lambda: service.authorize(None, None),
+            lambda: service.reject(None, None),
+            lambda: service.revise(None, None),
+            lambda: service.execute(authority),
+            lambda: service.inspect("foreign-operation"),
+            lambda: service.recover("foreign-operation"),
+        )
+        original_lock = service._state_lock
+        original_bindings = service._bindings
+
+        def call_all():
+            failures = []
+            with mock.patch.object(
+                commits_module,
+                "open_git_session_history",
+                side_effect=AssertionError("foreign service reached history I/O"),
+            ), mock.patch.object(
+                commits_module,
+                "prepare_identity_bound_story_commit_candidate",
+                side_effect=AssertionError("foreign service reached filesystem I/O"),
+            ), mock.patch.object(
+                StoryCommitService,
+                "_stage_git",
+                autospec=True,
+                side_effect=AssertionError("foreign service reached Git I/O"),
+            ):
+                for action in actions:
+                    try:
+                        action()
+                    except BaseException as failure:
+                        failures.append(
+                            (
+                                type(failure).__name__,
+                                getattr(getattr(failure, "code", None), "value", None),
+                                failure.__cause__ is None,
+                            )
+                        )
+            return tuple(failures)
+
+        service._state_lock = PoisonLock()
+        service._bindings = PoisonBindings()
+        try:
+            with ThreadPoolExecutor(max_workers=1) as executor:
+                thread_failures = executor.submit(call_all).result(timeout=10)
+            context = multiprocessing.get_context("fork")
+            child_results = context.Queue()
+
+            def call_in_child() -> None:
+                child_results.put(call_all())
+
+            process = context.Process(target=call_in_child)
+            try:
+                process.start()
+                process.join(timeout=10)
+                self.assertFalse(process.is_alive())
+                self.assertEqual(process.exitcode, 0)
+                process_failures = child_results.get(timeout=3)
+            finally:
+                if process.is_alive():
+                    process.terminate()
+                    process.join(timeout=5)
+        finally:
+            service._state_lock = original_lock
+            service._bindings = original_bindings
+        expected = (
+            (
+                "StoryCommitError",
+                StoryCommitFailureCode.AUTHORITY_INVALID.value,
+                True,
+            ),
+        ) * 7
+        self.assertEqual(thread_failures, expected)
+        self.assertEqual(process_failures, expected)
+        self.assertFalse(authority._consumed)
+        committed = service.execute(authority)
+        self.assertIs(committed.state, StoryCommitState.COMMITTED)
+
+        _root, _session_root, unbound, unbound_candidate = self.prepared(
+            "unbound-service-compatibility"
+        )
+        unbound_authority = unbound.authorize(
+            unbound_candidate,
+            self.confirmation(unbound_candidate, suffix="unbound"),
+        )
+        self.assertIs(
+            unbound.execute(unbound_authority).state,
+            StoryCommitState.COMMITTED,
+        )
+
     def test_recycled_numeric_ident_cannot_consume_story_commit_authority(
         self,
     ) -> None:
@@ -1126,6 +1249,19 @@ class StoryCommitServiceTests(StoryCommitGitTestCase):
                     artifact_before,
                 )
                 self.assertEqual(service.inspect(result.operation_id), result)
+                if decision is StoryCommitDecision.REVISE:
+                    with self.assertRaises(StoryCommitError) as revised:
+                        service.authorize(
+                            candidate,
+                            self.confirmation(
+                                candidate,
+                                suffix="revised-candidate",
+                            ),
+                        )
+                    self.assertIs(
+                        revised.exception.code,
+                        StoryCommitFailureCode.AUTHORITY_INVALID,
+                    )
 
     def test_real_sha1_and_sha256_commits_have_exact_tree_parent_identity_and_invariants(
         self,

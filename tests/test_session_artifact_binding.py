@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import gc
 import multiprocessing
 import os
 import pickle
@@ -211,6 +212,46 @@ class RuntimeSessionArtifactBindingTests(LeadOrchestrationTestCase):
         for descriptor in descriptors:
             with self.assertRaises(OSError):
                 os.fstat(descriptor)
+
+    def test_pending_owner_finalizer_closes_once_and_suppresses_failure(self) -> None:
+        binding = compose_session_artifact_binding(
+            self.control_workspace.root,
+            self.session_id,
+        )
+        original_close = SessionArtifactGenerationPin.close
+
+        for explicit in (False, True):
+            with self.subTest(explicit=explicit):
+                pin = binding.acquire_generation_pin()
+                descriptors = _generation_pin_descriptors(pin)
+                self.assertEqual(len(descriptors), 6)
+                calls = []
+                owner = object.__new__(orchestrator_module._PendingStoryCommit)
+                owner._generation_pin = pin
+
+                def close(current):
+                    if current is pin:
+                        calls.append(current)
+                    original_close(current)
+                    if not explicit and current is pin:
+                        raise SystemExit("injected finalizer close failure")
+
+                with mock.patch.object(
+                    SessionArtifactGenerationPin,
+                    "close",
+                    autospec=True,
+                    side_effect=close,
+                ):
+                    if explicit:
+                        owner.close()
+                    del owner
+                    gc.collect()
+
+                self.assertEqual(calls, [pin])
+                self.assertIsNone(pin._pin)
+                for descriptor in descriptors:
+                    with self.assertRaises(OSError):
+                        os.fstat(descriptor)
         with self.assertRaises(SessionArtifactBindingError):
             binding.require_generation_pin(pin)
 
@@ -896,6 +937,183 @@ class RuntimeSessionArtifactBindingTests(LeadOrchestrationTestCase):
         for descriptor in retained:
             with self.assertRaises(OSError):
                 os.fstat(descriptor)
+
+    def test_generation_descriptor_helpers_preserve_baseexception_and_cleanup(
+        self,
+    ) -> None:
+        binding = compose_session_artifact_binding(
+            self.control_workspace.root,
+            self.session_id,
+        )
+        with binding.open_ready_resources() as access:
+            worktree_descriptor = access.duplicate_worktree_descriptor()
+            common_descriptor = os.dup(access._lease.common_descriptor)
+            common_identity = access._lease.common_identity
+        self.addCleanup(os.close, worktree_descriptor)
+        self.addCleanup(os.close, common_descriptor)
+
+        for helper in ("duplicate", "directory", "file"):
+            for failure in (
+                KeyboardInterrupt(f"{helper} interrupted"),
+                SystemExit(f"{helper} exited"),
+                OSError(f"{helper} failed"),
+            ):
+                with self.subTest(helper=helper, failure=type(failure).__name__):
+                    opened: list[int] = []
+                    closed: list[int] = []
+                    original_dup = os.dup
+                    original_open = os.open
+                    original_close = os.close
+                    original_set_inheritable = os.set_inheritable
+
+                    def record_dup(descriptor):
+                        duplicate = original_dup(descriptor)
+                        opened.append(duplicate)
+                        return duplicate
+
+                    def record_open(path, flags, *args, **kwargs):
+                        descriptor = original_open(path, flags, *args, **kwargs)
+                        opened.append(descriptor)
+                        return descriptor
+
+                    def interrupt(descriptor, inheritable):
+                        if descriptor in opened:
+                            raise failure
+                        return original_set_inheritable(descriptor, inheritable)
+
+                    def close_then_fail(descriptor):
+                        if descriptor in opened:
+                            closed.append(descriptor)
+                            original_close(descriptor)
+                            raise OSError("secondary generation close failure")
+                        original_close(descriptor)
+
+                    observed = None
+                    observed_traceback = None
+                    with mock.patch.object(
+                        session_resources_module.os,
+                        "dup",
+                        side_effect=record_dup,
+                    ), mock.patch.object(
+                        session_resources_module.os,
+                        "open",
+                        side_effect=record_open,
+                    ), mock.patch.object(
+                        session_resources_module.os,
+                        "set_inheritable",
+                        side_effect=interrupt,
+                    ), mock.patch.object(
+                        session_resources_module.os,
+                        "close",
+                        side_effect=close_then_fail,
+                    ):
+                        try:
+                            if helper == "duplicate":
+                                session_resources_module._duplicate_generation_directory(
+                                    common_descriptor,
+                                    common_identity,
+                                )
+                            elif helper == "directory":
+                                session_resources_module._open_generation_directory(
+                                    binding.resources.identity.main_root,
+                                    binding._generation_identity.control_root_identity,
+                                )
+                            else:
+                                session_resources_module._open_generation_file(
+                                    worktree_descriptor,
+                                    ".git",
+                                )
+                        except BaseException as caught:
+                            observed = caught
+                            observed_traceback = caught.__traceback__
+                    if type(failure) is OSError:
+                        self.assertIs(type(observed), GitSessionResourceError)
+                        self.assertIs(
+                            observed.code,
+                            GitSessionFailureCode.UNSAFE_ROOT,
+                        )
+                        self.assertIsNone(observed.__cause__)
+                    else:
+                        self.assertIs(observed, failure)
+                    self.assertIsNotNone(observed_traceback)
+                    self.assertEqual(len(opened), 1)
+                    self.assertEqual(closed, opened)
+                    with self.assertRaises(OSError):
+                        os.fstat(opened[0])
+
+    def test_binding_composition_preserves_primary_failure_over_close_failure(
+        self,
+    ) -> None:
+        worktree_root = self.session_resources.identity.worktree_root
+        original_open = initialization_module._open_existing_root
+        original_close = os.close
+        original_capture = (
+            initialization_module.capture_locked_git_session_generation
+        )
+
+        for primary in (
+            KeyboardInterrupt("binding capture interrupted"),
+            SystemExit("binding capture exited"),
+            None,
+        ):
+            with self.subTest(primary=None if primary is None else type(primary).__name__):
+                target_descriptors: list[int] = []
+                closed: list[int] = []
+
+                def record_open(root, identity):
+                    descriptor = original_open(root, identity)
+                    if root == worktree_root:
+                        target_descriptors.append(descriptor)
+                    return descriptor
+
+                def close_then_fail(descriptor):
+                    if descriptor in target_descriptors:
+                        closed.append(descriptor)
+                        original_close(descriptor)
+                        raise OSError("secondary binding close failure")
+                    original_close(descriptor)
+
+                capture = (
+                    mock.DEFAULT
+                    if primary is None
+                    else primary
+                )
+                observed = None
+                capture_patch = mock.patch.object(
+                    initialization_module,
+                    "capture_locked_git_session_generation",
+                    wraps=original_capture if primary is None else None,
+                    side_effect=None if primary is None else capture,
+                )
+                with mock.patch.object(
+                    initialization_module,
+                    "_open_existing_root",
+                    side_effect=record_open,
+                ), mock.patch.object(
+                    initialization_module.os,
+                    "close",
+                    side_effect=close_then_fail,
+                ), capture_patch:
+                    try:
+                        compose_session_artifact_binding(
+                            self.control_workspace.root,
+                            self.session_id,
+                        )
+                    except BaseException as caught:
+                        observed = caught
+                self.assertEqual(len(target_descriptors), 1)
+                self.assertEqual(closed, target_descriptors)
+                with self.assertRaises(OSError):
+                    os.fstat(target_descriptors[0])
+                if primary is None:
+                    self.assertIs(type(observed), SessionArtifactBindingError)
+                    self.assertIsNone(observed.__cause__)
+                else:
+                    self.assertIs(observed, primary)
+                    self.assertIn(
+                        "session artifact descriptor cleanup failed: OSError",
+                        primary.__notes__,
+                    )
 
     def test_session_source_workspace_is_internal_and_accepts_safe_posix_paths(
         self,

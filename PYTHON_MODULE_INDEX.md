@@ -3047,7 +3047,11 @@ every intermediate arrow. The current runtime graph is acyclic.
   non-inheritable descriptors for those four directories and two indirection
   files, preventing deleted identities from being recycled; construction
   transfers that tuple once, and close, mismatch, and every partial failure
-  close all owned descriptors. Generation identities and pins retain their
+  close all owned descriptors. Each directory/file open or duplication keeps
+  its descriptor factory-local until successful return; every setup
+  `BaseException` closes that local ownership without replacing the primary,
+  while an original `OSError` retains the established content-free generation
+  failure translation. Generation identities and pins retain their
   creator process and non-recyclable thread token. Acquisition and recheck
   reject a foreign process or thread before any inherited per-pin lock,
   repository lock, descriptor validation, or Git I/O; close remains
@@ -3174,8 +3178,12 @@ every intermediate arrow. The current runtime graph is acyclic.
   `__all__`; workspace composition uses it to retain the successful Apply
   root's physical identity and guarded artifact-access callback without
   changing the public constructor, methods,
-  candidate values, or durable schemas. Direct construction remains strict by
-  default.
+  candidate values, or durable schemas. That bound service captures its
+  creator process and non-recyclable thread token when the physical root is
+  installed; all seven service methods reject a foreign thread or fork child
+  before authority/state locks, retained-map mutation, callbacks, history,
+  filesystem, or Git work. Direct construction remains strict by default and
+  does not gain the bound-only creator restriction.
 - **Direct internal dependencies:** `git.adapter`, `git.contracts`, `git.process`,
   `git.repository_lock`, `git.session_contracts`, `git.session_history`,
   `git.session_history_contracts`, `git.story_commit_candidates`, and
@@ -7283,7 +7291,17 @@ every intermediate arrow. The current runtime graph is acyclic.
   An exact current Apply decision may atomically mutate the artifact repository;
   successful Apply/unchanged outcomes may disclose one exact local commit
   request. A matching single-use Commit decision delegates staging and the
-  literal local commit to the established story-commit service. No path
+  literal local commit to the established story-commit service. One private
+  runtime-owned pending entry retains that exact identity-bound service and a
+  non-recyclable six-descriptor session-generation pin from request publication
+  through the user's decision, service action, and result-publication attempt;
+  it retains no Git lease and spans no provider await. Failed preparation or
+  publication, Commit/Reject/Revise completion, service or result failure,
+  cancellation, and exact replacement release the pin exactly once; runtime
+  abandonment invokes the owner's idempotent best-effort final release. A
+  failed decision append preserves the pending owner; after a durable decision
+  the exact observed owner is retired even when its request cannot be used,
+  without removing a concurrently replaced entry. No path
   performs a remote Git mutation or merge or exposes provider-native agent
   orchestration. Consensus submissions persist digest-addressed material;
   confirmed phases resolve candidate handles only through the material store,
@@ -7935,7 +7953,11 @@ every intermediate arrow. The current runtime graph is acyclic.
   one identity-bound repository lease, retains their immutable inspection,
   manifest, configuration allowance, and physical worktree identity, and
   verifies that the named root still has the same meaningful `(st_dev, st_ino)`.
-  This composition
+  Its transient worktree descriptor remains factory-owned through generation
+  capture and closes on every success or `BaseException`; cleanup failure is a
+  content-free secondary note and cannot replace the original cancellation or
+  protocol failure, while an otherwise primary close failure retains the
+  established binding-error translation. This composition
   does not re-admit the session scaffold or require clean artifact worktree
   content, so clean-index unstaged artifact modifications and deletions remain
   valid session state. It returns an immutable
@@ -8953,6 +8975,17 @@ every intermediate arrow. The current runtime graph is acyclic.
   cleanup bypasses copied binding locks and closes inherited Git descriptors
   without unlocking the parent's lease. This changes no module, import edge,
   export, facade, persistent schema, or state owner.
+  Identity-bound Story Commit services now apply that creator confinement at
+  every retained service entry before locks or operational work. Generation
+  descriptor construction and binding composition preserve primary
+  `BaseException` ownership while closing factory-local descriptors, and the
+  runtime's private pending-Commit owner holds a non-recyclable generation pin
+  through durable decision/result handling before exact-once terminal,
+  replacement, failure, or cancellation cleanup, with idempotent best-effort
+  final release on runtime abandonment. No Git lease spans the user wait or
+  provider work. These changes add no module, import
+  edge, export, facade API, persisted field, schema version, or #670 runtime-
+  agent CWD responsibility.
   Specialist routing adds one pure module and five net inward runtime
   edges over the provider-recovery baseline: artifact proposals replace their
   roster dependency with the policy, while relationship policy, conversation

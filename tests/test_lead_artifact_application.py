@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 import subprocess
 import unittest
 from dataclasses import replace
@@ -19,8 +20,12 @@ from story_writing_agents.conversations import (
     CollaborationConfirmationDecision,
     CollaborationNextAction,
     CollaborationSideEffect,
+    StoryCommitDecisionRequest,
+    StoryCommitNextAction,
+    StoryCommitOutcomeKind,
     project_collaboration_history,
 )
+from story_writing_agents.git.story_commit_contracts import StoryCommitDecision
 from story_writing_agents.writing_artifacts import (
     ArtifactApplicationError,
     ArtifactApplicationErrorCode,
@@ -31,7 +36,9 @@ from story_writing_agents.writing_artifacts.repository import WritingArtifactRep
 from story_writing_agents.workspace import initialization as initialization_module
 from story_writing_agents.workspace.initialization import (
     SessionArtifactAccess,
+    SessionArtifactBinding,
     SessionArtifactBindingError,
+    SessionArtifactGenerationPin,
     provision_session_resources,
 )
 
@@ -82,6 +89,20 @@ def _application_decision(
 
 
 class LeadArtifactApplicationTests(LeadOrchestrationTestCase):
+    def commit_session_fixture_state(self) -> None:
+        self.workspace.path(_RULES).unlink(missing_ok=True)
+        subprocess.run(
+            ["git", "add", "-A", "--", "core_documents", "manuscript"],
+            cwd=self.workspace.root,
+            check=True,
+        )
+        subprocess.run(
+            ["git", "commit", "-m", "Seed application test fixtures"],
+            cwd=self.workspace.root,
+            check=True,
+            stdout=subprocess.DEVNULL,
+        )
+
     def artifact_snapshot(self) -> tuple[tuple[str, bytes], ...]:
         return tuple(
             (item.path, item.content)
@@ -692,9 +713,203 @@ class LeadArtifactApplicationTests(LeadOrchestrationTestCase):
 
         self.assertIsNotNone(result.outcome.result)
         self.assertIsNone(result.commit_request)
-        self.assertNotIn(key, self.runtime._story_commit_services)
+        self.assertNotIn(key, self.runtime._pending_story_commits)
         projection = project_collaboration_history(self.history(turn.conversation_id))
         self.assertIsNone(projection.current_story_commit_request)
+
+    async def _assert_commit_request_failure_closes_pin_once(
+        self,
+        failure_point: str,
+    ) -> None:
+        self.commit_session_fixture_state()
+        original_acquire = SessionArtifactBinding.acquire_generation_pin
+        original_close = SessionArtifactGenerationPin.close
+        turn = await self.reviewed_create(f"Commit request {failure_point} failure")
+        decision = _application_decision(
+            turn,
+            ArtifactApplicationDecisionKind.APPLY,
+        )
+        key = (
+            decision.session_id,
+            decision.conversation_id,
+            decision.step_id,
+        )
+        pins = []
+        descriptors = []
+        close_calls = []
+        ordering = []
+
+        def acquire(binding):
+            pin = original_acquire(binding)
+            pins.append(pin)
+            descriptors.extend(pin._pin._descriptors)
+            ordering.append("pin")
+            return pin
+
+        def close(pin):
+            if pin in pins:
+                close_calls.append(pin)
+            return original_close(pin)
+
+        original_append = self.runtime._append_drafts
+        append_calls = 0
+
+        def append(*args, **kwargs):
+            nonlocal append_calls
+            append_calls += 1
+            if failure_point == "publish" and append_calls == 3:
+                ordering.append("request_publication")
+                raise OSError("commit request publication failed")
+            return original_append(*args, **kwargs)
+
+        def prepare(*args, **kwargs):
+            del args, kwargs
+            self.assertEqual(ordering, ["pin"])
+            raise RuntimeError("commit request preparation failed")
+
+        patches = [
+            mock.patch.object(
+                SessionArtifactBinding,
+                "acquire_generation_pin",
+                autospec=True,
+                side_effect=acquire,
+            ),
+            mock.patch.object(
+                SessionArtifactGenerationPin,
+                "close",
+                autospec=True,
+                side_effect=close,
+            ),
+            mock.patch.object(
+                self.runtime,
+                "_append_drafts",
+                side_effect=append,
+            ),
+        ]
+        if failure_point == "prepare":
+            patches.append(
+                mock.patch.object(
+                    StoryCommitService,
+                    "prepare",
+                    autospec=True,
+                    side_effect=prepare,
+                )
+            )
+        with patches[0], patches[1], patches[2]:
+            if len(patches) == 4:
+                with patches[3]:
+                    result = await self.runtime.decide_artifact_application(decision)
+            else:
+                result = await self.runtime.decide_artifact_application(decision)
+
+        self.assertEqual(len(pins), 1, result.message)
+        self.assertEqual(len(descriptors), 6)
+        self.assertEqual(close_calls, pins)
+        self.assertIsNone(pins[0]._pin)
+        for descriptor in descriptors:
+            with self.assertRaises(OSError):
+                os.fstat(descriptor)
+        self.assertNotIn(key, self.runtime._pending_story_commits)
+        self.assertIsNone(result.commit_request)
+        self.assertIsNotNone(result.outcome.result)
+        if failure_point == "publish":
+            self.assertEqual(
+                ordering,
+                ["pin", "request_publication"],
+                result.message,
+            )
+
+    async def test_commit_request_preparation_failure_closes_pin_once(self) -> None:
+        await self._assert_commit_request_failure_closes_pin_once("prepare")
+
+    async def test_commit_request_publication_failure_closes_pin_once(self) -> None:
+        await self._assert_commit_request_failure_closes_pin_once("publish")
+
+    async def test_pending_commit_rejects_replaced_generation_and_closes_pin(
+        self,
+    ) -> None:
+        self.commit_session_fixture_state()
+        turn = await self.reviewed_create("Pending commit generation replacement")
+        milestones = []
+        original_prepare = StoryCommitService.prepare
+        original_build = orchestrator_module.build_story_commit_request_payload
+
+        def prepare(service, *args, **kwargs):
+            milestones.append("prepare_enter")
+            try:
+                candidate = original_prepare(service, *args, **kwargs)
+            except BaseException as failure:
+                milestones.append(
+                    (
+                        "prepare_failure",
+                        type(failure).__name__,
+                        getattr(getattr(failure, "code", None), "value", None),
+                    )
+                )
+                raise
+            milestones.append("prepare_exit")
+            return candidate
+
+        def build(*args, **kwargs):
+            milestones.append("build")
+            return original_build(*args, **kwargs)
+
+        with mock.patch.object(
+            StoryCommitService,
+            "prepare",
+            autospec=True,
+            side_effect=prepare,
+        ), mock.patch.object(
+            orchestrator_module,
+            "build_story_commit_request_payload",
+            side_effect=build,
+        ):
+            applied = await self.runtime.decide_artifact_application(
+                _application_decision(turn, ArtifactApplicationDecisionKind.APPLY)
+            )
+        request = applied.commit_request
+        self.assertIsNotNone(request, (applied.message, milestones))
+        assert request is not None
+        reviewed = applied.request.reviewed_proposal
+        key = (reviewed.session_id, reviewed.conversation_id, reviewed.step_id)
+        pending = self.runtime._pending_story_commits[key]
+        pin = pending._generation_pin
+        assert pin is not None
+        descriptors = pin._pin._descriptors
+        close_calls = []
+        original_close = type(pin).close
+
+        def close(current):
+            if current is pin:
+                close_calls.append(current)
+            return original_close(current)
+
+        decision = StoryCommitDecisionRequest(
+            session_id=reviewed.session_id,
+            conversation_id=reviewed.conversation_id,
+            step_id=reviewed.step_id,
+            confirmation_request_id=request.confirmation_request_id,
+            application_result_event_id=request.application_result_event_id,
+            candidate_id=request.candidate.candidate_id,
+            request_digest=request.request_digest,
+            confirmation_id="replacement-confirmation",
+            kind=StoryCommitDecision.COMMIT,
+        )
+        with self.replace_session_worktree(), mock.patch.object(
+            type(pin),
+            "close",
+            new=close,
+        ):
+            result = await self.runtime.decide_story_commit(decision)
+
+        self.assertIs(result.outcome.outcome, StoryCommitOutcomeKind.STALE)
+        self.assertIs(result.outcome.next_action, StoryCommitNextAction.REPREPARE)
+        self.assertEqual(close_calls, [pin])
+        self.assertNotIn(key, self.runtime._pending_story_commits)
+        self.assertIsNone(pin._pin)
+        for descriptor in descriptors:
+            with self.assertRaises(OSError):
+                os.fstat(descriptor)
 
 
 if __name__ == "__main__":

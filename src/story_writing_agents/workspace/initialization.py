@@ -976,10 +976,13 @@ def _close_untransferred_artifact_descriptor(
     try:
         os.close(descriptor)
     except BaseException as cleanup_failure:
-        failure.add_note(
-            "session artifact descriptor cleanup failed: "
-            f"{type(cleanup_failure).__name__}"
-        )
+        try:
+            failure.add_note(
+                "session artifact descriptor cleanup failed: "
+                f"{type(cleanup_failure).__name__}"
+            )
+        except BaseException:
+            pass
 
 
 class SessionArtifactBindingError(SessionArtifactGuardFailure, RuntimeError):
@@ -1023,6 +1026,7 @@ def compose_session_artifact_binding(
                 raise WorkspaceSecurityError(
                     "session worktree root is not a safe directory"
                 )
+            descriptor = -1
             descriptor = _open_existing_root(worktree_root, worktree_identity)
             try:
                 confirmed_resources = _require_ready_locked_git_session_resources(
@@ -1045,8 +1049,13 @@ def compose_session_artifact_binding(
                     confirmed_resources,
                     expected_worktree_identity=worktree_identity,
                 )
-            finally:
+            except BaseException as failure:
+                _close_untransferred_artifact_descriptor(descriptor, failure)
+                descriptor = -1
+                raise
+            else:
                 os.close(descriptor)
+                descriptor = -1
     except _SESSION_ARTIFACT_BINDING_FAILURES:
         raise SessionArtifactBindingError(
             "session artifact resources are unavailable"

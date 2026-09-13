@@ -188,6 +188,11 @@ no-follow relationship proof, and release the lock before returning. They run
 no Git child or semantic READY, manifest, policy, or artifact scan and grant no
 traversal, read, mutation, or repository authority.
 
+Generation directory/file opens and duplicates, plus initial binding
+composition, keep each descriptor locally owned until transfer. Every
+`BaseException` closes the locally owned descriptor while preserving the
+primary failure; cleanup failure details are diagnostic only.
+
 The generation identity, binding, and pin are confined to the creator process
 and opaque thread token. Foreign-thread and forked-child acquisition or recheck
 fails before repository locking, descriptor validation, or other filesystem
@@ -277,7 +282,22 @@ fail closed. Noncanonical untracked files are omitted and preserved.
 Commit authority is nonserializable and consumed before I/O. Its process/thread
 check precedes the internal one-use lock, so a forked child rejects it without
 waiting on a copied lock, consuming parent authority, or reaching filesystem or
-Git work. Under the lease,
+Git work. The runtime-bound service that owns Prepare, Authorize, Reject,
+Revise, Execute, Inspect, Recover, and internal repository-access binding has
+the same creator-process/thread boundary, checked before service state, locks,
+filesystem access, or Git work.
+
+Before publishing a Commit request, runtime transfers one six-descriptor
+physical-generation pin to its pending owner. The identity-only pin cannot be
+traversed and does not exclude noncooperating Git; semantic READY checks remain
+authoritative. It closes exactly once after terminal decision/result
+publication, failure, cancellation, exact-owner replacement, or best-effort
+runtime abandonment. Failure before request publication closes the new local
+owner. A mismatched decision or failed decision append preserves the published
+owner; after a durable decision, cleanup retires only the exact owner observed
+at entry and leaves any replacement live.
+
+Under the lease,
 the executor synchronizes `running` evidence before the first mutation, then
 uses only literal `hash-object -w --no-filters --stdin`, `update-index`
 cache-entry/removal, `write-tree`, `commit-tree`, and compare-and-swap
@@ -286,6 +306,12 @@ Candidate paths are supplied after `--` where the Git command accepts a path;
 no glob, directory-wide add, checkout, reset, clean, hook, signing, filter,
 textconv, alias, pager/editor, credential prompt, remote, or provider input can
 widen the set.
+
+Authorize validates the current candidate and clean index before consulting
+revision history. An externally pre-staged index observed before durable
+`running` is therefore stale candidate drift requiring repreparation, not a
+recovery-only staged operation; the foreign index and worktree bytes are
+preserved.
 
 The verified tree must equal the prepared expected tree. The commit has exactly
 one prepared parent, exact message, and captured effective identity, and only

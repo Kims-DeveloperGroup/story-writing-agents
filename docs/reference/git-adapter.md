@@ -561,7 +561,9 @@ indirection files: the worktree `.git` and administrative `commondir`. It keeps
 their exact identities, file metadata, and SHA-256 digests. One opaque pin owns
 six corresponding non-inheritable descriptors, closes every descriptor on
 mismatch or partial construction, retains them after successful transfer, and
-closes idempotently.
+closes idempotently. Each directory/file open or duplicate remains locally
+owned until transfer. Any `BaseException` closes that local descriptor while
+preserving the primary failure; a cleanup failure is diagnostic only.
 
 Pin acquisition and current-generation recheck take the repository lock only
 for the bounded no-follow relationship proof and release it before returning.
@@ -972,6 +974,15 @@ reserved twice by the same service, and candidate/proposal/correlation IDs must
 all match. No authority survives restart; the runtime must obtain a fresh user
 decision instead of presenting an old serialized decision again.
 
+When runtime composition binds `StoryCommitService` to the successful Apply
+root and repository-access factory, the retained service is affine to its
+creator process and opaque thread token. Every service operation—Prepare,
+Authorize, Reject, Revise, Execute, Inspect, Recover, and repository-access
+binding—checks that identity before reading process-local service state, taking
+a service or history lock, or reaching filesystem or Git I/O. Direct-module
+services without that runtime binding retain their existing compatibility
+behavior.
+
 Process and thread affinity are checked before the authority's internal one-use
 lock. A forked child therefore returns `authority_invalid` without waiting on
 a copied lock or consuming the parent's authority, and it reaches no history,
@@ -983,9 +994,22 @@ filesystem, or Git operation.
 correlation IDs, exact `ArtifactChangeSet`, and its projected-state digest.
 Prepare requires that the change set is already applied exactly in the ready
 session worktree. Runtime composition additionally pins preparation to the
-physical worktree identity that successfully completed Apply; the same pin is
-retained through authorization and execution. Identity-bound preparation opens
-session history first, then lends that live history's READY validator to the
+physical worktree identity that successfully completed Apply. Before it
+publishes the Commit request, runtime acquires one opaque six-descriptor
+generation pin and transfers it to the pending request owner. That pin remains
+live through the terminal decision and result publication, and closes exactly
+once after success, failure, cancellation, replacement by another exact owner,
+or best-effort cleanup when the runtime and owner are abandoned. A failure
+before request publication closes the new owner or untransferred pin. A
+decision mismatch or decision-publication failure leaves the already published
+pending owner intact. Once the decision is durable, runtime retires the exact
+owner it observed at entry, even if it was stale, without retiring a
+replacement installed meanwhile. The pin prevents physical identity recycling
+only; it does not exclude an external Git process or confer repository
+authority.
+
+Identity-bound preparation opens session history first, then lends that live
+history's READY validator to the
 binding's one stable guarded repository generation for canonical artifact
 capture. Repository capture, Git checks, and create-only candidate publication
 therefore share one lease and one borrowed semantic READY transaction instead
@@ -1037,8 +1061,11 @@ branch and internal-ref tips, registered session worktree, main HEAD/status,
 and physical roots. READY/history resource loss detected before the `RUNNING`
 record is durable maps to `recovery_required`; ambiguity afterward is
 `outcome_unknown`. Candidate/root replacement found before execution remains
-candidate drift and requires
-repreparation. Execution then follows this fixed order:
+candidate drift and requires repreparation. Candidate and clean-index
+revalidation runs before revision-history inspection, so an externally
+pre-staged index detected before `RUNNING` is published is likewise stale
+candidate drift and `reprepare`; it does not enter staged-operation inspection
+or mutate the index. Execution then follows this fixed order:
 
 ```text
 publish and fsync RUNNING operation evidence

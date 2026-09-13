@@ -99,7 +99,10 @@ identity lock, repeat that bounded no-follow relationship proof, and release
 the lock before returning; they run no Git subprocess or semantic READY,
 manifest, policy, or artifact scan. The pin exposes no descriptor, traversal,
 content-read, mutation, or repository authority and is not a substitute for a
-guarded READY transaction.
+guarded READY transaction. Generation directory/file opens and duplicates,
+and initial binding composition, retain local descriptor ownership until
+transfer. Every `BaseException` closes those local descriptors without
+replacing the primary failure; cleanup failures remain diagnostic only.
 
 Direct Lead and Lead-synthesis invocations acquire this pin before any
 session-derived definition, source, or provider work and retain it through the
@@ -1051,23 +1054,39 @@ and sibling-session bytes remain outside the operation.
 Commit remains a distinct decision and authority boundary. Its internal
 service carries the successful Apply binding's physical worktree identity into
 Commit-request preparation, candidate authorization, and execution. Runtime
-reopens that exact binding and holds it through the `story_commit_request`
-append and in-memory service registration. A detected binding loss suppresses
-the returned request and removes the in-memory service, but it cannot roll back
-an append that already became durable. The Commit service also independently
-holds its session-history lease and places semantic READY checkpoints around execution,
-inspection, recovery, and every durable history transition. Normal phases
-require a clean READY index; after intentional staging, phase-aware topology
-checks instead require exactly the candidate index/worktree, branch and
-internal-ref tips, registered worktree, main-root HEAD/status, and bound
-physical root. READY/history resource loss detected before the `running`
-record is durable maps to `recovery_required`; failure after it is durable maps
-to `outcome_unknown`. A candidate/root replacement found before execution
-remains candidate drift and requires a fresh request. Failure while publishing
-the final `committed` record also durably preserves the same operation as
-`outcome_unknown` when the phase topology can still be proved. Apply never
-implies Commit, and neither operation pushes, merges, or grants a provider
-direct filesystem or Git authority.
+continues with that same invocation binding and, before publishing the
+`story_commit_request`,
+transfers one six-descriptor physical-generation pin to the in-memory pending
+request owner. The owner retains that non-recyclable identity through the
+terminal decision and result publication and closes it exactly once on
+success, failure, cancellation, replacement, or best-effort runtime
+abandonment. A request-preparation or publication failure closes the new owner
+or untransferred pin, but it cannot roll back an append that already became
+durable. This private lifecycle changes no public method signature or payload
+schema, and the pin grants no repository access or exclusion from an external
+Git process.
+
+The retained identity-bound Commit service is creator-process/thread affine.
+Prepare, Authorize, Reject, Revise, Execute, Inspect, Recover, and internal
+repository-access binding reject a foreign thread or forked child before
+reading service state, taking service or history locks, or reaching
+filesystem/Git I/O. The Commit service also
+independently holds its session-history lease and places semantic READY
+checkpoints around execution, inspection, recovery, and every durable history
+transition. Normal phases require a clean READY index; after intentional
+staging, phase-aware topology checks instead require exactly the candidate
+index/worktree, branch and internal-ref tips, registered worktree, main-root
+HEAD/status, and bound physical root. READY/history resource loss detected
+before the `running` record is durable maps to `recovery_required`; failure
+after it is durable maps to `outcome_unknown`. A candidate/root replacement
+found before execution remains candidate drift and requires a fresh request.
+Candidate and clean-index revalidation precedes revision-history inspection,
+so an externally pre-staged index detected before `running` is durable is stale
+and requires repreparation; it is not treated as a recovery-only staged
+operation. Failure while publishing the final `committed` record also durably
+preserves the same operation as `outcome_unknown` when the phase topology can
+still be proved. Apply never implies Commit, and neither operation pushes,
+merges, or grants a provider direct filesystem or Git authority.
 
 Identity-bound candidate preparation borrows the live session-history READY
 validator for canonical capture through the binding's one stable guarded
@@ -1076,6 +1095,13 @@ candidate append stay under that same lease and READY authority; no second
 repository generation or independently reacquired Git lease is substituted.
 Likewise, merely constructing `running` in memory is not durable Commit start.
 Pre-durable error mapping remains in force until the history append succeeds.
+
+A structurally invalid or mismatched decision is rejected before publication
+and preserves its published pending owner. If decision publication itself
+fails, that owner and pin likewise remain available for a later exact decision.
+After decision publication succeeds, terminal cleanup retires precisely the
+owner observed when processing began—even when its request no longer matches
+the durable tail—and never closes a replacement installed concurrently.
 
 The identity-bound service applies the same Apply-root requirement to
 `inspect()` and `recover()`, checking before and between their owner reads and
