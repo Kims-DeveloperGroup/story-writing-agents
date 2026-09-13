@@ -607,6 +607,16 @@ run after success, `RuntimeError`, or cancellation. Binding loss found there
 dominates the body failure; a clean postcheck preserves the original exception.
 Cleanup still revokes access and closes its descriptors on either path.
 
+The binding's creator process and opaque thread token also gate every READY,
+repository-callback, session-source, Story Commit service-composition, and
+borrowed Story Commit access factory.
+A foreign thread or forked child is rejected before a binding lock, Git lease,
+READY callback, descriptor open, or repository/source I/O. During factory
+setup, each new descriptor and lease remains factory-owned until the access
+object is activated and ownership transfers. Every `BaseException` before
+transfer closes the descriptor and unwinds the lease while preserving the
+primary failure; cleanup failures are retained only as diagnostic notes.
+
 The artifact binding captures the Git-owned generation identity under its
 initial READY lease. Lead and synthesis can then acquire the opaque six-
 descriptor pin under a separate short lock before session-derived source,
@@ -629,6 +639,12 @@ Context-manager cleanup may still run on a foreign thread: it privately revokes
 access, releases the flock, and closes descriptors without granting that thread
 authority. The required postcheck still reports binding loss with the same
 failure precedence described above.
+In a forked child, artifact-access revoke instead skips the inherited binding
+lock and closes only the child's worktree-descriptor copy. A fork-child Git
+lease exit similarly closes the child's common-Git descriptor without issuing
+`LOCK_UN`; the shared open-file-description lock and the parent's exclusion
+remain active until the parent exits its own lease.
+
 Binding itself performs no artifact I/O, provisioning, provider call, or global
 runtime mutation. Known readiness and workspace-validation failures become one
 content-free binding failure; malformed protocol/type defects remain visible.
@@ -955,6 +971,11 @@ consultation values cannot authorize execution, a confirmation ID cannot be
 reserved twice by the same service, and candidate/proposal/correlation IDs must
 all match. No authority survives restart; the runtime must obtain a fresh user
 decision instead of presenting an old serialized decision again.
+
+Process and thread affinity are checked before the authority's internal one-use
+lock. A forked child therefore returns `authority_invalid` without waiting on
+a copied lock or consuming the parent's authority, and it reaches no history,
+filesystem, or Git operation.
 
 ### Prepare and lead projection
 

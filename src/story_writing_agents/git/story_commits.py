@@ -159,6 +159,11 @@ class StoryCommitAuthority:
         str,
         StoryCommitRevalidation,
     ]:
+        if (
+            self._pid != os.getpid()
+            or self._thread_token is not current_thread_token()
+        ):
+            raise _error(StoryCommitFailureCode.AUTHORITY_INVALID)
         with self._lock:
             if (
                 self._owner is not owner

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import copy
+import multiprocessing
 import os
 import pickle
 import threading
@@ -202,6 +203,65 @@ class StoryCommitServiceTests(StoryCommitGitTestCase):
         with self.assertRaises(StoryCommitError) as caught:
             service.execute(authority)
         self.assertIs(caught.exception.code, StoryCommitFailureCode.AUTHORITY_CONSUMED)
+
+    def test_forked_authority_rejects_before_copied_lock_and_parent_can_consume(
+        self,
+    ) -> None:
+        if "fork" not in multiprocessing.get_all_start_methods():
+            self.skipTest("requires POSIX fork semantics")
+        _root, _session_root, service, candidate = self.prepared_bound(
+            "forked-authority-lock"
+        )
+        authority = service.authorize(
+            candidate,
+            self.confirmation(candidate, suffix="forked-lock"),
+        )
+        context = multiprocessing.get_context("fork")
+        child_results = context.Queue()
+
+        def consume_in_child() -> None:
+            try:
+                with mock.patch.object(
+                    commits_module,
+                    "open_git_session_history",
+                    side_effect=AssertionError("forked authority reached Git I/O"),
+                ):
+                    service.execute(authority)
+            except BaseException as failure:
+                child_results.put(
+                    (
+                        type(failure).__name__,
+                        getattr(getattr(failure, "code", None), "value", None),
+                        failure.__cause__ is None,
+                    )
+                )
+            else:
+                child_results.put((None, None, None))
+
+        authority._lock.acquire()  # noqa: SLF001
+        process = context.Process(target=consume_in_child)
+        try:
+            process.start()
+            process.join(timeout=10)
+            self.assertFalse(process.is_alive())
+            self.assertEqual(process.exitcode, 0)
+            child = child_results.get(timeout=3)
+        finally:
+            if process.is_alive():
+                process.terminate()
+                process.join(timeout=5)
+            authority._lock.release()  # noqa: SLF001
+        self.assertEqual(
+            child,
+            (
+                "StoryCommitError",
+                StoryCommitFailureCode.AUTHORITY_INVALID.value,
+                True,
+            ),
+        )
+        self.assertFalse(authority._consumed)  # noqa: SLF001
+        result = service.execute(authority)
+        self.assertIs(result.state, StoryCommitState.COMMITTED)
 
     def test_recycled_numeric_ident_cannot_consume_story_commit_authority(
         self,

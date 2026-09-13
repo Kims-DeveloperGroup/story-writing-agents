@@ -493,6 +493,7 @@ class SessionArtifactBinding:
     def open_ready_resources(self) -> Iterator[SessionArtifactAccess]:
         """Hold exact READY Git and physical-root authority for artifact I/O."""
 
+        self._require_creator()
         nested = self._current_repository_access()
         if nested is not None:
             nested.require_active()
@@ -506,6 +507,7 @@ class SessionArtifactBinding:
             return
 
         access: SessionArtifactAccess | None = None
+        descriptor = -1
         stack = ExitStack()
         try:
             lease = stack.enter_context(
@@ -526,14 +528,21 @@ class SessionArtifactBinding:
                 self.worktree_identity,
             )
             access = SessionArtifactAccess(self, lease, descriptor)
-        except _SESSION_ARTIFACT_BINDING_FAILURES:
+            descriptor = -1
+        except BaseException as failure:
+            _close_untransferred_artifact_descriptor(descriptor, failure)
             try:
                 stack.close()
-            except _SESSION_ARTIFACT_BINDING_FAILURES:
-                pass
-            raise SessionArtifactBindingError(
-                "session artifact resources are unavailable"
-            ) from None
+            except BaseException as cleanup_failure:
+                failure.add_note(
+                    "session artifact lock cleanup failed: "
+                    f"{type(cleanup_failure).__name__}"
+                )
+            if isinstance(failure, _SESSION_ARTIFACT_BINDING_FAILURES):
+                raise SessionArtifactBindingError(
+                    "session artifact resources are unavailable"
+                ) from None
+            raise
 
         body_failure: BaseException | None = None
         try:
@@ -557,6 +566,7 @@ class SessionArtifactBinding:
             ) from None
 
     def _activate_repository_access(self, access: SessionArtifactAccess) -> None:
+        self._require_creator()
         with self._operation_lock:
             if current_thread_token() is not access._owner_thread_token:
                 raise SessionArtifactBindingError(
@@ -570,7 +580,7 @@ class SessionArtifactBinding:
     def acquire_generation_pin(self) -> SessionArtifactGenerationPin:
         """Acquire one opaque pin under a short physical-generation lock."""
 
-        self._require_generation_creator()
+        self._require_creator()
         identity = self._generation_identity
         if identity is None:
             raise SessionArtifactBindingError(
@@ -596,7 +606,7 @@ class SessionArtifactBinding:
     def require_generation_pin(self, pin: SessionArtifactGenerationPin) -> None:
         """Require one opaque pin to match this binding's current generation."""
 
-        self._require_generation_creator()
+        self._require_creator()
         if type(pin) is not SessionArtifactGenerationPin:
             raise TypeError("generation pin must be exact")
         identity = self._generation_identity
@@ -611,7 +621,7 @@ class SessionArtifactBinding:
                 "session artifact resources are unavailable"
             ) from None
 
-    def _require_generation_creator(self) -> None:
+    def _require_creator(self) -> None:
         if (
             self._generation_creator_pid != os.getpid()
             or self._generation_creator_thread_token is not current_thread_token()
@@ -621,6 +631,7 @@ class SessionArtifactBinding:
             )
 
     def _deactivate_repository_access(self, access: SessionArtifactAccess) -> None:
+        self._require_creator()
         with self._operation_lock:
             if current_thread_token() is not access._owner_thread_token:
                 raise SessionArtifactBindingError(
@@ -636,6 +647,8 @@ class SessionArtifactBinding:
                 self._operation_tokens.pop(access._owner_thread_token, None)
 
     def _revoke_repository_access(self, access: SessionArtifactAccess) -> None:
+        if self._generation_creator_pid != os.getpid():
+            return
         with self._operation_lock:
             tokens = self._operation_tokens.get(access._owner_thread_token)
             if tokens and access in tokens:
@@ -644,12 +657,14 @@ class SessionArtifactBinding:
                     self._operation_tokens.pop(access._owner_thread_token, None)
 
     def _current_repository_access(self) -> SessionArtifactAccess | None:
+        self._require_creator()
         with self._operation_lock:
             tokens = self._operation_tokens.get(current_thread_token())
             return None if not tokens else tokens[-1]
 
     @contextmanager
     def _open_repository_operation(self) -> Iterator[None]:
+        self._require_creator()
         with self._operation_lock:
             access = self._current_repository_access()
             if access is None:
@@ -669,7 +684,9 @@ class SessionArtifactBinding:
     ) -> Iterator[WritingArtifactRepository]:
         """Borrow one live history validator for exact artifact capture."""
 
+        self._require_creator()
         access: SessionArtifactAccess | None = None
+        descriptor = -1
         try:
             confirmed = validate_ready()
             if confirmed != self.resources:
@@ -686,10 +703,14 @@ class SessionArtifactBinding:
                 descriptor,
                 ready_validator=validate_ready,
             )
-        except _SESSION_ARTIFACT_BINDING_FAILURES:
-            raise SessionArtifactBindingError(
-                "session artifact resources are unavailable"
-            ) from None
+            descriptor = -1
+        except BaseException as failure:
+            _close_untransferred_artifact_descriptor(descriptor, failure)
+            if isinstance(failure, _SESSION_ARTIFACT_BINDING_FAILURES):
+                raise SessionArtifactBindingError(
+                    "session artifact resources are unavailable"
+                ) from None
+            raise
 
         body_failure: BaseException | None = None
         try:
@@ -740,7 +761,23 @@ class SessionArtifactAccess:
         self._descriptor = descriptor
         self._owner_thread_token = current_thread_token()
         self._active = True
-        binding._activate_repository_access(self)
+        try:
+            binding._activate_repository_access(self)
+        except BaseException as failure:
+            self._active = False
+            if (
+                binding._generation_creator_pid == os.getpid()
+                and binding._generation_creator_thread_token
+                is current_thread_token()
+            ):
+                try:
+                    binding._revoke_repository_access(self)
+                except BaseException as cleanup_failure:
+                    failure.add_note(
+                        "session artifact activation cleanup failed: "
+                        f"{type(cleanup_failure).__name__}"
+                    )
+            raise
 
     @property
     def repository(self) -> WritingArtifactRepository:
@@ -780,6 +817,7 @@ class SessionArtifactAccess:
     def require_active(self) -> None:
         """Require the live lease, descriptor, and named worktree identity."""
 
+        self._binding._require_creator()
         if (
             not self._active
             or current_thread_token() is not self._owner_thread_token
@@ -927,6 +965,23 @@ def _postvalidate_session_artifact_access(access: SessionArtifactAccess) -> None
         ) from None
 
 
+def _close_untransferred_artifact_descriptor(
+    descriptor: int,
+    failure: BaseException,
+) -> None:
+    """Close factory-local authority while preserving its original failure."""
+
+    if descriptor < 0:
+        return
+    try:
+        os.close(descriptor)
+    except BaseException as cleanup_failure:
+        failure.add_note(
+            "session artifact descriptor cleanup failed: "
+            f"{type(cleanup_failure).__name__}"
+        )
+
+
 class SessionArtifactBindingError(SessionArtifactGuardFailure, RuntimeError):
     """A content-free failure to bind exact READY session artifact resources."""
 
@@ -1036,6 +1091,12 @@ def compose_story_commit_service(
 ) -> StoryCommitService:
     """Compose commit authority for one already-ready workspace session."""
 
+    if artifact_binding is not None:
+        if type(artifact_binding) is not SessionArtifactBinding:
+            raise SessionArtifactBindingError(
+                "story commit binding does not match the ready session"
+            )
+        artifact_binding._require_creator()
     main_root = _main_root(root)
     manifest = _known_baseline_manifest(main_root)
     allowance = _validated_configuration_allowance(main_root)
@@ -1052,10 +1113,7 @@ def compose_story_commit_service(
             session_id,
             allowed_worktree_changes=allowance,
         )
-    if (
-        type(artifact_binding) is not SessionArtifactBinding
-        or artifact_binding.resources != ready
-    ):
+    if artifact_binding.resources != ready:
         raise SessionArtifactBindingError(
             "story commit binding does not match the ready session"
         )

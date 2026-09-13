@@ -212,6 +212,18 @@ cancellation. When both the body and exit fail, binding loss takes precedence;
 a clean postcheck preserves the original exception, and cleanup remains
 guaranteed.
 
+That binding's creator-process/thread check runs at every repository, source,
+READY, Story Commit service-composition, and borrowed access factory before a
+binding lock, Git lease, READY callback, descriptor open, or I/O. Factory-local
+descriptors and
+leases remain owned there until access activation transfers them; any
+`BaseException` before transfer closes and unwinds them while preserving the
+primary failure. A fork-child revoke avoids the copied binding lock and closes
+only the child's worktree descriptor. Its inherited Git lease closes the child
+common-Git descriptor without `LOCK_UN`, so the parent's exclusion remains in
+force. A copied Story Commit authority likewise rejects on PID/thread affinity
+before its one-use lock and leaves the parent's authority unconsumed.
+
 Direct Lead and Lead-synthesis owners acquire a separate opaque six-descriptor
 physical-generation pin before session-derived sources, definitions, or
 provider work and retain it through durable persistence. Its short-lock

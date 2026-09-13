@@ -59,6 +59,7 @@ class GitRepositoryLease:
         "_common_git",
         "_common_identity",
         "_main_root",
+        "_pid",
         "_root_identity",
         "_thread_token",
     )
@@ -77,6 +78,7 @@ class GitRepositoryLease:
         self._root_identity = root_identity
         self._common_identity = common_identity
         self._common_descriptor = common_descriptor
+        self._pid = os.getpid()
         self._thread_token = current_thread_token()
         self._active = True
 
@@ -108,7 +110,11 @@ class GitRepositoryLease:
     def require_active(self) -> None:
         """Revalidate both named directories and the live leased descriptor."""
 
-        if not self._active or current_thread_token() is not self._thread_token:
+        if (
+            self._pid != os.getpid()
+            or not self._active
+            or current_thread_token() is not self._thread_token
+        ):
             raise _failure(GitRepositoryLockFailureCode.LOCK_UNAVAILABLE)
         failure: GitRepositoryLockFailure | None = None
         try:
@@ -150,6 +156,7 @@ def lock_git_repository(main_root: Path) -> Iterator[GitRepositoryLease]:
     common_git = root / ".git"
     common_identity = _bind_directory(common_git)
     common_descriptor = _open_bound_directory(common_git, common_identity)
+    creator_pid = os.getpid()
     failure: GitRepositoryLockFailure | None = None
     try:
         _fcntl.flock(common_descriptor, _fcntl.LOCK_EX)
@@ -162,23 +169,26 @@ def lock_git_repository(main_root: Path) -> Iterator[GitRepositoryLease]:
             pass
         raise failure
 
-    lease = GitRepositoryLease(
-        main_root=root,
-        common_git=common_git,
-        root_identity=root_identity,
-        common_identity=common_identity,
-        common_descriptor=common_descriptor,
-    )
+    lease: GitRepositoryLease | None = None
     try:
+        lease = GitRepositoryLease(
+            main_root=root,
+            common_git=common_git,
+            root_identity=root_identity,
+            common_identity=common_identity,
+            common_descriptor=common_descriptor,
+        )
         lease.require_active()
         yield lease
         lease.require_active()
     finally:
-        lease._close()
-        try:
-            _fcntl.flock(common_descriptor, _fcntl.LOCK_UN)
-        except OSError:
-            pass
+        if lease is not None:
+            lease._close()
+        if creator_pid == os.getpid():
+            try:
+                _fcntl.flock(common_descriptor, _fcntl.LOCK_UN)
+            except OSError:
+                pass
         try:
             os.close(common_descriptor)
         except OSError:

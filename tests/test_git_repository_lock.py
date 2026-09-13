@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import multiprocessing
 import os
 import threading
 import unittest
@@ -155,6 +156,99 @@ class GitRepositoryLockSafetyTests(DisposableGitTestCase):
         self.assertFalse(suppresses)
         with self.assertRaises(OSError):
             os.fstat(descriptor)
+        with lock_git_repository(root) as replacement:
+            replacement.require_active()
+
+    def test_forked_context_exit_cannot_unlock_parent_lease(self) -> None:
+        if "fork" not in multiprocessing.get_all_start_methods():
+            self.skipTest("requires POSIX fork semantics")
+        if lock_module._fcntl is None:
+            self.skipTest("requires flock support")
+        root = self._repository("forked-context-exit")
+        manager = lock_git_repository(root)
+        lease = manager.__enter__()
+        descriptor = lease.common_descriptor
+        context = multiprocessing.get_context("fork")
+        child_results = context.Queue()
+
+        def exit_in_child() -> None:
+            failure_code = None
+            try:
+                manager.__exit__(None, None, None)
+            except GitRepositoryLockFailure as failure:
+                failure_code = failure.code.value
+            try:
+                os.fstat(descriptor)
+                descriptor_closed = False
+            except OSError:
+                descriptor_closed = True
+            child_results.put((failure_code, descriptor_closed))
+
+        def contend(result_queue) -> None:
+            contender = os.open(root / ".git", os.O_RDONLY)
+            acquired = False
+            try:
+                try:
+                    lock_module._fcntl.flock(
+                        contender,
+                        lock_module._fcntl.LOCK_EX | lock_module._fcntl.LOCK_NB,
+                    )
+                    acquired = True
+                except OSError:
+                    acquired = False
+                if acquired:
+                    lock_module._fcntl.flock(
+                        contender,
+                        lock_module._fcntl.LOCK_UN,
+                    )
+            finally:
+                os.close(contender)
+            result_queue.put(acquired)
+
+        child = context.Process(target=exit_in_child)
+        blocked = None
+        try:
+            child.start()
+            child.join(timeout=10)
+            self.assertFalse(child.is_alive())
+            self.assertEqual(child.exitcode, 0)
+            self.assertEqual(
+                child_results.get(timeout=3),
+                (GitRepositoryLockFailureCode.LOCK_UNAVAILABLE.value, True),
+            )
+            lease.require_active()
+            os.fstat(descriptor)
+
+            blocked_results = context.Queue()
+            blocked = context.Process(target=contend, args=(blocked_results,))
+            blocked.start()
+            blocked.join(timeout=10)
+            self.assertFalse(blocked.is_alive())
+            self.assertEqual(blocked.exitcode, 0)
+            self.assertFalse(blocked_results.get(timeout=3))
+        finally:
+            if child.is_alive():
+                child.terminate()
+                child.join(timeout=5)
+            if blocked is not None and blocked.is_alive():
+                blocked.terminate()
+                blocked.join(timeout=5)
+            manager.__exit__(None, None, None)
+        with self.assertRaises(OSError):
+            os.fstat(descriptor)
+
+        released_results = context.Queue()
+        released = context.Process(target=contend, args=(released_results,))
+        try:
+            released.start()
+            released.join(timeout=10)
+            self.assertFalse(released.is_alive())
+            self.assertEqual(released.exitcode, 0)
+            self.assertTrue(released_results.get(timeout=3))
+        finally:
+            if released.is_alive():
+                released.terminate()
+                released.join(timeout=5)
         with lock_git_repository(root) as replacement:
             replacement.require_active()
 

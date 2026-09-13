@@ -77,6 +77,18 @@ numeric identifier reuse. Foreign-thread surface calls, including explicit
 close, fail; context-manager teardown instead privately revokes tokens and
 closes descriptors/leases without granting foreign authority.
 
+The binding performs that creator check at every READY, repository-callback,
+session-source, Story Commit service-composition, and borrowed access factory
+before touching its operation lock, acquiring a Git lease, invoking a READY
+callback, opening a descriptor, or reaching repository/source I/O. Factory
+setup retains ownership
+of each new descriptor and lease until the access object activates; every
+`BaseException` before transfer closes and unwinds those resources while
+preserving the primary failure. In a forked child, access revoke skips the
+copied binding lock and closes only the child's worktree-descriptor copy. Git
+lease exit closes the child's common-Git descriptor without `LOCK_UN`, leaving
+the parent's exclusion intact.
+
 Binding composition also captures one physical session-generation identity
 under its initial READY lease: the control root, common Git directory,
 per-worktree administrative directory, session worktree, and the bounded

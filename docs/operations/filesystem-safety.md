@@ -204,6 +204,23 @@ complete check immediately before its mutation method starts. No Git lease or
 live artifact access is retained across provider work; only the identity-only
 generation pin may span that await.
 
+Binding creator affinity applies before every READY, repository-callback,
+session-source, Story Commit service-composition, and borrowed access factory
+can take a binding lock, acquire a Git lease, invoke its READY validator, open a
+worktree
+descriptor, or reach repository/source I/O. Until activation transfers
+ownership to an access object, the factory owns every descriptor and lease it
+has acquired. Any `BaseException` during setup closes the untransferred
+descriptor and unwinds the lease, preserving the primary failure and recording
+only secondary cleanup diagnostics.
+
+Same-process foreign-thread context teardown may privately revoke access and
+release its lease. A fork-child revoke instead avoids the inherited binding
+lock and closes only the child's worktree-descriptor copy. When the forked Git
+lease context exits, it closes the child's common-Git descriptor but does not
+issue `LOCK_UN`; the parent's lock continues to exclude contenders until the
+parent releases it.
+
 Every Git child uses fixed arguments, `shell=False`, bounded streams and time,
 disabled prompting, hooks, signing, filters, pagers, and inherited Git control
 variables, followed by root-identity revalidation and complete process/pipe
@@ -257,7 +274,10 @@ main-root facts, and no unreported canonical change. Canonical symlinks,
 aliases, unsafe paths, content drift, pre-staged entries, and moved identities
 fail closed. Noncanonical untracked files are omitted and preserved.
 
-Commit authority is nonserializable and consumed before I/O. Under the lease,
+Commit authority is nonserializable and consumed before I/O. Its process/thread
+check precedes the internal one-use lock, so a forked child rejects it without
+waiting on a copied lock, consuming parent authority, or reaching filesystem or
+Git work. Under the lease,
 the executor synchronizes `running` evidence before the first mutation, then
 uses only literal `hash-object -w --no-filters --stdin`, `update-index`
 cache-entry/removal, `write-tree`, `commit-tree`, and compare-and-swap

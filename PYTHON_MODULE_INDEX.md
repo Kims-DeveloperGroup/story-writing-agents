@@ -2771,9 +2771,12 @@ every intermediate arrow. The current runtime graph is acyclic.
   and the descriptor before release. A lazy thread-local token is stable only
   for the current Python thread state and process generation; a PID change
   replaces it, and a later thread cannot inherit authority from a recycled
-  numeric thread identifier. Every lease operation is creator-thread confined;
-  cross-thread use fails content-free while private cleanup still revokes the
-  lease, unlocks, and closes its descriptor. Thread-local token initialization
+  numeric thread identifier. Every lease operation is creator-process/thread
+  confined; cross-thread or fork-child use fails content-free before resource
+  validation. Same-process cleanup revokes the lease, unlocks, and closes its
+  descriptor, while fork-child cleanup closes only the inherited descriptor
+  copy without unlocking the parent's shared open-file-description.
+  Thread-local token initialization
   performs no I/O and its per-thread state is released by Python's thread
   lifecycle. Bind, open, lock, and revalidation failures expose cleared
   content-free exception graphs; exceptions from the
@@ -3161,9 +3164,11 @@ every intermediate arrow. The current runtime graph is acyclic.
   `revise`, `execute`, `inspect`, and `recover`. Authority construction is
   sentinel-closed; each instance is process-, service-, thread-, candidate-,
   confirmation-, and operation-bound, noncopyable, nonpickleable, and consumed
-  once before execution I/O. Thread affinity uses the repository-lock owner's
-  opaque process-aware token, so a successor thread with the same recycled
-  numeric identifier cannot consume a dead creator's authority.
+  once before execution I/O. Process and thread affinity are rejected before
+  the authority's process-local lock is acquired; the repository-lock owner's
+  opaque process-aware token ensures a successor thread with the same recycled
+  numeric identifier cannot consume a dead creator's authority, and a fork
+  child never enters the copied lock.
   The named package-internal
   `create_identity_bound_story_commit_service(...)` factory is omitted from
   `__all__`; workspace composition uses it to retain the successful Apply
@@ -7962,12 +7967,19 @@ every intermediate arrow. The current runtime graph is acyclic.
   inherited lock. This continuity check
   never substitutes for the outer full semantic-READY access required around
   repository or artifact I/O, and no Git lease spans provider work.
-  The access holds one call-local Git lease and pinned root descriptor, keys
-  nested access by the repository-lock owner's process-aware opaque thread
-  token, and requires that creator thread state for every getter, READY check,
-  descriptor duplication, and normal close. Numeric thread-ID reuse grants no
-  access; foreign-thread exit still revokes the retained token entry and closes
-  resources.
+  The binding and each access are confined to their creator process and opaque
+  thread token. Every authority-minting factory, activation, nested lookup,
+  guarded repository callback, validator call, getter, READY check, descriptor
+  duplication, and normal close rejects foreign use before copied locks or
+  filesystem, Git, validator, and repository work. Numeric thread-ID reuse
+  grants no access; same-process foreign-thread revocation can still remove the
+  retained token entry and close resources, while fork-child revocation bypasses
+  the copied binding lock and closes only the child's descriptor copy. Access
+  factories retain ownership of a newly opened descriptor until activation
+  succeeds, roll back partial activation, and close all untransferred
+  descriptors and lock stacks on every setup `BaseException`; cleanup failures
+  remain content-free secondary notes and never replace the original protocol
+  or cancellation failure.
   Borrowed story-commit artifact access uses the live history validator instead
   of acquiring a second Git lease and remains synchronous. Outer and borrowed
   story-commit access exits require the current locked READY inspection to
@@ -8933,6 +8945,14 @@ every intermediate arrow. The current runtime graph is acyclic.
   generation loss has precedence at both Lead publication boundaries. These
   changes add no module, facade export, public API, persisted field, schema
   version, or ownership transfer.
+  Session artifact binding authority is likewise creator-process/thread
+  confined before any copied binding or Story Commit authority lock, callback,
+  validator, descriptor, filesystem, Git, or repository operation. Partial
+  access activation and every setup `BaseException` close untransferred
+  descriptors and lock stacks without replacing the original failure; forked
+  cleanup bypasses copied binding locks and closes inherited Git descriptors
+  without unlocking the parent's lease. This changes no module, import edge,
+  export, facade, persistent schema, or state owner.
   Specialist routing adds one pure module and five net inward runtime
   edges over the provider-recovery baseline: artifact proposals replace their
   roster dependency with the policy, while relationship policy, conversation

@@ -55,8 +55,10 @@ from story_writing_agents.workspace import core as workspace_core
 from story_writing_agents.workspace.core import SessionSourceWorkspace
 from story_writing_agents.workspace import initialization as initialization_module
 from story_writing_agents.workspace.initialization import (
+    SessionArtifactAccess,
     SessionArtifactBindingError,
     SessionArtifactGenerationPin,
+    compose_story_commit_service,
     compose_session_artifact_binding,
     inspect_session_resources,
     provision_session_resources,
@@ -339,6 +341,375 @@ class RuntimeSessionArtifactBindingTests(LeadOrchestrationTestCase):
         for descriptor in descriptors:
             with self.assertRaises(OSError):
                 os.fstat(descriptor)
+
+    def test_binding_access_factories_reject_foreign_threads_before_io(
+        self,
+    ) -> None:
+        binding = compose_session_artifact_binding(
+            self.control_workspace.root,
+            self.session_id,
+        )
+        original_lock = binding._operation_lock
+
+        class PoisonLock:
+            def __enter__(self):
+                raise AssertionError("foreign binding touched its operation lock")
+
+            def __exit__(self, _exc_type, _exc, _traceback):
+                return False
+
+        def reject() -> tuple[BaseException, ...]:
+            descriptor = os.open(
+                binding.resources.identity.worktree_root,
+                os.O_RDONLY,
+            )
+            validate_calls = 0
+
+            def validate_ready():
+                nonlocal validate_calls
+                validate_calls += 1
+                raise AssertionError("foreign binding invoked its validator")
+
+            def ready_access() -> None:
+                with binding.open_ready_resources():
+                    self.fail("foreign thread entered READY access")
+
+            def story_commit_access() -> None:
+                with binding.open_story_commit_artifact_repository(validate_ready):
+                    self.fail("foreign thread entered Commit access")
+
+            def direct_access() -> None:
+                SessionArtifactAccess(binding, object(), descriptor)
+
+            def repository_callback() -> None:
+                with binding._open_repository_operation():
+                    self.fail("foreign thread entered repository callback")
+
+            def source_access() -> None:
+                SessionSourceWorkspace.from_artifact_binding(
+                    binding
+                ).read_agent_session_state(PLOT_ARCHITECT, self.session_id)
+
+            actions = (
+                ready_access,
+                story_commit_access,
+                direct_access,
+                repository_callback,
+                lambda: binding._repository.read_text(_OUTLINE),
+                source_access,
+                lambda: compose_story_commit_service(
+                    self.control_workspace.root,
+                    self.session_id,
+                    binding,
+                ),
+            )
+            failures: list[BaseException] = []
+            try:
+                with mock.patch.object(
+                    initialization_module,
+                    "lock_git_repository",
+                    side_effect=AssertionError("foreign binding acquired Git lease"),
+                ), mock.patch.object(
+                    initialization_module,
+                    "_require_ready_locked_git_session_resources",
+                    side_effect=AssertionError("foreign binding validated READY"),
+                ), mock.patch.object(
+                    initialization_module,
+                    "_open_existing_root",
+                    side_effect=AssertionError("foreign binding opened descriptor"),
+                ), mock.patch.object(
+                    binding._repository,
+                    "_ensure_source_directories",
+                    side_effect=AssertionError("foreign binding reached repository I/O"),
+                ), mock.patch.object(
+                    SessionSourceWorkspace,
+                    "_read_bound",
+                    side_effect=AssertionError("foreign binding reached source I/O"),
+                ):
+                    for action in actions:
+                        try:
+                            action()
+                        except BaseException as failure:
+                            failures.append(failure)
+            finally:
+                os.close(descriptor)
+            self.assertEqual(validate_calls, 0)
+            return tuple(failures)
+
+        object.__setattr__(binding, "_operation_lock", PoisonLock())
+        try:
+            with ThreadPoolExecutor(max_workers=1) as executor:
+                failures = executor.submit(reject).result(timeout=10)
+        finally:
+            object.__setattr__(binding, "_operation_lock", original_lock)
+        self.assertEqual(len(failures), 7)
+        for failure in failures:
+            self.assertIs(type(failure), SessionArtifactBindingError)
+            self.assertEqual(
+                str(failure),
+                "session artifact resources are unavailable",
+            )
+            self.assertIsNone(failure.__cause__)
+
+        with binding.open_ready_resources() as outer:
+            with binding.open_ready_resources() as nested:
+                self.assertIs(nested, outer)
+                self.assertEqual(
+                    nested.repository.read_text(_OUTLINE),
+                    "Outline first line.\nOutline second line.\n",
+                )
+            sources = SessionSourceWorkspace.from_artifact_binding(binding)
+        self.assertEqual(
+            sources.read_agent_session_state(PLOT_ARCHITECT, self.session_id),
+            (),
+        )
+        validations = 0
+
+        def validate_ready():
+            nonlocal validations
+            validations += 1
+            return binding.resources
+
+        with binding.open_story_commit_artifact_repository(
+            validate_ready
+        ) as repository:
+            self.assertEqual(repository.read_text(_OUTLINE).splitlines()[0],
+                             "Outline first line.")
+        self.assertEqual(validations, 2)
+        service = compose_story_commit_service(
+            self.control_workspace.root,
+            self.session_id,
+            binding,
+        )
+        self.assertEqual(service._session_id, self.session_id)
+
+    def test_forked_binding_factories_fail_before_copied_lock_and_revoke_safely(
+        self,
+    ) -> None:
+        if "fork" not in multiprocessing.get_all_start_methods():
+            self.skipTest("requires POSIX fork semantics")
+        binding = compose_session_artifact_binding(
+            self.control_workspace.root,
+            self.session_id,
+        )
+        manager = binding.open_ready_resources()
+        access = manager.__enter__()
+        parent_descriptor = access._descriptor
+        original_lock = binding._operation_lock
+
+        class PoisonLock:
+            def __enter__(self):
+                raise AssertionError("forked binding touched copied lock")
+
+            def __exit__(self, _exc_type, _exc, _traceback):
+                return False
+
+        poison = PoisonLock()
+        object.__setattr__(binding, "_operation_lock", poison)
+        context = multiprocessing.get_context("fork")
+        child_results = context.Queue()
+
+        def inspect_child() -> None:
+            validate_calls = 0
+
+            def validate_ready():
+                nonlocal validate_calls
+                validate_calls += 1
+                raise AssertionError("forked binding invoked validator")
+
+            def enter(manager_factory) -> None:
+                with manager_factory():
+                    raise AssertionError("forked binding entered access")
+
+            actions = (
+                lambda: enter(binding.open_ready_resources),
+                lambda: enter(
+                    lambda: binding.open_story_commit_artifact_repository(
+                        validate_ready
+                    )
+                ),
+                lambda: SessionArtifactAccess(
+                    binding,
+                    object(),
+                    parent_descriptor,
+                ),
+                lambda: enter(binding._open_repository_operation),
+                lambda: binding._repository.read_text(_OUTLINE),
+                lambda: SessionSourceWorkspace.from_artifact_binding(binding),
+                lambda: compose_story_commit_service(
+                    self.control_workspace.root,
+                    self.session_id,
+                    binding,
+                ),
+            )
+            failures = []
+            with mock.patch.object(
+                initialization_module,
+                "lock_git_repository",
+                side_effect=AssertionError("forked binding acquired Git lease"),
+            ), mock.patch.object(
+                initialization_module,
+                "_require_ready_locked_git_session_resources",
+                side_effect=AssertionError("forked binding validated READY"),
+            ), mock.patch.object(
+                initialization_module,
+                "_open_existing_root",
+                side_effect=AssertionError("forked binding opened descriptor"),
+            ):
+                for action in actions:
+                    try:
+                        action()
+                    except BaseException as failure:
+                        failures.append(
+                            (
+                                type(failure).__name__,
+                                str(failure),
+                                failure.__cause__ is None,
+                            )
+                        )
+            access._revoke()
+            try:
+                os.fstat(parent_descriptor)
+                descriptor_closed = False
+            except OSError:
+                descriptor_closed = True
+            child_results.put((tuple(failures), validate_calls, descriptor_closed))
+
+        process = context.Process(target=inspect_child)
+        try:
+            process.start()
+            process.join(timeout=15)
+            self.assertFalse(process.is_alive())
+            self.assertEqual(process.exitcode, 0)
+            failures, validate_calls, descriptor_closed = child_results.get(timeout=3)
+        finally:
+            if process.is_alive():
+                process.terminate()
+                process.join(timeout=5)
+            object.__setattr__(binding, "_operation_lock", original_lock)
+        self.assertEqual(validate_calls, 0)
+        self.assertTrue(descriptor_closed)
+        self.assertEqual(
+            failures,
+            (
+                (
+                    "SessionArtifactBindingError",
+                    "session artifact resources are unavailable",
+                    True,
+                ),
+            )
+            * 7,
+        )
+        os.fstat(parent_descriptor)
+        access.require_ready()
+        with binding.open_ready_resources() as nested:
+            self.assertIs(nested, access)
+            self.assertEqual(nested.repository.read_text(_OUTLINE).splitlines()[0],
+                             "Outline first line.")
+        manager.__exit__(None, None, None)
+        with self.assertRaises(OSError):
+            os.fstat(parent_descriptor)
+
+    def test_access_factory_partial_activation_cleanup_preserves_base_exceptions(
+        self,
+    ) -> None:
+        for holder in ("ready", "story_commit"):
+            for failure in (
+                RuntimeError(f"{holder} construction interrupted"),
+                asyncio.CancelledError(f"{holder} construction cancelled"),
+            ):
+                with self.subTest(holder=holder, failure=type(failure).__name__):
+                    binding = compose_session_artifact_binding(
+                        self.control_workspace.root,
+                        self.session_id,
+                    )
+                    opened: list[int] = []
+                    closed: list[int] = []
+                    leases = []
+                    original_open = initialization_module._open_existing_root
+                    original_close = os.close
+                    original_activate = (
+                        initialization_module.SessionArtifactBinding
+                        ._activate_repository_access
+                    )
+                    original_git_lock = initialization_module.lock_git_repository
+
+                    def record_open(root, expected):
+                        descriptor = original_open(root, expected)
+                        opened.append(descriptor)
+                        return descriptor
+
+                    def close_then_fail(descriptor):
+                        if descriptor in opened:
+                            closed.append(descriptor)
+                            original_close(descriptor)
+                            raise OSError("secondary descriptor cleanup failure")
+                        original_close(descriptor)
+
+                    def activate_then_fail(owner, access):
+                        original_activate(owner, access)
+                        raise failure
+
+                    @contextmanager
+                    def record_git_lock(root):
+                        with original_git_lock(root) as lease:
+                            leases.append(lease)
+                            yield lease
+
+                    observed = None
+                    observed_traceback = None
+                    with mock.patch.object(
+                        initialization_module,
+                        "_open_existing_root",
+                        side_effect=record_open,
+                    ), mock.patch.object(
+                        initialization_module.SessionArtifactBinding,
+                        "_activate_repository_access",
+                        autospec=True,
+                        side_effect=activate_then_fail,
+                    ), mock.patch.object(
+                        initialization_module,
+                        "lock_git_repository",
+                        side_effect=record_git_lock,
+                    ), mock.patch.object(
+                        initialization_module.os,
+                        "close",
+                        side_effect=close_then_fail,
+                    ):
+                        try:
+                            if holder == "ready":
+                                with binding.open_ready_resources():
+                                    self.fail(
+                                        "partially activated READY access escaped"
+                                    )
+                            else:
+                                with binding.open_story_commit_artifact_repository(
+                                    lambda: binding.resources
+                                ):
+                                    self.fail(
+                                        "partially activated Commit access escaped"
+                                    )
+                        except BaseException as caught:
+                            observed = caught
+                            observed_traceback = caught.__traceback__
+                    self.assertIs(observed, failure)
+                    self.assertIsNotNone(observed_traceback)
+                    self.assertIn(
+                        "session artifact descriptor cleanup failed: OSError",
+                        failure.__notes__,
+                    )
+                    self.assertEqual(binding._operation_tokens, {})
+                    self.assertEqual(len(opened), 1)
+                    self.assertEqual(closed, opened)
+                    with self.assertRaises(OSError):
+                        os.fstat(opened[0])
+                    if holder == "ready":
+                        self.assertEqual(len(leases), 1)
+                        self.assertFalse(leases[0]._active)
+                    else:
+                        self.assertEqual(leases, [])
+                    with binding.open_ready_resources() as replacement:
+                        replacement.require_ready()
 
     def test_generation_pin_fails_closed_for_every_named_topology_component(
         self,
