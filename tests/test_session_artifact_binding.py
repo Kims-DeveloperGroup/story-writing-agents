@@ -2788,7 +2788,7 @@ class RuntimeSessionArtifactBindingTests(LeadOrchestrationTestCase):
             ):
                 operation()
 
-    def test_outer_transaction_performs_only_pre_and_post_ready_inspections(
+    def test_outer_transaction_validates_each_repository_operation_and_nesting_is_cheap(
         self,
     ) -> None:
         self.append_source_state(self.workspace, "transaction state")
@@ -2835,10 +2835,10 @@ class RuntimeSessionArtifactBindingTests(LeadOrchestrationTestCase):
                         ),
                         1,
                     )
-                self.assertEqual(require_ready.call_count, 1)
-            self.assertEqual(require_ready.call_count, 2)
+                self.assertEqual(require_ready.call_count, 7)
+            self.assertEqual(require_ready.call_count, 8)
 
-    def test_story_commit_borrow_runs_one_pre_and_post_validation(self) -> None:
+    def test_story_commit_borrow_validates_each_repository_operation(self) -> None:
         binding = compose_session_artifact_binding(
             self.control_workspace.root,
             self.session_id,
@@ -2861,8 +2861,8 @@ class RuntimeSessionArtifactBindingTests(LeadOrchestrationTestCase):
             )
             self.assertIn(_OUTLINE, repository.list_paths())
             self.assertTrue(repository.capture_complete_state())
-            self.assertEqual(validations, 1)
-        self.assertEqual(validations, 2)
+            self.assertEqual(validations, 7)
+        self.assertEqual(validations, 8)
 
     def test_outer_transaction_semantic_drift_fails_before_or_after_body(
         self,

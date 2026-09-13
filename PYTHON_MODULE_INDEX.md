@@ -3155,7 +3155,10 @@ every intermediate arrow. The current runtime graph is acyclic.
   candidate publication, and revalidation under the same lease. Exact generation
   loss or bound unsafe-root loss maps to recovery-required; unrelated history
   failures remain history failures and generic repository/protocol failures
-  retain candidate-drift. Unbound compatibility mapping is unchanged.
+  retain candidate-drift. The package-internal history loader accepts the same
+  optional retained generation solely to classify bound history failures:
+  record absence remains candidate-not-found, bound generation or unsafe-root
+  loss becomes recovery-required, and unbound compatibility is unchanged.
   Preparation
   verifies the exact symbolic session branch and tip, clean real index,
   effective identity/source, complete canonical HEAD and applied states, every
@@ -3240,8 +3243,11 @@ every intermediate arrow. The current runtime graph is acyclic.
   durable transition. After staging and while STAGED, the service pairs those
   phase-specific proofs with the history owner's generation-only check instead
   of incorrectly requiring a clean index. Reject and Revise decode and compare
-  the complete durable candidate value before terminal publication; matching
-  only its candidate ID grants no authority. It writes only exact
+  the complete durable candidate value before terminal publication; their
+  bound loader, along with inspect/recover and recovery-history reads, receives
+  the retained generation so unsafe-root loss is recovery-required without
+  acquiring another history lease. Matching only the candidate ID grants no
+  authority. It writes only exact
   no-filter blobs and literal index entries/removals, verifies the expected
   tree, creates one captured-identity commit with one exact parent, and CAS-
   updates only the session branch before durable COMMITTED evidence. It verifies

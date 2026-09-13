@@ -377,19 +377,25 @@ def load_story_commit_candidate(
 def load_story_commit_candidate_from_history(
     history: GitSessionHistory | GitSessionRecoveryHistory,
     candidate_id: str,
+    *,
+    expected_generation_identity: GitSessionGenerationIdentity | None = None,
 ) -> StoryCommitCandidate:
     """Load one exact candidate through an already-live history lease."""
 
-    if type(history) not in {GitSessionHistory, GitSessionRecoveryHistory}:
+    if type(history) not in {GitSessionHistory, GitSessionRecoveryHistory} or (
+        expected_generation_identity is not None
+        and type(expected_generation_identity) is not GitSessionGenerationIdentity
+    ):
         raise _error(StoryCommitFailureCode.INVALID_REQUEST)
     try:
         history.require_active()
-        return _candidate_from_record(history.read_candidate(candidate_id))
+        candidate = _candidate_from_record(history.read_candidate(candidate_id))
+        return candidate
     except GitSessionHistoryError as exc:
         code = (
             StoryCommitFailureCode.CANDIDATE_NOT_FOUND
             if exc.code is GitSessionHistoryFailureCode.RECORD_NOT_FOUND
-            else StoryCommitFailureCode.HISTORY_FAILED
+            else _history_failure_code(exc, expected_generation_identity)
         )
         raise _error(code) from None
 

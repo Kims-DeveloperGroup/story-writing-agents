@@ -972,7 +972,11 @@ class StoryCommitService:
                 )
                 try:
                     durable = load_story_commit_candidate_from_history(
-                        history, candidate.candidate_id
+                        history,
+                        candidate.candidate_id,
+                        expected_generation_identity=(
+                            self._expected_generation_identity
+                        ),
                     )
                 except StoryCommitError:
                     self._require_history_ready(
@@ -1390,7 +1394,11 @@ class StoryCommitService:
                 self._require_history_ready(history)
                 try:
                     candidate = load_story_commit_candidate_from_history(
-                        history, candidate_id
+                        history,
+                        candidate_id,
+                        expected_generation_identity=(
+                            self._expected_generation_identity
+                        ),
                     )
                 except StoryCommitError:
                     self._require_history_ready(history)
@@ -1771,6 +1779,7 @@ def inspect_story_commit_recovery_history(
                 candidate = load_story_commit_candidate_from_history(
                     history,
                     operation.candidate_id,
+                    expected_generation_identity=expected_generation_identity,
                 )
             except StoryCommitError:
                 if expected_generation_identity is not None:

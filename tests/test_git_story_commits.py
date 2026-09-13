@@ -731,7 +731,7 @@ class StoryCommitServiceTests(StoryCommitGitTestCase):
                     GitSessionHistoryState.OUTCOME_UNKNOWN,
                 )
 
-    def test_bound_commit_reuses_one_guarded_repository_for_every_capture(
+    def test_bound_commit_reuses_one_guarded_repository_with_per_operation_validation(
         self,
     ) -> None:
         root, session_root, evidence = self.applied_replace("bound-captures")
@@ -786,7 +786,7 @@ class StoryCommitServiceTests(StoryCommitGitTestCase):
         self.assertEqual(len({repository for repository, _value in captures}), 1)
         self.assertEqual(captures[0][1], captures[1][1])
         self.assertEqual(captures[1][1], captures[2][1])
-        self.assertEqual(generation_ready.call_count, 6)
+        self.assertEqual(generation_ready.call_count, 31)
         second_lock.assert_not_called()
 
     def test_borrowed_story_commit_generation_loss_overrides_body_failure(self) -> None:
@@ -1277,6 +1277,117 @@ class StoryCommitServiceTests(StoryCommitGitTestCase):
             compatibility.exception.code,
             StoryCommitFailureCode.HISTORY_FAILED,
         )
+
+    def test_candidate_loader_unsafe_root_mapping_preserves_durable_state(
+        self,
+    ) -> None:
+        unsafe = GitSessionHistoryError(
+            GitSessionHistoryFailureCode.UNSAFE_ROOT,
+            GitSessionHistoryRecoveryAction.OPERATOR_RECOVERY,
+        )
+        root, _session_root, service, candidate = self.prepared_bound(
+            "candidate-loader-unsafe-root"
+        )
+        expected_generation = service._expected_generation_identity
+
+        with open_git_session_history(root, manifest(), "novel") as history:
+            with mock.patch.object(
+                GitSessionHistory,
+                "read_candidate",
+                autospec=True,
+                side_effect=unsafe,
+            ):
+                for generation, expected_code in (
+                    (
+                        expected_generation,
+                        StoryCommitFailureCode.RECOVERY_REQUIRED,
+                    ),
+                    (None, StoryCommitFailureCode.HISTORY_FAILED),
+                ):
+                    with self.subTest(
+                        boundary="direct-loader",
+                        bound=generation is not None,
+                    ), self.assertRaises(StoryCommitError) as caught:
+                        commits_module.load_story_commit_candidate_from_history(
+                            history,
+                            candidate.candidate_id,
+                            expected_generation_identity=generation,
+                        )
+                    self.assertIs(caught.exception.code, expected_code)
+
+            for generation in (expected_generation, None):
+                with self.subTest(
+                    boundary="record-not-found",
+                    bound=generation is not None,
+                ), self.assertRaises(StoryCommitError) as caught:
+                    commits_module.load_story_commit_candidate_from_history(
+                        history,
+                        "0" * len(candidate.candidate_id),
+                        expected_generation_identity=generation,
+                    )
+                self.assertIs(
+                    caught.exception.code,
+                    StoryCommitFailureCode.CANDIDATE_NOT_FOUND,
+                )
+
+        with mock.patch.object(
+            GitSessionHistory,
+            "read_candidate",
+            autospec=True,
+            side_effect=unsafe,
+        ), mock.patch.object(
+            GitSessionHistory,
+            "write_commit_operation",
+            autospec=True,
+        ) as write, mock.patch.object(
+            commits_module,
+            "advance_commit_operation",
+            wraps=commits_module.advance_commit_operation,
+        ) as advance:
+            for action, decision in (
+                (service.reject, StoryCommitDecision.REJECT),
+                (service.revise, StoryCommitDecision.REVISE),
+            ):
+                with self.subTest(
+                    boundary="durable-decision",
+                    action=action.__name__,
+                ), self.assertRaises(StoryCommitError) as caught:
+                    action(
+                        candidate,
+                        self.confirmation(
+                            candidate,
+                            decision,
+                            f"loader-unsafe-{action.__name__}",
+                        ),
+                    )
+                self.assertIs(
+                    caught.exception.code,
+                    StoryCommitFailureCode.RECOVERY_REQUIRED,
+                )
+            advance.assert_not_called()
+            write.assert_not_called()
+        with open_git_session_history(root, manifest(), "novel") as history:
+            self.assertEqual(history.snapshot().commit_operations, ())
+
+        result = service.reject(
+            candidate,
+            self.confirmation(
+                candidate,
+                StoryCommitDecision.REJECT,
+                "loader-unsafe-terminal",
+            ),
+        )
+        with mock.patch.object(
+            GitSessionHistory,
+            "read_candidate",
+            autospec=True,
+            side_effect=unsafe,
+        ):
+            self.assert_terminal_reads_do_not_mutate(
+                service,
+                result.operation_id,
+                failure_code=StoryCommitFailureCode.RECOVERY_REQUIRED,
+            )
 
     def test_final_committed_history_write_failure_durably_preserves_unknown(
         self,
