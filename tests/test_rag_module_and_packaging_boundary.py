@@ -344,8 +344,8 @@ class RagModuleBoundaryTests(unittest.TestCase):
     ) -> None:
         modules = _module_inventory()
         edges = _internal_edges(modules)
-        self.assertEqual(len(modules), 140)
-        self.assertEqual(len(edges), 555)
+        self.assertEqual(len(modules), 143)
+        self.assertEqual(len(edges), 574)
         self.assertIsNone(_cycle_witness(modules, edges))
         conversation_dependencies = {
             "story_writing_agents.conversations": {
@@ -358,6 +358,7 @@ class RagModuleBoundaryTests(unittest.TestCase):
                 "story_writing_agents.errors",
             },
             "story_writing_agents.conversations.events": {
+                "story_writing_agents.reply_trace",
                 "story_writing_agents.specialist_routing",
                 "story_writing_agents.agents",
                 "story_writing_agents.artifact_proposals",
@@ -366,6 +367,7 @@ class RagModuleBoundaryTests(unittest.TestCase):
                 "story_writing_agents.writing_artifacts",
             },
             "story_writing_agents.conversations.context": {
+                "story_writing_agents.reply_trace",
                 "story_writing_agents.specialist_routing",
                 "story_writing_agents.conversations.events",
                 "story_writing_agents.errors",
@@ -694,6 +696,7 @@ class RagModuleBoundaryTests(unittest.TestCase):
                 "story_writing_agents.agent_context.ledger",
                 "story_writing_agents.agent_context.manifest",
                 "story_writing_agents.agent_context.planning",
+                "story_writing_agents.agent_context.progress",
                 "story_writing_agents.agent_context.sources",
                 "story_writing_agents.conversations.session_context",
                 "story_writing_agents.errors",
@@ -793,6 +796,7 @@ class RagModuleBoundaryTests(unittest.TestCase):
                 "story_writing_agents.conversations",
                 "story_writing_agents.errors",
                 "story_writing_agents.models",
+                "story_writing_agents.reply_trace",
             },
         )
 

@@ -3443,6 +3443,7 @@ class PackageBoundaryFoundationTests(unittest.TestCase):
             "_advisory_progress.py": {"..agent_context.actions", "..agent_context.progress"},
             "_collaboration_view.py": {
                 "..conversations",
+                "..reply_trace",
                 "..specialist_routing",
                 "..writing_artifacts",
                 "._model",
