@@ -13,7 +13,7 @@ The stable inventories in this revision are:
 
 | Import boundary | Exports | Purpose |
 | --- | ---: | --- |
-| `story_writing_agents` | 104 | Management runtime, workspace/catalog, backend/session, generic models, retrieval contracts, parser, and errors |
+| `story_writing_agents` | 106 | Management runtime, workspace/catalog, backend/session, generic models, reply traces, retrieval contracts, parser, and errors |
 | `story_writing_agents.conversations` | 158 | Catalog plus schema-v2 events, projection, evidence-grounded lead/specialist/artifact-review values, readable context, and pure validation |
 | `story_writing_agents.conversation_search` | 18 | Schema-v2 search, exact citations, paging, and history service |
 | `story_writing_agents.conversation_retrieval` | 24 | Low-level provider search/read-history/answer contracts |
@@ -24,9 +24,9 @@ The stable inventories in this revision are:
 | `story_writing_agents.writing_artifacts` | 76 | Canonical artifact/reference values plus pure exact change-set, relationship-policy, and artifact-application contracts |
 | `story_writing_agents.artifact_proposals` | 16 | Direct-only pure intent, evidence, exact candidate, reviewer-map, and strict candidate-codec contracts |
 
-The production graph has 140 modules, 555 runtime dependency edges, no runtime
-cycles, and 557 edges when annotation-only imports are included. The package
-root has 104 exports. The conversations facade contributes 120 event exports
+The production graph has 143 modules, 574 runtime dependency edges, no runtime
+cycles, and 576 edges when annotation-only imports are included. The package
+root has 106 exports. The conversations facade contributes 120 event exports
 and 30 context exports; its bindings are identical to the owner bindings.
 Session-transition integration contributes accepted orchestration-facing edges
 without adding an assessment facade export.
@@ -44,7 +44,10 @@ one Lead preparation and returns `LeadTurnResult`; the latter executes
 confirmed proposals through their separate decision. There is no public raw/unconfirmed specialist dispatch, artifact-write, Git,
 or debate-start method.
 
-The root still exposes generic backend, prompt/request/result, debate model,
+The root also exports `ReplyTrace` and `ReplyTraceOrigin`. Runtime-produced
+reply traces contain only role/action/context/recovery labels; they contain no
+provider prompt, hidden reasoning, story bytes, or authority. The root still
+exposes generic backend, prompt/request/result, debate model,
 session lifecycle, catalog, parser, retrieval, and error contracts. Those are
 component seams, not alternate runtime execution entry points. The exact list
 is authoritative in `story_writing_agents.__all__` and is checked against the
@@ -56,7 +59,7 @@ project module index.
 
 The direct `story_writing_agents.git` facade exports 23 pure contracts and the
 sole `GitRepositoryAdapter`. All 24 names are intentionally absent from the
-104-name package-root facade. The adapter exposes exactly seven typed operations:
+106-name package-root facade. The adapter exposes exactly seven typed operations:
 
 ```python
 from story_writing_agents.git import GitRepositoryAdapter
@@ -91,7 +94,7 @@ Two #510 direct modules own the closed session-runtime path/delta contracts and
 exact internal-ref checkpoint execution/recovery; they reuse the shared
 history, lease, and typed internal-checkpoint process profile.
 None is re-exported by the project, Git, or workspace facade; they do not
-expand the 104/22/3 export counts and are not a stable application API or
+expand the 106/24/3 export counts and are not a stable application API or
 arbitrary Git capability. Installed session Create now composes exact resource
 provisioning through `AgentBackend`; application evidence and confirmation
 remain owned by their existing workflow boundaries. See
@@ -117,7 +120,7 @@ or package-root facade.
 
 Canonical artifact value contracts live in
 `story_writing_agents.writing_artifacts`, but are intentionally absent from the
-104-name package-root facade. Its exact 76-name facade includes immutable path,
+106-name package-root facade. Its exact 76-name facade includes immutable path,
 catalog, kind, reference, and filesystem `ArtifactSourceIdentity` values;
 content-free authorization, operation history/state, read-request/action,
 `ReferenceOperationFailure`, and parser contracts; and the 16 pure exact
@@ -238,7 +241,7 @@ result = reconcile_session_recovery(evidence)
 ```
 
 These are the facade's exact ten exports. They are intentionally absent from
-the 104-name package root. The evidence and result values are frozen, slotted,
+the 106-name package root. The evidence and result values are frozen, slotted,
 exactly typed, and provider-free. `reconcile_session_recovery()` accepts only
 one already assembled `SessionRecoveryEvidence`; it reads no lifecycle store,
 conversation history, artifact repository, filesystem, Git repository, or
@@ -532,11 +535,12 @@ Recommendation preparation adds `LeadRecommendationActionKind`,
 `LeadRecommendationResultPayload` to this same facade. Confirm-origin objectives
 use v2 provenance; an existing objective retains its immutable v1 or v2 origin.
 
-`LeadTurnResult` has a trailing optional `recommendation_request=None`.
+`LeadTurnResult` has trailing optional `recommendation_request=None` and
+`trace=None` fields.
 A pending recommendation uses `submit_recommendation_decision`, with proposal,
 Apply, and Commit controls absent. The preceding optional `story_commit_request`
 rediscloses an exact pending Commit; `artifact_application_request` carries
-Apply disclosure. The ten-field provider `lead-outcome-v4` contract is distinct from these Python result values;
+Apply disclosure. The minimal variant-based provider `lead-outcome-v5` contract is distinct from these richer Python result values;
 see [Runtime API](runtime-api.md#contextual-authoring-objectives).
 
 Pure `AuthoringScope`, `AuthoringActivity`, `ReviewBasis`,

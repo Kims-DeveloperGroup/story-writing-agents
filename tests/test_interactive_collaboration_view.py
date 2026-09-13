@@ -14,6 +14,7 @@ from story_writing_agents.interactive_terminal._render import (
     render_component,
     strip_decorative_sgr,
 )
+from story_writing_agents.reply_trace import ReplyTrace, ReplyTraceOrigin
 
 from tests.collaboration_contract_fixture import (
     awaiting_history,
@@ -149,6 +150,13 @@ class CollaborationViewTests(unittest.TestCase):
             for payload in payloads
             if type(payload) is CollaborationLeadJudgmentPayload
         )
+        trace = ReplyTrace(
+            "lead_orchestrator",
+            "answer",
+            ("current_input", "session_state"),
+            ("structured_reply",),
+            ReplyTraceOrigin.RECOVERED,
+        )
         fresh = LeadTurnResult(
             "session_a",
             "conversation_a",
@@ -161,6 +169,7 @@ class CollaborationViewTests(unittest.TestCase):
             None,
             CollaborationNextAction.CONTINUE_WITH_LEAD,
             judgment.evidence,
+            trace=trace,
         )
         rendered = render_component(
             _collaboration_view.project_lead_turn_result(fresh),
@@ -168,6 +177,29 @@ class CollaborationViewTests(unittest.TestCase):
         ).text
         self.assertIn("  │ fresh one\n  │ fresh two\n", rendered)
         self.assertNotIn(r"\x0A", rendered)
+        self.assertIn("Reply construction", rendered)
+        self.assertIn("Role: lead_orchestrator", rendered)
+        self.assertIn("Action: answer", rendered)
+        self.assertIn("Context: current_input, session_state", rendered)
+        self.assertIn("Recovered fields: structured_reply", rendered)
+        self.assertIn("Origin: recovered", rendered)
+
+        judgment_event = next(
+            event
+            for event in history
+            if type(event.payload) is CollaborationLeadJudgmentPayload
+        )
+        historical = render_component(
+            _collaboration_view.project_collaboration_event(
+                replace(
+                    judgment_event,
+                    payload=replace(judgment_event.payload, trace=trace),
+                )
+            ),
+            _capability(CapabilityProfile.LINE, width=120),
+        ).text
+        self.assertIn("Reply construction", historical)
+        self.assertIn("Origin: recovered", historical)
 
     def test_proposal_discloses_complete_assignments_sources_impact_and_budget(
         self,
@@ -309,7 +341,8 @@ class CollaborationViewTests(unittest.TestCase):
                                   request.expected_result, request.user_impact,
                                   *request.target_paths,
                                   *(item.locator for item in request.basis.inputs)):
-                        self.assertIn(" ".join(value.split()), compact)
+                        for line in value.splitlines() or (value,):
+                            self.assertIn(" ".join(line.split()), compact)
                     self.assertIn(f"At most {request.max_preparation_physical_calls} provider calls", compact)
                     self.assertIn(f"{request.physical_calls_spent} already spent", compact)
                     self.assertNotIn("provider_private", plain)

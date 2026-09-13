@@ -32,16 +32,14 @@ Return exactly one JSON object with this shape and no additional fields:
 
 ```json
 {
-  "mode": "the assignment's unchanged draft or review mode",
   "assessment": "drafted | supports | concern | conflict | insufficient_evidence",
-  "assignment_id": "runtime-supplied assignment ID",
-  "input_ids": ["runtime-supplied input IDs in exact order"],
   "message": "nonempty visible assessment"
 }
 ```
 
-Use only the supplied assignment ID, mode, and input IDs. Draft mode permits
-only drafted or insufficient_evidence; review mode never returns drafted.
+The runtime attaches the supplied assignment ID, mode, and ordered input IDs
+after decoding. Draft mode permits only drafted or insufficient_evidence;
+review mode never returns drafted.
 Draft mode returns material to the Lead. Review mode does not rewrite the exact
 candidate. Never write filesystem artifacts or invoke Git. Do not produce a
 lead proposal or address the user as the lead.

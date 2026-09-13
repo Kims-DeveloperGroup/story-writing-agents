@@ -1551,7 +1551,7 @@ class ContextProviderCallResult:
 
 @dataclass(frozen=True, slots=True)
 class ContextReferencePreludeRequest:
-    """One separately budgeted exact mandatory-reference provider prelude."""
+    """One exact mandatory-reference request resolved locally by the backend."""
 
     scope: ContextScope
     policy_fingerprint: str
@@ -1577,23 +1577,13 @@ class ContextReferencePreludeRequest:
 
 @dataclass(frozen=True, slots=True)
 class ContextReferencePreludeResult:
-    """Transient exact reference context and its physical-call facts."""
+    """Transient exact reference context loaded by the runtime."""
 
     context: tuple[Mapping[str, object], ...] = field(repr=False)
-    thread_id: str
-    accounting: ProviderCallAccounting
 
     def __post_init__(self) -> None:
         if type(self.context) is not tuple or any(
             not isinstance(item, Mapping) for item in self.context
-        ):
-            raise _execution_error(ContextExecutionErrorCode.PROVIDER_CONTRACT)
-        _safe_identity(self.thread_id)
-        if (
-            type(self.accounting) is not ProviderCallAccounting
-            or self.accounting.state is not ProviderCallState.SUBMITTED
-            or self.accounting.payload.call_kind
-            is not ProviderCallKind.WRITING_ARTIFACT_REFERENCE_READ
         ):
             raise _execution_error(ContextExecutionErrorCode.PROVIDER_CONTRACT)
 
@@ -1626,7 +1616,7 @@ class ContextProvider(Protocol):
         self,
         request: ContextReferencePreludeRequest,
     ) -> ContextReferencePreludeResult:
-        """Run the existing mandatory-reference prelude on the scoped thread."""
+        """Load authorized mandatory references without a provider call."""
 
     async def invoke_context(
         self,
@@ -1905,6 +1895,17 @@ class ContextInvocationSession:
 
         with self._lock:
             return self._next_action_index
+
+    @property
+    def completed_handles(self) -> tuple[ContextSourceHandle, ...]:
+        """Return locally completed READ handles in deterministic receipt order."""
+
+        with self._lock:
+            return tuple(
+                evidence.handle
+                for receipt in self._completed_receipts
+                for evidence in receipt.evidence
+            )
 
     def _handle_message(
         self,
@@ -2905,22 +2906,6 @@ def _exact_object(
     return value
 
 
-def _correlation_token_matches(
-    value: object,
-    correlation: ContextActionCorrelation,
-) -> bool:
-    """Compare one untrusted token to the complete expected correlation."""
-
-    candidate = b""
-    if type(value) is str:
-        try:
-            candidate = value.encode("ascii", errors="strict")
-        except UnicodeEncodeError:
-            pass
-    expected = _correlation_token(correlation).encode("ascii")
-    return hmac.compare_digest(candidate, expected)
-
-
 def _answer_text_for_contract(
     value: object,
     contract: ContextJsonObjectResultContract,
@@ -2944,6 +2929,7 @@ def _decode_context_action(
         _SEARCH_SOURCE_KIND_ORDER
     ),
     resolve_handle: Callable[[object], ContextSourceHandle] = ContextSourceHandle,
+    completed_handles: tuple[ContextSourceHandle, ...] = (),
 ) -> ContextSearchAction | ContextReadAction | ContextAnswerAction:
     """Strictly decode typed wire v7 and restore the full internal action."""
 
@@ -2953,12 +2939,7 @@ def _decode_context_action(
             object_pairs_hook=_unique_json_object,
             parse_constant=lambda _value: (_ for _ in ()).throw(ValueError()),
         )
-        raw = _exact_object(value, frozenset({"action", "correlation"}))
-        if not _correlation_token_matches(raw["correlation"], correlation):
-            raise _execution_error(
-                ContextExecutionErrorCode.MALFORMED_ACTION,
-                detail=(_ContextExecutionErrorDetail.RESPONSE_CORRELATION_MISMATCH),
-            )
+        raw = _exact_object(value, frozenset({"action"}))
         action = raw["action"]
         if type(action) is not dict or type(action.get("kind")) is not str:
             raise ValueError
@@ -2966,11 +2947,10 @@ def _decode_context_action(
         if action_kind not in {"answer", "read", "search"}:
             raise ValueError
         if action_kind == "search":
-            search = _exact_object(
-                action,
-                frozenset({"kind", "path_prefix", "queries"}),
-            )
-            path_prefix = search["path_prefix"]
+            if set(action) not in ({"kind", "queries"}, {"kind", "path_prefix", "queries"}):
+                raise ValueError
+            search = action
+            path_prefix = search.get("path_prefix")
             query_values = search["queries"]
             if (
                 action_kind not in allowed_actions
@@ -3037,17 +3017,13 @@ def _decode_context_action(
                     ) from None
                 raise
             return ContextReadAction(correlation, handles)
-        answer = _exact_object(
-            action,
-            frozenset({"kind", "result", "used_handles"}),
-        )
-        used_handles = answer["used_handles"]
-        if action_kind not in allowed_actions or type(used_handles) is not list:
+        answer = _exact_object(action, frozenset({"kind", "result"}))
+        if action_kind not in allowed_actions:
             raise ValueError
         return ContextAnswerAction(
             correlation,
             _answer_text_for_contract(answer["result"], result_contract),
-            tuple(resolve_handle(item) for item in used_handles),
+            completed_handles,
         )
     except ContextExecutionError:
         raise
@@ -3080,12 +3056,10 @@ def _closed_provider_object_schema(
 
 def _context_action_schema(
     *,
-    correlation: ContextActionCorrelation,
     allowed_actions: tuple[str, ...],
     result_contract: ContextJsonObjectResultContract,
     allowed_search_source_kinds: tuple[ContextSourceKind, ...],
     action_limits: list[int],
-    max_used_handles: int,
 ) -> dict[str, object]:
     """Build one closed typed action envelope for the exact physical call."""
 
@@ -3110,24 +3084,20 @@ def _context_action_schema(
                 },
             }
         )
-        variants.append(
-            _closed_provider_object_schema(
-                {
-                    "kind": {"enum": ["search"], "type": "string"},
-                    "path_prefix": {"type": ["string", "null"]},
-                    "queries": {
-                        "items": query_schema,
-                        "maxItems": query_limit,
-                        "minItems": 1,
-                        "type": "array",
-                    },
-                },
-                description=(
-                    "SEARCH: find source locators; path_prefix is null unless "
-                    "restricting writing-artifact paths."
-                ),
-            )
-        )
+        search_properties = {
+            "kind": {"enum": ["search"], "type": "string"},
+            "queries": {
+                "items": query_schema,
+                "maxItems": query_limit,
+                "minItems": 1,
+                "type": "array",
+            },
+        }
+        variants.append(_closed_provider_object_schema(search_properties))
+        variants.append(_closed_provider_object_schema({
+            **search_properties,
+            "path_prefix": {"type": "string"},
+        }))
     if "read" in allowed_actions:
         handle_limit = min(action_limits[5], action_limits[6])
         variants.append(
@@ -3150,15 +3120,10 @@ def _context_action_schema(
                 {
                     "kind": {"enum": ["answer"], "type": "string"},
                     "result": result_contract.schema_value(),
-                    "used_handles": {
-                        "items": {"type": "string"},
-                        "maxItems": max_used_handles,
-                        "type": "array",
-                    },
                 },
                 description=(
-                    "ANSWER: return the exact result and only supporting handles "
-                    "emitted by successful READ actions."
+                    "ANSWER: return only the exact semantic result. Runtime "
+                    "attaches successful READ receipts."
                 ),
             )
         )
@@ -3168,17 +3133,10 @@ def _context_action_schema(
         variants[0] if len(variants) == 1 else {"anyOf": variants}
     )
     schema = _closed_provider_object_schema(
-        {
-            "correlation": {
-                "description": "Echo the exact correlation token from this call.",
-                "enum": [_correlation_token(correlation)],
-                "type": "string",
-            },
-            "action": action_schema,
-        },
+        {"action": action_schema},
         description=(
-            "Return exactly one schema-selected context action with its exact "
-            "correlation token."
+            "Return exactly one schema-selected context action. The runtime "
+            "owns correlation and action-index bookkeeping."
         ),
     )
     _validate_provider_schema_node(schema)
@@ -4236,7 +4194,7 @@ class AgentContextService:
         )
         if (
             physical_call_limit > self._action_policy.max_provider_calls
-            or physical_call_limit <= int(bool(request.mandatory_references))
+            or physical_call_limit <= 0
         ):
             raise _execution_error(ContextExecutionErrorCode.INVALID_VALUE)
         _validate_sync_callback(answer_validator)
@@ -4524,15 +4482,13 @@ class AgentContextService:
                     projection,
                 ),
                 allowed_search_source_kinds=(request.allowed_search_source_kinds),
-                physical_call_limit=(
-                    physical_call_limit - int(bool(request.mandatory_references))
-                ),
+                physical_call_limit=physical_call_limit,
                 core_statuses=core_statuses,
             )
 
             # All statically available mandatory material is checked before the
-            # reference prelude. Its generated observation is checked again in
-            # the exact substantive payload before that physical submission.
+            # local reference load. Its generated observation is checked again
+            # in the exact substantive payload before physical submission.
             if history_delivery is not None:
                 known_payload, _, _ = _initial_payload(
                     binding, projection, planning_checkpoint, action_session,
@@ -4651,129 +4607,11 @@ class AgentContextService:
                     request.reference_operation_id, current_thread_id,
                     None if continuation is None else continuation.identity,
                 )
-                for auth_attempt in range(2):
-                    call_id = prelude_request.call_id
-                    try:
-                        if auth_attempt:
-                            with authentication_replay(auth_failure, replay_sources_unchanged):
-                                prelude = await provider.prepare_references(prelude_request)
-                        else:
-                            prelude = await provider.prepare_references(prelude_request)
-                        break
-                    except BaseException as failure:
-                        if (
-                            isinstance(failure, ProviderAuthenticationRequiredError)
-                            and failure.replay_aborted
-                        ):
-                            raise
-                        facts = context_provider_failure_facts(failure)
-                        recorded_before = len(calls)
-                        if facts.accounting is not None:
-                            if facts.accounting.state is ProviderCallState.SUBMITTED:
-                                submitted_accountings.append(facts.accounting)
-                            generation = self._append_failure_call_without_replacing(
-                                self._ledger, key, generation, attempt_id,
-                                calls, call_id, facts.accounting,
-                            )
-                        provider_failure = True
-                        if (
-                            not isinstance(failure, ProviderAuthenticationRequiredError)
-                            or auth_attempt
-                        ):
-                            raise
-                        try:
-                            authenticated = await request_authentication(failure)
-                        except BaseException:
-                            failure.clear_replay_validator()
-                            raise
-                        if not (
-                            authenticated and failure.replay_safe
-                            and not facts.timed_out and not facts.submission_uncertain
-                            and not facts.taint_existing_thread
-                            and len(calls) == recorded_before + 1
-                            and len(calls) + 1 < physical_call_limit
-                        ):
-                            raise
-                        if not failure.validate_replay() or not replay_sources_unchanged():
-                            raise
-                        auth_failure = failure
-                        prelude_request = replace(
-                            prelude_request,
-                            call_id=f"{attempt_id}_call_{len(calls) + 1}",
-                        )
+                prelude = await provider.prepare_references(prelude_request)
                 stage = "reference_result"
-                terminal_provider_succeeded = True
                 if type(prelude) is not ContextReferencePreludeResult:
-                    failure = _execution_error(
-                        ContextExecutionErrorCode.PROVIDER_CONTRACT
-                    )
-                    accounting = getattr(prelude, "accounting", None)
-                    if (
-                        type(accounting) is ProviderCallAccounting
-                        and accounting.state is ProviderCallState.SUBMITTED
-                    ):
-                        submitted_accountings.append(accounting)
-                        record_context_provider_failure(
-                            failure,
-                            ContextProviderFailureFacts(
-                                accounting,
-                                taint_existing_thread=True,
-                            ),
-                        )
-                        generation = self._append_failure_call_without_replacing(
-                            self._ledger,
-                            key,
-                            generation,
-                            attempt_id,
-                            calls,
-                            call_id,
-                            accounting,
-                        )
-                    raise failure
-                submitted_accountings.append(prelude.accounting)
-                generation = self._append_call(
-                    self._ledger,
-                    key,
-                    generation,
-                    attempt_id,
-                    calls,
-                    call_id,
-                    prelude.accounting,
-                )
-                if (
-                    current_thread_id is not None
-                    and prelude.thread_id != current_thread_id
-                ):
-                    failure = _execution_error(
-                        ContextExecutionErrorCode.CONTINUATION_MISMATCH
-                    )
-                    record_context_provider_failure(
-                        failure,
-                        ContextProviderFailureFacts(
-                            prelude.accounting,
-                            taint_existing_thread=True,
-                        ),
-                    )
-                    raise failure
-                if (
-                    retired_thread_id is not None
-                    and prelude.thread_id == retired_thread_id
-                ):
-                    failure = _execution_error(
-                        ContextExecutionErrorCode.CONTINUATION_MISMATCH
-                    )
-                    record_context_provider_failure(
-                        failure,
-                        ContextProviderFailureFacts(
-                            prelude.accounting,
-                            taint_existing_thread=True,
-                        ),
-                    )
-                    raise failure
-                terminal_provider_succeeded = False
-                current_thread_id = prelude.thread_id
+                    raise _execution_error(ContextExecutionErrorCode.PROVIDER_CONTRACT)
                 reference_context = prelude.context
-                history_advanced = True
 
             observation: str | None = None
             pending_read: ContextReadReceipt | None = None
@@ -4793,16 +4631,12 @@ class AgentContextService:
                 call_id = f"{attempt_id}_call_{len(calls) + 1}"
                 correlation = _action_correlation(binding, action_index)
                 schema = _context_action_schema(
-                    correlation=correlation,
                     allowed_actions=allowed_actions,
                     result_contract=phase_contract[1],
                     allowed_search_source_kinds=(
                         request.allowed_search_source_kinds
                     ),
                     action_limits=action_session.action_limits(),
-                    max_used_handles=(
-                        self._action_policy.max_cumulative_handles
-                    ),
                 )
                 if observation is None:
                     payload, component_paths, reference_paths = _initial_payload(
@@ -5038,6 +4872,7 @@ class AgentContextService:
                             request.allowed_search_source_kinds
                         ),
                         resolve_handle=action_session.resolve_wire_handle,
+                        completed_handles=action_session.completed_handles,
                     )
                 except ContextExecutionError as decode_failure:
                     if (
@@ -5055,6 +4890,7 @@ class AgentContextService:
                                     request.allowed_search_source_kinds
                                 ),
                                 resolve_handle=(action_session.resolve_wire_handle),
+                                completed_handles=action_session.completed_handles,
                             )
                         except ContextExecutionError:
                             finalizer = call_finalizer

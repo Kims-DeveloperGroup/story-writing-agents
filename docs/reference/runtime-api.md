@@ -325,6 +325,7 @@ LeadTurnResult(
     artifact_application_request: ArtifactApplicationRequestPayload | None = None,
     story_commit_request: StoryCommitRequestPayload | None = None,
     recommendation_request: LeadRecommendationRequestPayload | None = None,
+    trace: ReplyTrace | None = None,
 )
 ```
 
@@ -359,38 +360,37 @@ redisclosed, with `next_action=submit_commit_decision`. It defaults to `None`,
 preserving existing construction that omits it. These requests still need
 their respective structured decisions; neither is consultation authority.
 
-A fresh provider judgment also returns exact durable `evidence`. It contains
-the provider-declared `scope` (`story_specific` or `workflow_meta`), declared
-status (`not_applicable`, `verified`, `missing`, `empty`, `incomplete`, or
-`conflicting`), and ordered content-free receipts. Proposal evidence is
+A fresh provider judgment also returns exact durable `evidence`. Runtime derives
+its scope, status (`not_applicable`, `verified`, `missing`, `empty`, `incomplete`,
+or `conflicting`), and ordered content-free receipts from the compact semantic
+scope plus invocation-local authorization facts. Proposal evidence is
 identical to `proposal.basis.evidence`. Runtime-generated workflow recovery and evidence-rejection notices can use
 `evidence=None`; local recommendation rejection or failure closure can instead
 return workflow-meta `not_applicable` evidence with no receipts.
 
-The provider's `lead-outcome-v4` result is one strict JSON object with exactly
-ten fields: `scope`, `evidence_status`, `evidence_ids`, `kind`, `message`,
-`proposal`, `artifact_intent`, `objective_intent`, `recommended_action`, and `authoring_scope`:
+Fresh Lead and specialist replies also expose a content-free `trace`. Its
+`role` and `action` identify the reply route; `context_sources` names classes
+such as `current_input`, `session_state`, `core_status`, `search_results`, and
+`read:writing_artifact`; `recovered_fields` identifies the structured reply
+only when repair or fallback was needed; and `origin` is `provider`,
+`recovered`, or `runtime_fallback`. The runtime constructs this value after
+provider validation. It is persisted with visible collaboration replies and
+therefore survives reopen. A runtime fallback always reports `action=none` and
+grants no confirmation, Apply, Commit, or other user authority.
+
+The provider's `lead-outcome-v5` result remains provider-enforced Structured
+Output, but each closed variant contains only semantic fields. A direct answer is:
 
 ```json
 {
-  "scope": "workflow_meta",
+  "kind": "answer",
+  "message": "Reject records the decision without starting specialist work.",
   "authoring_scope": {
-    "schema_version": 1,
     "activity": "workflow",
     "target_paths": [],
     "domains": [],
-    "interpretation": "Explain the Reject control.",
-    "task_id": "task_demo",
-    "task_revision": 1
-  },
-  "evidence_status": "not_applicable",
-  "evidence_ids": [],
-  "kind": "answer",
-  "message": "Reject records the decision without starting specialist work.",
-  "proposal": null,
-  "artifact_intent": null,
-  "objective_intent": null,
-  "recommended_action": null
+    "task": "task_demo@1"
+  }
 }
 ```
 
@@ -401,27 +401,23 @@ a proposal covering all affected domains, which the Lead can first recommend
 preparing. See the complete
 [scope and routing contract](../guides/lead-agent.md#how-specialist-routing-works).
 
-For a fresh `kind=recommendation`, `recommended_action` is non-null and
-`objective_intent`, `proposal`, and `artifact_intent` are null. Other kinds
-require `recommended_action=null`. A typed action has exactly these fields:
+For a fresh `kind=recommendation`, `recommended_action` is the one additional
+field. Unused intents are omitted. A preparation action has only its semantic
+selector fields:
 
 ```json
 {
   "kind": "prepare_artifact",
-  "purpose": "Prepare the agreed outline for review.",
   "instruction": "Prepare the agreed outline replacement.",
-  "expected_result": "One exact replacement candidate and its required reviewers.",
   "source_ids": ["current_response"],
-  "target_paths": ["core_documents/global_outline.md"],
-  "specialist_ids": [],
-  "objective_id": null
+  "target_paths": ["core_documents/global_outline.md"]
 }
 ```
 
 This is an action excerpt, not a complete Lead result. `prepare_artifact`
 requires exact canonical targets and no specialists; `prepare_consultation`
-requires canonical specialists and no target paths. Purpose, instruction,
-expected result, and source selection must be nonempty. An optional objective
+requires canonical specialists and no target paths. Instruction and source
+selection must be nonempty. An optional objective
 must be an offered open objective owned by this conversation; artifact targets
 must match it. Drafting a recommendation makes no objective transition.
 `current_response` is a provider alias for the complete visible recommendation
@@ -461,8 +457,8 @@ does not permit substantive direct story authoring:
 All other combinations fail closed. Runtime validates structural facts; it
 does not use NLP to infer scope, status, relevance, or semantic consistency.
 Evidence IDs must be current, unique, and in runtime order. A SEARCH hit that
-was not READ, a READ omitted from final `used_handles`, a truncated or non-
-writing zero-hit search, a prior-invocation ID, or an invented ID is invalid.
+was not READ, a truncated or non-writing zero-hit search, a prior-invocation
+ID, or an invented ID is invalid. Runtime attaches completed READ receipts.
 
 Duplicate/unknown/private fields, a nonobject, an unknown kind, a non-null
 proposal or artifact intent on a direct outcome, both proposal forms at once,
@@ -656,8 +652,8 @@ objective provenance; there is no synthetic user message.
 
 The public objective values are additive exports of
 `story_writing_agents.conversations`; the package-root facade is unchanged.
-Retained workspace policies receive a runtime v4 overlay without file rewrites.
-Specialist and synthesis schemas remain separate from `lead-outcome-v4`.
+Retained workspace policies receive the current runtime overlay without file rewrites.
+Specialist and synthesis schemas remain separate from `lead-outcome-v5`.
 
 `LeadProviderOutcome` preserves its Python positional order:
 
@@ -670,9 +666,9 @@ LeadProviderOutcome(
 ```
 
 `objective_intent` remains the eighth positional slot and `recommended_action`
-the ninth. Optional `authoring_scope` is keyword-only. The Python defaults
-support retained values, while fresh provider output must include all ten
-strict JSON fields. JSON member order does not define positional
+the ninth. Optional `authoring_scope` is keyword-only. These Python values are
+richer than the provider contract because runtime adds durable metadata after
+validation. JSON member order does not define positional
 Python arguments.
 
 ### `LeadStepDecision`

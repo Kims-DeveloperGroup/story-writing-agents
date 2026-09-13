@@ -640,10 +640,10 @@ for the user-visible lifecycle and limits.
 
 A built-in substantive call uses typed agent-context wire v7. Codex and
 Antigravity share the same closed domain constraints and payload semantics: the
-required root fields are `correlation` and `action`, and `action` is one closed
+only required root field is `action`, which is one closed
 SEARCH, READ, or ANSWER object. ANSWER embeds its invocation-specific result
-object directly and names only successful supporting READ handles in
-`used_handles`, or `[]` when none was used. There is no JSON-in-string layer,
+object directly. Runtime derives correlation and successful supporting READ
+handles from the active invocation. There is no JSON-in-string layer,
 compatibility decoder, or migration. Typed structure does not redact or reduce
 the sensitivity of action data.
 

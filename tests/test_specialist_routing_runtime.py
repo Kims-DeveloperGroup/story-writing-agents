@@ -8,7 +8,7 @@ from story_writing_agents import conversations as c
 from story_writing_agents.agents import PLOT_ARCHITECT, CHARACTER_CUSTODIAN, EXECUTION_SPECIALIST, LEAD_ORCHESTRATOR
 from story_writing_agents.specialist_routing import AuthoringActivity, AuthoringScope, ArtifactReviewDomain, SpecialistAssignmentMode, ReviewBasis
 from tests.test_lead_orchestration import (
-    LeadOrchestrationTestCase, _LeadBackend, _decision, _provider_envelope,
+    LeadOrchestrationTestCase, _LeadBackend, _compact_scope, _decision, _provider_envelope,
     _workflow_material, _live_scope, _specialist_outcome, _synthesis_outcome, _visible_outcome,
 )
 from tests.test_artifact_proposal_orchestration import _artifact_outcome, _artifact_synthesis_outcome
@@ -31,7 +31,7 @@ def scoped_proposal(*agents, activity="draft", paths=(OUTLINE,), domains=(), sel
         value = {"authoring_scope": scope, "kind": kind, "message": "The scoped work requires its disclosed specialists.",
                  "scope": "story_specific", "evidence_status": "incomplete",
                  "evidence_ids": [], "artifact_intent": None,
-                 "proposal": {"relation": material["answer_contract"]["proposal"]["relation"],
+                 "proposal": {"relation": "new_step",
                               "purpose": "Produce the scoped synthetic material.", "authoring_scope": scope,
                               "assignments": [{"agent_id": agent, "instruction": "Produce the bounded material." if mode == "draft" else "Assess the supplied candidate.",
                                                "input_ids": list(dict.fromkeys(["user_input", *ids])), "mode": mode,
@@ -91,7 +91,7 @@ class SpecialistRoutingRuntimeTests(LeadOrchestrationTestCase):
                 conversation = self.conversation()
                 result = await self.proposal_for(conversation, scoped_proposal(PLOT_ARCHITECT, kind=kind))
                 self.assertIsNone(result.proposal)
-                self.assertIs(result.next_action, c.CollaborationNextAction.RETRY_LEAD_TURN)
+                self.assertIs(result.next_action, c.CollaborationNextAction.CONTINUE_WITH_LEAD)
                 self.assertFalse(any(e.kind is c.CollaborationEventKind.ASSIGNMENT_DISPATCH for e in self.history(conversation)))
         conversation = self.conversation()
         self.backend.enqueue(_visible_outcome("question", "Which existing task should this status request concern?"))
@@ -106,14 +106,13 @@ class SpecialistRoutingRuntimeTests(LeadOrchestrationTestCase):
         self.assertIs(good.kind, c.LeadOutcomeKind.PROPOSAL)
         self.assertEqual(good.proposal.assignments[0].review_basis.candidate_input_ids, ("user_input",))
 
-    async def test_wrong_task_pair_and_scope_mismatch_reject_before_dispatch(self):
+    async def test_wrong_task_pair_rejects_before_dispatch(self):
         def wrong_pair(value, material): value["authoring_scope"]["task_revision"] += 1
-        def mismatch(value, material): value["proposal"]["authoring_scope"] = dict(value["authoring_scope"], interpretation="Different task interpretation.")
-        for mutation in (wrong_pair, mismatch):
-            with self.subTest(mutation=mutation.__name__):
-                result = await self.proposal_for(self.conversation(), scoped_proposal(PLOT_ARCHITECT, mutate=mutation))
-                self.assertIsNone(result.proposal)
-                self.assertIs(result.next_action, c.CollaborationNextAction.RETRY_LEAD_TURN)
+        result = await self.proposal_for(
+            self.conversation(), scoped_proposal(PLOT_ARCHITECT, mutate=wrong_pair)
+        )
+        self.assertIsNone(result.proposal)
+        self.assertIs(result.next_action, c.CollaborationNextAction.CONTINUE_WITH_LEAD)
 
     async def test_cross_conversation_selection_preserves_scope_and_rejects_workflow_relabel(self):
         original_conversation = self.conversation()
@@ -124,7 +123,10 @@ class SpecialistRoutingRuntimeTests(LeadOrchestrationTestCase):
             value["authoring_scope"].update(activity="workflow", target_paths=[], domains=[])
         bad = await self.proposal_for(self.conversation(), scoped_proposal(PLOT_ARCHITECT, selected=selected, kind="answer", mutate=relabel))
         self.assertIsNone(bad.proposal)
-        self.assertIs(bad.next_action, c.CollaborationNextAction.RETRY_LEAD_TURN)
+        self.assertIs(
+            bad.next_action,
+            c.CollaborationNextAction.CONTINUE_WITH_LEAD,
+        )
         continued = await self.proposal_for(self.conversation(), scoped_proposal(PLOT_ARCHITECT, selected=selected))
         self.assertEqual(continued.proposal.authoring_scope.task_id, selected)
         self.assertEqual(self.history(original_conversation), prefix)
@@ -139,12 +141,14 @@ class SpecialistRoutingRuntimeTests(LeadOrchestrationTestCase):
             value = json.loads(response(call, provider))
             material = _workflow_material(call.payload)
             index = next(i for i,t in enumerate(material["authoring_tasks"]) if t["task_id"] == task_id)
-            value["action"]["result"]["authoring_scope"] = _live_scope(call, activity="review", paths=(OUTLINE,), task_index=index)
+            value["action"]["result"]["authoring_scope"] = _compact_scope(
+                _live_scope(call, activity="review", paths=(OUTLINE,), task_index=index)
+            )
             return json.dumps(value)
         self.backend.enqueue(selected_review)
         result = await self.runtime.lead_turn(self.session_id, self.conversation(), "Integrate that pending task into the supplied candidate.")
         self.assertIsNone(result.artifact_proposal)
-        self.assertIs(result.next_action, c.CollaborationNextAction.RETRY_LEAD_TURN)
+        self.assertIs(result.next_action, c.CollaborationNextAction.CONTINUE_WITH_LEAD)
 
     async def test_provider_free_advisory_requires_scope_and_separate_confirmation(self):
         conversation = self.conversation()
@@ -182,8 +186,15 @@ class SpecialistRoutingRuntimeTests(LeadOrchestrationTestCase):
             value = json.loads(response(call, provider))
             material = _workflow_material(call.payload)
             index = next(i for i,t in enumerate(material["authoring_tasks"]) if t["task_id"] == task_id)
-            value["action"]["result"]["authoring_scope"] = _live_scope(
-                call, activity="review", paths=(path,), domains=("plot_structure", "character_world"), task_index=index)
+            value["action"]["result"]["authoring_scope"] = _compact_scope(
+                _live_scope(
+                    call,
+                    activity="review",
+                    paths=(path,),
+                    domains=("plot_structure", "character_world"),
+                    task_index=index,
+                )
+            )
             return json.dumps(value)
         self.backend.enqueue(integrate)
         proposed = await self.runtime.lead_turn(self.session_id, conversation, "Integrate the completed drafts into one exact candidate for all affected reviews.")
@@ -251,19 +262,21 @@ class SpecialistRoutingRuntimeTests(LeadOrchestrationTestCase):
             value["authoring_scope"]["task_revision"]=2
         invalid=await self.proposal_for(self.conversation(),scoped_proposal(PLOT_ARCHITECT,mutate=cross_product))
         self.assertIsNone(invalid.proposal)
-        self.assertIs(invalid.next_action,c.CollaborationNextAction.RETRY_LEAD_TURN)
+        self.assertIs(invalid.next_action,c.CollaborationNextAction.CONTINUE_WITH_LEAD)
         self.workspace.path(OUTLINE).unlink()
         response=_artifact_outcome(operations=[{"kind":"create","suggested_path":OUTLINE,"new_text":"Candidate for the revised task."}],evidence_status="missing",evidence_ids=lambda call,m:[next(x["evidence_id"] for x in call.payload["core_statuses"] if x["locator"]==OUTLINE)])
         def stale(call,provider):
             result=json.loads(response(call,provider))
             material=_workflow_material(call.payload)
             index=next(i for i,t in enumerate(material["authoring_tasks"]) if t["task_id"]==task_id)
-            result["action"]["result"]["authoring_scope"]=_live_scope(call,activity="review",paths=(OUTLINE,),task_index=index)
+            result["action"]["result"]["authoring_scope"] = _compact_scope(
+                _live_scope(call, activity="review", paths=(OUTLINE,), task_index=index)
+            )
             return json.dumps(result)
         self.backend.enqueue(stale)
         rejected=await self.runtime.lead_turn(self.session_id,self.conversation(),"Use the earlier draft for this revised candidate.")
         self.assertIsNone(rejected.artifact_proposal)
-        self.assertIs(rejected.next_action,c.CollaborationNextAction.RETRY_LEAD_TURN)
+        self.assertIs(rejected.next_action,c.CollaborationNextAction.CONTINUE_WITH_LEAD)
 
     async def test_legacy_pending_confirmation_requires_fresh_scoped_proposal_without_rewrite(self):
         from types import SimpleNamespace

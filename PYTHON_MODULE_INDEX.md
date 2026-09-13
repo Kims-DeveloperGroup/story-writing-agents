@@ -16,14 +16,14 @@ Source root: `src/`
 
 Package root: `src/story_writing_agents/`
 
-Importable production units indexed: 142.
+Importable production units indexed: 143.
 
-Direct internal dependency edges indexed: 565.
+Direct internal dependency edges indexed: 574.
 
 Directed internal dependency cycles indexed: 0.
 
 Edge and cycle totals exclude annotation-only `TYPE_CHECKING` imports. The
-all-import AST graph has 567 edges. Its two annotation-only edges are
+all-import AST graph has 576 edges. Its two annotation-only edges are
 `config -> workspace` and `interactive_terminal._core -> conversations`; the
 workspace cycle was already present in the 135-unit baseline
 (528 all-import / 526 runtime edges).
@@ -77,7 +77,7 @@ __main__ -> cli -> conversation_rag_cli
 
 consensus -> consensus.contracts/consensus.execution/consensus.projection/consensus.runtime_adapter/consensus.serialization
 consensus.contracts -> agents/writing_artifacts.catalog
-consensus.execution -> agents/consensus.contracts/consensus.projection
+consensus.execution -> agents/consensus.contracts/consensus.projection/reply_trace
 consensus.projection -> consensus.contracts
 consensus.runtime_adapter -> consensus.contracts/consensus.execution/consensus.projection/consensus.serialization
 consensus.serialization -> consensus.contracts/consensus.projection
@@ -149,7 +149,8 @@ interactive_terminal._viewer_controls -> interactive_terminal._model
 interactive_terminal._viewer_render -> interactive_terminal._model
                                     -> interactive_terminal._viewer_model
 interactive_terminal._collaboration_view -> conversations/specialist_routing
-                                        -> interactive_terminal._model/writing_artifacts
+                                        -> interactive_terminal._model/reply_trace
+                                        -> writing_artifacts
 conversation_literal_search -> (standard library only)
 conversation_rag -> (standard library only)
 conversation_rag_local -> conversation_literal_search/conversation_rag
@@ -172,7 +173,7 @@ conversation_rag_cli -> config/conversation_rag/conversation_rag_composition
 story_writing_agents facade -> agents/backend/conversation_retrieval
                             -> conversation_search/conversations/directives
                             -> errors/interactive_commands/models/orchestrator
-                            -> session_lifecycle/workspace
+                            -> reply_trace/session_lifecycle/workspace
 conversation_storage -> conversation_storage.archive/composition/contracts
                      -> conversation_storage.filesystem_archive
 conversation_storage.archive -> conversations/errors
@@ -206,9 +207,9 @@ orchestrator -> agent_context.progress/artifact_proposals/backend/config/consens
              -> conversation_storage.composition/contracts
              -> errors/git.story_commit_contracts/git.story_commits
              -> models
-             -> prompts/specialist_routing/workspace/workspace.initialization
+             -> prompts/reply_trace/specialist_routing/workspace/workspace.initialization
              -> writing_artifacts/repository/runtime_references
-models -> conversations/agents/errors
+models -> conversations/agents/errors/reply_trace
 agent_context -> agent_context.accounting
 agent_context.accounting -> (standard library only)
 agent_context.actions -> agent_context.manifest/planning
@@ -847,16 +848,16 @@ every intermediate arrow. The current runtime graph is acyclic.
   plans against the scoped ledger checkpoint, reserves INCOMPLETE before any
   physical provider call, and drives the finite SEARCH/READ/ANSWER loop through
   the service-owned `ContextProvider` inversion. Every substantive call uses
-  one provider-neutral compact wire-v7 schema and a full-correlation-derived
-  URL-safe token in a closed typed `{correlation, action}` response object. The
+  one provider-neutral compact wire-v7 schema and a closed typed `{action}`
+  response object. Runtime derives correlation and action-index facts locally. The
   schema is rebuilt for each physical call from its exact allowed actions,
-  searchable source kinds, remaining limits, correlation-token enum, and the
+  searchable source kinds, remaining limits, and the
   phase owner's required result-object schema. SEARCH, READ, and ANSWER are
   nested closed typed variants; no JSON-valued field is encoded as text.
   `ContextJsonObjectResultContract` validates and snapshots only the documented
   common OpenAI/Gemini schema subset, requires a typed closed object result (or
   object-only nested `anyOf` variants), and the decoder rechecks that schema,
-  exact correlation in constant time, action authority, handles, and all
+  runtime-owned correlation, action authority, handles, and all
   established runtime semantics. Every request supplies this explicit owner
   contract; conversation, retrieval, and debate routes retain their phase
   classification but receive no inferred legacy text/tuple contract or
@@ -883,7 +884,8 @@ every intermediate arrow. The current runtime graph is acyclic.
   result contract extend that same tuple for lead, specialist-assignment,
   lead-synthesis, and specialist-advisory execution without importing a story
   domain, while an optional positive physical-call limit bounds the whole
-  invocation including its mandatory-reference prelude and restricts the final
+  invocation's provider calls; mandatory references load locally and do not
+  consume this limit. It restricts the final
   substantive slot to ANSWER. The service exposes its immutable composite
   policy fingerprint for runtime proposal facts. SEARCH
   decodes one optional action-scoped artifact prefix, projects it across every
@@ -907,11 +909,10 @@ every intermediate arrow. The current runtime graph is acyclic.
   correlation, route authorization, fresh HMAC search handles and safe
   locators, per-request physical-call and action counters, atomic one-use reads,
   delivery receipts, final source revalidation, and answer authorization.
-  Mandatory-reference
-  reservations stay
-  separate from source search/read, use the unchanged provider prelude before
-  the substantive action budget, and must complete before verified ledger
-  commit. The two failure-fact helpers attach and recover only validated
+  Mandatory-reference reservations stay separate from source search/read, are
+  resolved locally before the substantive action budget, and must complete
+  before verified ledger commit. The two failure-fact helpers attach and
+  recover only validated
   content-free physical call facts without replacing the original exception;
   they additionally expose the exact ordered cumulative SUBMITTED accountings
   and whether an unaccounted submission may be uncertain. A failure exposes a
@@ -1266,6 +1267,10 @@ every intermediate arrow. The current runtime graph is acyclic.
   typed synthesis next-phase/deadlock metadata and finalization references to
   an existing reviewed proposal; duplicate JSON fields and prose-derived
   authority are rejected before orchestration.
+  Successful structured replies receive one runtime-derived, content-free
+  `ReplyTrace`; one successful repair is marked recovered and an exhausted
+  repair returns an `action=none` runtime fallback without halting the
+  conversation or adding authority.
 - **Authentication boundary:** Both legacy and contextual physical calls enter
   the scoped provider activity gate; this backend does not replay a provider
   call itself. It attaches the admitted authentication generation to typed
@@ -1289,7 +1294,7 @@ every intermediate arrow. The current runtime graph is acyclic.
   `conversation_retrieval`, `debug_log`, `errors`, `git.session_contracts`,
   `interactive_settings`,
   `models`, `provider_adapter`, `provider_auth_recovery`,
-  `provider_error_artifacts`, `provider_process`,
+  `provider_error_artifacts`, `provider_process`, `reply_trace`,
   `runtime_state_paths`,
   `session_lifecycle`, `session_recovery`,
   `session_recovery.transition_assessment`, `workspace`, and
@@ -1374,8 +1379,7 @@ every intermediate arrow. The current runtime graph is acyclic.
   runtime-failure terminal attempt. Legacy outcomes finalize locally;
   substantive context results carry
   a service-owned finalizer adapter until the contextual action lifecycle knows
-  its outcome, while mandatory-reference preludes finalize in the backend after
-  decode, authorization, handling, and context construction. Missing or
+  its outcome. Missing or
   ambiguous legacy correlation disables capture, and every capture call catches
   `BaseException` without changing provider execution, accounting, thread,
   taint, decoding, artifact, reference, cancellation, or exception semantics.
@@ -1388,16 +1392,11 @@ every intermediate arrow. The current runtime graph is acyclic.
   may contain provider content; capture owns serialization and its package
   remains the sole exchange schema, state, and storage owner. For a referenced
   logical invocation, the
-  same thread lock first runs one strict content-free read-action prelude. The
-  provider must echo the exact correlation and complete ordered path/range
-  batch under a request-specific output schema before the synchronous
-  coordinator can expose bytes. The backend frames those bytes once, in order,
-  as `untrusted_writing_artifact_context` only on the next substantive provider
-  payload, closes the transient result, and returns the reply only after
-  result-received and acceptance callbacks succeed. Direct and debate work add
-  one physical prelude call; retrieval places that prelude outside its unchanged
-  one-to-five-call action budget and supplies the frame only to retrieval call
-  one. An attempted authorized conversation-RAG preflight adds one exact
+  same thread lock first loads the complete ordered authorized path/range batch
+  locally. The backend frames those bytes once, in order, as
+  `untrusted_writing_artifact_context` on the substantive provider payload.
+  Reference loading adds no provider call. An attempted authorized
+  conversation-RAG preflight adds one exact
   `rag_context` object only to retrieval call one, frames its excerpts as
   untrusted story data, and permits their deterministic `g1` through `g20`
   citation identities in the existing answer action. Continuations omit that
@@ -1426,7 +1425,7 @@ every intermediate arrow. The current runtime graph is acyclic.
   boundary, a binding-scoped adapter implements the service-owned
   `ContextProvider` protocol without giving the backend planner, ledger, or
   source authority. It retains the bound provider for the complete lifecycle,
-  runs the existing exact reference prelude when requested, builds one
+  loads exact authorized references locally when requested, builds one
   `ProviderInvocation` from each service-supplied schema/payload/component
   mapping, passes its single canonical `payload_json` to the selected adapter,
   and returns raw response, thread identity, and exact content-free accounting
@@ -1441,7 +1440,7 @@ every intermediate arrow. The current runtime graph is acyclic.
   the native-record key and lifecycle lock, while raw exchanges retain their
   actual conversation attribution. Legacy conversation keys remain intact.
   The backend enforces the exact session-payload byte limit before every native
-  submission, including reference preludes. Typed adapter rejection proof is
+  submission. Typed adapter rejection proof is
   mapped only for an attempted continuation and never inferred from prose.
   Submitted
   cancellation, timeout, malformed result, continuation mismatch, and failed
@@ -1558,24 +1557,13 @@ every intermediate arrow. The current runtime graph is acyclic.
   before UTF-8 encoding and component accounting, and renders the structured
   delivery instruction as a complete schema-selected `finish` call. Contextual
   role rendering identifies the specialist's bare assessment example as
-  `action.result`, requiring the outer correlation/action object through
-  `finish`. Contextual Lead role rendering also clarifies that, after mandatory
-  reference reading, supplied `i.input_aliases` attached-reference IDs are
-  content evidence distinct from `core_statuses` IDs. Verified story content
-  requires a supporting attached-reference or completed READ evidence ID;
-  status IDs alone are insufficient. Only current supplied IDs are eligible,
-  with the existing runtime evidence ordering and domain rules preserved.
-  Supporting `evidence_ids` remain distinct from proposal assignment
-  `input_ids`: assignments collectively cover every supplied `i.input_aliases`
-  input ID, including `user_input`, plus every cited READ evidence ID. This
-  staging clarification preserves the canonical routing and validators.
-  For `lead_synthesis`, contextual Lead staging requires literal copies of
-  `i.answer_contract` scope, evidence status, evidence IDs, and reply-event
-  attribution IDs. Required `unresolved_input_ids` remain in supplied order
-  before any additional unresolved original inputs. Concern, conflict, or
-  insufficient-evidence inputs remain unresolved even when synthesis explains
-  a remedy or ends the consultation; empty `unresolved_input_ids` require an
-  empty required list. These instructions apply to every consultation, including ordinary
+  `action.result`, requiring the outer action object through `finish`.
+  Contextual Lead role rendering states that runtime owns correlation,
+  evidence, attribution, and review-basis bookkeeping. The provider supplies
+  semantic scopes, assignments, selectors, visible messages, and intent only.
+  For `lead_synthesis`, contextual Lead staging requests only the visible
+  message plus an optional semantic continuation or recommendation; runtime
+  derives reply-event and unresolved-input facts. These instructions apply to every consultation, including ordinary
   consultations and artifact reviews, without changing schemas, validators,
   or authority for another round.
   This local rendering leaves
@@ -1587,8 +1575,8 @@ every intermediate arrow. The current runtime graph is acyclic.
   A definition's internal `provider_managed_context` marker instead
   selects the compact contextual rules: the same role/persona/language facts
   plus the symmetric wire-v7 grammar for untrusted evidence, the exact typed
-  `{correlation, action}` envelope, schema-selected SEARCH/READ/ANSWER variant,
-  exact correlation echo, direct typed ANSWER result placement, and successful-
+  `{action}` envelope, schema-selected SEARCH/READ/ANSWER variant,
+  runtime-owned correlation, direct typed ANSWER result placement, and successful-
   READ-only handle rules, together with action-scoped prefix search, the
   per-call `q` contract, retained-state candidate reconstruction, alias-keyed
   patch upsert, and typed tombstone removal, with
@@ -1757,8 +1745,8 @@ every intermediate arrow. The current runtime graph is acyclic.
   internal `provider_managed_context` marker instead selects the compact
   contextual binding shared semantically with Antigravity: role, persona,
   language, and the symmetric wire-v7 grammar for untrusted evidence, the exact
-  typed `{correlation, action}` envelope, schema-selected SEARCH/READ/ANSWER
-  variant, exact correlation echo, direct typed ANSWER result placement, and
+  typed `{action}` envelope, schema-selected SEARCH/READ/ANSWER variant,
+  runtime-owned correlation, direct typed ANSWER result placement, and
   successful-READ-only handle rules, together with action-scoped prefix search,
   the authoritative per-call `q` contract,
   retained-state candidate reconstruction, alias-keyed patch upsert, and typed
@@ -2230,8 +2218,8 @@ every intermediate arrow. The current runtime graph is acyclic.
   only through immutable content-addressed material handles. Continuation
   lineage is forwarded to every provider assignment without becoming execution
   authority.
-- **Direct internal dependencies:** `agents`, `consensus.contracts`, and
-  `consensus.projection`.
+- **Direct internal dependencies:** `agents`, `consensus.contracts`,
+  `consensus.projection`, and `reply_trace`.
 - **State, resources, and side effects:** Retains only injected ports and
   owner identity. Provider and event-persistence effects are delegated through
   those ports; importing performs no operational I/O.
@@ -2398,7 +2386,7 @@ every intermediate arrow. The current runtime graph is acyclic.
   citation identities, event correlation, source identities, and half-open
   ranges; they omit query text, subjects, provider scores/candidates, paths,
   credentials, exception text, and generation identities. No name is
-  re-exported by the 104-name package-root facade.
+  re-exported by the 106-name package-root facade.
 - **Direct internal dependencies:** `config`, `conversation_rag`,
   `conversation_rag_composition`, `conversation_rag_local`,
   `conversation_rag_runtime`, `conversation_rag_store`,
@@ -2463,7 +2451,7 @@ every intermediate arrow. The current runtime graph is acyclic.
   `ConversationRagStateError`, and `ConversationRagOperationError`.
   These names are supported only from
   `story_writing_agents.conversation_rag`; none is re-exported by the
-  104-name package-root facade.
+  106-name package-root facade.
 - **Direct internal dependencies:** None.
 - **State, resources, and side effects:** Standard-library-only frozen,
   slotted values, exact enums, runtime-checkable caller-owned collaborator
@@ -3219,7 +3207,7 @@ every intermediate arrow. The current runtime graph is acyclic.
   bounded `preflight(..., forced_query=None)`, explicit
   `search_authorized(...)`, and
   `project_authorized(..., rebuild=False)` operations. None is re-exported by
-  the 104-name package-root facade.
+  the 106-name package-root facade.
 - **Direct internal dependencies:** `conversation_literal_search`,
   `conversation_rag`, `conversation_retrieval`, `conversation_search`,
   `conversation_storage.contracts`, and `conversations`.
@@ -3304,7 +3292,7 @@ every intermediate arrow. The current runtime graph is acyclic.
   `serialize_conversation_retrieval_observation`. The original retrieval
   contract names plus `ConversationRetrievalHistoryRecord` remain package-
   facade exports; the three RAG values and serializer are supported only from
-  this direct module, producing the exact 104-name root facade.
+  this direct module, producing the exact 106-name root facade.
   `ConversationRetrievalActionKind` permits only `SEARCH_CONVERSATIONS`,
   `READ_HISTORY`, and `ANSWER`. Each history record carries one validated
   `CollaborationReadableRecord` plus one exact citation ID per ordered closed
@@ -3326,8 +3314,12 @@ every intermediate arrow. The current runtime graph is acyclic.
   `ConversationRetrievalRequest` also carries an additive optional validated
   `story_session_context`; omission preserves legacy request construction and
   projection, and runtime-built requests may carry both context forms.
+  Search, read, answer, final reply, and result values can carry a content-free
+  runtime `ReplyTrace`; retrieval accumulates the ordered context-source labels
+  used across its bounded action loop.
 - **Direct internal dependencies:** `agents`, `conversation_rag`,
-  `conversation_search`, `conversations`, `errors`, and `models`.
+  `conversation_search`, `conversations`, `errors`, `models`, and
+  `reply_trace`.
 - **State, resources, and side effects:** Frozen, slotted contracts, immutable
   policy metadata, exact validators, and pure canonical serialization only.
   Authoritative excerpt and readable-field content is excluded from dataclass
@@ -3832,7 +3824,7 @@ every intermediate arrow. The current runtime graph is acyclic.
   `agent_states/orchestrator_state/conversation_storage_transfers`.
   The frozen report provides its fixed counts-only `to_dict`, compact sorted
   `to_json`, and process `exit_code` projections. These names are absent from
-  both the 63-name conversation-storage facade and 104-name package-root
+  both the 63-name conversation-storage facade and 106-name package-root
   facade. No former migration-named public constant, type, operation, or
   callable remains as an alias.
 - **Direct internal dependencies:** `conversation_storage.archive`,
@@ -4650,7 +4642,8 @@ every intermediate arrow. The current runtime graph is acyclic.
   the prior task, advances its revision by one, and cannot discard known
   targets or domains. Legacy absent-scope history remains readable.
 - **Direct internal dependencies:** `conversations.events`, `errors`,
-  `git.story_commit_contracts`, `specialist_routing`, and `writing_artifacts`.
+  `git.story_commit_contracts`, `reply_trace`, `specialist_routing`, and
+  `writing_artifacts`.
 - **State, resources, and side effects:** Immutable policy, window, and
   projection/readable values; immutable closed field and transition metadata;
   the immutable legacy context values and active v2 storage-neutral port; pure
@@ -4776,8 +4769,12 @@ every intermediate arrow. The current runtime graph is acyclic.
   mode. `DRAFTED` is limited to explicit draft replies and cannot become an
   artifact-review assessment. The conversations facade exposes every defining object, while
   the project-root facade retains only the three immutable visible-event names.
+  Agent-authored messages, judgments, specialist replies, and syntheses carry
+  an optional strict `ReplyTrace`; canonical event codecs persist the trace so
+  content-free construction facts survive reopen.
 - **Direct internal dependencies:** `agents`, `artifact_proposals`, `errors`,
-  `git.story_commit_contracts`, `specialist_routing`, and `writing_artifacts`.
+  `git.story_commit_contracts`, `reply_trace`, `specialist_routing`, and
+  `writing_artifacts`.
 - **State, resources, and side effects:** Immutable v1 and v2 values plus
   deterministic identifier, strict UTF-8/size/privacy, actor direction,
   lead-result closure, the strict workflow-meta/story-specific
@@ -6103,6 +6100,9 @@ every intermediate arrow. The current runtime graph is acyclic.
   their prose messages with the renderer's `AGENT` role. User messages,
   objectives, instructions, recommendation metadata, and structural fields do
   not opt into agent-prose normalization.
+  When present, their content-free trace is rendered in a separate
+  `Reply construction` section with role, action, context-source labels,
+  recovered-field labels, and origin.
   `validate_collaboration_event_order`
   rejects mixed conversation scope, duplicate sequence, and out-of-order input
   before presentation. Details mode adds durable record identity but cannot
@@ -6113,7 +6113,7 @@ every intermediate arrow. The current runtime graph is acyclic.
   an explicit legacy label when absent. Rendering supplies no routing or
   confirmation authority.
 - **Direct internal dependencies:** `conversations`, `specialist_routing`,
-  `writing_artifacts`, and `interactive_terminal._model`.
+  `writing_artifacts`, `reply_trace`, and `interactive_terminal._model`.
 - **State, resources, and side effects:** Pure validated projection only. It
   reads no store, invokes no provider, writes no stream, and owns no terminal,
   artifact, Git, or runtime state. Closed payload dispatch fails on unknown
@@ -6698,7 +6698,10 @@ every intermediate arrow. The current runtime graph is acyclic.
   deadlock, and finalization fields are mutually exclusive; synthesis carries
   only a closed next-phase value, while finalization carries only a reviewed
   proposal ID and tagged digest and never carries artifact content or authority.
-- **Direct internal dependencies:** `agents`, `conversations`, and `errors`.
+  `DebateMessage`, `AgentReply`, `ConversationReply`, and
+  `ConversationResult` can carry the shared content-free `ReplyTrace`.
+- **Direct internal dependencies:** `agents`, `conversations`, `errors`, and
+  `reply_trace`.
 - **State, resources, and side effects:** Value contracts own no process state;
   owner outcomes retain only the newest complete suffix under both 24-entry and
   32,768-UTF-8-byte caps with total/retained/omitted/byte/truncation accounting.
@@ -6754,20 +6757,19 @@ every intermediate arrow. The current runtime graph is acyclic.
   before a provider call with guidance to use the Lead for interpretation.
   Ordinary turns persist user input before the lead
   invocation, can supersede an exact pending request, and return one strict
-  visible lead outcome grounded in provider-declared scope/status plus ordered
-  runtime-issued evidence IDs; exact structured decisions confirm, reject, or
+  visible lead outcome grounded in its semantic scope plus locally derived
+  evidence facts; exact structured decisions confirm, reject, or
   revise the authoritative proposal tail. Confirm consumes its private
   capability and returns only after the authoritative execution turn. The
   runtime supplies the generic context service with exact closed typed result
   schemas for Lead front-channel, specialist assignment/advisory, Lead
-  synthesis, and artifact-review synthesis calls. The fresh `lead-outcome-v4`
-  schema requires all ten result fields, including nullable `objective_intent`
-  `recommended_action`, and versioned `authoring_scope`, and uses disjoint direct, recommendation,
-  consultation-proposal, and artifact-intent variants. Every fresh provider
-  recommendation includes a closed action and null objective intent; other
-  kinds have null action. Ordinary synthesis uses the nine-field
-  `lead-synthesis-v3` contract and private `_LeadSynthesisResult` wrapper:
-  nullable action and `next_intent` are mutually exclusive. Non-actionable
+  synthesis, and artifact-review synthesis calls. The fresh `lead-outcome-v5`
+  schema uses disjoint minimal direct, recommendation, consultation-proposal,
+  objective, and artifact-intent variants. It requires only semantic fields and
+  never infers absent authority selectors. A structured rejection receives one
+  repair call, then a visible safe no-action fallback. Ordinary synthesis uses
+  the minimal `lead-synthesis-v3` contract and private `_LeadSynthesisResult` wrapper:
+  optional action and `next_intent` are mutually exclusive. Non-actionable
   successful synthesis returns ANSWER; actionable synthesis discloses a new
   recommendation request. Artifact-review synthesis and runtime recovery
   notices retain their established contracts and gates. Front-channel story
@@ -7019,6 +7021,10 @@ every intermediate arrow. The current runtime graph is acyclic.
   draft provenance and exact-candidate review gates still control candidate
   preparation and Apply. Recommendation requests participate in the existing
   task projection; recommendation completion never satisfies authoring.
+  The runtime derives content-free reply traces from the admitted role,
+  semantic action, delivered context classes, and repair outcome; it persists
+  those facts with Lead, specialist, and synthesis replies without deriving
+  user authority from the trace.
 - **Direct internal dependencies:** `agent_context.accounting`,
   `agent_context.continuation`, `agent_context.manifest`, `agent_context.planning`, `agent_context.service`,
   `agent_context.progress`, `agent_context.sources`, `agents`, `artifact_proposals`, `backend`, `config`,
@@ -7028,7 +7034,7 @@ every intermediate arrow. The current runtime graph is acyclic.
   `git.story_commit_contracts`, `git.story_commits`,
   `conversation_rag_runtime`, `conversation_storage.composition`,
   `conversation_storage.contracts`, `debug_log`, `directives`, `errors`,
-  `models`, `prompts`, `specialist_routing`, `workspace`, `workspace.initialization`,
+  `models`, `prompts`, `reply_trace`, `specialist_routing`, `workspace`, `workspace.initialization`,
   `writing_artifacts`, `writing_artifacts.catalog`, `writing_artifacts.repository`, and
   `writing_artifacts.runtime_references`.
 - **State, resources, and side effects:** Retains workspace, prompt/config, one
@@ -7129,7 +7135,7 @@ every intermediate arrow. The current runtime graph is acyclic.
   fingerprint, so a direct binding cannot be resumed as a contextual binding;
   the established `build_definition()` keeps its exact eager core-document
   binding behavior for direct and explicitly custom callers. Every Lead
-  definition appends a deterministic `lead-outcome-v4` contract overlay to its
+  definition appends a deterministic `lead-outcome-v5` contract overlay to its
   retained domain policy bytes before constructing the content-addressed
   prompt reference. This reaches existing copied workspace policies and newly
   initialized workspaces without rewriting either; the overlay participates
@@ -7139,7 +7145,7 @@ every intermediate arrow. The current runtime graph is acyclic.
   still require attached-reference or READ evidence. Empty status establishes
   absence of content without claiming complete story knowledge or bypassing
   the closed evidence matrix and separate review/Apply/Commit gates. Its
-  ten-field contract requires concrete actions on fresh recommendations,
+  minimal variant contract requires concrete actions on fresh recommendations,
   resolves only offered source aliases, and distinguishes Confirm preparation
   from actual Revise replanning and ordinary contextual authoring input.
   Both paths append captured runtime
@@ -7183,6 +7189,29 @@ every intermediate arrow. The current runtime graph is acyclic.
   `tests/test_codex_backend.py`, `docs/reference/writing-artifacts.md`,
   `docs/reference/agent-contracts.md#recommendation-preparation-contracts`, and
   `docs/design/prompts-and-provider.md#current-contextual-binding`.
+
+### `story_writing_agents.reply_trace`
+
+- **Source:** `src/story_writing_agents/reply_trace.py`
+- **Responsibility:** Define the shared compact, content-free construction
+  trace attached to visible agent replies.
+- **Supported surface:** Package-supported `ReplyTrace` and
+  `ReplyTraceOrigin`. The exact JSON-compatible shape contains `role`,
+  `action`, `context_sources`, `recovered_fields`, and `origin`. Origins are
+  `provider`, `recovered`, and `runtime_fallback`; fallback must use
+  `action=none` and non-provider origins must identify affected fields.
+- **Direct internal dependencies:** None.
+- **State, resources, and side effects:** Frozen slotted values, safe bounded
+  labels, and exact pure dict codecs only. The module contains no prompt,
+  reply, retrieved, reference, hidden-reasoning, or authority bytes and owns no
+  mutable state, storage, provider, process, filesystem, or import-time I/O.
+- **Primary verification/documentation:** `tests/test_reply_trace.py`,
+  `tests/test_codex_backend.py`, `tests/test_lead_orchestration.py`,
+  `tests/test_specialist_orchestration.py`,
+  `tests/test_consensus_runtime_correlation.py`,
+  `tests/test_interactive_collaboration_view.py`,
+  `docs/reference/backend-and-sessions.md`,
+  `docs/reference/runtime-api.md`, and `docs/guides/lead-agent.md`.
 
 ### `story_writing_agents.run_inputs`
 
@@ -7698,9 +7727,9 @@ every intermediate arrow. The current runtime graph is acyclic.
   workflow directories), and 25 sorted initializer entries. It embeds and re-exports
   the session branch/ref/sibling-worktree values owned by
   `git.session_contracts` so marker bytes remain unchanged. Canonical common
-  and role-prompt scaffolds retain the typed `{correlation, action}` envelope.
-  The embedded Lead scaffold specifies the ten-field `lead-outcome-v4`
-  contract, semantic objective transitions, contextual drafting, fresh artifact
+  and role-prompt scaffolds use the typed `{action}` envelope with runtime-owned
+  correlation. The embedded Lead scaffold specifies the minimal variant-based
+  `lead-outcome-v5` contract, semantic objective transitions, contextual drafting, fresh artifact
   evidence, and separate review/Apply/Commit gates. It permits a selected exact
   empty-core status receipt for `replace` only after runtime revalidation,
   preserves attached-reference/READ requirements for nonempty content, and
@@ -7709,7 +7738,7 @@ every intermediate arrow. The current runtime graph is acyclic.
   versus Revise semantics, and ordinary synthesis's nullable action distinct
   from `next_intent`. The checked-in
   `config/agents/lead_orchestrator/AGENTS.md` is byte-identical to the embedded
-  ten-field v4 default.
+  minimal variant-based v5 default.
   Embedded defaults affect only newly initialized workspaces and define no
   migration.
   Existing copied policies receive the effective current contract from
@@ -8435,7 +8464,7 @@ every intermediate arrow. The current runtime graph is acyclic.
 
 ## Consistency Notes
 
-- The combined runtime has 140 production units, 555 runtime edges, 557
+- The combined runtime has 143 production units, 574 runtime edges, 576
   all-import edges, and no directed runtime cycle. Whole-source path parity is
   exact. Specialist routing adds one pure module and five net inward runtime
   edges over the provider-recovery baseline: artifact proposals replace their
@@ -8466,8 +8495,8 @@ every intermediate arrow. The current runtime graph is acyclic.
   `provider_auth_recovery` module and eight inward runtime edges to the
   pre-authentication 139-unit/547-runtime-edge routing baseline.
 - Recommendation confirmation composes without another module or dependency.
-  The combined Lead contract is ten-field v4 and ordinary synthesis is
-  nine-field v3. Scoped recommendation requests bind task/revision and required
+  The combined Lead contract is minimal variant-based v5 and ordinary synthesis
+  is minimal v3. Scoped recommendation requests bind task/revision and required
   domains into their action digest; historical absent scope bytes are unchanged.
   Preparation, specialist work, final candidate review, Apply, and Commit
   remain separately authorized boundaries; completed preparation is not a

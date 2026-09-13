@@ -316,7 +316,7 @@ class PublicApiTests(unittest.TestCase):
     def test_all_declared_public_imports_exist_and_runtime_aliases_are_absent(
         self,
     ) -> None:
-        self.assertEqual(len(story_writing_agents.__all__), 104)
+        self.assertEqual(len(story_writing_agents.__all__), 106)
         for name in story_writing_agents.__all__:
             with self.subTest(name=name):
                 self.assertTrue(hasattr(story_writing_agents, name))
@@ -361,6 +361,8 @@ class PublicApiTests(unittest.TestCase):
             "ConversationResult",
             "DirectiveKind",
             "PromptFileReference",
+            "ReplyTrace",
+            "ReplyTraceOrigin",
             "StoryWritingAgentsError",
             "WorkspaceSecurityError",
             "WorkspaceFormatError",
@@ -400,6 +402,8 @@ class PublicApiTests(unittest.TestCase):
                 "ConversationResult",
                 "DirectiveKind",
                 "PromptFileReference",
+                "ReplyTrace",
+                "ReplyTraceOrigin",
                 "StoryWritingAgentsError",
             }
         ):

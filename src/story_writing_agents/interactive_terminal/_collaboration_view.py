@@ -45,6 +45,7 @@ from ..conversations import (
     StoryCommitRequestPayload,
     StoryCommitResultPayload,
 )
+from ..reply_trace import ReplyTrace
 from ..specialist_routing import AuthoringScope
 from ..writing_artifacts import (
     ArtifactCreateOperation,
@@ -150,6 +151,7 @@ def project_lead_turn_result(result: LeadTurnResult) -> Panel:
     items: list[Section | Field | Notice | Message | Record | ListView] = [
         Field("Outcome", result.kind.value),
         _message("Lead", result.message, role=SemanticRole.AGENT),
+        *_reply_trace_items(result.trace),
     ]
     if result.proposal is not None:
         items.extend(_proposal_items(result.proposal))
@@ -315,6 +317,7 @@ def project_specialist_results(
                         reply.message,
                         role=SemanticRole.AGENT,
                     ),
+                    *_reply_trace_items(reply.trace),
                 )
             )
         else:
@@ -473,13 +476,17 @@ def _payload_items(
     if type(payload) is LeadRecommendationResultPayload:
         return (Field("Preparation", payload.state.value), _message("Result", payload.message))
     if type(payload) is CollaborationMessagePayload:
-        return (_message("Message", payload.content),)
+        return (
+            _message("Message", payload.content),
+            *_reply_trace_items(payload.trace),
+        )
     if type(payload) is CollaborationLeadJudgmentPayload:
         return (
             *_authoring_scope_items(payload.authoring_scope),
             Field("Outcome", payload.kind.value),
             _message("Lead", payload.message, role=SemanticRole.AGENT),
             *_evidence_items(payload.evidence),
+            *_reply_trace_items(payload.trace),
         )
     if type(payload) is CollaborationProposal:
         return _proposal_items(payload)
@@ -498,6 +505,7 @@ def _payload_items(
             Field("Mode", "legacy" if payload.mode is None else payload.mode.value),
             Field("Inputs read", _joined(payload.input_ids)),
             _message("Specialist reply", payload.message, role=SemanticRole.AGENT),
+            *_reply_trace_items(payload.trace),
         ]
         if payload.assessment.value == "conflict":
             items.extend(
@@ -528,6 +536,7 @@ def _payload_items(
             Field("Unresolved inputs", _joined(payload.unresolved_input_ids)),
             _message("Lead synthesis", payload.message, role=SemanticRole.AGENT),
             *_evidence_items(payload.evidence),
+            *_reply_trace_items(payload.trace),
         )
     if type(payload) is CollaborationStepStatePayload:
         fields: list[Field | Notice] = [
@@ -936,6 +945,23 @@ def _message(
         content,
         role=role,
         presentation=MessagePresentation.CHAT_BLOCK,
+    )
+
+
+def _reply_trace_items(trace: ReplyTrace | None) -> tuple[Section, ...]:
+    if trace is None:
+        return ()
+    return (
+        Section(
+            "Reply construction",
+            (
+                Field("Role", trace.role),
+                Field("Action", trace.action),
+                Field("Context", _joined(trace.context_sources)),
+                Field("Recovered fields", _joined(trace.recovered_fields)),
+                Field("Origin", trace.origin.value),
+            ),
+        ),
     )
 
 

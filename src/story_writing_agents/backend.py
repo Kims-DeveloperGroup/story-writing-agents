@@ -156,6 +156,7 @@ from .provider_error_artifacts import (
     WorkspaceProviderErrorArtifacts,
 )
 from .provider_process import ProcessTimedOut, stop_process
+from .reply_trace import ReplyTrace, ReplyTraceOrigin
 from .session_lifecycle import (
     SessionAccessState,
     SessionDurableState,
@@ -172,11 +173,9 @@ from .session_recovery.transition_assessment import (
     SessionTransitionOperation,
 )
 from .writing_artifacts.read_actions import (
-    ArtifactLineRange,
     ArtifactReference,
     ReferenceAuthorizationError,
     ReferenceAuthorizationErrorCode,
-    ReferenceInvocationCorrelation,
     ReferenceReadAction,
     ReferenceReadActionKind,
     ReferenceReadInvocation,
@@ -206,8 +205,8 @@ _SAFE_FINGERPRINT = re.compile(r"[0-9a-f]{64}")
 _SAFE_CONTEXT_DIGEST = re.compile(r"sha256:[0-9a-f]{64}")
 
 _CONVERSATION_RETRIEVAL_RULES = (
-    "Return exactly one structured retrieval action with the supplied "
-    "session_id, conversation_id, turn_id, and action_index.",
+    "Return exactly one structured retrieval action. The runtime owns all "
+    "session, conversation, turn, and action-index bookkeeping.",
     "Use search_conversations before read_history; after the first "
     "read_history, use only read_history or answer; answer may be the "
     "first action.",
@@ -233,14 +232,15 @@ _CONVERSATION_RAG_RETRIEVAL_RULES = (
     _CONVERSATION_RETRIEVAL_RULES[-1],
 )
 
-_REFERENCE_READ_RULES = (
-    "Return exactly one read_writing_artifacts action before answering the task.",
-    "Echo the supplied correlation and the complete ordered reference batch exactly.",
-    "Do not answer, omit, reorder, duplicate, broaden, or invent a reference.",
-    "The request contains reference indicators only; do not perform another action.",
+_StructuredReply = TypeVar("_StructuredReply")
+_SAFE_STRUCTURED_FALLBACK_MESSAGE = (
+    "I couldn't validate the provider's structured reply after one repair attempt, "
+    "so no action was taken. You can continue the conversation or try again."
 )
 
-_StructuredReply = TypeVar("_StructuredReply")
+
+class _StructuredOutputRejected(BackendProtocolError):
+    """Identify a returned provider value rejected by structured decoding."""
 
 
 @dataclass(slots=True)
@@ -778,6 +778,8 @@ class BoundAgent:
         validated = self._validated_conversation_retrieval_request(request)
         action = self.backend._decode_conversation_retrieval_action(
             text,
+            request=validated,
+            action_index=1,
             provider_name=("Codex" if self.vendor == "codex" else "Antigravity"),
         )
         if type(action) is not ConversationRetrievalAnswerAction or (
@@ -809,6 +811,7 @@ class BoundAgent:
         reply = self.backend._decode_reply(
             request.phase,
             text,
+            revision_id=request.revision_id,
             provider_name=("Codex" if self.vendor == "codex" else "Antigravity"),
         )
         if reply.revision_id != request.revision_id:
@@ -1713,7 +1716,7 @@ class AgentBackend:
         bound_agent: BoundAgent,
         session_id: str,
     ) -> str:
-        """Capture logical-turn thread state before any reference prelude."""
+        """Capture logical-turn thread state before local reference loading."""
 
         generation = bound_agent._adapter_generation
         try:
@@ -2777,12 +2780,13 @@ class AgentBackend:
         schema: Mapping[str, Any],
         payload: Mapping[str, Any],
         decode: Callable[[str], _StructuredReply],
+        fallback: Callable[[], _StructuredReply],
         provider_name: str,
         call_kind: ProviderCallKind,
     ) -> _StructuredReply:
         """Run one mandatory read prelude and one substantive provider call."""
 
-        context = await self._perform_reference_read_prelude(
+        context = await self._load_authorized_reference_context(
             bound_agent,
             session_id=session_id,
             debate_id=debate_id,
@@ -2793,7 +2797,7 @@ class AgentBackend:
         framed_payload = dict(payload)
         framed_payload["untrusted_writing_artifact_context"] = context
         try:
-            reply = await self._invoke_provider_structured(
+            reply = await self._invoke_provider_structured_resilient(
                 bound_agent,
                 session_id=session_id,
                 debate_id=debate_id,
@@ -2801,8 +2805,10 @@ class AgentBackend:
                 schema=schema,
                 payload=framed_payload,
                 decode=decode,
+                fallback=fallback,
                 best_effort_taint=True,
                 call_kind=call_kind,
+                trace_role=bound_agent.definition.agent_id,
             )
         except BaseException as exc:
             self._fail_reference_read_without_replacing(
@@ -2820,7 +2826,7 @@ class AgentBackend:
         )
         return reply
 
-    async def _perform_reference_read_prelude(
+    async def _load_authorized_reference_context(
         self,
         bound_agent: BoundAgent,
         *,
@@ -2830,44 +2836,16 @@ class AgentBackend:
         reference_read: ReferenceReadInvocation,
         provider_name: str,
     ) -> list[dict[str, object]]:
-        """Obtain one exact provider action, then transiently frame its bytes."""
+        """Read the already-authorized references and transiently frame their bytes."""
 
         request = reference_read.request
+        del debate_id, conversation_id, provider_name
         try:
-            action = await self._invoke_provider_structured(
-                bound_agent,
-                session_id=session_id,
-                debate_id=debate_id,
-                conversation_id=conversation_id,
-                schema=self._reference_read_action_schema(request),
-                payload=self._reference_read_prelude_payload(request),
-                decode=lambda text: self._decode_reference_read_action(
-                    text,
-                    provider_name=provider_name,
-                ),
-                best_effort_taint=True,
-                call_kind=ProviderCallKind.WRITING_ARTIFACT_REFERENCE_READ,
-            )
-        except BaseException as exc:
-            self._fail_reference_read_without_replacing(
-                reference_read,
-                exc,
-                session_id=session_id,
-                definition=bound_agent.definition,
-                provider_failure=True,
-                taint=False,
-            )
-            raise
-
-        try:
-            if action != ReferenceReadAction(
+            action = ReferenceReadAction(
                 ReferenceReadActionKind.READ_WRITING_ARTIFACTS,
                 request.correlation,
                 request.references,
-            ):
-                raise ReferenceAuthorizationError(
-                    ReferenceAuthorizationErrorCode.CORRELATION_MISMATCH
-                )
+            )
             result = reference_read.handle_reference_read_action(action)
             if inspect.isawaitable(result):
                 if inspect.iscoroutine(result):
@@ -3002,38 +2980,6 @@ class AgentBackend:
             pass
 
     @staticmethod
-    def _reference_read_prelude_payload(
-        request: ReferenceReadRequest,
-    ) -> dict[str, object]:
-        """Build a content-free payload containing only read instructions."""
-
-        return {
-            "operation": "writing_artifact_reference_read",
-            "correlation": AgentBackend._reference_correlation_payload(
-                request.correlation
-            ),
-            "references": [
-                AgentBackend._artifact_reference_payload(reference)
-                for reference in request.references
-            ],
-            "rules": list(_REFERENCE_READ_RULES),
-        }
-
-    @staticmethod
-    def _reference_correlation_payload(
-        correlation: ReferenceInvocationCorrelation,
-    ) -> dict[str, object]:
-        return {
-            "operation_id": correlation.operation_id,
-            "invocation_id": correlation.invocation_id,
-            "invocation_ordinal": correlation.invocation_ordinal,
-            "agent_id": correlation.agent_id,
-            "phase": correlation.phase,
-            "round_number": correlation.round_number,
-            "attempt": correlation.attempt,
-        }
-
-    @staticmethod
     def _artifact_reference_payload(
         reference: ArtifactReference,
     ) -> dict[str, object]:
@@ -3069,213 +3015,6 @@ class AgentBackend:
                 strict=True,
             )
         ]
-
-    @staticmethod
-    def _reference_read_action_schema(
-        request: ReferenceReadRequest,
-    ) -> dict[str, Any]:
-        """Return a strict schema for exactly this ordered read request."""
-
-        correlation_value = request.correlation
-        correlation = {
-            "type": "object",
-            "properties": {
-                "operation_id": {
-                    "type": "string",
-                    "enum": [correlation_value.operation_id],
-                },
-                "invocation_id": {
-                    "type": "string",
-                    "enum": [correlation_value.invocation_id],
-                },
-                "invocation_ordinal": {
-                    "type": "integer",
-                    "enum": [correlation_value.invocation_ordinal],
-                },
-                "agent_id": {
-                    "type": "string",
-                    "enum": [correlation_value.agent_id],
-                },
-                "phase": {
-                    "type": "string",
-                    "enum": [correlation_value.phase],
-                },
-                "round_number": {
-                    "type": (
-                        "null" if correlation_value.round_number is None else "integer"
-                    ),
-                    "enum": [correlation_value.round_number],
-                },
-                "attempt": {
-                    "type": "integer",
-                    "enum": [correlation_value.attempt],
-                },
-            },
-            "required": [
-                "operation_id",
-                "invocation_id",
-                "invocation_ordinal",
-                "agent_id",
-                "phase",
-                "round_number",
-                "attempt",
-            ],
-            "additionalProperties": False,
-        }
-        references: list[dict[str, Any]] = []
-        for value in request.references:
-            if value.line_range is None:
-                line_range: dict[str, Any] = {"type": "null"}
-            else:
-                line_range = {
-                    "type": "object",
-                    "properties": {
-                        "start": {
-                            "type": "integer",
-                            "enum": [value.line_range.start],
-                        },
-                        "end": {
-                            "type": "integer",
-                            "enum": [value.line_range.end],
-                        },
-                    },
-                    "required": ["start", "end"],
-                    "additionalProperties": False,
-                }
-            references.append(
-                {
-                    "type": "object",
-                    "properties": {
-                        "path": {"type": "string", "enum": [value.path]},
-                        "line_range": line_range,
-                    },
-                    "required": ["path", "line_range"],
-                    "additionalProperties": False,
-                }
-            )
-        action = {
-            "type": "object",
-            "properties": {
-                "kind": {
-                    "type": "string",
-                    "enum": [ReferenceReadActionKind.READ_WRITING_ARTIFACTS.value],
-                },
-                "correlation": correlation,
-                "references": {
-                    "type": "array",
-                    "items": {"anyOf": references},
-                    "minItems": len(references),
-                    "maxItems": len(references),
-                },
-            },
-            "required": ["kind", "correlation", "references"],
-            "additionalProperties": False,
-        }
-        return {
-            "type": "object",
-            "properties": {"action": action},
-            "required": ["action"],
-            "additionalProperties": False,
-        }
-
-    @staticmethod
-    def _decode_reference_read_action(
-        text: str,
-        *,
-        provider_name: str = "Codex",
-    ) -> ReferenceReadAction:
-        """Decode exact keys and built-in value types without external I/O."""
-
-        def reject_duplicates(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
-            value: dict[str, Any] = {}
-            for key, item in pairs:
-                if key in value:
-                    raise BackendProtocolError(
-                        f"{provider_name} reference read response duplicates a field"
-                    )
-                value[key] = item
-            return value
-
-        if type(text) is not str:
-            raise BackendProtocolError(
-                f"{provider_name} reference read response must be text"
-            )
-        try:
-            envelope = json.loads(text, object_pairs_hook=reject_duplicates)
-        except BackendProtocolError:
-            raise
-        except (json.JSONDecodeError, RecursionError, TypeError, UnicodeError) as exc:
-            raise BackendProtocolError(
-                f"{provider_name} reference read response is malformed JSON"
-            ) from exc
-        if type(envelope) is not dict or set(envelope) != {"action"}:
-            raise BackendProtocolError(
-                f"{provider_name} reference read response has an invalid schema"
-            )
-        action = envelope["action"]
-        if type(action) is not dict or set(action) != {
-            "kind",
-            "correlation",
-            "references",
-        }:
-            raise BackendProtocolError(
-                f"{provider_name} reference read action has an invalid schema"
-            )
-        if action["kind"] != ReferenceReadActionKind.READ_WRITING_ARTIFACTS.value:
-            raise BackendProtocolError(
-                f"{provider_name} reference read action kind is unknown"
-            )
-        raw_correlation = action["correlation"]
-        correlation_fields = {
-            "operation_id",
-            "invocation_id",
-            "invocation_ordinal",
-            "agent_id",
-            "phase",
-            "round_number",
-            "attempt",
-        }
-        if (
-            type(raw_correlation) is not dict
-            or set(raw_correlation) != correlation_fields
-        ):
-            raise BackendProtocolError(
-                f"{provider_name} reference read correlation has an invalid schema"
-            )
-        raw_references = action["references"]
-        if type(raw_references) is not list or not raw_references:
-            raise BackendProtocolError(
-                f"{provider_name} reference read references must be a nonempty array"
-            )
-        try:
-            correlation = ReferenceInvocationCorrelation(**raw_correlation)
-            references: list[ArtifactReference] = []
-            for value in raw_references:
-                if type(value) is not dict or set(value) != {"path", "line_range"}:
-                    raise TypeError
-                raw_line_range = value["line_range"]
-                if raw_line_range is None:
-                    selected_range = None
-                else:
-                    if type(raw_line_range) is not dict or set(raw_line_range) != {
-                        "start",
-                        "end",
-                    }:
-                        raise TypeError
-                    selected_range = ArtifactLineRange(
-                        raw_line_range["start"],
-                        raw_line_range["end"],
-                    )
-                references.append(ArtifactReference(value["path"], selected_range))
-            return ReferenceReadAction(
-                ReferenceReadActionKind.READ_WRITING_ARTIFACTS,
-                correlation,
-                tuple(references),
-            )
-        except (ReferenceAuthorizationError, TypeError, ValueError) as exc:
-            raise BackendProtocolError(
-                f"{provider_name} reference read action has invalid values"
-            ) from exc
 
     async def _invoke_provider(
         self,
@@ -3351,6 +3090,7 @@ class AgentBackend:
             reply = self._decode_reply(
                 request.phase,
                 response_text,
+                revision_id=request.revision_id,
                 provider_name=_provider_name,
             )
             if reply.revision_id != request.revision_id:
@@ -3379,17 +3119,37 @@ class AgentBackend:
                 )
             return reply
 
+        def fallback() -> AgentReply:
+            if request.phase is Phase.AUDIT:
+                return AgentReply(
+                    kind=AgentReplyKind.AUDIT,
+                    revision_id=request.revision_id,
+                    content=_SAFE_STRUCTURED_FALLBACK_MESSAGE,
+                    verdict=Verdict.CONFLICT,
+                )
+            if request.phase in {Phase.SYNTHESIZE, Phase.FINALIZE}:
+                return AgentReply.deadlock(
+                    request.revision_id,
+                    _SAFE_STRUCTURED_FALLBACK_MESSAGE,
+                )
+            return AgentReply.candidate(
+                request.revision_id,
+                _SAFE_STRUCTURED_FALLBACK_MESSAGE,
+            )
+
         schema = self._output_schema(request.phase)
         payload = self._request_payload(request)
         if reference_read is None:
-            return await self._invoke_provider_structured(
+            return await self._invoke_provider_structured_resilient(
                 bound_agent,
                 session_id=request.session_id,
                 debate_id=request.debate_id,
                 schema=schema,
                 payload=payload,
                 decode=decode,
+                fallback=fallback,
                 call_kind=ProviderCallKind.DEBATE,
+                trace_role=request.agent_id,
             )
         return await self._invoke_codex_after_reference_read(
             bound_agent,
@@ -3399,6 +3159,7 @@ class AgentBackend:
             schema=schema,
             payload=payload,
             decode=decode,
+            fallback=fallback,
             provider_name=_provider_name,
             call_kind=ProviderCallKind.DEBATE,
         )
@@ -3478,15 +3239,25 @@ class AgentBackend:
                 provider_name=_provider_name,
             )
 
+        def fallback() -> ConversationReply:
+            return ConversationReply(
+                session_id=request.session_id,
+                conversation_id=request.conversation_id,
+                turn_id=request.turn_id,
+                content=_SAFE_STRUCTURED_FALLBACK_MESSAGE,
+            )
+
         if reference_read is None:
-            return await self._invoke_provider_structured(
+            return await self._invoke_provider_structured_resilient(
                 bound_agent,
                 session_id=request.session_id,
                 conversation_id=request.conversation_id,
                 schema=schema,
                 payload=payload,
                 decode=decode,
+                fallback=fallback,
                 call_kind=ProviderCallKind.CONVERSATION,
+                trace_role=request.agent_id,
             )
         return await self._invoke_codex_after_reference_read(
             bound_agent,
@@ -3496,6 +3267,7 @@ class AgentBackend:
             schema=schema,
             payload=payload,
             decode=decode,
+            fallback=fallback,
             provider_name=_provider_name,
             call_kind=ProviderCallKind.CONVERSATION,
         )
@@ -3586,7 +3358,7 @@ class AgentBackend:
         self._ensure_open()
         reference_context: list[dict[str, object]] | None = None
         if reference_read is not None:
-            reference_context = await self._perform_reference_read_prelude(
+            reference_context = await self._load_authorized_reference_context(
                 bound_agent,
                 session_id=request.session_id,
                 conversation_id=request.conversation_id,
@@ -3597,6 +3369,8 @@ class AgentBackend:
         after_read = False
         pending_observation = False
         reference_provider_failure = False
+        trace_sources: list[str] = []
+        recovered = False
         try:
             for action_index in range(
                 1,
@@ -3627,7 +3401,7 @@ class AgentBackend:
                         observation=observation_frame,
                     )
                 reference_provider_failure = True
-                action = await self._invoke_provider_structured(
+                action = await self._invoke_provider_structured_resilient(
                     bound_agent,
                     session_id=request.session_id,
                     conversation_id=request.conversation_id,
@@ -3636,12 +3410,47 @@ class AgentBackend:
                     decode=lambda response_text: (
                         self._decode_conversation_retrieval_action(
                             response_text,
+                            request=request,
+                            action_index=action_index,
                             provider_name=_provider_name,
                         )
                     ),
+                    fallback=lambda: ConversationRetrievalAnswerAction(
+                        kind=ConversationRetrievalActionKind.ANSWER,
+                        session_id=request.session_id,
+                        conversation_id=request.conversation_id,
+                        turn_id=request.turn_id,
+                        action_index=action_index,
+                        content=_SAFE_STRUCTURED_FALLBACK_MESSAGE,
+                        citation_ids=(),
+                    ),
                     best_effort_taint=reference_read is not None,
                     call_kind=call_kind,
+                    trace_role=request.agent_id,
                 )
+                if action.trace is not None:
+                    trace_sources.extend(action.trace.context_sources)
+                    recovered = recovered or (
+                        action.trace.origin is ReplyTraceOrigin.RECOVERED
+                    )
+                    if type(action) is ConversationRetrievalAnswerAction:
+                        origin = action.trace.origin
+                        recovered_fields = action.trace.recovered_fields
+                        if recovered and origin is ReplyTraceOrigin.PROVIDER:
+                            origin = ReplyTraceOrigin.RECOVERED
+                            recovered_fields = ("structured_reply",)
+                        action = replace(
+                            action,
+                            trace=ReplyTrace(
+                                role=request.agent_id,
+                                action=action.trace.action,
+                                context_sources=tuple(
+                                    dict.fromkeys(trace_sources)
+                                ),
+                                recovered_fields=recovered_fields,
+                                origin=origin,
+                            ),
+                        )
                 reference_provider_failure = False
                 if type(action) in {
                     ConversationRetrievalSearchAction,
@@ -3679,6 +3488,7 @@ class AgentBackend:
                                 self._canonical_conversation_retrieval_source(source)
                                 for source in outcome.sources
                             ),
+                            trace=action.trace,
                         )
                     except Exception as exc:
                         raise BackendProtocolError(
@@ -4189,6 +3999,132 @@ class AgentBackend:
         except BaseException:
             pass
 
+    async def _invoke_provider_structured_resilient(
+        self,
+        bound_agent: BoundAgent,
+        *,
+        session_id: str,
+        schema: Mapping[str, Any],
+        payload: Mapping[str, Any],
+        decode: Callable[[str], _StructuredReply],
+        fallback: Callable[[], _StructuredReply],
+        debate_id: str | None = None,
+        conversation_id: str | None = None,
+        best_effort_taint: bool = False,
+        call_kind: ProviderCallKind = ProviderCallKind.UNCLASSIFIED,
+        trace_role: str | None = None,
+    ) -> _StructuredReply:
+        """Repair one rejected structured value, then return a safe local reply."""
+
+        arguments = {
+            "session_id": session_id,
+            "debate_id": debate_id,
+            "conversation_id": conversation_id,
+            "schema": schema,
+            "decode": decode,
+            "best_effort_taint": best_effort_taint,
+            "call_kind": call_kind,
+        }
+        try:
+            value = await self._invoke_provider_structured(
+                bound_agent,
+                payload=payload,
+                **arguments,
+            )
+            return self._attach_reply_trace(
+                value,
+                role=trace_role,
+                payload=payload,
+                origin=ReplyTraceOrigin.PROVIDER,
+            )
+        except _StructuredOutputRejected:
+            repair_payload = dict(payload)
+            repair_payload["structured_response_repair"] = {
+                "instruction": (
+                    "The prior structured response was rejected. Return the answer "
+                    "again with exactly the required schema fields. Do not add metadata."
+                )
+            }
+        try:
+            value = await self._invoke_provider_structured(
+                bound_agent,
+                payload=repair_payload,
+                **arguments,
+            )
+            return self._attach_reply_trace(
+                value,
+                role=trace_role,
+                payload=repair_payload,
+                origin=ReplyTraceOrigin.RECOVERED,
+            )
+        except _StructuredOutputRejected:
+            return self._attach_reply_trace(
+                fallback(),
+                role=trace_role,
+                payload=repair_payload,
+                origin=ReplyTraceOrigin.RUNTIME_FALLBACK,
+            )
+
+    @staticmethod
+    def _attach_reply_trace(
+        value: _StructuredReply,
+        *,
+        role: str | None,
+        payload: Mapping[str, Any],
+        origin: ReplyTraceOrigin,
+    ) -> _StructuredReply:
+        """Attach content-free construction facts to supported public replies."""
+
+        if role is None or type(value) not in {
+            AgentReply,
+            ConversationReply,
+            ConversationRetrievalSearchAction,
+            ConversationRetrievalReadAction,
+            ConversationRetrievalAnswerAction,
+        }:
+            return value
+        if type(value) is AgentReply:
+            action = value.kind.value
+        elif type(value) is ConversationReply:
+            action = "reply"
+        else:
+            action = value.kind.value
+        labels = {
+            "agent_state": "agent_state",
+            "context": "conversation_history",
+            "conversation_context": "conversation_history",
+            "messages": "debate_history",
+            "observation": "retrieval_observation",
+            "rag_context": "retrieval_index",
+            "story_session_context": "story_session",
+            "untrusted_writing_artifact_context": "writing_artifacts",
+        }
+        has_current_input = any(
+            key in payload and payload[key] not in (None, "", [], (), {})
+            for key in ("candidate_payload", "content", "task", "user_payload")
+        )
+        context_sources = (("current_input",) if has_current_input else ()) + tuple(
+            label
+            for key, label in labels.items()
+            if key in payload and payload[key] not in (None, [], (), {})
+        )
+        trace = ReplyTrace(
+            role=role,
+            action=(
+                "none"
+                if origin is ReplyTraceOrigin.RUNTIME_FALLBACK
+                else action
+            ),
+            context_sources=context_sources,
+            recovered_fields=(
+                ()
+                if origin is ReplyTraceOrigin.PROVIDER
+                else ("structured_reply",)
+            ),
+            origin=origin,
+        )
+        return replace(value, trace=trace)
+
     async def _invoke_provider_structured(
         self,
         bound_agent: BoundAgent,
@@ -4349,7 +4285,7 @@ class AgentBackend:
                         exchange,
                         self._structured_rejection_code(failure),
                     )
-                raise
+                raise _StructuredOutputRejected(str(failure)) from failure
             except (json.JSONDecodeError, UnicodeError):
                 self._record_rejected_provider_response_without_replacing_failure(
                     bound_agent,
@@ -4406,7 +4342,7 @@ class AgentBackend:
                 if bound_agent.vendor == "codex"
                 else "Antigravity CLI returned malformed structured output"
             )
-            raise BackendProtocolError(diagnostic) from exc
+            raise _StructuredOutputRejected(diagnostic) from exc
 
     @staticmethod
     def _context_failure_accounting(
@@ -4860,138 +4796,15 @@ class AgentBackend:
             raise ReferenceAuthorizationError(
                 ReferenceAuthorizationErrorCode.CORRELATION_MISMATCH
             )
-        payload = self._reference_read_prelude_payload(reference_request)
-        component_paths, mandatory_paths = self._provider_component_paths(
-            payload,
-            call_kind=ProviderCallKind.WRITING_ARTIFACT_REFERENCE_READ,
-        )
-        result = await self._invoke_context_physical(
+        context = await self._load_authorized_reference_context(
             bound_agent,
-            scope=request.scope,
-            policy_fingerprint=request.policy_fingerprint,
-            expected_thread_id=request.expected_thread_id,
-            schema=self._reference_read_action_schema(reference_request),
-            payload=payload,
-            call_kind=ProviderCallKind.WRITING_ARTIFACT_REFERENCE_READ,
-            component_paths=component_paths,
-            mandatory_reference_paths=mandatory_paths,
-            continuation_identity=request.continuation_identity,
+            session_id=request.scope.session_id,
+            reference_read=reference_read,
+            provider_name=(
+                "Codex" if bound_agent.vendor == "codex" else "Antigravity"
+            ),
         )
-        finalizer = result.finalizer
-        reference_stage = "decode"
-        try:
-            action = self._decode_reference_read_action(
-                result.response_text,
-                provider_name=(
-                    "Codex" if bound_agent.vendor == "codex" else "Antigravity"
-                ),
-            )
-            reference_stage = "authorization"
-            if action != ReferenceReadAction(
-                ReferenceReadActionKind.READ_WRITING_ARTIFACTS,
-                reference_request.correlation,
-                reference_request.references,
-            ):
-                raise ReferenceAuthorizationError(
-                    ReferenceAuthorizationErrorCode.CORRELATION_MISMATCH
-                )
-            reference_stage = "handler"
-            reference_result = reference_read.handle_reference_read_action(action)
-            if inspect.isawaitable(reference_result):
-                if inspect.iscoroutine(reference_result):
-                    reference_result.close()
-                raise BackendProtocolError(
-                    "reference read handler returned an awaitable"
-                )
-            if inspect.isasyncgen(reference_result):
-                raise BackendProtocolError(
-                    "reference read handler returned an async generator"
-                )
-            if (
-                type(reference_result) is not ReferenceReadResult
-                or reference_result.request != reference_request
-            ):
-                if type(reference_result) is ReferenceReadResult:
-                    reference_result.close()
-                raise BackendProtocolError(
-                    "reference read handler returned an invalid result"
-                )
-            with reference_result:
-                context = tuple(
-                    dict(item)
-                    for item in self._reference_read_context(reference_result)
-                )
-            prelude = ContextReferencePreludeResult(
-                context,
-                result.thread_id,
-                result.accounting,
-            )
-            self._accept_context_finalizer_without_replacing(finalizer)
-            return prelude
-        except BaseException as failure:
-            record_context_provider_failure(
-                failure,
-                ContextProviderFailureFacts(
-                    result.accounting,
-                    taint_existing_thread=True,
-                ),
-            )
-            self._taint_context_thread_without_replacing(
-                request.scope if request.continuation_identity is None
-                else request.continuation_identity.checkpoint_scope(),
-                bound_agent.vendor,
-                f"sha256:{bound_agent.definition.fingerprint}",
-                request.policy_fingerprint,
-            )
-            if isinstance(failure, asyncio.CancelledError):
-                outcome = ReferenceAuthorizationErrorCode.CANCELLED
-            elif isinstance(failure, ReferenceAuthorizationError):
-                outcome = failure.code
-            elif reference_stage == "decode":
-                outcome = ReferenceAuthorizationErrorCode.PROVIDER_FAILURE
-            else:
-                outcome = ReferenceAuthorizationErrorCode.WORKFLOW_FAILURE
-            self._terminate_reference_read_without_replacing(
-                reference_read,
-                outcome,
-            )
-            try:
-                setattr(
-                    failure,
-                    _CONTEXT_REFERENCE_TERMINATED_ATTRIBUTE,
-                    True,
-                )
-            except (AttributeError, TypeError):
-                pass
-            if isinstance(failure, asyncio.CancelledError):
-                self._cancel_context_finalizer_without_replacing(finalizer)
-            elif isinstance(failure, ReferenceAuthorizationError):
-                self._reject_context_finalizer_without_replacing(
-                    finalizer,
-                    (
-                        ContextProviderTerminalCode.RESPONSE_CORRELATION_MISMATCH
-                        if failure.code
-                        is ReferenceAuthorizationErrorCode.CORRELATION_MISMATCH
-                        else ContextProviderTerminalCode.RESPONSE_SEMANTIC_REJECTED
-                    ),
-                )
-            elif reference_stage == "decode":
-                code = (
-                    ContextProviderTerminalCode.MALFORMED_STRUCTURED_RESPONSE
-                    if self._structured_rejection_code(failure)
-                    is AgentExchangeTerminalCode.MALFORMED_STRUCTURED_RESPONSE
-                    else ContextProviderTerminalCode.RESPONSE_SEMANTIC_REJECTED
-                )
-                self._reject_context_finalizer_without_replacing(
-                    finalizer,
-                    code,
-                )
-            else:
-                self._fail_context_finalizer_without_replacing(
-                    finalizer,
-                    ContextProviderTerminalCode.REFERENCE_RUNTIME_FAILED,
-                )
-            raise
+        return ContextReferencePreludeResult(tuple(context))
 
     def _context_thread_lock(
         self,
@@ -5308,14 +5121,7 @@ class AgentBackend:
 
     @staticmethod
     def _conversation_retrieval_action_schema() -> dict[str, Any]:
-        """Return the strict provider envelope for retrieval actions."""
-
-        correlation = {
-            "session_id": {"type": "string"},
-            "conversation_id": {"type": "string"},
-            "turn_id": {"type": "string"},
-            "action_index": {"type": "integer", "minimum": 1},
-        }
+        """Return the strict semantic-only provider envelope for retrieval."""
 
         def action_schema(
             kind: ConversationRetrievalActionKind,
@@ -5325,7 +5131,6 @@ class AgentBackend:
 
             all_properties = {
                 "kind": {"type": "string", "enum": [kind.value]},
-                **correlation,
                 **properties,
             }
             return {
@@ -5346,16 +5151,20 @@ class AgentBackend:
                     {
                         "citation_id": {"type": "string"},
                         "start_sequence": {"type": "integer", "minimum": 1},
-                        "end_sequence": {
-                            "type": ["integer", "null"],
-                            "minimum": 1,
-                        },
+                        "end_sequence": {"type": "integer", "minimum": 1},
+                    },
+                ),
+                action_schema(
+                    ConversationRetrievalActionKind.READ_HISTORY,
+                    {
+                        "citation_id": {"type": "string"},
+                        "start_sequence": {"type": "integer", "minimum": 1},
                     },
                 ),
                 action_schema(
                     ConversationRetrievalActionKind.ANSWER,
                     {
-                        "content": {"type": "string"},
+                        "message": {"type": "string"},
                         "citation_ids": {
                             "type": "array",
                             "items": {"type": "string"},
@@ -5375,6 +5184,8 @@ class AgentBackend:
     def _decode_conversation_retrieval_action(
         text: str,
         *,
+        request: ConversationRetrievalRequest,
+        action_index: int,
         provider_name: str = "Codex",
     ) -> ConversationRetrievalAction:
         """Decode one exact action envelope while leaving semantics to the handler.
@@ -5442,26 +5253,24 @@ class AgentBackend:
                 f"{provider_name} conversation retrieval action kind is unknown"
             ) from exc
 
-        common_fields = {
-            "kind",
-            "session_id",
-            "conversation_id",
-            "turn_id",
-            "action_index",
-        }
+        common_fields = {"kind"}
         action_fields = {
             ConversationRetrievalActionKind.SEARCH_CONVERSATIONS: {"query"},
             ConversationRetrievalActionKind.READ_HISTORY: {
                 "citation_id",
                 "start_sequence",
-                "end_sequence",
             },
             ConversationRetrievalActionKind.ANSWER: {
-                "content",
+                "message",
                 "citation_ids",
             },
         }[kind]
-        if set(value) != common_fields | action_fields:
+        valid_fields = common_fields | action_fields
+        if kind is ConversationRetrievalActionKind.READ_HISTORY:
+            valid = set(value) in {frozenset(valid_fields), frozenset((*valid_fields, "end_sequence"))}
+        else:
+            valid = set(value) == valid_fields
+        if not valid:
             raise BackendProtocolError(
                 f"{provider_name} conversation retrieval response has an invalid schema"
             )
@@ -5497,10 +5306,10 @@ class AgentBackend:
 
         common = {
             "kind": kind,
-            "session_id": required_text("session_id"),
-            "conversation_id": required_text("conversation_id"),
-            "turn_id": required_text("turn_id"),
-            "action_index": positive_integer("action_index"),
+            "session_id": request.session_id,
+            "conversation_id": request.conversation_id,
+            "turn_id": request.turn_id,
+            "action_index": action_index,
         }
         try:
             if kind is ConversationRetrievalActionKind.SEARCH_CONVERSATIONS:
@@ -5510,7 +5319,7 @@ class AgentBackend:
                 )
             if kind is ConversationRetrievalActionKind.READ_HISTORY:
                 start_sequence = positive_integer("start_sequence")
-                raw_end_sequence = value["end_sequence"]
+                raw_end_sequence = value.get("end_sequence")
                 end_sequence = (
                     None
                     if raw_end_sequence is None
@@ -5544,7 +5353,7 @@ class AgentBackend:
                 raise ConversationRetrievalSemanticError()
             return ConversationRetrievalAnswerAction(
                 **common,
-                content=required_text("content"),
+                content=required_text("message"),
                 citation_ids=tuple(raw_citation_ids),
             )
         except ConversationRetrievalSemanticError:
@@ -5556,26 +5365,13 @@ class AgentBackend:
 
     @staticmethod
     def _conversation_output_schema() -> dict[str, Any]:
-        """Return the strict correlated conversation-reply JSON schema."""
+        """Return the strict semantic-only conversation-reply JSON schema."""
 
-        properties = {
-            field: {"type": "string", "minLength": 1}
-            for field in (
-                "session_id",
-                "conversation_id",
-                "turn_id",
-                "content",
-            )
-        }
+        properties = {"message": {"type": "string", "minLength": 1}}
         return {
             "type": "object",
             "properties": properties,
-            "required": [
-                "session_id",
-                "conversation_id",
-                "turn_id",
-                "content",
-            ],
+            "required": ["message"],
             "additionalProperties": False,
         }
 
@@ -5603,12 +5399,7 @@ class AgentBackend:
             return result
 
         value = json.loads(text, object_pairs_hook=reject_duplicate_fields)
-        expected_fields = {
-            "session_id",
-            "conversation_id",
-            "turn_id",
-            "content",
-        }
+        expected_fields = {"message"}
         if not isinstance(value, dict):
             raise BackendProtocolError(
                 f"{provider_name} conversation response must be a JSON object"
@@ -5617,40 +5408,15 @@ class AgentBackend:
             raise BackendProtocolError(
                 f"{provider_name} conversation response has an invalid schema"
             )
-        session_id = _strict_required_text(
-            value,
-            "session_id",
-            provider_name=provider_name,
-        )
-        conversation_id = _strict_required_text(
-            value,
-            "conversation_id",
-            provider_name=provider_name,
-        )
-        turn_id = _strict_required_text(
-            value,
-            "turn_id",
-            provider_name=provider_name,
-        )
         content = _strict_required_text(
             value,
-            "content",
+            "message",
             provider_name=provider_name,
         )
-        for field, actual, expected in (
-            ("session_id", session_id, request.session_id),
-            ("conversation_id", conversation_id, request.conversation_id),
-            ("turn_id", turn_id, request.turn_id),
-        ):
-            if actual != expected:
-                raise BackendProtocolError(
-                    f"{provider_name} conversation reply {field} does not match "
-                    "its request"
-                )
         return ConversationReply(
-            session_id=session_id,
-            conversation_id=conversation_id,
-            turn_id=turn_id,
+            session_id=request.session_id,
+            conversation_id=request.conversation_id,
+            turn_id=request.turn_id,
             content=content,
         )
 
@@ -5658,53 +5424,31 @@ class AgentBackend:
     def _output_schema(phase: Phase) -> dict[str, Any]:
         if phase is Phase.AUDIT:
             properties: dict[str, Any] = {
-                "kind": {"type": "string", "enum": ["audit"]},
-                "revision_id": {"type": "string"},
                 "verdict": {"type": "string", "enum": ["approve", "conflict"]},
-                "content": {"type": "string"},
+                "message": {"type": "string"},
             }
-            required = ["kind", "revision_id", "verdict", "content"]
+            required = ["verdict", "message"]
         elif phase is Phase.SYNTHESIZE:
             properties = {
-                "kind": {
+                "next": {
                     "type": "string",
-                    "enum": ["synthesis", "deadlock"],
+                    "enum": ["repair", "finalization", "deadlock"],
                 },
-                "revision_id": {"type": "string"},
-                "content": {"type": "string"},
-                "next_phase": {
-                    "type": ["string", "null"],
-                    "enum": ["repair", "finalization", None],
-                },
-                "deadlocked": {"type": "boolean"},
+                "message": {"type": "string"},
             }
-            required = [
-                "kind",
-                "revision_id",
-                "content",
-                "next_phase",
-                "deadlocked",
-            ]
+            required = ["next", "message"]
         elif phase is Phase.FINALIZE:
             properties = {
-                "kind": {"type": "string", "enum": ["finalization"]},
-                "revision_id": {"type": "string"},
                 "reviewed_proposal_id": {"type": "string"},
                 "reviewed_proposal_digest": {"type": "string"},
             }
             required = [
-                "kind",
-                "revision_id",
                 "reviewed_proposal_id",
                 "reviewed_proposal_digest",
             ]
         else:
-            properties = {
-                "kind": {"type": "string", "enum": ["candidate"]},
-                "revision_id": {"type": "string"},
-                "content": {"type": "string"},
-            }
-            required = ["kind", "revision_id", "content"]
+            properties = {"message": {"type": "string"}}
+            required = ["message"]
         return {
             "type": "object",
             "properties": properties,
@@ -5732,9 +5476,10 @@ class AgentBackend:
         phase: Phase,
         text: str,
         *,
+        revision_id: str,
         provider_name: str = "Codex",
     ) -> AgentReply:
-        """Decode one phase reply without echoing provider values in errors."""
+        """Decode one semantic phase reply and restore runtime-owned identity."""
 
         def reject_duplicate_fields(
             pairs: list[tuple[str, Any]],
@@ -5754,18 +5499,13 @@ class AgentBackend:
                 f"{provider_name} final response must be a JSON object"
             )
         if phase is Phase.AUDIT:
-            if set(value) != {"kind", "revision_id", "verdict", "content"} or value.get("kind") != AgentReplyKind.AUDIT.value:
+            if set(value) != {"verdict", "message"}:
                 raise BackendProtocolError(
                     f"{provider_name} audit response has an invalid schema"
                 )
-            revision_id = _required_text(
-                value,
-                "revision_id",
-                provider_name=provider_name,
-            )
             content = _text(
                 value,
-                "content",
+                "message",
                 provider_name=provider_name,
             )
             verdict_value = value.get("verdict")
@@ -5780,19 +5520,12 @@ class AgentBackend:
             )
         if phase is Phase.FINALIZE:
             if set(value) != {
-                "kind",
-                "revision_id",
                 "reviewed_proposal_id",
                 "reviewed_proposal_digest",
-            } or value.get("kind") != AgentReplyKind.FINALIZATION.value:
+            }:
                 raise BackendProtocolError(
                     f"{provider_name} finalization response has an invalid schema"
                 )
-            revision_id = _required_text(
-                value,
-                "revision_id",
-                provider_name=provider_name,
-            )
             return AgentReply.finalization(
                 revision_id,
                 _required_text(
@@ -5807,44 +5540,23 @@ class AgentBackend:
                 ),
             )
         if phase is Phase.SYNTHESIZE:
-            expected_fields = {
-                "kind",
-                "revision_id",
-                "content",
-                "next_phase",
-                "deadlocked",
-            }
+            expected_fields = {"next", "message"}
             if set(value) != expected_fields:
                 raise BackendProtocolError(
                     f"{provider_name} synthesis response has an invalid schema"
                 )
-            revision_id = _required_text(
-                value,
-                "revision_id",
-                provider_name=provider_name,
-            )
             content = _required_text(
                 value,
-                "content",
+                "message",
                 provider_name=provider_name,
             )
-            kind = value.get("kind")
-            next_phase = value.get("next_phase")
-            deadlocked = value.get("deadlocked")
-            if kind == AgentReplyKind.DEADLOCK.value:
-                if next_phase is not None or deadlocked is not True:
-                    raise BackendProtocolError(
-                        f"{provider_name} deadlock response is ambiguous"
-                    )
+            next_phase = value.get("next")
+            if next_phase == AgentReplyKind.DEADLOCK.value:
                 return AgentReply.deadlock(revision_id, content)
-            if (
-                kind != AgentReplyKind.SYNTHESIS.value
-                or deadlocked is not False
-                or next_phase not in {
+            if next_phase not in {
                     AgentReplyNextPhase.REPAIR.value,
                     AgentReplyNextPhase.FINALIZATION.value,
-                }
-            ):
+                }:
                 raise BackendProtocolError(
                     f"{provider_name} synthesis response is ambiguous"
                 )
@@ -5853,19 +5565,15 @@ class AgentBackend:
                 content,
                 AgentReplyNextPhase(next_phase),
             )
-        if set(value) != {"kind", "revision_id", "content"} or value.get("kind") != AgentReplyKind.CANDIDATE.value:
+        if set(value) != {"message"}:
             raise BackendProtocolError(
                 f"{provider_name} candidate response has an invalid schema"
             )
         return AgentReply.candidate(
+            revision_id,
             _required_text(
                 value,
-                "revision_id",
-                provider_name=provider_name,
-            ),
-            _required_text(
-                value,
-                "content",
+                "message",
                 provider_name=provider_name,
             ),
         )

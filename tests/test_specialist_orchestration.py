@@ -7,7 +7,7 @@ import json
 import unittest
 from dataclasses import replace
 
-from story_writing_agents import StoryRuntime
+from story_writing_agents import ReplyTraceOrigin, StoryRuntime
 from story_writing_agents.agents import (
     CHARACTER_CUSTODIAN,
     EXECUTION_SPECIALIST,
@@ -28,6 +28,7 @@ from story_writing_agents.conversations import (
     CollaborationProviderCallKind,
     CollaborationProviderCallPayload,
     CollaborationProviderCallState,
+    CollaborationSpecialistAssessment,
     CollaborationSpecialistReplyPayload,
     CollaborationStepKind,
     CollaborationStepState,
@@ -63,8 +64,11 @@ def _assignments(*agent_ids: str) -> list[dict[str, object]]:
 
 
 def _raw_outcome(value: object):
-    def respond(call, _provider):
-        return _provider_envelope(call, value)
+    def respond(_call, _provider):
+        return json.dumps(
+            {"action": {"kind": "answer", "result": value}},
+            separators=(",", ":"),
+        )
 
     return respond
 
@@ -553,117 +557,69 @@ class SpecialistExecutionAcceptanceTests(LeadOrchestrationTestCase):
             ("user_input", "reference_1", "reference_2", "reference_3"),
         )
 
-    async def test_strict_specialist_contract_rejects_wrong_extra_private_and_reordered_inputs(
+    async def test_invalid_specialist_shapes_repair_then_fall_back_without_halting(
         self,
     ) -> None:
         invalid_values = (
             {
                 "assessment": "supports",
-                "assignment_id": "wrong_assignment",
-                "input_ids": ["user_input"],
-                "message": "Wrong correlation.",
+            },
+            {
+                "message": "Missing assessment.",
             },
             {
                 "assessment": "supports",
-                "assignment_id": None,
-                "input_ids": ["user_input"],
-                "message": "Extra field.",
-                "extra": True,
-            },
-            {
-                "assessment": "supports",
-                "assignment_id": None,
-                "input_ids": ["user_input"],
                 "message": "Private state claim.",
                 "private_state": "forbidden",
             },
-            {
-                "assessment": "supports",
-                "assignment_id": None,
-                "input_ids": ["user_input"],
-                "message": "Mutation request.",
-                "mutation_request": "change the outline",
-            },
-            {
-                "assessment": "supports",
-                "assignment_id": None,
-                "input_ids": ["user_input"],
-                "message": "Delegation request.",
-                "delegate_to": CHARACTER_CUSTODIAN,
-            },
         )
-        for ordinal, template in enumerate(invalid_values, start=1):
+        for ordinal, value in enumerate(invalid_values, start=1):
             with self.subTest(ordinal=ordinal):
                 conversation_id = self.conversation(f"Strict specialist {ordinal}")
                 proposed = await self.proposal(conversation_id)
-                value = dict(template)
-                if value["assignment_id"] is None:
-                    value["assignment_id"] = proposed.proposal.assignments[
-                        0
-                    ].assignment_id
-                self.backend.enqueue_for(PLOT_ARCHITECT, _raw_outcome(value))
+                response = _raw_outcome(value)
+                self.backend.enqueue_for(PLOT_ARCHITECT, response)
+                self.backend.enqueue_for(PLOT_ARCHITECT, response)
+                self.backend.enqueue_for(LEAD_ORCHESTRATOR, _synthesis_outcome())
                 decision = await self.runtime.decide_lead_step(
                     _decision(proposed, CollaborationConfirmationDecision.CONFIRM)
                 )
-                self.assertIs(decision.turn.state, CollaborationStepState.FAILED)
+                self.assertIs(decision.turn.state, CollaborationStepState.COMPLETED)
                 result = _payloads(
                     self.history(conversation_id), CollaborationExecutionResult
                 )[0]
                 self.assertIs(
                     result.assignment_outcomes[0].outcome,
-                    CollaborationAssignmentOutcomeKind.FAILED,
+                    CollaborationAssignmentOutcomeKind.SUCCEEDED,
                 )
                 self.assertIs(
                     result.synthesis_outcome,
-                    CollaborationSynthesisOutcomeKind.NOT_ATTEMPTED,
+                    CollaborationSynthesisOutcomeKind.SUCCEEDED,
                 )
+                reply = _payloads(
+                    self.history(conversation_id),
+                    CollaborationSpecialistReplyPayload,
+                )[0]
+                self.assertIs(
+                    reply.assessment,
+                    CollaborationSpecialistAssessment.INSUFFICIENT_EVIDENCE,
+                )
+                self.assertIs(
+                    reply.trace.origin,
+                    ReplyTraceOrigin.RUNTIME_FALLBACK,
+                )
+                self.assertEqual(reply.trace.action, "none")
+                self.assertNotIn("private_state", repr(self.history(conversation_id)))
 
-        conversation_id = self.conversation("Strict input order")
-        proposed = await self.proposal(
-            conversation_id,
-            text=(
-                "Check ${core_documents/global_outline.md}#L2-L2 and "
-                "${core_documents/global_outline.md}#L1-L1."
-            ),
-            assignments=[
-                {
-                    "agent_id": PLOT_ARCHITECT,
-                    "instruction": "Check both sources.",
-                    "input_ids": ["user_input", "reference_1", "reference_2"],
-                }
-            ],
-        )
-        assignment = proposed.proposal.assignments[0]
-        self.backend.enqueue_for(
-            PLOT_ARCHITECT,
-            _raw_outcome(
-                {
-                    "assessment": "supports",
-                    "assignment_id": assignment.assignment_id,
-                    "input_ids": list(reversed(assignment.input_ids)),
-                    "message": "Reordered evidence.",
-                }
-            ),
-        )
-        decision = await self.runtime.decide_lead_step(
-            _decision(proposed, CollaborationConfirmationDecision.CONFIRM)
-        )
-        self.assertIs(decision.turn.state, CollaborationStepState.FAILED)
-
-    async def test_strict_synthesis_requires_exact_order_attribution_and_unresolved_ids(
+    async def test_synthesis_contract_is_semantic_and_runtime_derives_attribution(
         self,
     ) -> None:
-        def invalid_synthesis(call, _provider):
-            contract = _workflow_material(call.payload)["answer_contract"]
-            assert type(contract) is dict
+        def minimal_synthesis(call, _provider):
+            self.assertNotIn("reply_event_ids", repr(call.schema))
+            self.assertNotIn("unresolved_input_ids", repr(call.schema))
             return _provider_envelope(
                 call,
-                {
-                    "message": "Malformed attribution.",
-                    "next_intent": None,
-                    "reply_event_ids": list(reversed(contract["reply_event_ids"])),
-                    "unresolved_input_ids": ["unknown_input"],
-                },
+                {"message": "The concerns remain visible."},
             )
 
         conversation_id = self.conversation("Strict synthesis")
@@ -676,25 +632,31 @@ class SpecialistExecutionAcceptanceTests(LeadOrchestrationTestCase):
             CHARACTER_CUSTODIAN,
             _specialist_outcome("insufficient_evidence"),
         )
-        self.backend.enqueue_for(LEAD_ORCHESTRATOR, invalid_synthesis)
+        self.backend.enqueue_for(LEAD_ORCHESTRATOR, minimal_synthesis)
 
         decision = await self.runtime.decide_lead_step(
             _decision(proposed, CollaborationConfirmationDecision.CONFIRM)
         )
 
-        self.assertIs(decision.turn.state, CollaborationStepState.FAILED)
+        self.assertIs(decision.turn.state, CollaborationStepState.COMPLETED)
         history = self.history(conversation_id)
+        reply_events = _events(history, CollaborationEventKind.SPECIALIST_REPLY)
+        self.assertEqual(len(reply_events), 2)
+        synthesis = _payloads(history, CollaborationLeadSynthesisPayload)[0]
+        self.assertIs(synthesis.trace.origin, ReplyTraceOrigin.PROVIDER)
+        self.assertEqual(synthesis.trace.action, "synthesis")
         self.assertEqual(
-            len(_payloads(history, CollaborationSpecialistReplyPayload)), 2
+            synthesis.reply_event_ids,
+            tuple(event.event_id for event in reply_events),
         )
-        self.assertEqual(len(_payloads(history, CollaborationLeadSynthesisPayload)), 0)
+        self.assertEqual(synthesis.unresolved_input_ids, ("user_input",))
         result = _payloads(history, CollaborationExecutionResult)[0]
         self.assertIs(
-            result.synthesis_outcome, CollaborationSynthesisOutcomeKind.FAILED
+            result.synthesis_outcome, CollaborationSynthesisOutcomeKind.SUCCEEDED
         )
         self.assertEqual(result.synthesis_submitted_physical_calls, 1)
 
-    async def test_synthesis_cannot_erase_non_supporting_specialist_inputs(
+    async def test_synthesis_derives_non_supporting_inputs_locally(
         self,
     ) -> None:
         conversation_id = self.conversation("Unresolved concern")
@@ -709,12 +671,16 @@ class SpecialistExecutionAcceptanceTests(LeadOrchestrationTestCase):
             _decision(proposed, CollaborationConfirmationDecision.CONFIRM)
         )
 
-        self.assertIs(decision.turn.state, CollaborationStepState.FAILED)
+        self.assertIs(decision.turn.state, CollaborationStepState.COMPLETED)
+        synthesis = _payloads(
+            self.history(conversation_id), CollaborationLeadSynthesisPayload
+        )[0]
+        self.assertEqual(synthesis.unresolved_input_ids, ("user_input",))
         result = _payloads(self.history(conversation_id), CollaborationExecutionResult)[
             0
         ]
         self.assertIs(
-            result.synthesis_outcome, CollaborationSynthesisOutcomeKind.FAILED
+            result.synthesis_outcome, CollaborationSynthesisOutcomeKind.SUCCEEDED
         )
 
     async def test_submitted_uncertainty_enters_unknown_and_never_replays(self) -> None:
@@ -816,18 +782,13 @@ class SpecialistExecutionAcceptanceTests(LeadOrchestrationTestCase):
             material = _workflow_material(call.payload)
             contract = material["answer_contract"]
             assert type(contract) is dict
-            reply_ids = list(contract["reply_event_ids"])
+            reply_ids = [item["reply_event_id"] for item in material["replies"]]
             known_ids = [item["input_id"] for item in material["inputs"]]
             return _provider_envelope(
                 call,
                 {
-                    "recommended_action": None,
-                    "evidence_ids": contract["evidence_ids"],
-                    "evidence_status": contract["evidence_status"],
                     "message": "One issue needs a focused second review.",
-                    "scope": contract["scope"],
                     "reply_event_ids": reply_ids,
-                    "unresolved_input_ids": known_ids,
                     "next_intent": {
                         "relation": "continue_lineage",
                         "purpose": "Resolve the remaining plot concern.",
@@ -836,6 +797,7 @@ class SpecialistExecutionAcceptanceTests(LeadOrchestrationTestCase):
                                 "agent_id": PLOT_ARCHITECT,
                                 "instruction": "Reassess using the first reply.",
                                 "input_ids": [*known_ids, *reply_ids],
+                                "mode": "review",
                             }
                         ],
                     },
@@ -847,6 +809,7 @@ class SpecialistExecutionAcceptanceTests(LeadOrchestrationTestCase):
             _decision(first, CollaborationConfirmationDecision.CONFIRM)
         )
         second = first_decision.turn
+        self.assertIsNotNone(second.proposal, second)
         assert second.proposal is not None
         self.assertIs(second.state, CollaborationStepState.AWAITING_CONFIRMATION)
         self.assertEqual(second.proposal.step_id, first.step_id)
@@ -891,7 +854,7 @@ class SpecialistExecutionAcceptanceTests(LeadOrchestrationTestCase):
 
 
 class SpecialistAccountingAcceptanceTests(LeadOrchestrationTestCase):
-    async def test_reference_prelude_and_search_answer_spend_every_submitted_call(
+    async def test_local_reference_and_search_answer_count_only_provider_calls(
         self,
     ) -> None:
         conversation_id = self.conversation("Specialist accounting")
@@ -951,10 +914,8 @@ class SpecialistAccountingAcceptanceTests(LeadOrchestrationTestCase):
         def search_current_proposal(call, _provider):
             return json.dumps(
                 {
-                    "correlation": call.payload["c"],
                     "action": {
                         "kind": "search",
-                        "path_prefix": None,
                         "queries": [
                             {
                                 "text": "own plot state needle",
@@ -993,14 +954,6 @@ class SpecialistAccountingAcceptanceTests(LeadOrchestrationTestCase):
             tuple((item.call_kind, item.state) for item in specialist_calls),
             (
                 (
-                    CollaborationProviderCallKind.REFERENCE_PRELUDE,
-                    CollaborationProviderCallState.PREPARED,
-                ),
-                (
-                    CollaborationProviderCallKind.REFERENCE_PRELUDE,
-                    CollaborationProviderCallState.SUBMITTED,
-                ),
-                (
                     CollaborationProviderCallKind.INITIAL,
                     CollaborationProviderCallState.PREPARED,
                 ),
@@ -1027,10 +980,10 @@ class SpecialistAccountingAcceptanceTests(LeadOrchestrationTestCase):
             ),
         )
         result = _payloads(history, CollaborationExecutionResult)[0]
-        self.assertEqual(result.assignment_outcomes[0].submitted_physical_calls, 4)
-        self.assertEqual(result.synthesis_submitted_physical_calls, 2)
+        self.assertEqual(result.assignment_outcomes[0].submitted_physical_calls, 3)
+        self.assertEqual(result.synthesis_submitted_physical_calls, 1)
         projection = project_collaboration_history(history)
-        self.assertEqual(projection.physical_calls_spent, 8)
+        self.assertEqual(projection.physical_calls_spent, 5)
         self.assertLessEqual(projection.physical_calls_spent, 12)
 
     async def test_result_persistence_failure_cleans_marker_after_provider_completion(

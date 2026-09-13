@@ -266,6 +266,7 @@ from .errors import (
     BackendProtocolError, ConversationNotFoundError, ProviderAuthenticationRequiredError,
 )
 from .prompts import PromptAssembler
+from .reply_trace import ReplyTrace, ReplyTraceOrigin
 from .specialist_routing import (
     AuthoringActivity,
     AuthoringScope,
@@ -317,7 +318,7 @@ _BUDGET_POLICY_FINGERPRINT = (
     "sha256:"
     + hashlib.sha256(
         b"lead-confirmed-collaboration-budget-v1;rounds=2;calls=12;"
-        b"context=5;references=prelude;allocation=specialist-round-robin"
+        b"context=5;references=runtime-local;allocation=specialist-round-robin"
     ).hexdigest()
 )
 _CONTEXT_INVOCATION_CALL_LIMIT = 5
@@ -331,20 +332,18 @@ _LEAD_CORRECTABLE_RESPONSE_REJECTION_CODES = frozenset(
 )
 _LEAD_RESPONSE_CORRECTION_INSTRUCTION = (
     "Return ANSWER now without SEARCH or READ. Encode exactly one complete "
-    "lead_front_channel lead-outcome-v4 object in action.result with all ten "
-    "fields: scope, authoring_scope, evidence_status, evidence_ids, kind, message, "
-    "artifact_intent, proposal, objective_intent, and recommended_action. This supersedes "
-    "older retained field lists. Include explicit assignment mode and review_basis. "
-    "Follow the original answer_contract and evidence rules exactly. For answer, "
-    "question, critique, or recommendation, set artifact_intent and proposal "
-    "explicitly to null. Preserve a selected objective PREPARE as an exact "
+    "lead_front_channel lead-outcome-v5 object in action.result with only the fields "
+    "required by its selected semantic variant. A direct answer needs only message; "
+    "include kind for a question or critique. Include authoring_scope, proposal, "
+    "artifact_intent, objective_intent, or "
+    "recommended_action only when that variant requires it. Preserve a selected objective PREPARE as an exact "
     "artifact proposal; do not downgrade it into advice or claim completion."
 )
 _LEAD_OBJECTIVE_INSTRUCTION = (
-    "Runtime contract overlay: lead-outcome-v4 supersedes every older retained "
+    "Runtime contract overlay: lead-outcome-v5 supersedes every older retained "
     "lead_front_channel field list, including older retained instructions in "
-    "workspace prompts. Return exactly the ten named fields with explicit "
-    "authoring_scope, objective_intent, and recommended_action. Interpret "
+    "workspace prompts. Return only the required fields for the selected semantic "
+    "variant; the runtime derives evidence and bookkeeping. Interpret "
     "the user's instruction contextually with current artifact objectives and "
     "offered draft sources, including abbreviated Korean or English approval "
     "after a visible draft. Continue the selected draft or objective authoring task; "
@@ -352,14 +351,13 @@ _LEAD_OBJECTIVE_INSTRUCTION = (
     "Use CONSULT until those drafts cover every affected domain. "
     "Selecting PREPARE creates an exact artifact proposal "
     "for separately confirmed review, never Apply or Commit authority. "
-    "START requires request and nonempty exact canonical target_paths; if target "
-    "scope is unresolved ask a focused question with objective_intent=null first. "
+    "START requires nonempty exact canonical target_paths; if target "
+    "scope is unresolved ask a focused question and omit objective_intent first. "
     "CONTINUE uses an OPEN objective ID from this origin conversation. Both use "
     "next_step clarify (question only), consult (ordinary consultation proposal), "
-    "or prepare (kind=proposal, artifact_intent populated, proposal=null). "
-    "draft_source_event_ids must name this conversation's offered exact visible "
-    "sources; continue with an empty list retains the previous selected sources. "
-    "CANCEL explicitly names the objective and proposes no work. Null, prose, "
+    "or prepare (kind=proposal with artifact_intent and no proposal field). "
+    "The runtime resolves eligible exact visible draft sources from the conversation. "
+    "CANCEL explicitly names the objective and proposes no work. Omitted intent, prose, "
     "consultation/review success and step rejection never complete or cancel an "
     "objective. Only runtime's exact successful structured Apply result satisfies "
     "it. A selected exact status receipt for a currently empty canonical core "
@@ -370,18 +368,21 @@ _LEAD_OBJECTIVE_INSTRUCTION = (
     "evidence is unavailable select a focused clarification before PREPARE. "
     "Once PREPARE is selected, "
     "return the exact candidate or the established validation failure, not advice."
-    " Every fresh RECOMMENDATION requires one recommended_action and objective_intent=null. "
+    " Every fresh RECOMMENDATION requires one recommended_action and no objective_intent. "
     "Use exactly prepare_artifact or prepare_consultation, with purpose, instruction, "
-    "expected_result, ordered source_ids, target_paths, specialist_ids and optional objective_id. "
-    "prepare_artifact requires complete canonical targets and no specialists; "
-    "prepare_consultation requires the exact canonical specialist set and no targets. "
+    "expected_result, ordered source_ids, its action-specific selector, and optional objective_id. "
+    "prepare_artifact requires complete canonical targets; prepare_consultation requires the exact canonical specialist set. "
     "Source aliases may name offered draft events, input/evidence IDs, or current_response "
     "for this exact visible message; current_response is not extracted draft prose. "
-    "Other outcome kinds require recommended_action=null. An ordinary contextual "
+    "Other outcome kinds omit recommended_action. An ordinary contextual "
     "authoring instruction can still directly select A PREPARE without recommendation confirmation. "
     "Recommendation Confirm authorizes one bounded Lead preparation only, never specialists, "
     "review, Apply or Commit. A confirmed preparation must honor its exact disclosed "
     "action and must not produce another recommendation or request the same confirmation again."
+)
+_SAFE_STRUCTURED_FALLBACK_MESSAGE = (
+    "I couldn't validate the provider's structured reply after one repair attempt, "
+    "so no action was taken. You can continue the conversation or try again."
 )
 _LEAD_PROPOSAL_USER_IMPACT = (
     "Specialist advice and durable collaboration records only. "
@@ -410,12 +411,6 @@ def _closed_result_object(
     return schema
 
 
-def _nullable_result_object(properties: dict[str, object]) -> dict[str, object]:
-    schema = _closed_result_object(properties)
-    schema["type"] = ["object", "null"]
-    return schema
-
-
 def _string_array_result_schema(
     *,
     allowed_values: tuple[str, ...] = (),
@@ -437,18 +432,19 @@ def _authoring_scope_result_schema(
     task_revisions: tuple[tuple[str, int], ...] = (),
 ) -> dict[str, object]:
     return _closed_result_object({
-        "schema_version": {"enum": [1], "type": "integer"},
         "activity": {"enum": [item.value for item in AuthoringActivity], "type": "string"},
         "target_paths": _string_array_result_schema(),
         "domains": _string_array_result_schema(
             allowed_values=tuple(item.value for item in ArtifactReviewDomain),
         ),
-        "interpretation": {"type": "string"},
-        "task_id": ({"enum": list(dict.fromkeys(item[0] for item in task_revisions)),
-                     "type": "string"} if task_revisions else {"type": "string"}),
-        "task_revision": ({"enum": list(dict.fromkeys(item[1] for item in task_revisions)),
-                           "type": "integer"} if task_revisions else
-                          {"minimum": 1, "type": "integer"}),
+        "task": (
+            {
+                "enum": list(dict.fromkeys(f"{task_id}@{revision}" for task_id, revision in task_revisions)),
+                "type": "string",
+            }
+            if task_revisions
+            else {"type": "string"}
+        ),
     })
 
 
@@ -457,42 +453,35 @@ def _assignment_result_schema(
 ) -> dict[str, object]:
     input_schema = _string_array_result_schema(
         allowed_values=input_ids,
-        min_items=1,
-        max_items=len(input_ids),
     )
-    return _closed_result_object(
-        {
-            "agent_id": {"enum": list(SPECIALIST_IDS), "type": "string"},
-            "instruction": {"type": "string"},
-            "input_ids": input_schema,
-            "mode": {"enum": [item.value for item in SpecialistAssignmentMode],
-                     "type": "string"},
-            "review_basis": _nullable_result_object({
-                "schema_version": {"enum": [1], "type": "integer"},
-                "candidate_input_ids": input_schema,
-                "criteria": {"type": "string"},
-            }),
-        }
-    )
+    return _closed_result_object({
+        "agent_id": {"enum": list(SPECIALIST_IDS), "type": "string"},
+        "instruction": {"type": "string"},
+        "input_ids": input_schema,
+        "mode": {
+            "enum": [item.value for item in SpecialistAssignmentMode],
+            "type": "string",
+        },
+    })
 
 
 def _proposal_result_schema(
     relation: LeadProposalRelation,
     input_ids: tuple[str, ...],
 ) -> dict[str, object]:
-    return _closed_result_object(
-        {
-            "relation": {"enum": [relation.value], "type": "string"},
-            "purpose": {"type": "string"},
-            "authoring_scope": _authoring_scope_result_schema(),
-            "assignments": {
-                "items": _assignment_result_schema(input_ids),
-                "maxItems": len(SPECIALIST_IDS),
-                "minItems": 1,
-                "type": "array",
-            },
-        }
-    )
+    assignments = {
+        "assignments": {
+            "items": _assignment_result_schema(input_ids),
+            "type": "array",
+        },
+    }
+    return {"anyOf": [
+        _closed_result_object(assignments),
+        _closed_result_object({
+            **assignments,
+            "objective_intent": {"anyOf": _objective_intent_result_schema()["anyOf"][1:]},
+        }),
+    ]}
 
 
 def _artifact_intent_result_schema() -> dict[str, object]:
@@ -532,89 +521,60 @@ def _artifact_intent_result_schema() -> dict[str, object]:
             }
         ),
     ]
-    return _closed_result_object(
-        {
-            "additional_review_domains": {
-                "items": {
-                    "enum": [item.value for item in ArtifactReviewDomain],
-                    "type": "string",
-                },
-                "maxItems": len(ArtifactReviewDomain),
-                "type": "array",
-            },
-            "operations": {
-                "items": {"anyOf": operation_schemas},
-                "minItems": 1,
-                "type": "array",
-            },
-        }
-    )
-
-
-def _lead_result_properties(
-    *,
-    scope: dict[str, object],
-    evidence_status: dict[str, object],
-    evidence_ids: dict[str, object],
-    kind: dict[str, object],
-    artifact_intent: dict[str, object],
-    proposal: dict[str, object],
-) -> dict[str, object]:
-    return {
-        "scope": scope,
-        "authoring_scope": _authoring_scope_result_schema(),
-        "evidence_status": evidence_status,
-        "evidence_ids": evidence_ids,
-        "kind": kind,
-        "message": {"type": "string"},
-        "artifact_intent": artifact_intent,
-        "proposal": proposal,
-        "objective_intent": _objective_intent_result_schema(),
-        "recommended_action": {"type": "null"},
-    }
-
-
-def _recommended_action_result_schema() -> dict[str, object]:
-    common = {
-        "purpose": {"type": "string"},
-        "instruction": {"type": "string"},
-        "expected_result": {"type": "string"},
-        "source_ids": _string_array_result_schema(min_items=1),
-        "objective_id": {"type": ["string", "null"]},
+    operations = {
+        "operations": {
+            "items": {"anyOf": operation_schemas},
+            "type": "array",
+        },
     }
     return {"anyOf": [
+        _closed_result_object(operations),
         _closed_result_object({
-            **common,
-            "kind": {"enum": ["prepare_artifact"], "type": "string"},
-            "target_paths": _string_array_result_schema(min_items=1),
-            "specialist_ids": _string_array_result_schema(max_items=0),
-        }),
-        _closed_result_object({
-            **common,
-            "kind": {"enum": ["prepare_consultation"], "type": "string"},
-            "target_paths": _string_array_result_schema(max_items=0),
-            "specialist_ids": _string_array_result_schema(
-                allowed_values=tuple(SPECIALIST_IDS), min_items=1, max_items=len(SPECIALIST_IDS),
-            ),
+            **operations,
+            "objective_intent": {"anyOf": _objective_intent_result_schema()["anyOf"][1:]},
         }),
     ]}
 
 
+def _recommended_action_result_schema() -> dict[str, object]:
+    common: dict[str, object] = {
+        "instruction": {"type": "string"},
+        "source_ids": _string_array_result_schema(),
+    }
+    variants: list[dict[str, object]] = []
+    for objective in ({}, {"objective_id": {"type": "string"}}):
+        variants.extend((
+            _closed_result_object({
+            **common,
+            **objective,
+            "kind": {"enum": ["prepare_artifact"], "type": "string"},
+            "target_paths": _string_array_result_schema(),
+            }),
+            _closed_result_object({
+            **common,
+            **objective,
+            "kind": {"enum": ["prepare_consultation"], "type": "string"},
+            "specialist_ids": _string_array_result_schema(
+                allowed_values=tuple(SPECIALIST_IDS),
+            ),
+            }),
+        ))
+    return {"anyOf": variants}
+
+
 def _objective_intent_result_schema() -> dict[str, object]:
     steps = {"enum": [item.value for item in ArtifactObjectiveNextStep], "type": "string"}
-    sources = _string_array_result_schema()
     return {"anyOf": [
         {"type": "null"},
         _closed_result_object({
             "action": {"enum": ["start"], "type": "string"},
-            "request": {"type": "string"},
-            "target_paths": _string_array_result_schema(min_items=1),
-            "next_step": steps, "draft_source_event_ids": sources,
+            "target_paths": _string_array_result_schema(),
+            "next_step": steps,
         }),
         _closed_result_object({
             "action": {"enum": ["continue"], "type": "string"},
             "objective_id": {"type": "string"},
-            "next_step": steps, "draft_source_event_ids": sources,
+            "next_step": steps,
         }),
         _closed_result_object({
             "action": {"enum": ["cancel"], "type": "string"},
@@ -628,145 +588,51 @@ def _lead_front_result_contract(
     input_ids: tuple[str, ...],
     task_revisions: tuple[tuple[str, int], ...] = (),
 ) -> ContextJsonObjectResultContract:
+    scope = _authoring_scope_result_schema(task_revisions)
+    message = {"message": {"type": "string"}}
+    scoped = {**message, "authoring_scope": scope}
     direct_kinds = [
-        item.value for item in LeadOutcomeKind if item is not LeadOutcomeKind.PROPOSAL
-    ]
-    story_statuses = [
         item.value
-        for item in LeadEvidenceStatus
-        if item is not LeadEvidenceStatus.NOT_APPLICABLE
-    ]
-    story_common = {
-        "scope": {"enum": [LeadOutcomeScope.STORY_SPECIFIC.value], "type": "string"},
-        "evidence_status": {"enum": story_statuses, "type": "string"},
-        "evidence_ids": _string_array_result_schema(min_items=1),
-    }
-    story_direct_variants = [
-        _closed_result_object(
-            _lead_result_properties(
-                scope=story_common["scope"],
-                evidence_status={
-                    "enum": [LeadEvidenceStatus.VERIFIED.value],
-                    "type": "string",
-                },
-                evidence_ids=story_common["evidence_ids"],
-                kind={"enum": direct_kinds, "type": "string"},
-                artifact_intent={"type": "null"},
-                proposal={"type": "null"},
-            ),
-            description="Direct verified story Lead result.",
-        ),
-        _closed_result_object(
-            _lead_result_properties(
-                scope=story_common["scope"],
-                evidence_status={
-                    "enum": [
-                        LeadEvidenceStatus.MISSING.value,
-                        LeadEvidenceStatus.EMPTY.value,
-                    ],
-                    "type": "string",
-                },
-                evidence_ids=story_common["evidence_ids"],
-                kind={
-                    "enum": [
-                        LeadOutcomeKind.QUESTION.value,
-                        LeadOutcomeKind.RECOMMENDATION.value,
-                    ],
-                    "type": "string",
-                },
-                artifact_intent={"type": "null"},
-                proposal={"type": "null"},
-            ),
-            description="Direct missing-or-empty-evidence story Lead result.",
-        ),
-        _closed_result_object(
-            _lead_result_properties(
-                scope=story_common["scope"],
-                evidence_status={
-                    "enum": [
-                        LeadEvidenceStatus.INCOMPLETE.value,
-                        LeadEvidenceStatus.CONFLICTING.value,
-                    ],
-                    "type": "string",
-                },
-                evidence_ids=story_common["evidence_ids"],
-                kind={
-                    "enum": [
-                        LeadOutcomeKind.QUESTION.value,
-                        LeadOutcomeKind.CRITIQUE.value,
-                        LeadOutcomeKind.RECOMMENDATION.value,
-                    ],
-                    "type": "string",
-                },
-                artifact_intent={"type": "null"},
-                proposal={"type": "null"},
-            ),
-            description="Direct incomplete-or-conflicting-evidence story Lead result.",
-        ),
+        for item in LeadOutcomeKind
+        if item in {LeadOutcomeKind.QUESTION, LeadOutcomeKind.CRITIQUE}
     ]
     variants = [
-        _closed_result_object(
-            _lead_result_properties(
-                scope={
-                    "enum": [LeadOutcomeScope.WORKFLOW_META.value],
-                    "type": "string",
-                },
-                evidence_status={
-                    "enum": [LeadEvidenceStatus.NOT_APPLICABLE.value],
-                    "type": "string",
-                },
-                evidence_ids=_string_array_result_schema(max_items=0),
-                kind={"enum": direct_kinds, "type": "string"},
-                artifact_intent={"type": "null"},
-                proposal={"type": "null"},
-            ),
-            description="Direct workflow-meta Lead result.",
-        ),
-        *story_direct_variants,
-        _closed_result_object(
-            _lead_result_properties(
-                **story_common,
-                kind={"enum": [LeadOutcomeKind.PROPOSAL.value], "type": "string"},
-                artifact_intent={"type": "null"},
-                proposal=_proposal_result_schema(expected_relation, input_ids),
-            ),
-            description="Evidence-bearing specialist-consultation proposal.",
-        ),
-        _closed_result_object(
-            _lead_result_properties(
-                **story_common,
-                kind={"enum": [LeadOutcomeKind.PROPOSAL.value], "type": "string"},
-                artifact_intent=_artifact_intent_result_schema(),
-                proposal={"type": "null"},
-            ),
-            description="Evidence-bearing artifact-intent proposal.",
-        ),
-    ]
-    for variant in variants:
-        properties = variant["properties"]
-        properties["authoring_scope"] = _authoring_scope_result_schema(task_revisions)
-        if "proposal" in properties and "properties" in properties["proposal"]:
-            properties["proposal"]["properties"]["authoring_scope"] = (
-                _authoring_scope_result_schema(task_revisions)
-            )
-    exact_variants = []
-    for variant in variants:
-        properties = cast(dict[str, object], variant["properties"])
-        kinds = cast(dict[str, object], properties["kind"])["enum"]
-        if LeadOutcomeKind.RECOMMENDATION.value in kinds:
-            exact_variants.append(_closed_result_object({
-                **properties,
-                "kind": {"enum": [LeadOutcomeKind.RECOMMENDATION.value], "type": "string"},
-                "objective_intent": {"type": "null"},
-                "recommended_action": _recommended_action_result_schema(),
-            }))
-            properties = {**properties, "kind": {
-                "enum": [kind for kind in kinds if kind != LeadOutcomeKind.RECOMMENDATION.value],
+        _closed_result_object(message),
+        _closed_result_object({
+            **message,
+            "kind": {"enum": direct_kinds, "type": "string"},
+        }),
+        _closed_result_object({
+            **scoped,
+            "kind": {"enum": [LeadOutcomeKind.QUESTION.value], "type": "string"},
+        }),
+        _closed_result_object({
+            **scoped,
+            "kind": {
+                "enum": [item.value for item in LeadOutcomeKind if item not in {
+                    LeadOutcomeKind.PROPOSAL, LeadOutcomeKind.RECOMMENDATION,
+                }],
                 "type": "string",
-            }}
-        if cast(dict[str, object], properties["kind"])["enum"]:
-            exact_variants.append(_closed_result_object(properties))
-    return ContextJsonObjectResultContract("lead-outcome-v4", {"anyOf": exact_variants})
+            },
+            "objective_intent": {"anyOf": _objective_intent_result_schema()["anyOf"][1:]},
+        }),
+        _closed_result_object({
+            **scoped,
+            "kind": {"enum": [LeadOutcomeKind.RECOMMENDATION.value], "type": "string"},
+            "recommended_action": _recommended_action_result_schema(),
+        }),
+    ]
+    for field, intent_schema in (
+        ("proposal", _proposal_result_schema(expected_relation, input_ids)),
+        ("artifact_intent", _artifact_intent_result_schema()),
+    ):
+        proposal = {
+            **scoped,
+            "kind": {"enum": [LeadOutcomeKind.PROPOSAL.value], "type": "string"},
+            field: intent_schema,
+        }
+        variants.append(_closed_result_object(proposal))
+    return ContextJsonObjectResultContract("lead-outcome-v5", {"anyOf": variants})
 
 
 def _specialist_result_contract(
@@ -786,16 +652,6 @@ def _specialist_result_contract(
                                  else item is not CollaborationSpecialistAssessment.DRAFTED)],
                     "type": "string",
                 },
-                "mode": {"enum": [assignment.mode.value], "type": "string"},
-                "assignment_id": {
-                    "enum": [assignment.assignment_id],
-                    "type": "string",
-                },
-                "input_ids": _string_array_result_schema(
-                    allowed_values=assignment.input_ids,
-                    min_items=len(assignment.input_ids),
-                    max_items=len(assignment.input_ids),
-                ),
                 "message": {"type": "string"},
             }
         ),
@@ -811,81 +667,39 @@ def _lead_synthesis_result_contract(
     artifact_review: bool,
     authoring_scope: AuthoringScope,
 ) -> ContextJsonObjectResultContract:
-    continuation_input_ids = (*input_ids, *reply_event_ids)
-    next_intent = (
-        _nullable_result_object(
-            {
-                "relation": {
-                    "enum": [LeadProposalRelation.CONTINUE_LINEAGE.value],
-                    "type": "string",
-                },
-                "purpose": {"type": "string"},
-                "authoring_scope": _authoring_scope_result_schema(
-                    ((authoring_scope.task_id, authoring_scope.task_revision),)
-                ),
-                "assignments": {
-                    "items": _assignment_result_schema(continuation_input_ids),
-                    "maxItems": len(SPECIALIST_IDS),
-                    "minItems": 1,
-                    "type": "array",
-                },
-            }
-        )
-        if allow_next_intent
-        else {"type": "null"}
-    )
-    evidence_ids = tuple(item.evidence_id for item in evidence.receipts)
-    properties: dict[str, object] = {
-        "authoring_scope": _authoring_scope_result_schema(
-            ((authoring_scope.task_id, authoring_scope.task_revision),)
-        ),
-        "scope": {"enum": [evidence.scope.value], "type": "string"},
-        "evidence_status": {
-            "enum": [evidence.status.value],
-            "type": "string",
-        },
-        "evidence_ids": _string_array_result_schema(
-            allowed_values=evidence_ids,
-            min_items=len(evidence_ids),
-            max_items=len(evidence_ids),
-        ),
-        "message": {"type": "string"},
-        "next_intent": next_intent,
-        "reply_event_ids": _string_array_result_schema(
-            allowed_values=reply_event_ids,
-            min_items=len(reply_event_ids),
-            max_items=len(reply_event_ids),
-        ),
-        "unresolved_input_ids": _string_array_result_schema(
-            allowed_values=input_ids,
-            max_items=len(input_ids),
-        ),
-    }
+    del evidence, authoring_scope
+    message = {"message": {"type": "string"}}
     contract_id = "lead-synthesis-v3"
     if not artifact_review:
-        return ContextJsonObjectResultContract(contract_id, {"anyOf": [
-            _closed_result_object({
-                **properties, "next_intent": {"type": "null"},
-                "recommended_action": {"anyOf": [{"type": "null"}, _recommended_action_result_schema()]},
-            }),
-            _closed_result_object({**properties, "recommended_action": {"type": "null"}}),
-        ]})
-    if artifact_review:
-        properties.update(
-            {
-                "decision": {
-                    "enum": [item.value for item in ArtifactReviewDecision],
-                    "type": "string",
-                },
-                "limitations": {"type": "string"},
-                "rationale": {"type": "string"},
-                "user_impact": {"type": "string"},
-            }
-        )
-        contract_id = "artifact-review-synthesis-v2"
+        variants = [_closed_result_object(message)]
+        if allow_next_intent:
+            variants.append(_closed_result_object({
+                **message,
+                "next_intent": _closed_result_object({
+                    "purpose": {"type": "string"},
+                    "assignments": {
+                        "items": _assignment_result_schema((*input_ids, *reply_event_ids)),
+                        "maxItems": len(SPECIALIST_IDS),
+                        "minItems": 1,
+                        "type": "array",
+                    },
+                }),
+            }))
+        variants.append(_closed_result_object({
+            **message,
+            "recommended_action": _recommended_action_result_schema(),
+        }))
+        return ContextJsonObjectResultContract(contract_id, {"anyOf": variants})
+    contract_id = "artifact-review-synthesis-v3"
     return ContextJsonObjectResultContract(
         contract_id,
-        _closed_result_object(properties),
+        _closed_result_object({
+            "decision": {
+                "enum": [item.value for item in ArtifactReviewDecision],
+                "type": "string",
+            },
+            **message,
+        }),
     )
 
 
@@ -1074,32 +888,9 @@ class _AccountingContextProvider:
         self,
         request: ContextReferencePreludeRequest,
     ) -> ContextReferencePreludeResult:
-        ordinal = self._prepare(
-            request.call_id,
-            CollaborationProviderCallKind.REFERENCE_PRELUDE,
-        )
-        try:
-            result = await getattr(self._delegate, "prepare_references")(request)
-        except BaseException as failure:
-            if (
-                isinstance(failure, ProviderAuthenticationRequiredError)
-                and failure.replay_aborted
-            ):
-                raise
-            self._record_failure_submission(
-                failure,
-                request.call_id,
-                ordinal,
-                CollaborationProviderCallKind.REFERENCE_PRELUDE,
-            )
-            raise
-        self._record_result_submission(
-            result,
-            request.call_id,
-            ordinal,
-            CollaborationProviderCallKind.REFERENCE_PRELUDE,
-        )
-        return result
+        """Load authorized references locally without provider-call accounting."""
+
+        return await getattr(self._delegate, "prepare_references")(request)
 
     async def invoke_context(
         self,
@@ -1273,6 +1064,11 @@ class _CollaborationInvocationResult:
     submitted_physical_calls: int
     failure: BaseException | None = None
     submission_uncertain: bool = False
+    trace: ReplyTrace | None = None
+
+    def __post_init__(self) -> None:
+        if self.trace is not None and type(self.trace) is not ReplyTrace:
+            raise TypeError("collaboration invocation trace is invalid")
 
 
 @dataclass(frozen=True, slots=True)
@@ -1576,6 +1372,7 @@ class StoryRuntime:
                 ConsensusPhaseOutputKind.CANDIDATE,
                 digest,
                 authored_material,
+                trace=reply.trace,
             )
         candidate = invocation.candidate_material
         if candidate is None:
@@ -1606,6 +1403,7 @@ class StoryRuntime:
                 candidate,
                 ConsensusAuditVerdict(reply.verdict.value),
                 conflict_material=authored_material,
+                trace=reply.trace,
             )
         if authored_material is not None:
             raise ValueError("consensus phase does not accept authored material")
@@ -1615,6 +1413,7 @@ class StoryRuntime:
                     ConsensusPhaseOutputKind.DEADLOCK,
                     digest,
                     candidate,
+                    trace=reply.trace,
                 )
             if (
                 reply.kind is not AgentReplyKind.SYNTHESIS
@@ -1626,6 +1425,7 @@ class StoryRuntime:
                 digest,
                 candidate,
                 next_phase=ConsensusPhase(reply.next_phase.value),
+                trace=reply.trace,
             )
         if (
             invocation.phase is not ConsensusPhase.FINALIZATION
@@ -1636,6 +1436,7 @@ class StoryRuntime:
             ConsensusPhaseOutputKind.FINALIZATION,
             digest,
             candidate,
+            trace=reply.trace,
         )
 
     def create_workflow(
@@ -2399,10 +2200,7 @@ class StoryRuntime:
             except (TypeError, ValueError):
                 raise _LeadOutcomeValidationError("recommended route omits required specialists") from None
         remaining = COLLABORATION_PHYSICAL_CALL_LIMIT - projection.physical_calls_spent
-        mandatory = 1 + int(any(item.kind in {
-            CollaborationInputKind.CORE_DOCUMENT, CollaborationInputKind.MANUSCRIPT,
-            CollaborationInputKind.WRITING_ARTIFACT,
-        } for item in selected_inputs))
+        mandatory = 1
         if remaining < mandatory:
             raise _LeadOutcomeValidationError("recommended preparation cannot fit its source-lineage budget")
         request_event_id = self._new_id("e")
@@ -2461,6 +2259,7 @@ class StoryRuntime:
             LeadOutcomeKind.RECOMMENDATION, source.payload.message, None, None, None,
             CollaborationNextAction.SUBMIT_RECOMMENDATION_DECISION,
             evidence=request.basis.evidence, recommendation_request=request,
+            trace=getattr(source.payload, "trace", None),
         )
 
     def _recommendation_closure_draft(
@@ -2635,6 +2434,43 @@ class StoryRuntime:
             return self._blocking_lead_result(origin.session_id, origin.conversation_id,
                 CollaborationStepState.RECOVERY_REQUIRED, "Recommendation closure requires repair.",
                 turn_id=origin.turn_id, step_id=origin.step_id)
+        if result.message == _SAFE_STRUCTURED_FALLBACK_MESSAGE:
+            finalized = self._finalize_recommendation_failure_locked(
+                origin.session_id,
+                origin.conversation_id,
+                capability,
+            )
+            if finalized is None:
+                return self._blocking_lead_result(
+                    origin.session_id,
+                    origin.conversation_id,
+                    CollaborationStepState.RECOVERY_REQUIRED,
+                    "Recommendation closure requires repair.",
+                    turn_id=origin.turn_id,
+                    step_id=origin.step_id,
+                )
+            projection = self.conversation_storage_services.event_store.read_context(
+                origin.session_id,
+                origin.conversation_id,
+            )
+            self._append_drafts(
+                projection.last_sequence,
+                (
+                    self._draft(
+                        session_id=origin.session_id,
+                        conversation_id=origin.conversation_id,
+                        turn_id=origin.turn_id,
+                        step_id=origin.step_id,
+                        kind=CollaborationEventKind.MESSAGE,
+                        sender=_LEAD_ACTOR,
+                        recipient=_USER_ACTOR,
+                        payload=CollaborationMessagePayload(
+                            _SAFE_STRUCTURED_FALLBACK_MESSAGE
+                        ),
+                    ),
+                ),
+            )
+            return result
         return result
 
     def _finalize_recommendation_failure_locked(
@@ -2652,15 +2488,33 @@ class StoryRuntime:
         decision_event = by_id[start.decision_event_id]
         start_event = by_id[start.start_event_id]
         tail = events[-1]
-        if (type(tail.payload) is not CollaborationLeadOutcomeFailurePayload
-            or tail.turn_id != start_event.turn_id or tail.step_id != start_event.step_id):
+        lead_result = tail
+        if (
+            type(tail.payload) is CollaborationMessagePayload
+            and tail.sender == _LEAD_ACTOR
+            and tail.recipient == _USER_ACTOR
+            and tail.payload.content == _SAFE_STRUCTURED_FALLBACK_MESSAGE
+        ):
+            lead_result = next(
+                (
+                    event
+                    for event in reversed(events[:-1])
+                    if type(event.payload) is CollaborationLeadOutcomeFailurePayload
+                    and event.turn_id == start_event.turn_id
+                    and event.step_id == start_event.step_id
+                ),
+                tail,
+            )
+        if (type(lead_result.payload) is not CollaborationLeadOutcomeFailurePayload
+            or lead_result.turn_id != start_event.turn_id
+            or lead_result.step_id != start_event.step_id):
             return None
         request = cast(LeadRecommendationRequestPayload, request_event.payload)
         uses_references = any(item.kind in {
             CollaborationInputKind.CORE_DOCUMENT, CollaborationInputKind.MANUSCRIPT,
             CollaborationInputKind.WRITING_ARTIFACT,
         } for item in request.basis.inputs)
-        if uses_references and tail.payload.code is not CollaborationLeadOutcomeFailureCode.REQUEST_NOT_SUBMITTED:
+        if uses_references and lead_result.payload.code is not CollaborationLeadOutcomeFailureCode.REQUEST_NOT_SUBMITTED:
             operation_id = None if preparation is None else preparation.reference_operation_id
             terminal_proof = False
             if operation_id is not None and reference_operation_belongs_to_session(operation_id, session_id):
@@ -2691,10 +2545,10 @@ class StoryRuntime:
                     "The Lead failure is durable, but its exact terminal reference accounting cannot be proved. "
                     "Inspect and repair the operation; this preparation will not be replayed.",
                     turn_id=start_event.turn_id, step_id=start_event.step_id)
-        closure = self._recommendation_closure_draft(tail, request_event=request_event,
+        closure = self._recommendation_closure_draft(lead_result, request_event=request_event,
             decision_event=decision_event, start_event=start_event)
         self._append_drafts(projection.last_sequence, (closure,))
-        return LeadTurnResult(session_id, conversation_id, tail.turn_id, tail.step_id,
+        return LeadTurnResult(session_id, conversation_id, lead_result.turn_id, lead_result.step_id,
             LeadOutcomeKind.ANSWER, closure.payload.message, None, None, None,
             CollaborationNextAction.CONTINUE_WITH_LEAD,
             CollaborationLeadEvidence(LeadOutcomeScope.WORKFLOW_META, LeadEvidenceStatus.NOT_APPLICABLE, ()))
@@ -2905,6 +2759,16 @@ class StoryRuntime:
                 authoring_scope, inputs, None, prior_scope,
             )
             validate_specialist_routing(authoring_scope, (specialist_id,))
+            referenced_reviewers = {
+                reviewer
+                for reference in parse_artifact_references(text).references
+                for reviewer in (self._core_reviewer(reference.token),)
+                if reviewer is not None
+            }
+            if any(reviewer != specialist_id for reviewer in referenced_reviewers):
+                raise ValueError(
+                    "referenced artifact is owned by another reviewer"
+                )
             mode = (SpecialistAssignmentMode.REVIEW if authoring_scope.activity is AuthoringActivity.REVIEW
                     else SpecialistAssignmentMode.DRAFT)
             advisory_intent = LeadAssignmentIntent(
@@ -4246,9 +4110,6 @@ class StoryRuntime:
                         if assignment.mode is SpecialistAssignmentMode.DRAFT
                         else item is not CollaborationSpecialistAssessment.DRAFTED)
                 ],
-                "mode": assignment.mode.value,
-                "assignment_id": assignment.assignment_id,
-                "input_ids": list(assignment.input_ids),
                 "message": "nonempty visible specialist assessment",
             },
             "assignment": {
@@ -4301,6 +4162,13 @@ class StoryRuntime:
             physical_call_limit=assignment.max_physical_calls,
             round_number=assignment.round,
             decoder=decode,
+            fallback_answer=json.dumps(
+                {
+                    "assessment": CollaborationSpecialistAssessment.INSUFFICIENT_EVIDENCE.value,
+                    "message": _SAFE_STRUCTURED_FALLBACK_MESSAGE,
+                },
+                separators=(",", ":"),
+            ),
             action_progress_sink=action_progress_sink,
         )
 
@@ -4321,7 +4189,6 @@ class StoryRuntime:
             self._deterministic_id("e", attempt_id, reply.assignment_id, "reply")
             for reply in replies
         )
-        required_unresolved_input_ids = self._required_unresolved_input_ids(replies)
         value = {
             "artifact_objectives": artifact_objective_context(project_collaboration_history(events)),
             "objective_instruction": (
@@ -4331,27 +4198,12 @@ class StoryRuntime:
                 "completion unless its runtime state is SATISFIED by exact Apply."
             ),
             "answer_contract": {
-                "authoring_scope": authoring_scope_to_dict(proposal.authoring_scope),
-                "evidence_ids": [
-                    item.evidence_id
-                    for item in cast(
-                        CollaborationLeadEvidence,
-                        proposal.basis.evidence,
-                    ).receipts
-                ],
-                "evidence_status": cast(
-                    CollaborationLeadEvidence,
-                    proposal.basis.evidence,
-                ).status.value,
                 "message": "nonempty visible synthesis",
                 "next_intent": (
-                    "null or an exact same-lineage proposal intent"
+                    "omit or provide an exact same-lineage proposal intent"
                     if proposal.budget.rounds_spent == 0
-                    else None
+                    else "omit"
                 ),
-                "reply_event_ids": list(reply_event_ids),
-                "scope": LeadOutcomeScope.STORY_SPECIFIC.value,
-                "unresolved_input_ids": list(required_unresolved_input_ids),
             },
             "inputs": [
                 self._collaboration_input_value(item, events, evidence=proposal.basis.evidence)
@@ -4372,22 +4224,20 @@ class StoryRuntime:
         }
         if artifact_candidate is not None:
             value["answer_contract"] = {
-                **cast(dict[str, object], value["answer_contract"]),
                 "decision": [item.value for item in ArtifactReviewDecision],
-                "limitations": "nonempty visible limitations",
-                "next_intent": None,
-                "rationale": "nonempty visible review rationale",
-                "user_impact": "nonempty visible user impact",
+                "message": "nonempty visible review synthesis",
             }
             value["artifact_candidate"] = json.loads(
                 serialize_artifact_review_candidate(artifact_candidate.candidate)
             )
         else:
-            value["answer_contract"]["recommended_action"] = _recommended_action_result_schema()
+            cast(dict[str, object], value["answer_contract"])["recommended_action"] = (
+                _recommended_action_result_schema()
+            )
             value["recommendation_instruction"] = (
-                "Return recommended_action=null for an answer. An actionable synthesis may select exactly "
+                "Omit recommended_action for an answer. An actionable synthesis may select exactly "
                 "prepare_artifact or prepare_consultation with purpose, instruction, expected_result, source_ids, "
-                "target_paths, specialist_ids and objective_id. current_response names this exact visible synthesis; "
+                "the fields for that action, and optional objective_id. current_response names this exact visible synthesis; "
                 "other sources use the supplied input IDs or offered draft event IDs. next_intent and "
                 "recommended_action are mutually exclusive. Preserve OPEN authoring objectives."
             )
@@ -4465,6 +4315,17 @@ class StoryRuntime:
             physical_call_limit=proposal.budget.synthesis_max_physical_calls,
             round_number=proposal.budget.rounds_spent + 1,
             decoder=decode,
+            fallback_answer=json.dumps(
+                (
+                    {
+                        "decision": ArtifactReviewDecision.REJECT.value,
+                        "message": _SAFE_STRUCTURED_FALLBACK_MESSAGE,
+                    }
+                    if artifact_candidate is not None
+                    else {"message": _SAFE_STRUCTURED_FALLBACK_MESSAGE}
+                ),
+                separators=(",", ":"),
+            ),
             action_progress_sink=action_progress_sink,
         )
 
@@ -4499,53 +4360,25 @@ class StoryRuntime:
         replies: tuple[CollaborationSpecialistReplyPayload, ...],
         candidate: ArtifactReviewCandidatePayload,
     ) -> _ArtifactSynthesisResult:
-        keys = {
-            "decision",
-            "authoring_scope",
-            "evidence_ids",
-            "evidence_status",
-            "limitations",
-            "message",
-            "next_intent",
-            "rationale",
-            "reply_event_ids",
-            "scope",
-            "unresolved_input_ids",
-            "user_impact",
-        }
         try:
-            value = cls._strict_json_object(answer, keys)
-            if value["next_intent"] is not None:
+            value = cls._strict_json_object(answer, {"decision", "message"})
+            message = value["message"]
+            evidence = proposal.basis.evidence
+            if type(message) is not str or type(evidence) is not CollaborationLeadEvidence:
                 raise ValueError
-            collaboration_value = {
-                key: value[key]
-                for key in {
-                    "authoring_scope",
-                    "evidence_ids",
-                    "evidence_status",
-                    "message",
-                    "next_intent",
-                    "reply_event_ids",
-                    "scope",
-                    "unresolved_input_ids",
-                }
-            }
-            collaboration_value["recommended_action"] = None
-            collaboration = cls._decode_lead_synthesis(
-                json.dumps(
-                    collaboration_value,
-                    ensure_ascii=False,
-                    separators=(",", ":"),
-                    sort_keys=True,
-                ),
-                proposal=proposal,
-                attempt_id=attempt_id,
+            unresolved = cls._required_unresolved_input_ids(replies)
+            collaboration = CollaborationLeadSynthesisPayload(
+                proposal_id=proposal.proposal_id,
+                proposal_revision=proposal.proposal_revision,
+                proposal_digest=proposal.proposal_digest,
+                execution_attempt_id=attempt_id,
+                message=message,
                 reply_event_ids=reply_event_ids,
-                replies=replies,
-            ).collaboration
-            for field in ("rationale", "user_impact", "limitations"):
-                if type(value[field]) is not str:
-                    raise ValueError
+                unresolved_input_ids=unresolved,
+                evidence=evidence,
+                next_intent=None,
+                authoring_scope=proposal.authoring_scope,
+            )
             artifact = ArtifactReviewSynthesisPayload(
                 candidate_id=candidate.candidate.candidate_id,
                 candidate_revision=candidate.candidate.candidate_revision,
@@ -4555,18 +4388,65 @@ class StoryRuntime:
                 consultation_proposal_digest=proposal.proposal_digest,
                 execution_attempt_id=attempt_id,
                 decision=ArtifactReviewDecision(value["decision"]),
-                message=collaboration.message,
-                rationale=cast(str, value["rationale"]),
-                user_impact=cast(str, value["user_impact"]),
-                limitations=cast(str, value["limitations"]),
+                message=message,
+                rationale=message,
+                user_impact=_LEAD_PROPOSAL_USER_IMPACT,
+                limitations="No additional limitations were reported.",
                 reply_event_ids=reply_event_ids,
-                unresolved_input_ids=collaboration.unresolved_input_ids,
+                unresolved_input_ids=unresolved,
             )
             return _ArtifactSynthesisResult(collaboration, artifact)
         except (KeyError, TypeError, UnicodeError, ValueError) as exc:
             raise BackendProtocolError(
                 "lead returned a noncanonical artifact review synthesis"
             ) from exc
+
+    @staticmethod
+    def _collaboration_reply_trace(
+        *,
+        role: str,
+        action: str,
+        request: ContextInvocationRequest,
+        result: ContextInvocationResult | None,
+        origin: ReplyTraceOrigin,
+    ) -> ReplyTrace:
+        """Describe delivered context classes without retaining their content."""
+
+        labels: list[str] = ["current_input"]
+        if request.session_state_json is not None:
+            labels.append("session_state")
+        if result is not None:
+            authorization = result.authorization
+            if authorization.core_statuses:
+                labels.append("core_status")
+            if authorization.zero_hit_searches:
+                labels.append("search_results")
+            labels.extend(
+                f"read:{receipt.source_kind.value}"
+                for receipt in authorization.used_evidence
+            )
+        return ReplyTrace(
+            role=role,
+            action=("none" if origin is ReplyTraceOrigin.RUNTIME_FALLBACK else action),
+            context_sources=tuple(dict.fromkeys(labels)),
+            recovered_fields=(
+                ()
+                if origin is ReplyTraceOrigin.PROVIDER
+                else ("structured_reply",)
+            ),
+            origin=origin,
+        )
+
+    @staticmethod
+    def _collaboration_trace_action(value: object) -> str:
+        if type(value) is CollaborationSpecialistReplyPayload:
+            return value.assessment.value
+        if type(value) is _ArtifactSynthesisResult:
+            return "artifact_review"
+        if type(value) is _LeadSynthesisResult:
+            action = value.recommended_action
+            return "synthesis" if action is None else action.kind.value
+        return "reply"
 
     async def _run_collaboration_invocation(
         self,
@@ -4586,6 +4466,7 @@ class StoryRuntime:
         physical_call_limit: int,
         round_number: int,
         decoder: Callable[[str], object],
+        fallback_answer: str,
         action_progress_sink: ContextActionProgressSink | None,
     ) -> _CollaborationInvocationResult:
         artifact_inputs = tuple(
@@ -4701,33 +4582,135 @@ class StoryRuntime:
                 ),
             )
             decoded: object | None = None
+            trace_origin = ReplyTraceOrigin.PROVIDER
 
             def validate(answer: str, _authorization: object) -> None:
                 nonlocal decoded
                 decoded = decoder(answer)
 
-            result = await self._invoke_context_with_recovery(
-                request,
-                provider,
-                reference_operation=reference_operation,
-                provider_factory=factory,
-                round_number=round_number,
-                writing_artifacts=authorities[0],
-                focused_conversation=authorities[1],
-                active_debate=authorities[2],
-                own_agent_state=authorities[3],
-                answer_validator=validate,
-                progress_sink=action_progress_sink,
+            invocation_arguments = {
+                "writing_artifacts": authorities[0],
+                "focused_conversation": authorities[1],
+                "active_debate": authorities[2],
+                "own_agent_state": authorities[3],
+                "answer_validator": validate,
+                "progress_sink": action_progress_sink,
                 **self._lead_continuation_arguments(
                     session_id, conversation_id, turn_id, step_id,
                     agent_id=agent_id, synthesis=True,
                 ),
-            )
+            }
+            submitted_before = provider.submitted_physical_calls
+            try:
+                result = await self._invoke_context_with_recovery(
+                    request,
+                    provider,
+                    reference_operation=reference_operation,
+                    provider_factory=factory,
+                    round_number=round_number,
+                    **invocation_arguments,
+                )
+            except BaseException as first_failure:
+                facts = context_provider_failure_facts(first_failure)
+                spent = provider.submitted_physical_calls - submitted_before
+                correction_cost = 1
+                assert request.physical_call_limit is not None
+                remaining = request.physical_call_limit - spent
+                correctable = (
+                    facts.response_rejection_code
+                    in _LEAD_CORRECTABLE_RESPONSE_REJECTION_CODES
+                    and not facts.submission_uncertain
+                )
+                if not correctable:
+                    raise
+                if remaining < correction_cost:
+                    reference_operation.failure(first_failure)
+                    fallback_value = decoder(fallback_answer)
+                    return _CollaborationInvocationResult(
+                        fallback_value,
+                        provider.submitted_physical_calls,
+                        trace=self._collaboration_reply_trace(
+                            role=agent_id,
+                            action=self._collaboration_trace_action(fallback_value),
+                            request=request,
+                            result=None,
+                            origin=ReplyTraceOrigin.RUNTIME_FALLBACK,
+                        ),
+                    )
+                trace_origin = ReplyTraceOrigin.RECOVERED
+                reference_read = reference_operation.begin_invocation(
+                    agent_id=agent_id,
+                    phase=context_invocation_kind.value,
+                    round_number=round_number,
+                )
+                delegate = factory(reference_read)
+                if inspect.isawaitable(delegate):
+                    raise BackendProtocolError(
+                        "bound context_provider() must be synchronous"
+                    )
+                provider.renew_delegate(delegate)
+                decoded = None
+                correction_material = self._context_material(
+                    source_id=f"runtime_input:{operation_id}:repair",
+                    semantic_channel=ContextSemanticChannel.CURRENT_INPUT,
+                    ordinal=0,
+                    locator=f"request/{operation_id}/repair",
+                    value={
+                        "original_request": material_value,
+                        "response_correction": {
+                            "instruction": (
+                                "The prior structured response was rejected. Return "
+                                "ANSWER with exactly the required semantic fields."
+                            ),
+                            "rejection_code": facts.response_rejection_code.value,
+                        },
+                    },
+                )
+                try:
+                    result = await self._agent_context_service.invoke(
+                        replace(
+                            request,
+                            materials=(correction_material,),
+                            physical_call_limit=remaining,
+                        ),
+                        provider,
+                        **invocation_arguments,
+                    )
+                except BaseException as correction_failure:
+                    correction_facts = context_provider_failure_facts(
+                        correction_failure
+                    )
+                    if (
+                        correction_facts.response_rejection_code
+                        not in _LEAD_CORRECTABLE_RESPONSE_REJECTION_CODES
+                        or correction_facts.submission_uncertain
+                    ):
+                        raise
+                    reference_operation.failure(correction_failure)
+                    fallback_value = decoder(fallback_answer)
+                    return _CollaborationInvocationResult(
+                        fallback_value,
+                        provider.submitted_physical_calls,
+                        trace=self._collaboration_reply_trace(
+                            role=agent_id,
+                            action=self._collaboration_trace_action(fallback_value),
+                            request=request,
+                            result=None,
+                            origin=ReplyTraceOrigin.RUNTIME_FALLBACK,
+                        ),
+                    )
             value = decoded if decoded is not None else decoder(result.answer)
             reference_operation.finish()
             return _CollaborationInvocationResult(
                 value,
                 provider.submitted_physical_calls,
+                trace=self._collaboration_reply_trace(
+                    role=agent_id,
+                    action=self._collaboration_trace_action(value),
+                    request=request,
+                    result=result,
+                    origin=trace_origin,
+                ),
             )
         except BaseException as failure:
             if reference_operation is not None:
@@ -4905,7 +4888,10 @@ class StoryRuntime:
                             is CollaborationStepKind.SPECIALIST_ADVISORY
                             else _LEAD_ACTOR
                         ),
-                        payload=invocation_result.value,
+                        payload=replace(
+                            invocation_result.value,
+                            trace=invocation_result.trace,
+                        ),
                     )
                 )
                 outcome = CollaborationAssignmentOutcomeKind.SUCCEEDED
@@ -5026,10 +5012,16 @@ class StoryRuntime:
             if synthesis_result.failure is None:
                 value = synthesis_result.value
                 if type(value) is _ArtifactSynthesisResult:
-                    collaboration_value = value.collaboration
+                    collaboration_value = replace(
+                        value.collaboration,
+                        trace=synthesis_result.trace,
+                    )
                     artifact_value = value.artifact
                 elif type(value) is _LeadSynthesisResult:
-                    collaboration_value = value.collaboration
+                    collaboration_value = replace(
+                        value.collaboration,
+                        trace=synthesis_result.trace,
+                    )
                     recommended_action = value.recommended_action
                     artifact_value = None
                 else:
@@ -5988,17 +5980,12 @@ class StoryRuntime:
         try:
             value = cls._strict_json_object(
                 answer,
-                {"assessment", "assignment_id", "input_ids", "message", "mode"},
+                {"assessment", "message"},
             )
-            input_ids = value["input_ids"]
             assessment = value["assessment"]
             message = value["message"]
             if (
-                value["mode"] != assignment.mode.value
-                or value["assignment_id"] != assignment.assignment_id
-                or type(input_ids) is not list
-                or tuple(input_ids) != assignment.input_ids
-                or type(assessment) is not str
+                type(assessment) is not str
                 or type(message) is not str
             ):
                 raise ValueError
@@ -6011,7 +5998,7 @@ class StoryRuntime:
                 dispatch_event_id=dispatch_event_id,
                 assessment=CollaborationSpecialistAssessment(assessment),
                 message=message,
-                input_ids=tuple(input_ids),
+                input_ids=assignment.input_ids,
                 mode=assignment.mode,
             )
         except (KeyError, TypeError, UnicodeError, ValueError) as exc:
@@ -6032,67 +6019,45 @@ class StoryRuntime:
         try:
             value = cls._strict_json_object(
                 answer,
-                {
-                    "authoring_scope",
-                    "evidence_ids",
-                    "evidence_status",
-                    "message",
-                    "next_intent",
-                    "recommended_action",
-                    "reply_event_ids",
-                    "scope",
-                    "unresolved_input_ids",
-                },
+                (
+                    frozenset({"message"}),
+                    frozenset({"message", "next_intent"}),
+                    frozenset({"message", "recommended_action"}),
+                ),
             )
-            raw_reply_ids = value["reply_event_ids"]
-            raw_unresolved = value["unresolved_input_ids"]
             message = value["message"]
             evidence = proposal.basis.evidence
-            authoring_scope = authoring_scope_from_dict(value["authoring_scope"])
             if (
-                authoring_scope != proposal.authoring_scope
-                or type(evidence) is not CollaborationLeadEvidence
-                or value["scope"] != evidence.scope.value
-                or value["evidence_status"] != evidence.status.value
-                or type(value["evidence_ids"]) is not list
-                or tuple(value["evidence_ids"])
-                != tuple(item.evidence_id for item in evidence.receipts)
+                type(evidence) is not CollaborationLeadEvidence
                 or evidence.scope is not LeadOutcomeScope.STORY_SPECIFIC
-                or type(raw_reply_ids) is not list
-                or tuple(raw_reply_ids) != reply_event_ids
-                or type(raw_unresolved) is not list
-                or any(type(item) is not str for item in raw_unresolved)
                 or type(message) is not str
             ):
                 raise ValueError
             known_input_order = tuple(item.input_id for item in proposal.basis.inputs)
-            unresolved = tuple(raw_unresolved)
-            required_unresolved = cls._required_unresolved_input_ids(replies)
-            required_set = set(required_unresolved)
-            unresolved_order = (
-                *required_unresolved,
-                *(
-                    input_id
-                    for input_id in known_input_order
-                    if input_id not in required_set
-                ),
-            )
-            if (
-                not required_set.issubset(unresolved)
-                or unresolved
-                != tuple(
-                    input_id for input_id in unresolved_order if input_id in unresolved
-                )
-                or len(set(unresolved)) != len(unresolved)
-            ):
-                raise ValueError
-            raw_intent = value["next_intent"]
+            unresolved = cls._required_unresolved_input_ids(replies)
+            raw_intent = value.get("next_intent")
             if raw_intent is None:
                 intent = None
             else:
                 if proposal.budget.rounds_spent != 0:
                     raise ValueError
-                intent = cls._decode_continuation_intent(raw_intent)
+                intent = cls._decode_continuation_intent(
+                    raw_intent,
+                    authoring_scope=proposal.authoring_scope,
+                    review_candidate_ids=frozenset({
+                        *known_input_order,
+                        *(
+                            reply_event_id
+                            for reply_event_id, reply in zip(
+                                reply_event_ids,
+                                replies,
+                                strict=True,
+                            )
+                            if reply.assessment
+                            is CollaborationSpecialistAssessment.DRAFTED
+                        ),
+                    }),
+                )
                 actual_ids = {
                     input_id
                     for assignment in intent.assignments
@@ -6100,7 +6065,10 @@ class StoryRuntime:
                 }
                 if actual_ids != set(known_input_order) | set(reply_event_ids):
                     raise ValueError
-            action = cls._decode_recommended_action(value["recommended_action"])
+            action = cls._decode_recommended_action(
+                value.get("recommended_action"),
+                message=cast(str, message),
+            )
             if action is not None and intent is not None:
                 raise ValueError("synthesis cannot recommend and extend a consultation together")
             return _LeadSynthesisResult(CollaborationLeadSynthesisPayload(
@@ -6113,7 +6081,7 @@ class StoryRuntime:
                 unresolved_input_ids=unresolved,
                 evidence=evidence,
                 next_intent=intent,
-                authoring_scope=authoring_scope,
+                authoring_scope=proposal.authoring_scope,
             ), action)
         except (KeyError, TypeError, UnicodeError, ValueError) as exc:
             raise BackendProtocolError(
@@ -6140,15 +6108,14 @@ class StoryRuntime:
         return tuple(required)
 
     @classmethod
-    def _decode_continuation_intent(cls, value: object) -> LeadProposalIntent:
-        if type(value) is not dict or set(value) != {
-            "assignments",
-            "authoring_scope",
-            "purpose",
-            "relation",
-        }:
-            raise ValueError
-        if value["relation"] != LeadProposalRelation.CONTINUE_LINEAGE.value:
+    def _decode_continuation_intent(
+        cls,
+        value: object,
+        *,
+        authoring_scope: AuthoringScope,
+        review_candidate_ids: frozenset[str],
+    ) -> LeadProposalIntent:
+        if type(value) is not dict or set(value) != {"assignments", "purpose"}:
             raise ValueError
         raw_assignments = value["assignments"]
         if type(raw_assignments) is not list or not raw_assignments:
@@ -6157,14 +6124,7 @@ class StoryRuntime:
         for item in raw_assignments:
             if (
                 type(item) is not dict
-                or set(item)
-                != {
-                    "agent_id",
-                    "input_ids",
-                    "instruction",
-                    "mode",
-                    "review_basis",
-                }
+                or set(item) != {"agent_id", "input_ids", "instruction", "mode"}
                 or type(item["input_ids"]) is not list
             ):
                 raise ValueError
@@ -6174,8 +6134,18 @@ class StoryRuntime:
                     instruction=item["instruction"],
                     input_ids=tuple(item["input_ids"]),
                     mode=SpecialistAssignmentMode(item["mode"]),
-                    review_basis=(None if item["review_basis"] is None else
-                                  review_basis_from_dict(item["review_basis"])),
+                    review_basis=(
+                        ReviewBasis(
+                            tuple(
+                                input_id
+                                for input_id in item["input_ids"]
+                                if input_id in review_candidate_ids
+                            ),
+                            item["instruction"],
+                        )
+                        if item["mode"] == SpecialistAssignmentMode.REVIEW.value
+                        else None
+                    ),
                 )
             )
         specialist_ids = tuple(item.agent_id for item in assignments)
@@ -6187,11 +6157,14 @@ class StoryRuntime:
             relation=LeadProposalRelation.CONTINUE_LINEAGE,
             purpose=value["purpose"],
             assignments=tuple(assignments),
-            authoring_scope=authoring_scope_from_dict(value["authoring_scope"]),
+            authoring_scope=authoring_scope,
         )
 
     @staticmethod
-    def _strict_json_object(answer: str, keys: set[str]) -> dict[str, object]:
+    def _strict_json_object(
+        answer: str,
+        keys: set[str] | tuple[frozenset[str], ...],
+    ) -> dict[str, object]:
         if type(answer) is not str:
             raise TypeError
 
@@ -6211,7 +6184,8 @@ class StoryRuntime:
             )
         except (_DuplicateJsonKey, json.JSONDecodeError, ValueError) as exc:
             raise ValueError from exc
-        if type(value) is not dict or set(value) != keys:
+        allowed = (frozenset(keys),) if type(keys) is set else keys
+        if type(value) is not dict or frozenset(value) not in allowed:
             raise ValueError
         return value
 
@@ -6724,7 +6698,7 @@ class StoryRuntime:
                 reference_operation
             )
             current_value: dict[str, object] = {
-                "contract_version": "lead-outcome-v4",
+                "contract_version": "lead-outcome-v5",
                 "runtime_contract_overlay": _LEAD_OBJECTIVE_INSTRUCTION,
                 "artifact_objectives": artifact_objective_context(objective_projection),
                 "answer_contract": {
@@ -6733,29 +6707,25 @@ class StoryRuntime:
                         "input_ids": "nonempty runtime-supplied aliases",
                         "instruction": "complete visible assignment",
                         "mode": "draft | review",
-                        "review_basis": "null for draft; concrete candidate_input_ids and criteria for review",
+                        "review_basis": "omit for draft; concrete candidate_input_ids and criteria for review",
                     },
-                    "authoring_scope": "required versioned activity, targets, domains, interpretation, exact offered task_id/task_revision",
-                    "kind": [item.value for item in LeadOutcomeKind],
-                    "message": "nonempty user-visible text",
-                    "scope": "story_specific | workflow_meta",
-                    "evidence_status": (
-                        "not_applicable | verified | missing | empty | "
-                        "incomplete | conflicting"
+                    "direct_answer": "message only; add kind only for question or critique",
+                    "authoring_scope": (
+                        "required only for objective, recommendation, proposal, or artifact intent; "
+                        "include activity, targets, domains, and exact offered task token"
                     ),
-                    "evidence_ids": "ordered runtime-issued evidence IDs only",
+                    "kind": "required only when selecting a non-default semantic variant",
+                    "message": "always required nonempty user-visible text",
                     "proposal": {
                         "assignments": "required only for proposal",
-                        "authoring_scope": "same exact scope as this result",
                         "purpose": "visible purpose",
-                        "relation": expected_relation.value,
                     },
                     "artifact_intent": (
-                        "null or provider-neutral create/patch/replace/rename/"
+                        "omit or provide provider-neutral create/patch/replace/rename/"
                         "delete operations with optional review domains"
                     ),
-                    "objective_intent": _objective_intent_result_schema(),
-                    "recommended_action": _recommended_action_result_schema(),
+                    "objective_intent": "omit unless selecting an objective transition",
+                    "recommended_action": "omit unless kind is recommendation",
                 },
                 "command": reference_operation.provider_text,
                 "identity": {
@@ -6821,11 +6791,10 @@ class StoryRuntime:
             )
             if preparation is not None:
                 remaining = min(remaining, preparation.request_event.payload.max_preparation_physical_calls)
-            minimum_calls = 1 + int(bool(reservations))
+            minimum_calls = 1
             if remaining < minimum_calls:
                 raise BackendProtocolError(
-                    "lead invocation cannot fit its mandatory references and answer "
-                    "inside the physical-call lineage"
+                    "lead invocation cannot fit its answer inside the physical-call lineage"
                 )
             physical_call_limit = min(_CONTEXT_INVOCATION_CALL_LIMIT, remaining)
             contextual_request = ContextInvocationRequest(
@@ -6866,8 +6835,55 @@ class StoryRuntime:
                 prepare_selected = prepare_selected or self._declares_artifact_intent(
                     answer, objective_prepare_only=True,
                 )
-                decoded = self._decode_lead_outcome(answer)
+                decoded = self._decode_lead_outcome(
+                    answer,
+                    expected_relation=expected_relation,
+                )
+                if decoded.authoring_scope is None and (
+                    reference_operation.reference_proofs
+                    or authorization.used_evidence
+                ):
+                    decoded = replace(
+                        decoded,
+                        scope=LeadOutcomeScope.STORY_SPECIFIC,
+                        evidence_status=LeadEvidenceStatus.VERIFIED,
+                    )
                 if preparation is not None:
+                    preparation_request = cast(
+                        LeadRecommendationRequestPayload,
+                        preparation.request_event.payload,
+                    )
+                    if decoded.proposal is not None:
+                        candidate_ids = tuple(
+                            item.input_id
+                            for item in preparation_request.basis.inputs
+                        )
+                        decoded = replace(
+                            decoded,
+                            proposal=replace(
+                                decoded.proposal,
+                                purpose=preparation_request.purpose,
+                                assignments=tuple(
+                                    replace(
+                                        assignment,
+                                        review_basis=(
+                                            ReviewBasis(
+                                                tuple(
+                                                    input_id
+                                                    for input_id in assignment.input_ids
+                                                    if input_id in candidate_ids
+                                                ),
+                                                assignment.instruction,
+                                            )
+                                            if assignment.mode
+                                            is SpecialistAssignmentMode.REVIEW
+                                            else None
+                                        ),
+                                    )
+                                    for assignment in decoded.proposal.assignments
+                                ),
+                            ),
+                        )
                     self._validate_recommendation_preparation(decoded, preparation)
                 if prepare_selected and (
                     decoded.objective_intent is None
@@ -6879,8 +6895,44 @@ class StoryRuntime:
                     authorization,
                     inputs,
                 )
+                decoded = replace(
+                    decoded,
+                    scope=decoded_evidence.scope,
+                    evidence_status=decoded_evidence.status,
+                    evidence_ids=tuple(
+                        item.evidence_id for item in decoded_evidence.receipts
+                    ),
+                )
                 authoring_scope = decoded.authoring_scope
-                if authoring_scope is None or (authoring_scope.task_id, authoring_scope.task_revision) not in offered_tasks:
+                if authoring_scope is None:
+                    if (
+                        decoded.kind not in {
+                            LeadOutcomeKind.ANSWER,
+                            LeadOutcomeKind.QUESTION,
+                            LeadOutcomeKind.CRITIQUE,
+                        }
+                        or decoded.objective_intent is not None
+                        or decoded.proposal is not None
+                        or decoded.artifact_intent is not None
+                        or decoded.recommended_action is not None
+                    ):
+                        raise _LeadOutcomeValidationError(
+                            "authority-bearing outcomes require explicit authoring scope"
+                        )
+                    task_id, task_revision = next(
+                        (key for key, prior in offered_tasks.items() if prior is None),
+                        next(iter(offered_tasks)),
+                    )
+                    authoring_scope = AuthoringScope(
+                        AuthoringActivity.WORKFLOW,
+                        (),
+                        (),
+                        decoded.message,
+                        task_id,
+                        task_revision,
+                    )
+                    decoded = replace(decoded, authoring_scope=authoring_scope)
+                if (authoring_scope.task_id, authoring_scope.task_revision) not in offered_tasks:
                     raise _LeadOutcomeValidationError("authoring scope uses an unoffered task revision")
                 selected_prior = offered_tasks[(authoring_scope.task_id, authoring_scope.task_revision)]
                 current_task_events = self._session_authoring_events(session_id)
@@ -6889,6 +6941,11 @@ class StoryRuntime:
                 ) != selected_prior:
                     raise _LeadOutcomeValidationError(
                         "selected authoring task changed while the Lead was interpreting the request"
+                    )
+                if selected_prior is not None:
+                    authoring_scope = replace(
+                        authoring_scope,
+                        interpretation=selected_prior.interpretation,
                     )
                 objective_intent = decoded.objective_intent
                 if objective_intent is not None and authoring_scope.activity is not AuthoringActivity.WORKFLOW:
@@ -7002,7 +7059,7 @@ class StoryRuntime:
                     )
 
             result = None
-            correction_call_limit = 1 + int(bool(reservations))
+            correction_call_limit = 1
             corrective_rejection_code: ContextProviderTerminalCode | None = None
             correction_failure_code: CollaborationLeadOutcomeFailureCode | None = None
             rejected_call_id: str | None = None
@@ -7096,7 +7153,7 @@ class StoryRuntime:
                     reference_operation.failure(correction_setup_failure)
                     assert rejected_call_id is not None
                     assert correction_failure_code is not None
-                    return self._lead_outcome_failure_result(
+                    self._lead_outcome_failure_result(
                         session_id=session_id,
                         conversation_id=conversation_id,
                         turn_id=turn_id,
@@ -7104,6 +7161,18 @@ class StoryRuntime:
                         invocation_id=provider.invocation_id,
                         call_id=rejected_call_id,
                         failure_code=correction_failure_code,
+                    )
+                    return self._structured_fallback_lead_result(
+                        session_id=session_id,
+                        conversation_id=conversation_id,
+                        turn_id=turn_id,
+                        step_id=step_id,
+                        persist_message=preparation is None,
+                        state=(
+                            CollaborationStepState.SUPERSEDED
+                            if previous_proposal is not None
+                            else None
+                        ),
                     )
                 submitted_before_correction = provider.submitted_physical_calls
                 try:
@@ -7122,6 +7191,37 @@ class StoryRuntime:
                         ),
                     )
                 except BaseException as correction_failure:
+                    correction_facts = context_provider_failure_facts(
+                        correction_failure
+                    )
+                    if (
+                        correction_facts.response_rejection_code
+                        in _LEAD_CORRECTABLE_RESPONSE_REJECTION_CODES
+                        and not correction_facts.submission_uncertain
+                    ):
+                        reference_operation.failure(correction_failure)
+                        assert correction_failure_code is not None
+                        self._lead_outcome_failure_result(
+                            session_id=session_id,
+                            conversation_id=conversation_id,
+                            turn_id=turn_id,
+                            step_id=step_id,
+                            invocation_id=provider.invocation_id,
+                            call_id=provider.last_submitted_call_id,
+                            failure_code=correction_failure_code,
+                        )
+                        return self._structured_fallback_lead_result(
+                            session_id=session_id,
+                            conversation_id=conversation_id,
+                            turn_id=turn_id,
+                            step_id=step_id,
+                            persist_message=preparation is None,
+                            state=(
+                                CollaborationStepState.SUPERSEDED
+                                if previous_proposal is not None
+                                else None
+                            ),
+                        )
                     if (
                         provider.submitted_physical_calls
                         > submitted_before_correction
@@ -7130,7 +7230,7 @@ class StoryRuntime:
                     reference_operation.failure(correction_failure)
                     assert rejected_call_id is not None
                     assert correction_failure_code is not None
-                    return self._lead_outcome_failure_result(
+                    self._lead_outcome_failure_result(
                         session_id=session_id,
                         conversation_id=conversation_id,
                         turn_id=turn_id,
@@ -7139,16 +7239,68 @@ class StoryRuntime:
                         call_id=rejected_call_id,
                         failure_code=correction_failure_code,
                     )
+                    return self._structured_fallback_lead_result(
+                        session_id=session_id,
+                        conversation_id=conversation_id,
+                        turn_id=turn_id,
+                        step_id=step_id,
+                        persist_message=preparation is None,
+                        state=(
+                            CollaborationStepState.SUPERSEDED
+                            if previous_proposal is not None
+                            else None
+                        ),
+                    )
             assert result is not None
-            outcome = decoded or self._decode_lead_outcome(result.answer)
+            outcome = decoded or self._decode_lead_outcome(
+                result.answer,
+                expected_relation=expected_relation,
+            )
             evidence = decoded_evidence or self._durable_lead_evidence(
                 outcome,
                 result.authorization,
                 inputs,
             )
+            outcome = replace(
+                outcome,
+                trace=self._collaboration_reply_trace(
+                    role=LEAD_ORCHESTRATOR,
+                    action=outcome.kind.value,
+                    request=contextual_request,
+                    result=result,
+                    origin=(
+                        ReplyTraceOrigin.RECOVERED
+                        if corrective_rejection_code is not None
+                        else ReplyTraceOrigin.PROVIDER
+                    ),
+                ),
+            )
             reference_operation.finish()
         except _LeadOutcomeValidationError as failure:
             reference_operation.failure(failure)
+            if corrective_rejection_code is not None:
+                assert correction_failure_code is not None
+                self._lead_outcome_failure_result(
+                    session_id=session_id,
+                    conversation_id=conversation_id,
+                    turn_id=turn_id,
+                    step_id=step_id,
+                    invocation_id=None if provider is None else provider.invocation_id,
+                    call_id=None if provider is None else provider.last_submitted_call_id,
+                    failure_code=correction_failure_code,
+                )
+                return self._structured_fallback_lead_result(
+                    session_id=session_id,
+                    conversation_id=conversation_id,
+                    turn_id=turn_id,
+                    step_id=step_id,
+                    persist_message=preparation is None,
+                    state=(
+                        CollaborationStepState.SUPERSEDED
+                        if previous_proposal is not None
+                        else None
+                    ),
+                )
             if provider is None or provider.last_submitted_call_id is None:
                 raise
             return self._lead_outcome_failure_result(
@@ -7308,6 +7460,7 @@ class StoryRuntime:
                     outcome.message,
                     evidence,
                     outcome.authoring_scope,
+                    outcome.trace,
                 ),
             )
             proposal_event = self._draft(
@@ -7362,6 +7515,7 @@ class StoryRuntime:
                 request_id,
                 CollaborationNextAction.SUBMIT_CONFIRMATION,
                 evidence,
+                trace=outcome.trace,
             )
 
         refreshed = self.conversation_storage_services.event_store.read_context(
@@ -7372,7 +7526,13 @@ class StoryRuntime:
             session_id=session_id, conversation_id=conversation_id,
             turn_id=turn_id, step_id=step_id, kind=CollaborationEventKind.MESSAGE,
             sender=_LEAD_ACTOR, recipient=_USER_ACTOR,
-            payload=CollaborationLeadJudgmentPayload(outcome.kind, outcome.message, evidence, outcome.authoring_scope),
+            payload=CollaborationLeadJudgmentPayload(
+                outcome.kind,
+                outcome.message,
+                evidence,
+                outcome.authoring_scope,
+                outcome.trace,
+            ),
         )
         final_drafts = (
             judgment,
@@ -7413,6 +7573,7 @@ class StoryRuntime:
                 else CollaborationNextAction.CONTINUE_WITH_LEAD
             ),
             evidence,
+            trace=outcome.trace,
         )
 
     def _build_artifact_proposal_result(
@@ -7507,6 +7668,7 @@ class StoryRuntime:
                 outcome.message,
                 evidence,
                 review_scope,
+                outcome.trace,
             ),
         )
         candidate_payload = ArtifactReviewCandidatePayload(
@@ -7598,6 +7760,7 @@ class StoryRuntime:
                 ArtifactProposalState.AWAITING_CONSULTATION_CONFIRMATION,
                 candidate_payload,
             ),
+            trace=outcome.trace,
         )
 
     @classmethod
@@ -7616,8 +7779,12 @@ class StoryRuntime:
             return
         previous = next((item for item in projection.artifact_objectives
                          if item.facts.objective_id == intent.objective_id), None)
-        selected_ids = (intent.draft_source_event_ids or
-                        (() if previous is None else tuple(item.event_id for item in previous.draft_sources)))
+        selected_ids = cls._resolved_objective_source_ids(
+            outcome,
+            projection,
+            events,
+            previous,
+        )
         by_id = {event.event_id: event for event in events}
         related_scopes: list[AuthoringScope] = []
         for event in events:
@@ -7663,12 +7830,17 @@ class StoryRuntime:
         expected_scope = request.authoring_scope
         expected_revision = (None if expected_scope is None else expected_scope.task_revision
                              + int(decision.kind is CollaborationConfirmationDecision.REVISE))
-        if (scope is None or expected_scope is None or scope.task_id != expected_scope.task_id
+        if (scope is None or expected_scope is None
+            or scope.activity is not expected_scope.activity
+            or scope.task_id != expected_scope.task_id
             or scope.task_revision != expected_revision
             or not set(expected_scope.domains).issubset(scope.domains)
             or not set(expected_scope.target_paths).issubset(scope.target_paths)):
             raise _LeadOutcomeValidationError("preparation must retain its disclosed authoring task and scope")
-        if decision.kind is CollaborationConfirmationDecision.CONFIRM and scope != expected_scope:
+        if decision.kind is CollaborationConfirmationDecision.CONFIRM and (
+            scope.target_paths != expected_scope.target_paths
+            or scope.domains != expected_scope.domains
+        ):
             raise _LeadOutcomeValidationError("preparation must preserve its exact confirmed authoring scope")
         if decision.kind is CollaborationConfirmationDecision.REVISE:
             if (outcome.kind is not LeadOutcomeKind.RECOMMENDATION
@@ -7683,14 +7855,12 @@ class StoryRuntime:
         if outcome.kind is not LeadOutcomeKind.PROPOSAL or outcome.recommended_action is not None:
             raise _LeadOutcomeValidationError("confirmed preparation requires its exact proposal or a material question")
         intent = outcome.objective_intent
-        selected = tuple(item.event_id for item in request.draft_sources)
         if request.kind is LeadRecommendationActionKind.PREPARE_ARTIFACT:
             if outcome.artifact_intent is None or outcome.proposal is not None or intent is None:
                 raise _LeadOutcomeValidationError("confirmed artifact preparation requires an exact candidate objective")
             if (intent.next_step is not ArtifactObjectiveNextStep.PREPARE
-                or intent.draft_source_event_ids != selected
                 or (request.objective_id is None and (
-                    intent.action is not LeadObjectiveAction.START or intent.request != request.instruction
+                    intent.action is not LeadObjectiveAction.START
                     or intent.target_paths != request.target_paths))
                 or (request.objective_id is not None and (
                     intent.action is not LeadObjectiveAction.CONTINUE or intent.objective_id != request.objective_id))):
@@ -7711,9 +7881,44 @@ class StoryRuntime:
                     raise _LeadOutcomeValidationError("consultation cannot start an unrelated objective")
             elif (intent is None or intent.action is not LeadObjectiveAction.CONTINUE
                   or intent.objective_id != request.objective_id
-                  or intent.next_step is not ArtifactObjectiveNextStep.CONSULT
-                  or intent.draft_source_event_ids != selected):
+                  or intent.next_step is not ArtifactObjectiveNextStep.CONSULT):
                 raise _LeadOutcomeValidationError("confirmed consultation objective changed")
+
+    @staticmethod
+    def _resolved_objective_source_ids(
+        outcome: LeadProviderOutcome,
+        projection: CollaborationHistoryProjection,
+        events: tuple[CollaborationEvent, ...],
+        previous: ArtifactObjective | None,
+    ) -> tuple[str, ...]:
+        """Resolve non-authoritative draft provenance from durable local history."""
+
+        intent = outcome.objective_intent
+        if intent is None:
+            return ()
+        if intent.draft_source_event_ids:
+            return intent.draft_source_event_ids
+        selected = [] if previous is None else [
+            item.event_id for item in previous.draft_sources
+        ]
+        scope = outcome.authoring_scope
+        if scope is None:
+            return tuple(selected)
+        by_id = {event.event_id: event for event in events}
+        for source in projection.offered_draft_sources:
+            event = by_id.get(source.event_id)
+            if (
+                source.event_id not in selected
+                and event is not None
+                and type(event.payload) in {
+                    CollaborationLeadJudgmentPayload,
+                    CollaborationLeadSynthesisPayload,
+                }
+                and event.payload.authoring_scope is not None
+                and event.payload.authoring_scope.task_id == scope.task_id
+            ):
+                selected.append(source.event_id)
+        return tuple(selected)
 
     @staticmethod
     def _validate_objective_selection(
@@ -7800,12 +8005,16 @@ class StoryRuntime:
         else:
             facts = previous.facts
         offered = {item.event_id: item for item in projection.offered_draft_sources}
-        selected = (
-            tuple(offered[event_id] for event_id in intent.draft_source_event_ids)
-            if intent.draft_source_event_ids else
-            (() if previous is None else previous.draft_sources)
+        selected = tuple(
+            offered[event_id]
+            for event_id in self._resolved_objective_source_ids(
+                outcome,
+                projection,
+                events,
+                previous,
+            )
         )
-        if preparation is not None and previous is None:
+        if preparation is not None:
             selected = preparation.request_event.payload.draft_sources
         binding = None
         if candidate_event is not None:
@@ -8331,6 +8540,68 @@ class StoryRuntime:
             None,
         )
 
+    def _structured_fallback_lead_result(
+        self,
+        *,
+        session_id: str,
+        conversation_id: str,
+        turn_id: str,
+        step_id: str,
+        persist_message: bool = True,
+        state: CollaborationStepState | None = None,
+    ) -> LeadTurnResult:
+        """Persist one visible no-action answer after exhausted schema repair."""
+
+        trace = ReplyTrace(
+            role=LEAD_ORCHESTRATOR,
+            action="none",
+            context_sources=("current_input",),
+            recovered_fields=("structured_reply",),
+            origin=ReplyTraceOrigin.RUNTIME_FALLBACK,
+        )
+        if persist_message:
+            projection = self.conversation_storage_services.event_store.read_context(
+                session_id,
+                conversation_id,
+            )
+            self._append_drafts(
+                projection.last_sequence,
+                (
+                    self._draft(
+                        session_id=session_id,
+                        conversation_id=conversation_id,
+                        turn_id=turn_id,
+                        step_id=step_id,
+                        kind=CollaborationEventKind.MESSAGE,
+                        sender=_LEAD_ACTOR,
+                        recipient=_USER_ACTOR,
+                        payload=CollaborationMessagePayload(
+                            _SAFE_STRUCTURED_FALLBACK_MESSAGE,
+                            trace,
+                        ),
+                    ),
+                ),
+            )
+        evidence = CollaborationLeadEvidence(
+            LeadOutcomeScope.WORKFLOW_META,
+            LeadEvidenceStatus.NOT_APPLICABLE,
+            (),
+        )
+        return LeadTurnResult(
+            session_id,
+            conversation_id,
+            turn_id,
+            step_id,
+            LeadOutcomeKind.ANSWER,
+            _SAFE_STRUCTURED_FALLBACK_MESSAGE,
+            None,
+            state,
+            None,
+            CollaborationNextAction.CONTINUE_WITH_LEAD,
+            evidence,
+            trace=trace,
+        )
+
     @staticmethod
     def _declares_artifact_intent(
         answer: object, *, objective_prepare_only: bool = False,
@@ -8358,12 +8629,22 @@ class StoryRuntime:
             return False
         if type(value) is not dict:
             return False
+        artifact = value.get("artifact_intent")
+        proposal = value.get("proposal")
         objective = value.get("objective_intent")
+        if type(artifact) is dict:
+            objective = artifact.get("objective_intent", objective)
+        elif type(proposal) is dict:
+            objective = proposal.get("objective_intent", objective)
         prepare = type(objective) is dict and objective.get("next_step") == "prepare"
-        return prepare if objective_prepare_only else prepare or value.get("artifact_intent") is not None
+        return prepare if objective_prepare_only else prepare or artifact is not None
 
     @staticmethod
-    def _decode_lead_outcome(answer: str) -> LeadProviderOutcome:
+    def _decode_lead_outcome(
+        answer: str,
+        *,
+        expected_relation: LeadProposalRelation = LeadProposalRelation.NEW_STEP,
+    ) -> LeadProviderOutcome:
         """Strictly decode the neutral JSON-object result into closed lead intent."""
 
         if type(answer) is not str:
@@ -8383,34 +8664,74 @@ class StoryRuntime:
                 object_pairs_hook=unique,
                 parse_constant=lambda _value: (_ for _ in ()).throw(ValueError()),
             )
-            if type(value) is not dict or set(value) != {
-                "artifact_intent",
-                "objective_intent",
-                "recommended_action",
-                "authoring_scope",
-                "evidence_ids",
-                "evidence_status",
-                "kind",
-                "message",
-                "proposal",
-                "scope",
-            }:
+            allowed = {
+                frozenset({"message"}),
+                frozenset({"kind", "message"}),
+                frozenset({"authoring_scope", "kind", "message"}),
+                frozenset({"authoring_scope", "kind", "message", "objective_intent"}),
+                frozenset({"authoring_scope", "kind", "message", "recommended_action"}),
+                frozenset({"authoring_scope", "kind", "message", "proposal"}),
+                frozenset({"authoring_scope", "kind", "message", "artifact_intent"}),
+            }
+            if type(value) is not dict or frozenset(value) not in allowed:
                 raise ValueError
-            authoring_scope = authoring_scope_from_dict(value["authoring_scope"])
-            kind = LeadOutcomeKind(value["kind"])
-            message = value["message"]
-            scope = LeadOutcomeScope(value["scope"])
-            evidence_status = LeadEvidenceStatus(value["evidence_status"])
-            raw_evidence_ids = value["evidence_ids"]
-            if type(raw_evidence_ids) is not list or any(
-                type(item) is not str for item in raw_evidence_ids
+            raw_scope = value.get("authoring_scope")
+            if raw_scope is not None and type(raw_scope) is not dict:
+                raise ValueError
+            kind = LeadOutcomeKind(value.get("kind", LeadOutcomeKind.ANSWER.value))
+            if (
+                frozenset(value) == frozenset({"authoring_scope", "kind", "message"})
+                and kind is not LeadOutcomeKind.QUESTION
             ):
                 raise ValueError
-            evidence_ids = tuple(raw_evidence_ids)
-            proposal_value = value["proposal"]
-            artifact_value = value["artifact_intent"]
-            objective_intent = StoryRuntime._decode_objective_intent(value["objective_intent"])
-            recommended_action = StoryRuntime._decode_recommended_action(value["recommended_action"])
+            if raw_scope is None and kind not in {
+                LeadOutcomeKind.ANSWER, LeadOutcomeKind.QUESTION, LeadOutcomeKind.CRITIQUE,
+            }:
+                raise ValueError
+            message = value["message"]
+            if raw_scope is None:
+                authoring_scope = None
+            else:
+                task_id, separator, raw_revision = cast(str, raw_scope["task"]).rpartition("@")
+                if not separator:
+                    raise ValueError
+                authoring_scope = authoring_scope_from_dict({
+                    "schema_version": 1,
+                    **{
+                        key: item for key, item in raw_scope.items() if key != "task"
+                    },
+                    "task_id": task_id,
+                    "task_revision": int(raw_revision),
+                    "interpretation": message,
+                })
+            scope = (
+                LeadOutcomeScope.WORKFLOW_META
+                if authoring_scope is None
+                or authoring_scope.activity is AuthoringActivity.WORKFLOW
+                else LeadOutcomeScope.STORY_SPECIFIC
+            )
+            evidence_status = (
+                LeadEvidenceStatus.NOT_APPLICABLE
+                if scope is LeadOutcomeScope.WORKFLOW_META
+                else LeadEvidenceStatus.VERIFIED
+            )
+            proposal_value = value.get("proposal")
+            artifact_value = value.get("artifact_intent")
+            nested_intent = (
+                proposal_value.get("objective_intent")
+                if type(proposal_value) is dict
+                else artifact_value.get("objective_intent")
+                if type(artifact_value) is dict
+                else None
+            )
+            objective_intent = StoryRuntime._decode_objective_intent(
+                value.get("objective_intent", nested_intent),
+                message=cast(str, message),
+            )
+            recommended_action = StoryRuntime._decode_recommended_action(
+                value.get("recommended_action"),
+                message=cast(str, message),
+            )
             if (kind is LeadOutcomeKind.RECOMMENDATION) is not (recommended_action is not None):
                 raise ValueError("fresh recommendations require exactly one typed action")
             if recommended_action is not None and objective_intent is not None:
@@ -8423,7 +8744,7 @@ class StoryRuntime:
                     message,
                     scope,
                     evidence_status,
-                    evidence_ids,
+                    (),
                     None,
                     None,
                     objective_intent,
@@ -8433,23 +8754,25 @@ class StoryRuntime:
             if (proposal_value is None) is (artifact_value is None):
                 raise ValueError
             if artifact_value is not None:
-                artifact_intent = StoryRuntime._decode_artifact_intent(artifact_value)
+                artifact_intent = StoryRuntime._decode_artifact_intent({
+                    key: item
+                    for key, item in artifact_value.items()
+                    if key != "objective_intent"
+                })
                 return LeadProviderOutcome(
                     kind,
                     message,
                     scope,
                     evidence_status,
-                    evidence_ids,
+                    (),
                     None,
                     artifact_intent,
                     objective_intent,
                     authoring_scope=authoring_scope,
                 )
-            if type(proposal_value) is not dict or set(proposal_value) != {
-                "assignments",
-                "authoring_scope",
-                "purpose",
-                "relation",
+            if type(proposal_value) is not dict or frozenset(proposal_value) not in {
+                frozenset({"assignments"}),
+                frozenset({"assignments", "objective_intent"}),
             }:
                 raise ValueError
             raw_assignments = proposal_value["assignments"]
@@ -8458,11 +8781,7 @@ class StoryRuntime:
             assignments: list[LeadAssignmentIntent] = []
             for item in raw_assignments:
                 if type(item) is not dict or set(item) != {
-                    "agent_id",
-                    "input_ids",
-                    "instruction",
-                    "mode",
-                    "review_basis",
+                    "agent_id", "input_ids", "instruction", "mode",
                 }:
                     raise ValueError
                 if type(item["input_ids"]) is not list:
@@ -8473,22 +8792,25 @@ class StoryRuntime:
                         instruction=item["instruction"],
                         input_ids=tuple(item["input_ids"]),
                         mode=SpecialistAssignmentMode(item["mode"]),
-                        review_basis=(None if item["review_basis"] is None else
-                                      review_basis_from_dict(item["review_basis"])),
+                        review_basis=(
+                            ReviewBasis(tuple(item["input_ids"]), item["instruction"])
+                            if item["mode"] == SpecialistAssignmentMode.REVIEW.value
+                            else None
+                        ),
                     )
                 )
             proposal = LeadProposalIntent(
-                relation=LeadProposalRelation(proposal_value["relation"]),
-                purpose=proposal_value["purpose"],
+                relation=expected_relation,
+                purpose=cast(str, message),
                 assignments=tuple(assignments),
-                authoring_scope=authoring_scope_from_dict(proposal_value["authoring_scope"]),
+                authoring_scope=authoring_scope,
             )
             return LeadProviderOutcome(
                 kind,
                 message,
                 scope,
                 evidence_status,
-                evidence_ids,
+                (),
                 proposal,
                 None,
                 objective_intent,
@@ -8508,62 +8830,74 @@ class StoryRuntime:
             ) from exc
 
     @staticmethod
-    def _decode_recommended_action(value: object) -> LeadRecommendedAction | None:
+    def _decode_recommended_action(
+        value: object,
+        *,
+        message: str,
+    ) -> LeadRecommendedAction | None:
         if value is None:
             return None
-        if type(value) is not dict or set(value) != {
-            "kind", "purpose", "instruction", "expected_result", "source_ids",
-            "target_paths", "specialist_ids", "objective_id",
-        }:
+        if type(value) is not dict or type(value.get("kind")) is not str:
             raise ValueError("recommended action must have exactly its closed fields")
-        for key in ("source_ids", "target_paths", "specialist_ids"):
+        kind = LeadRecommendationActionKind(value["kind"])
+        specific = (
+            {"target_paths"}
+            if kind is LeadRecommendationActionKind.PREPARE_ARTIFACT
+            else {"specialist_ids"}
+        )
+        fields = {"kind", "instruction", "source_ids", *specific}
+        if frozenset(value) not in {frozenset(fields), frozenset((*fields, "objective_id"))}:
+            raise ValueError("recommended action must have exactly its closed fields")
+        for key in ("source_ids", *specific):
             if type(value[key]) is not list:
                 raise ValueError("recommended action collections must be arrays")
         return LeadRecommendedAction(
-            kind=LeadRecommendationActionKind(value["kind"]),
-            purpose=value["purpose"], instruction=value["instruction"],
-            expected_result=value["expected_result"],
-            source_ids=tuple(value["source_ids"]), target_paths=tuple(value["target_paths"]),
-            specialist_ids=tuple(value["specialist_ids"]), objective_id=value["objective_id"],
+            kind=kind,
+            purpose=cast(str, value["instruction"]),
+            instruction=cast(str, value["instruction"]),
+            expected_result=message,
+            source_ids=tuple(value["source_ids"]),
+            target_paths=tuple(value.get("target_paths", ())),
+            specialist_ids=tuple(value.get("specialist_ids", ())),
+            objective_id=cast(str | None, value.get("objective_id")),
         )
 
     @staticmethod
-    def _decode_objective_intent(value: object) -> LeadObjectiveIntent | None:
+    def _decode_objective_intent(
+        value: object,
+        *,
+        message: str,
+    ) -> LeadObjectiveIntent | None:
         if value is None:
             return None
         if type(value) is not dict:
             raise ValueError("objective intent must be an exact object")
         action = LeadObjectiveAction(value["action"])
         fields = {
-            LeadObjectiveAction.START: {"action", "request", "target_paths", "next_step", "draft_source_event_ids"},
-            LeadObjectiveAction.CONTINUE: {"action", "objective_id", "next_step", "draft_source_event_ids"},
+            LeadObjectiveAction.START: {"action", "target_paths", "next_step"},
+            LeadObjectiveAction.CONTINUE: {"action", "objective_id", "next_step"},
             LeadObjectiveAction.CANCEL: {"action", "objective_id"},
         }[action]
         if set(value) != fields:
             raise ValueError("objective intent fields are noncanonical")
         if action is LeadObjectiveAction.CANCEL:
             return LeadObjectiveIntent(action=action, objective_id=value["objective_id"])
-        if type(value["draft_source_event_ids"]) is not list:
-            raise ValueError("objective draft sources must be a list")
         if action is LeadObjectiveAction.START and type(value["target_paths"]) is not list:
             raise ValueError("objective target paths must be a list")
         return LeadObjectiveIntent(
             action=action, objective_id=value.get("objective_id"),
-            request=value.get("request"), target_paths=tuple(value.get("target_paths", ())),
+            request=(message if action is LeadObjectiveAction.START else None),
+            target_paths=tuple(value.get("target_paths", ())),
             next_step=ArtifactObjectiveNextStep(value["next_step"]),
-            draft_source_event_ids=tuple(value["draft_source_event_ids"]),
+            draft_source_event_ids=(),
         )
 
     @staticmethod
     def _decode_artifact_intent(value: object) -> ArtifactProposalIntent:
-        if type(value) is not dict or set(value) != {
-            "additional_review_domains",
-            "operations",
-        }:
+        if type(value) is not dict or set(value) != {"operations"}:
             raise ValueError
         raw_operations = value["operations"]
-        raw_domains = value["additional_review_domains"]
-        if type(raw_operations) is not list or type(raw_domains) is not list:
+        if type(raw_operations) is not list:
             raise ValueError
         operations: list[object] = []
         for item in raw_operations:
@@ -8606,9 +8940,7 @@ class StoryRuntime:
                 raise ValueError
         return ArtifactProposalIntent(
             operations=tuple(operations),
-            additional_review_domains=tuple(
-                ArtifactReviewDomain(item) for item in raw_domains
-            ),
+            additional_review_domains=(),
         )
 
     @staticmethod
@@ -8653,7 +8985,6 @@ class StoryRuntime:
         paths = tuple(dict.fromkeys((
             *scope.target_paths,
             *(previous.target_paths if previous is not None else ()),
-            *cls._authoring_affected_paths(inputs, evidence),
         )))
         domains = set(scope.domains)
         if previous is not None:
@@ -8844,9 +9175,7 @@ class StoryRuntime:
                 item = by_id.get(input_id)
                 if item is None or item.state is not CollaborationInputState.PRESENT:
                     raise _LeadOutcomeValidationError("review candidate input is unavailable")
-                if item.kind is CollaborationInputKind.USER_INPUT and user_text is not None:
-                    concrete = bool(user_text.strip())
-                elif item.kind in {CollaborationInputKind.CORE_DOCUMENT,
+                if item.kind in {CollaborationInputKind.CORE_DOCUMENT,
                                    CollaborationInputKind.MANUSCRIPT,
                                    CollaborationInputKind.WRITING_ARTIFACT}:
                     # The exact alias already carries reference/READ authority. A status
@@ -8866,14 +9195,25 @@ class StoryRuntime:
                 elif item.kind in {CollaborationInputKind.USER_INPUT,
                                    CollaborationInputKind.ARTIFACT_CANDIDATE,
                                    CollaborationInputKind.CONVERSATION_EVENT}:
-                    value = self._collaboration_input_value(item, events)
-                    if item.kind is CollaborationInputKind.CONVERSATION_EVENT:
-                        reply = value.get("reply", {})
-                        concrete = reply.get("mode") == SpecialistAssignmentMode.DRAFT.value and (
-                            reply.get("assessment") == CollaborationSpecialistAssessment.DRAFTED.value
+                    try:
+                        value = self._collaboration_input_value(item, events)
+                    except BackendProtocolError:
+                        if item.kind is not CollaborationInputKind.USER_INPUT or user_text is None:
+                            raise
+                        concrete = bool(user_text.strip()) and item.revision_digest == (
+                            "sha256:"
+                            + hashlib.sha256(
+                                user_text.encode("utf-8", errors="strict")
+                            ).hexdigest()
                         )
                     else:
-                        concrete = bool(value.get("candidate") or str(value.get("text", "")).strip())
+                        if item.kind is CollaborationInputKind.CONVERSATION_EVENT:
+                            reply = value.get("reply", {})
+                            concrete = reply.get("mode") == SpecialistAssignmentMode.DRAFT.value and (
+                                reply.get("assessment") == CollaborationSpecialistAssessment.DRAFTED.value
+                            )
+                        else:
+                            concrete = bool(value.get("candidate") or str(value.get("text", "")).strip())
                 else:
                     concrete = False
                 if not concrete:
@@ -10050,6 +10390,17 @@ class StoryRuntime:
                     ordinal=reference.ordinal,
                 )
             )
+        authoring_scope = outcome.authoring_scope
+        scoped_paths = (
+            frozenset()
+            if authoring_scope is None
+            else frozenset(authoring_scope.target_paths)
+        )
+        scoped_domains = (
+            frozenset()
+            if authoring_scope is None
+            else frozenset(authoring_scope.domains)
+        )
         available.extend(
             cls._durable_core_status_receipt(
                 item,
@@ -10057,6 +10408,13 @@ class StoryRuntime:
                 result_correlation_id=result_correlation_id,
             )
             for item in authorization.core_statuses
+            if (
+                outcome.scope is not LeadOutcomeScope.WORKFLOW_META
+                and (
+                    item.locator in scoped_paths
+                    or artifact_domain(item.locator) in scoped_domains
+                )
+            )
         )
         action_receipts: list[CollaborationEvidenceReceipt] = []
         action_receipts.extend(
@@ -10083,23 +10441,62 @@ class StoryRuntime:
         )
         available.extend(action_receipts)
         available_by_id = {item.evidence_id: item for item in available}
-        selected_ids = outcome.evidence_ids
-        selected_set = set(selected_ids)
-        canonical = tuple(
-            item.evidence_id for item in available if item.evidence_id in selected_set
-        )
-        if (
-            len(available_by_id) != len(available)
-            or len(selected_set) != len(selected_ids)
-            or canonical != selected_ids
-            or any(evidence_id not in available_by_id for evidence_id in selected_ids)
-        ):
+        if len(available_by_id) != len(available):
             raise _LeadOutcomeValidationError(
-                "lead evidence IDs are unknown, duplicate, or out of order"
+                "runtime evidence IDs are duplicate"
             )
+        if outcome.scope is LeadOutcomeScope.WORKFLOW_META:
+            selected_ids: tuple[str, ...] = ()
+            status = LeadEvidenceStatus.NOT_APPLICABLE
+        else:
+            selected_ids = tuple(item.evidence_id for item in available)
+            present_content = any(
+                item.source_state is CollaborationInputState.PRESENT
+                and item.utf8_bytes > 0
+                and item.acquisition in {
+                    CollaborationEvidenceAcquisition.ATTACHED_REFERENCE,
+                    CollaborationEvidenceAcquisition.READ,
+                }
+                for item in available
+            )
+            missing = any(
+                (
+                    item.acquisition is CollaborationEvidenceAcquisition.ZERO_HIT_SEARCH
+                    and CollaborationInputKind.WRITING_ARTIFACT
+                    in item.authorized_source_kinds
+                )
+                or (
+                    item.acquisition is CollaborationEvidenceAcquisition.CORE_STATUS
+                    and item.source_state is CollaborationInputState.ABSENT
+                )
+                for item in available
+            )
+            empty = any(
+                item.source_state is CollaborationInputState.PRESENT
+                and item.utf8_bytes == 0
+                and item.acquisition in {
+                    CollaborationEvidenceAcquisition.ATTACHED_REFERENCE,
+                    CollaborationEvidenceAcquisition.CORE_STATUS,
+                }
+                for item in available
+            )
+            if present_content and (missing or empty):
+                status = LeadEvidenceStatus.INCOMPLETE
+            elif missing:
+                status = LeadEvidenceStatus.MISSING
+            elif empty:
+                status = LeadEvidenceStatus.EMPTY
+            elif present_content:
+                status = LeadEvidenceStatus.VERIFIED
+            elif available:
+                status = LeadEvidenceStatus.INCOMPLETE
+            else:
+                raise _LeadOutcomeValidationError(
+                    "story-specific Lead outcome has no runtime evidence"
+                )
         evidence = CollaborationLeadEvidence(
             scope=outcome.scope,
-            status=outcome.evidence_status,
+            status=status,
             receipts=tuple(available_by_id[item] for item in selected_ids),
         )
         try:

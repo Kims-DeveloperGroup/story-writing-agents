@@ -25,18 +25,17 @@ runtime-issued identifiers required by its contract. Do not add surrounding
 prose, private notes, unknown fields, or unverified identifiers.
 
 On the typed context wire, return exactly the schema-selected outer JSON object
-with `correlation` and `action`. Set `correlation` to the exact input `c` token.
+with `action`. Correlation and action ordering are runtime-owned.
 Choose only an action variant allowed by `q`: `search`, `read`, or `answer`.
 Include every field required by that variant and no other field.
 
-For SEARCH, use `action.kind="search"`, the nullable `path_prefix`, and one or
-more `{text, source_kinds}` query objects. For READ, use `action.kind="read"`
-and only handles emitted by SEARCH. For ANSWER, use `action.kind="answer"`, put
-the complete invocation-specific result object directly in `action.result`, and
-put only supporting successful READ handles in `action.used_handles`. Use an
-empty `used_handles` array when no successful READ supports the answer. Never
-put a runtime input ID or alias in a handle field, encode a JSON object as text,
-move the semantic result into `correlation`, or wrap it under `answer_contract`.
+For SEARCH, use `action.kind="search"`, one or more `{text, source_kinds}` query
+objects, and `path_prefix` only when it is needed. For READ, use `action.kind="read"`
+and only handles emitted by SEARCH. For ANSWER, use `action.kind="answer"` and
+put the complete invocation-specific semantic result object directly in
+`action.result`; runtime attaches successful READ receipts. Never encode a JSON
+object as text, move the semantic result outside `action`, or wrap it under
+`answer_contract`.
 
 Runtime-owned specialist routing policy is part of the bound definition and
 applies alongside these workspace files. Respect explicit authoring scope and

@@ -151,7 +151,9 @@ class ObjectiveCase(lead.LeadOrchestrationTestCase):
             objective_intent=intent)
         def prepare_current_task(call, provider):
             value = json.loads(response(call, provider))
-            value["action"]["result"]["authoring_scope"] = self.scope(call, intent=intent)
+            value["action"]["result"]["authoring_scope"] = lead._compact_scope(
+                self.scope(call, intent=intent)
+            )
             return json.dumps(value)
         self.backend.enqueue(prepare_current_task)
         prompt = f"Prepare the next revision using ${{{OUTLINE}}}." if attached else "네, 그 초안 그대로 문서로 준비해 줘."
@@ -313,7 +315,7 @@ class ArtifactObjectiveContractTests(ObjectiveCase):
         readable = c.project_collaboration_readable_history(before)
         objective_record = next(item for item in readable if isinstance(item.payload, c.ArtifactObjectivePayload))
         self.assertEqual({field.key: field.text for field in objective_record.fields}, {
-            c.CollaborationReadableFieldKey.ARTIFACT_OBJECTIVE_REQUEST: "Prepare the approved synthetic outline.",
+            c.CollaborationReadableFieldKey.ARTIFACT_OBJECTIVE_REQUEST: "The scoped work requires its disclosed specialists.",
             c.CollaborationReadableFieldKey.ARTIFACT_OBJECTIVE_ACTION: "start",
             c.CollaborationReadableFieldKey.ARTIFACT_OBJECTIVE_NEXT_STEP: "consult",
         })

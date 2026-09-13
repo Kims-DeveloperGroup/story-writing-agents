@@ -214,7 +214,7 @@ planner; manuscripts and other additive sources are SEARCH-first.
 
 Lead binding appends a deterministic runtime contract overlay after the
 retained common and Lead policies. Fresh embedded and checked-in Lead defaults
-use the ten-field `lead-outcome-v4` contract. Existing workspace policy files
+use the minimal variant-based `lead-outcome-v5` contract. Existing workspace policy files
 remain unchanged; the overlay supersedes their older front-channel field
 lists and describes contextual objectives. It also preserves the independent
 `lead_synthesis` schema when the same Lead binding synthesizes a review.
@@ -265,21 +265,16 @@ authority, or a call to another agent.
 
 `lead_front_channel` receives the current command, identity, content-free input
 aliases, current owner-conversation objectives and offered draft sources,
-offered authoring tasks, a strict ten-field `lead-outcome-v4` answer contract,
-and four canonical-core status rows. `objective_intent`, `recommended_action`, and
-`authoring_scope` are required. Objective intent is explicitly null or a
-`start`, `continue`, or `cancel` intent. Inventory alone supplies no story body.
-The lead must classify the turn as `story_specific` or `workflow_meta`; runtime performs no NLP relabeling.
-For story-specific results the provider selects the minimum ordered current
-evidence IDs supporting `verified`, `missing`, `empty`, `incomplete`, or
-`conflicting`. For workflow/meta it must use `not_applicable`, no IDs, and no
-proposal. Ambiguous scope is handled by the role prompt—choose story-specific
-and ask a grounded question—not by runtime inference.
+offered authoring tasks, a minimal `lead-outcome-v5` answer contract, and
+canonical-core status rows. Every variant requires `kind`, `message`, and the
+compact semantic `authoring_scope`; intent fields appear only for variants that
+need them. Inventory alone supplies no story body. Runtime derives evidence
+scope, status, receipts, IDs, revisions, and interpretation from local facts.
 
-Fresh front-channel recommendations require `recommended_action` and null
-`objective_intent`. Other kinds require a null action. The action selects
-`prepare_artifact` or `prepare_consultation` with purpose, instruction, expected
-result, sources, targets or specialists, and an optional offered objective.
+Fresh front-channel recommendations require `recommended_action`; unused
+intent fields are omitted. The action selects `prepare_artifact` or
+`prepare_consultation` with instruction, sources, targets or specialists, and
+an optional offered objective.
 Runtime resolves `current_response` to the complete visible source message event
 and exact digest before publishing a separate versioned action request; aliases
 are never persisted as authority. Ordinary synthesis may select the same action
@@ -289,8 +284,8 @@ Confirm or Revise binds an exact final-tail request and starts one bounded Lead
 invocation with a fresh execution origin. Confirm prepares the disclosed proposal
 or asks a material question; it cannot return a recommendation for the same
 preparation. Revise produces only a new recommendation. No preparation starts
-specialists or bypasses review, Apply, or Commit. The reservation includes
-mandatory reference reads and permitted authentication assistance without
+specialists or bypasses review, Apply, or Commit. Mandatory references are
+loaded locally; the reservation includes provider calls and permitted authentication assistance without
 resetting physical-call spend or repeating the structured decision.
 
 The provider interprets short approval from complete session context. CLARIFY
@@ -307,8 +302,8 @@ keeps its immutable v1 or v2 facts. Execution origin remains independently
 validated, without a synthetic user message. See the
 [objective contract](../reference/runtime-api.md#contextual-authoring-objectives).
 
-Live result contracts are `lead-outcome-v4`, `specialist-reply-v2`,
-`lead-synthesis-v3`, and `artifact-review-synthesis-v2`. Routing scope and review
+Live result contracts are `lead-outcome-v5`, `specialist-reply-v2`,
+`lead-synthesis-v3`, and `artifact-review-synthesis-v3`. Routing scope and review
 basis use schema 1, independently of wire v7, runtime policy v1, and durable
 collaboration history schema v2. Historical omitted routing fields remain
 readable; they cannot authorize a new unscoped consultation.
@@ -327,11 +322,12 @@ input. Contextual continuation frames carry only the newly authorized action
 observation; they do not resend the initial payload.
 
 The action response itself is typed rather than prompt-decoded shorthand. Its
-closed root has required `correlation` and `action`; the latter is a closed
-SEARCH, READ, or ANSWER variant selected from the per-call schema. ANSWER puts
-the complete semantic object directly in `action.result` and supporting
-successful READ handles in `action.used_handles`. Runtime validates the exact
-correlation, issued handles, evidence IDs, Lead evidence matrix, input aliases,
+closed root has only required `action`; runtime owns correlation and action-index
+bookkeeping. The action is a closed SEARCH, READ, or ANSWER variant selected
+from the per-call schema. ANSWER puts the complete semantic object directly in
+`action.result`; runtime associates all successful current-invocation READ
+receipts locally. Runtime validates issued handles, the locally derived Lead
+evidence matrix, input aliases,
 artifact authority, and later confirmation boundaries. Provider schema
 acceptance is therefore necessary but never sufficient for a valid Lead turn.
 
@@ -448,8 +444,8 @@ rejected by shared decoding; pre-result native failures do not enter that store.
 
 All records for a captured call share a fresh `exchange_<32 lowercase hex>`
 identity plus the exact supplied session, conversation/debate scope, agent, and
-provider. A mandatory-reference prelude is a separate physical call but
-inherits the same outer logical scope as its substantive call. Capture has no
+provider. Mandatory references are loaded locally and create no provider
+exchange or provider-budget charge. Capture has no
 retry or replay path, and any capture/storage failure is suppressed after its
 state transition. Missing records or sequence gaps therefore do not prove that
 no provider call occurred. See the exact
@@ -509,30 +505,20 @@ common-policy clause `invoke another agent, provider subagent, tool, or model.`
 to `invoke another agent, provider subagent, or model.` before byte accounting.
 It also directs structured delivery through `finish` with the complete supplied
 outer schema. Contextual specialist instructions identify their assessment as
-`action.result`, inside the root `correlation` and `action` fields; they do not
+`action.result`, inside the root `action` field; they do not
 ask `finish` to receive the inner assessment alone. Its compact provider-managed
 constraints carry the same rule and omit the tool ban.
 
-The Antigravity staged Lead prompt additionally clarifies three existing
-contracts:
+The Antigravity staged Lead prompt additionally clarifies these contracts:
 
-- After mandatory reference reading, attached-reference aliases in
-  `i.input_aliases` are content evidence IDs, distinct from `core_statuses`
-  status IDs. A verified story judgment needs a supporting attached-reference
-  or completed READ evidence ID; status IDs alone are insufficient. Only
-  current, actually supplied IDs are eligible.
-- `evidence_ids` and proposal assignment `input_ids` have different roles.
-  Assignments collectively cover every input ID in `i.input_aliases`, including
-  `user_input`, and every cited READ evidence ID. The absence of a content
-  receipt for `user_input` does not remove it from the assignment inputs.
-- For `lead_synthesis`, `i.answer_contract` supplies required values. The Lead
-  copies `scope`, `evidence_status`, `evidence_ids`, and `reply_event_ids` exactly,
-  preserving the supplied order. Every required `unresolved_input_ids` entry
-  precedes any additional unresolved original inputs. A `concern`, `conflict`,
-  or `insufficient_evidence` assessment keeps its inputs unresolved even when
-  the synthesis explains a remedy or ends the consultation. Only an empty
-  required list permits an empty unresolved list. This applies to every
-  specialist consultation, including those without an artifact candidate.
+- Attached-reference aliases in `i.input_aliases` are valid assignment inputs;
+  runtime derives their evidence receipts.
+- Proposal assignments cover the runtime-offered inputs needed by the selected
+  semantic action. Runtime reconstructs correlation, attribution, evidence IDs,
+  and review basis locally.
+- For `lead_synthesis`, the Lead returns only its visible `message` plus one
+  optional semantic continuation or recommendation. Runtime binds reply event
+  IDs and unresolved inputs from completed assignment facts.
 
 These clarifications change staged text only. Shared policy/prompt sources,
 workspace initialization, Codex rendering and stdin/JSONL transport, domain

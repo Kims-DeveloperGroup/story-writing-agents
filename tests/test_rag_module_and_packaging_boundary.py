@@ -797,7 +797,7 @@ class RagModuleBoundaryTests(unittest.TestCase):
         )
 
     def test_supported_module_surfaces_do_not_expand_the_root_facade(self) -> None:
-        self.assertEqual(len(story_writing_agents.__all__), 104)
+        self.assertEqual(len(story_writing_agents.__all__), 106)
         rag_names = set().union(
             conversation_rag.__all__,
             conversation_rag_cli.__all__,

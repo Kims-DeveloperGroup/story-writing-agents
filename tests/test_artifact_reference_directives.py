@@ -581,7 +581,7 @@ class ArtifactReferenceFacadeTests(unittest.TestCase):
                 self.assertIs(getattr(artifact_facade, name), value)
                 self.assertNotIn(name, story_writing_agents.__all__)
                 self.assertFalse(hasattr(story_writing_agents, name))
-        self.assertEqual(len(story_writing_agents.__all__), 104)
+        self.assertEqual(len(story_writing_agents.__all__), 106)
 
     def test_parser_is_provider_free_and_uses_no_operational_io(self) -> None:
         failure = AssertionError("directive parsing must not open files")

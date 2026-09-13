@@ -475,8 +475,8 @@ and a closed nested outcome vocabulary. `session_id` and `scope_id` match
 correlation identity. Automatic capture generates
 `exchange_<32 lowercase hexadecimal characters>` and shares it across the
 request, optional response, and terminal attempt. All records also preserve the
-exact supplied session, scope kind/ID, agent, and provider; a reference prelude
-inherits its outer conversation/debate scope. The store itself does not infer
+exact supplied session, scope kind/ID, agent, and provider. Local reference
+loading creates no provider exchange. The store itself does not infer
 or enforce record grouping, outcome transitions, provider behavior, or a
 required `no_response` body.
 
