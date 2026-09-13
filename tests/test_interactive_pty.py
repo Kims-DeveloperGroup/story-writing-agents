@@ -42,7 +42,7 @@ from story_writing_agents.workspace import (
 )
 
 from tests.collaboration_contract_fixture import contract_batches
-from tests.helpers import initialize_test_workspace
+from tests.helpers import pristine_initialized_workspace
 
 try:
     import fcntl
@@ -1324,7 +1324,7 @@ class InteractiveCliPtyTests(unittest.TestCase):
         temporary = tempfile.TemporaryDirectory()
         self.addCleanup(temporary.cleanup)
         self.temporary_root = Path(temporary.name)
-        self.workspace = initialize_test_workspace(self.temporary_root / "workspace")
+        self.workspace = pristine_initialized_workspace(self)
         self._set_existing_default()
         self.fake_directory = self.temporary_root / "provider-bin"
         self.fake_directory.mkdir()
@@ -1374,6 +1374,12 @@ class InteractiveCliPtyTests(unittest.TestCase):
 
         for process in reversed(self._processes):
             process.close()
+
+    def _replace_with_pristine_workspace(self) -> None:
+        """Use a fresh ready root while preserving process-first cleanup order."""
+
+        self.workspace = pristine_initialized_workspace(self)
+        self.addCleanup(self._close_processes)
 
     def _environment(self) -> dict[str, str]:
         """Return a provider-free child environment with explicit source imports."""
@@ -3037,9 +3043,7 @@ print(
             ansi.original_terminal_attributes,
         )
 
-        self.workspace = initialize_test_workspace(
-            self.temporary_root / "workspace-no-color"
-        )
+        self._replace_with_pristine_workspace()
         self._set_existing_default()
         no_color = self._spawn_cli(
             (),
@@ -3063,9 +3067,7 @@ print(
             no_color.original_terminal_attributes,
         )
 
-        self.workspace = initialize_test_workspace(
-            self.temporary_root / "workspace-line-profile"
-        )
+        self._replace_with_pristine_workspace()
         self._set_existing_default()
         line = self._spawn_cli(())
         line.wait_for_text("story[lobby]> ")
@@ -3253,9 +3255,7 @@ print(
         expected_languages = ("EN", "JA", "ZH")
         for attempt, expected_language in enumerate(expected_languages):
             with self.subTest(attempt=attempt):
-                self.workspace = initialize_test_workspace(
-                    self.temporary_root / f"workspace-settings-save-{attempt}"
-                )
+                self._replace_with_pristine_workspace()
                 self._set_existing_default()
                 current_language = "KO"
                 process = self._spawn_cli(
@@ -3954,9 +3954,7 @@ print(
         for event_name in ("escape", "interrupt", "eof"):
             for attempt in range(3):
                 with self.subTest(event=event_name, attempt=attempt):
-                    self.workspace = initialize_test_workspace(
-                        self.temporary_root / f"workspace-{event_name}-{attempt}"
-                    )
+                    self._replace_with_pristine_workspace()
                     self._set_existing_default()
                     process = self._spawn_cli(
                         (),
@@ -4826,9 +4824,7 @@ raise SystemExit(cli.main([]))
         )
         for terminal_columns, logo_marker, identity, next_copy in cases:
             with self.subTest(terminal_columns=terminal_columns):
-                self.workspace = initialize_test_workspace(
-                    self.temporary_root / f"workspace-welcome-{terminal_columns}"
-                )
+                self._replace_with_pristine_workspace()
                 self._set_existing_default()
                 process = self._spawn_cli(
                     (),
