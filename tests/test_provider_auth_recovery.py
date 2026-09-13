@@ -788,7 +788,14 @@ class InteractiveRecoveryTests(unittest.TestCase):
     def test_interruption_and_recovery_failure_restore_same_runner_and_notice(self):
         for control in (KeyboardInterrupt, asyncio.CancelledError):
             finalized = []
-            async def turn(*args):
+            async def turn(
+                _session,
+                _conversation_id,
+                _text,
+                _context_event_sink=None,
+                *,
+                action_progress_sink=None,
+            ):
                 try:
                     await request_authentication(auth_failure())
                 finally:
@@ -804,7 +811,14 @@ class InteractiveRecoveryTests(unittest.TestCase):
             self.assertEqual(runner.run(asyncio.sleep(0, result="usable")), "usable")
 
     def test_no_recovery_callback_preserves_typed_error_and_fixed_notice(self):
-        async def turn(*args):
+        async def turn(
+            _session,
+            _conversation_id,
+            _text,
+            _context_event_sink=None,
+            *,
+            action_progress_sink=None,
+        ):
             raise auth_failure()
         adapter, runner, output = self.adapter()
         with mock.patch.object(RuntimeSession, "lead_turn", new=turn):

@@ -2469,7 +2469,7 @@ class TerminalBoundaryTests(unittest.TestCase):
         }
         self.assertEqual(
             internal_dependencies,
-            {"_core"},
+            {"_advisory_progress", "_core"},
         )
         self.assertNotIn("interactive_terminal", story_writing_agents.__all__)
         for name in PUBLIC_EXPORTS:
