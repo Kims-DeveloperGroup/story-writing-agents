@@ -6,7 +6,6 @@ import asyncio
 import hashlib
 import inspect
 import json
-import tempfile
 import unittest
 from collections.abc import Awaitable, Callable
 from contextlib import asynccontextmanager
@@ -95,7 +94,7 @@ from story_writing_agents.writing_artifacts.repository import (
     WritingArtifactRepository,
 )
 
-from tests.helpers import initialize_test_workspace
+from tests.helpers import pristine_initialized_workspace
 
 
 _PRIVATE_INPUT = "PRIVATE_CURRENT_INPUT_한🙂"
@@ -456,9 +455,7 @@ class _ScriptedProvider:
 
 class ContextExecutionTestCase(unittest.IsolatedAsyncioTestCase):
     def setUp(self) -> None:
-        temporary = tempfile.TemporaryDirectory(prefix="context-execution-")
-        self.addCleanup(temporary.cleanup)
-        self.workspace = initialize_test_workspace(temporary.name)
+        self.workspace = pristine_initialized_workspace(self)
         self.service = AgentContextService(self.workspace)
         self.repository = WritingArtifactRepository(self.workspace.root)
 
