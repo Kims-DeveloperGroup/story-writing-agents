@@ -146,7 +146,11 @@ step with no reviewer call. Otherwise confirmation and durable start record
 `artifact_proposal_state=reviewing`, and every disclosed reviewer receives the
 same candidate. When all succeed, `artifact_review_synthesis` stores the lead's
 `propose`, `revise`, or `reject` decision, message, rationale, user impact,
-limitations, every reply event ID, and every unresolved input ID.
+limitations, every reply event ID, and every unresolved input ID. The provider
+supplies only the decision and message. Runtime uses the message as rationale,
+adds the no-change impact, and derives limitations truthfully: no additional
+limitations when the unresolved set is empty, otherwise the exact unresolved
+reviewer input IDs.
 
 Only `propose` records `artifact_reviewed_proposal` and artifact state
 `reviewed`. The immutable reviewed proposal closes over candidate,
@@ -166,8 +170,10 @@ Filesystem/SQLite history, archive, and transfer retain the same objective
 records; projection itself appends nothing.
 
 `ArtifactObjectiveFacts` freezes the runtime objective ID, origin conversation
-and user event, visible request, exact canonical target paths, and the offered
-draft-source snapshot. `ArtifactObjectivePayload` records `start`, `continue`,
+and user event, the exact originating user-event content as its visible request,
+exact canonical target paths, and the offered draft-source snapshot. The
+provider cannot replace that request with a paraphrase.
+`ArtifactObjectivePayload` records `start`, `continue`,
 or `cancel` beside its accepted Lead judgment in the same atomic batch. A
 continuation names the exact previous objective event and preserves the origin
 facts. A PREPARE transition also binds its co-batched candidate by event ID,

@@ -159,7 +159,7 @@ canonical role and these request correlations:
 | --- | --- |
 | `invoke()` | `agent_id` equals the request and bound definition; `phase` equals the debate phase value; `round_number` equals the request round. |
 | `converse()` | `agent_id` equals the request and bound definition; `phase="conversation"`; `round_number=None`. |
-| `converse_with_retrieval()` | `agent_id` equals the request and bound definition; `phase="conversation_retrieval"`; `round_number=None`. Retrieval action indices remain a separate `1..5` sequence. |
+| `converse_with_retrieval()` | `agent_id` equals the request and bound definition; `phase="conversation_retrieval"`; `round_number=None`. Accepted retrieval action indices advance separately from physical attempts; a structured repair repeats the current index. |
 
 The backend loads the exact authorized path/range batch locally before the
 substantive provider call. Coordinator validation rejects partial, reordered,
@@ -174,15 +174,23 @@ canonical roles follow this backend path; their prompt prose is not the
 enforcement mechanism. The full state and trust mapping is in
 [Canonical writing artifacts](writing-artifacts.md#provider-enforced-invocation-sequence).
 
-| One logical invocation | Without references | With references |
-| --- | ---: | ---: |
-| Direct conversation | 1 provider call | 1 reply call |
-| One agent in one debate phase | 1 provider call | 1 phase-reply call |
-| Retrieval turn | 1–5 provider calls | unchanged 1–5 retrieval calls |
+That acceptance sequence applies to provider and successfully repaired replies.
+If structured repair is exhausted, the safe local fallback remains visible but
+the reference invocation and operation terminate with `provider_failure`; they
+record neither `result_received` nor `accepted`.
 
-The backend performs no automatic retry. Cancellation, provider or workflow
-failure, drift, and invalid action/correlation terminate the same one-use
-coordinator with a content-free outcome. After provider state has advanced,
+| One logical structured invocation | Without references | With references |
+| --- | ---: | ---: |
+| Direct conversation | 1 initial call plus at most 1 repair | Unchanged; references add no provider call |
+| One agent in one debate phase | 1 initial call plus at most 1 repair | Unchanged; references add no provider call |
+| Retrieval turn | 1–5 total physical calls, including repairs | Unchanged 1–5-call total |
+
+The backend performs no automatic top-level retry or replay. One rejected
+structured value can receive one bounded repair; retrieval repairs consume the
+same five-physical-call budget as ordinary retrieval actions, and the last call
+is answer-only. Cancellation, provider or workflow failure, drift, and invalid
+action/correlation terminate the same one-use coordinator with a content-free
+outcome. After provider state has advanced,
 the compatible thread is tainted where required so a later call cannot assume
 clean continuation. An explicit retry or replacement needs a new top-level
 operation with a fresh capture, correlation, coordinator, capability, and

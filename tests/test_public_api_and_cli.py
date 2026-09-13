@@ -31,11 +31,14 @@ from story_writing_agents import (
     DebateContextMode,
     DebateContextRequest,
     DebateFailureKind,
+    DebateMessage,
     DebateProgressEvent,
     DebateProgressPhase,
     InputKind,
     PLOT_ARCHITECT,
     ProgressObserverError,
+    ReplyTrace,
+    ReplyTraceOrigin,
     StoryRuntime,
     Workspace,
 )
@@ -80,7 +83,11 @@ from story_writing_agents.provider_auth import (
     ProviderAuthState,
     ProviderAuthStatus,
 )
-from tests.helpers import initialized_workspace, workspace_git_identity
+from tests.helpers import (
+    initialized_workspace,
+    pristine_initialized_workspace,
+    workspace_git_identity,
+)
 from tests.sqlite_conversation_storage_fixture import database_path, provision
 
 
@@ -778,25 +785,126 @@ class PublicApiTests(unittest.TestCase):
 
 
 class PersistenceValidationTests(unittest.TestCase):
-    def test_persisted_debate_log_rejects_wrong_field_types(self) -> None:
-        workspace = initialized_workspace(self)
-        workspace.write_text(
-            "discussion_logs/session_a/debate_a.jsonl",
-            json.dumps(
-                {
-                    "sender": "plot_architect",
-                    "phase": "audit",
-                    "round": "not-an-integer",
-                    "revision": "r0",
-                    "kind": "approval",
-                    "content": "neutral",
-                    "timestamp": "2026-01-01T00:00:00+00:00",
-                }
-            )
-            + "\n",
+    @staticmethod
+    def _message(*, trace: ReplyTrace | None = None) -> DebateMessage:
+        return DebateMessage(
+            sender="plot_architect",
+            phase="audit",
+            round=1,
+            revision="r0",
+            kind="approval",
+            content="Visible assessment.",
+            timestamp="2026-01-01T00:00:00+00:00",
+            trace=trace,
         )
-        with self.assertRaisesRegex(WorkspaceFormatError, "line 1"):
-            workspace.read_debate_messages("session_a", "debate_a")
+
+    def test_persisted_debate_log_reopens_traced_and_untraced_messages_exactly(
+        self,
+    ) -> None:
+        workspace = pristine_initialized_workspace(self)
+        trace = ReplyTrace(
+            role="plot_architect",
+            action="audit",
+            context_sources=("current_input", "read:writing_artifact"),
+            recovered_fields=("structured_reply",),
+            origin=ReplyTraceOrigin.RECOVERED,
+        )
+        untraced = self._message()
+        traced = self._message(trace=trace)
+        workspace.append_debate_message("session_a", "debate_a", untraced)
+        workspace.append_debate_message("session_a", "debate_a", traced)
+
+        restored = workspace.read_debate_messages("session_a", "debate_a")
+        self.assertEqual(restored, (untraced, traced))
+        self.assertIsNone(restored[0].trace)
+        self.assertIs(type(restored[1].trace), ReplyTrace)
+        self.assertEqual(restored[1].trace, trace)
+        self.assertEqual(
+            workspace.read_debate_messages("session_a", "debate_a"),
+            restored,
+        )
+
+        raw = tuple(
+            json.loads(line)
+            for line in workspace.read_text(
+                "discussion_logs/session_a/debate_a.jsonl"
+            ).splitlines()
+        )
+        base_fields = {
+            "sender",
+            "phase",
+            "round",
+            "revision",
+            "kind",
+            "content",
+            "timestamp",
+        }
+        self.assertEqual(set(raw[0]), base_fields)
+        self.assertNotIn("trace", raw[0])
+        self.assertEqual(set(raw[1]), {*base_fields, "trace"})
+        self.assertEqual(raw[1]["trace"], trace.to_dict())
+
+    def test_persisted_debate_log_rejects_noncanonical_fields_values_and_rounds(
+        self,
+    ) -> None:
+        workspace = initialized_workspace(self)
+        relative = "discussion_logs/session_a/debate_a.jsonl"
+        base = self._message().to_dict()
+        valid_trace = ReplyTrace(
+            role="plot_architect",
+            action="audit",
+            context_sources=("current_input",),
+        ).to_dict()
+        invalid_trace = dict(valid_trace)
+        invalid_trace["origin"] = "unknown"
+        missing_trace_field = dict(valid_trace)
+        missing_trace_field.pop("action")
+        extra_trace_field = {**valid_trace, "message": "must not be persisted"}
+
+        invalid = [
+            ("unknown base field", {**base, "unknown": True}),
+            (
+                "unknown traced field",
+                {**base, "trace": valid_trace, "unknown": True},
+            ),
+            ("missing base field", {key: value for key, value in base.items() if key != "kind"}),
+            ("null trace", {**base, "trace": None}),
+            ("trace scalar", {**base, "trace": "invalid"}),
+            ("trace list", {**base, "trace": []}),
+            ("missing trace field", {**base, "trace": missing_trace_field}),
+            ("extra trace field", {**base, "trace": extra_trace_field}),
+            ("invalid trace origin", {**base, "trace": invalid_trace}),
+            *(
+                (
+                    f"non-string {field}",
+                    {**base, field: None},
+                )
+                for field in (
+                    "sender",
+                    "phase",
+                    "revision",
+                    "kind",
+                    "content",
+                    "timestamp",
+                )
+            ),
+            ("boolean round", {**base, "round": True}),
+            ("negative round", {**base, "round": -1}),
+            ("string round", {**base, "round": "1"}),
+            ("float round", {**base, "round": 1.0}),
+        ]
+        valid_prefix = json.dumps(base, sort_keys=True) + "\n"
+        for label, value in invalid:
+            with self.subTest(label=label):
+                workspace.write_text(
+                    relative,
+                    valid_prefix + json.dumps(value, sort_keys=True) + "\n",
+                )
+                with self.assertRaisesRegex(
+                    WorkspaceFormatError,
+                    r"^invalid debate log entry at line 2$",
+                ):
+                    workspace.read_debate_messages("session_a", "debate_a")
 
 
 class CliTests(unittest.TestCase):

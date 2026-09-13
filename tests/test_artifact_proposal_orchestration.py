@@ -681,6 +681,16 @@ class ArtifactProposalOrchestrationTests(LeadOrchestrationTestCase):
                     else proposed.proposal.assignments[0].input_ids
                 )
                 self.assertEqual(reviewed.unresolved_input_ids, expected_unresolved)
+                self.assertEqual(
+                    reviewed.limitations,
+                    (
+                        "No additional limitations were reported."
+                        if not expected_unresolved
+                        else "Unresolved reviewer inputs remain: "
+                        + ", ".join(expected_unresolved)
+                        + "."
+                    ),
+                )
 
         failed_id = self.conversation("Partial reviewer failure")
         self.backend.enqueue(

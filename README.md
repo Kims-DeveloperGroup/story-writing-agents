@@ -22,7 +22,7 @@ inspection and the Python lead front channel.
 | Address the Lead by ordinary focused shell input or Python; confirm a one-to-three-specialist consultation; receive typed replies and synthesis. | Treat conversation text such as `Yes` as confirmation. |
 | Ask the lead to form an exact create/patch/replace/rename/delete candidate; confirm its disclosed specialist review; inspect an immutable reviewed proposal. | Treat proposal or review confirmation as write or Git authority. |
 | Separately confirm Apply for an exact reviewed artifact candidate, then separately confirm Commit for one exact local session-branch commit. | Push, merge, or otherwise publish the local Git commit remotely. |
-| Use the Python API to submit a prompt or complete draft, inspect and separately confirm every consensus phase, interrupt active work, inspect durable state after restart, and continue an exact deadlock in place or as a linked workflow without copying its candidate. | Start or advance consensus from the installed shell, treat finalization as artifact publication, or reuse confirmation authority after restart. |
+| Use the Python API to submit a prompt or complete draft, inspect and separately confirm every consensus phase, interrupt active work, inspect durable state after restart, and continue an exact synthesis deadlock in place or as a linked workflow without copying its candidate. | Start or advance consensus from the installed shell, treat finalization as artifact publication, or reuse confirmation authority after restart. |
 | Use schema-v2 collaboration contracts, stores, archive/transfer, readable projection, search, and paging APIs. | Bypass the runtime with a removed direct-run method. |
 | Run a disposable management/storage smoke or verify an existing workspace without changing it. | Use smoke as evidence of provider behavior or story quality. |
 
@@ -70,8 +70,9 @@ instructions and returns a new recommendation for fresh confirmation.
 The lead interprets short follow-ups such as “Use that draft” from the session
 context. Ordinary approval is a new authoring instruction and can supersede an
 unconfirmed recommendation. With a clear target and current evidence, it can
-prepare the exact candidate for separately confirmed review. Runtime retains the authoring
-objective in its originating conversation across discussion, consultation,
+prepare the exact candidate for separately confirmed review. Runtime retains
+the authoring objective and its exact originating user request in that
+conversation across discussion, consultation,
 conversation switches, and restart. Only a matching successful Apply result
 (`applied` or `unchanged`) satisfies it; review, prose approval, and Commit do
 not. An explicit objective cancellation closes it without writing.
@@ -281,7 +282,7 @@ and `decide_lead_step()` methods. Confirmation executes the disclosed read-only 
 `decide_lead_step()`. Both facades also expose a phase-confirmed consensus API:
 submit prompt/draft input, inspect, decide or confirm the exact phase,
 explicitly request its successor, interrupt, and resume inspection. There is
-also an explicit deadlock-continuation call that binds the source result,
+also an explicit synthesis-deadlock continuation call that binds the source result,
 unresolved critique material, operator ruling, and added repair-round budget;
 it prepares a fresh REPAIR confirmation and never copies candidate text. There
 is no public unconfirmed specialist dispatch, artifact publication, consensus
