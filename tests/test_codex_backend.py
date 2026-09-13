@@ -4457,6 +4457,13 @@ class CodexBackendTestCase(unittest.IsolatedAsyncioTestCase):
                 conversation_id=conversation_id,
                 turn_id="turn_current",
                 content=visible_reply,
+                trace=ReplyTrace(
+                    role=PLOT_ARCHITECT,
+                    action="reply",
+                    context_sources=("current_input", "conversation_history"),
+                    recovered_fields=(),
+                    origin=ReplyTraceOrigin.PROVIDER,
+                ),
             ),
         )
         invocation = self.provider_invocations()[0]

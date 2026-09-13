@@ -775,20 +775,23 @@ class AntigravityAdapterTests(unittest.IsolatedAsyncioTestCase):
         antigravity_sample, antigravity_sample_components = (
             AntigravityAdapter._definition_file(sample_definition)
         )
-        self.assertEqual(len(codex_sample), 11568)
+        self.assertEqual(len(codex_sample), 11682)
         self.assertEqual(
             hashlib.sha256(codex_sample).hexdigest(),
-            "2aaa1aa800032dc04925dfa076e2debff167bfbc9b0b30dc60bf5a3708ad806a",
+            "17410478a062c1b4974fd87879390b33f1ce9111a776639d6db50c70097729ab",
         )
         self.assertEqual(
             tuple(item.serialized_utf8_bytes for item in codex_sample_components),
-            (4, 10652, 251, 10, 651),
+            (4, 10766, 251, 10, 651),
         )
         self.assertEqual(antigravity_sample, _expected_antigravity_role(codex_sample).replace(original_provider, expected_provider))
         captured_lead_role = sample_definition.system_prompt_file.content
         expected_lead_role = _expected_antigravity_role(captured_lead_role)
         self.assertIn(b"Runtime derives schema versions, interpretation", expected_lead_role)
-        self.assertIn(b"Omit unused fields instead of writing `null`", expected_lead_role)
+        self.assertIn(
+            b"Omit unused fields instead of\nwriting `null`",
+            expected_lead_role,
+        )
         self.assertIn(b"runtime derives the review basis", expected_lead_role)
         self.assertIn(b"runtime restores\nproposal identity", expected_lead_role)
         self.assertIn(b"runtime derives review bookkeeping", expected_lead_role)
