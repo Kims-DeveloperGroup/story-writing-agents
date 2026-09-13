@@ -380,6 +380,7 @@ def inspect_story_commit_recovery_snapshot(
             session_id,
             None,
             expected_session_root_identity=None,
+            expected_generation_identity=None,
             allowed_worktree_changes=allowance,
         ) as (history, operation, candidate, resources):
             generation_pin = history.acquire_generation_pin()
@@ -741,9 +742,10 @@ class SessionArtifactBinding:
     @contextmanager
     def open_story_commit_artifact_repository(
         self,
-        validate_ready: Callable[[], GitSessionResourceInspection],
+        validate_ready: Callable[[], GitSessionResourceInspection | None],
         *,
         expected_generation_identity: GitSessionGenerationIdentity,
+        binding_failure_factory: Callable[[], BaseException] | None = None,
     ) -> Iterator[WritingArtifactRepository]:
         """Borrow one live history validator for exact artifact capture."""
 
@@ -751,13 +753,17 @@ class SessionArtifactBinding:
         if (
             type(expected_generation_identity) is not GitSessionGenerationIdentity
             or expected_generation_identity != self._generation_identity
+            or (
+                binding_failure_factory is not None
+                and not callable(binding_failure_factory)
+            )
         ):
             raise SessionArtifactBindingError(
                 "session artifact generation is unavailable"
             )
-        def validate_generation() -> GitSessionResourceInspection:
-            confirmed = validate_ready()
-            return confirmed
+
+        def validate_generation() -> GitSessionResourceInspection | None:
+            return validate_ready()
 
         access: SessionArtifactAccess | None = None
         descriptor = -1
@@ -776,11 +782,14 @@ class SessionArtifactBinding:
                 None,
                 descriptor,
                 ready_validator=validate_generation,
+                binding_failure_factory=binding_failure_factory,
             )
             descriptor = -1
         except BaseException as failure:
             _close_untransferred_artifact_descriptor(descriptor, failure)
             if isinstance(failure, _SESSION_ARTIFACT_BINDING_FAILURES):
+                if binding_failure_factory is not None:
+                    raise binding_failure_factory() from None
                 raise SessionArtifactBindingError(
                     "session artifact resources are unavailable"
                 ) from None
@@ -820,10 +829,12 @@ class SessionArtifactAccess:
     __slots__ = (
         "_active",
         "_binding",
+        "_binding_failure_factory",
         "_descriptor",
         "_lease",
         "_owner_thread_token",
         "_ready_validator",
+        "_translated_binding_failure",
     )
 
     def __init__(
@@ -832,13 +843,18 @@ class SessionArtifactAccess:
         lease: GitRepositoryLease | None,
         descriptor: int,
         *,
-        ready_validator: Callable[[], GitSessionResourceInspection] | None = None,
+        ready_validator: Callable[
+            [], GitSessionResourceInspection | None
+        ] | None = None,
+        binding_failure_factory: Callable[[], BaseException] | None = None,
     ) -> None:
         if (lease is None) == (ready_validator is None):
             raise SessionArtifactBindingError(
                 "session artifact access authority is invalid"
             )
         self._binding = binding
+        self._binding_failure_factory = binding_failure_factory
+        self._translated_binding_failure: BaseException | None = None
         self._lease = lease
         self._ready_validator = ready_validator
         self._descriptor = descriptor
@@ -919,9 +935,21 @@ class SessionArtifactAccess:
                 self._binding.worktree_identity,
             )
         except _SESSION_ARTIFACT_BINDING_FAILURES:
-            raise SessionArtifactBindingError(
-                "session artifact resources are unavailable"
-            ) from None
+            self._raise_binding_failure()
+
+    def _is_translated_binding_failure(self, failure: BaseException) -> bool:
+        return failure is self._translated_binding_failure
+
+    def _raise_binding_failure(self) -> None:
+        factory = self._binding_failure_factory
+        if factory is not None:
+            translated = factory()
+            if isinstance(translated, BaseException):
+                self._translated_binding_failure = translated
+                raise translated from None
+        raise SessionArtifactBindingError(
+            "session artifact resources are unavailable"
+        ) from None
 
     def require_ready(self) -> None:
         """Repeat exact READY inspection under the live repository lease."""
@@ -958,9 +986,7 @@ class SessionArtifactAccess:
                 )
             self.require_active()
         except _SESSION_ARTIFACT_BINDING_FAILURES:
-            raise SessionArtifactBindingError(
-                "session artifact resources are unavailable"
-            ) from None
+            self._raise_binding_failure()
 
     def _close(self) -> None:
         self.require_active()
@@ -1065,17 +1091,21 @@ def _postvalidate_session_artifact_access(
     try:
         access.require_ready()
     except BaseException as cleanup_failure:
-        binding_lost = isinstance(
-            cleanup_failure,
-            _SESSION_ARTIFACT_BINDING_FAILURES,
+        translated = access._is_translated_binding_failure(cleanup_failure)
+        binding_lost = translated or isinstance(
+            cleanup_failure, _SESSION_ARTIFACT_BINDING_FAILURES
         )
         if not binding_lost:
             if failure is not None:
                 _add_session_artifact_cleanup_note(failure, cleanup_failure)
                 return
             raise
-        authoritative = SessionArtifactBindingError(
-            "session artifact resources are unavailable"
+        authoritative = (
+            cleanup_failure
+            if translated
+            else SessionArtifactBindingError(
+                "session artifact resources are unavailable"
+            )
         )
         if failure is not None:
             try:

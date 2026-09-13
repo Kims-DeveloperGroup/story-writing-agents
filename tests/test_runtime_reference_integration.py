@@ -1978,6 +1978,24 @@ class RuntimeExecutionRetirementTests(unittest.TestCase):
         self.addCleanup(self._cleanup_runtime_registry, workspace_root)
         marker = WorkspaceSecurityError("capture root security changed")
         published = []
+        cleanup_objects = []
+
+        class PoisonInvocation:
+            calls = 0
+
+            def _close_transient_content(self):
+                self.calls += 1
+                raise SystemExit("invocation cleanup interrupted")
+
+        class PoisonAuthorization:
+            def __init__(self, delegate):
+                self.delegate = delegate
+                self.calls = 0
+
+            def close(self):
+                self.calls += 1
+                self.delegate.close()
+                raise SystemExit("authorization cleanup interrupted")
 
         @contextmanager
         def repository_access():
@@ -1988,6 +2006,14 @@ class RuntimeExecutionRetirementTests(unittest.TestCase):
         def register(operation):
             runtime._register_reference_operation(operation)
             published.append(operation)
+            invocations = (PoisonInvocation(), PoisonInvocation())
+            authorization = PoisonAuthorization(operation._authorization)
+            operation._pending = {
+                str(index): invocation
+                for index, invocation in enumerate(invocations)
+            }
+            operation._authorization = authorization
+            cleanup_objects.extend((*invocations, authorization))
 
         with self.assertRaises(WorkspaceSecurityError) as rejected:
             prepare_registered_guarded_runtime_reference_operation(
@@ -2000,6 +2026,15 @@ class RuntimeExecutionRetirementTests(unittest.TestCase):
             )
         self.assertIs(rejected.exception, marker)
         self.assertEqual(len(published), 1)
+        self.assertEqual([item.calls for item in cleanup_objects], [1, 1, 1])
+        self.assertEqual(
+            marker.__notes__,
+            [
+                "runtime reference cleanup failed: SystemExit",
+                "runtime reference cleanup failed: SystemExit",
+                "runtime reference cleanup failed: SystemExit",
+            ],
+        )
         operation = published[0]
         self._assert_content_free_cleanup_pending(operation)
         retained_pin = self._assert_physical_pin_open(operation)

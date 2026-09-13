@@ -237,12 +237,18 @@ class GitSessionHistory:
     def require_generation_ready(
         self,
         expected_generation: GitSessionGenerationIdentity,
+        *,
+        expected_branch_tip: str | None = None,
+        expected_internal_tip: str | None = None,
     ) -> GitSessionResourceInspection:
         """Require exact READY semantics and one retained physical generation."""
 
         if type(expected_generation) is not GitSessionGenerationIdentity:
             raise _history_error(GitSessionHistoryFailureCode.INVALID_REQUEST)
-        resources = self.require_semantic_ready()
+        resources = self.require_semantic_ready(
+            expected_branch_tip=expected_branch_tip,
+            expected_internal_tip=expected_internal_tip,
+        )
         try:
             current = capture_locked_git_session_generation(
                 self._lease,
@@ -714,6 +720,30 @@ class GitSessionRecoveryHistory:
             raise _history_error(GitSessionHistoryFailureCode.RECOVERY_REQUIRED)
         self.require_active()
         return confirmed
+
+    def require_generation_ready(
+        self,
+        expected_generation: GitSessionGenerationIdentity,
+    ) -> GitSessionRecoveryTopology:
+        """Require the exact retained generation under this recovery lease."""
+
+        if type(expected_generation) is not GitSessionGenerationIdentity:
+            raise _history_error(GitSessionHistoryFailureCode.INVALID_REQUEST)
+        topology = self.require_recovery_topology()
+        try:
+            current = capture_locked_git_session_generation(
+                self._lease,
+                topology.resources,
+                expected_worktree_identity=expected_generation.worktree_identity,
+            )
+        except GitSessionResourceError:
+            raise _history_error(
+                GitSessionHistoryFailureCode.RECOVERY_REQUIRED
+            ) from None
+        if current != expected_generation:
+            raise _history_error(GitSessionHistoryFailureCode.RECOVERY_REQUIRED)
+        self.require_active()
+        return topology
 
     def acquire_generation_pin(self) -> GitSessionGenerationPin:
         """Retain the validated recovery generation through the live lease."""

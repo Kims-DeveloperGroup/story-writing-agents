@@ -141,6 +141,23 @@ class StoryCommitGitTestCase(GitSessionResourceGitTestCase):
             session_root.rmdir()
             moved.rename(session_root)
 
+    @contextmanager
+    def replace_session_git_indirection(self, session_root: Path):
+        """Replace only the linked-worktree .git file while retaining its bytes."""
+
+        git_file = session_root / ".git"
+        original = session_root / ".git-generation-original"
+        replacement = session_root / ".git-generation-replacement"
+        payload = git_file.read_bytes()
+        git_file.rename(original)
+        replacement.write_bytes(payload)
+        replacement.rename(git_file)
+        try:
+            yield
+        finally:
+            git_file.unlink()
+            original.rename(git_file)
+
 
 class StoryCommitCandidateContractTests(unittest.TestCase):
     def evidence(
@@ -289,13 +306,20 @@ class StoryCommitCandidateIntegrationTests(StoryCommitGitTestCase):
     def test_apply_identity_rejects_root_replacement_at_every_candidate_read(
         self,
     ) -> None:
-        root, session_root, evidence = self.applied_replace("identity-bound")
+        root, session_root, evidence = self.applied_replace(
+            "identity-bound"
+        )
         observed = os.stat(session_root)
         identity = (observed.st_dev, observed.st_ino)
         artifact_binding = compose_session_artifact_binding(root, "novel")
-        artifact_repository_access = (
-            artifact_binding.open_story_commit_artifact_repository
-        )
+
+        def artifact_repository_access(validate_ready):
+            return artifact_binding.open_story_commit_artifact_repository(
+                validate_ready,
+                expected_generation_identity=(
+                    artifact_binding._generation_identity
+                ),
+            )
 
         with self.replace_session_root(session_root), self.assertRaises(
             StoryCommitError
@@ -308,6 +332,7 @@ class StoryCommitCandidateIntegrationTests(StoryCommitGitTestCase):
                 ("impact",),
                 allowed_worktree_changes=(),
                 expected_session_root_identity=identity,
+                expected_generation_identity=artifact_binding._generation_identity,
                 artifact_repository_access=artifact_repository_access,
             )
         self.assertIs(
@@ -334,12 +359,15 @@ class StoryCommitCandidateIntegrationTests(StoryCommitGitTestCase):
                 ("impact",),
                 allowed_worktree_changes=(),
                 expected_session_root_identity=identity,
+                expected_generation_identity=artifact_binding._generation_identity,
                 artifact_repository_access=artifact_repository_access,
             )
         self.assertIs(
             during_prepare.exception.code,
             StoryCommitFailureCode.CANDIDATE_DRIFT,
         )
+
+        artifact_binding = compose_session_artifact_binding(root, "novel")
 
         binding = candidates_module.prepare_identity_bound_story_commit_candidate(
             root,
@@ -349,6 +377,7 @@ class StoryCommitCandidateIntegrationTests(StoryCommitGitTestCase):
             ("impact",),
             allowed_worktree_changes=(),
             expected_session_root_identity=identity,
+            expected_generation_identity=artifact_binding._generation_identity,
             artifact_repository_access=artifact_repository_access,
         )
         with mock.patch.object(
@@ -359,12 +388,14 @@ class StoryCommitCandidateIntegrationTests(StoryCommitGitTestCase):
             candidates_module.revalidate_identity_bound_story_commit_candidate(
                 binding,
                 identity,
+                artifact_binding._generation_identity,
                 artifact_repository_access=artifact_repository_access,
             )
         self.assertIs(
             during_revalidation.exception.code,
             StoryCommitFailureCode.CANDIDATE_DRIFT,
         )
+
     def test_prepare_is_git_read_only_durable_and_restart_loadable(self) -> None:
         root, session_root, evidence = self.applied_replace()
         before = self.repository_snapshot(root)

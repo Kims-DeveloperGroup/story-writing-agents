@@ -2963,6 +2963,7 @@ every intermediate arrow. The current runtime graph is acyclic.
   recovery-required failure, while private context teardown and descriptor
   cleanup remain unconditional. While that recovery context still owns its
   live repository lease, it may acquire one opaque physical-generation pin,
+  compare the complete retained generation around recovery reads and writes,
   recheck the exact topology, and transfer the pin to its caller; failed
   recheck or transfer closes the pin without replacing the primary failure.
   Opening accepts an optional exact-config worktree allowance for workspace
@@ -3134,7 +3135,8 @@ every intermediate arrow. The current runtime graph is acyclic.
   argv, environment, descriptor, repository lease, or reusable Git capability
   crosses it. Named package-internal preparation and revalidation operations,
   omitted from `__all__`, accept the Apply-bound physical session-root identity
-  without changing the exported binding shape or public function signatures.
+  and complete retained generation identity without changing the exported
+  binding shape or public function signatures.
   Candidate operations propagate an optional exact-config allowance through
   session readiness and history while remaining strict by default.
 - **Direct internal dependencies:** `git.contracts`, `git.process`,
@@ -3147,6 +3149,10 @@ every intermediate arrow. The current runtime graph is acyclic.
   preparation and revalidation receive a guarded repository-access callback
   backed by the already-live history READY validator; each capture obtains one
   complete artifact generation and reuses it for drift checks and staging.
+  They compare that generation before and after history reads, artifact capture,
+  candidate publication, and revalidation under the same lease. Exact generation
+  loss maps to recovery-required; unrelated history failures remain history
+  failures and generic repository/protocol failures retain candidate-drift.
   Preparation
   verifies the exact symbolic session branch and tip, clean real index,
   effective identity/source, complete canonical HEAD and applied states, every
@@ -3196,8 +3202,12 @@ every intermediate arrow. The current runtime graph is acyclic.
   creator process and non-recyclable thread token when the physical root is
   installed; all seven service methods reject a foreign thread or fork child
   before authority/state locks, retained-map mutation, callbacks, history,
-  filesystem, or Git work. Direct construction remains strict by default and
-  does not gain the bound-only creator restriction. Bound artifact entry and
+  filesystem, or Git work. All seven bound methods also validate the complete
+  retained generation before and after their existing history reads or writes:
+  prepare/authorize candidate work, Reject/Revise terminal publication, Execute
+  phase transitions, and inspect/recover observation or recovery. Direct
+  construction remains strict by default and does not gain the bound-only
+  creator restriction. Bound artifact entry and
   exit delegate full generation revalidation to the live history owner under
   its already-held lease; the adapter neither reaches into the private lease
   nor acquires a nested Git lock.
@@ -3216,9 +3226,11 @@ every intermediate arrow. The current runtime graph is acyclic.
   physical session root, and repeats exact semantic READY validation after
   revalidation and immediately before the durable RUNNING boundary. Semantic
   resource loss before RUNNING requires operator recovery; any failure after
-  RUNNING is preserved as outcome-unknown. Once the intentional staged index
-  means ordinary READY inspection no longer applies, phase-aware topology
-  checks instead require the exact registered worktree, symbolic branch,
+  RUNNING is preserved as outcome-unknown. Generation loss before RUNNING is
+  never relabeled as generic history failure; after RUNNING or Git mutation it
+  retains the conservative outcome-unknown phase rule. Once the intentional
+  staged index means ordinary READY inspection no longer applies, phase-aware
+  topology checks instead require the exact registered worktree, symbolic branch,
   branch/internal/main tips, common Git directory, main status, physical root,
   and expected index/worktree content before and after each later mutation or
   durable transition. It writes only exact
@@ -8020,7 +8032,11 @@ every intermediate arrow. The current runtime graph is acyclic.
   compares that complete retained identity under its entry lease and again at
   authoritative postcheck. Lease-free Story Commit access obtains the same
   complete comparison through the Git history owner's existing-lease validator
-  at entry and exit, without private lease access or nested locking. A binding may then mint one opaque
+  at entry and exit, without private lease access or nested locking. Its optional
+  package-internal failure factory translates only the closed invalid-generation
+  result for the bound Commit owner; direct callers without that factory retain
+  `SessionArtifactBindingError`, and unrelated callback failures remain unchanged.
+  A binding may then mint one opaque
   `SessionArtifactGenerationPin` through the Git owner's short identity-only
   lock without entering `open_ready_resources()` or repeating full Git,
   manifest, policy, or artifact validation. The pin wraps six non-inheritable
@@ -8595,9 +8611,13 @@ every intermediate arrow. The current runtime graph is acyclic.
   coordinators are discarded, and the stale repository/access callback is
   detached. Deferral first detaches all authority, then exhausts every pending
   result and authorization close; a triggering failure stays primary, while a
-  no-primary first cleanup failure is raised only after the batch. The operation retains its private, non-inheritable worktree
-  directory descriptor across ordinary deferred cleanup, uses it only for
-  `fstat` identity validation and close, and releases it on successful/durable
+  no-primary first cleanup failure is raised only after the batch. Registered
+  preparation passes its escaping failure through both deferral and unpublished
+  operation abandonment, including physical-pin close, so cleanup cannot replace
+  the guard or binding failure. The operation retains its private,
+  non-inheritable worktree directory descriptor across ordinary deferred
+  cleanup, uses it only for `fstat` identity validation and close, and releases
+  it on successful/durable
   terminalization, reconciled completion, replacement abandonment, or any
   unregistered preparation failure. A later owner can reconcile the exact
   operation through a freshly guarded same-identity repository; an identity
@@ -9070,7 +9090,12 @@ every intermediate arrow. The current runtime graph is acyclic.
   an existing Git lease, runtime-reference deferral exhausts all detached
   content cleanup, and orchestration pin cleanup cannot prevent bound-agent
   release. These corrections add no import
-  edge, export, facade surface, persisted field, or schema version.
+  edge, export, facade surface, persisted field, or schema version. The complete
+  identity-bound Story Commit family now validates the retained generation
+  around all seven methods using existing ordinary or recovery history leases;
+  a closed internal failure factory maps only actual generation loss, while
+  registered reference preparation preserves its active failure through
+  deferral and abandonment. Graph totals remain 142/576/578/0.
   Specialist routing adds one pure module and five net inward runtime
   edges over the provider-recovery baseline: artifact proposals replace their
   roster dependency with the policy, while relationship policy, conversation

@@ -45,7 +45,10 @@ from .session_history_contracts import (
     GitSessionIdentitySource,
     build_candidate_record,
 )
-from .session_resources import require_ready_git_session_resources
+from .session_resources import (
+    GitSessionGenerationIdentity,
+    require_ready_git_session_resources,
+)
 from .story_commit_contracts import (
     StoryCommitApplicationEvidence,
     StoryCommitCandidate,
@@ -62,11 +65,34 @@ _MAX_ENTRIES = 65_536
 _MAX_CONTENT_BYTES = 64 * 1024 * 1024
 _P = ParamSpec("_P")
 _T = TypeVar("_T")
-StoryCommitSemanticReadyValidator = Callable[[], GitSessionResourceInspection]
+StoryCommitSemanticReadyValidator = Callable[
+    [], GitSessionResourceInspection | None
+]
 StoryCommitArtifactRepositoryAccess = Callable[
     [StoryCommitSemanticReadyValidator],
     AbstractContextManager[WritingArtifactRepository],
 ]
+
+
+def _require_history_ready(
+    history: GitSessionHistory,
+    expected_generation: GitSessionGenerationIdentity | None,
+    *,
+    expected_branch_tip: str | None = None,
+    expected_internal_tip: str | None = None,
+) -> GitSessionResourceInspection:
+    """Choose compatibility or full-generation READY validation."""
+
+    if expected_generation is None:
+        return history.require_semantic_ready(
+            expected_branch_tip=expected_branch_tip,
+            expected_internal_tip=expected_internal_tip,
+        )
+    return history.require_generation_ready(
+        expected_generation,
+        expected_branch_tip=expected_branch_tip,
+        expected_internal_tip=expected_internal_tip,
+    )
 
 
 def _content_free_boundary(
@@ -193,11 +219,14 @@ def prepare_identity_bound_story_commit_candidate(
     *,
     allowed_worktree_changes: tuple[str, ...],
     expected_session_root_identity: tuple[int, int],
+    expected_generation_identity: GitSessionGenerationIdentity,
     artifact_repository_access: StoryCommitArtifactRepositoryAccess,
 ) -> StoryCommitCandidateBinding:
     """Package-internal preparation pinned to an Apply worktree identity."""
 
     _require_directory_identity(expected_session_root_identity)
+    if type(expected_generation_identity) is not GitSessionGenerationIdentity:
+        raise _error(StoryCommitFailureCode.INVALID_REQUEST)
     return _prepare_story_commit_candidate(
         root,
         manifest,
@@ -206,6 +235,7 @@ def prepare_identity_bound_story_commit_candidate(
         impact_boundary,
         allowed_worktree_changes=allowed_worktree_changes,
         expected_root_identity=expected_session_root_identity,
+        expected_generation_identity=expected_generation_identity,
         artifact_repository_access=artifact_repository_access,
     )
 
@@ -219,6 +249,7 @@ def _prepare_story_commit_candidate(
     *,
     allowed_worktree_changes: tuple[str, ...],
     expected_root_identity: tuple[int, int] | None,
+    expected_generation_identity: GitSessionGenerationIdentity | None = None,
     artifact_repository_access: StoryCommitArtifactRepositoryAccess | None = None,
 ) -> StoryCommitCandidateBinding:
     """Implement bound and compatibility candidate preparation."""
@@ -248,6 +279,7 @@ def _prepare_story_commit_candidate(
             create=True,
             allowed_worktree_changes=allowed_worktree_changes,
         ) as history:
+            _require_history_ready(history, expected_generation_identity)
             candidate, identity, invariants, _current = _capture(
                 ready.identity.worktree_root,
                 ready.identity.main_root,
@@ -261,8 +293,21 @@ def _prepare_story_commit_candidate(
                 expected_root_identity=session_root_identity,
                 artifact_repository_access=artifact_repository_access,
                 history=history,
+                expected_generation_identity=expected_generation_identity,
+            )
+            _require_history_ready(
+                history,
+                expected_generation_identity,
+                expected_branch_tip=candidate.branch_tip,
+                expected_internal_tip=invariants[0],
             )
             history.write_candidate(_candidate_record(candidate))
+            _require_history_ready(
+                history,
+                expected_generation_identity,
+                expected_branch_tip=candidate.branch_tip,
+                expected_internal_tip=invariants[0],
+            )
         return StoryCommitCandidateBinding(
             candidate=candidate,
             main_root=ready.identity.main_root,
@@ -277,8 +322,14 @@ def _prepare_story_commit_candidate(
         )
     except StoryCommitError:
         raise
-    except GitSessionHistoryError:
-        raise _error(StoryCommitFailureCode.HISTORY_FAILED) from None
+    except GitSessionHistoryError as exc:
+        code = (
+            StoryCommitFailureCode.RECOVERY_REQUIRED
+            if expected_generation_identity is not None
+            and exc.code is GitSessionHistoryFailureCode.RECOVERY_REQUIRED
+            else StoryCommitFailureCode.HISTORY_FAILED
+        )
+        raise _error(code) from None
     except Exception:
         raise _error(StoryCommitFailureCode.CANDIDATE_DRIFT) from None
 
@@ -356,6 +407,7 @@ def revalidate_story_commit_candidate(
 def revalidate_identity_bound_story_commit_candidate(
     binding: StoryCommitCandidateBinding,
     expected_session_root_identity: tuple[int, int],
+    expected_generation_identity: GitSessionGenerationIdentity,
     *,
     history: GitSessionHistory | None = None,
     allowed_worktree_changes: tuple[str, ...] = (),
@@ -364,11 +416,14 @@ def revalidate_identity_bound_story_commit_candidate(
     """Package-internal revalidation pinned to an Apply worktree identity."""
 
     _require_directory_identity(expected_session_root_identity)
+    if type(expected_generation_identity) is not GitSessionGenerationIdentity:
+        raise _error(StoryCommitFailureCode.INVALID_REQUEST)
     return _revalidate_story_commit_candidate(
         binding,
         history=history,
         allowed_worktree_changes=allowed_worktree_changes,
         expected_session_root_identity=expected_session_root_identity,
+        expected_generation_identity=expected_generation_identity,
         artifact_repository_access=artifact_repository_access,
     )
 
@@ -379,6 +434,7 @@ def _revalidate_story_commit_candidate(
     history: GitSessionHistory | None,
     allowed_worktree_changes: tuple[str, ...],
     expected_session_root_identity: tuple[int, int] | None,
+    expected_generation_identity: GitSessionGenerationIdentity | None = None,
     artifact_repository_access: StoryCommitArtifactRepositoryAccess | None = None,
 ) -> StoryCommitRevalidation:
     """Implement public and identity-bound candidate revalidation."""
@@ -412,6 +468,7 @@ def _revalidate_story_commit_candidate(
                     value.internal_ref,
                     opened,
                     expected_session_root_identity,
+                    expected_generation_identity,
                     artifact_repository_access,
                 )
         if type(history) is not GitSessionHistory:
@@ -424,12 +481,19 @@ def _revalidate_story_commit_candidate(
             value.internal_ref,
             history,
             expected_session_root_identity,
+            expected_generation_identity,
             artifact_repository_access,
         )
     except StoryCommitError:
         raise
-    except GitSessionHistoryError:
-        raise _error(StoryCommitFailureCode.HISTORY_FAILED) from None
+    except GitSessionHistoryError as exc:
+        code = (
+            StoryCommitFailureCode.RECOVERY_REQUIRED
+            if expected_generation_identity is not None
+            and exc.code is GitSessionHistoryFailureCode.RECOVERY_REQUIRED
+            else StoryCommitFailureCode.HISTORY_FAILED
+        )
+        raise _error(code) from None
     except Exception:
         raise _error(StoryCommitFailureCode.CANDIDATE_DRIFT) from None
 
@@ -439,11 +503,14 @@ def _revalidate_under_history(
     internal_ref: str,
     history: GitSessionHistory,
     expected_session_root_identity: tuple[int, int] | None,
+    expected_generation_identity: GitSessionGenerationIdentity | None,
     artifact_repository_access: StoryCommitArtifactRepositoryAccess | None,
 ) -> StoryCommitRevalidation:
+    _require_history_ready(history, expected_generation_identity)
     durable = _candidate_from_record(
         history.read_candidate(value.candidate.candidate_id)
     )
+    _require_history_ready(history, expected_generation_identity)
     if durable != value.candidate:
         raise _error(StoryCommitFailureCode.CANDIDATE_DRIFT)
     session_root_identity = (
@@ -464,6 +531,13 @@ def _revalidate_under_history(
         expected_root_identity=session_root_identity,
         artifact_repository_access=artifact_repository_access,
         history=history,
+        expected_generation_identity=expected_generation_identity,
+    )
+    _require_history_ready(
+        history,
+        expected_generation_identity,
+        expected_branch_tip=value.candidate.branch_tip,
+        expected_internal_tip=value.internal_tip,
     )
     if observed != value.candidate or identity != value.effective_identity:
         raise _error(StoryCommitFailureCode.CANDIDATE_DRIFT)
@@ -498,6 +572,7 @@ def _capture(
     expected_root_identity: tuple[int, int] | None,
     artifact_repository_access: StoryCommitArtifactRepositoryAccess | None,
     history: GitSessionHistory,
+    expected_generation_identity: GitSessionGenerationIdentity | None,
 ) -> tuple[
     StoryCommitCandidate,
     GitEffectiveIdentity,
@@ -543,12 +618,23 @@ def _capture(
         )
     else:
         repository_context = artifact_repository_access(
-            history.require_semantic_ready
+            lambda: _require_history_ready(
+                history,
+                expected_generation_identity,
+                expected_branch_tip=branch_tip,
+                expected_internal_tip=internal_tip,
+            )
         )
     with repository_context as repository:
         if type(repository) is not WritingArtifactRepository:
             raise _error(StoryCommitFailureCode.CANDIDATE_DRIFT)
         current = _current_artifact_state(repository)
+    _require_history_ready(
+        history,
+        expected_generation_identity,
+        expected_branch_tip=branch_tip,
+        expected_internal_tip=internal_tip,
+    )
     if (
         current != projected
         or evidence.applied_state_digest != evidence.change_set.projected_state_digest

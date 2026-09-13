@@ -791,19 +791,34 @@ class RuntimeReferenceOperation:
             cleanups += (authorization.close,)
         _run_reference_cleanups(cleanups, failure=failure)
 
-    def _abandon_unretained(self) -> None:
+    def _abandon_unretained(
+        self,
+        *,
+        failure: BaseException | None = None,
+    ) -> None:
         """Close content and the root pin when no registry owns this operation."""
 
         self._require_process_affinity()
         with self._lock:
-            failure: BaseException | None = None
+            cleanup_failure: BaseException | None = None
             try:
-                self._defer_cleanup_locked()
+                self._defer_cleanup_locked(failure=failure)
             except BaseException as exc:
-                failure = exc
-                raise
-            finally:
-                self._close_physical_workspace_pin_locked(failure=failure)
+                if failure is not None:
+                    try:
+                        failure.add_note(
+                            "reference cleanup failed: "
+                            f"{type(exc).__name__}"
+                        )
+                    except BaseException:
+                        pass
+                else:
+                    cleanup_failure = exc
+            self._close_physical_workspace_pin_locked(
+                failure=failure or cleanup_failure,
+            )
+            if failure is None and cleanup_failure is not None:
+                raise cleanup_failure
 
     def _mark_finished_locked(self) -> None:
         self._finished = True
@@ -1015,11 +1030,20 @@ def prepare_registered_guarded_runtime_reference_operation(
                     ReferenceAuthorizationErrorCode.WORKFLOW_FAILURE,
                 )
             return prepared
-    except BaseException:
+    except BaseException as failure:
         if operation is not None:
-            operation._defer_cleanup()
+            try:
+                operation._defer_cleanup(failure=failure)
+            except BaseException as cleanup_failure:
+                try:
+                    failure.add_note(
+                        "reference cleanup failed: "
+                        f"{type(cleanup_failure).__name__}"
+                    )
+                except BaseException:
+                    pass
             if not published:
-                operation._abandon_unretained()
+                operation._abandon_unretained(failure=failure)
         raise
 
 

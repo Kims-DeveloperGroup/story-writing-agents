@@ -985,6 +985,20 @@ a service or history lock, or reaching filesystem or Git I/O. Direct-module
 services without that runtime binding retain their existing compatibility
 behavior.
 
+That identity-bound service also retains the Apply binding's complete
+six-component Git generation and revalidates it across Prepare, Authorize,
+Reject, Revise, Execute, Inspect, and Recover, before and after their owned
+observations and transitions. During Execute, generation loss before a durable
+`running` operation is `recovery_required`; once `running` is durable or Git
+mutation may have occurred, ambiguity remains `outcome_unknown`. Generation
+loss in Reject, Revise, Inspect, or Recover is `recovery_required`, including
+after a terminal or recovery history write, so replacement-generation work
+cannot report success. Borrowed artifact-repository callbacks apply the same
+full-generation check, and binding loss remains authoritative when callback
+work fails at the same time. Direct-module compatibility services continue to
+use semantic READY validation without acquiring this runtime-only generation
+binding.
+
 Process and thread affinity are checked before the authority's internal one-use
 lock. A forked child therefore returns `authority_invalid` without waiting on
 a copied lock or consuming the parent's authority, and it reaches no history,
