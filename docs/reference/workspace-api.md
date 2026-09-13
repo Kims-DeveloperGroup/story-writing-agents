@@ -197,13 +197,16 @@ paths are rejected. Every allowed read opens the no-follow root, traverses
 directories relative to descriptors, and accepts a leaf only when its opened
 and named views are the same unique regular file with link count one. FIFOs,
 devices, symlinks, hard-linked leaves, and identity/mode/size/time drift before
-or after the read fail closed. Compound agent-state and debate reads also pin
+or after the read fail closed. A leaf is limited to 8 MiB: the exact boundary
+is accepted, while one additional byte fails with `WorkspaceSecurityError`.
+Compound agent-state and debate reads also pin
 the intermediate parent-directory descriptor. They accept a result only while
 the complete directory inventory is unchanged: every name and its device,
 inode, file type, link count, size, nanosecond modification time, and
 nanosecond change time must match. A parent-directory swap, added or removed
-entry, or metadata drift therefore fails closed. Debate state/results must
-embed the requested session and debate IDs; agent-state entries must embed the
+entry, metadata drift, or more than 8,192 entries in one inventoried directory
+therefore fails closed; exactly 8,192 entries are accepted. Debate state/results
+must embed the requested session and debate IDs; agent-state entries must embed the
 path's agent, session, and debate ownership. If the agent-state parent is
 missing, absence is checked at the failed open and again immediately before an
 empty tuple is returned; creation between those observations fails closed with
@@ -212,6 +215,12 @@ returning and closes its call-local descriptors on success or failure.
 Generic pathname access, writes, Git operations, control-root fallback, and
 sibling-session fallback are rejected. These internal semantics do not change
 any public constructor or method signature.
+
+The same internal reader captures an agent's canonical ordered common/family/
+role behavior-policy files from the session worktree for guarded runtime
+composition. It returns exact path/byte pairs only; it does not select backend,
+route, runtime configuration, or persona and exposes no generic policy-path
+API.
 
 This explicit path contract is unchanged by opaque readiness. For example,
 readiness does not inspect an unknown symlink beneath `.antigravity/`, but a

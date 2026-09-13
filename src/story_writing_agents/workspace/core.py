@@ -16,6 +16,7 @@ from typing import Any, Callable, Mapping
 
 from ..agents import (
     AGENT_STATE_DIRECTORIES,
+    behavior_policy_files,
 )
 from ..conversations import (
     ConversationContextWindow,
@@ -53,6 +54,8 @@ from .schema import (
 
 
 _SAFE_REFERENCE_OPERATION_ID = re.compile(r"[A-Za-z0-9][A-Za-z0-9_-]{0,127}")
+_SESSION_SOURCE_MAX_FILE_BYTES = 8 * 1024 * 1024
+_SESSION_SOURCE_MAX_DIRECTORY_ENTRIES = 8192
 _DEBATE_CONTEXT_EVENT_FIELDS = frozenset(
     {
         "schema_version",
@@ -1339,12 +1342,24 @@ class SessionSourceWorkspace(Workspace):
                 initial,
                 named_initial,
             )
+            if initial.st_size > _SESSION_SOURCE_MAX_FILE_BYTES:
+                raise WorkspaceSecurityError(
+                    "session source file exceeds read limit"
+                )
             chunks: list[bytes] = []
-            while True:
-                chunk = os.read(descriptor, 64 * 1024)
+            retained_bytes = 0
+            while retained_bytes <= _SESSION_SOURCE_MAX_FILE_BYTES:
+                chunk = os.read(
+                    descriptor,
+                    min(
+                        64 * 1024,
+                        _SESSION_SOURCE_MAX_FILE_BYTES + 1 - retained_bytes,
+                    ),
+                )
                 if not chunk:
                     break
                 chunks.append(chunk)
+                retained_bytes += len(chunk)
             final = os.fstat(descriptor)
             named_final = os.stat(
                 parts[-1],
@@ -1366,6 +1381,10 @@ class SessionSourceWorkspace(Workspace):
             ):
                 raise WorkspaceSecurityError(
                     "session source file identity changed"
+                )
+            if retained_bytes > _SESSION_SOURCE_MAX_FILE_BYTES:
+                raise WorkspaceSecurityError(
+                    "session source file exceeds read limit"
                 )
             return b"".join(chunks)
         finally:
@@ -1410,7 +1429,15 @@ class SessionSourceWorkspace(Workspace):
         """Capture names and identity/type/link/metadata facts through one parent."""
 
         try:
-            names = tuple(sorted(os.listdir(descriptor)))
+            names: list[str] = []
+            with os.scandir(descriptor) as entries:
+                for entry in entries:
+                    if len(names) == _SESSION_SOURCE_MAX_DIRECTORY_ENTRIES:
+                        raise WorkspaceSecurityError(
+                            "session source directory exceeds inventory limit"
+                        )
+                    names.append(entry.name)
+            names.sort()
             facts = []
             for name in names:
                 observed = os.stat(
@@ -1437,6 +1464,24 @@ class SessionSourceWorkspace(Workspace):
             raise WorkspaceSecurityError(
                 "session source directory inventory is unavailable"
             ) from None
+
+    def capture_behavior_policy_files(
+        self,
+        agent_id: str,
+    ) -> tuple[tuple[str, bytes], ...]:
+        """Capture one canonical behavior policy through the bound descriptor."""
+
+        paths = behavior_policy_files(agent_id)
+
+        def read(root: int) -> tuple[tuple[str, bytes], ...]:
+            components: list[tuple[str, bytes]] = []
+            for path in paths:
+                content = self._read_bytes_at(root, path)
+                assert content is not None
+                components.append((path, content))
+            return tuple(components)
+
+        return self._read_bound(read)
 
     @classmethod
     def _require_directory_absent_at(cls, root: int, relative: str) -> None:

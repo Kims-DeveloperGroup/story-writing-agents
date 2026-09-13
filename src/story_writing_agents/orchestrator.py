@@ -249,6 +249,7 @@ from .git.story_commit_contracts import (
     StoryCommitRecoveryAction,
 )
 from .models import (
+    AgentDefinition,
     AgentReply,
     AgentReplyKind,
     AgentReplyNextPhase,
@@ -1381,7 +1382,7 @@ class StoryRuntime:
 
     _reference_operation_registry_lock = threading.RLock()
     _reference_operation_registry: dict[
-        tuple[str, str, str], RuntimeReferenceOperation
+        tuple[str, str, tuple[int, int], str], RuntimeReferenceOperation
     ] = {}
 
     def __init__(
@@ -1782,6 +1783,9 @@ class StoryRuntime:
                 )
                 self._reconcile_reference_operations_at_boundary(
                     session_id=invocation.execution_identity.session_id,
+                    physical_workspace_identity=(
+                        artifact_binding.worktree_identity
+                    ),
                     repository_access=repository_access,
                 )
                 reference_boundary_reconciled = True
@@ -1809,9 +1813,17 @@ class StoryRuntime:
                         ),
                     )
                 )
-            definition = self.prompts.build_contextual_definition(
-                session_id=invocation.execution_identity.session_id,
-                agent_id=invocation.agent_id,
+            definition = (
+                self.prompts.build_contextual_definition(
+                    session_id=invocation.execution_identity.session_id,
+                    agent_id=invocation.agent_id,
+                )
+                if artifact_binding is None
+                else self._build_guarded_contextual_definition(
+                    artifact_binding=artifact_binding,
+                    session_id=invocation.execution_identity.session_id,
+                    agent_id=invocation.agent_id,
+                )
             )
             bound_agent = await self._acquire_bound_agent(definition)
             reference_read = (
@@ -1918,6 +1930,7 @@ class StoryRuntime:
             repository_access,
             session_id=invocation.execution_identity.session_id,
             text=f"${{{path}}}",
+            physical_workspace_identity=artifact_binding.worktree_identity,
             reconcile_existing=not reference_boundary_reconciled,
         )
         proofs = operation.reference_proofs
@@ -2354,7 +2367,17 @@ class StoryRuntime:
             operation.session_id,
         ):
             raise BackendProtocolError("reference operation identity is invalid")
-        key = (str(self.workspace.root), operation.session_id, operation_id)
+        physical_identity = operation.physical_workspace_identity
+        if physical_identity is None:
+            raise BackendProtocolError(
+                "registered reference operation lacks physical workspace identity"
+            )
+        key = (
+            str(self.workspace.root),
+            operation.session_id,
+            physical_identity,
+            operation_id,
+        )
         with StoryRuntime._reference_operation_registry_lock:
             current = StoryRuntime._reference_operation_registry.get(key)
             if current is not None and current is not operation:
@@ -2368,7 +2391,15 @@ class StoryRuntime:
         operation_id = operation.operation_id
         if operation_id is None or not operation.finished:
             return
-        key = (str(self.workspace.root), operation.session_id, operation_id)
+        physical_identity = operation.physical_workspace_identity
+        if physical_identity is None:
+            return
+        key = (
+            str(self.workspace.root),
+            operation.session_id,
+            physical_identity,
+            operation_id,
+        )
         with StoryRuntime._reference_operation_registry_lock:
             if StoryRuntime._reference_operation_registry.get(key) is operation:
                 StoryRuntime._reference_operation_registry.pop(key)
@@ -2376,6 +2407,7 @@ class StoryRuntime:
     def _registered_reference_operation_ids(
         self,
         session_id: str,
+        physical_workspace_identity: tuple[int, int],
     ) -> frozenset[str]:
         """Snapshot exact live IDs while the caller owns repository access."""
 
@@ -2383,10 +2415,19 @@ class StoryRuntime:
         with StoryRuntime._reference_operation_registry_lock:
             return frozenset(
                 operation_id
-                for (owned_root, owned_session, operation_id) in (
+                for (
+                    owned_root,
+                    owned_session,
+                    owned_identity,
+                    operation_id,
+                ) in (
                     StoryRuntime._reference_operation_registry
                 )
-                if owned_root == workspace_root and owned_session == session_id
+                if (
+                    owned_root == workspace_root
+                    and owned_session == session_id
+                    and owned_identity == physical_workspace_identity
+                )
             )
 
     def _has_cleanup_pending_reference_operation(self, session_id: str) -> bool:
@@ -2400,6 +2441,7 @@ class StoryRuntime:
                     owned_root,
                     owned_session,
                     _,
+                    _,
                 ), operation in StoryRuntime._reference_operation_registry.items()
                 if owned_root == workspace_root and owned_session == session_id
             )
@@ -2409,6 +2451,7 @@ class StoryRuntime:
         self,
         *,
         session_id: str,
+        physical_workspace_identity: tuple[int, int],
         repository_access: Callable[
             [], AbstractContextManager[WritingArtifactRepository]
         ],
@@ -2416,32 +2459,40 @@ class StoryRuntime:
         """Retry retained and restarted cleanup before new provider work."""
 
         workspace_root = str(self.workspace.root)
-        with StoryRuntime._reference_operation_registry_lock:
-            registered = tuple(
-                operation
-                for (
-                    owned_root,
-                    owned_session,
-                    _,
-                ), operation in StoryRuntime._reference_operation_registry.items()
-                if (
-                    owned_root == workspace_root
-                    and owned_session == session_id
-                )
-            )
-        retained = tuple(
-            operation for operation in registered if operation.cleanup_is_pending()
-        )
         reconciled_retained: list[RuntimeReferenceOperation] = []
         with repository_access() as repository:
-            for operation in retained:
-                operation.reconcile_cleanup(repository)
+            with StoryRuntime._reference_operation_registry_lock:
+                registered = tuple(
+                    (key, operation)
+                    for key, operation in (
+                        StoryRuntime._reference_operation_registry.items()
+                    )
+                    if key[0] == workspace_root and key[1] == session_id
+                )
+            for key, operation in registered:
+                if operation.defer_if_workspace_replaced(
+                    physical_workspace_identity
+                ):
+                    with StoryRuntime._reference_operation_registry_lock:
+                        if (
+                            StoryRuntime._reference_operation_registry.get(key)
+                            is operation
+                        ):
+                            StoryRuntime._reference_operation_registry.pop(key)
+                    continue
+                if not operation.cleanup_is_pending():
+                    continue
+                operation.reconcile_cleanup(
+                    repository,
+                    physical_workspace_identity=physical_workspace_identity,
+                )
                 reconciled_retained.append(operation)
             repository.reconcile_incomplete_reference_operations(
                 session_id,
                 excluded_ids_supplier=partial(
                     self._registered_reference_operation_ids,
                     session_id,
+                    physical_workspace_identity,
                 ),
             )
         for operation in reconciled_retained:
@@ -2456,17 +2507,20 @@ class StoryRuntime:
         *,
         session_id: str,
         text: str,
+        physical_workspace_identity: tuple[int, int],
         reconcile_existing: bool = True,
     ) -> RuntimeReferenceOperation:
         if reconcile_existing:
             self._reconcile_reference_operations_at_boundary(
                 session_id=session_id,
+                physical_workspace_identity=physical_workspace_identity,
                 repository_access=repository_access,
             )
         return prepare_registered_guarded_runtime_reference_operation(
             repository_access,
             session_id=session_id,
             text=text,
+            physical_workspace_identity=physical_workspace_identity,
             register=self._register_reference_operation,
         )
 
@@ -2497,6 +2551,30 @@ class StoryRuntime:
         """Freshly require and bind one exact session worktree for artifact I/O."""
 
         return compose_session_artifact_binding(self.workspace.root, session_id)
+
+    def _build_guarded_contextual_definition(
+        self,
+        *,
+        artifact_binding: SessionArtifactBinding,
+        session_id: str,
+        agent_id: str,
+    ) -> AgentDefinition:
+        """Build one definition from policy bytes bound to the session worktree."""
+
+        session_sources = SessionSourceWorkspace.from_artifact_binding(
+            artifact_binding
+        )
+        with artifact_binding.open_ready_resources() as access:
+            if access.resources.identity.session_id != session_id:
+                raise SessionArtifactBindingError(
+                    "context policy binding does not match its session"
+                )
+            policy_snapshot = session_sources.capture_behavior_policy_files(agent_id)
+            return self.prompts.build_contextual_definition_with_policy_snapshot(
+                session_id=session_id,
+                agent_id=agent_id,
+                policy_snapshot=policy_snapshot,
+            )
 
     @classmethod
     def _recommendation_event_digest(cls, event: CollaborationEvent | CollaborationEventDraft) -> str:
@@ -2560,9 +2638,18 @@ class StoryRuntime:
         self, session_id: str, kind: LeadRecommendationActionKind,
         specialist_ids: tuple[str, ...], inputs: tuple[CollaborationInputRevision, ...],
         evidence: CollaborationLeadEvidence,
+        *,
+        artifact_binding: SessionArtifactBinding | None = None,
     ) -> CollaborationProposalBasis:
+        if artifact_binding is None:
+            artifact_binding = self._session_artifact_binding(session_id)
         profiles = tuple(self._collaboration_agent_profile(
-            agent_id, self.prompts.build_contextual_definition(session_id=session_id, agent_id=agent_id),
+            agent_id,
+            self._build_guarded_contextual_definition(
+                artifact_binding=artifact_binding,
+                session_id=session_id,
+                agent_id=agent_id,
+            ),
         ) for agent_id in ROSTER if agent_id in {LEAD_ORCHESTRATOR, *specialist_ids})
         route = "lead_recommendation_" + kind.value
         return CollaborationProposalBasis(
@@ -2814,8 +2901,14 @@ class StoryRuntime:
                         artifact_binding=artifact_binding,
                     )
                     if (current_inputs != request.basis.inputs
-                        or self._recommendation_basis(session_id, request.kind, request.specialist_ids,
-                            current_inputs, request.basis.evidence) != request.basis
+                        or self._recommendation_basis(
+                            session_id,
+                            request.kind,
+                            request.specialist_ids,
+                            current_inputs,
+                            request.basis.evidence,
+                            artifact_binding=artifact_binding,
+                        ) != request.basis
                         or self._recommendation_source_fingerprint(
                             session_id,
                             conversation_id,
@@ -3225,7 +3318,9 @@ class StoryRuntime:
                 )
             )
             assert synthesis_calls == 0
-            definition = self.prompts.build_contextual_definition(
+            artifact_binding = self._session_artifact_binding(session_id)
+            definition = self._build_guarded_contextual_definition(
+                artifact_binding=artifact_binding,
                 session_id=session_id,
                 agent_id=specialist_id,
             )
@@ -5096,12 +5191,14 @@ class StoryRuntime:
                 repository_access,
                 session_id=session_id,
                 text=" ".join(item.locator for item in artifact_inputs),
+                physical_workspace_identity=artifact_binding.worktree_identity,
             )
             self._validate_assignment_reference_proofs(
                 artifact_inputs,
                 reference_operation,
             )
-            definition = self.prompts.build_contextual_definition(
+            definition = self._build_guarded_contextual_definition(
+                artifact_binding=artifact_binding,
                 session_id=session_id,
                 agent_id=agent_id,
             )
@@ -6459,8 +6556,10 @@ class StoryRuntime:
             )
         )
         participant_ids = {LEAD_ORCHESTRATOR, *specialist_ids}
+        artifact_binding = self._session_artifact_binding(session_id)
         definitions = {
-            agent_id: self.prompts.build_contextual_definition(
+            agent_id: self._build_guarded_contextual_definition(
+                artifact_binding=artifact_binding,
                 session_id=session_id,
                 agent_id=agent_id,
             )
@@ -7215,6 +7314,7 @@ class StoryRuntime:
             repository_access,
             session_id=session_id,
             text=text,
+            physical_workspace_identity=artifact_binding.worktree_identity,
         )
         if preparation is not None:
             preparation.reference_operation_id = reference_operation.operation_id
@@ -7266,7 +7366,8 @@ class StoryRuntime:
             session_id, conversation_id,
         )
         objective_projection = project_collaboration_history(objective_events)
-        definition = self.prompts.build_contextual_definition(
+        definition = self._build_guarded_contextual_definition(
+            artifact_binding=artifact_binding,
             session_id=session_id,
             agent_id=LEAD_ORCHESTRATOR,
         )
@@ -7919,6 +8020,7 @@ class StoryRuntime:
                 projection=refreshed,
                 lead_definition=definition,
                 evidence=evidence,
+                artifact_binding=artifact_binding,
             )
             request_id = self._new_id("c")
             message_event = self._draft(
@@ -8120,6 +8222,7 @@ class StoryRuntime:
             projection=projection,
             lead_definition=lead_definition,
             evidence=evidence,
+            artifact_binding=artifact_binding,
         )
         request_id = self._new_id("c")
         judgment = self._draft(
@@ -9582,6 +9685,7 @@ class StoryRuntime:
         projection: CollaborationHistoryProjection,
         lead_definition: object,
         evidence: CollaborationLeadEvidence,
+        artifact_binding: SessionArtifactBinding,
     ) -> CollaborationProposal:
         if intent.authoring_scope is None:
             raise BackendProtocolError("live proposal requires authoring scope")
@@ -9664,7 +9768,8 @@ class StoryRuntime:
         definitions = {LEAD_ORCHESTRATOR: lead_definition}
         definitions.update(
             {
-                agent_id: self.prompts.build_contextual_definition(
+                agent_id: self._build_guarded_contextual_definition(
+                    artifact_binding=artifact_binding,
                     session_id=session_id,
                     agent_id=agent_id,
                 )
@@ -9825,7 +9930,8 @@ class StoryRuntime:
                 else specialist_ids
             )
             definitions = {
-                agent_id: self.prompts.build_contextual_definition(
+                agent_id: self._build_guarded_contextual_definition(
+                    artifact_binding=artifact_binding,
                     session_id=session_id,
                     agent_id=agent_id,
                 )

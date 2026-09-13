@@ -1352,22 +1352,24 @@ Guarded `StoryRuntime` creation publishes ownership before its fallible access
 exit. As soon as capture or invocation authorization has created durable state,
 the runtime registers the operation or tracks the invocation while its exact
 transient owner still exists. A process-shared registry keyed by control
-workspace, session, and operation holds a strong cleanup owner until that
-operation is terminal; another `StoryRuntime` in the same process therefore
-does not mistake live work for a restart orphan.
+workspace, session, exact physical worktree identity, and operation holds a
+strong cleanup owner until that operation is terminal; another `StoryRuntime`
+in the same process therefore does not mistake live work for a restart orphan.
 
-If a guard failure or preserved guarded `WorkspaceSecurityError` leaves
-termination uncertain, the runtime immediately closes every retained
-selected-byte result and the content-bearing authorization, which also makes
-its one-use capabilities unusable. It clears pending coordinators and retained
-repository access, leaving only content-free cleanup ownership and an
-unfinished operation marked for cleanup. The failed invocation and any known
-provider work are not replayed.
-At the next same-process artifact-sensitive boundary for that session, runtime
-creates a fresh exact binding and uses durable evidence to terminate unfinished
-invocations before terminating the operation. A candidate-only consensus call
-does the same only when the registry reports pending cleanup; otherwise that
-call remains worktree-free.
+Every failure after registered guarded creation has published the operation
+defers cleanup, not only guard or workspace-security failures. Deferral
+immediately closes every retained selected-byte result and content-bearing
+authorization, makes one-use capabilities unusable, clears pending coordinators
+and repository access, and leaves only content-free ownership of the unfinished
+operation. The failed invocation and any known provider work are not replayed.
+At the next same-process artifact-sensitive boundary, runtime reconciles a
+retained owner only when the fresh binding has the same physical worktree
+identity. If the session name now resolves to a replacement root, it strips and
+unregisters the stale transient owner without running its cleanup against the
+replacement and without adding the old operation ID to the replacement's
+live-owner exclusion set; the original root's durable history is unchanged. A
+candidate-only consensus call enters this boundary only when the registry
+reports pending cleanup; otherwise it remains worktree-free.
 
 After process restart, no transient registry owner survives. The next
 artifact-sensitive boundary inventories validated reference history and

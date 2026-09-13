@@ -209,6 +209,7 @@ class RuntimeReferenceOperation:
         "_lock",
         "_next_ordinal",
         "_pending",
+        "_physical_workspace_identity",
         "_repository",
         "_repository_access",
         "_provider_text",
@@ -228,6 +229,7 @@ class RuntimeReferenceOperation:
         provider_text: str,
         operation_id: str | None,
         authorization: ReferenceAuthorization | None,
+        physical_workspace_identity: tuple[int, int] | None = None,
     ) -> None:
         if type(repository) is not WritingArtifactRepository:
             raise TypeError("repository must be a WritingArtifactRepository")
@@ -243,6 +245,15 @@ class RuntimeReferenceOperation:
             raise ValueError("reference operation identity and authorization differ")
         if bool(batch is not None and batch.references) != (authorization is not None):
             raise ValueError("reference operation capture does not match its batch")
+        if physical_workspace_identity is not None and (
+            type(physical_workspace_identity) is not tuple
+            or len(physical_workspace_identity) != 2
+            or any(
+                type(value) is not int or value <= 0
+                for value in physical_workspace_identity
+            )
+        ):
+            raise TypeError("physical workspace identity is invalid")
         self._repository: WritingArtifactRepository | None = repository
         self._repository_access: (
             Callable[[], AbstractContextManager[WritingArtifactRepository]] | None
@@ -257,6 +268,7 @@ class RuntimeReferenceOperation:
         )
         self._next_ordinal = 1
         self._pending: dict[str, _TrackedReferenceReadInvocation] = {}
+        self._physical_workspace_identity = physical_workspace_identity
         self._cleanup_pending = False
         self._finished = False
         self._guarded = False
@@ -296,6 +308,35 @@ class RuntimeReferenceOperation:
 
         with self._lock:
             return self._cleanup_pending
+
+    @property
+    def physical_workspace_identity(self) -> tuple[int, int] | None:
+        """Return the immutable content-free identity bound before publication."""
+
+        return self._physical_workspace_identity
+
+    def defer_if_workspace_replaced(
+        self,
+        current_identity: tuple[int, int],
+    ) -> bool:
+        """Erase transient authority when this process handle belongs elsewhere."""
+
+        if (
+            type(current_identity) is not tuple
+            or len(current_identity) != 2
+            or any(type(value) is not int or value <= 0 for value in current_identity)
+        ):
+            raise TypeError("physical workspace identity is invalid")
+        with self._lock:
+            if self._physical_workspace_identity == current_identity:
+                return False
+            if self._physical_workspace_identity is None:
+                raise ReferenceOperationFailure(
+                    self._required_operation_id(),
+                    ReferenceAuthorizationErrorCode.CORRELATION_MISMATCH,
+                )
+            self._defer_cleanup_locked()
+            return True
 
     def begin_invocation(
         self,
@@ -504,16 +545,35 @@ class RuntimeReferenceOperation:
             self._defer_cleanup_locked()
         return ReferenceOperationFailure(operation_id, code)
 
-    def reconcile_cleanup(self, repository: WritingArtifactRepository) -> None:
+    def reconcile_cleanup(
+        self,
+        repository: WritingArtifactRepository,
+        *,
+        physical_workspace_identity: tuple[int, int],
+    ) -> None:
         """Reconcile through fresh access without accepting its outer postcheck."""
 
         if type(repository) is not WritingArtifactRepository:
             raise TypeError("repository must be a WritingArtifactRepository")
+        if (
+            type(physical_workspace_identity) is not tuple
+            or len(physical_workspace_identity) != 2
+            or any(
+                type(value) is not int or value <= 0
+                for value in physical_workspace_identity
+            )
+        ):
+            raise TypeError("physical workspace identity is invalid")
         if self.operation_id is None:
             return
         with self._lock:
             if self._finished:
                 return
+            if self._physical_workspace_identity != physical_workspace_identity:
+                raise ReferenceOperationFailure(
+                    self._required_operation_id(),
+                    ReferenceAuthorizationErrorCode.CORRELATION_MISMATCH,
+                )
             self._reconcile_cleanup_locked(repository)
 
     def _reconcile_cleanup_locked(
@@ -662,6 +722,7 @@ def prepare_guarded_runtime_reference_operation(
     *,
     session_id: str,
     text: str,
+    physical_workspace_identity: tuple[int, int],
 ) -> RuntimeReferenceOperation:
     """Prepare a package-internal operation with short guarded repository calls."""
 
@@ -676,6 +737,7 @@ def prepare_guarded_runtime_reference_operation(
             text=text,
             repository_access=repository_access,
             operation_created=None,
+            physical_workspace_identity=physical_workspace_identity,
         )
 
 
@@ -686,6 +748,7 @@ def prepare_registered_guarded_runtime_reference_operation(
     *,
     session_id: str,
     text: str,
+    physical_workspace_identity: tuple[int, int],
     register: Callable[[RuntimeReferenceOperation], None],
 ) -> RuntimeReferenceOperation:
     """Publish captured authority to its runtime owner before guard exit."""
@@ -713,9 +776,10 @@ def prepare_registered_guarded_runtime_reference_operation(
                 text=text,
                 repository_access=repository_access,
                 operation_created=publish,
+                physical_workspace_identity=physical_workspace_identity,
             )
-    except BaseException as exc:
-        if operation is not None and operation._preserves_guard_failure(exc):
+    except BaseException:
+        if operation is not None:
             operation._defer_cleanup()
         raise
 
@@ -729,6 +793,7 @@ def _prepare_runtime_reference_operation(
         [], AbstractContextManager[WritingArtifactRepository]
     ] | None,
     operation_created: Callable[[RuntimeReferenceOperation], None] | None = None,
+    physical_workspace_identity: tuple[int, int] | None = None,
 ) -> RuntimeReferenceOperation:
     """Implement public and package-internal reference preparation."""
 
@@ -743,6 +808,7 @@ def _prepare_runtime_reference_operation(
             provider_text=text,
             operation_id=None,
             authorization=None,
+            physical_workspace_identity=physical_workspace_identity,
         )
         operation._repository_access = repository_access
         operation._guarded = repository_access is not None
@@ -757,6 +823,7 @@ def _prepare_runtime_reference_operation(
             provider_text=batch.provider_text,
             operation_id=None,
             authorization=None,
+            physical_workspace_identity=physical_workspace_identity,
         )
         operation._repository_access = repository_access
         operation._guarded = repository_access is not None
@@ -774,6 +841,7 @@ def _prepare_runtime_reference_operation(
             provider_text=batch.provider_text,
             operation_id=operation_id,
             authorization=authorization,
+            physical_workspace_identity=physical_workspace_identity,
         )
         operation._repository_access = repository_access
         operation._guarded = repository_access is not None
@@ -818,6 +886,7 @@ def _prepare_runtime_reference_operation(
             provider_text=batch.provider_text,
             operation_id=operation_id,
             authorization=authorization,
+            physical_workspace_identity=physical_workspace_identity,
         )
         operation._repository_access = repository_access
         operation._guarded = repository_access is not None

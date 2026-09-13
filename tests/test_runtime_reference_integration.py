@@ -102,7 +102,10 @@ class RuntimeExecutionRetirementTests(unittest.TestCase):
 
     def _complete_fresh_cleanup(self, binding, operation) -> None:
         with binding.open_ready_resources() as access:
-            operation.reconcile_cleanup(access.repository)
+            operation.reconcile_cleanup(
+                access.repository,
+                physical_workspace_identity=binding.worktree_identity,
+            )
         operation.complete_reconciled_cleanup()
         self.assertTrue(operation.finished)
         self.assertFalse(operation.cleanup_is_pending())
@@ -347,6 +350,7 @@ class RuntimeExecutionRetirementTests(unittest.TestCase):
                     repository_access,
                     session_id="novel",
                     text="Read ${core_documents/global_outline.md}.",
+                    physical_workspace_identity=binding.worktree_identity,
                 )
             self.assertIs(guarded.exception, failure)
 
@@ -382,6 +386,7 @@ class RuntimeExecutionRetirementTests(unittest.TestCase):
                 repository_access,
                 session_id="novel",
                 text="Read ${core_documents/global_outline.md}.",
+                physical_workspace_identity=binding.worktree_identity,
             )
 
         preparation_marker = SessionArtifactBindingError("preparation marker")
@@ -699,6 +704,7 @@ class RuntimeExecutionRetirementTests(unittest.TestCase):
             repository_access,
             session_id="novel",
             text="Read ${core_documents/global_outline.md}.",
+            physical_workspace_identity=binding.worktree_identity,
         )
         invocation = operation.begin_invocation(
             agent_id=PLOT_ARCHITECT,
@@ -774,6 +780,7 @@ class RuntimeExecutionRetirementTests(unittest.TestCase):
             repository_access,
             session_id="novel",
             text="Read ${core_documents/global_outline.md}.",
+            physical_workspace_identity=binding.worktree_identity,
         )
         invocation = operation.begin_invocation(
             agent_id=PLOT_ARCHITECT,
@@ -851,7 +858,7 @@ class RuntimeExecutionRetirementTests(unittest.TestCase):
             ReferenceOperationState.TERMINATED,
         )
 
-    def test_registered_capture_postcheck_retains_owner_until_fresh_terminalization(
+    def test_registered_ordinary_postcheck_retains_owner_until_fresh_terminalization(
         self,
     ) -> None:
         workspace = pristine_initialized_workspace(self)
@@ -860,7 +867,7 @@ class RuntimeExecutionRetirementTests(unittest.TestCase):
         runtime = StoryRuntime(workspace)
         workspace_root = str(workspace.root)
         self.addCleanup(self._cleanup_runtime_registry, workspace_root)
-        marker = SessionArtifactBindingError("capture postcheck rejected")
+        marker = RuntimeError("ordinary capture postcheck rejected")
         reject_postcheck = [True]
         published = []
 
@@ -875,11 +882,12 @@ class RuntimeExecutionRetirementTests(unittest.TestCase):
             runtime._register_reference_operation(operation)
             published.append(operation)
 
-        with self.assertRaises(SessionArtifactBindingError) as rejected:
+        with self.assertRaises(RuntimeError) as rejected:
             prepare_registered_guarded_runtime_reference_operation(
                 repository_access,
                 session_id="novel",
                 text="Read ${core_documents/global_outline.md}.",
+                physical_workspace_identity=binding.worktree_identity,
                 register=register,
             )
         self.assertIs(rejected.exception, marker)
@@ -888,7 +896,9 @@ class RuntimeExecutionRetirementTests(unittest.TestCase):
         self._assert_content_free_cleanup_pending(operation)
         assert operation.operation_id is not None
         self.assertEqual(
-            runtime._registered_reference_operation_ids("novel"),
+            runtime._registered_reference_operation_ids(
+                "novel", binding.worktree_identity
+            ),
             frozenset((operation.operation_id,)),
         )
         with binding.open_ready_resources() as access:
@@ -911,10 +921,16 @@ class RuntimeExecutionRetirementTests(unittest.TestCase):
 
         runtime._reconcile_reference_operations_at_boundary(
             session_id="novel",
+            physical_workspace_identity=fresh_binding.worktree_identity,
             repository_access=fresh_repository_access,
         )
         self.assertTrue(operation.finished)
-        self.assertEqual(runtime._registered_reference_operation_ids("novel"), frozenset())
+        self.assertEqual(
+            runtime._registered_reference_operation_ids(
+                "novel", fresh_binding.worktree_identity
+            ),
+            frozenset(),
+        )
         with fresh_binding.open_ready_resources() as access:
             terminal = access.repository.inspect_reference_operation(
                 operation.operation_id
@@ -952,6 +968,7 @@ class RuntimeExecutionRetirementTests(unittest.TestCase):
                 repository_access,
                 session_id="novel",
                 text="Read ${core_documents/global_outline.md}.",
+                physical_workspace_identity=binding.worktree_identity,
                 register=register,
             )
         self.assertIs(rejected.exception, marker)
@@ -966,11 +983,14 @@ class RuntimeExecutionRetirementTests(unittest.TestCase):
 
         runtime._reconcile_reference_operations_at_boundary(
             session_id="novel",
+            physical_workspace_identity=binding.worktree_identity,
             repository_access=fresh_repository_access,
         )
         self.assertTrue(operation.finished)
         self.assertEqual(
-            runtime._registered_reference_operation_ids("novel"),
+            runtime._registered_reference_operation_ids(
+                "novel", binding.worktree_identity
+            ),
             frozenset(),
         )
 
@@ -993,6 +1013,7 @@ class RuntimeExecutionRetirementTests(unittest.TestCase):
             repository_access,
             session_id="novel",
             text="Read ${core_documents/global_outline.md}.",
+            physical_workspace_identity=binding.worktree_identity,
         )
         marker = SessionArtifactBindingError("authorization postcheck rejected")
 
@@ -1025,7 +1046,9 @@ class RuntimeExecutionRetirementTests(unittest.TestCase):
             (ReferenceInvocationState.AUTHORIZED,),
         )
         self.assertEqual(
-            runtime._registered_reference_operation_ids("novel"),
+            runtime._registered_reference_operation_ids(
+                "novel", binding.worktree_identity
+            ),
             frozenset((operation.operation_id,)),
         )
 
@@ -1038,6 +1061,7 @@ class RuntimeExecutionRetirementTests(unittest.TestCase):
 
         runtime._reconcile_reference_operations_at_boundary(
             session_id="novel",
+            physical_workspace_identity=fresh_binding.worktree_identity,
             repository_access=fresh_repository_access,
         )
         self.assertTrue(operation.finished)
@@ -1110,6 +1134,7 @@ class RuntimeExecutionRetirementTests(unittest.TestCase):
 
         restarted._reconcile_reference_operations_at_boundary(
             session_id="novel",
+            physical_workspace_identity=fresh_binding.worktree_identity,
             repository_access=repository_access,
         )
         with fresh_binding.open_ready_resources() as access:
@@ -1221,10 +1246,12 @@ class RuntimeExecutionRetirementTests(unittest.TestCase):
             repository_access,
             session_id="novel",
             text="Read ${core_documents/global_outline.md}.",
+            physical_workspace_identity=binding.worktree_identity,
         )
         assert operation.operation_id is not None
         second._reconcile_reference_operations_at_boundary(
             session_id="novel",
+            physical_workspace_identity=binding.worktree_identity,
             repository_access=repository_access,
         )
         with binding.open_ready_resources() as access:
@@ -1239,7 +1266,80 @@ class RuntimeExecutionRetirementTests(unittest.TestCase):
         self.assertFalse(operation.finished)
         first._fail_reference_operation(operation, RuntimeError("owner stopped"))
         self.assertTrue(operation.finished)
-        self.assertEqual(first._registered_reference_operation_ids("novel"), frozenset())
+        self.assertEqual(
+            first._registered_reference_operation_ids(
+                "novel", binding.worktree_identity
+            ),
+            frozenset(),
+        )
+
+    def test_replaced_workspace_drops_stale_authority_without_cross_root_cleanup(
+        self,
+    ) -> None:
+        workspace = pristine_initialized_workspace(self)
+        provision_session_resources(workspace.root, "novel")
+        binding = compose_session_artifact_binding(workspace.root, "novel")
+        runtime = StoryRuntime(workspace)
+        workspace_root = str(workspace.root)
+        self.addCleanup(self._cleanup_runtime_registry, workspace_root)
+
+        @contextmanager
+        def repository_access():
+            with binding.open_ready_resources() as access:
+                yield access.repository
+
+        operation = runtime._prepare_session_reference_operation(
+            repository_access,
+            session_id="novel",
+            text="Read ${core_documents/global_outline.md}.",
+            physical_workspace_identity=binding.worktree_identity,
+        )
+        assert operation.operation_id is not None
+        replacement_identity = (
+            binding.worktree_identity[0],
+            binding.worktree_identity[1] + 1,
+        )
+
+        class ReplacementRepository:
+            excluded: frozenset[str] | None = None
+
+            def reconcile_incomplete_reference_operations(
+                self,
+                session_id,
+                *,
+                excluded_ids_supplier,
+            ):
+                self.excluded = excluded_ids_supplier()
+
+        replacement = ReplacementRepository()
+
+        @contextmanager
+        def replacement_access():
+            yield replacement
+
+        runtime._reconcile_reference_operations_at_boundary(
+            session_id="novel",
+            physical_workspace_identity=replacement_identity,
+            repository_access=replacement_access,
+        )
+
+        self._assert_content_free_cleanup_pending(operation)
+        self.assertEqual(replacement.excluded, frozenset())
+        self.assertEqual(
+            runtime._registered_reference_operation_ids(
+                "novel", binding.worktree_identity
+            ),
+            frozenset(),
+        )
+        with binding.open_ready_resources() as access:
+            history = access.repository.inspect_reference_operation(
+                operation.operation_id
+            )
+        assert history is not None
+        self.assertIs(
+            history.operation_events[-1].operation_state,
+            ReferenceOperationState.CAPTURED,
+        )
 
     def test_terminal_postcheck_reconciles_before_runtime_marks_finished(self) -> None:
         workspace = pristine_initialized_workspace(self)
@@ -1258,6 +1358,7 @@ class RuntimeExecutionRetirementTests(unittest.TestCase):
             repository_access,
             session_id="novel",
             text="Read ${core_documents/global_outline.md}.",
+            physical_workspace_identity=binding.worktree_identity,
         )
         invocation = operation.begin_invocation(
             agent_id=PLOT_ARCHITECT,
@@ -1293,7 +1394,9 @@ class RuntimeExecutionRetirementTests(unittest.TestCase):
         self._assert_content_free_cleanup_pending(operation)
         assert operation.operation_id is not None
         self.assertEqual(
-            runtime._registered_reference_operation_ids("novel"),
+            runtime._registered_reference_operation_ids(
+                "novel", binding.worktree_identity
+            ),
             frozenset((operation.operation_id,)),
         )
         with binding.open_ready_resources() as access:
@@ -1315,10 +1418,16 @@ class RuntimeExecutionRetirementTests(unittest.TestCase):
 
         runtime._reconcile_reference_operations_at_boundary(
             session_id="novel",
+            physical_workspace_identity=fresh_binding.worktree_identity,
             repository_access=fresh_repository_access,
         )
         self.assertTrue(operation.finished)
-        self.assertEqual(runtime._registered_reference_operation_ids("novel"), frozenset())
+        self.assertEqual(
+            runtime._registered_reference_operation_ids(
+                "novel", fresh_binding.worktree_identity
+            ),
+            frozenset(),
+        )
 
     def test_long_lived_reference_and_source_adapter_reacquire_exact_access(
         self,
@@ -1344,6 +1453,7 @@ class RuntimeExecutionRetirementTests(unittest.TestCase):
             repository_access,
             session_id="novel",
             text="Read ${core_documents/global_outline.md}.",
+            physical_workspace_identity=binding.worktree_identity,
         )
         invocation = operation.begin_invocation(
             agent_id=PLOT_ARCHITECT,

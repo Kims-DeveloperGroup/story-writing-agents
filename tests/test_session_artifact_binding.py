@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import os
 import subprocess
+import tempfile
 import threading
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import contextmanager
@@ -24,7 +25,11 @@ from story_writing_agents.agent_context.sources import (
     ContextSourceErrorCode,
     OwnAgentStateSourceAdapter,
 )
-from story_writing_agents.agents import LEAD_ORCHESTRATOR, PLOT_ARCHITECT
+from story_writing_agents.agents import (
+    LEAD_ORCHESTRATOR,
+    PLOT_ARCHITECT,
+    behavior_policy_files,
+)
 from story_writing_agents.conversations import (
     CollaborationNextAction,
     CollaborationStepState,
@@ -173,6 +178,47 @@ class RuntimeSessionArtifactBindingTests(LeadOrchestrationTestCase):
         self.assertIn('"language":"EN"', state)
         self.assertNotIn('"language":"KO"', state)
 
+    def test_guarded_definition_uses_session_policy_and_control_configuration(
+        self,
+    ) -> None:
+        binding = compose_session_artifact_binding(
+            self.control_workspace.root,
+            self.session_id,
+        )
+        policy_relative = behavior_policy_files(PLOT_ARCHITECT)[-1]
+        policy_path = self.workspace.path(policy_relative)
+        marker = b"\nSESSION_WORKTREE_POLICY_MARKER\n"
+        policy_path.write_bytes(policy_path.read_bytes() + marker)
+        control_definition = self.runtime.prompts.build_contextual_definition(
+            session_id=self.session_id,
+            agent_id=PLOT_ARCHITECT,
+        )
+
+        guarded = self.runtime._build_guarded_contextual_definition(
+            artifact_binding=binding,
+            session_id=self.session_id,
+            agent_id=PLOT_ARCHITECT,
+        )
+
+        self.assertIn(marker.strip(), guarded.system_prompt_file.content)
+        self.assertNotIn(marker.strip(), control_definition.system_prompt_file.content)
+        self.assertNotEqual(guarded.fingerprint, control_definition.fingerprint)
+        self.assertEqual(guarded.backend, control_definition.backend)
+        self.assertEqual(guarded.language, control_definition.language)
+        self.assertEqual(guarded.persona_file, control_definition.persona_file)
+        self.assertEqual(
+            guarded.system_prompt_file.path,
+            self.control_workspace.path(policy_relative),
+        )
+
+        policy_path.write_bytes(policy_path.read_bytes() + b"SECOND_POLICY_VERSION\n")
+        rebuilt = self.runtime._build_guarded_contextual_definition(
+            artifact_binding=binding,
+            session_id=self.session_id,
+            agent_id=PLOT_ARCHITECT,
+        )
+        self.assertNotEqual(rebuilt.fingerprint, guarded.fingerprint)
+
     def test_session_source_paths_reject_unsafe_lexical_forms_before_io(
         self,
     ) -> None:
@@ -202,6 +248,78 @@ class RuntimeSessionArtifactBindingTests(LeadOrchestrationTestCase):
                 SessionSourceWorkspace._read_bytes_at(123456, relative)
             open_call.assert_not_called()
             duplicate_call.assert_not_called()
+
+    def test_session_source_file_read_limit_accepts_boundary_and_rejects_next_byte(
+        self,
+    ) -> None:
+        limit = 8 * 1024 * 1024
+        with tempfile.TemporaryDirectory(prefix="session-source-file-limit-") as root:
+            path = os.path.join(root, "source.bin")
+            source = os.open(path, os.O_WRONLY | os.O_CREAT, 0o600)
+            os.ftruncate(source, limit)
+            os.close(source)
+            descriptor = os.open(root, os.O_RDONLY)
+            try:
+                self.assertEqual(
+                    len(SessionSourceWorkspace._read_bytes_at(descriptor, "source.bin")),
+                    limit,
+                )
+                source = os.open(path, os.O_WRONLY | os.O_APPEND)
+                os.write(source, b"x")
+                os.close(source)
+                with self.assertRaisesRegex(
+                    WorkspaceSecurityError,
+                    "exceeds read limit",
+                ):
+                    SessionSourceWorkspace._read_bytes_at(descriptor, "source.bin")
+            finally:
+                os.close(descriptor)
+
+    def test_session_source_directory_inventory_limit_is_exact_and_repeatable(
+        self,
+    ) -> None:
+        limit = 8192
+        with tempfile.TemporaryDirectory(prefix="session-source-inventory-") as root:
+            directory_path = os.path.join(root, "inventory")
+            os.mkdir(directory_path)
+            for ordinal in range(limit):
+                entry = os.open(
+                    os.path.join(directory_path, f"entry-{ordinal:04d}"),
+                    os.O_WRONLY | os.O_CREAT,
+                    0o600,
+                )
+                os.close(entry)
+            root_descriptor = os.open(root, os.O_RDONLY)
+            descriptor = os.open(directory_path, os.O_RDONLY)
+            try:
+                inventory = SessionSourceWorkspace._capture_directory_inventory(
+                    descriptor
+                )
+                self.assertEqual(len(inventory), limit)
+                entry = os.open(
+                    os.path.join(directory_path, "entry-over-limit"),
+                    os.O_WRONLY | os.O_CREAT,
+                    0o600,
+                )
+                os.close(entry)
+                with self.assertRaisesRegex(
+                    WorkspaceSecurityError,
+                    "exceeds inventory limit",
+                ):
+                    SessionSourceWorkspace._capture_directory_inventory(descriptor)
+                with self.assertRaisesRegex(
+                    WorkspaceSecurityError,
+                    "exceeds inventory limit",
+                ):
+                    SessionSourceWorkspace._verify_directory_at(
+                        root_descriptor,
+                        "inventory",
+                        descriptor,
+                        inventory,
+                    )
+            finally:
+                os.close(descriptor)
+                os.close(root_descriptor)
 
     def test_session_source_rejects_fifo_and_hardlinked_owned_records(
         self,

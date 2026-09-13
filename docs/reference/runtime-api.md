@@ -115,16 +115,24 @@ derived from the same call-local binding; it exposes no generic path, write, or
 Git authority. Source paths must be canonical relative POSIX text. Each allowed
 read reopens and rechecks the exact physical session root, accepts only one
 unique regular-file leaf, rejects FIFOs/devices/symlinks/hard links and
-identity/metadata drift, and checks embedded debate or agent-state ownership
-before returning. A compound agent-state or debate read pins its intermediate
+identity/metadata drift, caps each file at 8 MiB, and checks embedded debate or
+agent-state ownership before returning. A compound agent-state or debate read
+pins its intermediate
 parent descriptor and rechecks the complete inventory: names plus device,
 inode, type, link count, size, nanosecond modification time, and nanosecond
-change time. Parent replacement or any inventory drift fails closed. A missing
+change time. Exactly 8,192 entries are accepted per inventoried directory; an
+additional entry, parent replacement, or any inventory drift fails closed. A
+missing
 agent-state parent produces an empty result only after absence is checked when
 the open fails and again immediately before return; creation between those
 observations fails closed. A missing, replaced, or unsafe bound root fails
 closed as a content-free `source_unavailable` instead of borrowing control-root
 or sibling-session state.
+
+Artifact-sensitive definitions capture the canonical ordered behavior-policy
+bytes from that guarded session worktree. Validated configuration, runtime
+overrides, backend and route selection, and persona remain owned by the control
+workspace; session policy capture does not redirect those authorities.
 
 ## Phase-confirmed consensus methods
 
@@ -284,7 +292,14 @@ no installed CLI or interactive continuation route.
 Provider input is an `AgentRequest` with the runtime-selected agent, phase,
 revision, fixed task text, input, and current candidate. Canonical artifact
 input retains the normal provider-read reference authorization and digest
-revalidation; durable events contain handles/digests rather than file bytes.
+revalidation. Artifact-backed consensus therefore binds the exact physical
+session worktree, reconciles only cleanup owned by that identity, and builds
+the agent definition from its guarded policy bytes. Candidate-only consensus
+with no same-process pending reference cleanup remains worktree-free and uses
+the control-owned definition. If such cleanup is pending, it first binds the
+current worktree and reconciles only identity-matching ownership; its definition
+then uses that binding's session policy. Durable events contain handles/digests
+rather than file bytes.
 See [Consensus runs](../guides/consensus-runs.md) for examples and user-visible
 state meanings, and [Consensus design](../design/consensus-workflow.md) for the
 event/authority mechanism.
@@ -1054,15 +1069,18 @@ planning/review, while loss of the exact bound resources requires recovery.
 Repair authoritative session resources/history before continuing.
 
 For those guarded references, creation publishes the operation or invocation
-owner before a fallible access exit. A process-shared `StoryRuntime` registry
-retains strong content-free cleanup ownership while transient bytes, results,
-authorization, and capability authority are closed and retained access to the
-old binding is dropped. The operation remains unfinished with cleanup pending.
-The next same-process artifact-sensitive boundary uses a fresh exact binding
-to reconcile that cleanup. After restart, the next such boundary reconciles
-durable nonterminal orphans instead. Reconciliation is invocation-first,
-operation-second, idempotent, non-replaying, and fail-closed on corrupt
-evidence. See
+owner before a fallible access exit. Every failure after publication defers
+cleanup. A process-shared `StoryRuntime` registry keys content-free ownership
+by control workspace, session, physical worktree identity, and operation while
+transient bytes/results, authorization, capability authority, and retained
+binding access are closed. The next same-process artifact-sensitive boundary
+reconciles only an owner whose physical identity matches its fresh binding. A
+replacement root receives neither the old cleanup nor its operation ID in the
+replacement's live-owner exclusion set; the stale transient owner is removed
+and the original durable history is unchanged. After restart, the next such
+boundary reconciles durable nonterminal orphans instead. Reconciliation is
+invocation-first, operation-second, idempotent, non-replaying, and fail-closed
+on corrupt evidence. See
 [Explicit-reference evidence recovery](../operations/recovery-and-limitations.md#explicit-reference-evidence-recovery).
 
 Guarded reference preparation preserves `WorkspaceSecurityError` and binding

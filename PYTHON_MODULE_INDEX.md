@@ -7090,6 +7090,15 @@ every intermediate arrow. The current runtime graph is acyclic.
   draft provenance and exact-candidate review gates still control candidate
   preparation and Apply. Recommendation requests participate in the existing
   task projection; recommendation completion never satisfies authoring.
+- **Session policy binding:** Every Lead or specialist provider call and each
+  persisted or rederived recommendation, advisory, continuation, consultation,
+  or confirmation profile uses the canonical behavior-policy bytes captured
+  through its live session-artifact binding. Artifact-backed consensus uses the
+  same seam; candidate-only consensus retains its reference-free control-policy
+  definition only when it has no binding. Configuration snapshots, runtime and
+  backend overrides, provider-route generation, persona selection, and the
+  runtime policy overlay remain control-owned. This changes neither provider
+  CWD nor provider project-root selection.
 - **Direct internal dependencies:** `agent_context.accounting`,
   `agent_context.continuation`, `agent_context.manifest`, `agent_context.planning`, `agent_context.service`,
   `agent_context.progress`, `agent_context.sources`, `agents`, `artifact_proposals`, `backend`, `config`,
@@ -7112,9 +7121,10 @@ every intermediate arrow. The current runtime graph is acyclic.
   binding state, per-conversation async locks,
   private confirmed-step, recommendation, and artifact-application capabilities,
   and live execution-attempt markers. A process-wide, lock-protected registry,
-  keyed by canonical control-workspace path, session, and reference-operation
-  identity, strongly retains exact live or deferred reference operations across
-  `StoryRuntime` instances. Registration occurs from the repository transaction
+  keyed by canonical control-workspace path, session, physical worktree
+  identity, and reference-operation identity, strongly retains exact live or
+  deferred reference operations across `StoryRuntime` instances. Registration
+  occurs from the repository transaction
   after durable capture and before its fallible guard exit. Lead,
   collaboration, and artifact-backed consensus provider boundaries first retry
   deferred operations through that boundary's fresh session repository and
@@ -7128,8 +7138,12 @@ every intermediate arrow. The current runtime graph is acyclic.
   concurrent runtime cannot reconcile an operation between durable capture and
   registry publication.
   Deferred operations have already released transient bytes and their stale
-  repository binding; the runtime removes them only after fresh guarded access
-  passes its outer postcheck and durable terminalization is known.
+  repository binding. Same-identity operations are removed only after fresh
+  guarded access passes its outer postcheck and durable terminalization is
+  known. A retained handle from a replaced physical worktree is instead
+  locally deferred and removed without accessing the replacement repository or
+  marking copied durable evidence terminal; its ID is not excluded from that
+  repository's independent restart reconciliation.
   Every artifact-sensitive top-level operation freshly binds the exact READY
   session resource and physical worktree identity. Direct reads use one short
   synchronous guarded access; lazy provider reference and writing-artifact
@@ -7260,7 +7274,10 @@ every intermediate arrow. The current runtime graph is acyclic.
   context marker. That marker participates in the contextual definition
   fingerprint, so a direct binding cannot be resumed as a contextual binding;
   the established `build_definition()` keeps its exact eager core-document
-  binding behavior for direct and explicitly custom callers. Every Lead
+  binding behavior for direct and explicitly custom callers. The separate
+  package-internal `build_contextual_definition_with_policy_snapshot()` accepts
+  only the exact ordered canonical path/byte tuple for its agent and binds
+  those injected bytes to the same stable logical policy paths. Every Lead
   definition appends a deterministic `lead-outcome-v4` contract overlay to its
   retained domain policy bytes before constructing the content-addressed
   prompt reference. This reaches existing copied workspace policies and newly
@@ -7284,9 +7301,12 @@ every intermediate arrow. The current runtime graph is acyclic.
   `models`, `workspace`, `writing_artifacts`, and
   `writing_artifacts.repository`.
 - **State, resources, and side effects:** Reads verified prompt references and
-  owner-isolated agent history. With no injected snapshot it resolves persisted
-  configuration on demand; with a snapshot it reuses those persisted values but
-  still loads session runtime overrides for every definition. The legacy path
+  owner-isolated agent history. A supplied behavior-policy snapshot replaces
+  only the policy-component bytes; persona, configuration, runtime/backend
+  overrides, provider-route generation, and logical policy identities remain
+  control-workspace facts. Without an injected configuration snapshot it
+  resolves persisted configuration on demand; with one it reuses those values
+  but still loads session runtime overrides for every definition. The legacy path
   requests only the agent's core context paths and binds stable, strict-UTF-8,
   NUL-free immutable byte snapshots into prompt references; no later provider
   step reopens an artifact path. The contextual path performs no core-document
@@ -7691,7 +7711,10 @@ every intermediate arrow. The current runtime graph is acyclic.
   derived only from an exact
   `workspace.initialization.SessionArtifactBinding`; it exposes the existing
   `Workspace` read shape needed by context adapters while rejecting inherited
-  pathname I/O. Package-internal `discover_workspace` delegates nearest
+  pathname I/O. Its package-internal `capture_behavior_policy_files()` reads
+  only the canonical ordered role-policy paths for one agent and returns exact
+  logical-path/byte pairs without exposing generic path or binding authority.
+  Package-internal `discover_workspace` delegates nearest
   recognizable-boundary selection and constructs an exactly ready workspace.
   `Workspace.inspect_debate_context` is the strict, separate context-sidecar
   inspection operation. `Workspace.read_agent_session_state` returns one
@@ -7721,12 +7744,15 @@ every intermediate arrow. The current runtime graph is acyclic.
   short semantic-READY/physical-root access from that binding, traverses the
   pinned descriptor with strict lexical and no-follow checks, pins the nested
   agent-state session or discussion-log session directory for the complete
-  logical read, and captures its sorted leaf inventory with device, inode,
-  type, link count, size, mtime, and ctime. Every selected leaf is read relative
-  to that retained directory; before return, the directory must still be its
-  named identity and its complete metadata inventory must match. Each leaf is
-  also required during its read to remain the same unique regular file with
-  stable metadata, while a missing nested directory is rechecked immediately
+  logical read, and streams at most 8192 directory entries before sorting and
+  capturing device, inode, type, link count, size, mtime, and ctime facts. Entry
+  8193 fails before excess name or stat retention. Every selected leaf is read
+  relative to that retained directory; before return, the directory must still
+  be its named identity and its complete metadata inventory must match. Each
+  leaf is prechecked at 8 MiB and incrementally limited to that content plus one
+  detection byte, then required during its read to remain the same unique
+  regular file with stable metadata; growth cannot bypass the running bound. A
+  missing nested directory is rechecked immediately
   before an empty result returns and must remain absent across the complete
   operation. Debate result/state session and debate
   identities, and every agent-state agent/session/debate identity, must match
@@ -8335,14 +8361,17 @@ every intermediate arrow. The current runtime graph is acyclic.
   `reference_operation_belongs_to_session`, plus the exact fail-closed
   `reference_operation_session_id` decoder. Package-internal
   `prepare_guarded_runtime_reference_operation(...)`, omitted from every
-  facade, injects a repository-access context-manager callback without changing
-  the established operation constructor or public preparation signature. The
+  facade, injects a repository-access context-manager callback and requires the
+  immutable physical worktree identity used by identity-checked cleanup,
+  without changing the established operation constructor or public preparation
+  signature. The
   sibling package-internal
   `prepare_registered_guarded_runtime_reference_operation(...)` publishes a
   newly captured operation to its runtime owner before the surrounding guard
-  can reject its return. Runtime-owned cleanup inspection, fresh-repository
-  reconciliation, and postcheck-completion methods expose only content-free
-  lifecycle state. None
+  can reject its return and binds it to one immutable process-local physical
+  worktree identity. Runtime-owned identity inspection, replacement deferral,
+  cleanup inspection, fresh-repository reconciliation, and postcheck-completion
+  methods expose only content-free lifecycle state. None
   is re-exported by the writing-artifact or project-root facade. Preparation preserves exact source
   and provider-text projections and uses a no-operation-ID fast path when no
   references exist. Each referenced provider attempt receives a fresh
@@ -8370,12 +8399,15 @@ every intermediate arrow. The current runtime graph is acyclic.
   preparation, repository actions, failure handling, terminalization, and
   cleanup so binding loss reaches the binding owner's typed recovery boundary;
   guarded capture also retains its established workspace-security propagation.
-  Guard rejection or a preserved guarded `WorkspaceSecurityError` moves the
-  registered operation to content-free cleanup-pending state: transient
+  Every exception escaping registered preparation after publication moves the
+  operation to content-free cleanup-pending state and is re-raised unchanged:
+  transient
   results and authorization bytes are closed, pending
   coordinators are discarded, and the stale repository/access callback is
   detached. A later owner can reconcile the exact operation through a freshly
-  guarded repository; runtime state becomes finished only after the outer
+  guarded same-identity repository; an identity mismatch fails closed before
+  repository use, while explicit replacement deferral only erases local
+  transient authority. Runtime state becomes finished only after the outer
   postcheck accepts already-terminal durable evidence. Postcheck failure leaves
   the retained handle cleanup-eligible while already-persisted repository
   evidence remains authoritative.
@@ -8732,7 +8764,10 @@ every intermediate arrow. The current runtime graph is acyclic.
 
 - The combined runtime has 142 production units, 573 runtime edges, 575
   all-import edges, and no directed runtime cycle. Whole-source path parity is
-  exact. Deterministic story-commit operation binding, exact staged-recovery
+  exact. Bounded session-source reads and inventories, session-bound behavior
+  policy capture, and physical-identity-aware runtime-reference cleanup change
+  no module, import edge, export, facade, persisted schema field, or schema
+  version. Deterministic story-commit operation binding, exact staged-recovery
   provenance, and submitted-call preservation across reference-cleanup binding
   loss change no module, import edge, export, schema field, or schema version.
   Pre-change random Commit and confirmation-salted Reject operation identities

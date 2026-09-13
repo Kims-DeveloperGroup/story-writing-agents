@@ -170,15 +170,22 @@ run before a result is accepted.
 Canonical artifact input uses the normal reference operation: runtime
 revalidates the path and digest and gives the provider an authorized read
 coordinator. Canonical bytes are not embedded in durable consensus events and
-the agent cannot bypass the reference.
+the agent cannot bypass the reference. This artifact-backed path binds the
+exact physical session worktree, reconciles only reference cleanup owned by
+that identity, and builds the agent definition from its canonical session
+policy bytes; configuration, backend/route, runtime overrides, and persona
+remain control-owned.
 
 Candidate-only consensus normally reads unpublished candidate material without
-requesting a session worktree. If the process-shared runtime registry has
-pending reference cleanup for that session, the same call first creates a
-fresh exact binding and drains the content-free cleanup without replaying
-provider work. With no registered cleanup it remains worktree-free. A restart
-orphan is instead reconciled at the next artifact-sensitive boundary; a
-candidate-only call does not scan the worktree merely to discover one.
+requesting a session worktree and uses the control-owned definition. If the
+process-shared runtime registry has pending reference cleanup for that session,
+the same call first creates a fresh exact binding, reconciles only cleanup whose
+physical identity matches, and then uses that binding's session policy without
+replaying provider work. A replaced root receives neither the old cleanup nor
+the old operation ID as a live-owner exclusion. With no registered cleanup the
+call remains worktree-free. A restart orphan is instead reconciled at the next
+artifact-sensitive boundary; a candidate-only call does not scan the worktree
+merely to discover one.
 
 ## Continue a deadlock without copying the candidate
 
