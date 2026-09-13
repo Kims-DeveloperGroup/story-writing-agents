@@ -83,7 +83,7 @@ from story_writing_agents.writing_artifacts.repository import (
     WritingArtifactRepository,
 )
 
-from tests.helpers import initialize_test_workspace
+from tests.helpers import pristine_initialized_workspace
 
 
 _REPOSITORY_ROOT = Path(__file__).resolve().parents[1]
@@ -325,11 +325,7 @@ class _Clock:
 
 class LedgerTestCase(unittest.TestCase):
     def setUp(self) -> None:
-        self.temporary = tempfile.TemporaryDirectory()
-        self.addCleanup(self.temporary.cleanup)
-        self.workspace = initialize_test_workspace(
-            Path(self.temporary.name) / "workspace"
-        )
+        self.workspace = pristine_initialized_workspace(self)
         self.scope = _scope()
         self.key = ContextLedgerKey(self.scope, "provider")
         self.projection = _projection(self.scope, mandatory_reference_count=1)
@@ -1919,8 +1915,8 @@ class LedgerStorageSecurityAndAtomicityTests(LedgerTestCase):
             "lock_directory",
             "lock_mode",
         ):
-            with self.subTest(kind=kind), tempfile.TemporaryDirectory() as temporary:
-                workspace = initialize_test_workspace(Path(temporary) / "workspace")
+            with self.subTest(kind=kind):
+                workspace = pristine_initialized_workspace(self)
                 ledger = ContextLedger(workspace, clock=_Clock())
                 key = ContextLedgerKey(self.scope, "provider")
                 ledger.invalidate(key, expected_generation=0)
@@ -1930,7 +1926,7 @@ class LedgerStorageSecurityAndAtomicityTests(LedgerTestCase):
                 )
                 record = directory / f"{digest}.json"
                 lock = directory / f"{digest}.lock"
-                outside = Path(temporary) / "outside"
+                outside = workspace.root.parent / "outside"
                 outside.write_bytes(b"outside-safe")
                 os.chmod(outside, 0o600)
                 target = record if kind.startswith("record") else lock
@@ -1966,9 +1962,7 @@ class LedgerStorageSecurityAndAtomicityTests(LedgerTestCase):
     def test_workspace_root_identity_replacement_is_rejected_without_new_state(
         self,
     ) -> None:
-        workspace = Workspace(
-            Path(self.temporary.name) / "identity-workspace"
-        ).initialize()
+        workspace = pristine_initialized_workspace(self)
         ledger = ContextLedger(workspace, clock=_Clock())
         original = workspace.root.with_name("identity-workspace-original")
         workspace.root.rename(original)
