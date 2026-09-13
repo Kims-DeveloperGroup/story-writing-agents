@@ -68,6 +68,8 @@ READY check immediately before `apply_artifact_changes()` starts. All of these
 exit checks run after success, `RuntimeError`, or cancellation. If the body and
 exit check both fail, binding loss is authoritative; a clean postcheck
 preserves the original exception, and cleanup completes in either case. The
+authoritative binding failure may note only the superseded exception's type;
+it carries no body/provider message or content. The
 binding keeps one stable exact repository object private. Retaining it grants
 no later or cross-thread authority. The underlying Git lease, session history,
 artifact access, and Commit authority are affine to a
@@ -119,7 +121,9 @@ token. Foreign-thread or forked-child use fails before repository locking or
 filesystem inspection; a child may only close its inherited descriptor copies
 through the idempotent, child-safe close path. If provider or persistence work
 fails while the physical-generation recheck also detects loss, generation loss
-is authoritative and enters the existing recovery boundary.
+is authoritative and enters the existing recovery boundary. Any retained
+diagnostic about the displaced body/provider failure is limited to its
+content-free exception type, never its message or payload.
 
 This continuity mechanism does not set or confine a story-runtime provider's
 working directory or project root. That separate execution boundary remains

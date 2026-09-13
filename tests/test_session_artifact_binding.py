@@ -1167,6 +1167,61 @@ class RuntimeSessionArtifactBindingTests(LeadOrchestrationTestCase):
             with self.assertRaises(OSError):
                 os.fstat(descriptor)
 
+        resource_descriptor = os.dup(0)
+        resource_chain = tuple(os.dup(0) for _ in range(2))
+        resource_failure = RuntimeError("source processing failed")
+        resource_closes = []
+
+        def close_resources(descriptor):
+            resource_closes.append(descriptor)
+            original_close(descriptor)
+            raise KeyboardInterrupt("source resource close interrupted")
+
+        with mock.patch.object(
+            workspace_core.os,
+            "close",
+            side_effect=close_resources,
+        ):
+            SessionSourceWorkspace._close_source_resources(
+                resource_descriptor,
+                resource_chain,
+                failure=resource_failure,
+            )
+        self.assertEqual(
+            resource_closes,
+            [resource_descriptor, *reversed(resource_chain)],
+        )
+        self.assertEqual(len(resource_failure.__notes__), 3)
+
+        with tempfile.TemporaryDirectory(prefix="source-leaf-race-") as root:
+            path = os.path.join(root, "appeared.txt")
+            with open(path, "wb") as stream:
+                stream.write(b"appeared after first check")
+            root_descriptor = os.open(root, os.O_RDONLY)
+            original_open = os.open
+            missed = False
+
+            def miss_first_leaf(name, flags, *args, **kwargs):
+                nonlocal missed
+                if name == "appeared.txt" and not missed:
+                    missed = True
+                    raise FileNotFoundError(name)
+                return original_open(name, flags, *args, **kwargs)
+
+            try:
+                with mock.patch.object(
+                    workspace_core.os,
+                    "open",
+                    side_effect=miss_first_leaf,
+                ), self.assertRaises(WorkspaceSecurityError):
+                    SessionSourceWorkspace._read_bytes_at(
+                        root_descriptor,
+                        "appeared.txt",
+                    )
+                self.assertTrue(missed)
+            finally:
+                os.close(root_descriptor)
+
     def test_access_postcheck_revoke_and_duplicate_cleanup_preserve_primary(
         self,
     ) -> None:
@@ -1182,6 +1237,24 @@ class RuntimeSessionArtifactBindingTests(LeadOrchestrationTestCase):
         self.assertIn(
             "session artifact cleanup failed: KeyboardInterrupt",
             postcheck_failure.__notes__,
+        )
+
+        body_failure = RuntimeError("yielded body failed")
+        confirmed_loss = SessionArtifactBindingError(
+            "confirmed generation changed"
+        )
+        access = SimpleNamespace(
+            require_ready=mock.Mock(side_effect=confirmed_loss)
+        )
+        with self.assertRaises(SessionArtifactBindingError) as caught:
+            initialization_module._postvalidate_session_artifact_access(
+                access,
+                failure=body_failure,
+            )
+        self.assertIsNot(caught.exception, body_failure)
+        self.assertIn(
+            "yielded body failure superseded by binding loss: RuntimeError",
+            caught.exception.__notes__,
         )
 
         binding = compose_session_artifact_binding(
@@ -1269,6 +1342,26 @@ class RuntimeSessionArtifactBindingTests(LeadOrchestrationTestCase):
             self.assertEqual(len(opened), 1)
             with self.assertRaises(OSError):
                 os.fstat(opened[0])
+
+        lower_pin = SimpleNamespace(close=mock.Mock())
+        wrapper_failure = KeyboardInterrupt("pin wrapper interrupted")
+        lower_pin.close.side_effect = SystemExit("lower pin close interrupted")
+        with mock.patch.object(
+            initialization_module,
+            "acquire_git_session_generation_pin",
+            return_value=lower_pin,
+        ), mock.patch.object(
+            initialization_module,
+            "SessionArtifactGenerationPin",
+            side_effect=wrapper_failure,
+        ), self.assertRaises(KeyboardInterrupt) as caught:
+            binding.acquire_generation_pin()
+        self.assertIs(caught.exception, wrapper_failure)
+        lower_pin.close.assert_called_once_with()
+        self.assertIn(
+            "session artifact cleanup failed: SystemExit",
+            wrapper_failure.__notes__,
+        )
 
     def test_binding_composition_preserves_primary_failure_over_close_failure(
         self,

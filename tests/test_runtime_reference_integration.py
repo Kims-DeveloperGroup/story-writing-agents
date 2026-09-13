@@ -120,6 +120,63 @@ class RuntimeExecutionRetirementTests(unittest.TestCase):
         os.fstat(descriptor)
         return descriptor
 
+    def test_descriptor_and_owner_pin_cleanup_preserve_active_baseexception(
+        self,
+    ) -> None:
+        workspace = pristine_initialized_workspace(self)
+        repository = WritingArtifactRepository(workspace.root)
+        direct_descriptor = os.open(workspace.root, os.O_RDONLY)
+        owner_descriptor = os.open(workspace.root, os.O_RDONLY)
+        identity = os.fstat(owner_descriptor)
+        operation = runtime_references_module.RuntimeReferenceOperation(
+            repository,
+            session_id="novel",
+            batch=None,
+            source_text="plain text",
+            provider_text="plain text",
+            operation_id=None,
+            authorization=None,
+            physical_workspace_identity=(identity.st_dev, identity.st_ino),
+            physical_workspace_pin=owner_descriptor,
+        )
+        original_close = os.close
+        close_attempts = []
+
+        def close_then_fail(descriptor):
+            close_attempts.append(descriptor)
+            original_close(descriptor)
+            raise SystemExit("physical pin close interrupted")
+
+        direct_failure = RuntimeError("direct descriptor owner failed")
+        owner_failure = KeyboardInterrupt("operation cleanup interrupted")
+        with mock.patch.object(
+            runtime_references_module.os,
+            "close",
+            side_effect=close_then_fail,
+        ):
+            runtime_references_module._close_descriptor(
+                direct_descriptor,
+                failure=direct_failure,
+            )
+            with mock.patch.object(
+                runtime_references_module.RuntimeReferenceOperation,
+                "_defer_cleanup_locked",
+                autospec=True,
+                side_effect=owner_failure,
+            ), self.assertRaises(KeyboardInterrupt) as caught:
+                operation._abandon_unretained()
+        self.assertIs(caught.exception, owner_failure)
+        self.assertEqual(close_attempts, [direct_descriptor, owner_descriptor])
+        self.assertIsNone(operation._physical_workspace_pin)
+        for failure in (direct_failure, owner_failure):
+            self.assertIn(
+                "physical workspace pin cleanup failed: SystemExit",
+                failure.__notes__,
+            )
+        for descriptor in close_attempts:
+            with self.assertRaises(OSError):
+                os.fstat(descriptor)
+
     def _assert_descriptor_closed(self, descriptor: int) -> None:
         with self.assertRaises(OSError):
             os.fstat(descriptor)

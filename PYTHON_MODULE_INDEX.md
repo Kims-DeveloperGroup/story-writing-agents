@@ -7877,7 +7877,11 @@ every intermediate arrow. The current runtime graph is acyclic.
   bound instead of materializing all split lines. A
   missing nested directory is rechecked immediately
   before an empty result returns and must remain absent across the complete
-  operation. Debate result/state session and debate
+  operation. A missing leaf is likewise re-statted relative to its retained
+  parent descriptor after ancestor revalidation and returns absent only when
+  that final observation is still missing. Descriptor/chain cleanup exhausts
+  every owned close while preserving an active body `BaseException` as primary.
+  Debate result/state session and debate
   identities, and every agent-state agent/session/debate identity, must match
   their requested paths. The guard and every call-local descriptor close on
   success or failure before bytes return. Descriptor-backed reads and retained
@@ -8030,7 +8034,9 @@ every intermediate arrow. The current runtime graph is acyclic.
   succeeds, roll back partial activation, and close all untransferred
   descriptors and lock stacks on every setup `BaseException`; cleanup failures
   remain content-free secondary notes and never replace the original protocol
-  or cancellation failure.
+  or cancellation failure. Generation-pin construction likewise retains the
+  lower Git pin until the wrapper is complete, then transfers it once; failed
+  construction closes the local pin exactly once without replacing its primary.
   Borrowed story-commit artifact access uses the live history validator instead
   of acquiring a second Git lease and remains synchronous. Outer and borrowed
   story-commit access exits require the current locked READY inspection to
@@ -8038,8 +8044,9 @@ every intermediate arrow. The current runtime graph is acyclic.
   paths; nested exits repeat active lease and named-root checks within that
   outer semantic transaction. Every exit closes its owned resources. An
   original body failure is preserved when postvalidation succeeds, while
-  binding loss on any of those exits becomes the authoritative typed binding
-  error. Later
+  confirmed binding-generation loss on any exit becomes the authoritative typed
+  binding error even when the body also failed; the displaced failure is reduced
+  to a content-free type note. Later
   path replacement and persistent
   same-inode Git drift therefore fail closed before bytes return; orchestration
   keeps each access and repository operation synchronous and short, never
@@ -8585,7 +8592,10 @@ every intermediate arrow. The current runtime graph is acyclic.
   finished only after the outer
   postcheck accepts already-terminal durable evidence. Postcheck failure leaves
   the retained handle cleanup-eligible while already-persisted repository
-  evidence remains authoritative.
+  evidence remains authoritative. Physical-worktree pin cleanup clears local or
+  operation ownership before one raw close attempt, catches `BaseException`, and
+  preserves an active preparation, publication, or deferred-cleanup failure with
+  only a content-free cleanup-type note.
   Every referenced guarded, registered, or unguarded operation retains its
   creator process and the repository-lock owner's non-recyclable thread token.
   Invocation allocation, reads, result acknowledgement, acceptance,
@@ -9035,7 +9045,11 @@ every intermediate arrow. The current runtime graph is acyclic.
   release remains one-shot. Already-archived conversation handling also retires
   exact runtime-owned pending Commit authority. The authoritative graph remains
   142 production units, 576 runtime edges, 578 all-import edges, and zero
-  directed runtime cycles.
+  directed runtime cycles. Session-source missing-leaf reads now require a final
+  descriptor-relative absence observation; confirmed binding-generation loss is
+  authoritative over a simultaneous body failure; and binding/runtime-reference
+  pin cleanup is primary-aware and one-shot. These corrections add no import
+  edge, export, facade surface, persisted field, or schema version.
   Specialist routing adds one pure module and five net inward runtime
   edges over the provider-recovery baseline: artifact proposals replace their
   roster dependency with the policy, while relationship policy, conversation

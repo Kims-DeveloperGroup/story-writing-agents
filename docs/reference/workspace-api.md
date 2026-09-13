@@ -178,9 +178,10 @@ Commit access performs one complete history-owned READY validation before and
 after its body. Apply adds an explicit complete check immediately before its
 repository mutation starts. All exit checks run after a successful body,
 `RuntimeError`, or cancellation. If a check finds binding loss, the
-content-free binding failure takes precedence; a clean postcheck preserves the
-original exception. Descriptors, access tokens, and the cooperating-runtime
-lease close on every path.
+content-free binding failure takes precedence; its optional note names only the
+superseded exception type, never its message or provider/body content. A clean
+postcheck preserves the original exception. Descriptors, access tokens, and
+the cooperating-runtime lease close on every path.
 
 When composed, the binding also captures the exact physical generation of the
 control root, common Git directory, session administrative directory, session
@@ -234,10 +235,14 @@ allowances are applied to each successive agent-state file. Agent-state entries
 must embed the path's agent, session, and debate ownership. If the agent-state
 parent is missing, the retained existing ancestor prefix and absent edge are
 captured twice and must match before an empty tuple is returned. A missing leaf
-likewise requires full ancestor-chain revalidation; creation or replacement
-between observations fails closed with `WorkspaceSecurityError`. The reader verifies
-the named root again before returning and closes its call-local descriptors on
-success or failure.
+that is allowed to return absence first requires full ancestor-chain
+revalidation, then restats the leaf through the retained parent descriptor;
+only a second `FileNotFoundError` permits the empty result. Creation or
+replacement between observations fails closed with `WorkspaceSecurityError`.
+The reader verifies the named root again before returning. Cleanup attempts the
+leaf descriptor and every retained ancestor descriptor in reverse order even
+after a `BaseException`; an active primary failure remains authoritative and
+receives only content-free cleanup exception-type notes.
 Generic pathname access, writes, Git operations, control-root fallback, and
 sibling-session fallback are rejected. These internal semantics do not change
 any public constructor or method signature.

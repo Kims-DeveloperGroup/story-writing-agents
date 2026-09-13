@@ -1373,6 +1373,25 @@ class SessionSourceWorkspace(Workspace):
             pass
 
     @classmethod
+    def _close_source_resources(
+        cls,
+        descriptor: int,
+        directory_chain: tuple[int, ...],
+        *,
+        failure: BaseException | None,
+    ) -> None:
+        cleanup_failure: BaseException | None = None
+        if descriptor >= 0:
+            try:
+                cls._close_source_descriptor(descriptor, failure=failure)
+            except BaseException as exc:
+                cleanup_failure = exc
+        primary = failure if failure is not None else cleanup_failure
+        cls._close_directory_chain(directory_chain, failure=primary)
+        if failure is None and cleanup_failure is not None:
+            raise cleanup_failure
+
+    @classmethod
     def _open_directory_chain_at(
         cls,
         root: int,
@@ -1382,8 +1401,9 @@ class SessionSourceWorkspace(Workspace):
         descriptors, missing_index = cls._capture_directory_chain_state(root, parts)
         if missing_index is None:
             return descriptors
-        cls._close_directory_chain(descriptors)
-        raise FileNotFoundError(relative)
+        failure = FileNotFoundError(relative)
+        cls._close_directory_chain(descriptors, failure=failure)
+        raise failure
 
     @classmethod
     def _verify_directory_chain_at(
@@ -1394,6 +1414,7 @@ class SessionSourceWorkspace(Workspace):
     ) -> None:
         parts = () if not relative else cls._safe_relative_parts(relative)
         rebound, missing_index = cls._capture_directory_chain_state(root, parts)
+        failure: BaseException | None = None
         try:
             if missing_index is not None or len(rebound) != len(descriptors):
                 raise WorkspaceSecurityError(
@@ -1407,8 +1428,11 @@ class SessionSourceWorkspace(Workspace):
                 raise WorkspaceSecurityError(
                     "session source directory identity changed"
                 )
+        except BaseException as exc:
+            failure = exc
+            raise
         finally:
-            cls._close_directory_chain(rebound)
+            cls._close_directory_chain(rebound, failure=failure)
 
     @classmethod
     def _read_bytes_at(
@@ -1450,6 +1474,7 @@ class SessionSourceWorkspace(Workspace):
             ) from None
         descriptor = -1
         directory = directory_chain[-1]
+        failure: BaseException | None = None
         try:
             flags = os.O_RDONLY | os.O_NOFOLLOW | getattr(os, "O_NONBLOCK", 0)
             try:
@@ -1468,7 +1493,17 @@ class SessionSourceWorkspace(Workspace):
                             "/".join(parts[:-1]),
                             directory_chain,
                         )
-                        return None
+                        try:
+                            os.stat(
+                                parts[-1],
+                                dir_fd=directory,
+                                follow_symlinks=False,
+                            )
+                        except FileNotFoundError:
+                            return None
+                        raise WorkspaceSecurityError(
+                            "session source file identity changed"
+                        )
                     raise WorkspaceSecurityError(
                         "session source file identity changed"
                     )
@@ -1535,16 +1570,19 @@ class SessionSourceWorkspace(Workspace):
             )
             return content
         except OSError:
-            raise WorkspaceSecurityError(
+            failure = WorkspaceSecurityError(
                 "session source file is unavailable"
-            ) from None
+            )
+            raise failure from None
+        except BaseException as exc:
+            failure = exc
+            raise
         finally:
-            if descriptor >= 0:
-                try:
-                    os.close(descriptor)
-                except OSError:
-                    pass
-            cls._close_directory_chain(directory_chain)
+            cls._close_source_resources(
+                descriptor,
+                directory_chain,
+                failure=failure,
+            )
 
     @classmethod
     def _verify_directory_at(
@@ -1635,6 +1673,7 @@ class SessionSourceWorkspace(Workspace):
     @classmethod
     def _require_directory_absent_at(cls, root: int, relative: str) -> None:
         parts = cls._safe_relative_parts(relative)
+        failure: BaseException | None = None
         try:
             first, first_missing = cls._capture_directory_chain_state(root, parts)
         except OSError:
@@ -1647,6 +1686,7 @@ class SessionSourceWorkspace(Workspace):
                     "session source directory inventory changed"
                 )
             second, second_missing = cls._capture_directory_chain_state(root, parts)
+            second_failure: BaseException | None = None
             try:
                 if first_missing != second_missing or len(first) != len(second):
                     raise WorkspaceSecurityError(
@@ -1660,14 +1700,21 @@ class SessionSourceWorkspace(Workspace):
                     raise WorkspaceSecurityError(
                         "session source directory identity changed"
                     )
+            except BaseException as exc:
+                second_failure = exc
+                raise
             finally:
-                cls._close_directory_chain(second)
+                cls._close_directory_chain(second, failure=second_failure)
         except OSError:
-            raise WorkspaceSecurityError(
+            failure = WorkspaceSecurityError(
                 "session source directory inventory is unavailable"
-            ) from None
+            )
+            raise failure from None
+        except BaseException as exc:
+            failure = exc
+            raise
         finally:
-            cls._close_directory_chain(first)
+            cls._close_directory_chain(first, failure=failure)
 
     @staticmethod
     def _require_unique_regular_file(
@@ -1766,6 +1813,7 @@ class SessionSourceWorkspace(Workspace):
 
         def read(root: int) -> tuple[AgentStateEntry, ...]:
             directory_chain: tuple[int, ...] | None = None
+            failure: BaseException | None = None
             try:
                 try:
                     directory_chain = self._open_directory_chain_at(
@@ -1850,9 +1898,15 @@ class SessionSourceWorkspace(Workspace):
                     root, relative_directory, directory_chain, inventory
                 )
                 return result
+            except BaseException as exc:
+                failure = exc
+                raise
             finally:
                 if directory_chain is not None:
-                    self._close_directory_chain(directory_chain)
+                    self._close_directory_chain(
+                        directory_chain,
+                        failure=failure,
+                    )
 
         return self._read_bound(read)
 
@@ -1874,6 +1928,7 @@ class SessionSourceWorkspace(Workspace):
                 ]
                 | None
             ) = None
+            failure: BaseException | None = None
             try:
                 try:
                     directory_chain = self._open_directory_chain_at(
@@ -2010,9 +2065,15 @@ class SessionSourceWorkspace(Workspace):
                         inventory,
                     )
                 return inspected
+            except BaseException as exc:
+                failure = exc
+                raise
             finally:
                 if directory_chain is not None:
-                    self._close_directory_chain(directory_chain)
+                    self._close_directory_chain(
+                        directory_chain,
+                        failure=failure,
+                    )
 
         return self._read_bound(read)
 

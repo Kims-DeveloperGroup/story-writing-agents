@@ -1405,6 +1405,15 @@ abandonment, and every unretained preparation path each close the pin exactly
 once. A candidate-only consensus call enters this boundary only when the
 registry reports pending cleanup; otherwise it remains worktree-free.
 
+Reference descriptor cleanup is `BaseException`-safe and primary-aware.
+Preparation relinquishes each local descriptor before attempting its close,
+and an operation clears its owner-pin field before closing, so the owner path is
+one-shot. A failure while deferring content or authorization cannot skip the
+pin close. When another failure is already active, a close failure adds only
+its exception type as a content-free note and cannot replace the primary;
+without a primary, ordinary close `OSError` is suppressed while a non-`OSError`
+`BaseException` propagates. All applicable cleanup steps are still attempted.
+
 After process restart, no transient registry owner survives. The next
 artifact-sensitive boundary inventories validated reference history and
 reconciles every nonterminal orphan. Reconciliation is idempotent: already

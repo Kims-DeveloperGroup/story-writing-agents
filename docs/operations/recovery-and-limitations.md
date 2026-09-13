@@ -1610,6 +1610,12 @@ does not scan the worktree, so an orphan waits for an artifact-sensitive
 boundary. Corrupt evidence fails closed and blocks the boundary; it is never
 skipped, rewritten, or used to authorize replay.
 
+Reference pin ownership is cleared before close, making owner cleanup one-shot.
+Deferral uses `finally`-style cleanup, so any `BaseException` from content or
+authorization retirement cannot skip the pin close. An already active failure
+remains primary; close failures add only content-free exception-type notes, and
+all applicable cleanup steps are attempted.
+
 The original operation's provider-facing and mutation authority is both
 process- and opaque-thread-affine. A foreign thread or forked child rejects it
 before repository locking or I/O. Only cleanup and reconciliation are

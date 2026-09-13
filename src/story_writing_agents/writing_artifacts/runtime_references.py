@@ -104,13 +104,26 @@ def _failure_code(
     return default
 
 
-def _close_descriptor(descriptor: int | None) -> None:
+def _close_descriptor(
+    descriptor: int | None,
+    *,
+    failure: BaseException | None = None,
+) -> None:
     if type(descriptor) is not int or descriptor < 0:
         return
     try:
         os.close(descriptor)
-    except OSError:
-        pass
+    except BaseException as cleanup_failure:
+        if failure is not None:
+            try:
+                failure.add_note(
+                    "physical workspace pin cleanup failed: "
+                    f"{type(cleanup_failure).__name__}"
+                )
+            except BaseException:
+                pass
+        elif not isinstance(cleanup_failure, OSError):
+            raise
 
 
 def _validate_physical_workspace_pin(
@@ -403,8 +416,14 @@ class RuntimeReferenceOperation:
                     self._required_operation_id(),
                     ReferenceAuthorizationErrorCode.CORRELATION_MISMATCH,
                 )
-            self._defer_cleanup_locked()
-            self._close_physical_workspace_pin_locked()
+            failure: BaseException | None = None
+            try:
+                self._defer_cleanup_locked()
+            except BaseException as exc:
+                failure = exc
+                raise
+            finally:
+                self._close_physical_workspace_pin_locked(failure=failure)
             return True
 
     def begin_invocation(
@@ -726,22 +745,29 @@ class RuntimeReferenceOperation:
 
         self._require_process_affinity()
         with self._lock:
-            self._defer_cleanup_locked()
-            self._close_physical_workspace_pin_locked()
+            failure: BaseException | None = None
+            try:
+                self._defer_cleanup_locked()
+            except BaseException as exc:
+                failure = exc
+                raise
+            finally:
+                self._close_physical_workspace_pin_locked(failure=failure)
 
     def _mark_finished_locked(self) -> None:
         self._finished = True
         self._close_physical_workspace_pin_locked()
 
-    def _close_physical_workspace_pin_locked(self) -> None:
+    def _close_physical_workspace_pin_locked(
+        self,
+        *,
+        failure: BaseException | None = None,
+    ) -> None:
         descriptor = self._physical_workspace_pin
         if descriptor is None:
             return
         self._physical_workspace_pin = None
-        try:
-            os.close(descriptor)
-        except OSError:
-            pass
+        _close_descriptor(descriptor, failure=failure)
 
     def _retire_invocation(
         self,
@@ -1030,13 +1056,17 @@ def _prepare_runtime_reference_operation(
                 physical_workspace_pin,
                 physical_workspace_identity,
             )
-        except BaseException:
-            _close_descriptor(physical_workspace_pin)
+        except BaseException as failure:
+            closing_pin = physical_workspace_pin
+            physical_workspace_pin = None
+            _close_descriptor(closing_pin, failure=failure)
             raise
     try:
         operation_id = _operation_id(session_id)
-    except BaseException:
-        _close_descriptor(physical_workspace_pin)
+    except BaseException as failure:
+        closing_pin = physical_workspace_pin
+        physical_workspace_pin = None
+        _close_descriptor(closing_pin, failure=failure)
         raise
     operation: RuntimeReferenceOperation | None = None
     post_capture_failure: BaseException | None = None
@@ -1085,6 +1115,7 @@ def _prepare_runtime_reference_operation(
                 authorization.close()
                 raise publication_failure_signal from None
 
+    escaping_failure: BaseException | None = None
     try:
         try:
             if operation_created is None:
@@ -1135,5 +1166,10 @@ def _prepare_runtime_reference_operation(
             operation._repository_access = repository_access
             operation._guarded = repository_access is not None
         return operation
+    except BaseException as failure:
+        escaping_failure = failure
+        raise
     finally:
-        _close_descriptor(physical_workspace_pin)
+        closing_pin = physical_workspace_pin
+        physical_workspace_pin = None
+        _close_descriptor(closing_pin, failure=escaping_failure)

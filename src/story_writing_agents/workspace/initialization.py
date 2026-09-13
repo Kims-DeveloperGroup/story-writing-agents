@@ -596,6 +596,8 @@ class SessionArtifactBinding:
         except _SESSION_ARTIFACT_BINDING_FAILURES as exc:
             if exc is body_failure:
                 raise
+            if type(exc) is SessionArtifactBindingError:
+                raise
             raise SessionArtifactBindingError(
                 "session artifact resources are unavailable"
             ) from None
@@ -630,13 +632,22 @@ class SessionArtifactBinding:
             )
             git_pin = None
             return pin
-        except _SESSION_ARTIFACT_BINDING_FAILURES:
-            raise SessionArtifactBindingError(
-                "session artifact resources are unavailable"
-            ) from None
-        finally:
+        except BaseException as failure:
+            primary: BaseException = failure
+            if isinstance(failure, _SESSION_ARTIFACT_BINDING_FAILURES):
+                primary = SessionArtifactBindingError(
+                    "session artifact resources are unavailable"
+                )
             if git_pin is not None:
-                git_pin.close()
+                lower_pin = git_pin
+                git_pin = None
+                try:
+                    lower_pin.close()
+                except BaseException as cleanup_failure:
+                    _add_session_artifact_cleanup_note(primary, cleanup_failure)
+            if primary is not failure:
+                raise primary from None
+            raise
 
     def require_generation_pin(self, pin: SessionArtifactGenerationPin) -> None:
         """Require one opaque pin to match this binding's current generation."""
@@ -771,6 +782,8 @@ class SessionArtifactBinding:
                 access._revoke()
         except _SESSION_ARTIFACT_BINDING_FAILURES as exc:
             if exc is body_failure:
+                raise
+            if type(exc) is SessionArtifactBindingError:
                 raise
             raise SessionArtifactBindingError(
                 "session artifact resources are unavailable"
@@ -1015,14 +1028,27 @@ def _postvalidate_session_artifact_access(
     try:
         access.require_ready()
     except BaseException as cleanup_failure:
-        if failure is not None:
-            _add_session_artifact_cleanup_note(failure, cleanup_failure)
-            return
-        if not isinstance(cleanup_failure, _SESSION_ARTIFACT_BINDING_FAILURES):
+        binding_lost = isinstance(
+            cleanup_failure,
+            _SESSION_ARTIFACT_BINDING_FAILURES,
+        )
+        if not binding_lost:
+            if failure is not None:
+                _add_session_artifact_cleanup_note(failure, cleanup_failure)
+                return
             raise
-        raise SessionArtifactBindingError(
+        authoritative = SessionArtifactBindingError(
             "session artifact resources are unavailable"
-        ) from None
+        )
+        if failure is not None:
+            try:
+                authoritative.add_note(
+                    "yielded body failure superseded by binding loss: "
+                    f"{type(failure).__name__}"
+                )
+            except BaseException:
+                pass
+        raise authoritative from None
 
 
 def _add_session_artifact_cleanup_note(
