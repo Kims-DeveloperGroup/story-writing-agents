@@ -35,6 +35,8 @@ from story_writing_agents import (
     LEAD_ORCHESTRATOR,
     PLOT_ARCHITECT,
     Phase,
+    ReplyTrace,
+    ReplyTraceOrigin,
     SessionAccessState,
     SessionDurableState,
     SessionPausedError,
@@ -1408,7 +1410,19 @@ class AntigravityParityTests(unittest.IsolatedAsyncioTestCase):
             {"STORY_FAKE_AGY_CAPTURE_PAYLOAD": "1"},
         ):
             reply = await bound.invoke(request, reference_read=invocation)
-        self.assertEqual(reply, AgentReply.candidate("r0", "reply-draft"))
+        self.assertEqual(
+            reply,
+            replace(
+                AgentReply.candidate("r0", "reply-draft"),
+                trace=ReplyTrace(
+                    role=PLOT_ARCHITECT,
+                    action="candidate",
+                    context_sources=("current_input", "writing_artifacts"),
+                    recovered_fields=(),
+                    origin=ReplyTraceOrigin.PROVIDER,
+                ),
+            ),
+        )
         repository.finish_reference_operation(authorization, outcome=None)
 
         calls = self.provider_invocations()

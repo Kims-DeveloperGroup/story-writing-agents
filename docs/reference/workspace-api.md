@@ -230,6 +230,14 @@ debate engine. Reservation uses exclusive creation, so
 one session/debate ID has one owner. The owner token coordinates transitions
 but is not authentication and is omitted by normal inspection.
 
+Each debate-log JSONL row has exactly the seven base message fields, optionally
+plus `trace`. `append_debate_message()` omits the key when the message is
+untraced. When present, `trace` must be a valid object with the exact
+`ReplyTrace` fields; `read_debate_messages()` restores it as a typed
+`ReplyTrace`. Unknown, missing, or extra message or trace fields, a null,
+scalar, or list trace, malformed trace values, and invalid base-field values
+raise `WorkspaceFormatError` identifying the offending line.
+
 `save_debate_context()` exclusively creates an identity-bound sidecar: included
 mode requires a canonical snapshot, while fresh mode requires `None`.
 `inspect_debate_context()` is a separate strict read and returns `None` for an

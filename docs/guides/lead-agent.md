@@ -500,7 +500,7 @@ Lead review synthesis
 decision: propose
 message: The exact candidate review is complete.
 user_impact: No artifact changed; the user may review the proposal.
-limitations: Review is advisory and grants no Apply or Git authority.
+limitations: No additional limitations were reported.
 
 Final artifact state: reviewed
 Final collaboration state: completed
@@ -907,7 +907,7 @@ variants:
       "anyOf": [
         {"type":"object","additionalProperties":false,"properties":{"kind":{"type":"string","enum":["search"]},"queries":{"type":"array","minItems":1,"items":{"type":"object","additionalProperties":false,"properties":{"text":{"type":"string"},"source_kinds":{"type":"array","minItems":1,"items":{"type":"string","enum":["writing_artifact","conversation","active_debate","own_agent_state"]}}},"required":["text","source_kinds"]}},"path_prefix":{"type":"string"}},"required":["kind","queries"]},
         {"type":"object","additionalProperties":false,"properties":{"kind":{"type":"string","enum":["read"]},"handles":{"type":"array","minItems":1,"items":{"type":"string"}}},"required":["kind","handles"]},
-        {"type":"object","additionalProperties":false,"properties":{"kind":{"type":"string","enum":["answer"]},"result":{"type":"object","additionalProperties":false,"properties":{"kind":{"type":"string","enum":["answer","question","critique"]},"message":{"type":"string"}},"required":["kind","message"]}},"required":["kind","result"]}
+        {"type":"object","additionalProperties":false,"properties":{"kind":{"type":"string","enum":["answer"]},"result":{"type":"object","additionalProperties":false,"properties":{"message":{"type":"string"},"authoring_scope":{"type":"object","additionalProperties":false,"properties":{"activity":{"type":"string","enum":["workflow","draft","revise","review"]},"target_paths":{"type":"array","items":{"type":"string"}},"domains":{"type":"array","items":{"type":"string","enum":["plot_structure","character_world","tone_execution"]}},"task":{"type":"string"}},"required":["activity","target_paths","domains","task"]}},"required":["message","authoring_scope"]}},"required":["kind","result"]}
       ]
     }
   },
@@ -915,12 +915,17 @@ variants:
 }
 ```
 
-The shown ANSWER branch is the minimal `lead-outcome-v5` workflow-meta
-answer/question/critique variant. Live schemas add only the semantic fields
-needed by recommendation, story-specific, and proposal variants. SEARCH finds
-locators, READ accepts only issued SEARCH handles, and ANSWER embeds its semantic
-result directly. Runtime attaches evidence receipts, used handles, correlation,
-scope, and task metadata. There is no JSON-in-string layer or legacy decoder.
+The shown ANSWER branch is the minimal `lead-outcome-v5` workflow-meta direct-
+answer variant. Every provider-produced direct Lead result requires `message`
+and compact `authoring_scope`; questions and critiques add `kind`, while the
+default answer omits it. Live schemas add only the semantic fields needed by
+recommendation, story-specific, and proposal variants. SEARCH finds locators,
+READ accepts only issued SEARCH handles, and ANSWER embeds its semantic result
+directly. Runtime derives evidence receipts, used handles, correlation, and
+other bookkeeping. It never infers a missing scope as workflow: omission gets
+one bounded repair, then a runtime-owned visible no-action fallback if repair
+fails. That fallback is not a provider-schema variant. There is no JSON-in-
+string layer or legacy decoder.
 
 A sanitized provider-call summary (with the schema block referenced rather
 than duplicated) has the same semantics for either provider:
@@ -986,16 +991,14 @@ SEARCH/READ; those bytes do not satisfy the current evidence contract.
     "input_aliases": [{"input_id": "user_input", "kind": "user_input", "locator": "conversation/<turn-id>/user_input", "revision_digest": "sha256:<digest>", "start_line": null, "end_line": null}],
     "answer_contract": {
       "assignments": {"agent_id": "canonical specialist ID", "input_ids": "nonempty runtime-supplied aliases", "instruction": "complete visible assignment", "mode":"draft | review", "review_basis":"null for draft; schema 1 candidate_input_ids and criteria for review"},
-      "scope": "story_specific | workflow_meta",
-      "authoring_scope": "required schema 1 activity, target_paths, domains, interpretation, and exact offered task_id/task_revision",
-      "evidence_status": "not_applicable | verified | missing | empty | incomplete | conflicting",
-      "evidence_ids": "ordered runtime-issued evidence IDs only",
-      "kind": ["answer", "question", "critique", "recommendation", "proposal"],
+      "direct_answer": "message and authoring_scope; add kind only for question or critique",
+      "authoring_scope": "always required: activity, target_paths, domains, and exact offered task token",
+      "kind": "question | critique | recommendation | proposal when selected; omit for the default answer",
       "message": "nonempty user-visible text",
-      "proposal": {"relation": "new_step", "purpose": "visible purpose", "authoring_scope":"same exact scope as this result", "assignments": "required only for ordinary consultation"},
-      "artifact_intent": "null or create/patch/replace/rename/delete operations plus optional review domains",
-      "objective_intent": "null or strict start/continue/cancel intent",
-      "recommended_action": "null or strict prepare_artifact/prepare_consultation action"
+      "proposal": {"assignments": "required only for an ordinary consultation proposal"},
+      "artifact_intent": "create/patch/replace/rename/delete operations for an artifact proposal",
+      "objective_intent": "strict start/continue/cancel intent when transitioning an objective",
+      "recommended_action": "strict prepare_artifact/prepare_consultation action for a recommendation"
     }
   },
   "core_statuses": [
@@ -1371,8 +1374,10 @@ The confirmation path enforces this order:
 For an artifact candidate, the same order is tightened: candidate freshness is
 checked before the confirmation batch; `reviewing` is correlated to the one
 execution attempt; each derived reviewer receives the identical serialized
-candidate; the artifact synthesis must add `propose`, `revise`, or `reject`
-plus rationale, user impact, and limitations; and successful `propose`
+candidate; the provider artifact synthesis supplies only `decision` (`propose`,
+`revise`, or `reject`) and `message`. Runtime uses the message as rationale,
+adds the no-change user impact, and reports either no additional limitations or
+the exact unresolved reviewer input IDs. Successful `propose`
 finalization reprojects the exact change set against a fresh complete-state
 capture. Only then does runtime persist `ArtifactReviewedProposal`, still with
 zero Apply/write/Git authority.

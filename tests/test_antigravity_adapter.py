@@ -27,6 +27,8 @@ from story_writing_agents import (
     PLOT_ARCHITECT,
     Phase,
     PromptFileReference,
+    ReplyTrace,
+    ReplyTraceOrigin,
 )
 from story_writing_agents.antigravity_adapter import AntigravityAdapter
 from story_writing_agents.codex_adapter import CodexAdapter
@@ -2643,7 +2645,19 @@ class AntigravityAdapterTests(unittest.IsolatedAsyncioTestCase):
             first_invoke,
         ):
             reply = await bound.invoke(self.request(session_id, debate_id="debate-one"))
-        self.assertEqual(reply, AgentReply.candidate("r0", "candidate"))
+        self.assertEqual(
+            reply,
+            replace(
+                AgentReply.candidate("r0", "candidate"),
+                trace=ReplyTrace(
+                    role=PLOT_ARCHITECT,
+                    action="candidate",
+                    context_sources=("current_input",),
+                    recovered_fields=(),
+                    origin=ReplyTraceOrigin.PROVIDER,
+                ),
+            ),
+        )
         first_invocation = first_invoke.await_args.args[1]
         self.assertIsNone(first_invocation.thread_id)
         manifest = self.workspace.read_json(
@@ -2692,7 +2706,19 @@ class AntigravityAdapterTests(unittest.IsolatedAsyncioTestCase):
             resumed_reply = await resumed_bound.invoke(
                 self.request(session_id, debate_id="debate-two")
             )
-        self.assertEqual(resumed_reply, AgentReply.candidate("r0", "resumed"))
+        self.assertEqual(
+            resumed_reply,
+            replace(
+                AgentReply.candidate("r0", "resumed"),
+                trace=ReplyTrace(
+                    role=PLOT_ARCHITECT,
+                    action="candidate",
+                    context_sources=("current_input",),
+                    recovered_fields=(),
+                    origin=ReplyTraceOrigin.PROVIDER,
+                ),
+            ),
+        )
         second_invocation = second_invoke.await_args.args[1]
         self.assertEqual(second_invocation.thread_id, "agy-conversation")
 

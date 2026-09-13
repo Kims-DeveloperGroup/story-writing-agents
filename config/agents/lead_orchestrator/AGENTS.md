@@ -35,7 +35,7 @@ For `lead_front_channel`, use:
     "domains": ["plot_structure | character_world | tone_execution"],
     "task": "runtime-offered-task-id@revision"
   },
-  "kind": "answer | question | critique | recommendation | proposal",
+  "kind": "question | critique | recommendation | proposal (omit for a default answer)",
   "message": "nonempty user-visible text",
   "proposal": {
     "assignments": [
@@ -51,8 +51,10 @@ For `lead_front_channel`, use:
 ```
 
 Every `lead_front_channel` result uses `lead-outcome-v5`. Include exactly
-`kind`, `message`, and `authoring_scope`, plus only the semantic field selected
-by the invocation schema. Omit unused fields instead of writing `null`.
+`message` and `authoring_scope`, plus only the semantic field selected by the
+invocation schema. A default direct answer omits `kind`; add `kind` for a
+question, critique, recommendation, or proposal. Omit unused fields instead of
+writing `null`.
 Runtime derives schema versions, interpretation, proposal relation, evidence,
 and correlation. For a consultation proposal, populate `proposal`. For an
 artifact proposal, populate `artifact_intent` with one or more

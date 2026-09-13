@@ -148,7 +148,7 @@ actions and bounds valid for that physical call:
 ```
 
 ```json
-{"action":{"kind":"answer","result":{"message":"Hello. What would you like to work on?"}}}
+{"action":{"kind":"answer","result":{"message":"Hello. What would you like to work on?","authoring_scope":{"activity":"workflow","target_paths":[],"domains":[],"task":"task_demo@1"}}}}
 ```
 
 SEARCH has required `kind`, nullable `path_prefix`, and nonempty typed
@@ -162,11 +162,13 @@ common provider-schema subset types and enums members; it does not claim JSON
 Schema enforces uniqueness or canonical order.
 READ has required `kind` and nonempty typed `handles`. ANSWER has required
 `kind` and the exact invocation-specific object in `result`. The Lead front-
-channel example is a complete `lead-outcome-v5` direct-answer variant: only
-`message` is required. Questions and critiques add `kind`; authority-bearing
-variants add compact `authoring_scope` plus exactly one intent field. Runtime
-derives READ usage, evidence, IDs, revisions, interpretation, and other
-bookkeeping from the invocation and durable history.
+channel example is a complete `lead-outcome-v5` direct-answer variant using an
+illustrative offered task: every provider-produced direct result requires
+`message` and compact `authoring_scope`. Questions and critiques add `kind`;
+the default answer omits it. Intent-bearing variants add their one semantic
+intent field. Runtime never infers a missing scope as `workflow`; it derives
+READ usage, evidence, IDs, revisions, interpretation, and other bookkeeping
+from the invocation and durable history.
 
 No action or result object is encoded as JSON text. Runtime still checks the closed schema,
 issued handles, result-domain contract, and current source
@@ -227,11 +229,13 @@ is not replay authority.
 `ArtifactObjectiveCandidateBinding`, `ArtifactObjectivePayload`,
 `ArtifactObjectivePayloadV2`, `ArtifactObjective`, and `artifact_objective_context()`.
 
-The provider's `objective_intent` is null or a strict `start`, `continue`, or
-`cancel` intent. A start fixes the visible authoring request and exact target
-paths; continuation/cancellation names an offered `OPEN` objective owned by
-the current conversation. `clarify` requires a question, `consult` an ordinary
-consultation proposal, and `prepare` an artifact-intent proposal. PREPARE
+The provider omits `objective_intent` or supplies a strict `start`, `continue`,
+or `cancel` intent. A start selects exact target paths; runtime freezes the
+exact originating user-event content as the visible request rather than
+accepting a provider request field. Continuation/cancellation names an offered
+`OPEN` objective owned by the current conversation. `clarify` requires a
+question, `consult` an ordinary consultation proposal, and `prepare` an
+artifact-intent proposal. PREPARE
 cannot become advice during bounded result correction. The exact field shapes
 are in the [runtime API](runtime-api.md#contextual-authoring-objectives).
 
@@ -255,8 +259,8 @@ facade: `decide_lead_recommendation()` returns `LeadTurnResult` with a trailing
 optional `recommendation_request` for a pending recommendation.
 
 A fresh front-channel recommendation requires one `prepare_artifact` or
-`prepare_consultation` action and `objective_intent=null`. Other kinds require
-`recommended_action=null`. Runtime replaces source aliases with exact event or
+`prepare_consultation` action and omits `objective_intent`. Other kinds omit
+`recommended_action`. Runtime replaces source aliases with exact event or
 input identities and discloses the action, basis, impact, and call reservation.
 The request requires substantive scope; consultation preparation includes every
 affected specialist. Its optional Python `authoring_scope` is keyword-only and
@@ -269,9 +273,10 @@ Confirm authorizes one preparation only. Review/execution, Apply, and Commit
 retain separate decisions. Ordinary contextual approval is a new instruction
 and can supersede the unconfirmed recommendation without a fabricated Confirm.
 
-A new Confirm-origin objective uses v2 request/decision provenance. Continuing
-an existing objective preserves its immutable v1 or v2 facts independently of
-the preparation execution origin. See the
+A new Confirm-origin objective uses v2 request/decision provenance. An ordinary
+v1 objective preserves the exact originating user-event payload as its request,
+not a provider-authored paraphrase. Continuing an existing objective preserves
+its immutable v1 or v2 facts independently of the preparation execution origin. See the
 [exact API](runtime-api.md#leadrecommendationdecision) and
 [versioned history](collaboration-history.md#recommendation-preparation-events).
 
@@ -310,9 +315,11 @@ nonempty candidate inputs and criteria. The conversations facade owns the exact
 The strict provider contracts are `lead-outcome-v5`, `specialist-reply-v2`,
 `lead-synthesis-v3`, and `artifact-review-synthesis-v3`. Provider schemas contain
 only semantic choices. Runtime reconstructs attribution and routing metadata and
-never infers missing authority selectors. A structured-result rejection receives
-one bounded repair call; a second rejection becomes a visible safe answer with no
-action so the conversation can continue.
+never infers missing authority selectors. The provider schemas remain closed
+Structured Outputs. A missing Lead `authoring_scope`, like another structured-
+result rejection, receives one bounded repair call; a second rejection becomes
+a runtime-owned visible safe answer with no action. That fallback is not a
+provider-schema variant and never supplies an inferred `workflow` scope.
 
 ## Specialist reply and lead synthesis
 
@@ -426,9 +433,11 @@ ArtifactReviewFailurePayload
 ArtifactProposalResult
 ```
 
-The artifact synthesis repeats exact candidate/consultation/attempt identity,
-preserves every reply event and unresolved non-supporting input, and adds
-visible `rationale`, `user_impact`, and `limitations`. Only `decision=propose`
+The artifact synthesis repeats exact candidate/consultation/attempt identity
+and preserves every reply event and unresolved non-supporting input. The
+provider supplies only `decision` and `message`; runtime uses that message as
+the visible rationale, adds the no-change user impact, and reports either no
+additional limitations or the exact unresolved reviewer input IDs. Only `decision=propose`
 creates `ArtifactReviewedProposal`. That immutable value closes over the exact
 candidate, every disclosed review, evidence and synthesis identities, and the
 review tail, while requiring `artifact_write_occurred=false`,
@@ -470,14 +479,17 @@ package-root exports; see [Agent-context design](../design/agent-context.md#type
 
 ```python
 DebateMessage(sender: str, phase: str, round: int, revision: str,
-              kind: str, content: str, timestamp: str)
+              kind: str, content: str, timestamp: str,
+              trace: ReplyTrace | None = None)
 AgentStateEntry(agent_id: str, session_id: str, debate_id: str, phase: str,
                 round: int, revision: str, kind: str, content: str,
                 timestamp: str)
 ```
 
 Both are frozen and provide `to_dict()`; agent-state content is capped at 4096
-characters per entry.
+characters per entry. An untraced debate message omits `trace` from its encoded
+object. A traced message encodes the exact trace object, and `from_dict()`
+restores it as a typed `ReplyTrace`.
 
 ## One advisory conversation turn
 
