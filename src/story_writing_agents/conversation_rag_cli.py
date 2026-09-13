@@ -252,7 +252,7 @@ class ConversationRagCliCounts:
             > CONVERSATION_RAG_RUNTIME_POLICY.max_projected_source_utf8_bytes
         ):
             raise ValueError("authoritative source bytes exceed the RAG budget")
-        if self.authoritative_documents * 2 > self.authoritative_events:
+        if self.authoritative_documents != self.authoritative_events:
             raise ValueError("authoritative document and event counts are inconsistent")
         if self.authoritative_documents > 0 and self.authoritative_conversations == 0:
             raise ValueError(
@@ -277,7 +277,7 @@ class ConversationRagCliCounts:
             payload_bytes=self.indexed_payload_bytes,
             generation_bytes=self.indexed_generation_bytes,
         )
-        if self.indexed_documents * 2 > self.indexed_events:
+        if self.indexed_documents > self.indexed_events:
             raise ValueError("indexed document and event counts are inconsistent")
         if self.indexed_documents == 0:
             if any(
@@ -293,7 +293,7 @@ class ConversationRagCliCounts:
         elif (
             self.indexed_conversations == 0
             or self.indexed_conversations > self.indexed_documents
-            or self.indexed_events != self.indexed_documents * 2
+            or self.indexed_events != self.indexed_documents
             or self.indexed_fragments < self.indexed_documents
             or self.indexed_source_utf8_bytes == 0
             or self.indexed_generations == 0
