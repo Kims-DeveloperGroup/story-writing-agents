@@ -70,8 +70,9 @@ instructions and returns a new recommendation for fresh confirmation.
 The lead interprets short follow-ups such as “Use that draft” from the session
 context. Ordinary approval is a new authoring instruction and can supersede an
 unconfirmed recommendation. With a clear target and current evidence, it can
-prepare the exact candidate for separately confirmed review. Runtime retains the authoring
-objective in its originating conversation across discussion, consultation,
+prepare the exact candidate for separately confirmed review. Runtime retains
+the authoring objective and its exact originating user request in that
+conversation across discussion, consultation,
 conversation switches, and restart. Only a matching successful Apply result
 (`applied` or `unchanged`) satisfies it; review, prose approval, and Commit do
 not. An explicit objective cancellation closes it without writing.

@@ -1172,8 +1172,11 @@ are evidence, not a vote.
 
 Only `propose` produces an immutable `ArtifactReviewedProposal`. That value
 contains visible rationale, user impact, limitations, every review, unresolved
-inputs, and exact candidate/history identity, while requiring all of these to
-remain false:
+inputs, and exact candidate/history identity. The provider supplies only its
+review decision and message; runtime uses the message as rationale, adds the
+no-change impact, and reports no additional limitations when unresolved inputs
+are empty or lists the exact unresolved reviewer input IDs otherwise. The value
+requires all of these to remain false:
 
 ```text
 artifact_write_occurred = false

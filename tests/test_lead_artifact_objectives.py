@@ -107,6 +107,17 @@ class LeadArtifactObjectiveTests(objectives.ObjectiveCase):
     async def test_side_turn_switch_and_restart_preserve_owner_objective_without_authority(self):
         conversation_id, _ = await self.start()
         original = self.objective(conversation_id)
+        origin_request = (
+            f"Draft {objectives.OUTLINE} from this brief: a lantern vanishes, "
+            "its keeper is found, and it returns."
+        )
+        origin_judgment = next(
+            event.payload
+            for event in self.history(conversation_id)
+            if isinstance(event.payload, c.CollaborationLeadJudgmentPayload)
+        )
+        self.assertEqual(original.facts.request, origin_request)
+        self.assertNotEqual(original.facts.request, origin_judgment.message)
         self.backend.enqueue(lead._visible_outcome("answer", "A brief side answer."))
         await self.runtime.lead_turn(self.session_id, conversation_id, "What does a three-beat outline mean?")
         other = self.conversation("Separate conversation")
@@ -489,8 +500,9 @@ class LeadArtifactObjectiveTests(objectives.ObjectiveCase):
         self.assertIs(outcome.objective_intent, objective)
         self.assertIsNone(outcome.recommended_action)
         self.assertIs(outcome.authoring_scope, scope)
-        self.assertEqual(tuple((f.name, f.kw_only) for f in fields(outcome))[-3:],
-            (("objective_intent", False), ("recommended_action", False), ("authoring_scope", True)))
+        self.assertEqual(tuple((f.name, f.kw_only) for f in fields(outcome))[-4:],
+            (("objective_intent", False), ("recommended_action", False),
+             ("authoring_scope", True), ("trace", True)))
         observed = []
         original = self.question(intent={"action": "start", "request": "Clarify the outline.", "target_paths": [objectives.OUTLINE],
             "next_step": "clarify", "draft_source_event_ids": []}, message="Which ending?")
@@ -504,13 +516,12 @@ class LeadArtifactObjectiveTests(objectives.ObjectiveCase):
         result = await self.runtime.lead_turn(self.session_id, self.conversation(), "Clarify the ending.")
         self.assertIs(result.kind, c.LeadOutcomeKind.QUESTION)
         self.assertEqual(set(observed[0]), {"authoring_scope", "kind", "message", "objective_intent"})
-        decoded = StoryRuntime._decode_lead_outcome(
-            json.dumps({"kind": "question", "message": "Which ending?"})
-        )
-        self.assertIsNone(decoded.objective_intent)
-        self.assertIsNone(decoded.authoring_scope)
-        direct = StoryRuntime._decode_lead_outcome(json.dumps({"message": "Visible."}))
-        self.assertIs(direct.kind, c.LeadOutcomeKind.ANSWER)
+        for unscoped in (
+            {"kind": "question", "message": "Which ending?"},
+            {"message": "Visible."},
+        ):
+            with self.assertRaises(lead.BackendProtocolError):
+                StoryRuntime._decode_lead_outcome(json.dumps(unscoped))
         scoped_question = dict(observed[0])
         scoped_question.pop("objective_intent")
         decoded_scoped_question = StoryRuntime._decode_lead_outcome(

@@ -492,11 +492,15 @@ def _live_result(call, value):
         and value.get("recommended_action") is None
         and execution is None
     ):
-        return (
-            {"message": value["message"]}
-            if value["kind"] == "answer"
-            else {"kind": value["kind"], "message": value["message"]}
-        )
+        compact = {
+            "message": value["message"],
+            "authoring_scope": _compact_scope(
+                _live_scope(call, activity="workflow")
+            ),
+        }
+        if value["kind"] != "answer":
+            compact["kind"] = value["kind"]
+        return compact
     domains = []
     paths = []
     if type(proposal) is dict:
@@ -1100,8 +1104,23 @@ class LeadOutcomeAndProposalTests(LeadOrchestrationTestCase):
             if variant["properties"]["kind"].get("enum") == ["answer"]
         )
         schema = answer_variant["properties"]["result"]
+        result_variants = schema["anyOf"]
+        self.assertTrue(
+            all(
+                "authoring_scope" in variant["properties"]
+                and "authoring_scope" in variant["required"]
+                for variant in result_variants
+            )
+        )
+        self.assertFalse(
+            any(
+                set(variant["properties"])
+                in ({"message"}, {"kind", "message"})
+                for variant in result_variants
+            )
+        )
         encoded = json.dumps(schema, separators=(",", ":"))
-        self.assertLessEqual(len(encoded.encode("utf-8")), 11_000)
+        self.assertLessEqual(len(encoded.encode("utf-8")), 11_500)
         self.assertNotIn('"null"', encoded)
         for metadata in (
             "correlation",
@@ -1170,6 +1189,108 @@ class LeadOutcomeAndProposalTests(LeadOrchestrationTestCase):
         self.assertEqual(len(self.backend.calls), 2)
         repair = _workflow_material(self.backend.calls[-1].payload)
         self.assertIn("response_correction", repair)
+
+    async def test_direct_scope_is_required_and_substantive_outcomes_cannot_bypass_routing(
+        self,
+    ) -> None:
+        def raw_result(value: dict[str, object]):
+            def respond(
+                _call: ContextProviderCallRequest,
+                _provider: _LeadContextProvider,
+            ) -> str:
+                return json.dumps(
+                    {"action": {"kind": "answer", "result": value}},
+                    separators=(",", ":"),
+                )
+
+            return respond
+
+        for label, value in (
+            ("answer", {"message": "Unscoped answer."}),
+            ("question", {"kind": "question", "message": "Unscoped question?"}),
+            ("critique", {"kind": "critique", "message": "Unscoped critique."}),
+        ):
+            with self.subTest(label=label):
+                conversation_id = self.conversation(f"Unscoped {label}")
+                response = raw_result(value)
+                self.backend.enqueue(response)
+                self.backend.enqueue(response)
+                before = len(self.backend.calls)
+                result = await self.runtime.lead_turn(
+                    self.session_id,
+                    conversation_id,
+                    "Explain the collaboration workflow.",
+                )
+                self.assertEqual(len(self.backend.calls) - before, 2)
+                self.assertIs(result.trace.origin, ReplyTraceOrigin.RUNTIME_FALLBACK)
+                self.assertIn("after one repair attempt", result.message)
+                self.assertFalse(
+                    any(
+                        type(event.payload) is CollaborationLeadJudgmentPayload
+                        for event in self.history(conversation_id)
+                    )
+                )
+                correction = _workflow_material(self.backend.calls[-1].payload)
+                self.assertIn("response_correction", correction)
+                self.assertIn(
+                    "authoring_scope",
+                    correction["response_correction"]["instruction"],
+                )
+
+        conversation_id = self.conversation("Scoped workflow answer")
+        self.backend.enqueue(_visible_outcome("answer", "Scoped workflow answer."))
+        before = len(self.backend.calls)
+        accepted = await self.runtime.lead_turn(
+            self.session_id,
+            conversation_id,
+            "Explain the collaboration workflow.",
+        )
+        self.assertEqual(len(self.backend.calls) - before, 1)
+        self.assertEqual(accepted.message, "Scoped workflow answer.")
+        self.assertIs(accepted.trace.origin, ReplyTraceOrigin.PROVIDER)
+        self.assertIs(accepted.evidence.scope, LeadOutcomeScope.WORKFLOW_META)
+
+        def substantive(kind: str, activity: str):
+            def respond(
+                call: ContextProviderCallRequest,
+                _provider: _LeadContextProvider,
+            ) -> str:
+                value: dict[str, object] = {
+                    "message": f"Direct {kind} attempted story work.",
+                    "authoring_scope": _compact_scope(
+                        _live_scope(
+                            call,
+                            activity=activity,
+                            domains=("plot_structure",),
+                            paths=("core_documents/global_outline.md",),
+                        )
+                    ),
+                }
+                if kind != "answer":
+                    value["kind"] = kind
+                return raw_result(value)(call, _provider)
+
+            return respond
+
+        for kind, activity in (("answer", "draft"), ("critique", "review")):
+            with self.subTest(substantive_kind=kind):
+                conversation_id = self.conversation(f"Substantive {kind}")
+                response = substantive(kind, activity)
+                self.backend.enqueue(response)
+                self.backend.enqueue(response)
+                before = len(self.backend.calls)
+                rejected = await self.runtime.lead_turn(
+                    self.session_id,
+                    conversation_id,
+                    "Draft core_documents/global_outline.md as three beats.",
+                )
+                self.assertEqual(len(self.backend.calls) - before, 2)
+                self.assertIs(
+                    rejected.trace.origin,
+                    ReplyTraceOrigin.RUNTIME_FALLBACK,
+                )
+                self.assertIsNone(rejected.proposal)
+                self.assertIn("after one repair attempt", rejected.message)
 
     async def test_runtime_constructs_complete_ordered_content_free_proposal(
         self,
