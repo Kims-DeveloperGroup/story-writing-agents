@@ -67,8 +67,9 @@ execution evidence.
 Runtime-built provider-managed definitions use the agent-context service and
 typed wire v7. Package-internal `story_session_context` remains capture and
 direct-request compatibility input; it is not the current built-in provider
-envelope. A content-free explicit-reference prelude remains separate, and
-context continuations carry only the new authorized observation. See
+envelope. Explicit writing-artifact references are authorized and loaded
+locally before the substantive provider call, and context continuations carry
+only the new authorized observation. See
 [Agent-context design](../design/agent-context.md#typed-provider-wire-v7).
 
 Both adapters receive the same provider-neutral `ProviderInvocation`, including
@@ -76,7 +77,7 @@ byte-identical canonical schema and payload semantics. Codex receives the
 schema through `--output-schema <schema-file>`. Antigravity receives the same
 schema through `--json-schema <canonical-json>` and must return a root-object
 `structured_output` plus an exact `json_schema` echo. Those transport checks do
-not replace the shared runtime's validation of wire-v7 correlation, issued
+not replace the shared runtime's validation of runtime-owned correlation, issued
 handles, evidence IDs, Lead outcome matrix, input aliases, artifact authority,
 or confirmation.
 
@@ -139,8 +140,7 @@ of non-execution; there is no native automatic-retry guarantee.
 `WritingArtifactRepository.begin_reference_invocation()` and remains private;
 the provider-neutral request and action values are documented in
 [Agent contracts](agent-contracts.md#explicit-reference-read-contracts).
-Omitting the argument preserves the exact established payload, schema, provider
-call count, and repository-I/O-free path.
+Omitting the argument preserves the ordinary payload and provider call count.
 
 Before provider work, every referenced call validates the coordinator's exact
 content-free request type and synchronous methods. It also validates the bound
@@ -152,13 +152,10 @@ canonical role and these request correlations:
 | `converse()` | `agent_id` equals the request and bound definition; `phase="conversation"`; `round_number=None`. |
 | `converse_with_retrieval()` | `agent_id` equals the request and bound definition; `phase="conversation_retrieval"`; `round_number=None`. Retrieval action indices remain a separate `1..5` sequence. |
 
-The backend then holds the same provider-thread lock across a content-free
-prelude and the substantive work. The first provider result must be one
-`read_writing_artifacts` action that exactly echoes the full correlation and
-ordered path/range batch. A request-specific schema plus decoder and equality
-check rejects result-first, partial, reordered, duplicate, broadened, foreign,
-or malformed actions before selected content is returned. The private
-capability never enters the provider request.
+The backend loads the exact authorized path/range batch locally before the
+substantive provider call. Coordinator validation rejects partial, reordered,
+duplicate, broadened, foreign, or malformed requests before selected content is
+returned. The private capability never enters the provider request.
 
 After the exact action, selected strict-UTF-8 text appears once under
 `untrusted_writing_artifact_context` in the immediately following substantive
@@ -170,9 +167,9 @@ enforcement mechanism. The full state and trust mapping is in
 
 | One logical invocation | Without references | With references |
 | --- | ---: | ---: |
-| Direct conversation | 1 provider call | 2: prelude + reply |
-| One agent in one debate phase | 1 provider call | 2: prelude + phase reply |
-| Retrieval turn | 1–5 provider calls | 2–6: prelude + unchanged 1–5 retrieval loop |
+| Direct conversation | 1 provider call | 1 reply call |
+| One agent in one debate phase | 1 provider call | 1 phase-reply call |
+| Retrieval turn | 1–5 provider calls | unchanged 1–5 retrieval calls |
 
 The backend performs no automatic retry. Cancellation, provider or workflow
 failure, drift, and invalid action/correlation terminate the same one-use
@@ -300,9 +297,8 @@ no viewer dependency or static import.
 One successful capture lifecycle uses a fresh
 `exchange_<32 lowercase hexadecimal characters>` identity and preserves the
 exact supplied session, canonical agent, provider, and one conversation or
-debate kind/ID across its records. A writing-artifact reference prelude is a
-separate physical call with its own exchange ID, but it inherits the same outer
-conversation/debate correlation as the substantive call.
+debate kind/ID across its records. Local writing-artifact reference loading
+creates no separate provider exchange.
 
 The nested canonical content shapes are:
 

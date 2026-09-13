@@ -536,7 +536,7 @@ use v2 provenance; an existing objective retains its immutable v1 or v2 origin.
 A pending recommendation uses `submit_recommendation_decision`, with proposal,
 Apply, and Commit controls absent. The preceding optional `story_commit_request`
 rediscloses an exact pending Commit; `artifact_application_request` carries
-Apply disclosure. The ten-field provider `lead-outcome-v4` contract is distinct from these Python result values;
+Apply disclosure. The minimal variant-based provider `lead-outcome-v5` contract is distinct from these richer Python result values;
 see [Runtime API](runtime-api.md#contextual-authoring-objectives).
 
 Pure `AuthoringScope`, `AuthoringActivity`, `ReviewBasis`,

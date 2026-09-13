@@ -285,7 +285,7 @@ class LeadSessionContinuityTests(lead.LeadOrchestrationTestCase):
         self.assertEqual(self.backend.calls, [])
         self.assertIs(self.checkpoint().record.state, ContextLedgerRecordState.TAINTED)
         submitted = [event.payload for event in self.history(conversation) if type(event.payload) is CollaborationProviderCallPayload and event.payload.state is CollaborationProviderCallState.SUBMITTED]
-        self.assertEqual(len(submitted), 1)
+        self.assertEqual(submitted, [])
 
     async def test_session_lock_covers_capture_provider_publication_and_commit(self):
         first, second = self.conversation("First"), self.conversation("Second")

@@ -413,7 +413,7 @@ in addition, so evidence alone never permits substantive direct story work:
 | Declared scope and status | Minimum current evidence | Allowed visible kinds |
 | --- | --- | --- |
 | `workflow_meta` / `not_applicable` | No receipts | `answer`, `question`, `critique`, `recommendation` |
-| `story_specific` / `verified` | One nonempty attached reference or final-answer-used READ | All five kinds |
+| `story_specific` / `verified` | One nonempty attached reference or completed READ | All five kinds |
 | `story_specific` / `missing` | An absent canonical-core status, or a complete non-truncated zero-hit SEARCH whose authorized scope includes writing artifacts | `question`, `recommendation`, `proposal` |
 | `story_specific` / `empty` | A zero-byte canonical-core status or a zero-byte whole attached reference | `question`, `recommendation`, `proposal` |
 | `story_specific` / `incomplete` | At least one current content or canonical-core status receipt | `question`, `critique`, `recommendation`, `proposal` |
@@ -421,8 +421,8 @@ in addition, so evidence alone never permits substantive direct story work:
 
 Every other combination fails closed. Evidence IDs are invocation-local and
 must be unique and in runtime order: attached references, four core statuses,
-then completed SEARCH/READ actions. Only a READ named in the final ANSWER's
-`action.used_handles` field may support content and become a proposal input. Core-status and
+then completed SEARCH/READ actions. Every successful current-invocation READ
+may support content and become a proposal input. Core-status and
 zero-hit SEARCH receipts are evidence only, never assignment inputs.
 
 An exact explicit reference has stronger failure semantics than an exploratory
@@ -733,19 +733,18 @@ Do not treat every provider-related failure as the same recovery case:
 | --- | --- | --- |
 | An exchange closes with `provider_failure` / `provider_authentication_required`, but no valid `ProviderResult`. | The completed native result requires authentication. Authentication and timeout are independent facts; interactive Lead work still offers provider-native sign-in. | Complete native sign-in. Story may replay only the exact Antigravity pre-execution rejection when no timeout fact exists; a timeout defeats replay and continuation reuse and closes an eligible read-only Lead attempt as `provider_timed_out` with `retry_lead_turn`. |
 | An exchange has a request and `provider_failure` / `provider_invocation_failed`, but no valid `ProviderResult`. | The adapter did not return Story's provider-result contract. Configuration, output-schema rejection, transport, or another provider-side failure may be responsible. The fixed code does not prove whether the provider performed external work. | Diagnose the provider/configuration boundary. Do not infer that replay is safe from this diagnostic alone. |
-| A completed result is rejected and the durable Lead failure is `provider_result_rejected`. | Story received a result but deterministically rejected its structured action, correlation, semantics, action budget, or validated answer. The rejected call is closed. | Follow `retry_lead_turn`. This creates a fresh call; the tainted provider thread is not reused. |
+| A completed result is rejected. | Story received malformed or semantically invalid structured output. | Story requests one bounded repair. If repair fails, it returns a visible safe no-action Lead answer and keeps the conversation open. |
 | Collaboration state is `outcome_unknown`. | Submission is durable, but no authoritative accepted or rejected result closes it. | Follow `inspect_and_resolve_outcome`; never replay the submitted call. |
 
 For example, the former Codex failure was caused by a response schema whose
 array `items` node had no explicit supported type. Codex rejected that schema
 before returning a valid `ProviderResult`, so the exchange could show only
 `provider_invocation_failed`. Typed wire v7 uses a closed
-`{correlation, action}` root and embeds every action/result object directly.
-Conversely, an Antigravity
-result that places `user_input` in `action.used_handles` without a successful
-READ, or omits required nullable Lead fields, is a
-returned-result rejection and becomes `provider_result_rejected`, not
-`outcome_unknown`. These examples contain no provider-native diagnostic or
+`{action}` root and embeds every action/result object directly. Runtime derives
+correlation from the active call.
+Conversely, an Antigravity result that adds undeclared bookkeeping fields or
+omits a semantic field required by its selected variant is a returned-result
+rejection, not `outcome_unknown`. These examples contain no provider-native diagnostic or
 story content; durable user history also keeps only the fixed classifications.
 
 The replay exception is deliberately narrow. Antigravity must exit 1 with its
@@ -880,37 +879,34 @@ object for readability; they are excerpts, not complete on-wire payloads.
 SEARCH/READ continuation frames carry only their new observation.
 
 Codex and Antigravity receive byte-identical provider-neutral wire-v7 schema
-and payload semantics; only their native transport differs. The closed outer
-response has required `correlation` and `action` fields. The exact correlation
-token, allowed actions, source kinds, result object, and array limits are
-generated for each physical call. This sanitized structural sample shows all
-three action variants:
+and payload semantics; only their native transport differs. The provider root
+requires only `action`; runtime derives correlation and action-index facts from
+the active invocation. This sanitized structural sample shows all three action
+variants:
 
 ```json
 {
   "type": "object",
   "additionalProperties": false,
   "properties": {
-    "correlation": {"type": "string", "enum": ["<exact-token>"]},
     "action": {
       "anyOf": [
-        {"type":"object","additionalProperties":false,"properties":{"kind":{"type":"string","enum":["search"]},"path_prefix":{"type":["string","null"]},"queries":{"type":"array","minItems":1,"items":{"type":"object","additionalProperties":false,"properties":{"text":{"type":"string"},"source_kinds":{"type":"array","minItems":1,"items":{"type":"string","enum":["writing_artifact","conversation","active_debate","own_agent_state"]}}},"required":["text","source_kinds"]}}},"required":["kind","path_prefix","queries"]},
+        {"type":"object","additionalProperties":false,"properties":{"kind":{"type":"string","enum":["search"]},"queries":{"type":"array","minItems":1,"items":{"type":"object","additionalProperties":false,"properties":{"text":{"type":"string"},"source_kinds":{"type":"array","minItems":1,"items":{"type":"string","enum":["writing_artifact","conversation","active_debate","own_agent_state"]}}},"required":["text","source_kinds"]}},"path_prefix":{"type":"string"}},"required":["kind","queries"]},
         {"type":"object","additionalProperties":false,"properties":{"kind":{"type":"string","enum":["read"]},"handles":{"type":"array","minItems":1,"items":{"type":"string"}}},"required":["kind","handles"]},
-        {"type":"object","additionalProperties":false,"properties":{"kind":{"type":"string","enum":["answer"]},"result":{"type":"object","additionalProperties":false,"properties":{"scope":{"type":"string","enum":["workflow_meta"]},"evidence_status":{"type":"string","enum":["not_applicable"]},"evidence_ids":{"type":"array","maxItems":0,"items":{"type":"string"}},"kind":{"type":"string","enum":["answer","question","critique"]},"message":{"type":"string"},"artifact_intent":{"type":"null"},"proposal":{"type":"null"},"recommended_action":{"type":"null"},"objective_intent":{"anyOf":[{"type":"null"},{"type":"object","additionalProperties":false,"properties":{"action":{"type":"string","enum":["start"]},"request":{"type":"string"},"target_paths":{"type":"array","items":{"type":"string"},"minItems":1},"next_step":{"type":"string","enum":["clarify","consult","prepare"]},"draft_source_event_ids":{"type":"array","items":{"type":"string"}}},"required":["action","request","target_paths","next_step","draft_source_event_ids"]},{"type":"object","additionalProperties":false,"properties":{"action":{"type":"string","enum":["continue"]},"objective_id":{"type":"string"},"next_step":{"type":"string","enum":["clarify","consult","prepare"]},"draft_source_event_ids":{"type":"array","items":{"type":"string"}}},"required":["action","objective_id","next_step","draft_source_event_ids"]},{"type":"object","additionalProperties":false,"properties":{"action":{"type":"string","enum":["cancel"]},"objective_id":{"type":"string"}},"required":["action","objective_id"]}]},"authoring_scope":{"type":"object","additionalProperties":false,"properties":{"schema_version":{"type":"integer","enum":[1]},"activity":{"type":"string","enum":["workflow"]},"target_paths":{"type":"array","items":{"type":"string"},"maxItems":0},"domains":{"type":"array","items":{"type":"string"},"maxItems":0},"interpretation":{"type":"string"},"task_id":{"type":"string","enum":["task_demo"]},"task_revision":{"type":"integer","enum":[1]}},"required":["schema_version","activity","target_paths","domains","interpretation","task_id","task_revision"]}},"required":["scope","evidence_status","evidence_ids","kind","message","artifact_intent","proposal","objective_intent","recommended_action","authoring_scope"]},"used_handles":{"type":"array","items":{"type":"string"}}},"required":["kind","result","used_handles"]}
+        {"type":"object","additionalProperties":false,"properties":{"kind":{"type":"string","enum":["answer"]},"result":{"type":"object","additionalProperties":false,"properties":{"kind":{"type":"string","enum":["answer","question","critique"]},"message":{"type":"string"}},"required":["kind","message"]}},"required":["kind","result"]}
       ]
     }
   },
-  "required": ["correlation", "action"]
+  "required": ["action"]
 }
 ```
 
-The shown ANSWER branch is a complete ten-field `lead-outcome-v4` workflow-meta
-answer/question/critique variant with illustrative offered pair `task_demo`/`1`.
-Live schemas also include separate recommendation, story-specific, and proposal variants allowed by
-that call. SEARCH
-finds locators, READ accepts only issued SEARCH handles, and ANSWER embeds its
-semantic result object directly plus only supporting successful READ handles.
-There is no JSON-in-string layer, migration, or legacy decoder.
+The shown ANSWER branch is the minimal `lead-outcome-v5` workflow-meta
+answer/question/critique variant. Live schemas add only the semantic fields
+needed by recommendation, story-specific, and proposal variants. SEARCH finds
+locators, READ accepts only issued SEARCH handles, and ANSWER embeds its semantic
+result directly. Runtime attaches evidence receipts, used handles, correlation,
+scope, and task metadata. There is no JSON-in-string layer or legacy decoder.
 
 A sanitized provider-call summary (with the schema block referenced rather
 than duplicated) has the same semantics for either provider:
@@ -922,7 +918,7 @@ than duplicated) has the same semantics for either provider:
   "schema": "<exact per-call schema shown above>",
   "payload": {
     "c": "<correlation-1>",
-    "q": ["lead", "sa", "wcdo", [4, 2, 2, 4, 8, 8, 16, 200], ["lead", "lead-outcome-v4"]],
+    "q": ["lead", "sa", "wcdo", [4, 2, 2, 4, 8, 8, 16, 200], ["lead", "lead-outcome-v5"]],
     "i": {"workflow": "lead_front_channel", "command": "Does the planned reveal conflict with the current opening?"}
   }
 }
@@ -938,7 +934,7 @@ Applications do not call separate provider search/read endpoints.
 For example, either provider can return this provider-neutral SEARCH output:
 
 ```json
-{"correlation":"<correlation-1>","action":{"kind":"search","path_prefix":null,"queries":[{"text":"planned reveal opening","source_kinds":["writing_artifact"]}]}}
+{"action":{"kind":"search","queries":[{"text":"planned reveal opening","source_kinds":["writing_artifact"]}]}}
 ```
 
 The samples keep `source_kinds` in canonical order for readability, but a
@@ -966,10 +962,10 @@ SEARCH/READ; those bytes do not satisfy the current evidence contract.
 ```json
 {
   "c": "<correlation-1>",
-  "q": ["lead", "sa", "wcdo", [4, 2, 2, 4, 8, 8, 16, 200], ["lead", "lead-outcome-v4"]],
+  "q": ["lead", "sa", "wcdo", [4, 2, 2, 4, 8, 8, 16, 200], ["lead", "lead-outcome-v5"]],
   "i": {
     "workflow": "lead_front_channel",
-    "contract_version": "lead-outcome-v4",
+    "contract_version": "lead-outcome-v5",
     "command": "Does the planned reveal conflict with the current opening?",
     "identity": {"agent_id": "lead_orchestrator", "session_id": "novel", "conversation_id": "<conversation-id>", "turn_id": "<turn-id>", "step_id": "<step-id>"},
     "authoring_tasks": [{"task_id":"task_demo","task_revision":1,"current_scope":null}],
@@ -1003,7 +999,7 @@ and offers `task_demo`/`1`; real output must select an exact pair offered by tha
 call. A provider that needs the manuscript can request a bounded lexical SEARCH:
 
 ```json
-{"correlation":"<correlation-1>","action":{"kind":"search","path_prefix":null,"queries":[{"text":"planned reveal opening","source_kinds":["writing_artifact"]}]}}
+{"action":{"kind":"search","queries":[{"text":"planned reveal opening","source_kinds":["writing_artifact"]}]}}
 ```
 
 Runtime returns a compact continuation observation. A hit includes source,
@@ -1011,125 +1007,34 @@ revision, boundary, provenance, snippet, and an opaque invocation-local
 handle; it is not yet content evidence. The provider asks to READ that handle:
 
 ```json
-{"correlation":"<correlation-2>","action":{"kind":"read","handles":["<handle>"]}}
+{"action":{"kind":"read","handles":["<handle>"]}}
 ```
 
 The READ continuation contains the selected untrusted text and a new evidence
-ID such as `read_2_1`. The provider's final ANSWER must name the handle in
-`action.used_handles`
-and cite the evidence ID in its strict semantic result:
+ID such as `read_2_1`. Runtime associates that receipt with the active
+invocation; the provider's final ANSWER returns only the semantic proposal:
 
 ```json
 {
-  "correlation": "<correlation-3>",
   "action": {
     "kind": "answer",
     "result": {
-      "scope": "story_specific",
-      "authoring_scope": {
-        "schema_version": 1,
-        "activity": "review",
-        "target_paths": [
-          "core_documents/global_outline.md",
-          "manuscript/part-01/opening.md"
-        ],
-        "domains": [
-          "plot_structure",
-          "character_world",
-          "tone_execution"
-        ],
-        "interpretation": "Review the supplied opening for timing, motivation, and prose.",
-        "task_id": "task_demo",
-        "task_revision": 1
-      },
-      "evidence_status": "conflicting",
-      "evidence_ids": [
-        "read_2_1",
-        "read_2_2"
-      ],
       "kind": "proposal",
-      "message": "I propose reviews of opening order, motivation, and prose against these current sources.",
-      "artifact_intent": null,
-      "proposal": {
-        "relation": "new_step",
-        "purpose": "Review the supplied opening.",
-        "authoring_scope": {
-          "schema_version": 1,
-          "activity": "review",
-          "target_paths": [
-            "core_documents/global_outline.md",
-            "manuscript/part-01/opening.md"
-          ],
-          "domains": [
-            "plot_structure",
-            "character_world",
-            "tone_execution"
-          ],
-          "interpretation": "Review the supplied opening for timing, motivation, and prose.",
-          "task_id": "task_demo",
-          "task_revision": 1
-        },
-        "assignments": [
-          {
-            "agent_id": "plot_architect",
-            "instruction": "Review opening order against the outline.",
-            "input_ids": [
-              "user_input",
-              "read_2_1",
-              "read_2_2"
-            ],
-            "mode": "review",
-            "review_basis": {
-              "schema_version": 1,
-              "candidate_input_ids": [
-                "read_2_2"
-              ],
-              "criteria": "Check causality and pacing."
-            }
-          },
-          {
-            "agent_id": "character_custodian",
-            "instruction": "Review motivation in the opening.",
-            "input_ids": [
-              "user_input",
-              "read_2_1",
-              "read_2_2"
-            ],
-            "mode": "review",
-            "review_basis": {
-              "schema_version": 1,
-              "candidate_input_ids": [
-                "read_2_2"
-              ],
-              "criteria": "Check motivation and continuity."
-            }
-          },
-          {
-            "agent_id": "execution_specialist",
-            "instruction": "Review the opening prose.",
-            "input_ids": [
-              "user_input",
-              "read_2_1",
-              "read_2_2"
-            ],
-            "mode": "review",
-            "review_basis": {
-              "schema_version": 1,
-              "candidate_input_ids": [
-                "read_2_2"
-              ],
-              "criteria": "Check prose and narrative execution."
-            }
-          }
-        ]
+      "message": "I propose reviews of opening order, motivation, and prose.",
+      "authoring_scope": {
+        "activity": "review",
+        "target_paths": ["core_documents/global_outline.md", "manuscript/part-01/opening.md"],
+        "domains": ["plot_structure", "character_world", "tone_execution"],
+        "task": "task_demo@1"
       },
-      "objective_intent": null,
-      "recommended_action": null
-    },
-    "used_handles": [
-      "<handle-1>",
-      "<handle-2>"
-    ]
+      "proposal": {
+        "assignments": [
+          {"agent_id":"plot_architect","instruction":"Review opening order against the outline.","input_ids":["user_input","read_2_1","read_2_2"],"mode":"review"},
+          {"agent_id":"character_custodian","instruction":"Review motivation in the opening.","input_ids":["user_input","read_2_1","read_2_2"],"mode":"review"},
+          {"agent_id":"execution_specialist","instruction":"Review the opening prose.","input_ids":["user_input","read_2_1","read_2_2"],"mode":"review"}
+        ]
+      }
+    }
   }
 }
 ```
@@ -1144,7 +1049,7 @@ A complete, non-truncated zero-hit SEARCH instead includes a content-free
 `search_<action>` receipt in the observation. That receipt can support
 `missing` only when the searched scope includes canonical writing artifacts.
 A conversation-only zero hit, a truncated search, a hit that was never READ,
-or a READ omitted from final `action.used_handles` cannot ground the claim.
+or a READ not associated with the accepted answer cannot ground the claim.
 
 For a story-file change, the lead ANSWER uses the same envelope but chooses
 `kind=proposal`, sets the ordinary `proposal` to `null`, and returns one strict
@@ -1156,22 +1061,14 @@ must match the offered active task:
 
 ```json
 {
-  "correlation": "<correlation-3>",
   "action": {
     "kind": "answer",
     "result": {
-      "scope": "story_specific",
-      "authoring_scope": {"schema_version":1,"activity":"review","target_paths":["core_documents/global_outline.md","manuscript/part-01/opening.md"],"domains":["plot_structure","character_world","tone_execution"],"interpretation":"Review the supplied opening for timing, motivation, and prose.","task_id":"task_demo","task_revision":1},
-      "evidence_status": "verified",
-      "evidence_ids": ["reference_1", "reference_2"],
       "kind": "proposal",
       "message": "I prepared an exact manuscript patch candidate for review.",
-      "artifact_intent": {"operations":[{"kind":"patch","evidence_id":"reference_1","replacement_text":"<proposed replacement>"}],"additional_review_domains":["plot_structure","character_world"]},
-      "proposal": null,
-      "objective_intent": {"action":"start","request":"Prepare the manuscript patch.","target_paths":["manuscript/part-01/opening.md"],"next_step":"prepare","draft_source_event_ids":[]},
-      "recommended_action": null
-    },
-    "used_handles": []
+      "authoring_scope": {"activity":"review","target_paths":["manuscript/part-01/opening.md"],"domains":["plot_structure","character_world"],"task":"task_demo@1"},
+      "artifact_intent": {"operations":[{"kind":"patch","evidence_id":"reference_1","replacement_text":"<proposed replacement>"}]}
+    }
   }
 }
 ```
@@ -1183,29 +1080,25 @@ change set, validates projected relationships, derives mandatory review
 domains, unions the explicitly requested additional domains in canonical
 order, and computes the candidate digest. An unknown or authority-bearing
 provider field violates the closed wire-v7 result schema, so the response is
-rejected before candidate construction; if bounded correction does not produce
-a valid response, it closes as `provider_result_rejected` with no artifact-
-review failure event. A schema-valid intent that cannot satisfy runtime
-artifact semantics instead closes as `artifact_intent_rejected`. Both outcomes
-create no candidate and permit only `retry_lead_turn` as a fresh Lead turn.
+repaired once before candidate construction. If repair also fails, runtime
+emits a visible safe no-action Lead answer and continues the conversation. A
+schema-valid intent that cannot satisfy runtime artifact semantics instead
+closes as `artifact_intent_rejected`; runtime never infers missing paths, task
+selectors, or other authority.
 
-Every front-channel result supplies all ten fields, including explicit
-`objective_intent`. It may be null or a strict `start`, `continue`, or `cancel`
-object. CLARIFY requires `kind=question`; CONSULT requires an ordinary
-consultation proposal; PREPARE requires an artifact proposal with
-`proposal=null`. Once PREPARE is selected, bounded same-turn correction cannot
-replace it with advice or a prose completion claim. Later ordinary user input
-remains contextual. A fresh recommendation instead requires `recommended_action`
-and null objective intent. Ordinary synthesis has its own nullable action;
-specialist and artifact-review synthesis contracts remain separate.
-Fresh Lead policies use v4, and retained workspace policies receive a runtime
-v4 overlay without file rewrites.
+Every front-channel result supplies only the semantic fields for its selected
+variant. CLARIFY requires `kind=question`; CONSULT requires an ordinary
+consultation proposal; PREPARE requires an artifact intent. Once PREPARE is
+selected, bounded same-turn correction cannot replace it with advice or a prose
+completion claim. Runtime derives absent bookkeeping and no-action defaults; it
+never derives authority. Ordinary synthesis and specialist and artifact-review
+synthesis retain separate minimal contracts. Fresh Lead policies use v5.
 
 ### Specialist assignment: initial input
 
 The dynamic material includes the exact assignment, its input subset, and the
-strict answer contract. Authorized reference bytes are added separately under
-`untrusted_writing_artifact_context` after the mandatory-reference prelude.
+strict answer contract. Runtime loads authorized reference bytes locally and
+adds them under `untrusted_writing_artifact_context` without a provider prelude.
 
 ```json
 {
@@ -1280,7 +1173,7 @@ input IDs, assessment, and visible message.
 The provider can request bounded lexical search:
 
 ```json
-{"correlation":"<correlation-1>","action":{"kind":"search","path_prefix":null,"queries":[{"text":"opening causality","source_kinds":["writing_artifact","conversation"]}]}}
+{"action":{"kind":"search","queries":[{"text":"opening causality","source_kinds":["writing_artifact","conversation"]}]}}
 ```
 
 Runtime searches only this invocation's authorized sources and returns an
@@ -1288,19 +1181,17 @@ opaque handle in the continuation observation. The provider requests that
 handle:
 
 ```json
-{"correlation":"<correlation-2>","action":{"kind":"read","handles":["<handle>"]}}
+{"action":{"kind":"read","handles":["<handle>"]}}
 ```
 
-After runtime recaptures and validates the source, the provider answers and
-names every READ handle it used:
+After runtime recaptures and validates the source, the provider answers with
+only its assessment and visible message:
 
 ```json
 {
-  "correlation": "<correlation-3>",
   "action": {
     "kind": "answer",
-    "result": {"mode":"review","assessment":"concern","assignment_id":"<assignment-id>","input_ids":["user_input","reference_1","reference_3"],"message":"The opening advances the reveal before its outline cause."},
-    "used_handles": ["<handle>"]
+    "result": {"assessment":"concern","message":"The opening advances the reveal before its outline cause."}
   }
 }
 ```
@@ -1345,51 +1236,15 @@ replies and the exact attribution contract:
 }
 ```
 
-The terminal provider answer is exact JSON:
+The terminal provider answer returns only its semantic message:
 
 ```json
 {
-  "correlation": "<synthesis-correlation>",
   "action": {
     "kind": "answer",
     "result": {
-      "scope": "story_specific",
-      "authoring_scope": {
-        "schema_version": 1,
-        "activity": "review",
-        "target_paths": [
-          "core_documents/global_outline.md",
-          "manuscript/part-01/opening.md"
-        ],
-        "domains": [
-          "plot_structure",
-          "character_world",
-          "tone_execution"
-        ],
-        "interpretation": "Review the supplied opening for timing, motivation, and prose.",
-        "task_id": "task_demo",
-        "task_revision": 1
-      },
-      "evidence_status": "conflicting",
-      "evidence_ids": [
-        "reference_1",
-        "read_2_1"
-      ],
-      "message": "Motivation is plausible, but the reveal still conflicts with the outline timing.",
-      "next_intent": null,
-      "reply_event_ids": [
-        "<reply-event-1>",
-        "<reply-event-2>",
-        "<reply-event-3>"
-      ],
-      "unresolved_input_ids": [
-        "user_input",
-        "reference_1",
-        "read_2_1"
-      ],
-      "recommended_action": null
-    },
-    "used_handles": []
+      "message": "Motivation is plausible, but the reveal still conflicts with the outline timing."
+    }
   }
 }
 ```
@@ -1406,18 +1261,15 @@ An action produces a separately confirmable recommendation while the historical
 durable synthesis payload remains unchanged.
 
 For artifact review, the synthesis input additionally includes the same exact
-`artifact_candidate`. Its independent answer contract omits `recommended_action`
-and adds `decision`, `rationale`, `user_impact`, and `limitations`, and requires
-`next_intent=null`. This uses `artifact-review-synthesis-v2`, independently of
-the candidate codec version:
+`artifact_candidate`. Its independent minimal answer contract requires only
+`decision` and `message`. This uses `artifact-review-synthesis-v3`, independently
+of the candidate codec version:
 
 ```json
 {
-  "correlation": "<synthesis-correlation>",
   "action": {
     "kind": "answer",
-    "result": {"scope":"story_specific","authoring_scope":{"schema_version":1,"activity":"review","target_paths":["core_documents/global_outline.md","manuscript/part-01/opening.md"],"domains":["plot_structure","character_world","tone_execution"],"interpretation":"Review the supplied opening for timing, motivation, and prose.","task_id":"task_demo","task_revision":1},"evidence_status":"verified","evidence_ids":["reference_1","reference_2"],"message":"The candidate is coherent after preserving the stated concern.","next_intent":null,"reply_event_ids":["<reply-event-1>","<reply-event-2>","<reply-event-3>"],"unresolved_input_ids":["user_input","reference_1","reference_2","artifact_candidate"],"decision":"propose","rationale":"Every disclosed review is attributed and the candidate remains exact.","user_impact":"No artifact changed; the user may inspect the reviewed proposal.","limitations":"This result grants no Apply, write, commit, or Git authority."},
-    "used_handles": []
+    "result": {"decision":"propose","message":"The candidate is coherent after preserving the stated concern."}
   }
 }
 ```
@@ -1597,7 +1449,6 @@ lead-synthesis call; a direct advisory reserves zero synthesis calls.
 
 Submitted calls include:
 
-- mandatory-reference prelude;
 - initial provider call;
 - SEARCH, READ, and final ANSWER continuations; and
 - calls that were submitted but then failed, timed out, or were cancelled.

@@ -306,17 +306,17 @@ memory, and the outer compact input envelope are omitted:
 The Lead requests a bounded search, then reads a returned opaque handle:
 
 ```json
-{"correlation":"<search-token>","action":{"kind":"search","path_prefix":null,"queries":[{"text":"part outline pacing","source_kinds":["writing_artifact"]}]}}
+{"action":{"kind":"search","queries":[{"text":"part outline pacing","source_kinds":["writing_artifact"]}]}}
 ```
 
 ```json
-{"correlation":"<read-token>","action":{"kind":"read","handles":["<runtime-handle>"]}}
+{"action":{"kind":"read","handles":["<runtime-handle>"]}}
 ```
 
-Assume READ returns the nonempty part outline as `read_1`. The complete
-`lead-outcome-v4` ANSWER embeds all ten fields in `action.result` and names
-the used READ handle in `action.used_handles`. Its evidence IDs cite receipts,
-not the handle alone. Substantive critique requires a proposal:
+Assume READ returns the nonempty part outline as `read_1`. A
+`lead-outcome-v5` ANSWER returns only its semantic result fields. Runtime derives
+the used-handle receipts, evidence status, scope, and correlation. Substantive
+critique requires a proposal:
 
 ```json
 {
@@ -681,10 +681,9 @@ runtime appends its routing policy to the captured prompt; customized workspace
 files are preserved. Routing policy v1 is separate from Lead result v3 and
 specialist/synthesis result v2.
 
-Fresh Lead policies use `lead-outcome-v4`. Existing workspace policy files are
-retained byte-for-byte; the runtime appends a deterministic Lead overlay that
-supersedes older front-channel field lists. The overlay also applies during
-Lead synthesis while preserving that invocation's separate result schema.
+Fresh Lead policies use `lead-outcome-v5`. The runtime overlay also applies
+during Lead synthesis while preserving that invocation's separate minimal
+result schema.
 
 The runtime captures strict UTF-8, NUL-free snapshots before binding and
 fingerprints every ordered file component and the runtime policy bytes.

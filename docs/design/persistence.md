@@ -612,8 +612,8 @@ Capture is ordered around provider behavior, not as one storage transaction:
 A provider failure before a result has request plus outcome and no response. A
 cancellation may close before or after a response. Context SEARCH/READ calls
 are accepted after completion-observer delivery, ANSWER is accepted after the
-checkpoint commit but before the later checkpoint observer, and a successful
-reference prelude is accepted in the backend before its result is returned.
+checkpoint commit but before the later checkpoint observer. Local reference
+loading has no provider-call record.
 These are append-only historical facts: a later failure does not rewrite an
 already accepted call.
 

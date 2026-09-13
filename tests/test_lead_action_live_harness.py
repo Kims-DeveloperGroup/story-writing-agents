@@ -235,7 +235,14 @@ class LiveHarnessTests(unittest.IsolatedAsyncioTestCase):
                         value = json.loads(response(call, provider))
                         tasks = lead._workflow_material(call.payload)['authoring_tasks']
                         index = next(i for i, task in enumerate(tasks) if task['task_id'] == holder['task_id'])
-                        value['action']['result']['authoring_scope'] = lead._live_scope(call, activity='review', paths=(live.OUTLINE,), task_index=index)
+                        value['action']['result']['authoring_scope'] = lead._compact_scope(
+                            lead._live_scope(
+                                call,
+                                activity='review',
+                                paths=(live.OUTLINE,),
+                                task_index=index,
+                            )
+                        )
                         return json.dumps(value)
                     def backend_factory(workspace, **_kwargs):
                         holder['workspace_root'] = str(workspace.root)

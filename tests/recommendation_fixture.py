@@ -103,15 +103,18 @@ def preparation(turn, *, text=DRAFT, mutate=None):
         def producer(call, provider):
             import json
             value = json.loads(base(call, provider))
-            value["action"]["result"]["objective_intent"] = intent
+            if intent is not None:
+                value["action"]["result"]["proposal"]["objective_intent"] = (
+                    lead._compact_objective(intent)
+                )
             return json.dumps(value, ensure_ascii=False)
 
     def respond(call, provider):
         value = json.loads(producer(call, provider))
         body = value["action"]["result"]
-        body["authoring_scope"] = json.loads(json.dumps(asdict(request.authoring_scope)))
-        if body.get("proposal") is not None:
-            body["proposal"]["authoring_scope"] = copy.deepcopy(body["authoring_scope"])
+        body["authoring_scope"] = lead._compact_scope(
+            json.loads(json.dumps(asdict(request.authoring_scope)))
+        )
         if mutate is not None:
             mutate(body)
         return json.dumps(value, ensure_ascii=False)
