@@ -127,6 +127,13 @@ interruption. Preserve the linked worktree, common Git administration,
 markers, index, refs, and working bytes, stop automated writers, and inspect
 offline. Do not retry merely because partial metadata may have been read.
 
+The same precedence applies to the physical-generation pin retained across a
+Lead or synthesis provider await and its durable persistence: if that work
+fails while the final generation recheck also detects replacement or drift,
+the generation loss is authoritative and enters the recovery-required/
+operator-recovery contract. The simultaneous provider or persistence failure
+does not authorize retry against an unproved generation.
+
 These reads never continue, abort, reset, clean, checkout, stage, commit, or
 repair Git. They also do not establish which story session owns the worktree.
 The recovery reconciler and transition assessor correlate those observations
@@ -969,7 +976,11 @@ The runtime joins all parallel assignment tasks before classifying a known
 partial failure. One failed peer does not cancel successful siblings, and no
 lead synthesis is attempted over an incomplete set. Outer cancellation cancels
 and joins every child, persists knowable terminal facts/result, removes the
-live marker, releases bound-agent resources, and re-raises. For those
+live marker, releases bound-agent resources, and re-raises. Bound-agent release
+itself is one shielded, joined task: cancellation is propagated only after the
+exact retained use is released once. If release also fails, the cancellation
+remains primary and records that cleanup failure; without cancellation, the
+release failure remains visible. For those
 specialist/synthesis invocations, a submitted timeout or transport failure
 marked outcome-uncertain enters `outcome_unknown`; the read-only Lead retry
 path does not abandon them. A PREPARED call that never crossed the provider
@@ -1554,6 +1565,13 @@ already terminal evidence unchanged. A restart candidate-only consensus call
 does not scan the worktree, so an orphan waits for an artifact-sensitive
 boundary. Corrupt evidence fails closed and blocks the boundary; it is never
 skipped, rewritten, or used to authorize replay.
+
+The original operation's provider-facing and mutation authority is both
+process- and opaque-thread-affine. A foreign thread or forked child rejects it
+before repository locking or I/O. Only cleanup and reconciliation are
+same-process, PID-only responsibilities: another thread may finish them through
+fresh binding access, while a child process discards inherited registry handles
+and relies on durable restart reconciliation instead.
 
 `inspect_reference_operation()` distinguishes absence from corruption. It
 returns no history only when the named operation directory is absent. If any

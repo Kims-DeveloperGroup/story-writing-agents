@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import multiprocessing
 import os
 import pickle
 import shutil
@@ -40,6 +41,13 @@ from story_writing_agents.conversations import (
 from story_writing_agents.errors import WorkspaceFormatError, WorkspaceSecurityError
 from story_writing_agents.git import repository_lock as lock_module
 from story_writing_agents.git import session_resources as session_resources_module
+from story_writing_agents.git.session_contracts import (
+    GitSessionFailureCode,
+    GitSessionOperationKind,
+    GitSessionRecoveryAction,
+    GitSessionResourceError,
+    GitSessionResourceState,
+)
 from story_writing_agents.git.process import GitProcessRunner
 from story_writing_agents.models import AgentStateEntry, DebateMessage
 from story_writing_agents.workspace import Workspace
@@ -203,6 +211,134 @@ class RuntimeSessionArtifactBindingTests(LeadOrchestrationTestCase):
                 os.fstat(descriptor)
         with self.assertRaises(SessionArtifactBindingError):
             binding.require_generation_pin(pin)
+
+    def test_generation_pins_reject_foreign_thread_and_fork_before_io(self) -> None:
+        binding = compose_session_artifact_binding(
+            self.control_workspace.root,
+            self.session_id,
+        )
+        pin = binding.acquire_generation_pin()
+        descriptors = _generation_pin_descriptors(pin)
+        self.assertEqual(len(descriptors), 6)
+
+        def foreign_thread_calls():
+            results = []
+            with mock.patch.object(
+                session_resources_module,
+                "lock_git_repository",
+                side_effect=AssertionError("foreign pin must fail before lock"),
+            ), mock.patch.object(
+                session_resources_module,
+                "_require_retained_generation_descriptors",
+                side_effect=AssertionError(
+                    "foreign pin must fail before descriptor validation"
+                ),
+            ):
+                for operation in (
+                    pin._pin.require_current,
+                    lambda: pin._require_identity(binding._generation_identity),
+                    lambda: binding.require_generation_pin(pin),
+                ):
+                    try:
+                        operation()
+                    except BaseException as failure:
+                        results.append(failure)
+            return tuple(results)
+
+        with ThreadPoolExecutor(max_workers=1) as executor:
+            thread_failures = executor.submit(foreign_thread_calls).result(timeout=10)
+        self.assertEqual(len(thread_failures), 3)
+        self.assertIs(type(thread_failures[0]), GitSessionResourceError)
+        self.assertIs(type(thread_failures[1]), SessionArtifactBindingError)
+        self.assertIs(type(thread_failures[2]), SessionArtifactBindingError)
+        raw_failure = thread_failures[0]
+        self.assertIs(raw_failure.code, GitSessionFailureCode.UNSAFE_ROOT)
+        self.assertIs(raw_failure.operation, GitSessionOperationKind.INSPECT)
+        self.assertIs(raw_failure.state, GitSessionResourceState.RECOVERY_REQUIRED)
+        self.assertIs(
+            raw_failure.recovery_action,
+            GitSessionRecoveryAction.OPERATOR_RECOVERY,
+        )
+        self.assertIsNone(raw_failure.__cause__)
+        binding.require_generation_pin(pin)
+
+        if "fork" not in multiprocessing.get_all_start_methods():
+            self.skipTest("requires POSIX fork semantics")
+        context = multiprocessing.get_context("fork")
+        child_results = context.Queue()
+
+        def foreign_process_calls() -> None:
+            outcomes = []
+            with mock.patch.object(
+                session_resources_module,
+                "lock_git_repository",
+                side_effect=AssertionError("forked pin must fail before lock"),
+            ), mock.patch.object(
+                session_resources_module,
+                "_require_retained_generation_descriptors",
+                side_effect=AssertionError(
+                    "forked pin must fail before descriptor validation"
+                ),
+            ):
+                for operation in (
+                    pin._pin.require_current,
+                    lambda: pin._require_identity(binding._generation_identity),
+                    lambda: binding.require_generation_pin(pin),
+                ):
+                    try:
+                        operation()
+                    except BaseException as failure:
+                        outcomes.append(
+                            (
+                                type(failure).__name__,
+                                getattr(getattr(failure, "code", None), "value", None),
+                                getattr(
+                                    getattr(failure, "operation", None), "value", None
+                                ),
+                                getattr(getattr(failure, "state", None), "value", None),
+                                getattr(
+                                    getattr(failure, "recovery_action", None),
+                                    "value",
+                                    None,
+                                ),
+                                failure.__cause__ is None,
+                            )
+                        )
+            pin.close()
+            child_results.put(tuple(outcomes))
+
+        process = context.Process(target=foreign_process_calls)
+        try:
+            process.start()
+            process.join(timeout=10)
+            self.assertFalse(process.is_alive())
+            self.assertEqual(process.exitcode, 0)
+            outcomes = child_results.get(timeout=3)
+        finally:
+            if process.is_alive():
+                process.terminate()
+                process.join(timeout=5)
+        self.assertEqual(
+            outcomes,
+            (
+                (
+                    "GitSessionResourceError",
+                    GitSessionFailureCode.UNSAFE_ROOT.value,
+                    GitSessionOperationKind.INSPECT.value,
+                    GitSessionResourceState.RECOVERY_REQUIRED.value,
+                    GitSessionRecoveryAction.OPERATOR_RECOVERY.value,
+                    True,
+                ),
+                ("SessionArtifactBindingError", None, None, None, None, True),
+                ("SessionArtifactBindingError", None, None, None, None, True),
+            ),
+        )
+        binding.require_generation_pin(pin)
+        pin.close()
+        pin.close()
+        for descriptor in descriptors:
+            with self.assertRaises(OSError):
+                os.fstat(descriptor)
 
     def test_generation_pin_fails_closed_for_every_named_topology_component(
         self,

@@ -1379,6 +1379,20 @@ and repository access, and leaves content-free ownership plus the operation's
 private, non-traversed worktree descriptor. The pin is never read, serialized,
 provider-visible, or usable as repository authority. The failed invocation and
 any known provider work are not replayed.
+
+Operational reference authority belongs to the process and opaque thread token
+that created it. Beginning or finishing work, handling a provider read action,
+recording or accepting its result, and invocation termination all reject a
+foreign thread or forked child with `correlation_mismatch` before repository
+locking or I/O. Cleanup state is narrower: another thread in the same process
+may inspect pending state and complete retained reconciliation through its own
+fresh guarded repository access. A forked process cannot do so. Where the
+platform supports `os.register_at_fork`, its `after_in_child` hook eagerly
+replaces the inherited lock and handle set with an empty child-local registry
+as the fork returns. A PID check before each registry lock remains a defensive
+lazy fallback. Inherited operations are therefore never treated as live child
+authority.
+
 At the next same-process artifact-sensitive boundary, runtime reconciles a
 retained owner only when the fresh binding has the same physical worktree
 identity. Same-generation terminal or reconciled completion closes the pin. If

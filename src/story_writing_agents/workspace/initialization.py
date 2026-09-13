@@ -438,6 +438,12 @@ class SessionArtifactBinding:
         repr=False,
         compare=False,
     )
+    _generation_creator_pid: int = field(init=False, repr=False, compare=False)
+    _generation_creator_thread_token: object = field(
+        init=False,
+        repr=False,
+        compare=False,
+    )
     _repository: WritingArtifactRepository = field(init=False, repr=False)
     _operation_lock: threading.RLock = field(init=False, repr=False, compare=False)
     _operation_tokens: dict[object, list[SessionArtifactAccess]] = field(
@@ -465,6 +471,12 @@ class SessionArtifactBinding:
             != self.worktree_identity
         ):
             raise TypeError("session artifact generation identity is invalid")
+        object.__setattr__(self, "_generation_creator_pid", os.getpid())
+        object.__setattr__(
+            self,
+            "_generation_creator_thread_token",
+            current_thread_token(),
+        )
         object.__setattr__(self, "_operation_lock", threading.RLock())
         object.__setattr__(self, "_operation_tokens", {})
         object.__setattr__(
@@ -558,6 +570,7 @@ class SessionArtifactBinding:
     def acquire_generation_pin(self) -> SessionArtifactGenerationPin:
         """Acquire one opaque pin under a short physical-generation lock."""
 
+        self._require_generation_creator()
         identity = self._generation_identity
         if identity is None:
             raise SessionArtifactBindingError(
@@ -583,6 +596,7 @@ class SessionArtifactBinding:
     def require_generation_pin(self, pin: SessionArtifactGenerationPin) -> None:
         """Require one opaque pin to match this binding's current generation."""
 
+        self._require_generation_creator()
         if type(pin) is not SessionArtifactGenerationPin:
             raise TypeError("generation pin must be exact")
         identity = self._generation_identity
@@ -596,6 +610,15 @@ class SessionArtifactBinding:
             raise SessionArtifactBindingError(
                 "session artifact resources are unavailable"
             ) from None
+
+    def _require_generation_creator(self) -> None:
+        if (
+            self._generation_creator_pid != os.getpid()
+            or self._generation_creator_thread_token is not current_thread_token()
+        ):
+            raise SessionArtifactBindingError(
+                "session artifact resources are unavailable"
+            )
 
     def _deactivate_repository_access(self, access: SessionArtifactAccess) -> None:
         with self._operation_lock:
@@ -829,7 +852,13 @@ class SessionArtifactAccess:
 class SessionArtifactGenerationPin:
     """Opaque ownership of one non-inheritable physical session generation."""
 
-    __slots__ = ("_identity", "_lock", "_pin")
+    __slots__ = (
+        "_creator_pid",
+        "_creator_thread_token",
+        "_identity",
+        "_lock",
+        "_pin",
+    )
 
     def __init__(
         self,
@@ -843,11 +872,19 @@ class SessionArtifactGenerationPin:
             raise TypeError("session artifact generation pin is invalid")
         self._identity = identity
         self._pin = pin
+        self._creator_pid = os.getpid()
+        self._creator_thread_token = current_thread_token()
         self._lock = threading.Lock()
 
     def close(self) -> None:
         """Release this generation pin exactly once."""
 
+        if self._creator_pid != os.getpid():
+            pin = self._pin
+            self._pin = None
+            if pin is not None:
+                pin.close()
+            return
         with self._lock:
             pin = self._pin
             if pin is None:
@@ -856,6 +893,13 @@ class SessionArtifactGenerationPin:
         pin.close()
 
     def _require_identity(self, identity: GitSessionGenerationIdentity) -> None:
+        if (
+            self._creator_pid != os.getpid()
+            or self._creator_thread_token is not current_thread_token()
+        ):
+            raise SessionArtifactBindingError(
+                "session artifact resources are unavailable"
+            )
         with self._lock:
             pin = self._pin
             if pin is None or self._identity != identity:

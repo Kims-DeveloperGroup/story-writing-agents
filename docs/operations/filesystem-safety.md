@@ -188,6 +188,13 @@ no-follow relationship proof, and release the lock before returning. They run
 no Git child or semantic READY, manifest, policy, or artifact scan and grant no
 traversal, read, mutation, or repository authority.
 
+The generation identity, binding, and pin are confined to the creator process
+and opaque thread token. Foreign-thread and forked-child acquisition or recheck
+fails before repository locking, descriptor validation, or other filesystem
+I/O. Close is still idempotent; after a fork, the child-safe close path releases
+only the child's inherited descriptor copies without entering inherited locks
+or granting generation authority.
+
 Ordinary artifact access retains the stronger semantic boundary: one outer
 synchronous transaction performs a complete READY validation before and after
 its body. Nested access and repository calls reuse that transaction with only
@@ -378,6 +385,16 @@ paths close the descriptor; the pin grants no traversal or repository
 authority. A registry-callback failure after capture closes transient content
 and leaves only a content-free orphan for later restart reconciliation rather
 than recursively entering repository cleanup from the callback.
+
+Reference-provider actions and terminal mutation of their operation state use
+the same creator PID/thread affinity and reject a foreign thread or forked
+child before locks or I/O. Pending cleanup and reconciliation deliberately use
+PID-only authority: another thread in the same process may complete them under
+fresh guarded access. Where supported, an `os.register_at_fork` child hook
+eagerly replaces the inherited process-wide registry lock and clears inherited
+handles as the fork returns; a pre-lock PID check remains the defensive lazy
+fallback. The child leaves durable orphan recovery to a later artifact-
+sensitive boundary.
 
 The complete source must be strict UTF-8 without NUL. Universal CRLF, LF, and
 lone-CR records determine exact one-based range slices, including their line

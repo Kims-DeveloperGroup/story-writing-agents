@@ -96,7 +96,13 @@ persistence owner; direct Lead work retains it around its own publication.
 Both recheck the physical generation and close the pin after persistence, and
 failure, cancellation, malformed output, binding loss, or a non-transferred
 exit closes it exactly once. The identity pin may span a provider `await`, but
-no Git lease or artifact access does.
+no Git lease or artifact access does. The generation identity, binding, and pin
+may be acquired or revalidated only by their creator process and opaque thread
+token. Foreign-thread or forked-child use fails before repository locking or
+filesystem inspection; a child may only close its inherited descriptor copies
+through the idempotent, child-safe close path. If provider or persistence work
+fails while the physical-generation recheck also detects loss, generation loss
+is authoritative and enters the existing recovery boundary.
 
 This continuity mechanism does not set or confine a story-runtime provider's
 working directory or project root. That separate execution boundary remains
@@ -1175,7 +1181,12 @@ Before accepting new text, `lead_turn` normalizes authoritative state:
 Unresolved `running` with no live owner and no authoritative result becomes
 `outcome_unknown`; it is never replayed. A `running` result batch is finalized
 locally to `completed`, `failed`, or `interrupted`. The runtime clears live
-execution markers and releases bound-agent resources on every exit path.
+execution markers and releases bound-agent resources on every exit path. Each
+retained bound-agent use is released by one separately joined task. Cancellation
+cannot interrupt or duplicate that release: the runtime shields and joins it,
+then propagates the original cancellation after cleanup. A simultaneous
+release failure is recorded on that cancellation; without cancellation, the
+release failure remains the reported failure.
 
 ### Context event sink
 

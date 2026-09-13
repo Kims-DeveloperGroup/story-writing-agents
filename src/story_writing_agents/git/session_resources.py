@@ -33,6 +33,7 @@ from .repository_lock import (
     GitRepositoryLease,
     GitRepositoryLockFailure,
     GitRepositoryLockFailureCode,
+    current_thread_token,
     lock_git_repository,
 )
 from .session_contracts import (
@@ -85,6 +86,12 @@ class GitSessionGenerationIdentity:
     common_indirection_facts: _GenerationFileFacts = dataclass_field(repr=False)
     git_indirection_sha256: str = dataclass_field(repr=False)
     common_indirection_sha256: str = dataclass_field(repr=False)
+    _creator_pid: int = dataclass_field(init=False, repr=False, compare=False)
+    _creator_thread_token: object = dataclass_field(
+        init=False,
+        repr=False,
+        compare=False,
+    )
 
     def __post_init__(self) -> None:
         if (
@@ -119,12 +126,31 @@ class GitSessionGenerationIdentity:
             )
         ):
             raise TypeError("Git session generation identity is invalid")
+        object.__setattr__(self, "_creator_pid", os.getpid())
+        object.__setattr__(
+            self,
+            "_creator_thread_token",
+            current_thread_token(),
+        )
+
+    def _require_creator(self) -> None:
+        if (
+            self._creator_pid != os.getpid()
+            or self._creator_thread_token is not current_thread_token()
+        ):
+            raise _generation_error()
 
 
 class GitSessionGenerationPin:
     """Opaque retained descriptors for one physical linked-worktree generation."""
 
-    __slots__ = ("_descriptors", "_identity", "_lock")
+    __slots__ = (
+        "_creator_pid",
+        "_creator_thread_token",
+        "_descriptors",
+        "_identity",
+        "_lock",
+    )
 
     def __init__(
         self,
@@ -138,14 +164,22 @@ class GitSessionGenerationPin:
             or any(type(descriptor) is not int or descriptor < 0 for descriptor in descriptors)
         ):
             raise TypeError("Git session generation pin is invalid")
+        identity._require_creator()
         _require_retained_generation_descriptors(identity, descriptors)
         self._identity = identity
         self._descriptors = descriptors
+        self._creator_pid = os.getpid()
+        self._creator_thread_token = current_thread_token()
         self._lock = threading.Lock()
 
     def require_current(self) -> None:
         """Require the named topology and every retained identity to remain exact."""
 
+        if (
+            self._creator_pid != os.getpid()
+            or self._creator_thread_token is not current_thread_token()
+        ):
+            raise _generation_error()
         identity = self._identity
         with lock_git_repository(identity.session.main_root) as lease:
             current, descriptors = _capture_git_session_generation(
@@ -166,6 +200,11 @@ class GitSessionGenerationPin:
     def close(self) -> None:
         """Release every retained descriptor idempotently."""
 
+        if self._creator_pid != os.getpid():
+            descriptors = self._descriptors
+            self._descriptors = ()
+            _close_generation_descriptors(descriptors)
+            return
         with self._lock:
             descriptors = self._descriptors
             self._descriptors = ()
@@ -212,6 +251,7 @@ def acquire_git_session_generation_pin(
 
     if type(identity) is not GitSessionGenerationIdentity:
         raise TypeError("Git session generation identity is invalid")
+    identity._require_creator()
     pin: GitSessionGenerationPin | None = None
     descriptors: tuple[int, ...] = ()
     try:

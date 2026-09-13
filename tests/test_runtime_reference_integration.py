@@ -3,9 +3,11 @@
 from __future__ import annotations
 
 import inspect
+import multiprocessing
 import os
 import threading
 import unittest
+from concurrent.futures import ThreadPoolExecutor
 from contextlib import contextmanager
 from unittest import mock
 
@@ -991,6 +993,584 @@ class RuntimeExecutionRetirementTests(unittest.TestCase):
                 authorization,
                 outcome=ReferenceAuthorizationErrorCode.CANCELLED,
             )
+
+    def _runtime_reference_affinity_case(self, runtime_type=StoryRuntime):
+        workspace = pristine_initialized_workspace(self)
+        provision_session_resources(workspace.root, "novel")
+        binding = compose_session_artifact_binding(workspace.root, "novel")
+        runtime = runtime_type(workspace)
+        self.addCleanup(self._cleanup_runtime_registry, str(workspace.root))
+
+        @contextmanager
+        def repository_access():
+            with binding.open_ready_resources() as access:
+                yield access.repository
+
+        def public_unregistered():
+            return prepare_runtime_reference_operation(
+                WritingArtifactRepository(binding.resources.identity.worktree_root),
+                session_id="novel",
+                text="Read ${core_documents/global_outline.md}.",
+            )
+
+        def guarded_unregistered():
+            return prepare_guarded_runtime_reference_operation(
+                repository_access,
+                session_id="novel",
+                text="Read ${core_documents/global_outline.md}.",
+                physical_workspace_identity=binding.worktree_identity,
+                physical_workspace_pin_factory=self._physical_pin_factory(binding),
+            )
+
+        def guarded_registered():
+            return runtime._prepare_session_reference_operation(
+                repository_access,
+                artifact_binding=binding,
+                session_id="novel",
+                text="Read ${core_documents/global_outline.md}.",
+                reconcile_existing=False,
+            )
+
+        return (
+            binding,
+            runtime,
+            repository_access,
+            (
+                ("public_unregistered", public_unregistered, False),
+                ("guarded_unregistered", guarded_unregistered, False),
+                ("guarded_registered", guarded_registered, True),
+            ),
+        )
+
+    def _reference_operation_snapshot(self, binding, operation):
+        history = self._reference_history(binding, operation.operation_id)
+        assert history is not None
+        return (
+            tuple(
+                (event.operation_state, event.outcome)
+                for event in history.operation_events
+            ),
+            tuple(
+                tuple(
+                    (event.invocation_state, event.outcome)
+                    for event in invocation
+                )
+                for invocation in history.invocation_events
+            ),
+            operation.finished,
+            operation.cleanup_is_pending(),
+            tuple(operation._pending),
+        )
+
+    def _complete_reference_affinity_case(
+        self,
+        *,
+        runtime,
+        operation,
+        registered,
+        invocation=None,
+    ) -> None:
+        if invocation is None:
+            invocation = operation.begin_invocation(
+                agent_id=PLOT_ARCHITECT,
+                phase="draft",
+                round_number=None,
+            )
+            assert invocation is not None
+        action = ReferenceReadAction(
+            ReferenceReadActionKind.READ_WRITING_ARTIFACTS,
+            invocation.request.correlation,
+            invocation.request.references,
+        )
+        with invocation.handle_reference_read_action(action) as result:
+            self.assertEqual(result.contents, (b"",))
+        invocation.record_result_received()
+        invocation.accept()
+        if registered:
+            runtime._finish_reference_operation(operation)
+        else:
+            operation.finish()
+        self.assertTrue(operation.finished)
+
+    def test_runtime_reference_authority_rejects_foreign_thread_across_factories(
+        self,
+    ) -> None:
+        binding, runtime, _repository_access, factories = (
+            self._runtime_reference_affinity_case()
+        )
+        cases = []
+        for label, factory, registered in factories:
+            begin = factory()
+            finish = factory()
+            tracked = factory()
+            invocation = tracked.begin_invocation(
+                agent_id=PLOT_ARCHITECT,
+                phase="draft",
+                round_number=None,
+            )
+            assert invocation is not None
+            action = ReferenceReadAction(
+                ReferenceReadActionKind.READ_WRITING_ARTIFACTS,
+                invocation.request.correlation,
+                invocation.request.references,
+            )
+            cases.extend(
+                (
+                    (label, "begin", begin, registered, None, lambda operation=begin: operation.begin_invocation(
+                        agent_id=PLOT_ARCHITECT,
+                        phase="draft",
+                        round_number=None,
+                    )),
+                    (label, "finish", finish, registered, None, finish.finish),
+                    (label, "tracked_read", tracked, registered, invocation,
+                     lambda current=invocation, request=action:
+                     current.handle_reference_read_action(request)),
+                    (label, "tracked_result", tracked, registered, invocation,
+                     invocation.record_result_received),
+                    (label, "tracked_accept", tracked, registered, invocation,
+                     invocation.accept),
+                    (label, "tracked_terminate", tracked, registered, invocation,
+                     lambda current=invocation: current.terminate(
+                         ReferenceAuthorizationErrorCode.CANCELLED
+                     )),
+                )
+            )
+
+        before = {
+            id(operation): self._reference_operation_snapshot(binding, operation)
+            for _, _, operation, _, _, _ in cases
+        }
+
+        def foreign_calls():
+            failures = []
+            for label, action_name, operation, _registered, _invocation, action in cases:
+                try:
+                    result = action()
+                    if result is not None and callable(getattr(result, "close", None)):
+                        result.close()
+                except BaseException as failure:
+                    failures.append((label, action_name, failure))
+            return tuple(failures)
+
+        with ThreadPoolExecutor(max_workers=1) as executor:
+            failures = executor.submit(foreign_calls).result(timeout=20)
+        self.assertEqual(len(failures), len(cases))
+        for label, action_name, failure in failures:
+            with self.subTest(factory=label, action=action_name):
+                self.assertIs(type(failure), ReferenceOperationFailure)
+                self.assertIs(
+                    failure.code,
+                    ReferenceAuthorizationErrorCode.CORRELATION_MISMATCH,
+                )
+                self.assertIsNone(failure.__cause__)
+        after = {
+            id(operation): self._reference_operation_snapshot(binding, operation)
+            for _, _, operation, _, _, _ in cases
+        }
+        self.assertEqual(after, before)
+
+        completed = set()
+        for _label, action_name, operation, registered, invocation, _action in cases:
+            if id(operation) in completed:
+                continue
+            self._complete_reference_affinity_case(
+                runtime=runtime,
+                operation=operation,
+                registered=registered,
+                invocation=invocation if action_name.startswith("tracked_") else None,
+            )
+            completed.add(id(operation))
+
+    def test_runtime_reference_authority_rejects_fork_across_factories(self) -> None:
+        if "fork" not in multiprocessing.get_all_start_methods():
+            self.skipTest("requires POSIX fork semantics")
+        binding, runtime, _repository_access, factories = (
+            self._runtime_reference_affinity_case()
+        )
+        cases = []
+        for label, factory, registered in factories:
+            begin = factory()
+            finish = factory()
+            tracked = factory()
+            invocation = tracked.begin_invocation(
+                agent_id=PLOT_ARCHITECT,
+                phase="draft",
+                round_number=None,
+            )
+            assert invocation is not None
+            action = ReferenceReadAction(
+                ReferenceReadActionKind.READ_WRITING_ARTIFACTS,
+                invocation.request.correlation,
+                invocation.request.references,
+            )
+            cases.extend(
+                (
+                    (label, "begin", begin, registered, None, lambda operation=begin: operation.begin_invocation(
+                        agent_id=PLOT_ARCHITECT,
+                        phase="draft",
+                        round_number=None,
+                    )),
+                    (label, "finish", finish, registered, None, finish.finish),
+                    (label, "tracked_read", tracked, registered, invocation,
+                     lambda current=invocation, request=action:
+                     current.handle_reference_read_action(request)),
+                    (label, "tracked_result", tracked, registered, invocation,
+                     invocation.record_result_received),
+                    (label, "tracked_accept", tracked, registered, invocation,
+                     invocation.accept),
+                    (label, "tracked_terminate", tracked, registered, invocation,
+                     lambda current=invocation: current.terminate(
+                         ReferenceAuthorizationErrorCode.CANCELLED
+                     )),
+                )
+            )
+        before = {
+            id(operation): self._reference_operation_snapshot(binding, operation)
+            for _, _, operation, _, _, _ in cases
+        }
+        context = multiprocessing.get_context("fork")
+        child_results = context.Queue()
+
+        def foreign_calls() -> None:
+            failures = []
+            for label, action_name, _operation, _registered, _invocation, action in cases:
+                try:
+                    result = action()
+                    if result is not None and callable(getattr(result, "close", None)):
+                        result.close()
+                    failures.append((label, action_name, "success", None, None))
+                except BaseException as failure:
+                    failures.append(
+                        (
+                            label,
+                            action_name,
+                            type(failure).__name__,
+                            getattr(getattr(failure, "code", None), "value", None),
+                            failure.__cause__ is None,
+                        )
+                    )
+            child_results.put(tuple(failures))
+
+        process = context.Process(target=foreign_calls)
+        try:
+            process.start()
+            process.join(timeout=20)
+            self.assertFalse(process.is_alive())
+            self.assertEqual(process.exitcode, 0)
+            failures = child_results.get(timeout=3)
+        finally:
+            if process.is_alive():
+                process.terminate()
+                process.join(timeout=5)
+        self.assertEqual(len(failures), len(cases))
+        for label, action_name, failure_type, code, no_cause in failures:
+            with self.subTest(factory=label, action=action_name):
+                self.assertEqual(failure_type, "ReferenceOperationFailure")
+                self.assertEqual(
+                    code,
+                    ReferenceAuthorizationErrorCode.CORRELATION_MISMATCH.value,
+                )
+                self.assertTrue(no_cause)
+        after = {
+            id(operation): self._reference_operation_snapshot(binding, operation)
+            for _, _, operation, _, _, _ in cases
+        }
+        self.assertEqual(after, before)
+
+        completed = set()
+        for _label, action_name, operation, registered, invocation, _action in cases:
+            if id(operation) in completed:
+                continue
+            self._complete_reference_affinity_case(
+                runtime=runtime,
+                operation=operation,
+                registered=registered,
+                invocation=invocation if action_name.startswith("tracked_") else None,
+            )
+            completed.add(id(operation))
+
+    def test_forked_reference_registry_purges_inherited_handles(self) -> None:
+        if "fork" not in multiprocessing.get_all_start_methods():
+            self.skipTest("requires POSIX fork semantics")
+        binding, runtime, _repository_access, factories = (
+            self._runtime_reference_affinity_case()
+        )
+        _label, factory, registered = factories[-1]
+        self.assertTrue(registered)
+        operation = factory()
+        assert operation.operation_id is not None
+        self.assertEqual(
+            runtime._registered_reference_operation_ids(
+                "novel",
+                binding.worktree_identity,
+            ),
+            frozenset((operation.operation_id,)),
+        )
+        context = multiprocessing.get_context("fork")
+        child_results = context.Queue()
+
+        def inspect_in_child() -> None:
+            registered_ids = runtime._registered_reference_operation_ids(
+                "novel",
+                binding.worktree_identity,
+            )
+            child_results.put(
+                (
+                    StoryRuntime._reference_operation_registry_pid == os.getpid(),
+                    tuple(registered_ids),
+                    runtime._has_cleanup_pending_reference_operation("novel"),
+                )
+            )
+
+        process = context.Process(target=inspect_in_child)
+        try:
+            process.start()
+            process.join(timeout=10)
+            self.assertFalse(process.is_alive())
+            self.assertEqual(process.exitcode, 0)
+            child = child_results.get(timeout=3)
+        finally:
+            if process.is_alive():
+                process.terminate()
+                process.join(timeout=5)
+        self.assertEqual(child, (True, (), False))
+        self.assertEqual(
+            runtime._registered_reference_operation_ids(
+                "novel",
+                binding.worktree_identity,
+            ),
+            frozenset((operation.operation_id,)),
+        )
+        self._complete_reference_affinity_case(
+            runtime=runtime,
+            operation=operation,
+            registered=True,
+        )
+        self.assertEqual(
+            runtime._registered_reference_operation_ids(
+                "novel",
+                binding.worktree_identity,
+            ),
+            frozenset(),
+        )
+
+    def test_forked_runtime_subclass_resets_base_registry_before_locking(
+        self,
+    ) -> None:
+        if "fork" not in multiprocessing.get_all_start_methods():
+            self.skipTest("requires POSIX fork semantics")
+
+        class ChildStoryRuntime(StoryRuntime):
+            pass
+
+        binding, runtime, _repository_access, factories = (
+            self._runtime_reference_affinity_case(ChildStoryRuntime)
+        )
+        _label, factory, registered = factories[-1]
+        self.assertTrue(registered)
+        operation = factory()
+        assert operation.operation_id is not None
+        parent_registry = dict(StoryRuntime._reference_operation_registry)
+
+        class InheritedPoisonLock:
+            def __enter__(self):
+                raise AssertionError("inherited registry lock was used")
+
+            def __exit__(self, _exc_type, _exc, _traceback):
+                return False
+
+        inherited_lock = InheritedPoisonLock()
+        inherited_lock_id = id(inherited_lock)
+        context = multiprocessing.get_context("fork")
+        child_results = context.Queue()
+
+        def inspect_in_child() -> None:
+            try:
+                registered_ids = runtime._registered_reference_operation_ids(
+                    "novel",
+                    binding.worktree_identity,
+                )
+                child_results.put(
+                    (
+                        StoryRuntime._reference_operation_registry_pid,
+                        tuple(registered_ids),
+                        id(StoryRuntime._reference_operation_registry_lock),
+                        None,
+                    )
+                )
+            except BaseException as failure:
+                child_results.put((None, (), None, repr(failure)))
+
+        with mock.patch.object(
+            StoryRuntime,
+            "_reference_operation_registry_lock",
+            inherited_lock,
+        ):
+            process = context.Process(target=inspect_in_child)
+            try:
+                process.start()
+                process.join(timeout=10)
+                self.assertFalse(process.is_alive())
+                self.assertEqual(process.exitcode, 0)
+                child_pid, child_ids, child_lock_id, child_failure = (
+                    child_results.get(timeout=3)
+                )
+            finally:
+                if process.is_alive():
+                    process.terminate()
+                    process.join(timeout=5)
+            self.assertEqual(
+                StoryRuntime._reference_operation_registry,
+                parent_registry,
+            )
+        self.assertIsNone(child_failure)
+        self.assertEqual(child_pid, process.pid)
+        self.assertEqual(child_ids, ())
+        self.assertNotEqual(child_lock_id, inherited_lock_id)
+        self._complete_reference_affinity_case(
+            runtime=runtime,
+            operation=operation,
+            registered=True,
+        )
+
+    def test_two_first_forked_consumers_keep_both_child_registrations(
+        self,
+    ) -> None:
+        if "fork" not in multiprocessing.get_all_start_methods():
+            self.skipTest("requires POSIX fork semantics")
+        binding, runtime, _repository_access, factories = (
+            self._runtime_reference_affinity_case()
+        )
+        _label, factory, registered = factories[-1]
+        self.assertTrue(registered)
+        parent_operation = factory()
+        assert parent_operation.operation_id is not None
+        parent_registry = dict(StoryRuntime._reference_operation_registry)
+
+        class InheritedPoisonLock:
+            def __enter__(self):
+                raise AssertionError("inherited registry lock was used")
+
+            def __exit__(self, _exc_type, _exc, _traceback):
+                return False
+
+        inherited_lock = InheritedPoisonLock()
+        context = multiprocessing.get_context("fork")
+        child_results = context.Queue()
+
+        def register_in_child() -> None:
+            barrier = threading.Barrier(3)
+            operation_ids: list[str] = []
+            failures: list[str] = []
+
+            def consume() -> None:
+                try:
+                    barrier.wait(timeout=5)
+                    operation = factory()
+                    assert operation.operation_id is not None
+                    operation_ids.append(operation.operation_id)
+                except BaseException as failure:
+                    failures.append(repr(failure))
+
+            consumers = tuple(
+                threading.Thread(target=consume) for _ in range(2)
+            )
+            for consumer in consumers:
+                consumer.start()
+            barrier.wait(timeout=5)
+            for consumer in consumers:
+                consumer.join(timeout=20)
+            child_results.put(
+                (
+                    tuple(consumer.is_alive() for consumer in consumers),
+                    tuple(sorted(operation_ids)),
+                    tuple(sorted(runtime._registered_reference_operation_ids(
+                        "novel",
+                        binding.worktree_identity,
+                    ))),
+                    tuple(failures),
+                    StoryRuntime._reference_operation_registry_lock
+                    is inherited_lock,
+                )
+            )
+
+        with mock.patch.object(
+            StoryRuntime,
+            "_reference_operation_registry_lock",
+            inherited_lock,
+        ):
+            process = context.Process(target=register_in_child)
+            try:
+                process.start()
+                process.join(timeout=45)
+                self.assertFalse(process.is_alive())
+                self.assertEqual(process.exitcode, 0)
+                child = child_results.get(timeout=3)
+            finally:
+                if process.is_alive():
+                    process.terminate()
+                    process.join(timeout=5)
+            self.assertEqual(
+                StoryRuntime._reference_operation_registry,
+                parent_registry,
+            )
+        live_threads, operation_ids, registered_ids, failures, used_poison = child
+        self.assertEqual(live_threads, (False, False))
+        self.assertEqual(failures, ())
+        self.assertEqual(len(operation_ids), 2)
+        self.assertEqual(len(set(operation_ids)), 2)
+        self.assertEqual(registered_ids, operation_ids)
+        self.assertFalse(used_poison)
+        self._complete_reference_affinity_case(
+            runtime=runtime,
+            operation=parent_operation,
+            registered=True,
+        )
+
+    def test_registered_cleanup_can_finish_from_another_thread_in_same_process(
+        self,
+    ) -> None:
+        binding, runtime, repository_access, factories = (
+            self._runtime_reference_affinity_case()
+        )
+        _label, factory, registered = factories[-1]
+        self.assertTrue(registered)
+        operation = factory()
+        assert operation.operation_id is not None
+        operation._defer_cleanup()
+        self.assertTrue(operation.cleanup_is_pending())
+        failures = []
+
+        def reconcile() -> None:
+            try:
+                runtime._reconcile_reference_operations_at_boundary(
+                    session_id="novel",
+                    physical_workspace_identity=binding.worktree_identity,
+                    repository_access=repository_access,
+                )
+            except BaseException as failure:
+                failures.append(failure)
+
+        thread = threading.Thread(target=reconcile)
+        thread.start()
+        thread.join(timeout=20)
+        self.assertFalse(thread.is_alive())
+        self.assertEqual(failures, [])
+        self.assertTrue(operation.finished)
+        self.assertFalse(operation.cleanup_is_pending())
+        self.assertEqual(
+            runtime._registered_reference_operation_ids(
+                "novel",
+                binding.worktree_identity,
+            ),
+            frozenset(),
+        )
+        history = self._reference_history(binding, operation.operation_id)
+        assert history is not None
+        self.assertIs(
+            history.operation_events[-1].operation_state,
+            ReferenceOperationState.TERMINATED,
+        )
 
     def test_nested_guard_rejection_discards_content_and_defers_fresh_cleanup(
         self,

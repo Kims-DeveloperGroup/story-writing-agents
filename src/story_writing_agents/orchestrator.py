@@ -1408,6 +1408,7 @@ class StoryRuntime:
     """Public management and lead front-channel/confirmation APIs."""
 
     _reference_operation_registry_lock = threading.RLock()
+    _reference_operation_registry_pid = os.getpid()
     _reference_operation_registry: dict[
         tuple[str, str, tuple[int, int], str], RuntimeReferenceOperation
     ] = {}
@@ -2386,6 +2387,7 @@ class StoryRuntime:
     ) -> None:
         """Retain exact cleanup authority before guarded handle publication."""
 
+        self._require_current_reference_registry()
         operation_id = operation.operation_id
         if operation_id is None:
             return
@@ -2415,6 +2417,7 @@ class StoryRuntime:
         self,
         operation: RuntimeReferenceOperation,
     ) -> None:
+        self._require_current_reference_registry()
         operation_id = operation.operation_id
         if operation_id is None or not operation.finished:
             return
@@ -2438,6 +2441,7 @@ class StoryRuntime:
     ) -> frozenset[str]:
         """Snapshot exact live IDs while the caller owns repository access."""
 
+        self._require_current_reference_registry()
         workspace_root = str(self.workspace.root)
         with StoryRuntime._reference_operation_registry_lock:
             return frozenset(
@@ -2460,6 +2464,7 @@ class StoryRuntime:
     def _has_cleanup_pending_reference_operation(self, session_id: str) -> bool:
         """Check a workspace/session snapshot without holding its registry lock."""
 
+        self._require_current_reference_registry()
         workspace_root = str(self.workspace.root)
         with StoryRuntime._reference_operation_registry_lock:
             registered = tuple(
@@ -2485,6 +2490,7 @@ class StoryRuntime:
     ) -> None:
         """Retry retained and restarted cleanup before new provider work."""
 
+        self._require_current_reference_registry()
         workspace_root = str(self.workspace.root)
         reconciled_retained: list[RuntimeReferenceOperation] = []
         with repository_access() as repository:
@@ -2525,6 +2531,23 @@ class StoryRuntime:
         for operation in reconciled_retained:
             operation.complete_reconciled_cleanup()
             self._unregister_terminal_reference_operation(operation)
+
+    @staticmethod
+    def _require_current_reference_registry() -> None:
+        """Discard inherited process-local handles before registry locking."""
+
+        pid = os.getpid()
+        if StoryRuntime._reference_operation_registry_pid == pid:
+            return
+        StoryRuntime._reset_reference_registry_after_fork()
+
+    @staticmethod
+    def _reset_reference_registry_after_fork() -> None:
+        """Install empty child-owned registry state without inherited locking."""
+
+        StoryRuntime._reference_operation_registry_lock = threading.RLock()
+        StoryRuntime._reference_operation_registry = {}
+        StoryRuntime._reference_operation_registry_pid = os.getpid()
 
     def _prepare_session_reference_operation(
         self,
@@ -5560,15 +5583,9 @@ class StoryRuntime:
         try:
             try:
                 self._persist_collaboration_results_with_generation_pin(**arguments)
-            except BaseException as failure:
+            except BaseException:
                 if generation_pin is not None and artifact_binding is not None:
-                    try:
-                        artifact_binding.require_generation_pin(generation_pin)
-                    except BaseException as check_failure:
-                        failure.add_note(
-                            "session generation recheck failed: "
-                            f"{type(check_failure).__name__}"
-                        )
+                    artifact_binding.require_generation_pin(generation_pin)
                 raise
             if generation_pin is not None:
                 if artifact_binding is None:
@@ -7443,14 +7460,8 @@ class StoryRuntime:
         try:
             try:
                 result = await self._run_lead_provider_guarded_pinned(**arguments)
-            except BaseException as failure:
-                try:
-                    artifact_binding.require_generation_pin(generation_pin)
-                except BaseException as check_failure:
-                    failure.add_note(
-                        "session generation recheck failed: "
-                        f"{type(check_failure).__name__}"
-                    )
+            except BaseException:
+                artifact_binding.require_generation_pin(generation_pin)
                 raise
             artifact_binding.require_generation_pin(generation_pin)
             return result
@@ -11991,6 +12002,57 @@ class StoryRuntime:
         self._bound_agent_uses[identity] = (bound_agent, current[1] + 1)
 
     async def _release_bound_agent_use(self, bound_agent: BoundAgent) -> None:
+        """Finish one release before propagating caller cancellation."""
+
+        task = asyncio.create_task(
+            self._release_bound_agent_use_once(bound_agent),
+            name="release-bound-agent-use",
+        )
+        cancellation: asyncio.CancelledError | None = None
+        interruption: BaseException | None = None
+        while not task.done():
+            try:
+                await asyncio.shield(task)
+            except asyncio.CancelledError as failure:
+                if cancellation is None:
+                    cancellation = failure
+            except BaseException as failure:
+                if task.done():
+                    break
+                if interruption is None:
+                    interruption = failure
+
+        cleanup_failure: BaseException | None = None
+        if task.cancelled():
+            cleanup_failure = asyncio.CancelledError()
+        else:
+            try:
+                task.result()
+            except BaseException as failure:
+                cleanup_failure = failure
+        if cancellation is not None:
+            if cleanup_failure is not None:
+                cancellation.add_note(
+                    "bound-agent release failed: "
+                    f"{type(cleanup_failure).__name__}"
+                )
+            raise cancellation
+        if interruption is not None:
+            if cleanup_failure is not None:
+                interruption.add_note(
+                    "bound-agent release failed: "
+                    f"{type(cleanup_failure).__name__}"
+                )
+            raise interruption
+        if cleanup_failure is not None:
+            raise cleanup_failure
+
+    async def _release_bound_agent_use_once(
+        self,
+        bound_agent: BoundAgent,
+    ) -> None:
+        """Decrement one retained use exactly once."""
+
         release: BoundAgent | None = None
         async with self._binding_lock:
             identity = id(bound_agent)
@@ -12061,6 +12123,14 @@ class StoryRuntime:
                 continue
             released.add(identity)
             release_bound_agent(bound_agent)
+
+
+_register_at_fork = getattr(os, "register_at_fork", None)
+if _register_at_fork is not None:
+    _register_at_fork(
+        after_in_child=StoryRuntime._reset_reference_registry_after_fork,
+    )
+del _register_at_fork
 
 
 class RuntimeSession:

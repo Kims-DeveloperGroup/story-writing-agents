@@ -570,6 +570,14 @@ scan. A pin grants no descriptor access, traversal, file-content read,
 mutation, or semantic READY authority. Its purpose is physical generation
 continuity and inode-reuse prevention only.
 
+The captured generation identity, its binding, and each pin are affine to the
+process and opaque thread token that created them. Acquisition and recheck from
+another thread or a forked child fail before taking a repository lock,
+validating descriptors, or performing other filesystem I/O. Closing remains
+idempotent. A forked child may close only its inherited descriptor copies;
+that child-safe path does not enter inherited thread locks or grant authority
+to inspect the generation.
+
 The runtime's package-internal session-artifact binding is a fifth composition
 seam above `require one ready session`. Given the initialized `main` control
 root and a session ID, it freshly requires the exact READY identity, opens the
@@ -605,7 +613,10 @@ descriptor pin under a separate short lock before session-derived source,
 definition, or provider work, retain it through durable result persistence,
 recheck the physical generation, and close it. No lease spans the provider
 await, and this identity-only continuity never replaces the separate semantic
-READY guards around filesystem operations.
+READY guards around filesystem operations. If provider or persistence work and
+the generation recheck both fail, generation loss is authoritative; the
+runtime reports the resource/recovery failure rather than returning the
+simultaneous body failure.
 
 `GitRepositoryLease` properties/validation and all `SessionArtifactAccess`
 operations are affine to a package-internal, process-aware opaque token for

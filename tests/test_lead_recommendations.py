@@ -5,7 +5,9 @@ from __future__ import annotations
 import asyncio
 import json
 import os
+import traceback
 from dataclasses import replace
+from types import SimpleNamespace
 from unittest import mock
 
 from story_writing_agents import StoryRuntime
@@ -266,6 +268,46 @@ class LeadRecommendationTests(RecommendationCase):
                     artifact_binding=binding,
                 )
             self.assertIs(caught.exception, marker)
+            self.assertEqual(len(pins), 1)
+            self.assertEqual(_generation_pin_descriptors(pins[0]), ())
+
+        for marker in (RuntimeError("provider failed"), asyncio.CancelledError()):
+            pins = []
+            replacement = self.replace_session_worktree()
+            entered = False
+
+            def capture_pin(current):
+                pin = original_acquire_pin(current)
+                pins.append(pin)
+                return pin
+
+            async def fail_after_replacement(**_kwargs):
+                nonlocal entered
+                replacement.__enter__()
+                entered = True
+                raise marker
+
+            try:
+                with self.subTest(
+                    replacement_failure=type(marker).__name__
+                ), mock.patch.object(
+                    SessionArtifactBinding,
+                    "acquire_generation_pin",
+                    new=capture_pin,
+                ), mock.patch.object(
+                    self.runtime,
+                    "_run_lead_provider_guarded_pinned",
+                    side_effect=fail_after_replacement,
+                ), self.assertRaises(SessionArtifactBindingError) as caught:
+                    await self.runtime._run_lead_provider_guarded(
+                        artifact_binding=binding,
+                    )
+            finally:
+                if entered:
+                    replacement.__exit__(None, None, None)
+            self.assertIsNone(caught.exception.__cause__)
+            if str(marker):
+                self.assertNotIn(str(marker), str(caught.exception))
             self.assertEqual(len(pins), 1)
             self.assertEqual(_generation_pin_descriptors(pins[0]), ())
 
@@ -1212,7 +1254,7 @@ class LeadRecommendationSynthesisTests(RecommendationCase):
             self.runtime,
             "_persist_collaboration_results_with_generation_pin",
             side_effect=marker,
-        ), self.assertRaises(RuntimeError):
+        ), self.assertRaises(SessionArtifactBindingError):
             self.runtime._persist_collaboration_results_locked(
                 synthesis_result=malformed,
             )
@@ -1221,6 +1263,343 @@ class LeadRecommendationSynthesisTests(RecommendationCase):
         for descriptor in second_descriptors:
             with self.assertRaises(OSError):
                 os.fstat(descriptor)
+
+    def test_synthesis_generation_loss_overrides_append_failure_and_closes_pin(
+        self,
+    ) -> None:
+        binding = compose_session_artifact_binding(
+            self.control_workspace.root,
+            self.session_id,
+        )
+        pin = binding.acquire_generation_pin()
+        descriptors = _generation_pin_descriptors(pin)
+        result = owner._CollaborationInvocationResult(
+            object(),
+            0,
+            artifact_binding=binding,
+            generation_pin=pin,
+        )
+        marker = RuntimeError("durable append failed after generation loss")
+        replacement = self.replace_session_worktree()
+        replacement.__enter__()
+
+        def fail_persistence(**_kwargs):
+            self.runtime._append_drafts(0, ())
+
+        try:
+            with mock.patch.object(
+                self.runtime,
+                "_append_drafts",
+                side_effect=marker,
+            ) as append, mock.patch.object(
+                self.runtime,
+                "_persist_collaboration_results_with_generation_pin",
+                side_effect=fail_persistence,
+            ), self.assertRaises(SessionArtifactBindingError) as caught:
+                self.runtime._persist_collaboration_results_locked(
+                    synthesis_result=result,
+                )
+        finally:
+            replacement.__exit__(None, None, None)
+        self.assertIsNone(caught.exception.__cause__)
+        self.assertNotIn(str(marker), str(caught.exception))
+        append.assert_called_once_with(0, ())
+        self.assertEqual(_generation_pin_descriptors(pin), ())
+        pin.close()
+        for descriptor in descriptors:
+            with self.assertRaises(OSError):
+                os.fstat(descriptor)
+
+    async def test_bound_agent_release_joins_repeated_cancellation_and_failures(
+        self,
+    ) -> None:
+        for cancellations in (1, 2):
+            with self.subTest(cancellations=cancellations):
+                bound_agent = object()
+                key = (LEAD_ORCHESTRATOR, f"cancel-{cancellations}")
+                self.runtime._bound_agent_uses[id(bound_agent)] = (
+                    bound_agent,
+                    1,
+                )
+                self.runtime._retiring_bound_agents[key] = bound_agent
+                await self.runtime._binding_lock.acquire()
+                released = []
+                try:
+                    with mock.patch.object(
+                        owner,
+                        "release_bound_agent",
+                        side_effect=lambda current: released.append(current),
+                    ):
+                        task = asyncio.create_task(
+                            self.runtime._release_bound_agent_use(bound_agent)
+                        )
+                        await asyncio.sleep(0)
+                        for ordinal in range(cancellations):
+                            task.cancel(f"cancel-{ordinal + 1}")
+                            await asyncio.sleep(0)
+                        self.runtime._binding_lock.release()
+                        with self.assertRaises(asyncio.CancelledError) as caught:
+                            await task
+                finally:
+                    if self.runtime._binding_lock.locked():
+                        self.runtime._binding_lock.release()
+                self.assertEqual(str(caught.exception), "cancel-1")
+                self.assertEqual(released, [bound_agent])
+                self.assertNotIn(id(bound_agent), self.runtime._bound_agent_uses)
+                self.assertNotIn(key, self.runtime._retiring_bound_agents)
+
+        completion_started = asyncio.Event()
+        completion_allowed = asyncio.Event()
+
+        async def complete_in_race(_bound_agent):
+            completion_started.set()
+            await completion_allowed.wait()
+
+        with mock.patch.object(
+            self.runtime,
+            "_release_bound_agent_use_once",
+            side_effect=complete_in_race,
+        ):
+            completion = asyncio.create_task(
+                self.runtime._release_bound_agent_use(object())
+            )
+            await completion_started.wait()
+            completion.cancel("completion-race")
+            completion_allowed.set()
+            with self.assertRaises(asyncio.CancelledError) as raced:
+                await completion
+        self.assertEqual(str(raced.exception), "completion-race")
+
+        cleanup_marker = RuntimeError("physical release failed")
+
+        async def fail_cleanup(_bound_agent):
+            raise cleanup_marker
+
+        with mock.patch.object(
+            self.runtime,
+            "_release_bound_agent_use_once",
+            side_effect=fail_cleanup,
+        ), self.assertRaises(RuntimeError) as cleanup:
+            await self.runtime._release_bound_agent_use(object())
+        self.assertIs(cleanup.exception, cleanup_marker)
+
+        failure_started = asyncio.Event()
+        failure_allowed = asyncio.Event()
+
+        async def fail_after_cancel(_bound_agent):
+            failure_started.set()
+            await failure_allowed.wait()
+            raise cleanup_marker
+
+        with mock.patch.object(
+            self.runtime,
+            "_release_bound_agent_use_once",
+            side_effect=fail_after_cancel,
+        ):
+            cancelled = asyncio.create_task(
+                self.runtime._release_bound_agent_use(object())
+            )
+            await failure_started.wait()
+            cancelled.cancel("cleanup-cancel")
+            failure_allowed.set()
+            with self.assertRaises(asyncio.CancelledError) as caught:
+                await cancelled
+        self.assertEqual(str(caught.exception), "cleanup-cancel")
+        self.assertIn(
+            "bound-agent release failed: RuntimeError",
+            getattr(caught.exception, "__notes__", ()),
+        )
+
+    async def test_collaboration_release_cancellation_cleans_retired_use_and_pin(
+        self,
+    ) -> None:
+        for mode in ("success", "cancelled", "cleanup_failure"):
+            with self.subTest(mode=mode):
+                conversation_id = self.conversation(f"release {mode}")
+                binding = compose_session_artifact_binding(
+                    self.control_workspace.root,
+                    self.session_id,
+                )
+                invocation_started = asyncio.Event()
+                invocation_allowed = asyncio.Event()
+                release_started = asyncio.Event()
+                original_release = self.runtime._release_bound_agent_use
+                physical_releases = []
+                cleanup_marker = RuntimeError("retired binding release failed")
+                binding_key = (LEAD_ORCHESTRATOR, f"release-{mode}")
+                bound_agent = SimpleNamespace()
+                delegate = SimpleNamespace(
+                    provider_id="synthetic-provider",
+                    definition_fingerprint="synthetic-definition",
+                    reference_operation_id=None,
+                )
+
+                async def acquire(_definition):
+                    self.runtime._bound_agents[binding_key] = bound_agent
+                    self.runtime._retain_bound_agent_use_locked(bound_agent)
+                    return bound_agent
+
+                async def invoke(*_args, **_kwargs):
+                    invocation_started.set()
+                    await invocation_allowed.wait()
+                    return SimpleNamespace(answer="synthetic synthesis")
+
+                async def observe_release(bound_agent):
+                    release_started.set()
+                    if not invocation_started.is_set():
+                        return None
+                    return await original_release(bound_agent)
+
+                def release_physical(bound_agent):
+                    physical_releases.append(bound_agent)
+                    if mode == "cleanup_failure":
+                        raise cleanup_marker
+
+                with mock.patch.object(
+                    owner,
+                    "ContextInvocationRequest",
+                    side_effect=lambda **values: SimpleNamespace(**values),
+                ), mock.patch.object(
+                    owner,
+                    "select_bounded_collaboration_context",
+                    return_value=None,
+                ), mock.patch.object(
+                    self.runtime,
+                    "_build_guarded_contextual_definition",
+                    return_value=SimpleNamespace(
+                        agent_id=LEAD_ORCHESTRATOR,
+                        fingerprint=binding_key[1],
+                    ),
+                ), mock.patch.object(
+                    self.runtime,
+                    "_acquire_bound_agent",
+                    side_effect=acquire,
+                ), mock.patch.object(
+                    self.runtime,
+                    "_validated_context_provider_factory",
+                    return_value=lambda _reference_read: delegate,
+                ), mock.patch.object(
+                    self.runtime,
+                    "_session_context_state",
+                    return_value=None,
+                ), mock.patch.object(
+                    self.runtime,
+                    "_lead_continuation_arguments",
+                    return_value={},
+                ), mock.patch.object(
+                    self.runtime,
+                    "_invoke_context_with_recovery",
+                    side_effect=invoke,
+                ), mock.patch.object(
+                    self.runtime,
+                    "_release_bound_agent_use",
+                    side_effect=observe_release,
+                ), mock.patch.object(
+                    owner,
+                    "release_bound_agent",
+                    side_effect=release_physical,
+                ):
+                    task = asyncio.create_task(
+                        self.runtime._run_collaboration_invocation_guarded(
+                            artifact_binding=binding,
+                            session_id=self.session_id,
+                            conversation_id=conversation_id,
+                            turn_id="turn",
+                            step_id="step",
+                            agent_id=LEAD_ORCHESTRATOR,
+                            operation_id="operation",
+                            result_correlation_id="result",
+                            inputs=(),
+                            material_value={},
+                            invocation_kind=owner.CollaborationInvocationKind.LEAD_SYNTHESIS,
+                            context_invocation_kind=owner.ContextInvocationKind.LEAD_SYNTHESIS,
+                            result_contract=object(),
+                            physical_call_limit=1,
+                            round_number=None,
+                            decoder=lambda answer, _binding: answer,
+                            action_progress_sink=None,
+                        )
+                    )
+                    invocation_wait = asyncio.create_task(
+                        invocation_started.wait()
+                    )
+                    done, _pending = await asyncio.wait(
+                        (task, invocation_wait),
+                        timeout=30,
+                        return_when=asyncio.FIRST_COMPLETED,
+                    )
+                    if task in done:
+                        premature = task.result()
+                        self.fail(
+                            "collaboration failed before provider barrier: "
+                            f"{premature.failure!r}\n"
+                            + "".join(
+                                traceback.format_tb(premature.failure.__traceback__)
+                            )
+                        )
+                    self.assertIn(invocation_wait, done)
+                    await invocation_wait
+                    await self.runtime._binding_lock.acquire()
+                    try:
+                        self.assertEqual(len(self.runtime._bound_agent_uses), 1)
+                        retained_agent, uses = next(
+                            iter(self.runtime._bound_agent_uses.values())
+                        )
+                        self.assertIs(retained_agent, bound_agent)
+                        self.assertEqual(uses, 1)
+                        key = next(
+                            key
+                            for key, current in self.runtime._bound_agents.items()
+                            if current is retained_agent
+                        )
+                        self.runtime._bound_agents.pop(key)
+                        self.assertEqual(
+                            self.runtime._mark_binding_retiring_locked(
+                                key,
+                                retained_agent,
+                            ),
+                            [],
+                        )
+                        invocation_allowed.set()
+                        await release_started.wait()
+                        if mode == "cancelled":
+                            task.cancel("release cancelled")
+                            await asyncio.sleep(0)
+                    finally:
+                        self.runtime._binding_lock.release()
+                    result = await task
+
+                if mode == "success":
+                    self.assertIsNone(result.failure)
+                    self.assertEqual(result.value, "synthetic synthesis")
+                elif mode == "cancelled":
+                    self.assertIsInstance(result.failure, asyncio.CancelledError)
+                    self.assertEqual(str(result.failure), "release cancelled")
+                else:
+                    self.assertIs(result.failure, cleanup_marker)
+                self.assertEqual(physical_releases, [bound_agent])
+                self.assertEqual(self.runtime._bound_agent_uses, {})
+                self.assertNotIn(key, self.runtime._retiring_bound_agents)
+                self.assertIs(result.artifact_binding, binding)
+                self.assertIsNotNone(result.generation_pin)
+                descriptors = _generation_pin_descriptors(result.generation_pin)
+                self.assertEqual(len(descriptors), 6)
+                binding.require_generation_pin(result.generation_pin)
+                with mock.patch.object(
+                    self.runtime,
+                    "_persist_collaboration_results_with_generation_pin",
+                    return_value=None,
+                ):
+                    self.runtime._persist_collaboration_results_locked(
+                        synthesis_result=result,
+                    )
+                self.assertEqual(
+                    _generation_pin_descriptors(result.generation_pin),
+                    (),
+                )
+                for descriptor in descriptors:
+                    with self.assertRaises(OSError):
+                        os.fstat(descriptor)
 
     async def test_synthesis_failure_transfers_pin_once_until_persistence(self):
         binding = compose_session_artifact_binding(

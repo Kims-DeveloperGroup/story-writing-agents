@@ -18,6 +18,7 @@ from contextlib import AbstractContextManager, contextmanager
 from typing import TypeVar
 
 from ..errors import SessionArtifactGuardFailure, WorkspaceSecurityError
+from ..git.repository_lock import current_thread_token
 from .authorization import (
     AuthorizedArtifactReference,
     ReferenceAuthorization,
@@ -162,6 +163,7 @@ class _TrackedReferenceReadInvocation:
         self,
         action: ReferenceReadAction,
     ) -> ReferenceReadResult:
+        self._operation._require_operational_affinity()
         try:
             with self._operation._open_repository_access():
                 result = self._delegate.handle_reference_read_action(action)
@@ -176,6 +178,7 @@ class _TrackedReferenceReadInvocation:
             raise
 
     def record_result_received(self) -> None:
+        self._operation._require_operational_affinity()
         try:
             with self._operation._open_repository_access():
                 self._delegate.record_result_received()
@@ -185,6 +188,7 @@ class _TrackedReferenceReadInvocation:
             raise
 
     def accept(self) -> None:
+        self._operation._require_operational_affinity()
         preserve = False
         try:
             with self._operation._open_repository_access():
@@ -199,6 +203,7 @@ class _TrackedReferenceReadInvocation:
                 self._mark_terminal()
 
     def terminate(self, outcome: ReferenceAuthorizationErrorCode) -> None:
+        self._operation._require_operational_affinity()
         if self._terminal:
             return
         preserve = False
@@ -237,6 +242,8 @@ class RuntimeReferenceOperation:
     __slots__ = (
         "_authorization",
         "_cleanup_pending",
+        "_creator_pid",
+        "_creator_thread_token",
         "_finished",
         "_guarded",
         "_lock",
@@ -307,6 +314,8 @@ class RuntimeReferenceOperation:
                 raise WorkspaceSecurityError(
                     "physical workspace pin identity changed"
                 )
+        self._creator_pid = os.getpid()
+        self._creator_thread_token = current_thread_token()
         self._repository: WritingArtifactRepository | None = repository
         self._repository_access: (
             Callable[[], AbstractContextManager[WritingArtifactRepository]] | None
@@ -350,16 +359,19 @@ class RuntimeReferenceOperation:
         this operation's private lifecycle state.
         """
 
+        self._require_process_affinity()
         return self._reference_proofs
 
     @property
     def finished(self) -> bool:
+        self._require_process_affinity()
         with self._lock:
             return self._finished
 
     def cleanup_is_pending(self) -> bool:
         """Return whether only content-free durable cleanup remains."""
 
+        self._require_process_affinity()
         with self._lock:
             return self._cleanup_pending
 
@@ -367,6 +379,7 @@ class RuntimeReferenceOperation:
     def physical_workspace_identity(self) -> tuple[int, int] | None:
         """Return the immutable content-free identity bound before publication."""
 
+        self._require_process_affinity()
         return self._physical_workspace_identity
 
     def defer_if_workspace_replaced(
@@ -381,6 +394,7 @@ class RuntimeReferenceOperation:
             or any(type(value) is not int or value <= 0 for value in current_identity)
         ):
             raise TypeError("physical workspace identity is invalid")
+        self._require_process_affinity()
         with self._lock:
             if self._physical_workspace_identity == current_identity:
                 return False
@@ -404,6 +418,7 @@ class RuntimeReferenceOperation:
 
         if self.operation_id is None:
             return None
+        self._require_operational_affinity()
         with self._lock:
             if self._finished or self._cleanup_pending:
                 raise ReferenceOperationFailure(
@@ -472,6 +487,7 @@ class RuntimeReferenceOperation:
 
         if invocation is None:
             return
+        self._require_operational_affinity()
         if type(outcome) is not ReferenceAuthorizationErrorCode:
             raise TypeError("outcome must be a ReferenceAuthorizationErrorCode")
         if not isinstance(invocation, _TrackedReferenceReadInvocation):
@@ -485,6 +501,7 @@ class RuntimeReferenceOperation:
             with self._lock:
                 self._close_physical_workspace_pin_locked()
             return
+        self._require_operational_affinity()
         with self._lock:
             if self._finished:
                 raise ReferenceOperationFailure(
@@ -548,6 +565,7 @@ class RuntimeReferenceOperation:
             with self._lock:
                 self._close_physical_workspace_pin_locked()
             return None
+        self._require_operational_affinity()
         preserve_guard_failure = self._preserves_guard_failure(failure)
         code = _failure_code(failure, default)
         with self._lock:
@@ -625,6 +643,7 @@ class RuntimeReferenceOperation:
             raise TypeError("physical workspace identity is invalid")
         if self.operation_id is None:
             return
+        self._require_process_affinity()
         with self._lock:
             if self._finished:
                 return
@@ -653,6 +672,7 @@ class RuntimeReferenceOperation:
     def complete_reconciled_cleanup(self) -> None:
         """Mark cleanup complete after fresh guarded access passes postchecks."""
 
+        self._require_process_affinity()
         with self._lock:
             if self._finished:
                 return
@@ -683,6 +703,7 @@ class RuntimeReferenceOperation:
         }
 
     def _defer_cleanup(self) -> None:
+        self._require_process_affinity()
         with self._lock:
             self._defer_cleanup_locked()
 
@@ -703,6 +724,7 @@ class RuntimeReferenceOperation:
     def _abandon_unretained(self) -> None:
         """Close content and the root pin when no registry owns this operation."""
 
+        self._require_process_affinity()
         with self._lock:
             self._defer_cleanup_locked()
             self._close_physical_workspace_pin_locked()
@@ -734,6 +756,27 @@ class RuntimeReferenceOperation:
     def _required_operation_id(self) -> str:
         assert self.operation_id is not None
         return self.operation_id
+
+    def _belongs_to_current_process(self) -> bool:
+        return self._creator_pid == os.getpid()
+
+    def _require_process_affinity(self) -> None:
+        if self.operation_id is not None and not self._belongs_to_current_process():
+            raise ReferenceOperationFailure(
+                self._required_operation_id(),
+                ReferenceAuthorizationErrorCode.CORRELATION_MISMATCH,
+            )
+
+    def _require_operational_affinity(self) -> None:
+        self._require_process_affinity()
+        if (
+            self.operation_id is not None
+            and self._creator_thread_token is not current_thread_token()
+        ):
+            raise ReferenceOperationFailure(
+                self._required_operation_id(),
+                ReferenceAuthorizationErrorCode.CORRELATION_MISMATCH,
+            )
 
     def _required_repository(self) -> WritingArtifactRepository:
         repository = self._repository
@@ -767,6 +810,7 @@ class RuntimeReferenceOperation:
 
     @contextmanager
     def _open_repository_access(self) -> Iterator[WritingArtifactRepository]:
+        self._require_operational_affinity()
         access = self._repository_access
         if access is None:
             yield self._required_repository()

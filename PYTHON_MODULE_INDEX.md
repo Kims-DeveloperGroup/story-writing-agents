@@ -18,12 +18,12 @@ Package root: `src/story_writing_agents/`
 
 Importable production units indexed: 142.
 
-Direct internal dependency edges indexed: 573.
+Direct internal dependency edges indexed: 574.
 
 Directed internal dependency cycles indexed: 0.
 
 Edge and cycle totals exclude annotation-only `TYPE_CHECKING` imports. The
-all-import AST graph has 575 edges. Its two annotation-only edges are
+all-import AST graph has 576 edges. Its two annotation-only edges are
 `config -> workspace` and `interactive_terminal._core -> conversations`; the
 workspace cycle was already present in the 135-unit baseline
 (528 all-import / 526 runtime edges).
@@ -310,7 +310,8 @@ writing_artifacts.relationship_policy -> specialist_routing
                                       -> writing_artifacts.catalog/change_sets
 writing_artifacts.directives -> writing_artifacts.references
 writing_artifacts.read_actions -> writing_artifacts.authorization/references
-writing_artifacts.runtime_references -> writing_artifacts.authorization/directives
+writing_artifacts.runtime_references -> git.repository_lock
+                                     -> writing_artifacts.authorization/directives
                                      -> writing_artifacts.read_actions/references/repository
 writing_artifacts.references -> writing_artifacts.catalog
 writing_artifacts._reference_evidence -> writing_artifacts._storage/authorization
@@ -2761,8 +2762,8 @@ every intermediate arrow. The current runtime graph is acyclic.
   `GitRepositoryLockFailure`, `GitRepositoryLockFailureCode`, and
   `lock_git_repository` in direct-module `__all__`; no facade re-exports them.
   Package-internal `current_thread_token`, omitted from `__all__`, supplies one
-  opaque process-bound token for the current Python thread state to Git and
-  workspace capability owners.
+  opaque process-bound token for the current Python thread state to Git,
+  workspace, and runtime-reference capability owners.
 - **Direct internal dependencies:** None.
 - **State, resources, and side effects:** Opening the context binds the exact
   lexical standalone root and `.git` directory without following symlinks,
@@ -3043,7 +3044,12 @@ every intermediate arrow. The current runtime graph is acyclic.
   non-inheritable descriptors for those four directories and two indirection
   files, preventing deleted identities from being recycled; construction
   transfers that tuple once, and close, mismatch, and every partial failure
-  close all owned descriptors. The pin exposes only current-generation
+  close all owned descriptors. Generation identities and pins retain their
+  creator process and non-recyclable thread token. Acquisition and recheck
+  reject a foreign process or thread before any inherited per-pin lock,
+  repository lock, descriptor validation, or Git I/O; close remains
+  idempotent and, after a fork, releases only the child's copied descriptors
+  without entering an inherited lock. The pin exposes only current-generation
   validation and idempotent close, retains no repository lock between calls,
   and grants no traversal, content-read, mutation, or semantic-READY authority.
   Partial, moved, aliased, malformed, uncertain, or colliding
@@ -7144,8 +7150,15 @@ every intermediate arrow. The current runtime graph is acyclic.
   and live execution-attempt markers. A process-wide, lock-protected registry,
   keyed by canonical control-workspace path, session, physical worktree
   identity, and reference-operation identity, strongly retains exact live or
-  deferred reference operations across `StoryRuntime` instances. Registration
-  occurs from the repository transaction
+  deferred reference operations across `StoryRuntime` instances. After the
+  complete `StoryRuntime` definition, module import installs one private
+  `os.register_at_fork` child callback when supported. The callback replaces
+  the base-owned registry, lock, and PID in the sole surviving child thread
+  before later concurrent consumers can observe or acquire inherited state;
+  every consumer also applies the same lock-free PID reset as a defensive
+  fallback. Subclasses continue to share the base registry, and parent-process
+  operations cannot become child cleanup authority. Registration occurs from
+  the repository transaction
   after durable capture and before its fallible guard exit. Lead,
   collaboration, and artifact-backed consensus provider boundaries first retry
   deferred operations through that boundary's fresh session repository and
@@ -7180,13 +7193,22 @@ every intermediate arrow. The current runtime graph is acyclic.
   an await. Lead synthesis transfers that pin with its private invocation
   result to the persistence owner, which revalidates and closes it after the
   exact terminal batch is appended; direct Lead calls retain and close their
-  pin around their own complete publication path. Failure, cancellation,
+  pin around their own complete publication path. On both direct Lead and
+  synthesis persistence paths, a failed final generation recheck supersedes
+  an original provider, persistence, or cancellation failure so binding loss
+  reaches the established recovery mapping. Failure, cancellation,
   malformed synthesis, binding loss, and every non-transferred exit close the
   same pin exactly once. The pin is neither provider-visible nor a source of
   traversal, artifact bytes, persisted state, or restored capability. Its
   acquisition and final recheck use only the Git owner's bounded physical-
   generation proof; semantic READY authorization remains with each separate
   guarded repository or artifact access.
+  Bound-agent use release is one joined, one-shot asynchronous cleanup task.
+  Caller cancellation cannot detach it or clear the retained-use handle early:
+  the decrement and any final release complete once, the task result is
+  observed, and the original cancellation is then re-raised with any cleanup
+  failure retained only as secondary context. Release never begins while the
+  caller owns the binding-state lock.
   Every artifact-sensitive top-level operation freshly binds the exact READY
   session resource and physical worktree identity. Direct reads use one short
   synchronous guarded access; lazy provider reference and writing-artifact
@@ -7933,7 +7955,11 @@ every intermediate arrow. The current runtime graph is acyclic.
   Git-owned descriptors and supports only idempotent close and physical
   generation revalidation through another short identity lock; it is
   nonserializable, exposes no descriptor or traversal authority, and is absent
-  from every facade and the module's empty `__all__`. This continuity check
+  from every facade and the module's empty `__all__`. The binding and wrapper
+  pin retain the creator process and non-recyclable thread token, reject
+  cross-process or cross-thread acquisition/recheck before any copied lock or
+  lower-level I/O, and close a fork child's copied pin without entering an
+  inherited lock. This continuity check
   never substitutes for the outer full semantic-READY access required around
   repository or artifact I/O, and no Git lease spans provider work.
   The access holds one call-local Git lease and pinned root descriptor, keys
@@ -8453,7 +8479,8 @@ every intermediate arrow. The current runtime graph is acyclic.
   Successful completion requires no pending invocation before repository
   finalization; failures terminate unfinished invocations and return one safe,
   structured `ReferenceOperationFailure`.
-- **Direct internal dependencies:** `errors`, `writing_artifacts.authorization`,
+- **Direct internal dependencies:** `errors`, `git.repository_lock`,
+  `writing_artifacts.authorization`,
   `writing_artifacts.directives`, `writing_artifacts.read_actions`,
   `writing_artifacts.references`, and `writing_artifacts.repository`.
 - **State, resources, and side effects:** One operation owns a reentrant lock,
@@ -8494,9 +8521,20 @@ every intermediate arrow. The current runtime graph is acyclic.
   postcheck accepts already-terminal durable evidence. Postcheck failure leaves
   the retained handle cleanup-eligible while already-persisted repository
   evidence remains authoritative.
+  Every referenced guarded, registered, or unguarded operation retains its
+  creator process and the repository-lock owner's non-recyclable thread token.
+  Invocation allocation, reads, result acknowledgement, acceptance,
+  termination, operation success, and operation failure reject process or
+  thread drift before an operation/result lock or repository access. The
+  process-global cleanup and inspection surfaces intentionally permit another
+  thread in the same process, but reject a fork child before inherited locks or
+  repository I/O. Rejection uses the existing content-free correlation-
+  mismatch failure; the no-reference fast path grants no authority. This adds
+  no facade export or persisted affinity field.
   The unguarded preparation path continues to convert repository failures to
   the established content-free `ReferenceOperationFailure`. The module imports
-  no Git, workspace, controller, or orchestration
+  only the package-internal thread-token seam from Git and imports no workspace,
+  controller, or orchestration
   implementation and owns no filesystem, persistent-evidence, provider,
   process, or terminal resource; repository calls remain the only operational
   effects. Importing the module performs no I/O.
@@ -8845,7 +8883,7 @@ every intermediate arrow. The current runtime graph is acyclic.
 
 ## Consistency Notes
 
-- The combined runtime has 142 production units, 573 runtime edges, 575
+- The combined runtime has 142 production units, 574 runtime edges, 576
   all-import edges, and no directed runtime cycle. Whole-source path parity is
   exact. Bounded session-source reads and inventories, session-bound behavior
   policy capture, and physical-identity-aware runtime-reference cleanup change
@@ -8886,6 +8924,15 @@ every intermediate arrow. The current runtime graph is acyclic.
   non-recyclable thread authority; no runtime cycle or facade export results.
   Guarded runtime-reference capture adds one inward edge to the stable
   content-free `errors` boundary.
+  Creator-process/thread confinement for Git/session generation pins and
+  referenced runtime operations adds one acyclic direct
+  `writing_artifacts.runtime_references -> git.repository_lock` edge for the
+  established process-aware thread-token seam. Runtime-reference cleanup stays
+  same-process and cross-thread while forked registries are discarded before
+  inherited locks; bound-agent release is cancellation-safe and joined, and
+  generation loss has precedence at both Lead publication boundaries. These
+  changes add no module, facade export, public API, persisted field, schema
+  version, or ownership transfer.
   Specialist routing adds one pure module and five net inward runtime
   edges over the provider-recovery baseline: artifact proposals replace their
   roster dependency with the policy, while relationship policy, conversation
