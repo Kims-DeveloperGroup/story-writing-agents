@@ -326,9 +326,8 @@ def nested_mapping_with(value, key):
 def lead_scope(value, activity="workflow", domains=()):
     material = nested_mapping_with(value, "authoring_tasks")
     task = material["authoring_tasks"][-1]
-    return {"schema_version":1, "activity":activity, "target_paths":[], "domains":list(domains),
-            "interpretation":"Assess the synthetic current input candidate." if activity == "review" else "Report factual workflow status.",
-            "task_id":task["task_id"], "task_revision":task["task_revision"]}
+    return {"activity":activity, "target_paths":[], "domains":list(domains),
+            "task":f'{task["task_id"]}@{task["task_revision"]}'}
 
 
 def lead_consultation_answer(value, _agent_id):
@@ -594,24 +593,15 @@ elif isinstance(query, list):
             }
         else:
             answer = {
-                "kind": "answer",
                 "message": "Corrected complete Lead answer.",
-                "scope": "workflow_meta",
-                "evidence_status": "not_applicable",
-                "evidence_ids": [],
-                "artifact_intent": None,
-                "objective_intent": None,
-                "recommended_action": None,
-                "proposal": None,
             }
+            answer.setdefault("authoring_scope", lead_scope(payload))
         if "kind" in answer:
             answer.setdefault("authoring_scope", lead_scope(payload))
         response = {
-            "correlation": payload["c"],
             "action": {
                 "kind": "answer",
                 "result": answer,
-                "used_handles": [],
             },
         }
     elif (
