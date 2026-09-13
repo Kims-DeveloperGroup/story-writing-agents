@@ -19,6 +19,7 @@ from ..artifact_proposals import (
     serialize_artifact_review_candidate,
 )
 from ..errors import SessionIdError
+from ..reply_trace import ReplyTrace
 from ..specialist_routing import (
     ArtifactReviewDomain,
     AuthoringActivity,
@@ -452,6 +453,7 @@ class CollaborationLeadJudgmentPayload:
     message: str
     evidence: CollaborationLeadEvidence
     authoring_scope: AuthoringScope | None = None
+    trace: ReplyTrace | None = None
 
     def __post_init__(self) -> None:
         _require_enum(self.kind, LeadOutcomeKind, "lead judgment kind")
@@ -460,6 +462,8 @@ class CollaborationLeadJudgmentPayload:
             raise TypeError("lead judgment evidence must be CollaborationLeadEvidence")
         _validate_lead_evidence_matrix(self.kind, self.evidence)
         _validate_authoring_evidence_scope(self.authoring_scope, self.evidence.scope)
+        if self.trace is not None and type(self.trace) is not ReplyTrace:
+            raise TypeError("lead judgment trace must be ReplyTrace or None")
 
 
 @dataclass(frozen=True, slots=True)
@@ -1089,6 +1093,7 @@ class LeadProviderOutcome:
     objective_intent: LeadObjectiveIntent | None = None
     recommended_action: LeadRecommendedAction | None = None
     authoring_scope: AuthoringScope | None = field(default=None, kw_only=True)
+    trace: ReplyTrace | None = field(default=None, kw_only=True)
 
     def __post_init__(self) -> None:
         _require_enum(self.kind, LeadOutcomeKind, "lead outcome kind")
@@ -1135,6 +1140,8 @@ class LeadProviderOutcome:
             elif self.kind is LeadOutcomeKind.PROPOSAL:
                 raise ValueError("objective cancellation cannot propose work")
         _validate_authoring_evidence_scope(self.authoring_scope, self.scope)
+        if self.trace is not None and type(self.trace) is not ReplyTrace:
+            raise TypeError("lead provider outcome trace must be ReplyTrace or None")
         if (
             self.authoring_scope is not None
             and self.proposal is not None
@@ -2002,9 +2009,12 @@ class CollaborationMessagePayload:
     """Bounded visible message without metadata or hidden reasoning."""
 
     content: str
+    trace: ReplyTrace | None = None
 
     def __post_init__(self) -> None:
         _validate_visible_text(self.content, label="collaboration message")
+        if self.trace is not None and type(self.trace) is not ReplyTrace:
+            raise TypeError("collaboration message trace must be ReplyTrace or None")
 
 
 @dataclass(frozen=True, slots=True)
@@ -2042,6 +2052,7 @@ class CollaborationSpecialistReplyPayload:
     message: str
     input_ids: tuple[str, ...]
     mode: SpecialistAssignmentMode | None = None
+    trace: ReplyTrace | None = None
 
     def __post_init__(self) -> None:
         _validate_identifier(self.proposal_id, label="reply proposal ID")
@@ -2069,6 +2080,8 @@ class CollaborationSpecialistReplyPayload:
                 raise ValueError("draft replies cannot assert review assessments")
         elif self.assessment is CollaborationSpecialistAssessment.DRAFTED:
             raise ValueError("drafted assessment requires explicit draft mode")
+        if self.trace is not None and type(self.trace) is not ReplyTrace:
+            raise TypeError("specialist reply trace must be ReplyTrace or None")
 
 
 @dataclass(frozen=True, slots=True)
@@ -2085,6 +2098,7 @@ class CollaborationLeadSynthesisPayload:
     evidence: CollaborationLeadEvidence
     next_intent: LeadProposalIntent | None = None
     authoring_scope: AuthoringScope | None = None
+    trace: ReplyTrace | None = None
 
     def __post_init__(self) -> None:
         _validate_identifier(self.proposal_id, label="synthesis proposal ID")
@@ -2105,6 +2119,8 @@ class CollaborationLeadSynthesisPayload:
         )
         if type(self.evidence) is not CollaborationLeadEvidence:
             raise TypeError("synthesis evidence must be CollaborationLeadEvidence")
+        if self.trace is not None and type(self.trace) is not ReplyTrace:
+            raise TypeError("lead synthesis trace must be ReplyTrace or None")
         if self.evidence.scope is not LeadOutcomeScope.STORY_SPECIFIC:
             raise ValueError("lead synthesis must remain story-specific")
         _validate_lead_evidence_matrix(LeadOutcomeKind.RECOMMENDATION, self.evidence)
@@ -3969,7 +3985,11 @@ def _payload_value(payload: CollaborationPayload) -> dict[str, object]:
     if type(payload) is CollaborationProposal:
         return {"payload_type": "proposal", "proposal": _proposal_value(payload)}
     if type(payload) is CollaborationMessagePayload:
-        return {"content": payload.content, "payload_type": "message"}
+        return {
+            "content": payload.content,
+            "payload_type": "message",
+            **_reply_trace_fields(payload.trace),
+        }
     if type(payload) is CollaborationLeadJudgmentPayload:
         return {
             "evidence": _lead_evidence_value(payload.evidence),
@@ -3977,6 +3997,7 @@ def _payload_value(payload: CollaborationPayload) -> dict[str, object]:
             "message": payload.message,
             "payload_type": "lead_judgment",
             **_authoring_scope_fields(payload.authoring_scope),
+            **_reply_trace_fields(payload.trace),
         }
     if type(payload) is CollaborationAssignmentDispatchPayload:
         return {
@@ -4000,6 +4021,7 @@ def _payload_value(payload: CollaborationPayload) -> dict[str, object]:
             "proposal_digest": payload.proposal_digest,
             "proposal_id": payload.proposal_id,
             "proposal_revision": payload.proposal_revision,
+            **_reply_trace_fields(payload.trace),
         }
     if type(payload) is CollaborationLeadSynthesisPayload:
         return {
@@ -4018,6 +4040,7 @@ def _payload_value(payload: CollaborationPayload) -> dict[str, object]:
             "proposal_revision": payload.proposal_revision,
             "reply_event_ids": list(payload.reply_event_ids),
             "unresolved_input_ids": list(payload.unresolved_input_ids),
+            **_reply_trace_fields(payload.trace),
         }
     if type(payload) is CollaborationStepStatePayload:
         return {
@@ -4995,15 +5018,21 @@ def _decode_payload(value: object) -> CollaborationPayload:
         item = _object(value, {"payload_type", "proposal"}, label="proposal payload")
         return _decode_proposal(item["proposal"])
     if payload_type == "message":
-        item = _object(value, {"content", "payload_type"}, label="message payload")
+        item = _object_with_optional_extensions(
+            value,
+            {"content", "payload_type"},
+            {"trace"},
+            label="message payload",
+        )
         return CollaborationMessagePayload(
-            content=_string(item["content"], label="message content")
+            content=_string(item["content"], label="message content"),
+            trace=_decode_optional_reply_trace(item),
         )
     if payload_type == "lead_judgment":
-        item = _object_with_extension(
+        item = _object_with_optional_extensions(
             value,
             {"evidence", "kind", "message", "payload_type"},
-            {"authoring_scope"},
+            {"authoring_scope", "trace"},
             label="lead judgment payload",
         )
         return CollaborationLeadJudgmentPayload(
@@ -5011,6 +5040,7 @@ def _decode_payload(value: object) -> CollaborationPayload:
             message=_string(item["message"], label="lead judgment message"),
             evidence=_decode_lead_evidence(item["evidence"]),
             authoring_scope=_decode_optional_authoring_scope(item),
+            trace=_decode_optional_reply_trace(item),
         )
     if payload_type == "assignment_dispatch":
         item = _object(
@@ -5042,7 +5072,7 @@ def _decode_payload(value: object) -> CollaborationPayload:
             assignment=_decode_assignment(item["assignment"]),
         )
     if payload_type == "specialist_reply":
-        item = _object_with_extension(
+        item = _object_with_optional_extensions(
             value,
             {
                 "assignment_id",
@@ -5056,7 +5086,7 @@ def _decode_payload(value: object) -> CollaborationPayload:
                 "proposal_id",
                 "proposal_revision",
             },
-            {"mode"},
+            {"mode", "trace"},
             label="specialist reply payload",
         )
         return CollaborationSpecialistReplyPayload(
@@ -5089,9 +5119,10 @@ def _decode_payload(value: object) -> CollaborationPayload:
                 for input_id in _array(item["input_ids"], label="reply input IDs")
             ),
             mode=_decode_assignment_mode(item),
+            trace=_decode_optional_reply_trace(item),
         )
     if payload_type == "lead_synthesis":
-        item = _object_with_extension(
+        item = _object_with_optional_extensions(
             value,
             {
                 "evidence",
@@ -5105,7 +5136,7 @@ def _decode_payload(value: object) -> CollaborationPayload:
                 "reply_event_ids",
                 "unresolved_input_ids",
             },
-            {"authoring_scope"},
+            {"authoring_scope", "trace"},
             label="lead synthesis payload",
         )
         return CollaborationLeadSynthesisPayload(
@@ -5144,6 +5175,7 @@ def _decode_payload(value: object) -> CollaborationPayload:
                 else _decode_lead_proposal_intent(item["next_intent"])
             ),
             authoring_scope=_decode_optional_authoring_scope(item),
+            trace=_decode_optional_reply_trace(item),
         )
     if payload_type == "lead_outcome_failure":
         item = _object(
@@ -6179,6 +6211,34 @@ def _object_with_extension(
         raise ValueError(f"{label} must be an object")
     expected = fields | extension if set(value) & extension else fields
     return _object(value, expected, label=label)
+
+
+def _object_with_optional_extensions(
+    value: object,
+    fields: set[str],
+    extensions: set[str],
+    *,
+    label: str,
+) -> dict[str, object]:
+    """Accept required fields plus any explicitly supported independent fields."""
+
+    if (
+        type(value) is not dict
+        or not fields.issubset(value)
+        or not set(value).issubset(fields | extensions)
+    ):
+        raise ValueError(f"{label} has missing or extra fields")
+    return value
+
+
+def _reply_trace_fields(trace: ReplyTrace | None) -> dict[str, object]:
+    return {} if trace is None else {"trace": trace.to_dict()}
+
+
+def _decode_optional_reply_trace(item: dict[str, object]) -> ReplyTrace | None:
+    if "trace" not in item:
+        return None
+    return ReplyTrace.from_dict(item["trace"])
 
 
 def _object(

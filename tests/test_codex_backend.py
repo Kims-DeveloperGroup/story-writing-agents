@@ -51,6 +51,7 @@ from story_writing_agents import (
     Phase,
     PromptFileReference,
     ROSTER,
+    ReplyTraceOrigin,
     SessionAccessState,
     SessionDurableState,
     Workspace,
@@ -783,7 +784,7 @@ class ConversationModelContractTests(unittest.TestCase):
                 with self.assertRaises((TypeError, ValueError)):
                     AgentReply(**values)
 
-    def test_exact_frozen_slotted_no_default_models_and_converse_signature(
+    def test_exact_frozen_slotted_models_and_converse_signature(
         self,
     ) -> None:
         reply = ConversationReply(
@@ -805,7 +806,7 @@ class ConversationModelContractTests(unittest.TestCase):
             ),
             (
                 ConversationReply,
-                ("session_id", "conversation_id", "turn_id", "content"),
+                ("session_id", "conversation_id", "turn_id", "content", "trace"),
                 reply,
             ),
         )
@@ -813,17 +814,14 @@ class ConversationModelContractTests(unittest.TestCase):
             with self.subTest(model=model.__name__):
                 model_fields = fields(model)
                 self.assertEqual(tuple(field.name for field in model_fields), names)
-                required_fields = (
-                    model_fields[:-1] if model is ConversationRequest else model_fields
-                )
+                required_fields = model_fields[:-1]
                 self.assertTrue(
                     all(
                         field.default is MISSING and field.default_factory is MISSING
                         for field in required_fields
                     )
                 )
-                if model is ConversationRequest:
-                    self.assertIsNone(model_fields[-1].default)
+                self.assertIsNone(model_fields[-1].default)
                 self.assertFalse(hasattr(value, "__dict__"))
                 with self.assertRaises(FrozenInstanceError):
                     value.content = "changed"
@@ -5021,9 +5019,12 @@ class CodexBackendTestCase(unittest.IsolatedAsyncioTestCase):
         self.addCleanup(backend.close)
         backend.create_session_with_access(session_id)
         bound = await backend.bind(self.definition())
-        await bound.converse(
+        seed_reply = await bound.converse(
             self.conversation_request(session_id=session_id, turn_id="turn_seed")
         )
+        self.assertIs(seed_reply.trace.origin, ReplyTraceOrigin.PROVIDER)
+        self.assertEqual(seed_reply.trace.action, "reply")
+        self.assertIn("current_input", seed_reply.trace.context_sources)
         base: dict[str, object] = {
             "message": "visible reply",
         }
@@ -5063,6 +5064,9 @@ class CodexBackendTestCase(unittest.IsolatedAsyncioTestCase):
                 self.assertEqual(reply.session_id, session_id)
                 self.assertEqual(reply.conversation_id, "conversation_a")
                 self.assertEqual(reply.turn_id, "turn_failed")
+                self.assertIs(reply.trace.origin, ReplyTraceOrigin.RUNTIME_FALLBACK)
+                self.assertEqual(reply.trace.action, "none")
+                self.assertEqual(reply.trace.recovered_fields, ("structured_reply",))
                 self.assertIs(self.thread(session_id)["tainted"], True)
                 await bound.converse(
                     self.conversation_request(
@@ -6154,6 +6158,12 @@ class CodexBackendTestCase(unittest.IsolatedAsyncioTestCase):
             reply = await bound.converse_with_retrieval(request, handler)
 
         self.assertEqual(reply.content, "final answer")
+        self.assertIs(reply.trace.origin, ReplyTraceOrigin.PROVIDER)
+        self.assertEqual(reply.trace.action, "answer")
+        self.assertEqual(
+            reply.trace.context_sources,
+            ("current_input", "story_session", "retrieval_observation"),
+        )
         self.assertEqual(len(handler.actions), 3)
         self.assertEqual(
             tuple(type(action) for action in handler.actions),
@@ -7969,6 +7979,8 @@ class CodexBackendTestCase(unittest.IsolatedAsyncioTestCase):
             )
         self.assertEqual(debate_reply.revision_id, "expected-revision")
         self.assertIn("after one repair attempt", debate_reply.content)
+        self.assertIs(debate_reply.trace.origin, ReplyTraceOrigin.RUNTIME_FALLBACK)
+        self.assertEqual(debate_reply.trace.action, "none")
         self.assertIs(self.thread(debate_session)["tainted"], True)
         self.assertEqual(self.thread(debate_session)["thread_id"], seeded_thread)
 
@@ -7999,6 +8011,10 @@ class CodexBackendTestCase(unittest.IsolatedAsyncioTestCase):
                 )
             )
         self.assertIn("after one repair attempt", conversation_reply.content)
+        self.assertIs(
+            conversation_reply.trace.origin,
+            ReplyTraceOrigin.RUNTIME_FALLBACK,
+        )
 
         records = _provider_error_records(self.workspace)
         self.assertEqual(len(records), 4)
@@ -8081,6 +8097,11 @@ class CodexBackendTestCase(unittest.IsolatedAsyncioTestCase):
                 _RecordingRetrievalHandler(),
             )
         self.assertIn("after one repair attempt", retrieval_reply.content)
+        self.assertIs(
+            retrieval_reply.trace.origin,
+            ReplyTraceOrigin.RUNTIME_FALLBACK,
+        )
+        self.assertEqual(retrieval_reply.trace.action, "none")
 
         prelude_session = "capture_reference_prelude_session"
         prelude_debate = "capture_reference_prelude_debate"

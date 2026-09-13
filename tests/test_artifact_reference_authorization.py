@@ -249,7 +249,7 @@ class ReferenceAuthorizationValueTests(unittest.TestCase):
         self.assertTrue(
             (supported | transient).isdisjoint(story_writing_agents.__all__)
         )
-        self.assertEqual(len(story_writing_agents.__all__), 104)
+        self.assertEqual(len(story_writing_agents.__all__), 106)
 
     def test_correlation_requires_safe_ids_positive_ordinals_and_attempts(self) -> None:
         valid = _correlation(

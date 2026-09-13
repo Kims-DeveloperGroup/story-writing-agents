@@ -32,6 +32,7 @@ from story_writing_agents.models import (
     AgentReplyNextPhase,
 )
 from story_writing_agents.orchestrator import StoryRuntime
+from story_writing_agents.reply_trace import ReplyTrace, ReplyTraceOrigin
 
 from tests.test_collaboration_events import _reviewed_artifact_proposal
 
@@ -83,6 +84,29 @@ def _reply_digest(reply: AgentReply) -> str:
 
 
 class ConsensusRuntimeCorrelationTests(unittest.TestCase):
+    def test_provider_trace_survives_consensus_mapping(self) -> None:
+        invocation = _invocation(ConsensusPhase.DRAFT, EXECUTION_SPECIALIST, 1)
+        trace = ReplyTrace(
+            EXECUTION_SPECIALIST,
+            "candidate",
+            ("current_input", "debate_history"),
+            (),
+            ReplyTraceOrigin.PROVIDER,
+        )
+        content = "new candidate"
+        reply = replace(AgentReply.candidate("r0", content), trace=trace)
+        authored = candidate_material_handle(
+            hashlib.sha256(content.encode()).hexdigest()
+        )
+
+        result = StoryRuntime.map_consensus_provider_reply(
+            invocation,
+            reply,
+            authored_material=authored,
+        )
+
+        self.assertEqual(result.trace, trace)
+
     def test_all_six_routes_map_exact_typed_results(self) -> None:
         candidate_text = "new candidate"
         authored = candidate_material_handle(

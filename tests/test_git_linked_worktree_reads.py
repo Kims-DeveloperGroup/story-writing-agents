@@ -98,7 +98,7 @@ class GitLinkedWorktreeReadContractTests(unittest.TestCase):
         self.assertNotIn("GitStatus", story_writing_agents.__all__)
         self.assertNotIn("GitLogMetadata", story_writing_agents.__all__)
         self.assertEqual(len(git_facade.__all__), 24)
-        self.assertEqual(len(story_writing_agents.__all__), 104)
+        self.assertEqual(len(story_writing_agents.__all__), 106)
         self.assertEqual(len(tuple(GitOperationKind)), 7)
 
         tree = ast.parse(_ADAPTER_SOURCE.read_text())

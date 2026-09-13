@@ -6,8 +6,8 @@ direct-run consumers are absent; generic provider,
 prompt, context, lifecycle, artifact, and terminal components remain behind
 explicit module boundaries.
 
-The production graph contains 132 modules, 514 dependency edges, no cycles, and
-104 package-root exports.
+The production graph contains 143 modules, 574 runtime dependency edges, no
+cycles, and 106 package-root exports.
 
 ## Current user flow
 

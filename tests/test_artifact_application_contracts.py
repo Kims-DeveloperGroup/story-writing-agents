@@ -285,7 +285,7 @@ class ArtifactApplicationSurfaceTests(ApplicationContractTestCase):
                 self.assertEqual(writing_artifacts.__all__.count(name), 1)
                 self.assertNotIn(name, story_writing_agents.__all__)
                 self.assertFalse(hasattr(story_writing_agents, name))
-        self.assertEqual(len(story_writing_agents.__all__), 104)
+        self.assertEqual(len(story_writing_agents.__all__), 106)
         self.assertEqual(
             tuple(state.value for state in ArtifactApplicationState),
             ("applied", "unchanged"),

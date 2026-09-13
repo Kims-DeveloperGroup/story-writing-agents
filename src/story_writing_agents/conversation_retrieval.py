@@ -23,6 +23,7 @@ from .conversations import (
     CollaborationReadableContext,
     CollaborationReadableRecord,
 )
+from .reply_trace import ReplyTrace
 from .errors import SessionIdError
 from .models import StorySessionContext
 
@@ -487,6 +488,7 @@ class ConversationRetrievalSearchAction:
     turn_id: str
     action_index: int
     query: str
+    trace: ReplyTrace | None = None
 
     def __post_init__(self) -> None:
         """Validate shape and text without authorizing or performing a search."""
@@ -504,6 +506,8 @@ class ConversationRetrievalSearchAction:
             label="conversation retrieval search query",
             nonempty=True,
         )
+        if self.trace is not None and type(self.trace) is not ReplyTrace:
+            raise TypeError("retrieval search trace must be ReplyTrace or None")
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)
@@ -518,6 +522,7 @@ class ConversationRetrievalReadAction:
     citation_id: str
     start_sequence: int
     end_sequence: int | None
+    trace: ReplyTrace | None = None
 
     def __post_init__(self) -> None:
         """Validate shape and range without authorizing or reading history."""
@@ -536,6 +541,8 @@ class ConversationRetrievalReadAction:
             _positive_integer(self.end_sequence, label="end sequence")
         if self.end_sequence is not None and self.end_sequence < self.start_sequence:
             raise ValueError("end sequence must not precede start sequence")
+        if self.trace is not None and type(self.trace) is not ReplyTrace:
+            raise TypeError("retrieval read trace must be ReplyTrace or None")
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)
@@ -549,6 +556,7 @@ class ConversationRetrievalAnswerAction:
     action_index: int
     content: str
     citation_ids: tuple[str, ...]
+    trace: ReplyTrace | None = None
 
     def __post_init__(self) -> None:
         """Validate answer shape without resolving citation authorization."""
@@ -574,6 +582,8 @@ class ConversationRetrievalAnswerAction:
             if citation_id in seen:
                 raise ValueError("answer citation IDs must be unique")
             seen.add(citation_id)
+        if self.trace is not None and type(self.trace) is not ReplyTrace:
+            raise TypeError("retrieval answer trace must be ReplyTrace or None")
 
 
 ConversationRetrievalAction: TypeAlias = (
@@ -862,6 +872,7 @@ class ConversationRetrievalReply:
     turn_id: str
     content: str
     sources: tuple[ConversationRetrievalSource, ...]
+    trace: ReplyTrace | None = None
 
     def __post_init__(self) -> None:
         """Validate answer correlation, content, and source set without I/O."""
@@ -875,6 +886,8 @@ class ConversationRetrievalReply:
             nonempty=True,
         )
         _validate_sources(self.sources, session_id=self.session_id)
+        if self.trace is not None and type(self.trace) is not ReplyTrace:
+            raise TypeError("retrieval reply trace must be ReplyTrace or None")
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)
@@ -891,6 +904,7 @@ class ConversationRetrievalResult:
     reference_operation_id: str | None = None
     rag_outcome: ConversationRagAttemptOutcome | None = None
     rag_sources: tuple[ConversationRetrievalSource, ...] = ()
+    trace: ReplyTrace | None = None
 
     def __post_init__(self) -> None:
         """Validate result identity, context, content, and canonical sources."""
@@ -944,6 +958,8 @@ class ConversationRetrievalResult:
             raise ValueError(
                 "conversation retrieval RAG sources must be an ordered result subset"
             )
+        if self.trace is not None and type(self.trace) is not ReplyTrace:
+            raise TypeError("retrieval result trace must be ReplyTrace or None")
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)

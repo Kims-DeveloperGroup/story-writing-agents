@@ -266,6 +266,7 @@ from .errors import (
     BackendProtocolError, ConversationNotFoundError, ProviderAuthenticationRequiredError,
 )
 from .prompts import PromptAssembler
+from .reply_trace import ReplyTrace, ReplyTraceOrigin
 from .specialist_routing import (
     AuthoringActivity,
     AuthoringScope,
@@ -1063,6 +1064,11 @@ class _CollaborationInvocationResult:
     submitted_physical_calls: int
     failure: BaseException | None = None
     submission_uncertain: bool = False
+    trace: ReplyTrace | None = None
+
+    def __post_init__(self) -> None:
+        if self.trace is not None and type(self.trace) is not ReplyTrace:
+            raise TypeError("collaboration invocation trace is invalid")
 
 
 @dataclass(frozen=True, slots=True)
@@ -1366,6 +1372,7 @@ class StoryRuntime:
                 ConsensusPhaseOutputKind.CANDIDATE,
                 digest,
                 authored_material,
+                trace=reply.trace,
             )
         candidate = invocation.candidate_material
         if candidate is None:
@@ -1396,6 +1403,7 @@ class StoryRuntime:
                 candidate,
                 ConsensusAuditVerdict(reply.verdict.value),
                 conflict_material=authored_material,
+                trace=reply.trace,
             )
         if authored_material is not None:
             raise ValueError("consensus phase does not accept authored material")
@@ -1405,6 +1413,7 @@ class StoryRuntime:
                     ConsensusPhaseOutputKind.DEADLOCK,
                     digest,
                     candidate,
+                    trace=reply.trace,
                 )
             if (
                 reply.kind is not AgentReplyKind.SYNTHESIS
@@ -1416,6 +1425,7 @@ class StoryRuntime:
                 digest,
                 candidate,
                 next_phase=ConsensusPhase(reply.next_phase.value),
+                trace=reply.trace,
             )
         if (
             invocation.phase is not ConsensusPhase.FINALIZATION
@@ -1426,6 +1436,7 @@ class StoryRuntime:
             ConsensusPhaseOutputKind.FINALIZATION,
             digest,
             candidate,
+            trace=reply.trace,
         )
 
     def create_workflow(
@@ -2248,6 +2259,7 @@ class StoryRuntime:
             LeadOutcomeKind.RECOMMENDATION, source.payload.message, None, None, None,
             CollaborationNextAction.SUBMIT_RECOMMENDATION_DECISION,
             evidence=request.basis.evidence, recommendation_request=request,
+            trace=getattr(source.payload, "trace", None),
         )
 
     def _recommendation_closure_draft(
@@ -4389,6 +4401,53 @@ class StoryRuntime:
                 "lead returned a noncanonical artifact review synthesis"
             ) from exc
 
+    @staticmethod
+    def _collaboration_reply_trace(
+        *,
+        role: str,
+        action: str,
+        request: ContextInvocationRequest,
+        result: ContextInvocationResult | None,
+        origin: ReplyTraceOrigin,
+    ) -> ReplyTrace:
+        """Describe delivered context classes without retaining their content."""
+
+        labels: list[str] = ["current_input"]
+        if request.session_state_json is not None:
+            labels.append("session_state")
+        if result is not None:
+            authorization = result.authorization
+            if authorization.core_statuses:
+                labels.append("core_status")
+            if authorization.zero_hit_searches:
+                labels.append("search_results")
+            labels.extend(
+                f"read:{receipt.source_kind.value}"
+                for receipt in authorization.used_evidence
+            )
+        return ReplyTrace(
+            role=role,
+            action=("none" if origin is ReplyTraceOrigin.RUNTIME_FALLBACK else action),
+            context_sources=tuple(dict.fromkeys(labels)),
+            recovered_fields=(
+                ()
+                if origin is ReplyTraceOrigin.PROVIDER
+                else ("structured_reply",)
+            ),
+            origin=origin,
+        )
+
+    @staticmethod
+    def _collaboration_trace_action(value: object) -> str:
+        if type(value) is CollaborationSpecialistReplyPayload:
+            return value.assessment.value
+        if type(value) is _ArtifactSynthesisResult:
+            return "artifact_review"
+        if type(value) is _LeadSynthesisResult:
+            action = value.recommended_action
+            return "synthesis" if action is None else action.kind.value
+        return "reply"
+
     async def _run_collaboration_invocation(
         self,
         *,
@@ -4523,6 +4582,7 @@ class StoryRuntime:
                 ),
             )
             decoded: object | None = None
+            trace_origin = ReplyTraceOrigin.PROVIDER
 
             def validate(answer: str, _authorization: object) -> None:
                 nonlocal decoded
@@ -4565,10 +4625,19 @@ class StoryRuntime:
                     raise
                 if remaining < correction_cost:
                     reference_operation.failure(first_failure)
+                    fallback_value = decoder(fallback_answer)
                     return _CollaborationInvocationResult(
-                        decoder(fallback_answer),
+                        fallback_value,
                         provider.submitted_physical_calls,
+                        trace=self._collaboration_reply_trace(
+                            role=agent_id,
+                            action=self._collaboration_trace_action(fallback_value),
+                            request=request,
+                            result=None,
+                            origin=ReplyTraceOrigin.RUNTIME_FALLBACK,
+                        ),
                     )
+                trace_origin = ReplyTraceOrigin.RECOVERED
                 reference_read = reference_operation.begin_invocation(
                     agent_id=agent_id,
                     phase=context_invocation_kind.value,
@@ -4618,15 +4687,30 @@ class StoryRuntime:
                     ):
                         raise
                     reference_operation.failure(correction_failure)
+                    fallback_value = decoder(fallback_answer)
                     return _CollaborationInvocationResult(
-                        decoder(fallback_answer),
+                        fallback_value,
                         provider.submitted_physical_calls,
+                        trace=self._collaboration_reply_trace(
+                            role=agent_id,
+                            action=self._collaboration_trace_action(fallback_value),
+                            request=request,
+                            result=None,
+                            origin=ReplyTraceOrigin.RUNTIME_FALLBACK,
+                        ),
                     )
             value = decoded if decoded is not None else decoder(result.answer)
             reference_operation.finish()
             return _CollaborationInvocationResult(
                 value,
                 provider.submitted_physical_calls,
+                trace=self._collaboration_reply_trace(
+                    role=agent_id,
+                    action=self._collaboration_trace_action(value),
+                    request=request,
+                    result=result,
+                    origin=trace_origin,
+                ),
             )
         except BaseException as failure:
             if reference_operation is not None:
@@ -4804,7 +4888,10 @@ class StoryRuntime:
                             is CollaborationStepKind.SPECIALIST_ADVISORY
                             else _LEAD_ACTOR
                         ),
-                        payload=invocation_result.value,
+                        payload=replace(
+                            invocation_result.value,
+                            trace=invocation_result.trace,
+                        ),
                     )
                 )
                 outcome = CollaborationAssignmentOutcomeKind.SUCCEEDED
@@ -4925,10 +5012,16 @@ class StoryRuntime:
             if synthesis_result.failure is None:
                 value = synthesis_result.value
                 if type(value) is _ArtifactSynthesisResult:
-                    collaboration_value = value.collaboration
+                    collaboration_value = replace(
+                        value.collaboration,
+                        trace=synthesis_result.trace,
+                    )
                     artifact_value = value.artifact
                 elif type(value) is _LeadSynthesisResult:
-                    collaboration_value = value.collaboration
+                    collaboration_value = replace(
+                        value.collaboration,
+                        trace=synthesis_result.trace,
+                    )
                     recommended_action = value.recommended_action
                     artifact_value = None
                 else:
@@ -7168,6 +7261,20 @@ class StoryRuntime:
                 result.authorization,
                 inputs,
             )
+            outcome = replace(
+                outcome,
+                trace=self._collaboration_reply_trace(
+                    role=LEAD_ORCHESTRATOR,
+                    action=outcome.kind.value,
+                    request=contextual_request,
+                    result=result,
+                    origin=(
+                        ReplyTraceOrigin.RECOVERED
+                        if corrective_rejection_code is not None
+                        else ReplyTraceOrigin.PROVIDER
+                    ),
+                ),
+            )
             reference_operation.finish()
         except _LeadOutcomeValidationError as failure:
             reference_operation.failure(failure)
@@ -7353,6 +7460,7 @@ class StoryRuntime:
                     outcome.message,
                     evidence,
                     outcome.authoring_scope,
+                    outcome.trace,
                 ),
             )
             proposal_event = self._draft(
@@ -7407,6 +7515,7 @@ class StoryRuntime:
                 request_id,
                 CollaborationNextAction.SUBMIT_CONFIRMATION,
                 evidence,
+                trace=outcome.trace,
             )
 
         refreshed = self.conversation_storage_services.event_store.read_context(
@@ -7417,7 +7526,13 @@ class StoryRuntime:
             session_id=session_id, conversation_id=conversation_id,
             turn_id=turn_id, step_id=step_id, kind=CollaborationEventKind.MESSAGE,
             sender=_LEAD_ACTOR, recipient=_USER_ACTOR,
-            payload=CollaborationLeadJudgmentPayload(outcome.kind, outcome.message, evidence, outcome.authoring_scope),
+            payload=CollaborationLeadJudgmentPayload(
+                outcome.kind,
+                outcome.message,
+                evidence,
+                outcome.authoring_scope,
+                outcome.trace,
+            ),
         )
         final_drafts = (
             judgment,
@@ -7458,6 +7573,7 @@ class StoryRuntime:
                 else CollaborationNextAction.CONTINUE_WITH_LEAD
             ),
             evidence,
+            trace=outcome.trace,
         )
 
     def _build_artifact_proposal_result(
@@ -7552,6 +7668,7 @@ class StoryRuntime:
                 outcome.message,
                 evidence,
                 review_scope,
+                outcome.trace,
             ),
         )
         candidate_payload = ArtifactReviewCandidatePayload(
@@ -7643,6 +7760,7 @@ class StoryRuntime:
                 ArtifactProposalState.AWAITING_CONSULTATION_CONFIRMATION,
                 candidate_payload,
             ),
+            trace=outcome.trace,
         )
 
     @classmethod
@@ -8434,6 +8552,13 @@ class StoryRuntime:
     ) -> LeadTurnResult:
         """Persist one visible no-action answer after exhausted schema repair."""
 
+        trace = ReplyTrace(
+            role=LEAD_ORCHESTRATOR,
+            action="none",
+            context_sources=("current_input",),
+            recovered_fields=("structured_reply",),
+            origin=ReplyTraceOrigin.RUNTIME_FALLBACK,
+        )
         if persist_message:
             projection = self.conversation_storage_services.event_store.read_context(
                 session_id,
@@ -8451,7 +8576,8 @@ class StoryRuntime:
                         sender=_LEAD_ACTOR,
                         recipient=_USER_ACTOR,
                         payload=CollaborationMessagePayload(
-                            _SAFE_STRUCTURED_FALLBACK_MESSAGE
+                            _SAFE_STRUCTURED_FALLBACK_MESSAGE,
+                            trace,
                         ),
                     ),
                 ),
@@ -8473,6 +8599,7 @@ class StoryRuntime:
             None,
             CollaborationNextAction.CONTINUE_WITH_LEAD,
             evidence,
+            trace=trace,
         )
 
     @staticmethod

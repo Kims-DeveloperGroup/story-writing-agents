@@ -403,6 +403,15 @@ accounting. Every other code requires both exact non-null call identities;
 original user event and never creates a successful judgment or execution
 result. Payloads contain visible facts, not hidden reasoning.
 
+Agent-authored visible messages, Lead judgments, specialist replies, and Lead
+syntheses persist an optional `trace` object with exactly `role`, `action`,
+`context_sources`, `recovered_fields`, and `origin`. These are bounded labels
+derived by runtime after provider validation; no prompt, retrieved content,
+reply prose, hidden reasoning, or authority is copied into the trace. A newly
+opened event store decodes the same trace, allowing terminal history to show
+how the reply was constructed. `runtime_fallback` always reports
+`action=none`.
+
 `provider_call_accounting` contains no request or response content. It records
 one invocation/call identity, contiguous ordinal, canonical agent role,
 invocation kind (`lead`, `specialist_assignment`, `lead_synthesis`, or

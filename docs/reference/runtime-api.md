@@ -325,6 +325,7 @@ LeadTurnResult(
     artifact_application_request: ArtifactApplicationRequestPayload | None = None,
     story_commit_request: StoryCommitRequestPayload | None = None,
     recommendation_request: LeadRecommendationRequestPayload | None = None,
+    trace: ReplyTrace | None = None,
 )
 ```
 
@@ -366,6 +367,16 @@ scope plus invocation-local authorization facts. Proposal evidence is
 identical to `proposal.basis.evidence`. Runtime-generated workflow recovery and evidence-rejection notices can use
 `evidence=None`; local recommendation rejection or failure closure can instead
 return workflow-meta `not_applicable` evidence with no receipts.
+
+Fresh Lead and specialist replies also expose a content-free `trace`. Its
+`role` and `action` identify the reply route; `context_sources` names classes
+such as `current_input`, `session_state`, `core_status`, `search_results`, and
+`read:writing_artifact`; `recovered_fields` identifies the structured reply
+only when repair or fallback was needed; and `origin` is `provider`,
+`recovered`, or `runtime_fallback`. The runtime constructs this value after
+provider validation. It is persisted with visible collaboration replies and
+therefore survives reopen. A runtime fallback always reports `action=none` and
+grants no confirmation, Apply, Commit, or other user authority.
 
 The provider's `lead-outcome-v5` result remains provider-enforced Structured
 Output, but each closed variant contains only semantic fields. A direct answer is:

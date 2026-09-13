@@ -367,7 +367,7 @@ class SessionLifecycleContractTests(unittest.TestCase):
             ],
         )
         self.assertIs(story_writing_agents.SessionLifecycleState, SessionLifecycleState)
-        self.assertEqual(len(story_writing_agents.__all__), 104)
+        self.assertEqual(len(story_writing_agents.__all__), 106)
 
         expected = {
             "get_session_lifecycle": ("self", "session_id"),

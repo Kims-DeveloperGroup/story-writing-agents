@@ -1508,7 +1508,7 @@ class ActiveDebateSourceAdapter:
             message: DebateMessage | None = None
             try:
                 if type(raw) is dict:
-                    message = DebateMessage(**raw)
+                    message = DebateMessage.from_dict(raw)
             except (TypeError, ValueError):
                 pass
             if message is None:
