@@ -118,6 +118,21 @@ _ROOT = Path(__file__).resolve().parents[1]
 _SOURCE = _ROOT / "src" / "story_writing_agents" / "session_recovery" / "reconciliation.py"
 _WORKSPACE = Path("/tmp/recovery-main")
 _SESSION = "novel"
+
+
+class _RecoveryPin:
+    def __init__(self, *, lost: bool = False) -> None:
+        self.lost = lost
+        self.require_calls = 0
+        self.close_calls = 0
+
+    def require_current(self) -> None:
+        self.require_calls += 1
+        if self.lost:
+            raise RuntimeError("recovery generation changed")
+
+    def close(self) -> None:
+        self.close_calls += 1
 _CONVERSATION = "conversation-1"
 _PATH = "manuscript/part-01/opening.md"
 _TIP = "1" * 40
@@ -603,6 +618,13 @@ def _observe(
             yield Access(resources)
 
     with ExitStack() as stack:
+        stack.enter_context(
+            mock.patch.object(
+                reconciliation_module,
+                "GitSessionGenerationPin",
+                _RecoveryPin,
+            )
+        )
         stack.enter_context(
             mock.patch.object(
                 reconciliation_module,
@@ -1154,6 +1176,7 @@ class SessionRecoveryStateTests(unittest.TestCase):
                         1,
                         _TIP,
                     ),
+                    _RecoveryPin(),
                 )
                 self.assertTrue(
                     reconciliation_module._staged_recovery_evidence_matches(
@@ -1201,10 +1224,12 @@ class SessionRecoveryStateTests(unittest.TestCase):
         history = _snapshot(GitSessionHistoryState.STAGED)
         candidate_record = history.candidates[0]
         operation = history.commit_operations[0]
+        pin = _RecoveryPin()
         recovery = StoryCommitRecoverySnapshot(
             resources,
             candidates_module._candidate_from_record(candidate_record),
             operation,
+            pin,
         )
         observed = _observe(
             resources=(resources,),
@@ -1215,6 +1240,7 @@ class SessionRecoveryStateTests(unittest.TestCase):
         )
         self.assertIs(observed.result.state, SessionRecoveryState.RECOVERY_REQUIRED)
         self.assertIs(observed.result.owner, SessionRecoveryOwner.STORY_COMMIT)
+        self.assertEqual((pin.require_calls, pin.close_calls), (1, 1))
 
         mismatched = _observe(
             resources=(resources,),
@@ -1225,6 +1251,7 @@ class SessionRecoveryStateTests(unittest.TestCase):
                 resources,
                 replace(recovery.candidate, correlation_id="foreign-correlation"),
                 operation,
+                _RecoveryPin(),
             ),
         )
         self.assertIs(
@@ -1232,6 +1259,17 @@ class SessionRecoveryStateTests(unittest.TestCase):
             SessionRecoveryFailureCode.CORRELATION_MISMATCH,
         )
         self.assertIs(mismatched.result.owner, SessionRecoveryOwner.STORY_COMMIT)
+
+        lost_pin = _RecoveryPin(lost=True)
+        lost = _observe(
+            resources=(resources,),
+            reviewed=reviewed,
+            application=application,
+            stored_application=application.application_result,
+            recovery_snapshot=replace(recovery, generation_pin=lost_pin),
+        )
+        self.assertIs(lost.result.owner, SessionRecoveryOwner.SESSION_RESOURCES)
+        self.assertEqual((lost_pin.require_calls, lost_pin.close_calls), (1, 1))
 
         fallback = _observe(
             resources=(resources,),
@@ -1266,6 +1304,7 @@ class SessionRecoveryStateTests(unittest.TestCase):
                     1,
                     _TIP,
                 ),
+                _RecoveryPin(),
             )
 
         wrong_digest = hashlib.sha256(b"different content").hexdigest()
@@ -1722,7 +1761,7 @@ class SessionRecoveryBoundaryTests(unittest.TestCase):
         self.assertNotIn("git.session_history", dependencies)
         index = (_ROOT / "PYTHON_MODULE_INDEX.md").read_text()
         self.assertIn("Importable production units indexed: 142.", index)
-        self.assertIn("Direct internal dependency edges indexed: 573.", index)
+        self.assertIn("Direct internal dependency edges indexed: 576.", index)
         self.assertIn("Directed internal dependency cycles indexed: 0.", index)
         self.assertIn("tests/test_session_recovery_reconciliation.py", index)
 

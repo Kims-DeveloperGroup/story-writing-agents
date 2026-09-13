@@ -219,7 +219,8 @@ descriptors and
 leases remain owned there until access activation transfers them; any
 `BaseException` before transfer closes and unwinds them while preserving the
 primary failure. Descriptor-batch cleanup attempts every close despite a prior
-close failure and preserves an active primary exception. A fork-child revoke
+`BaseException`, exhausts lock/lease release and required postchecks, and
+preserves the active primary exception. A fork-child revoke
 avoids the copied binding lock and closes only the child's worktree descriptor.
 Its inherited Git lease closes the child
 common-Git descriptor without `LOCK_UN`, so the parent's exclusion remains in
@@ -243,10 +244,12 @@ the owner observed at entry, including a stale mismatched owner, without
 closing a concurrently installed replacement. Terminal success, failure, or
 cancellation and exact-owner replacement also close once; abandoned runtime
 owners have an idempotent best-effort final release. This pin prevents physical
-identity recycling only and does not exclude an external Git writer.
-A definitive conversation archive retires the exact pending Commit authority;
-successful focused-archive compensation verifies unarchive and does not retire
-it.
+identity recycling only and does not exclude an external Git writer. Recovery
+fallback retains and revalidates the opaque pin until the ownership result is
+known, then closes it unless ownership transferred. A definitive conversation
+archive, including an already-archived command, retires the exact pending
+Commit owners; successful focused-archive compensation verifies unarchive and
+does not retire them.
 
 The corresponding runtime-bound `StoryCommitService` is creator-process/thread
 affine for Prepare, Authorize, Reject, Revise, Execute, Inspect, Recover, and

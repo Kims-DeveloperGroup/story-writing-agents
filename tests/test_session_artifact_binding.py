@@ -1106,6 +1106,170 @@ class RuntimeSessionArtifactBindingTests(LeadOrchestrationTestCase):
                         observed.__notes__,
                     )
 
+    def test_source_read_and_directory_chain_cleanup_preserve_primary(self) -> None:
+        original_close = os.close
+        read_descriptor = os.dup(0)
+        primary = KeyboardInterrupt("bound read interrupted")
+
+        class Access:
+            def duplicate_worktree_descriptor(self):
+                return read_descriptor
+
+        @contextmanager
+        def open_ready_resources():
+            yield Access()
+
+        source = object.__new__(SessionSourceWorkspace)
+        source._artifact_binding = SimpleNamespace(
+            open_ready_resources=open_ready_resources
+        )
+
+        def close_then_fail(descriptor):
+            original_close(descriptor)
+            raise SystemExit("source close failed")
+
+        with mock.patch.object(
+            workspace_core.os,
+            "close",
+            side_effect=close_then_fail,
+        ), self.assertRaises(KeyboardInterrupt) as caught:
+            source._read_bound(lambda descriptor: (_ for _ in ()).throw(primary))
+        self.assertIs(caught.exception, primary)
+        self.assertIn(
+            "session source descriptor cleanup failed: SystemExit",
+            primary.__notes__,
+        )
+        with self.assertRaises(OSError):
+            os.fstat(read_descriptor)
+
+        descriptors = tuple(os.dup(0) for _ in range(3))
+        closed = []
+        chain_failure = RuntimeError("directory inventory failed")
+
+        def close_chain(descriptor):
+            closed.append(descriptor)
+            original_close(descriptor)
+            if descriptor != descriptors[1]:
+                raise KeyboardInterrupt("directory close interrupted")
+
+        with mock.patch.object(
+            workspace_core.os,
+            "close",
+            side_effect=close_chain,
+        ):
+            SessionSourceWorkspace._close_directory_chain(
+                descriptors,
+                failure=chain_failure,
+            )
+        self.assertEqual(closed, list(reversed(descriptors)))
+        self.assertEqual(len(chain_failure.__notes__), 2)
+        for descriptor in descriptors:
+            with self.assertRaises(OSError):
+                os.fstat(descriptor)
+
+    def test_access_postcheck_revoke_and_duplicate_cleanup_preserve_primary(
+        self,
+    ) -> None:
+        postcheck_failure = asyncio.CancelledError("body cancelled")
+        postcheck_cleanup = KeyboardInterrupt("postcheck interrupted")
+        access = SimpleNamespace(
+            require_ready=mock.Mock(side_effect=postcheck_cleanup)
+        )
+        initialization_module._postvalidate_session_artifact_access(
+            access,
+            failure=postcheck_failure,
+        )
+        self.assertIn(
+            "session artifact cleanup failed: KeyboardInterrupt",
+            postcheck_failure.__notes__,
+        )
+
+        binding = compose_session_artifact_binding(
+            self.control_workspace.root,
+            self.session_id,
+        )
+        manager = binding.open_ready_resources()
+        active = manager.__enter__()
+        descriptor = active._descriptor
+        revoke_failure = SystemExit("access revocation interrupted")
+        original_revoke = (
+            initialization_module.SessionArtifactBinding
+            ._revoke_repository_access
+        )
+        original_close = os.close
+
+        def revoke_then_fail(owner, current):
+            original_revoke(owner, current)
+            self.assertIs(owner, binding)
+            raise revoke_failure
+
+        def close_then_fail(current):
+            original_close(current)
+            if current == descriptor:
+                raise KeyboardInterrupt("access close interrupted")
+
+        with mock.patch.object(
+            initialization_module.SessionArtifactBinding,
+            "_revoke_repository_access",
+            autospec=True,
+            side_effect=revoke_then_fail,
+        ), mock.patch.object(
+            initialization_module.os,
+            "close",
+            side_effect=close_then_fail,
+        ), self.assertRaises(SystemExit) as caught:
+            manager.__exit__(None, None, None)
+        self.assertIs(caught.exception, revoke_failure)
+        self.assertIn(
+            "session artifact cleanup failed: KeyboardInterrupt",
+            revoke_failure.__notes__,
+        )
+        with self.assertRaises(OSError):
+            os.fstat(descriptor)
+
+        with binding.open_ready_resources() as current:
+            opened = []
+            primary = KeyboardInterrupt("duplicate post-open interrupted")
+            original_dup = os.dup
+            original_fstat = os.fstat
+
+            def duplicate(value):
+                result = original_dup(value)
+                opened.append(result)
+                return result
+
+            def inspect(value):
+                if value in opened:
+                    raise primary
+                return original_fstat(value)
+
+            def close_duplicate(value):
+                original_close(value)
+                raise SystemExit("duplicate close interrupted")
+
+            with mock.patch.object(
+                initialization_module.os,
+                "dup",
+                side_effect=duplicate,
+            ), mock.patch.object(
+                initialization_module.os,
+                "fstat",
+                side_effect=inspect,
+            ), mock.patch.object(
+                initialization_module.os,
+                "close",
+                side_effect=close_duplicate,
+            ), self.assertRaises(KeyboardInterrupt) as caught:
+                current.duplicate_worktree_descriptor()
+            self.assertIs(caught.exception, primary)
+            self.assertIn(
+                "session artifact descriptor cleanup failed: SystemExit",
+                primary.__notes__,
+            )
+            self.assertEqual(len(opened), 1)
+            with self.assertRaises(OSError):
+                os.fstat(opened[0])
+
     def test_binding_composition_preserves_primary_failure_over_close_failure(
         self,
     ) -> None:
@@ -1171,6 +1335,7 @@ class RuntimeSessionArtifactBindingTests(LeadOrchestrationTestCase):
                 with self.assertRaises(OSError):
                     os.fstat(target_descriptors[0])
                 if primary is None:
+                    self.assertEqual(len(closed), 1)
                     self.assertIs(type(observed), SessionArtifactBindingError)
                     self.assertIsNone(observed.__cause__)
                 else:

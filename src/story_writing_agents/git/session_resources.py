@@ -286,6 +286,40 @@ def acquire_git_session_generation_pin(
         raise
 
 
+def acquire_locked_git_session_generation_pin(
+    lease: GitRepositoryLease,
+    resources: GitSessionResourceInspection,
+) -> GitSessionGenerationPin:
+    """Acquire one opaque generation pin through an existing live lease."""
+
+    if (
+        type(lease) is not GitRepositoryLease
+        or type(resources) is not GitSessionResourceInspection
+        or resources.state is not GitSessionResourceState.READY
+    ):
+        raise TypeError("ready locked Git session resources are required")
+    pin: GitSessionGenerationPin | None = None
+    descriptors: tuple[int, ...] = ()
+    try:
+        lease.require_active()
+        identity, descriptors = _capture_git_session_generation(
+            lease,
+            resources.identity,
+        )
+        pin = GitSessionGenerationPin(identity, descriptors)
+        descriptors = ()
+        lease.require_active()
+        return pin
+    except BaseException as failure:
+        _close_generation_descriptors(descriptors, failure=failure)
+        if pin is not None:
+            try:
+                pin.close()
+            except BaseException as cleanup_failure:
+                _add_generation_descriptor_cleanup_note(failure, cleanup_failure)
+        raise
+
+
 @dataclass(frozen=True, slots=True)
 class GitSessionRecoveryTopology:
     """Exact session topology whose only deferred fact is index cleanliness."""

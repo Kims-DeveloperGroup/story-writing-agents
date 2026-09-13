@@ -602,8 +602,8 @@ class SessionLifecycleContractTests(unittest.TestCase):
             encoding="utf-8"
         )
         self.assertIn("Importable production units indexed: 142.", index)
-        self.assertIn("Direct internal dependency edges indexed: 574.", index)
-        self.assertIn("all-import AST graph has 576 edges", index)
+        self.assertIn("Direct internal dependency edges indexed: 576.", index)
+        self.assertIn("all-import AST graph has 578 edges", index)
         self.assertIn("Its two annotation-only edges are", index)
         self.assertIn("Directed internal dependency cycles indexed: 0.", index)
         headings = tuple(re.findall(r"^### `([^`]+)`$", index, flags=re.MULTILINE))

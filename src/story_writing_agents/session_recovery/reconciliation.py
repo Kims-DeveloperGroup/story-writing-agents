@@ -36,6 +36,7 @@ from ..git.session_history_contracts import (
     GitSessionHistorySnapshot,
     GitSessionHistoryState,
 )
+from ..git.session_resources import GitSessionGenerationPin
 from ..session_lifecycle import (
     SessionAccessState,
     SessionDurableState,
@@ -269,42 +270,14 @@ class SessionRecoveryReconciler:
                     )
                 except Exception:
                     return resource_blocker
-                if (
-                    type(recovery) is not StoryCommitRecoverySnapshot
-                    or recovery.resources.identity.session_id != session_id
-                    or recovery.candidate.session_id != session_id
-                    or recovery.operation.session_id != session_id
-                    or recovery.operation.candidate_id
-                    != recovery.candidate.candidate_id
-                ):
-                    return resource_blocker
-                if application is None:
-                    return _blocked(
-                        session_id,
-                        conversation,
-                        tail,
-                        SessionRecoveryState.RECOVERY_REQUIRED,
-                        SessionRecoveryOwner.STORY_COMMIT,
-                        SessionRecoveryFailureCode.MISSING_PREDECESSOR,
-                    )
-                if not _staged_recovery_evidence_matches(
+                return _staged_story_commit_recovery_result(
                     recovery,
-                    reviewed,
-                    application,
-                ):
-                    return _blocked(
-                        session_id,
-                        conversation,
-                        tail,
-                        SessionRecoveryState.RECOVERY_REQUIRED,
-                        SessionRecoveryOwner.STORY_COMMIT,
-                        SessionRecoveryFailureCode.CORRELATION_MISMATCH,
-                    )
-                return _owner_recovery(
+                    resource_blocker,
                     session_id,
                     conversation,
                     tail,
-                    SessionRecoveryOwner.STORY_COMMIT,
+                    reviewed,
+                    application,
                 )
             return resource_blocker
         try:
@@ -834,6 +807,83 @@ class SessionRecoveryReconciler:
                 )
             )
         return value
+
+
+def _staged_story_commit_recovery_result(
+    recovery: object,
+    resource_blocker: SessionRecoveryResult,
+    session_id: str,
+    conversation_id: str,
+    tail: int,
+    reviewed: SessionReviewedProposalEvidence | None,
+    application: SessionArtifactApplicationEvidence | None,
+) -> SessionRecoveryResult:
+    """Validate, recheck, and release one transferred recovery generation pin."""
+
+    if type(recovery) is not StoryCommitRecoverySnapshot:
+        return resource_blocker
+    generation_pin = recovery.generation_pin
+    if type(generation_pin) is not GitSessionGenerationPin:
+        return resource_blocker
+    failure: BaseException | None = None
+    try:
+        if (
+            recovery.resources.identity.session_id != session_id
+            or recovery.candidate.session_id != session_id
+            or recovery.operation.session_id != session_id
+            or recovery.operation.candidate_id != recovery.candidate.candidate_id
+        ):
+            return resource_blocker
+        if application is None:
+            result = _blocked(
+                session_id,
+                conversation_id,
+                tail,
+                SessionRecoveryState.RECOVERY_REQUIRED,
+                SessionRecoveryOwner.STORY_COMMIT,
+                SessionRecoveryFailureCode.MISSING_PREDECESSOR,
+            )
+        elif not _staged_recovery_evidence_matches(
+            recovery,
+            reviewed,
+            application,
+        ):
+            result = _blocked(
+                session_id,
+                conversation_id,
+                tail,
+                SessionRecoveryState.RECOVERY_REQUIRED,
+                SessionRecoveryOwner.STORY_COMMIT,
+                SessionRecoveryFailureCode.CORRELATION_MISMATCH,
+            )
+        else:
+            result = _owner_recovery(
+                session_id,
+                conversation_id,
+                tail,
+                SessionRecoveryOwner.STORY_COMMIT,
+            )
+        try:
+            generation_pin.require_current()
+        except Exception:
+            return resource_blocker
+        return result
+    except BaseException as exc:
+        failure = exc
+        raise
+    finally:
+        try:
+            generation_pin.close()
+        except BaseException as cleanup_failure:
+            if failure is None:
+                raise
+            try:
+                failure.add_note(
+                    "story commit recovery pin cleanup failed: "
+                    f"{type(cleanup_failure).__name__}"
+                )
+            except BaseException:
+                pass
 
 
 def _is_canonical_empty_history(history: CollaborationHistoryProjection) -> bool:

@@ -1726,7 +1726,7 @@ assert tuple(relationship_policy.__all__) == tuple(sys.argv[2].split(','))
                     if resolved is not None and resolved != module:
                         edges.add((module, resolved))
         self.assertEqual(len(modules), 142)
-        self.assertEqual(len(edges), 574)
+        self.assertEqual(len(edges), 576)
         relationship_name = "story_writing_agents.writing_artifacts.relationship_policy"
         self.assertEqual(
             {target for source, target in edges if source == relationship_name},
@@ -1762,7 +1762,7 @@ assert tuple(relationship_policy.__all__) == tuple(sys.argv[2].split(','))
             visit(module)
         index = (_ROOT / "PYTHON_MODULE_INDEX.md").read_text(encoding="utf-8")
         self.assertIn("Importable production units indexed: 142.", index)
-        self.assertIn("Direct internal dependency edges indexed: 574.", index)
+        self.assertIn("Direct internal dependency edges indexed: 576.", index)
         self.assertIn("Directed internal dependency cycles indexed: 0.", index)
         self.assertIn(
             "### `story_writing_agents.writing_artifacts.relationship_policy`",

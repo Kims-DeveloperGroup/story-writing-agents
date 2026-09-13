@@ -414,7 +414,7 @@ class GitExternalOperationInspectionTests(DisposableGitTestCase):
                     if resolved is not None and resolved != module:
                         edges.add((module, resolved))
         self.assertEqual(len(modules), 142)
-        self.assertEqual(len(edges), 573)
+        self.assertEqual(len(edges), 576)
         git_contracts = "story_writing_agents.git.contracts"
         git_adapter = "story_writing_agents.git.adapter"
         self.assertEqual(
@@ -443,7 +443,7 @@ class GitExternalOperationInspectionTests(DisposableGitTestCase):
             visit(module)
         index = (_ROOT / "PYTHON_MODULE_INDEX.md").read_text(encoding="utf-8")
         self.assertIn("Importable production units indexed: 142.", index)
-        self.assertIn("Direct internal dependency edges indexed: 573.", index)
+        self.assertIn("Direct internal dependency edges indexed: 576.", index)
         self.assertIn("Directed internal dependency cycles indexed: 0.", index)
         self.assertIn("`GitExternalOperationInspection`", index)
         self.assertIn("zero-argument `inspect_external_operation`", index)

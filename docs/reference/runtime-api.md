@@ -103,7 +103,8 @@ guarded READY transaction. Generation directory/file opens and duplicates,
 and initial binding composition, retain local descriptor ownership until
 transfer. Every `BaseException` closes those local descriptors without
 replacing the primary failure. Batch cleanup attempts every close despite an
-earlier close failure and preserves the active primary exception.
+earlier `BaseException`; descriptor closes, lock/lease releases, and required
+postchecks are exhausted while the active primary remains authoritative.
 
 Direct Lead and Lead-synthesis invocations acquire this pin before any
 session-derived definition, source, or provider work and retain it through the
@@ -1068,6 +1069,8 @@ or untransferred pin, but it cannot roll back an append that already became
 durable. This private lifecycle changes no public method signature or payload
 schema, and the pin grants no repository access or exclusion from an external
 Git process.
+Recovery fallback retains and revalidates that opaque pin until it determines
+the ownership result, then closes it unless ownership transferred.
 
 The retained identity-bound Commit service is creator-process/thread affine.
 Prepare, Authorize, Reject, Revise, Execute, Inspect, Recover, and internal
@@ -1105,9 +1108,9 @@ fails, that owner and pin likewise remain available for a later exact decision.
 After decision publication succeeds, terminal cleanup retires precisely the
 owner observed when processing began—even when its request no longer matches
 the durable tail—and never closes a replacement installed concurrently.
-A definitive conversation archive likewise retires the exact pending Commit
-authority; verified compensation that unarchives a focused conversation does
-not perform that retirement.
+A definitive conversation archive, including an already-archived command,
+likewise retires the exact pending Commit owners; verified compensation that
+unarchives a focused conversation does not perform that retirement.
 
 The identity-bound service applies the same Apply-root requirement to
 `inspect()` and `recover()`, checking before and between their owner reads and

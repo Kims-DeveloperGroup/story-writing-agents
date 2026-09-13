@@ -564,7 +564,8 @@ mismatch or partial construction, retains them after successful transfer, and
 closes idempotently. Each directory/file open or duplicate remains locally
 owned until transfer. Any `BaseException` closes that local descriptor while
 preserving the primary failure; batch cleanup still attempts every descriptor
-after a close failure and keeps the active primary authoritative.
+close, lock/lease release, and required postcheck after a `BaseException` and
+keeps the active primary authoritative.
 
 Pin acquisition and current-generation recheck take the repository lock only
 for the bounded no-follow relationship proof and release it before returning.
@@ -1008,8 +1009,11 @@ owner it observed at entry, even if it was stale, without retiring a
 replacement installed meanwhile. The pin prevents physical identity recycling
 only; it does not exclude an external Git process or confer repository
 authority.
+Recovery fallback likewise retains and revalidates the opaque pin until its
+ownership result is known, then closes it unless ownership transferred.
 
-A definitive conversation archive retires the exact pending Commit owner and
+A definitive conversation archive, including a command that confirms the
+target was already archived, retires the exact pending Commit owners and
 authority for that conversation. A focused archive that is durably compensated
 by verified unarchive does not retire them.
 

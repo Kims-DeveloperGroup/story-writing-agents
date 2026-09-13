@@ -18,12 +18,12 @@ Package root: `src/story_writing_agents/`
 
 Importable production units indexed: 142.
 
-Direct internal dependency edges indexed: 574.
+Direct internal dependency edges indexed: 576.
 
 Directed internal dependency cycles indexed: 0.
 
 Edge and cycle totals exclude annotation-only `TYPE_CHECKING` imports. The
-all-import AST graph has 576 edges. Its two annotation-only edges are
+all-import AST graph has 578 edges. Its two annotation-only edges are
 `config -> workspace` and `interactive_terminal._core -> conversations`; the
 workspace cycle was already present in the 135-unit baseline
 (528 all-import / 526 runtime edges).
@@ -2775,7 +2775,10 @@ every intermediate arrow. The current runtime graph is acyclic.
   confined; cross-thread or fork-child use fails content-free before resource
   validation. Same-process cleanup revokes the lease, unlocks, and closes its
   descriptor, while fork-child cleanup closes only the inherited descriptor
-  copy without unlocking the parent's shared open-file-description.
+  copy without unlocking the parent's shared open-file-description. Failed
+  acquisition and context exit exhaust every applicable unlock/close action;
+  an active caller or acquisition `BaseException` remains primary and cleanup
+  failures are retained only as content-free type notes.
   Thread-local token initialization
   performs no I/O and its per-thread state is released by Python's thread
   lifecycle. Bind, open, lock, and revalidation failures expose cleared
@@ -2956,7 +2959,10 @@ every intermediate arrow. The current runtime graph is acyclic.
   content-free unsafe-root failure. Direct recovery-topology reinspection also
   normalizes Git session-resource drift to the history-owned content-free
   recovery-required failure, while private context teardown and descriptor
-  cleanup remain unconditional.
+  cleanup remain unconditional. While that recovery context still owns its
+  live repository lease, it may acquire one opaque physical-generation pin,
+  recheck the exact topology, and transfer the pin to its caller; failed
+  recheck or transfer closes the pin without replacing the primary failure.
   Opening accepts an optional exact-config worktree allowance for workspace
   composition and otherwise retains strict session-resource validation.
 - **Direct internal dependencies:** `git.contracts`, `git.process`,
@@ -3023,7 +3029,9 @@ every intermediate arrow. The current runtime graph is acyclic.
   A named package-internal recovery admission, omitted from `__all__`, defers
   only session-index cleanliness while retaining every other topology check;
   its frozen result pins the exact main status and allowed-path binary delta
-  for equality revalidation under the same lease.
+  for equality revalidation under the same lease. A second named internal seam,
+  also omitted from `__all__`, constructs the opaque generation pin under a
+  caller's already-held live lease without nested lock acquisition.
 - **Direct internal dependencies:** `git.contracts`, `git.process`,
   `git.repository_lock`, and `git.session_contracts`.
 - **State, resources, and side effects:** Borrows the shared identity-bound
@@ -5244,7 +5252,9 @@ every intermediate arrow. The current runtime graph is acyclic.
   pause is assessed immediately before the combined durable pause and access
   release. A denial releases only an uncommitted destination when applicable,
   preserves the source, and renders fixed content-safe assessment fields without
-  executing the denied operation. After a focused or unfocused archive and any
+  executing the denied operation. An already-archived selection first invokes
+  exact runtime retirement before rendering its no-op result. After a focused
+  or unfocused archive and any
   required default-conversation persistence succeed, the controller calls the
   runtime-owned retirement seam for that exact session/conversation; it never
   reaches into the runtime's pending-Commit registry.
@@ -7546,6 +7556,7 @@ every intermediate arrow. The current runtime graph is acyclic.
   absent from both the `session_recovery` and project-root facades.
 - **Direct internal dependencies:** `conversations`, `git`,
   `git.session_contracts`, `git.session_history_contracts`,
+  `git.session_resources`,
   `session_lifecycle`, `session_recovery.contracts`,
   `workspace.initialization`, and `writing_artifacts`.
 - **State, resources, and side effects:** The constructor normalizes and
@@ -7558,7 +7569,10 @@ every intermediate arrow. The current runtime graph is acyclic.
   path operations and before/after digests to match the reviewed change set and
   the application result's affected paths, final artifacts, rename lineage, and
   deletion provenance exactly. The recovery snapshot continues to own the
-  staged-topology and expected-tree proof. Unrelated dirty or malformed state
+  staged-topology and expected-tree proof and transfers the recovery-history
+  owner's opaque generation pin across lease release. The reconciler validates
+  that pin before returning and closes it on every result or exceptional path,
+  without retaining Git traversal or lease authority. Unrelated dirty or malformed state
   remains owned by SESSION_RESOURCES. It observes collaboration, session resources, and session
   history as generation A; correlates one physical and semantic session
   artifact binding to that generation and performs the optional ledger
@@ -7866,7 +7880,10 @@ every intermediate arrow. The current runtime graph is acyclic.
   operation. Debate result/state session and debate
   identities, and every agent-state agent/session/debate identity, must match
   their requested paths. The guard and every call-local descriptor close on
-  success or failure before bytes return; the view provides no generic path or
+  success or failure before bytes return. Descriptor-backed reads and retained
+  directory-chain teardown exhaust locally owned closes while preserving an
+  active `BaseException`; no raw descriptor close is retried after ownership
+  becomes ambiguous. The view provides no generic path or
   write authority. Package-internal root-descriptor helpers recheck
   the bound identity for storage owners. This module does not define marker,
   scaffold, journal, Git, discovery, or readiness policy; it owns no Git
@@ -7965,7 +7982,8 @@ every intermediate arrow. The current runtime graph is acyclic.
   manifest, configuration allowance, and physical worktree identity, and
   verifies that the named root still has the same meaningful `(st_dev, st_ino)`.
   Its transient worktree descriptor remains factory-owned through generation
-  capture and closes on every success or `BaseException`; cleanup failure is a
+  capture and is closed exactly once on successful release or cleaned on a
+  failed pre-transfer path; cleanup failure is a
   content-free secondary note and cannot replace the original cancellation or
   protocol failure, while an otherwise primary close failure retains the
   established binding-error translation. This composition
@@ -8046,8 +8064,10 @@ every intermediate arrow. The current runtime graph is acyclic.
   wrapper is the sole non-data-driven session mutation authority;
   `inspect_session_history` derives the selected known baseline manifest,
   opens existing history with `create=False`, and returns only its stable
-  immutable snapshot. A separate read-only wrapper exposes only one validated,
-  correlated story-commit recovery snapshot for reconciliation. The composition helper constructs the established local
+  immutable snapshot. A separate read-only wrapper acquires an opaque generation
+  pin through recovery history's already-held lease and transfers it with one
+  validated, correlated story-commit recovery snapshot for reconciliation;
+  failure before transfer closes the pin without nesting another Git lease. The composition helper constructs the established local
   story-commit service from the ready root and session manifest. Inspect, list,
   reopen, history snapshot, and require-ready
   remain read-only. It creates no provider state, artifact mutation, remote,
@@ -8857,7 +8877,10 @@ every intermediate arrow. The current runtime graph is acyclic.
   repository lock modes first enter any injected caller access, then acquire
   that same workspace lease and invoke application recovery before any
   authoritative catalog, source, or reference observation. They release the
-  caller access last on both success and failure, so a session-composed
+  caller access last on both success and failure. Partial entry tracks each
+  operation context, reentrant lock, and file lock independently and exhausts
+  acquired cleanup in reverse ownership order without replacing the initiating
+  `BaseException`, so a session-composed
   repository cannot perform I/O outside its live semantic-READY binding while
   ordinary constructor callers retain the existing no-op access context. No
   caller observes a mixed multi-file transaction state.
@@ -8928,7 +8951,7 @@ every intermediate arrow. The current runtime graph is acyclic.
 
 ## Consistency Notes
 
-- The combined runtime has 142 production units, 574 runtime edges, 576
+- The combined runtime has 142 production units, 576 runtime edges, 578
   all-import edges, and no directed runtime cycle. Whole-source path parity is
   exact. Bounded session-source reads and inventories, session-bound behavior
   policy capture, and physical-identity-aware runtime-reference cleanup change
@@ -9001,6 +9024,18 @@ every intermediate arrow. The current runtime graph is acyclic.
   user wait or provider work. These changes add no module, import
   edge, export, facade API, persisted field, schema version, or #670 runtime-
   agent CWD responsibility.
+  Recovery inspection now acquires an opaque generation pin through the
+  history owner's existing lease and transfers it to reconciliation, which
+  rechecks and closes it on every result; this adds the direct
+  `session_recovery.reconciliation -> git.session_resources` edge without a
+  cycle or facade export. Repository-lease acquisition, session-source reads
+  and directory chains, artifact-binding construction and postvalidation, and
+  writing-artifact operation entry now exhaust locally acquired descriptor and
+  lock cleanup while preserving an active `BaseException`; successful raw-fd
+  release remains one-shot. Already-archived conversation handling also retires
+  exact runtime-owned pending Commit authority. The authoritative graph remains
+  142 production units, 576 runtime edges, 578 all-import edges, and zero
+  directed runtime cycles.
   Specialist routing adds one pure module and five net inward runtime
   edges over the provider-recovery baseline: artifact proposals replace their
   roster dependency with the policy, while relationship policy, conversation

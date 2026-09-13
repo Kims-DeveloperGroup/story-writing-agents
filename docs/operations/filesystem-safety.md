@@ -192,7 +192,8 @@ Generation directory/file opens and duplicates, plus initial binding
 composition, keep each descriptor locally owned until transfer. Every
 `BaseException` closes the locally owned descriptor while preserving the
 primary failure. Batch cleanup continues through every descriptor after a
-close failure and keeps an active primary authoritative.
+`BaseException`, exhausts lock/lease release and required postchecks, and keeps
+an active primary authoritative.
 
 The generation identity, binding, and pin are confined to the creator process
 and opaque thread token. Foreign-thread and forked-child acquisition or recheck
@@ -298,9 +299,11 @@ publication, failure, cancellation, exact-owner replacement, or best-effort
 runtime abandonment. Failure before request publication closes the new local
 owner. A mismatched decision or failed decision append preserves the published
 owner; after a durable decision, cleanup retires only the exact owner observed
-at entry and leaves any replacement live.
-A definitive conversation archive also retires the exact pending Commit owner;
-a verified compensating unarchive of a focused conversation does not.
+at entry and leaves any replacement live. Recovery fallback retains and
+revalidates the pin through its ownership result, then closes it unless
+ownership transferred. A definitive archive, including an already-archived
+command, retires the exact pending Commit owners; a verified compensating
+unarchive of a focused conversation does not.
 
 Under the lease,
 the executor synchronizes `running` evidence before the first mutation, then

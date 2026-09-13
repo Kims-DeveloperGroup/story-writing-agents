@@ -1622,7 +1622,7 @@ class ControllerContractTests(ControllerTestCase):
         for module_name in graph:
             visit(module_name)
         self.assertEqual(len(modules), 142)
-        self.assertEqual(sum(len(dependencies) for dependencies in graph.values()), 574)
+        self.assertEqual(sum(len(dependencies) for dependencies in graph.values()), 576)
         self.assertTrue(
             {
                 "story_writing_agents.artifact_proposals",
@@ -11398,7 +11398,13 @@ class ControllerConversationCommandTests(ControllerTestCase):
             wraps=controller._runtime.retire_archived_conversation,
         ) as retire:
             self.assertEqual(controller.run_session_lobby(), 0)
-        retire.assert_called_once_with("session", other.conversation_id)
+        self.assertEqual(
+            retire.call_args_list,
+            [
+                mock.call("session", archived.conversation_id),
+                mock.call("session", other.conversation_id),
+            ],
+        )
         self.assertEqual(catalog.entries[2].to_dict(), archived_before)
         self.assertIs(catalog.entries[1].status, ConversationStatus.ARCHIVED)
         self.assertEqual(

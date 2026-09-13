@@ -74,6 +74,68 @@ class GitRepositoryLockSafetyTests(DisposableGitTestCase):
         self.initialize(root)
         return root
 
+    def test_flock_baseexception_closes_descriptor_without_masking_primary(
+        self,
+    ) -> None:
+        root = self._repository("flock-baseexception")
+        primary = KeyboardInterrupt("flock interrupted")
+        flock_calls = []
+        close_calls = []
+        original_flock = lock_module._fcntl.flock
+        original_close = os.close
+
+        def flock(descriptor, operation):
+            flock_calls.append((descriptor, operation))
+            if len(flock_calls) == 1:
+                raise primary
+            raise SystemExit("unlock cleanup failed")
+
+        def close(descriptor):
+            close_calls.append(descriptor)
+            original_close(descriptor)
+            raise RuntimeError("close cleanup failed")
+
+        with mock.patch.object(lock_module._fcntl, "flock", side_effect=flock), \
+                mock.patch.object(lock_module.os, "close", side_effect=close):
+            with self.assertRaises(KeyboardInterrupt) as caught:
+                with lock_git_repository(root):
+                    self.fail("failed flock entered")
+        self.assertIs(caught.exception, primary)
+        self.assertEqual(len(flock_calls), 2)
+        self.assertEqual(close_calls, [flock_calls[0][0]])
+        self.assertIn(
+            "Git repository lock cleanup failed: SystemExit",
+            primary.__notes__,
+        )
+        self.assertIn(
+            "Git repository lock cleanup failed: RuntimeError",
+            primary.__notes__,
+        )
+
+        body_failure = RuntimeError("repository body failed")
+        descriptor = -1
+
+        def teardown_flock(current, operation):
+            if operation == lock_module._fcntl.LOCK_UN:
+                raise KeyboardInterrupt("teardown unlock interrupted")
+            return original_flock(current, operation)
+
+        with mock.patch.object(
+            lock_module._fcntl,
+            "flock",
+            side_effect=teardown_flock,
+        ), self.assertRaises(RuntimeError) as caught:
+            with lock_git_repository(root) as lease:
+                descriptor = lease.common_descriptor
+                raise body_failure
+        self.assertIs(caught.exception, body_failure)
+        self.assertIn(
+            "Git repository lock cleanup failed: KeyboardInterrupt",
+            body_failure.__notes__,
+        )
+        with self.assertRaises(OSError):
+            os.fstat(descriptor)
+
     def test_lease_revalidates_names_and_expires_after_every_exit(self) -> None:
         root = self._repository("lease")
         lease: GitRepositoryLease | None = None

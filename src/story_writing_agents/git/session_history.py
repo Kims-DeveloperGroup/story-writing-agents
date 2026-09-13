@@ -45,7 +45,9 @@ from .session_history_contracts import (
     encode_commit_operation,
 )
 from .session_resources import (
+    GitSessionGenerationPin,
     GitSessionRecoveryTopology,
+    acquire_locked_git_session_generation_pin,
     require_ready_git_session_resources,
     require_ready_locked_git_session_resources,
     require_story_commit_recovery_locked_git_session_resources,
@@ -686,6 +688,33 @@ class GitSessionRecoveryHistory:
             raise _history_error(GitSessionHistoryFailureCode.RECOVERY_REQUIRED)
         self.require_active()
         return confirmed
+
+    def acquire_generation_pin(self) -> GitSessionGenerationPin:
+        """Retain the validated recovery generation through the live lease."""
+
+        topology = self.require_recovery_topology()
+        pin = acquire_locked_git_session_generation_pin(
+            self._lease,
+            topology.resources,
+        )
+        try:
+            if self.require_recovery_topology() != topology:
+                raise _history_error(
+                    GitSessionHistoryFailureCode.RECOVERY_REQUIRED
+                )
+            return pin
+        except BaseException as failure:
+            try:
+                pin.close()
+            except BaseException as cleanup_failure:
+                try:
+                    failure.add_note(
+                        "Git session generation pin cleanup failed: "
+                        f"{type(cleanup_failure).__name__}"
+                    )
+                except BaseException:
+                    pass
+            raise
 
     def read_candidate(self, candidate_id: str) -> GitSessionCandidateRecord:
         self.require_active()

@@ -372,15 +372,38 @@ def inspect_story_commit_recovery_snapshot(
     main_root = _main_root(root)
     manifest = _known_baseline_manifest(main_root)
     allowance = _validated_configuration_allowance(main_root)
-    with inspect_story_commit_recovery_history(
-        main_root,
-        manifest,
-        session_id,
-        None,
-        expected_session_root_identity=None,
-        allowed_worktree_changes=allowance,
-    ) as (_history, operation, candidate, resources):
-        return StoryCommitRecoverySnapshot(resources, candidate, operation)
+    generation_pin: GitSessionGenerationPin | None = None
+    try:
+        with inspect_story_commit_recovery_history(
+            main_root,
+            manifest,
+            session_id,
+            None,
+            expected_session_root_identity=None,
+            allowed_worktree_changes=allowance,
+        ) as (history, operation, candidate, resources):
+            generation_pin = history.acquire_generation_pin()
+            snapshot = StoryCommitRecoverySnapshot(
+                resources,
+                candidate,
+                operation,
+                generation_pin,
+            )
+        generation_pin = None
+        return snapshot
+    except BaseException as failure:
+        if generation_pin is not None:
+            try:
+                generation_pin.close()
+            except BaseException as cleanup_failure:
+                try:
+                    failure.add_note(
+                        "story commit recovery pin cleanup failed: "
+                        f"{type(cleanup_failure).__name__}"
+                    )
+                except BaseException:
+                    pass
+        raise
 
 
 def list_session_resources(root: Path) -> GitSessionResourceInventory:
@@ -499,8 +522,8 @@ class SessionArtifactBinding:
             nested.require_active()
             try:
                 yield nested
-            except BaseException:
-                nested.require_active()
+            except BaseException as failure:
+                _postvalidate_session_artifact_access(nested, failure=failure)
                 raise
             else:
                 nested.require_active()
@@ -552,11 +575,23 @@ class SessionArtifactBinding:
                         yield access
                     except BaseException as exc:
                         body_failure = exc
-                        _postvalidate_session_artifact_access(access)
+                        _postvalidate_session_artifact_access(
+                            access,
+                            failure=exc,
+                        )
                         raise
                     else:
                         _postvalidate_session_artifact_access(access)
-                finally:
+                except BaseException as failure:
+                    try:
+                        access._revoke()
+                    except BaseException as cleanup_failure:
+                        _add_session_artifact_cleanup_note(
+                            failure,
+                            cleanup_failure,
+                        )
+                    raise
+                else:
                     access._revoke()
         except _SESSION_ARTIFACT_BINDING_FAILURES as exc:
             if exc is body_failure:
@@ -674,7 +709,10 @@ class SessionArtifactBinding:
             access.require_active()
             try:
                 yield
-            finally:
+            except BaseException as failure:
+                _postvalidate_session_artifact_access(access, failure=failure)
+                raise
+            else:
                 access.require_active()
 
     @contextmanager
@@ -715,21 +753,28 @@ class SessionArtifactBinding:
         body_failure: BaseException | None = None
         try:
             try:
-                yield access.repository
-            except BaseException as exc:
-                body_failure = exc
-                _postvalidate_session_artifact_access(access)
+                try:
+                    yield access.repository
+                except BaseException as exc:
+                    body_failure = exc
+                    _postvalidate_session_artifact_access(access, failure=exc)
+                    raise
+                else:
+                    _postvalidate_session_artifact_access(access)
+            except BaseException as failure:
+                try:
+                    access._revoke()
+                except BaseException as cleanup_failure:
+                    _add_session_artifact_cleanup_note(failure, cleanup_failure)
                 raise
             else:
-                _postvalidate_session_artifact_access(access)
+                access._revoke()
         except _SESSION_ARTIFACT_BINDING_FAILURES as exc:
             if exc is body_failure:
                 raise
             raise SessionArtifactBindingError(
                 "session artifact resources are unavailable"
             ) from None
-        finally:
-            access._revoke()
 
 class SessionArtifactAccess:
     """One live same-thread view of a guarded session artifact binding."""
@@ -807,12 +852,14 @@ class SessionArtifactAccess:
             if _meaningful_directory_identity(opened) != self.worktree_identity:
                 raise OSError
             return descriptor
-        except OSError:
-            if descriptor >= 0:
-                os.close(descriptor)
+        except OSError as failure:
+            _close_untransferred_artifact_descriptor(descriptor, failure)
             raise SessionArtifactBindingError(
                 "session artifact resources are unavailable"
             ) from None
+        except BaseException as failure:
+            _close_untransferred_artifact_descriptor(descriptor, failure)
+            raise
 
     def require_active(self) -> None:
         """Require the live lease, descriptor, and named worktree identity."""
@@ -877,14 +924,18 @@ class SessionArtifactAccess:
     def _revoke(self) -> None:
         if not self._active:
             return
+        failure: BaseException | None = None
         try:
             self._binding._revoke_repository_access(self)
+        except BaseException as exc:
+            failure = exc
+            raise
         finally:
             self._active = False
-            try:
-                os.close(self._descriptor)
-            except OSError:
-                pass
+            _close_session_artifact_access_descriptor(
+                self._descriptor,
+                failure=failure,
+            )
 
 
 class SessionArtifactGenerationPin:
@@ -954,15 +1005,51 @@ class SessionArtifactGenerationPin:
         raise TypeError("session artifact generation pins cannot be serialized")
 
 
-def _postvalidate_session_artifact_access(access: SessionArtifactAccess) -> None:
+def _postvalidate_session_artifact_access(
+    access: SessionArtifactAccess,
+    *,
+    failure: BaseException | None = None,
+) -> None:
     """Translate only a failed exit check, preserving an original body failure."""
 
     try:
         access.require_ready()
-    except _SESSION_ARTIFACT_BINDING_FAILURES:
+    except BaseException as cleanup_failure:
+        if failure is not None:
+            _add_session_artifact_cleanup_note(failure, cleanup_failure)
+            return
+        if not isinstance(cleanup_failure, _SESSION_ARTIFACT_BINDING_FAILURES):
+            raise
         raise SessionArtifactBindingError(
             "session artifact resources are unavailable"
         ) from None
+
+
+def _add_session_artifact_cleanup_note(
+    failure: BaseException,
+    cleanup_failure: BaseException,
+) -> None:
+    try:
+        failure.add_note(
+            "session artifact cleanup failed: "
+            f"{type(cleanup_failure).__name__}"
+        )
+    except BaseException:
+        pass
+
+
+def _close_session_artifact_access_descriptor(
+    descriptor: int,
+    *,
+    failure: BaseException | None,
+) -> None:
+    try:
+        os.close(descriptor)
+    except BaseException as cleanup_failure:
+        if failure is not None:
+            _add_session_artifact_cleanup_note(failure, cleanup_failure)
+        elif not isinstance(cleanup_failure, OSError):
+            raise
 
 
 def _close_untransferred_artifact_descriptor(
@@ -1054,8 +1141,9 @@ def compose_session_artifact_binding(
                 descriptor = -1
                 raise
             else:
-                os.close(descriptor)
+                closing_descriptor = descriptor
                 descriptor = -1
+                os.close(closing_descriptor)
     except _SESSION_ARTIFACT_BINDING_FAILURES:
         raise SessionArtifactBindingError(
             "session artifact resources are unavailable"

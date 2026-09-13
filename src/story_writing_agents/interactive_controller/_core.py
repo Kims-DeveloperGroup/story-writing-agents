@@ -6621,6 +6621,14 @@ class InteractiveController:
         )
         is_focused = target.conversation_id == focused_id
         if target.status is ConversationStatus.ARCHIVED:
+            try:
+                self._runtime.retire_archived_conversation(
+                    session_id,
+                    target.conversation_id,
+                )
+            except Exception as exc:
+                self._present_conversation_failure(exc)
+                return False
             if is_focused:
                 self._focused_conversation = None
                 self._write_error(

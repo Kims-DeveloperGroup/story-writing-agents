@@ -34,6 +34,7 @@ from .session_history import (
     open_git_session_history,
     open_story_commit_recovery_history,
 )
+from .session_resources import GitSessionGenerationPin
 from .session_contracts import (
     GitSessionResourceInspection,
     GitSessionResourceState,
@@ -190,6 +191,7 @@ class StoryCommitRecoverySnapshot:
     resources: GitSessionResourceInspection
     candidate: StoryCommitCandidate
     operation: GitSessionCommitOperationRecord
+    generation_pin: GitSessionGenerationPin
 
 
 class StoryCommitService:

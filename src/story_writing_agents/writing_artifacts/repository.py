@@ -1030,26 +1030,38 @@ class _RepositoryLock:
         self._repository = repository
         self._file_lock = None
         self._operation_context = None
+        self._operation_entered = False
+        self._repository_lock_acquired = False
 
     def __enter__(self) -> None:
-        self._operation_context = self._repository._open_operation_access()
-        self._operation_context.__enter__()
-        self._repository._lock.acquire()
         try:
+            self._operation_context = self._repository._open_operation_access()
+            self._operation_context.__enter__()
+            self._operation_entered = True
+            self._repository._lock.acquire()
+            self._repository_lock_acquired = True
             self._repository._ensure_state_directories()
             self._file_lock = self._repository._storage.exclusive_lock(
                 ARTIFACT_LOCK_PATH
             )
             self._file_lock.__enter__()
             self._repository._applications.recover()
-        except BaseException:
-            try:
-                if self._file_lock is not None:
-                    self._file_lock.__exit__(None, None, None)
-            finally:
-                self._repository._lock.release()
-                self._operation_context.__exit__(None, None, None)
+        except BaseException as failure:
+            self._cleanup_failed_enter(failure)
             raise
+
+    def _cleanup_failed_enter(self, failure: BaseException) -> None:
+        cleanups = []
+        if self._file_lock is not None:
+            cleanups.append(lambda: self._file_lock.__exit__(None, None, None))
+        if self._repository_lock_acquired:
+            cleanups.append(self._repository._lock.release)
+        if self._operation_entered:
+            assert self._operation_context is not None
+            cleanups.append(
+                lambda: self._operation_context.__exit__(None, None, None)
+            )
+        _run_repository_entry_cleanups(cleanups, failure)
 
     def __exit__(self, exc_type, exc, traceback) -> None:
         try:
@@ -1076,26 +1088,38 @@ class _RepositorySourceLock:
         self._evidence = evidence
         self._file_lock = None
         self._operation_context = None
+        self._operation_entered = False
+        self._repository_lock_acquired = False
 
     def __enter__(self) -> None:
-        self._operation_context = self._repository._open_operation_access()
-        self._operation_context.__enter__()
-        self._repository._lock.acquire()
         try:
+            self._operation_context = self._repository._open_operation_access()
+            self._operation_context.__enter__()
+            self._operation_entered = True
+            self._repository._lock.acquire()
+            self._repository_lock_acquired = True
             self._repository._ensure_source_directories(evidence=self._evidence)
             self._file_lock = self._repository._storage.exclusive_lock(
                 ARTIFACT_LOCK_PATH
             )
             self._file_lock.__enter__()
             self._repository._applications.recover()
-        except BaseException:
-            try:
-                if self._file_lock is not None:
-                    self._file_lock.__exit__(None, None, None)
-            finally:
-                self._repository._lock.release()
-                self._operation_context.__exit__(None, None, None)
+        except BaseException as failure:
+            self._cleanup_failed_enter(failure)
             raise
+
+    def _cleanup_failed_enter(self, failure: BaseException) -> None:
+        cleanups = []
+        if self._file_lock is not None:
+            cleanups.append(lambda: self._file_lock.__exit__(None, None, None))
+        if self._repository_lock_acquired:
+            cleanups.append(self._repository._lock.release)
+        if self._operation_entered:
+            assert self._operation_context is not None
+            cleanups.append(
+                lambda: self._operation_context.__exit__(None, None, None)
+            )
+        _run_repository_entry_cleanups(cleanups, failure)
 
     def __exit__(self, exc_type, exc, traceback) -> None:
         try:
@@ -1107,6 +1131,25 @@ class _RepositorySourceLock:
             finally:
                 assert self._operation_context is not None
                 self._operation_context.__exit__(exc_type, exc, traceback)
+
+
+def _run_repository_entry_cleanups(
+    cleanups: list[Callable[[], object]],
+    failure: BaseException,
+) -> None:
+    """Run every acquired-entry cleanup without replacing its primary failure."""
+
+    for cleanup in cleanups:
+        try:
+            cleanup()
+        except BaseException as cleanup_failure:
+            try:
+                failure.add_note(
+                    "artifact repository entry cleanup failed: "
+                    f"{type(cleanup_failure).__name__}"
+                )
+            except BaseException:
+                pass
 
 
 def create_guarded_writing_artifact_repository(

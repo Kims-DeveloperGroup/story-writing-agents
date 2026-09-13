@@ -1235,13 +1235,17 @@ class SessionSourceWorkspace(Workspace):
     def _read_bound(self, reader: Callable[[int], Any]) -> Any:
         with self._artifact_binding.open_ready_resources() as access:
             descriptor = access.duplicate_worktree_descriptor()
+            failure: BaseException | None = None
             try:
                 value = reader(descriptor)
                 verify_workspace_root_directory(self, descriptor)
                 access.require_active()
                 return value
+            except BaseException as exc:
+                failure = exc
+                raise
             finally:
-                os.close(descriptor)
+                self._close_source_descriptor(descriptor, failure=failure)
 
     @staticmethod
     def _safe_relative_parts(relative: object) -> tuple[str, ...]:
@@ -1305,27 +1309,68 @@ class SessionSourceWorkspace(Workspace):
                         raise WorkspaceSecurityError(
                             "session source directory identity changed"
                         )
-                except BaseException:
-                    os.close(child)
+                except BaseException as failure:
+                    cls._close_source_descriptor(child, failure=failure)
                     raise
                 descriptors.append(child)
             return tuple(descriptors), None
         except OSError:
-            cls._close_directory_chain(descriptors)
-            raise WorkspaceSecurityError(
+            failure = WorkspaceSecurityError(
                 "session source directory inventory is unavailable"
-            ) from None
-        except BaseException:
-            cls._close_directory_chain(descriptors)
+            )
+            cls._close_directory_chain(descriptors, failure=failure)
+            raise failure from None
+        except BaseException as failure:
+            cls._close_directory_chain(descriptors, failure=failure)
             raise
 
     @staticmethod
-    def _close_directory_chain(descriptors: tuple[int, ...] | list[int]) -> None:
+    def _close_directory_chain(
+        descriptors: tuple[int, ...] | list[int],
+        *,
+        failure: BaseException | None = None,
+    ) -> None:
+        cleanup_failure: BaseException | None = None
         for descriptor in reversed(descriptors):
             try:
                 os.close(descriptor)
-            except OSError:
-                pass
+            except BaseException as exc:
+                primary = failure if failure is not None else cleanup_failure
+                if primary is not None:
+                    SessionSourceWorkspace._add_source_cleanup_note(primary, exc)
+                elif not isinstance(exc, OSError):
+                    cleanup_failure = exc
+        if cleanup_failure is not None:
+            raise cleanup_failure
+
+    @staticmethod
+    def _close_source_descriptor(
+        descriptor: int,
+        *,
+        failure: BaseException | None,
+    ) -> None:
+        try:
+            os.close(descriptor)
+        except BaseException as cleanup_failure:
+            if failure is None:
+                raise
+            SessionSourceWorkspace._add_source_cleanup_note(
+                failure,
+                cleanup_failure,
+            )
+
+    @staticmethod
+    def _add_source_cleanup_note(
+        failure: BaseException,
+        cleanup_failure: BaseException,
+    ) -> None:
+        try:
+            failure.add_note(
+                "session source descriptor cleanup failed: "
+                f"{type(cleanup_failure).__name__}"
+            )
+        except BaseException:
+            pass
 
     @classmethod
     def _open_directory_chain_at(
