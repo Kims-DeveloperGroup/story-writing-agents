@@ -227,6 +227,39 @@ class ConsensusRuntimeCorrelationTests(unittest.TestCase):
                         authored_material=material,
                     )
 
+    def test_runtime_fallback_maps_draft_failure_and_later_deadlocks(self) -> None:
+        fallback = AgentReply.deadlock("r0", "provider response rejected twice")
+
+        draft = StoryRuntime.map_consensus_provider_reply(
+            _invocation(ConsensusPhase.DRAFT, EXECUTION_SPECIALIST, 1),
+            fallback,
+        )
+        self.assertIs(draft.kind, ConsensusPhaseOutputKind.FAILURE)
+        self.assertIsNone(draft.candidate_material)
+
+        for phase, agent_id in (
+            (ConsensusPhase.REPAIR, EXECUTION_SPECIALIST),
+            (ConsensusPhase.SYNTHESIS, LEAD_ORCHESTRATOR),
+            (ConsensusPhase.FINALIZATION, LEAD_ORCHESTRATOR),
+        ):
+            with self.subTest(phase=phase):
+                result = StoryRuntime.map_consensus_provider_reply(
+                    _invocation(phase, agent_id, 1),
+                    fallback,
+                )
+                self.assertIs(result.kind, ConsensusPhaseOutputKind.DEADLOCK)
+                self.assertIs(result.candidate_material, _CANDIDATE)
+                self.assertTrue(result.deadlocked)
+                self.assertIsNone(fallback.reviewed_proposal_id)
+                self.assertIsNone(fallback.reviewed_proposal_digest)
+
+        with self.assertRaisesRegex(ValueError, "cannot retain authored material"):
+            StoryRuntime.map_consensus_provider_reply(
+                _invocation(ConsensusPhase.REPAIR, EXECUTION_SPECIALIST, 1),
+                fallback,
+                authored_material=_CANDIDATE,
+            )
+
     def test_finalization_handoff_exposes_review_only_lineage(self) -> None:
         reviewed = _reviewed_artifact_proposal()
         invocation = _invocation(ConsensusPhase.FINALIZATION, LEAD_ORCHESTRATOR, 1)

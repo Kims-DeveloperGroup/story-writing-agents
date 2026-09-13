@@ -436,7 +436,7 @@ class ConsensusExecutionCoordinator:
         output = outputs[0]
         state = (
             ConsensusPhaseState.DEADLOCKED
-            if request.phase is ConsensusPhase.SYNTHESIS and output.deadlocked
+            if output.deadlocked
             else ConsensusPhaseState.COMPLETED
         )
         return ConsensusPhaseResult(
@@ -515,8 +515,14 @@ def _validate_provider_result(
         )
     elif request.phase is ConsensusPhase.REPAIR:
         valid = (
-            result.kind is ConsensusPhaseOutputKind.CANDIDATE
-            and result.candidate_material != request.candidate_material
+            (
+                result.kind is ConsensusPhaseOutputKind.CANDIDATE
+                and result.candidate_material != request.candidate_material
+            )
+            or (
+                result.kind is ConsensusPhaseOutputKind.DEADLOCK
+                and result.candidate_material == request.candidate_material
+            )
         )
     elif request.phase is ConsensusPhase.SYNTHESIS:
         valid = result.candidate_material == request.candidate_material and (
@@ -528,7 +534,11 @@ def _validate_provider_result(
         )
     else:
         valid = (
-            result.kind is ConsensusPhaseOutputKind.FINALIZATION
+            result.kind
+            in {
+                ConsensusPhaseOutputKind.FINALIZATION,
+                ConsensusPhaseOutputKind.DEADLOCK,
+            }
             and result.candidate_material == request.candidate_material
         )
     if not valid:

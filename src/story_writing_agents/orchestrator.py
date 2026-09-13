@@ -1359,6 +1359,25 @@ class StoryRuntime:
                 sort_keys=True,
             ).encode("utf-8", errors="strict")
         ).hexdigest()
+        if reply.kind is AgentReplyKind.DEADLOCK and reply.deadlocked:
+            if authored_material is not None:
+                raise ValueError("consensus deadlock cannot retain authored material")
+            if invocation.phase is ConsensusPhase.DRAFT:
+                return ConsensusProviderResult(
+                    ConsensusPhaseOutputKind.FAILURE,
+                    digest,
+                    None,
+                    trace=reply.trace,
+                )
+            candidate = invocation.candidate_material
+            if candidate is None:
+                raise ValueError("consensus deadlock requires candidate material")
+            return ConsensusProviderResult(
+                ConsensusPhaseOutputKind.DEADLOCK,
+                digest,
+                candidate,
+                trace=reply.trace,
+            )
         if invocation.phase in {ConsensusPhase.DRAFT, ConsensusPhase.REPAIR}:
             if (
                 reply.kind is not AgentReplyKind.CANDIDATE
@@ -1408,13 +1427,6 @@ class StoryRuntime:
         if authored_material is not None:
             raise ValueError("consensus phase does not accept authored material")
         if invocation.phase is ConsensusPhase.SYNTHESIS:
-            if reply.kind is AgentReplyKind.DEADLOCK and reply.deadlocked:
-                return ConsensusProviderResult(
-                    ConsensusPhaseOutputKind.DEADLOCK,
-                    digest,
-                    candidate,
-                    trace=reply.trace,
-                )
             if (
                 reply.kind is not AgentReplyKind.SYNTHESIS
                 or type(reply.next_phase) is not AgentReplyNextPhase
@@ -1587,7 +1599,10 @@ class StoryRuntime:
             if reference_operation is not None:
                 reference_operation.finish()
             authored_material = None
-            if invocation.phase in {ConsensusPhase.DRAFT, ConsensusPhase.REPAIR}:
+            if (
+                invocation.phase in {ConsensusPhase.DRAFT, ConsensusPhase.REPAIR}
+                and reply.kind is AgentReplyKind.CANDIDATE
+            ):
                 authored_material = self._consensus_material_store.put_text(reply.content)
             elif (
                 invocation.phase in {ConsensusPhase.AUDIT, ConsensusPhase.REAUDIT}

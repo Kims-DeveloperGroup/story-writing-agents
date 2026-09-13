@@ -155,8 +155,9 @@ The projection states are `awaiting_confirmation`, `confirmed`, `running`,
 `request_decision`, `start_confirmed_phase`, `wait_for_phase`,
 `request_next_phase`, `inspect_failure`, `operator_recovery`,
 `continue_deadlock`, or `none`.
-`publication_allowed` is always false. A terminal deadlock reports
-`next_action=continue_deadlock`.
+`publication_allowed` is always false. A terminal SYNTHESIS deadlock reports
+`next_action=continue_deadlock`; a REPAIR or FINALIZATION fallback deadlock
+reports `next_action=inspect_failure`.
 
 The normal phase graph is DRAFT → AUDIT → SYNTHESIS. Lead synthesis selects
 REPAIR → REAUDIT → SYNTHESIS, FINALIZATION, or deadlock. Every phase is a new
@@ -164,6 +165,14 @@ request and confirmation. Audits invoke all three specialists against the same
 revision; the lead synthesizes and finalizes but does not vote. Finalization is
 a read-only handoff to a separately confirmed artifact Apply, followed later
 by a separately confirmed Git Commit.
+
+Each rejected structured phase result receives one bounded repair. If that
+repair is exhausted, DRAFT records `failed` with no candidate. REPAIR,
+SYNTHESIS, and FINALIZATION record `deadlocked`, retain the trusted input
+candidate, select no next phase, and still forbid publication. Only the
+SYNTHESIS case is a valid continuation source; REPAIR and FINALIZATION direct
+the caller to failure inspection. The returned provider result retains the
+content-free `ReplyTrace` with `origin=runtime_fallback` and `action=none`.
 
 `interrupt_consensus()` acts only on a running request. `resume_consensus()` is
 an inspection operation: it never resumes/replays a provider call or recreates
