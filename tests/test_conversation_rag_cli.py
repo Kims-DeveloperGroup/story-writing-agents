@@ -317,23 +317,162 @@ class ConversationRagCliContractTests(unittest.TestCase):
     def test_counts_excerpts_and_reports_reject_malformed_direct_construction(
         self,
     ) -> None:
-        with self.assertRaises(ValueError):
-            rag_cli.ConversationRagCliCounts(authoritative_conversations=-1)
-        with self.assertRaises(ValueError):
-            rag_cli.ConversationRagCliCounts(
-                authoritative_conversations=0,
-                authoritative_events=2,
-                authoritative_documents=1,
-                authoritative_source_utf8_bytes=5,
-            )
-        with self.assertRaises(ValueError):
-            rag_cli.ConversationRagCliCounts(
-                indexed_documents=1,
-                indexed_events=2,
-                indexed_fragments=1,
-                indexed_source_utf8_bytes=5,
-                indexed_generations=1,
-            )
+        empty = rag_cli.ConversationRagCliCounts()
+        self.assertEqual(
+            (
+                empty.authoritative_events,
+                empty.authoritative_documents,
+                empty.indexed_events,
+                empty.indexed_documents,
+            ),
+            (0, 0, 0, 0),
+        )
+        nonempty_values = {
+            "authoritative_conversations": 1,
+            "authoritative_events": 1,
+            "authoritative_documents": 1,
+            "authoritative_source_utf8_bytes": 1,
+            "indexed_conversations": 1,
+            "indexed_events": 1,
+            "indexed_documents": 1,
+            "indexed_fragments": 1,
+            "indexed_source_utf8_bytes": 1,
+            "indexed_payload_bytes": 1,
+            "indexed_generation_bytes": 1,
+            "indexed_generations": 1,
+        }
+        nonempty = rag_cli.ConversationRagCliCounts(**nonempty_values)
+        self.assertEqual(
+            (
+                nonempty.authoritative_events,
+                nonempty.authoritative_documents,
+                nonempty.indexed_events,
+                nonempty.indexed_documents,
+            ),
+            (1, 1, 1, 1),
+        )
+
+        invalid_counts = (
+            ("negative", {"authoritative_conversations": -1}),
+            ("boolean", {"authoritative_conversations": True}),
+            ("non_integer", {"authoritative_conversations": 1.0}),
+            (
+                "conversation_budget",
+                {
+                    "authoritative_conversations": (
+                        rag_cli.CONVERSATION_RAG_POLICY.max_conversations + 1
+                    )
+                },
+            ),
+            (
+                "event_budget",
+                {
+                    "authoritative_conversations": 1,
+                    "authoritative_events": rag_cli.CONVERSATION_RAG_POLICY.max_events
+                    + 1,
+                    "authoritative_documents": rag_cli.CONVERSATION_RAG_POLICY.max_events
+                    + 1,
+                    "authoritative_source_utf8_bytes": 1,
+                },
+            ),
+            (
+                "source_byte_budget",
+                {
+                    "authoritative_source_utf8_bytes": (
+                        rag_cli.CONVERSATION_RAG_RUNTIME_POLICY.max_projected_source_utf8_bytes
+                        + 1
+                    )
+                },
+            ),
+            (
+                "authoritative_unequal",
+                {
+                    "authoritative_conversations": 1,
+                    "authoritative_events": 2,
+                    "authoritative_documents": 1,
+                    "authoritative_source_utf8_bytes": 1,
+                },
+            ),
+            (
+                "authoritative_missing_conversation",
+                {
+                    "authoritative_events": 1,
+                    "authoritative_documents": 1,
+                    "authoritative_source_utf8_bytes": 1,
+                },
+            ),
+            (
+                "authoritative_empty_with_bytes",
+                {"authoritative_source_utf8_bytes": 1},
+            ),
+            (
+                "authoritative_nonempty_without_bytes",
+                {
+                    "authoritative_conversations": 1,
+                    "authoritative_events": 1,
+                    "authoritative_documents": 1,
+                },
+            ),
+            ("indexed_empty_with_conversation", {"indexed_conversations": 1}),
+            (
+                "indexed_missing_conversation",
+                {
+                    **nonempty_values,
+                    "indexed_conversations": 0,
+                },
+            ),
+            (
+                "indexed_conversations_exceed_documents",
+                {
+                    **nonempty_values,
+                    "indexed_conversations": 2,
+                },
+            ),
+            (
+                "indexed_unequal",
+                {
+                    **nonempty_values,
+                    "indexed_events": 2,
+                },
+            ),
+            (
+                "indexed_missing_fragment",
+                {
+                    **nonempty_values,
+                    "indexed_fragments": 0,
+                },
+            ),
+            (
+                "indexed_missing_source_bytes",
+                {
+                    **nonempty_values,
+                    "indexed_source_utf8_bytes": 0,
+                },
+            ),
+            (
+                "indexed_missing_generation",
+                {
+                    **nonempty_values,
+                    "indexed_generations": 0,
+                    "indexed_payload_bytes": 0,
+                    "indexed_generation_bytes": 0,
+                },
+            ),
+            (
+                "indexed_payload_exceeds_generation",
+                {
+                    **nonempty_values,
+                    "indexed_payload_bytes": 2,
+                },
+            ),
+            (
+                "indexed_generation_bytes_without_generation",
+                {"indexed_generation_bytes": 1},
+            ),
+        )
+        for label, values in invalid_counts:
+            with self.subTest(label=label), self.assertRaises(ValueError):
+                rag_cli.ConversationRagCliCounts(**values)
 
         excerpt = _cli_excerpt()
         malformed_excerpts = (
