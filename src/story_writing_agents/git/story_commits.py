@@ -419,6 +419,7 @@ class StoryCommitService:
                         expected_internal_tip=binding.internal_tip,
                     )
                     self._stage_git(revalidation)
+                    self._require_history_generation_current(history)
                     self._require_staged_candidate(
                         revalidation,
                         binding.internal_ref,
@@ -428,15 +429,18 @@ class StoryCommitService:
                         GitSessionHistoryState.STAGED,
                     )
                     history.write_commit_operation(operation)
+                    self._require_history_generation_current(history)
                     self._require_staged_candidate(
                         revalidation,
                         binding.internal_ref,
                     )
+                    self._require_history_generation_current(history)
                     commit_id = self._create_commit(revalidation)
                     self._require_staged_candidate(
                         revalidation,
                         binding.internal_ref,
                     )
+                    self._require_history_generation_current(history)
                     self._cas_branch(revalidation, commit_id)
                     branch_updated = True
                     self._require_history_ready(
@@ -489,12 +493,7 @@ class StoryCommitService:
                 branch_updated,
             )
             if not running_persisted:
-                code = (
-                    StoryCommitFailureCode.RECOVERY_REQUIRED
-                    if exc.code is GitSessionHistoryFailureCode.RECOVERY_REQUIRED
-                    else StoryCommitFailureCode.HISTORY_FAILED
-                )
-                raise _error(code) from None
+                raise _error(self._history_failure_code(exc)) from None
             raise _error(StoryCommitFailureCode.OUTCOME_UNKNOWN) from None
         except GitProcessFailure:
             self._preserve_uncertain(
@@ -591,6 +590,25 @@ class StoryCommitService:
         if expected is None:
             return history.require_recovery_topology()
         return history.require_generation_ready(expected)
+
+    def _require_history_generation_current(
+        self,
+        history: GitSessionHistory,
+    ) -> None:
+        expected = self._expected_generation_identity
+        if expected is not None:
+            history.require_generation_current(expected)
+
+    def _history_failure_code(
+        self,
+        failure: GitSessionHistoryError,
+    ) -> StoryCommitFailureCode:
+        if failure.code is GitSessionHistoryFailureCode.RECOVERY_REQUIRED or (
+            self._expected_generation_identity is not None
+            and failure.code is GitSessionHistoryFailureCode.UNSAFE_ROOT
+        ):
+            return StoryCommitFailureCode.RECOVERY_REQUIRED
+        return StoryCommitFailureCode.HISTORY_FAILED
 
     def _require_bound_session_root(self) -> None:
         expected = self._expected_session_root_identity
@@ -883,12 +901,7 @@ class StoryCommitService:
             raise
         except GitSessionHistoryError as exc:
             self._require_recovery_bound_session_root()
-            code = (
-                StoryCommitFailureCode.RECOVERY_REQUIRED
-                if exc.code is GitSessionHistoryFailureCode.RECOVERY_REQUIRED
-                else StoryCommitFailureCode.HISTORY_FAILED
-            )
-            raise _error(code) from None
+            raise _error(self._history_failure_code(exc)) from None
         except Exception:
             self._require_recovery_bound_session_root()
             raise _error(StoryCommitFailureCode.RECOVERY_REQUIRED) from None
@@ -957,12 +970,21 @@ class StoryCommitService:
                     history,
                     expected_branch_tip=candidate.branch_tip,
                 )
-                durable = history.read_candidate(candidate.candidate_id)
+                try:
+                    durable = load_story_commit_candidate_from_history(
+                        history, candidate.candidate_id
+                    )
+                except StoryCommitError:
+                    self._require_history_ready(
+                        history,
+                        expected_branch_tip=candidate.branch_tip,
+                    )
+                    raise
                 self._require_history_ready(
                     history,
                     expected_branch_tip=candidate.branch_tip,
                 )
-                if durable.candidate_id != candidate.candidate_id:
+                if durable != candidate:
                     raise _error(StoryCommitFailureCode.CANDIDATE_DRIFT)
                 record = GitSessionCommitOperationRecord(
                     session_id=self._session_id,
@@ -1006,12 +1028,7 @@ class StoryCommitService:
         except StoryCommitError:
             raise
         except GitSessionHistoryError as exc:
-            code = (
-                StoryCommitFailureCode.RECOVERY_REQUIRED
-                if exc.code is GitSessionHistoryFailureCode.RECOVERY_REQUIRED
-                else StoryCommitFailureCode.HISTORY_FAILED
-            )
-            raise _error(code) from None
+            raise _error(self._history_failure_code(exc)) from None
 
     def _stage_git(self, value: StoryCommitRevalidation) -> None:
         root = _session_root(self._root, self._session_id)
@@ -1358,7 +1375,7 @@ class StoryCommitService:
                 GitSessionHistoryFailureCode.RECOVERY_REQUIRED: (
                     StoryCommitFailureCode.RECOVERY_REQUIRED
                 ),
-            }.get(exc.code, StoryCommitFailureCode.HISTORY_FAILED)
+            }.get(exc.code, self._history_failure_code(exc))
             raise _error(code) from None
 
     def _load_candidate(self, candidate_id: str) -> StoryCommitCandidate:
@@ -1388,7 +1405,7 @@ class StoryCommitService:
                 GitSessionHistoryFailureCode.RECOVERY_REQUIRED: (
                     StoryCommitFailureCode.RECOVERY_REQUIRED
                 ),
-            }.get(exc.code, StoryCommitFailureCode.HISTORY_FAILED)
+            }.get(exc.code, self._history_failure_code(exc))
             raise _error(code) from None
 
     def _require_recovery_semantic_ready(self) -> None:
@@ -1407,12 +1424,7 @@ class StoryCommitService:
         except StoryCommitError:
             raise
         except GitSessionHistoryError as exc:
-            code = (
-                StoryCommitFailureCode.RECOVERY_REQUIRED
-                if exc.code is GitSessionHistoryFailureCode.RECOVERY_REQUIRED
-                else StoryCommitFailureCode.HISTORY_FAILED
-            )
-            raise _error(code) from None
+            raise _error(self._history_failure_code(exc)) from None
 
     def _inspect_story_commit_index_recovery(
         self,
@@ -1538,12 +1550,7 @@ class StoryCommitService:
         except StoryCommitError:
             raise
         except GitSessionHistoryError as exc:
-            code = (
-                StoryCommitFailureCode.RECOVERY_REQUIRED
-                if exc.code is GitSessionHistoryFailureCode.RECOVERY_REQUIRED
-                else StoryCommitFailureCode.HISTORY_FAILED
-            )
-            raise _error(code) from None
+            raise _error(self._history_failure_code(exc)) from None
 
     def _require_terminal_operation_ready(
         self,
@@ -1842,7 +1849,10 @@ def _open_generation_bound_artifact_repository(
         try:
             return validate_ready()
         except GitSessionHistoryError as exc:
-            if exc.code is GitSessionHistoryFailureCode.RECOVERY_REQUIRED:
+            if exc.code in {
+                GitSessionHistoryFailureCode.RECOVERY_REQUIRED,
+                GitSessionHistoryFailureCode.UNSAFE_ROOT,
+            }:
                 return None
             raise
 

@@ -2952,7 +2952,9 @@ every intermediate arrow. The current runtime graph is acyclic.
   revalidation against optional expected branch and internal-ref tips through
   its already-held repository lease; a companion method captures and compares
   the complete retained six-component physical-generation identity under that
-  same lease. Neither method is a facade export.
+  same lease. A generation-only variant performs that physical comparison
+  without asserting clean-index semantic READY, for callers that separately
+  own an intentional staged phase. None of these methods is a facade export.
   A separate package-internal recovery context, also omitted from `__all__`,
   borrows one non-recyclable thread-token-affine lease for bounded story-
   candidate/commit reads and caller-validated recovery transitions while
@@ -3151,8 +3153,9 @@ every intermediate arrow. The current runtime graph is acyclic.
   complete artifact generation and reuses it for drift checks and staging.
   They compare that generation before and after history reads, artifact capture,
   candidate publication, and revalidation under the same lease. Exact generation
-  loss maps to recovery-required; unrelated history failures remain history
-  failures and generic repository/protocol failures retain candidate-drift.
+  loss or bound unsafe-root loss maps to recovery-required; unrelated history
+  failures remain history failures and generic repository/protocol failures
+  retain candidate-drift. Unbound compatibility mapping is unchanged.
   Preparation
   verifies the exact symbolic session branch and tip, clean real index,
   effective identity/source, complete canonical HEAD and applied states, every
@@ -3228,12 +3231,17 @@ every intermediate arrow. The current runtime graph is acyclic.
   resource loss before RUNNING requires operator recovery; any failure after
   RUNNING is preserved as outcome-unknown. Generation loss before RUNNING is
   never relabeled as generic history failure; after RUNNING or Git mutation it
-  retains the conservative outcome-unknown phase rule. Once the intentional
+  retains the conservative outcome-unknown phase rule. Bound unsafe-root loss
+  follows that same phase mapping. Once the intentional
   staged index means ordinary READY inspection no longer applies, phase-aware
   topology checks instead require the exact registered worktree, symbolic branch,
   branch/internal/main tips, common Git directory, main status, physical root,
   and expected index/worktree content before and after each later mutation or
-  durable transition. It writes only exact
+  durable transition. After staging and while STAGED, the service pairs those
+  phase-specific proofs with the history owner's generation-only check instead
+  of incorrectly requiring a clean index. Reject and Revise decode and compare
+  the complete durable candidate value before terminal publication; matching
+  only its candidate ID grants no authority. It writes only exact
   no-filter blobs and literal index entries/removals, verifies the expected
   tree, creates one captured-identity commit with one exact parent, and CAS-
   updates only the session branch before durable COMMITTED evidence. It verifies
@@ -8049,7 +8057,10 @@ every intermediate arrow. The current runtime graph is acyclic.
   lower-level I/O, and close a fork child's copied pin without entering an
   inherited lock. This continuity check
   never substitutes for the outer full semantic-READY access required around
-  repository or artifact I/O, and no Git lease spans provider work.
+  repository or artifact I/O, and no Git lease spans provider work. Every
+  injected repository operation performs full access `require_ready()` before
+  entry and again before successful return; exceptional exits retain the same
+  authoritative full postvalidation.
   The binding and each access are confined to their creator process and opaque
   thread token. Every authority-minting factory, activation, nested lookup,
   guarded repository callback, validator call, getter, READY check, descriptor
@@ -8069,8 +8080,9 @@ every intermediate arrow. The current runtime graph is acyclic.
   of acquiring a second Git lease and remains synchronous. Outer and borrowed
   story-commit access exits require the current locked READY inspection to
   equal the binding after body I/O on successful, exceptional, and cancellation
-  paths; nested exits repeat active lease and named-root checks within that
-  outer semantic transaction. Every exit closes its owned resources. An
+  paths. Nested binding acquisition reuses the outer transaction's cheap active
+  check, while each repository operation still performs full READY entry and
+  successful-exit validation. Every exit closes its owned resources. An
   original body failure is preserved when postvalidation succeeds, while
   confirmed binding-generation loss on any exit becomes the authoritative typed
   binding error even when the body also failed; the displaced failure is reduced
@@ -9017,9 +9029,10 @@ every intermediate arrow. The current runtime graph is acyclic.
   direct-module names in `git.session_resources`, but no module, import edge,
   facade export, persisted schema field, or schema version. Binding access now
   amortizes complete semantic READY validation across one outer synchronous
-  transaction: nested binding and repository operations repeat thread, lease,
-  and named-root liveness checks, while outer and borrowed Story Commit
-  boundaries retain complete READY pre/post validation. This changes no module,
+  transaction: nested binding acquisition repeats thread, lease, and named-root
+  liveness checks, while every injected repository operation and outer or
+  borrowed Story Commit boundary performs complete READY pre/post validation.
+  This changes no module,
   import edge, export, facade, state owner, or schema. Deterministic
   story-commit operation binding, exact staged-recovery
   provenance, and submitted-call preservation across reference-cleanup binding
@@ -9095,7 +9108,11 @@ every intermediate arrow. The current runtime graph is acyclic.
   around all seven methods using existing ordinary or recovery history leases;
   a closed internal failure factory maps only actual generation loss, while
   registered reference preparation preserves its active failure through
-  deferral and abandonment. Graph totals remain 142/576/578/0.
+  deferral and abandonment. Intentional staged phases pair generation-only
+  validation with their staged topology proofs, bound unsafe-root failures use
+  phase-correct recovery mapping, Reject/Revise require complete durable
+  candidate equality, and repository operations repeat full READY at entry and
+  successful exit. Graph totals remain 142/576/578/0.
   Specialist routing adds one pure module and five net inward runtime
   edges over the provider-recovery baseline: artifact proposals replace their
   roster dependency with the policy, while relationship policy, conversation

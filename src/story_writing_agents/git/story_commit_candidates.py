@@ -95,6 +95,18 @@ def _require_history_ready(
     )
 
 
+def _history_failure_code(
+    failure: GitSessionHistoryError,
+    expected_generation: GitSessionGenerationIdentity | None,
+) -> StoryCommitFailureCode:
+    if expected_generation is not None and failure.code in {
+        GitSessionHistoryFailureCode.RECOVERY_REQUIRED,
+        GitSessionHistoryFailureCode.UNSAFE_ROOT,
+    }:
+        return StoryCommitFailureCode.RECOVERY_REQUIRED
+    return StoryCommitFailureCode.HISTORY_FAILED
+
+
 def _content_free_boundary(
     action: Callable[_P, _T],
 ) -> Callable[_P, _T]:
@@ -323,13 +335,9 @@ def _prepare_story_commit_candidate(
     except StoryCommitError:
         raise
     except GitSessionHistoryError as exc:
-        code = (
-            StoryCommitFailureCode.RECOVERY_REQUIRED
-            if expected_generation_identity is not None
-            and exc.code is GitSessionHistoryFailureCode.RECOVERY_REQUIRED
-            else StoryCommitFailureCode.HISTORY_FAILED
-        )
-        raise _error(code) from None
+        raise _error(
+            _history_failure_code(exc, expected_generation_identity)
+        ) from None
     except Exception:
         raise _error(StoryCommitFailureCode.CANDIDATE_DRIFT) from None
 
@@ -487,13 +495,9 @@ def _revalidate_story_commit_candidate(
     except StoryCommitError:
         raise
     except GitSessionHistoryError as exc:
-        code = (
-            StoryCommitFailureCode.RECOVERY_REQUIRED
-            if expected_generation_identity is not None
-            and exc.code is GitSessionHistoryFailureCode.RECOVERY_REQUIRED
-            else StoryCommitFailureCode.HISTORY_FAILED
-        )
-        raise _error(code) from None
+        raise _error(
+            _history_failure_code(exc, expected_generation_identity)
+        ) from None
     except Exception:
         raise _error(StoryCommitFailureCode.CANDIDATE_DRIFT) from None
 

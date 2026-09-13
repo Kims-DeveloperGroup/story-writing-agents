@@ -264,6 +264,32 @@ class GitSessionHistory:
         self.require_active()
         return resources
 
+    def require_generation_current(
+        self,
+        expected_generation: GitSessionGenerationIdentity,
+    ) -> None:
+        """Require only the retained physical generation under this live lease."""
+
+        if type(expected_generation) is not GitSessionGenerationIdentity:
+            raise _history_error(GitSessionHistoryFailureCode.INVALID_REQUEST)
+        self.require_active()
+        resources = self._resources
+        if resources is None:
+            raise _history_error(GitSessionHistoryFailureCode.INVALID_REQUEST)
+        try:
+            current = capture_locked_git_session_generation(
+                self._lease,
+                resources,
+                expected_worktree_identity=expected_generation.worktree_identity,
+            )
+        except GitSessionResourceError:
+            raise _history_error(
+                GitSessionHistoryFailureCode.RECOVERY_REQUIRED
+            ) from None
+        if current != expected_generation:
+            raise _history_error(GitSessionHistoryFailureCode.RECOVERY_REQUIRED)
+        self.require_active()
+
     def close(self) -> None:
         self.require_active()
         self._close()

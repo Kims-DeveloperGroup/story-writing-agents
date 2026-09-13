@@ -730,14 +730,14 @@ class SessionArtifactBinding:
                 raise SessionArtifactBindingError(
                     "session artifact repository access is not active"
                 )
-            access.require_active()
+            access.require_ready()
             try:
                 yield
             except BaseException as failure:
                 _postvalidate_session_artifact_access(access, failure=failure)
                 raise
             else:
-                access.require_active()
+                access.require_ready()
 
     @contextmanager
     def open_story_commit_artifact_repository(

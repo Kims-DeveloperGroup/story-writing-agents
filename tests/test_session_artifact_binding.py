@@ -2938,6 +2938,61 @@ class RuntimeSessionArtifactBindingTests(LeadOrchestrationTestCase):
                 moved.rename(root)
             self.assertIn(_OUTLINE, repository.list_paths())
 
+    def test_repository_operation_revalidates_generation_before_result_escape(
+        self,
+    ) -> None:
+        binding = compose_session_artifact_binding(
+            self.control_workspace.root,
+            self.session_id,
+        )
+        session_root = binding.resources.identity.worktree_root
+        git_file = session_root / ".git"
+        original_git_file = session_root / ".git-operation-original"
+        replacement_git_file = session_root / ".git-operation-replacement"
+        original_read = type(binding._repository._sources).read_text
+        original_lock = initialization_module.lock_git_repository
+        replacement_active = False
+        lock_calls = 0
+
+        @contextmanager
+        def count_lock(root):
+            nonlocal lock_calls
+            lock_calls += 1
+            with original_lock(root) as lease:
+                yield lease
+
+        def read_then_replace(source, path, *, max_bytes=None):
+            nonlocal replacement_active
+            result = original_read(source, path, max_bytes=max_bytes)
+            payload = git_file.read_bytes()
+            git_file.rename(original_git_file)
+            replacement_git_file.write_bytes(payload)
+            replacement_git_file.rename(git_file)
+            replacement_active = True
+            return result
+
+        result = None
+        try:
+            with mock.patch.object(
+                initialization_module,
+                "lock_git_repository",
+                new=count_lock,
+            ), mock.patch.object(
+                type(binding._repository._sources),
+                "read_text",
+                autospec=True,
+                side_effect=read_then_replace,
+            ), self.assertRaises(SessionArtifactBindingError):
+                with binding.open_ready_resources() as access:
+                    result = access.repository.read_text(_OUTLINE)
+        finally:
+            if replacement_active:
+                git_file.unlink()
+                original_git_file.rename(git_file)
+        self.assertIsNone(result)
+        self.assertEqual(lock_calls, 1)
+        self.assertEqual(binding._operation_tokens, {})
+
     def test_repository_operations_require_live_same_thread_nested_access(
         self,
     ) -> None:

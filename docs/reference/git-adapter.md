@@ -591,11 +591,13 @@ the named root to retain that identity. Each later repository or session-source
 action takes a short synchronous cooperating-runtime guard: the common-Git
 lease remains held while one outer transaction performs a complete semantic
 READY and pinned-root check before and after its body, then the guard closes.
-Same-thread nested access and repository operations reuse the active lease and
-descriptor and check only their liveness and the named root; they do not repeat
-the full READY scan. Borrowed Story Commit access retains one complete history-
-owned validation before and after its body, and Apply explicitly repeats
-complete READY validation immediately before its repository mutation starts. A
+Same-thread nested guard entry and exit reuse the active lease and descriptor
+and check their liveness and named root. Every artifact-repository operation
+nevertheless repeats complete READY and generation validation at entry and
+successful exit; its failure exit performs the same authoritative
+postvalidation. Borrowed Story Commit access retains one complete history-owned
+validation before and after its body, and Apply explicitly repeats complete
+READY validation immediately before its repository mutation starts. A
 provider await or concurrent specialist execution never holds this lease; the
 next filesystem transaction reacquires and rechecks it. The binding supplies a
 writing-artifact repository rooted at and pinned to that session worktree only
@@ -997,7 +999,8 @@ cannot report success. Borrowed artifact-repository callbacks apply the same
 full-generation check, and binding loss remains authoritative when callback
 work fails at the same time. Direct-module compatibility services continue to
 use semantic READY validation without acquiring this runtime-only generation
-binding.
+binding. A bound history `unsafe_root` failure is normalized to
+`recovery_required` rather than exposed as a generic history failure.
 
 Process and thread affinity are checked before the authority's internal one-use
 lock. A forked child therefore returns `authority_invalid` without waiting on
@@ -1079,13 +1082,15 @@ authority. Execute consumes that authority, takes the common-Git/session-history
 lease, independently requires the exact READY session resources, and places
 semantic READY and Apply-root checks around durable observations and
 transitions. Before intentional staging, READY requires the clean index. After
-staging, phase-aware checks instead require the exact candidate index/worktree,
-branch and internal-ref tips, registered session worktree, main HEAD/status,
-and physical roots. READY/history resource loss detected before the `RUNNING`
-record is durable maps to `recovery_required`; ambiguity afterward is
-`outcome_unknown`. Candidate/root replacement found before execution remains
-candidate drift and requires repreparation. Candidate and clean-index
-revalidation runs before revision-history inspection, so an externally
+staging, the live history lease uses a generation-only comparison alongside
+phase-aware checks for the exact candidate index/tree and worktree, branch and
+internal-ref tips, registered session worktree, main HEAD/status, and physical
+roots; it does not reapply clean-index semantic READY to the intentional staged
+state. READY/history resource loss detected before the `RUNNING` record is
+durable maps to `recovery_required`; ambiguity afterward is `outcome_unknown`.
+Candidate/root replacement found before execution remains candidate drift and
+requires repreparation. Candidate and clean-index revalidation runs before
+revision-history inspection, so an externally
 pre-staged index detected before `RUNNING` is published is likewise stale
 candidate drift and `reprepare`; it does not enter staged-operation inspection
 or mutate the index. Execution then follows this fixed order:
@@ -1129,6 +1134,9 @@ objects, or refs; the candidate remains available. Revise records `rejected`
 under the deterministic revision identity, removes the live binding, and makes
 that candidate ineligible for later authorization. A changed proposal therefore
 requires newly applied evidence, a new candidate, and fresh confirmation.
+Before either decision writes or accepts its terminal record, it loads the
+durable candidate and requires complete candidate equality, not only a matching
+candidate ID.
 
 Commit, Reject, and Revise operation IDs are deterministic action/candidate
 identities: the first 32 lowercase hexadecimal characters of SHA-256 over the
