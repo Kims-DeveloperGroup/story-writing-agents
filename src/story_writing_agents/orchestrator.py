@@ -6,6 +6,7 @@ import asyncio
 import hashlib
 import inspect
 import json
+import os
 import threading
 import uuid
 from collections.abc import Callable, Iterator
@@ -331,6 +332,25 @@ def _open_session_artifact_repository(
 
     with binding.open_ready_resources() as access:
         yield access.repository
+
+
+def _duplicate_session_worktree_descriptor(
+    binding: SessionArtifactBinding,
+) -> int:
+    """Duplicate only the exact guarded session-root descriptor."""
+
+    descriptor: int | None = None
+    try:
+        with binding.open_ready_resources() as access:
+            descriptor = access.duplicate_worktree_descriptor()
+        return descriptor
+    except BaseException:
+        if descriptor is not None:
+            try:
+                os.close(descriptor)
+            except OSError:
+                pass
+        raise
 
 
 _USER_ACTOR = CollaborationActor(CollaborationActorKind.USER)
@@ -1299,6 +1319,7 @@ class _CollaborationInvocationResult:
     submitted_physical_calls: int
     failure: BaseException | None = None
     submission_uncertain: bool = False
+    artifact_binding: SessionArtifactBinding | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -1928,9 +1949,9 @@ class StoryRuntime:
         )
         operation = self._prepare_session_reference_operation(
             repository_access,
+            artifact_binding=artifact_binding,
             session_id=invocation.execution_identity.session_id,
             text=f"${{{path}}}",
-            physical_workspace_identity=artifact_binding.worktree_identity,
             reconcile_existing=not reference_boundary_reconciled,
         )
         proofs = operation.reference_proofs
@@ -2505,22 +2526,26 @@ class StoryRuntime:
             [], AbstractContextManager[WritingArtifactRepository]
         ],
         *,
+        artifact_binding: SessionArtifactBinding,
         session_id: str,
         text: str,
-        physical_workspace_identity: tuple[int, int],
         reconcile_existing: bool = True,
     ) -> RuntimeReferenceOperation:
         if reconcile_existing:
             self._reconcile_reference_operations_at_boundary(
                 session_id=session_id,
-                physical_workspace_identity=physical_workspace_identity,
+                physical_workspace_identity=artifact_binding.worktree_identity,
                 repository_access=repository_access,
             )
         return prepare_registered_guarded_runtime_reference_operation(
             repository_access,
             session_id=session_id,
             text=text,
-            physical_workspace_identity=physical_workspace_identity,
+            physical_workspace_identity=artifact_binding.worktree_identity,
+            physical_workspace_pin_factory=partial(
+                _duplicate_session_worktree_descriptor,
+                artifact_binding,
+            ),
             register=self._register_reference_operation,
         )
 
@@ -2639,10 +2664,10 @@ class StoryRuntime:
         specialist_ids: tuple[str, ...], inputs: tuple[CollaborationInputRevision, ...],
         evidence: CollaborationLeadEvidence,
         *,
-        artifact_binding: SessionArtifactBinding | None = None,
+        artifact_binding: SessionArtifactBinding,
     ) -> CollaborationProposalBasis:
-        if artifact_binding is None:
-            artifact_binding = self._session_artifact_binding(session_id)
+        if type(artifact_binding) is not SessionArtifactBinding:
+            raise TypeError("recommendation basis requires an exact artifact binding")
         profiles = tuple(self._collaboration_agent_profile(
             agent_id,
             self._build_guarded_contextual_definition(
@@ -2665,9 +2690,14 @@ class StoryRuntime:
         self, *, source: CollaborationEventDraft, action: LeadRecommendedAction,
         inputs: tuple[CollaborationInputRevision, ...], evidence: CollaborationLeadEvidence,
         events: tuple[CollaborationEvent, ...], projection: CollaborationHistoryProjection,
+        artifact_binding: SessionArtifactBinding,
         tail_sequence: int, step_id: str | None = None,
         previous: LeadRecommendationRequestPayload | None = None,
     ) -> CollaborationEventDraft:
+        if type(artifact_binding) is not SessionArtifactBinding:
+            raise TypeError(
+                "recommendation requires an exact session artifact binding"
+            )
         objective = next((item for item in projection.artifact_objectives
                           if item.facts.objective_id == action.objective_id), None)
         if action.objective_id is not None and (
@@ -2765,10 +2795,21 @@ class StoryRuntime:
             specialist_ids=action.specialist_ids, objective_id=action.objective_id,
             source_recommendation_event_id=source.event_id,
             source_recommendation_digest=current.content_digest, draft_sources=tuple(drafts),
-            basis=self._recommendation_basis(source.session_id, action.kind, action.specialist_ids,
-                                             selected_inputs, evidence),
+            basis=self._recommendation_basis(
+                source.session_id,
+                action.kind,
+                action.specialist_ids,
+                selected_inputs,
+                evidence,
+                artifact_binding=artifact_binding,
+            ),
             source_fingerprint=self._recommendation_source_fingerprint(
-                source.session_id, source.conversation_id, selected_inputs, action.target_paths),
+                source.session_id,
+                source.conversation_id,
+                selected_inputs,
+                action.target_paths,
+                artifact_binding=artifact_binding,
+            ),
             physical_calls_spent=projection.physical_calls_spent,
             max_preparation_physical_calls=min(_CONTEXT_INVOCATION_CALL_LIMIT, remaining),
             tail_sequence=tail_sequence,
@@ -4819,7 +4860,10 @@ class StoryRuntime:
             "workflow": proposal.step_kind.value,
         }
 
-        def decode(answer: str) -> CollaborationSpecialistReplyPayload:
+        def decode(
+            answer: str,
+            _artifact_binding: SessionArtifactBinding,
+        ) -> CollaborationSpecialistReplyPayload:
             return self._decode_specialist_reply(
                 answer,
                 proposal=proposal,
@@ -4945,7 +4989,10 @@ class StoryRuntime:
                 "recommended_action are mutually exclusive. Preserve OPEN authoring objectives."
             )
 
-        def decode(answer: str) -> object:
+        def decode(
+            answer: str,
+            artifact_binding: SessionArtifactBinding,
+        ) -> object:
             if artifact_candidate is not None:
                 return self._decode_artifact_synthesis(
                     answer,
@@ -4980,6 +5027,7 @@ class StoryRuntime:
                     source=source, action=decoded.recommended_action,
                     inputs=(*proposal.basis.inputs, *reply_inputs), evidence=proposal.basis.evidence,
                     events=current_events, projection=current_projection,
+                    artifact_binding=artifact_binding,
                     tail_sequence=current_projection.last_sequence + 2,
                 )
             return decoded
@@ -5163,7 +5211,7 @@ class StoryRuntime:
         result_contract: ContextJsonObjectResultContract,
         physical_call_limit: int,
         round_number: int,
-        decoder: Callable[[str], object],
+        decoder: Callable[[str, SessionArtifactBinding], object],
         action_progress_sink: ContextActionProgressSink | None,
     ) -> _CollaborationInvocationResult:
         artifact_inputs = tuple(
@@ -5189,9 +5237,9 @@ class StoryRuntime:
             )
             reference_operation = self._prepare_session_reference_operation(
                 repository_access,
+                artifact_binding=artifact_binding,
                 session_id=session_id,
                 text=" ".join(item.locator for item in artifact_inputs),
-                physical_workspace_identity=artifact_binding.worktree_identity,
             )
             self._validate_assignment_reference_proofs(
                 artifact_inputs,
@@ -5294,7 +5342,7 @@ class StoryRuntime:
 
             def validate(answer: str, _authorization: object) -> None:
                 nonlocal decoded
-                decoded = decoder(answer)
+                decoded = decoder(answer, artifact_binding)
 
             result = await self._invoke_context_with_recovery(
                 request,
@@ -5313,11 +5361,16 @@ class StoryRuntime:
                     agent_id=agent_id, synthesis=True,
                 ),
             )
-            value = decoded if decoded is not None else decoder(result.answer)
+            value = (
+                decoded
+                if decoded is not None
+                else decoder(result.answer, artifact_binding)
+            )
             self._finish_reference_operation(reference_operation)
             return _CollaborationInvocationResult(
                 value,
                 provider.submitted_physical_calls,
+                artifact_binding=artifact_binding,
             )
         except BaseException as failure:
             cleanup_binding_failure: SessionArtifactBindingError | None = None
@@ -5745,6 +5798,13 @@ class StoryRuntime:
         )
         if recommended_action is not None:
             assert synthesis_draft is not None
+            if (
+                synthesis_result is None
+                or synthesis_result.artifact_binding is None
+            ):
+                raise BackendProtocolError(
+                    "lead synthesis recommendation lacks its artifact binding"
+                )
             terminal = self._terminal_state_draft(events=current_events, turn_id=turn_id,
                 proposal=proposal, result_event_id=result_event_id, state=CollaborationStepState.COMPLETED)
             reply_inputs = tuple(CollaborationInputRevision(
@@ -5756,6 +5816,7 @@ class StoryRuntime:
                 source=synthesis_draft, action=recommended_action,
                 inputs=(*proposal.basis.inputs, *reply_inputs), evidence=proposal.basis.evidence,
                 events=current_events, projection=projection,
+                artifact_binding=synthesis_result.artifact_binding,
                 tail_sequence=projection.last_sequence + len(result_drafts) + 2,
                 step_id=self._deterministic_id("s", result_event_id, "recommendation"),
             )
@@ -7312,9 +7373,9 @@ class StoryRuntime:
         )
         reference_operation = self._prepare_session_reference_operation(
             repository_access,
+            artifact_binding=artifact_binding,
             session_id=session_id,
             text=text,
-            physical_workspace_identity=artifact_binding.worktree_identity,
         )
         if preparation is not None:
             preparation.reference_operation_id = reference_operation.operation_id
@@ -7706,6 +7767,7 @@ class StoryRuntime:
                         source=source, action=decoded.recommended_action, inputs=inputs,
                         evidence=decoded_evidence, events=objective_events,
                         projection=services.event_store.read_context(session_id, conversation_id),
+                        artifact_binding=artifact_binding,
                         tail_sequence=services.event_store.read_context(session_id, conversation_id).last_sequence + 2,
                     )
 
@@ -8114,6 +8176,7 @@ class StoryRuntime:
             request_draft = self._recommendation_request_draft(
                 source=judgment, action=outcome.recommended_action, inputs=inputs,
                 evidence=evidence, events=objective_events, projection=refreshed,
+                artifact_binding=artifact_binding,
                 tail_sequence=refreshed.last_sequence + len(final_drafts) + 1,
                 step_id=self._new_id("s") if refreshed.current_proposal is not None else None,
                 previous=None if preparation is None else preparation.request_event.payload,

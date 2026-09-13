@@ -14,7 +14,13 @@ from unittest import mock
 from story_writing_agents.git import GitBaselineManifest, GitManifestEntry
 from story_writing_agents.git import repository_lock as lock_module
 from story_writing_agents.git import session_history as history_module
-from story_writing_agents.git.session_contracts import GitSessionResourceState
+from story_writing_agents.git.session_contracts import (
+    GitSessionFailureCode,
+    GitSessionOperationKind,
+    GitSessionRecoveryAction,
+    GitSessionResourceError,
+    GitSessionResourceState,
+)
 from story_writing_agents.git.session_history import (
     open_git_session_history,
     open_story_commit_recovery_history,
@@ -27,6 +33,7 @@ from story_writing_agents.git.session_history_contracts import (
     GitSessionCommitOperationRecord,
     GitSessionHistoryError,
     GitSessionHistoryFailureCode,
+    GitSessionHistoryRecoveryAction,
     GitSessionHistoryState,
     GitSessionHistorySnapshot,
     GitSessionIdentitySource,
@@ -163,6 +170,37 @@ class GitSessionHistorySafetyTests(GitSessionResourceGitTestCase):
                     caught.exception.code,
                     GitSessionHistoryFailureCode.RECOVERY_REQUIRED,
                 )
+
+    def test_recovery_topology_translates_resource_failure_without_cause(
+        self,
+    ) -> None:
+        root, _tip = self._ready_root("recovery-topology-error")
+        resource_failure = GitSessionResourceError(
+            GitSessionFailureCode.RECOVERY_REQUIRED,
+            operation=GitSessionOperationKind.REQUIRE_READY,
+            state=GitSessionResourceState.RECOVERY_REQUIRED,
+            recovery_action=GitSessionRecoveryAction.OPERATOR_RECOVERY,
+        )
+        with open_story_commit_recovery_history(
+            root,
+            _manifest(),
+            "novel",
+        ) as recovery, mock.patch.object(
+            history_module,
+            "require_story_commit_recovery_locked_git_session_resources",
+            side_effect=resource_failure,
+        ), self.assertRaises(GitSessionHistoryError) as caught:
+            recovery.require_recovery_topology()
+
+        self.assertIs(
+            caught.exception.code,
+            GitSessionHistoryFailureCode.RECOVERY_REQUIRED,
+        )
+        self.assertIs(
+            caught.exception.recovery_action,
+            GitSessionHistoryRecoveryAction.OPERATOR_RECOVERY,
+        )
+        self.assertIsNone(caught.exception.__cause__)
 
     def test_foreign_thread_history_surface_fails_without_mutation_and_exit_cleans_up(
         self,

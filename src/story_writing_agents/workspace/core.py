@@ -56,6 +56,8 @@ from .schema import (
 _SAFE_REFERENCE_OPERATION_ID = re.compile(r"[A-Za-z0-9][A-Za-z0-9_-]{0,127}")
 _SESSION_SOURCE_MAX_FILE_BYTES = 8 * 1024 * 1024
 _SESSION_SOURCE_MAX_DIRECTORY_ENTRIES = 8192
+_SESSION_SOURCE_MAX_AGENT_STATE_BYTES = 8 * 1024 * 1024
+_SESSION_SOURCE_MAX_AGENT_STATE_RECORDS = 10_000
 _DEBATE_CONTEXT_EVENT_FIELDS = frozenset(
     {
         "schema_version",
@@ -1311,7 +1313,14 @@ class SessionSourceWorkspace(Workspace):
         relative: str,
         *,
         missing_ok: bool = False,
+        max_bytes: int = _SESSION_SOURCE_MAX_FILE_BYTES,
     ) -> bytes | None:
+        if (
+            type(max_bytes) is not int
+            or max_bytes < 0
+            or max_bytes > _SESSION_SOURCE_MAX_FILE_BYTES
+        ):
+            raise ValueError("session source read limit is invalid")
         parts = cls._safe_relative_parts(relative)
         try:
             directory = (
@@ -1342,18 +1351,18 @@ class SessionSourceWorkspace(Workspace):
                 initial,
                 named_initial,
             )
-            if initial.st_size > _SESSION_SOURCE_MAX_FILE_BYTES:
+            if initial.st_size > max_bytes:
                 raise WorkspaceSecurityError(
                     "session source file exceeds read limit"
                 )
             chunks: list[bytes] = []
             retained_bytes = 0
-            while retained_bytes <= _SESSION_SOURCE_MAX_FILE_BYTES:
+            while retained_bytes <= max_bytes:
                 chunk = os.read(
                     descriptor,
                     min(
                         64 * 1024,
-                        _SESSION_SOURCE_MAX_FILE_BYTES + 1 - retained_bytes,
+                        max_bytes + 1 - retained_bytes,
                     ),
                 )
                 if not chunk:
@@ -1382,7 +1391,7 @@ class SessionSourceWorkspace(Workspace):
                 raise WorkspaceSecurityError(
                     "session source file identity changed"
                 )
-            if retained_bytes > _SESSION_SOURCE_MAX_FILE_BYTES:
+            if retained_bytes > max_bytes:
                 raise WorkspaceSecurityError(
                     "session source file exceeds read limit"
                 )
@@ -1525,8 +1534,14 @@ class SessionSourceWorkspace(Workspace):
         relative: str,
         *,
         missing_ok: bool = False,
+        max_bytes: int = _SESSION_SOURCE_MAX_FILE_BYTES,
     ) -> str | None:
-        content = cls._read_bytes_at(root, relative, missing_ok=missing_ok)
+        content = cls._read_bytes_at(
+            root,
+            relative,
+            missing_ok=missing_ok,
+            max_bytes=max_bytes,
+        )
         if content is None:
             return None
         try:
@@ -1569,12 +1584,39 @@ class SessionSourceWorkspace(Workspace):
                 state_files = tuple(
                     name for name, _fact in inventory if name.endswith(".jsonl")
                 )
+                state_bytes = sum(
+                    fact[4]
+                    for name, fact in inventory
+                    if name.endswith(".jsonl")
+                )
+                if state_bytes > _SESSION_SOURCE_MAX_AGENT_STATE_BYTES:
+                    raise WorkspaceSecurityError(
+                        "session agent state exceeds aggregate read limit"
+                    )
+                retained_bytes = 0
+                retained_records = 0
                 for file_index, filename in enumerate(state_files):
                     debate_id = filename[: -len(".jsonl")]
                     self.validate_identifier(debate_id, label="debate ID")
-                    text = self._read_text_at(directory, filename)
+                    text = self._read_text_at(
+                        directory,
+                        filename,
+                        max_bytes=(
+                            _SESSION_SOURCE_MAX_AGENT_STATE_BYTES
+                            - retained_bytes
+                        ),
+                    )
                     assert text is not None
+                    retained_bytes += len(text.encode("utf-8"))
                     for line_number, line in enumerate(text.splitlines(), 1):
+                        if (
+                            retained_records
+                            == _SESSION_SOURCE_MAX_AGENT_STATE_RECORDS
+                        ):
+                            raise WorkspaceSecurityError(
+                                "session agent state exceeds record limit"
+                            )
+                        retained_records += 1
                         try:
                             raw = json.loads(line)
                             value = self._validate_agent_state_entry(raw)

@@ -321,6 +321,134 @@ class RuntimeSessionArtifactBindingTests(LeadOrchestrationTestCase):
                 os.close(descriptor)
                 os.close(root_descriptor)
 
+    def test_agent_state_aggregate_byte_limit_is_exact_and_propagated(self) -> None:
+        limit = 8 * 1024 * 1024
+        first_size = 1024 * 1024
+        def state_line(debate_id: str) -> bytes:
+            self.workspace.append_agent_state(
+                AgentStateEntry(
+                    PLOT_ARCHITECT,
+                    self.session_id,
+                    debate_id,
+                    "audit",
+                    1,
+                    "r1",
+                    "outcome",
+                    "aggregate state",
+                    "2026-09-11T00:00:00+00:00",
+                )
+            )
+            path = self.workspace.path(
+                self.workspace._agent_state_relative(
+                    PLOT_ARCHITECT,
+                    self.session_id,
+                    debate_id,
+                )
+            )
+            content = path.read_bytes()
+            path.unlink()
+            return content
+
+        def padded(line: bytes, size: int) -> bytes:
+            self.assertLessEqual(len(line), size)
+            return line.rstrip(b"\n") + b" " * (size - len(line)) + b"\n"
+
+        first = self.workspace.path(
+            self.workspace._agent_state_relative(
+                PLOT_ARCHITECT,
+                self.session_id,
+                "aggregate_a",
+            )
+        )
+        second = self.workspace.path(
+            self.workspace._agent_state_relative(
+                PLOT_ARCHITECT,
+                self.session_id,
+                "aggregate_b",
+            )
+        )
+        first.write_bytes(padded(state_line("aggregate_a"), first_size))
+        second.write_bytes(
+            padded(state_line("aggregate_b"), limit - first_size)
+        )
+        sources = self.source_workspace()
+        remaining_limits: list[int] = []
+        original_read = SessionSourceWorkspace._read_text_at
+
+        def capture_limit(
+            root,
+            relative,
+            *,
+            missing_ok=False,
+            max_bytes=workspace_core._SESSION_SOURCE_MAX_FILE_BYTES,
+        ):
+            remaining_limits.append(max_bytes)
+            return original_read(
+                root,
+                relative,
+                missing_ok=missing_ok,
+                max_bytes=max_bytes,
+            )
+
+        with mock.patch.object(
+            SessionSourceWorkspace,
+            "_read_text_at",
+            side_effect=capture_limit,
+        ):
+            state = sources.read_agent_session_state(
+                PLOT_ARCHITECT,
+                self.session_id,
+            )
+        self.assertEqual(
+            tuple(item.debate_id for item in state),
+            ("aggregate_a", "aggregate_b"),
+        )
+        self.assertEqual(remaining_limits, [limit, limit - first_size])
+
+        second.write_bytes(second.read_bytes() + b" ")
+        with mock.patch.object(
+            SessionSourceWorkspace,
+            "_read_text_at",
+            wraps=original_read,
+        ) as read_call, self.assertRaisesRegex(
+            WorkspaceSecurityError,
+            "aggregate read limit",
+        ):
+            sources.read_agent_session_state(PLOT_ARCHITECT, self.session_id)
+        read_call.assert_not_called()
+
+    def test_agent_state_aggregate_record_limit_rejects_first_excess_before_parse(
+        self,
+    ) -> None:
+        debate_id = "record_limit"
+        self.append_source_state(self.workspace, "bounded record")
+        source = self.workspace.path(
+            self.workspace._agent_state_relative(
+                PLOT_ARCHITECT,
+                self.session_id,
+                "source_debate",
+            )
+        )
+        line = source.read_bytes().replace(
+            b"source_debate",
+            debate_id.encode("utf-8"),
+        )
+        target = source.with_name(f"{debate_id}.jsonl")
+        source.unlink()
+        target.write_bytes(line * 10_000)
+        sources = self.source_workspace()
+
+        state = sources.read_agent_session_state(PLOT_ARCHITECT, self.session_id)
+        self.assertEqual(len(state), 10_000)
+        self.assertTrue(all(item.debate_id == debate_id for item in state))
+
+        target.write_bytes(target.read_bytes() + b"not-json\n")
+        with self.assertRaisesRegex(
+            WorkspaceSecurityError,
+            "record limit",
+        ):
+            sources.read_agent_session_state(PLOT_ARCHITECT, self.session_id)
+
     def test_session_source_rejects_fifo_and_hardlinked_owned_records(
         self,
     ) -> None:
@@ -490,9 +618,20 @@ class RuntimeSessionArtifactBindingTests(LeadOrchestrationTestCase):
         moved = directory.with_name(f"{directory.name}.generation-a")
         swapped = False
 
-        def swap_after_read(root, relative, *, missing_ok=False):
+        def swap_after_read(
+            root,
+            relative,
+            *,
+            missing_ok=False,
+            max_bytes=workspace_core._SESSION_SOURCE_MAX_FILE_BYTES,
+        ):
             nonlocal swapped
-            value = original_read(root, relative, missing_ok=missing_ok)
+            value = original_read(
+                root,
+                relative,
+                missing_ok=missing_ok,
+                max_bytes=max_bytes,
+            )
             if not swapped:
                 swapped = True
                 directory.rename(moved)
@@ -514,9 +653,20 @@ class RuntimeSessionArtifactBindingTests(LeadOrchestrationTestCase):
         extra = directory / "unexpected-inventory-entry"
         changed = False
 
-        def add_after_read(root, relative, *, missing_ok=False):
+        def add_after_read(
+            root,
+            relative,
+            *,
+            missing_ok=False,
+            max_bytes=workspace_core._SESSION_SOURCE_MAX_FILE_BYTES,
+        ):
             nonlocal changed
-            value = original_read(root, relative, missing_ok=missing_ok)
+            value = original_read(
+                root,
+                relative,
+                missing_ok=missing_ok,
+                max_bytes=max_bytes,
+            )
             if not changed:
                 changed = True
                 extra.write_bytes(b"replacement inventory must not be accepted")
@@ -590,9 +740,20 @@ class RuntimeSessionArtifactBindingTests(LeadOrchestrationTestCase):
         moved = directory.with_name(f"{directory.name}.generation-a")
         swapped = False
 
-        def swap_after_read(root, relative, *, missing_ok=False):
+        def swap_after_read(
+            root,
+            relative,
+            *,
+            missing_ok=False,
+            max_bytes=workspace_core._SESSION_SOURCE_MAX_FILE_BYTES,
+        ):
             nonlocal swapped
-            value = original_read(root, relative, missing_ok=missing_ok)
+            value = original_read(
+                root,
+                relative,
+                missing_ok=missing_ok,
+                max_bytes=max_bytes,
+            )
             if not swapped:
                 swapped = True
                 directory.rename(moved)
@@ -614,9 +775,20 @@ class RuntimeSessionArtifactBindingTests(LeadOrchestrationTestCase):
         extra = directory / "unexpected-inventory-entry"
         changed = False
 
-        def add_after_read(root, relative, *, missing_ok=False):
+        def add_after_read(
+            root,
+            relative,
+            *,
+            missing_ok=False,
+            max_bytes=workspace_core._SESSION_SOURCE_MAX_FILE_BYTES,
+        ):
             nonlocal changed
-            value = original_read(root, relative, missing_ok=missing_ok)
+            value = original_read(
+                root,
+                relative,
+                missing_ok=missing_ok,
+                max_bytes=max_bytes,
+            )
             if not changed:
                 changed = True
                 extra.write_bytes(b"replacement inventory must not be accepted")
@@ -733,7 +905,13 @@ class RuntimeSessionArtifactBindingTests(LeadOrchestrationTestCase):
         replacement_context = self.replace_session_worktree()
         entered = False
 
-        def replace_during_read(root, relative, *, missing_ok=False):
+        def replace_during_read(
+            root,
+            relative,
+            *,
+            missing_ok=False,
+            max_bytes=workspace_core._SESSION_SOURCE_MAX_FILE_BYTES,
+        ):
             nonlocal entered
             if not entered:
                 entered = True
@@ -741,7 +919,12 @@ class RuntimeSessionArtifactBindingTests(LeadOrchestrationTestCase):
                 (replacement / "replacement-sentinel").write_bytes(
                     b"mid-read replacement bytes"
                 )
-            return original_read_text(root, relative, missing_ok=missing_ok)
+            return original_read_text(
+                root,
+                relative,
+                missing_ok=missing_ok,
+                max_bytes=max_bytes,
+            )
 
         try:
             with mock.patch.object(
@@ -799,12 +982,23 @@ class RuntimeSessionArtifactBindingTests(LeadOrchestrationTestCase):
         original_read = SessionSourceWorkspace._read_text_at
         drifted = False
 
-        def stage_during_read(root, path, *, missing_ok=False):
+        def stage_during_read(
+            root,
+            path,
+            *,
+            missing_ok=False,
+            max_bytes=workspace_core._SESSION_SOURCE_MAX_FILE_BYTES,
+        ):
             nonlocal drifted
             if not drifted:
                 drifted = True
                 stage()
-            return original_read(root, path, missing_ok=missing_ok)
+            return original_read(
+                root,
+                path,
+                missing_ok=missing_ok,
+                max_bytes=max_bytes,
+            )
 
         try:
             with mock.patch.object(

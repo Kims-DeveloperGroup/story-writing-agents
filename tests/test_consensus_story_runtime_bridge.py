@@ -339,9 +339,9 @@ class ConsensusStoryRuntimeBridgeTests(unittest.IsolatedAsyncioTestCase):
 
         retained = runtime._prepare_session_reference_operation(
             repository_access,
+            artifact_binding=binding,
             session_id="story_session",
             text="Read ${core_documents/global_outline.md}.",
-            physical_workspace_identity=binding.worktree_identity,
         )
         retained._defer_cleanup()
         assert retained.operation_id is not None

@@ -206,8 +206,13 @@ inode, file type, link count, size, nanosecond modification time, and
 nanosecond change time must match. A parent-directory swap, added or removed
 entry, metadata drift, or more than 8,192 entries in one inventoried directory
 therefore fails closed; exactly 8,192 entries are accepted. Debate state/results
-must embed the requested session and debate IDs; agent-state entries must embed the
-path's agent, session, and debate ownership. If the agent-state parent is
+must embed the requested session and debate IDs. One compound agent-state read
+also accepts at most 8 MiB across all selected JSONL files and at most 10,000
+records; either exact boundary is accepted, while the first excess byte or
+record fails closed. The remaining aggregate byte allowance is applied to each
+successive file, and the first excess record is rejected before it is parsed or
+retained. Agent-state entries must embed the path's agent, session, and debate
+ownership. If the agent-state parent is
 missing, absence is checked at the failed open and again immediately before an
 empty tuple is returned; creation between those observations fails closed with
 `WorkspaceSecurityError`. The reader verifies the named root again before

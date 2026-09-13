@@ -274,9 +274,10 @@ tracks that separate state-machine work and remains outside this change.
 This change covers only the #661 Git/session resource path. Conversation-side
 occurrence remains follow-up work in
 [Issue #668](https://github.com/Kims-DeveloperGroup/story-writing-agents/issues/668),
-and adjacent topology resource translation remains follow-up work in
-[Issue #669](https://github.com/Kims-DeveloperGroup/story-writing-agents/issues/669);
-neither is shipped behavior here.
+and is not shipped behavior here. Direct recovery-topology validation now
+normalizes a delegated session-resource failure to the history-owned
+`recovery_required` / `operator_recovery` contract, without mutation or an
+exposed lower-layer exception chain.
 Issue #661 does not confine the provider working directory or project root;
 that separate boundary remains tracked by
 [Issue #670](https://github.com/Kims-DeveloperGroup/story-writing-agents/issues/670).
@@ -1503,24 +1504,29 @@ invocation owner before the access exit can fail. `StoryRuntime` retains that
 owner strongly in one process-shared workspace/session/physical-worktree/
 operation registry. Every failure after that publication defers cleanup.
 Deferral immediately closes selected-byte results, content-bearing
-authorization, and capability authority and drops the old binding. Only
-content-free cleanup ownership remains on an unfinished operation; neither the
-failed invocation nor known provider work is replayed.
+authorization, capability authority, and the old binding access. The unfinished
+operation retains only content-free cleanup ownership and one private,
+non-traversed duplicated directory descriptor that pins the exact original
+worktree; the pin is never read, serialized, provider-visible, or used as
+repository authority.
+Neither the failed invocation nor known provider work is replayed.
 
 The next same-process artifact-sensitive boundary drains a retained owner only
 through a fresh binding with the same physical worktree identity. A replacement
-root cannot receive the old cleanup: runtime removes that stale transient owner
-and does not include its operation ID in the replacement root's live-owner
-exclusion set. The original durable history remains unchanged. A candidate-only
-consensus call enters this boundary only for known same-process pending cleanup
-and otherwise stays worktree-free. After restart, the next artifact-sensitive
-boundary inventories durable histories and reconciles unowned nonterminal
-operations. It terminates every unfinished invocation before the operation, is
-idempotent after interruption, and leaves already terminal evidence unchanged.
-A restart candidate-only consensus call does not scan the worktree, so an orphan
-waits for an artifact-sensitive boundary. Corrupt evidence fails closed and
-blocks the boundary; it is never skipped, rewritten, or used to authorize
-replay.
+root cannot receive the old cleanup: runtime closes the pin, removes that stale
+transient owner, and does not include its operation ID in the replacement root's
+live-owner exclusion set. Terminal success or failure, reconciled completion,
+stale-owner abandonment, and every unretained preparation path each close the
+pin exactly once. The original durable history remains
+unchanged. A candidate-only consensus call enters this boundary only for known
+same-process pending cleanup and otherwise stays worktree-free. After restart,
+the next artifact-sensitive boundary inventories durable histories and
+reconciles unowned nonterminal operations. It terminates every unfinished
+invocation before the operation, is idempotent after interruption, and leaves
+already terminal evidence unchanged. A restart candidate-only consensus call
+does not scan the worktree, so an orphan waits for an artifact-sensitive
+boundary. Corrupt evidence fails closed and blocks the boundary; it is never
+skipped, rewritten, or used to authorize replay.
 
 `inspect_reference_operation()` distinguishes absence from corruption. It
 returns no history only when the named operation directory is absent. If any

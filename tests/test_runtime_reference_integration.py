@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import inspect
+import os
 import threading
 import unittest
 from contextlib import contextmanager
@@ -99,6 +100,24 @@ class RuntimeExecutionRetirementTests(unittest.TestCase):
         self.assertIsNone(operation._authorization)
         self.assertIsNone(operation._repository)
         self.assertIsNone(operation._repository_access)
+
+    @staticmethod
+    def _physical_pin_factory(binding):
+        def duplicate() -> int:
+            with binding.open_ready_resources() as access:
+                return access.duplicate_worktree_descriptor()
+
+        return duplicate
+
+    def _assert_physical_pin_open(self, operation) -> int:
+        descriptor = operation._physical_workspace_pin
+        self.assertIs(type(descriptor), int)
+        os.fstat(descriptor)
+        return descriptor
+
+    def _assert_descriptor_closed(self, descriptor: int) -> None:
+        with self.assertRaises(OSError):
+            os.fstat(descriptor)
 
     def _complete_fresh_cleanup(self, binding, operation) -> None:
         with binding.open_ready_resources() as access:
@@ -351,6 +370,9 @@ class RuntimeExecutionRetirementTests(unittest.TestCase):
                     session_id="novel",
                     text="Read ${core_documents/global_outline.md}.",
                     physical_workspace_identity=binding.worktree_identity,
+                    physical_workspace_pin_factory=self._physical_pin_factory(
+                        binding
+                    ),
                 )
             self.assertIs(guarded.exception, failure)
 
@@ -365,6 +387,152 @@ class RuntimeExecutionRetirementTests(unittest.TestCase):
                 public.exception.code,
                 ReferenceAuthorizationErrorCode.WORKFLOW_FAILURE,
             )
+
+    def test_guarded_physical_pin_is_bounded_to_reference_lifecycle(self) -> None:
+        workspace = pristine_initialized_workspace(self)
+        provision_session_resources(workspace.root, "novel")
+        binding = compose_session_artifact_binding(workspace.root, "novel")
+
+        @contextmanager
+        def repository_access():
+            with binding.open_ready_resources() as access:
+                yield access.repository
+
+        no_reference_supplier = mock.Mock(
+            side_effect=AssertionError("plain text must not acquire a root pin")
+        )
+        plain = prepare_guarded_runtime_reference_operation(
+            repository_access,
+            session_id="novel",
+            text="No writing artifact reference.",
+            physical_workspace_identity=binding.worktree_identity,
+            physical_workspace_pin_factory=no_reference_supplier,
+        )
+        no_reference_supplier.assert_not_called()
+        self.assertIsNone(plain._physical_workspace_pin)
+        plain.finish()
+
+        successful = prepare_guarded_runtime_reference_operation(
+            repository_access,
+            session_id="novel",
+            text="Read ${core_documents/global_outline.md}.",
+            physical_workspace_identity=binding.worktree_identity,
+            physical_workspace_pin_factory=self._physical_pin_factory(binding),
+        )
+        successful_pin = self._assert_physical_pin_open(successful)
+        invocation = successful.begin_invocation(
+            agent_id=PLOT_ARCHITECT,
+            phase="draft",
+            round_number=None,
+        )
+        assert invocation is not None
+        action = ReferenceReadAction(
+            ReferenceReadActionKind.READ_WRITING_ARTIFACTS,
+            invocation.request.correlation,
+            invocation.request.references,
+        )
+        result = invocation.handle_reference_read_action(action)
+        self.assertEqual(result.contents, (b"",))
+        invocation.record_result_received()
+        invocation.accept()
+        successful.finish()
+        self.assertTrue(successful.finished)
+        self._assert_descriptor_closed(successful_pin)
+
+        failed = prepare_guarded_runtime_reference_operation(
+            repository_access,
+            session_id="novel",
+            text="Read ${core_documents/global_outline.md}.",
+            physical_workspace_identity=binding.worktree_identity,
+            physical_workspace_pin_factory=self._physical_pin_factory(binding),
+        )
+        failed_pin = self._assert_physical_pin_open(failed)
+        terminal = failed.failure(RuntimeError("provider stopped"))
+        self.assertIsNotNone(terminal)
+        self.assertTrue(failed.finished)
+        self._assert_descriptor_closed(failed_pin)
+
+    def test_guarded_physical_pin_closes_on_preparation_failures(self) -> None:
+        workspace = pristine_initialized_workspace(self)
+        provision_session_resources(workspace.root, "novel")
+        binding = compose_session_artifact_binding(workspace.root, "novel")
+
+        @contextmanager
+        def repository_access():
+            with binding.open_ready_resources() as access:
+                yield access.repository
+
+        supplier_marker = RuntimeError("pin supplier rejected")
+        with self.assertRaises(RuntimeError) as supplier_failure:
+            prepare_guarded_runtime_reference_operation(
+                repository_access,
+                session_id="novel",
+                text="Read ${core_documents/global_outline.md}.",
+                physical_workspace_identity=binding.worktree_identity,
+                physical_workspace_pin_factory=mock.Mock(
+                    side_effect=supplier_marker
+                ),
+            )
+        self.assertIs(supplier_failure.exception, supplier_marker)
+
+        mismatched = os.open(workspace.root, os.O_RDONLY)
+        with self.assertRaises(WorkspaceSecurityError):
+            prepare_guarded_runtime_reference_operation(
+                repository_access,
+                session_id="novel",
+                text="Read ${core_documents/global_outline.md}.",
+                physical_workspace_identity=binding.worktree_identity,
+                physical_workspace_pin_factory=lambda: mismatched,
+            )
+        self._assert_descriptor_closed(mismatched)
+
+        postcheck_marker = RuntimeError("guard postcheck rejected")
+        postcheck_pins: list[int] = []
+
+        @contextmanager
+        def rejected_repository_access():
+            with binding.open_ready_resources() as access:
+                yield access.repository
+            raise postcheck_marker
+
+        def capture_pin() -> int:
+            descriptor = self._physical_pin_factory(binding)()
+            postcheck_pins.append(descriptor)
+            return descriptor
+
+        with self.assertRaises(RuntimeError) as postcheck_failure:
+            prepare_guarded_runtime_reference_operation(
+                rejected_repository_access,
+                session_id="novel",
+                text="Read ${core_documents/global_outline.md}.",
+                physical_workspace_identity=binding.worktree_identity,
+                physical_workspace_pin_factory=capture_pin,
+            )
+        self.assertIs(postcheck_failure.exception, postcheck_marker)
+        self.assertEqual(len(postcheck_pins), 1)
+        self._assert_descriptor_closed(postcheck_pins[0])
+
+        registered: list[object] = []
+        register_marker = RuntimeError("registry rejected")
+
+        def reject_registration(operation) -> None:
+            registered.append(operation)
+            raise register_marker
+
+        with self.assertRaises(ReferenceOperationFailure) as registration_failure:
+            prepare_registered_guarded_runtime_reference_operation(
+                repository_access,
+                session_id="novel",
+                text="Read ${core_documents/global_outline.md}.",
+                physical_workspace_identity=binding.worktree_identity,
+                physical_workspace_pin_factory=self._physical_pin_factory(binding),
+                register=reject_registration,
+            )
+        self.assertIs(registration_failure.exception.__cause__, register_marker)
+        self.assertEqual(len(registered), 1)
+        abandoned = registered[0]
+        self._assert_content_free_cleanup_pending(abandoned)
+        self.assertIsNone(abandoned._physical_workspace_pin)
 
     def test_guarded_binding_failure_identity_survives_every_reference_phase(
         self,
@@ -387,6 +555,7 @@ class RuntimeExecutionRetirementTests(unittest.TestCase):
                 session_id="novel",
                 text="Read ${core_documents/global_outline.md}.",
                 physical_workspace_identity=binding.worktree_identity,
+                physical_workspace_pin_factory=self._physical_pin_factory(binding),
             )
 
         preparation_marker = SessionArtifactBindingError("preparation marker")
@@ -705,6 +874,7 @@ class RuntimeExecutionRetirementTests(unittest.TestCase):
             session_id="novel",
             text="Read ${core_documents/global_outline.md}.",
             physical_workspace_identity=binding.worktree_identity,
+            physical_workspace_pin_factory=self._physical_pin_factory(binding),
         )
         invocation = operation.begin_invocation(
             agent_id=PLOT_ARCHITECT,
@@ -781,6 +951,7 @@ class RuntimeExecutionRetirementTests(unittest.TestCase):
             session_id="novel",
             text="Read ${core_documents/global_outline.md}.",
             physical_workspace_identity=binding.worktree_identity,
+            physical_workspace_pin_factory=self._physical_pin_factory(binding),
         )
         invocation = operation.begin_invocation(
             agent_id=PLOT_ARCHITECT,
@@ -888,12 +1059,14 @@ class RuntimeExecutionRetirementTests(unittest.TestCase):
                 session_id="novel",
                 text="Read ${core_documents/global_outline.md}.",
                 physical_workspace_identity=binding.worktree_identity,
+                physical_workspace_pin_factory=self._physical_pin_factory(binding),
                 register=register,
             )
         self.assertIs(rejected.exception, marker)
         self.assertEqual(len(published), 1)
         operation = published[0]
         self._assert_content_free_cleanup_pending(operation)
+        retained_pin = self._assert_physical_pin_open(operation)
         assert operation.operation_id is not None
         self.assertEqual(
             runtime._registered_reference_operation_ids(
@@ -925,6 +1098,7 @@ class RuntimeExecutionRetirementTests(unittest.TestCase):
             repository_access=fresh_repository_access,
         )
         self.assertTrue(operation.finished)
+        self._assert_descriptor_closed(retained_pin)
         self.assertEqual(
             runtime._registered_reference_operation_ids(
                 "novel", fresh_binding.worktree_identity
@@ -969,12 +1143,14 @@ class RuntimeExecutionRetirementTests(unittest.TestCase):
                 session_id="novel",
                 text="Read ${core_documents/global_outline.md}.",
                 physical_workspace_identity=binding.worktree_identity,
+                physical_workspace_pin_factory=self._physical_pin_factory(binding),
                 register=register,
             )
         self.assertIs(rejected.exception, marker)
         self.assertEqual(len(published), 1)
         operation = published[0]
         self._assert_content_free_cleanup_pending(operation)
+        retained_pin = self._assert_physical_pin_open(operation)
 
         @contextmanager
         def fresh_repository_access():
@@ -987,6 +1163,7 @@ class RuntimeExecutionRetirementTests(unittest.TestCase):
             repository_access=fresh_repository_access,
         )
         self.assertTrue(operation.finished)
+        self._assert_descriptor_closed(retained_pin)
         self.assertEqual(
             runtime._registered_reference_operation_ids(
                 "novel", binding.worktree_identity
@@ -1011,9 +1188,9 @@ class RuntimeExecutionRetirementTests(unittest.TestCase):
 
         operation = runtime._prepare_session_reference_operation(
             repository_access,
+            artifact_binding=binding,
             session_id="novel",
             text="Read ${core_documents/global_outline.md}.",
-            physical_workspace_identity=binding.worktree_identity,
         )
         marker = SessionArtifactBindingError("authorization postcheck rejected")
 
@@ -1244,9 +1421,9 @@ class RuntimeExecutionRetirementTests(unittest.TestCase):
 
         operation = first._prepare_session_reference_operation(
             repository_access,
+            artifact_binding=binding,
             session_id="novel",
             text="Read ${core_documents/global_outline.md}.",
-            physical_workspace_identity=binding.worktree_identity,
         )
         assert operation.operation_id is not None
         second._reconcile_reference_operations_at_boundary(
@@ -1290,11 +1467,12 @@ class RuntimeExecutionRetirementTests(unittest.TestCase):
 
         operation = runtime._prepare_session_reference_operation(
             repository_access,
+            artifact_binding=binding,
             session_id="novel",
             text="Read ${core_documents/global_outline.md}.",
-            physical_workspace_identity=binding.worktree_identity,
         )
         assert operation.operation_id is not None
+        stale_pin = self._assert_physical_pin_open(operation)
         replacement_identity = (
             binding.worktree_identity[0],
             binding.worktree_identity[1] + 1,
@@ -1324,6 +1502,8 @@ class RuntimeExecutionRetirementTests(unittest.TestCase):
         )
 
         self._assert_content_free_cleanup_pending(operation)
+        self.assertIsNone(operation._physical_workspace_pin)
+        self._assert_descriptor_closed(stale_pin)
         self.assertEqual(replacement.excluded, frozenset())
         self.assertEqual(
             runtime._registered_reference_operation_ids(
@@ -1356,9 +1536,9 @@ class RuntimeExecutionRetirementTests(unittest.TestCase):
 
         operation = runtime._prepare_session_reference_operation(
             repository_access,
+            artifact_binding=binding,
             session_id="novel",
             text="Read ${core_documents/global_outline.md}.",
-            physical_workspace_identity=binding.worktree_identity,
         )
         invocation = operation.begin_invocation(
             agent_id=PLOT_ARCHITECT,
@@ -1454,6 +1634,7 @@ class RuntimeExecutionRetirementTests(unittest.TestCase):
             session_id="novel",
             text="Read ${core_documents/global_outline.md}.",
             physical_workspace_identity=binding.worktree_identity,
+            physical_workspace_pin_factory=self._physical_pin_factory(binding),
         )
         invocation = operation.begin_invocation(
             agent_id=PLOT_ARCHITECT,

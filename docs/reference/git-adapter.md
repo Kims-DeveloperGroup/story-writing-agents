@@ -716,7 +716,12 @@ The recovery-only history wrapper normalizes a direct lease rejection from any
 of its surfaces or teardown to a sanitized
 `GitSessionHistoryError(GitSessionHistoryFailureCode.UNSAFE_ROOT)` without
 exposing a chained repository-lock failure. It remains read-only and grants no
-replacement history authority.
+replacement history authority. Its direct `require_recovery_topology()` method
+also normalizes any delegated `GitSessionResourceError` to
+`GitSessionHistoryError(GitSessionHistoryFailureCode.RECOVERY_REQUIRED)` with
+`operator_recovery`, no chained resource exception, and no mutation. Callers
+therefore remain entirely within the history-owned error contract even when the
+lower session-resource topology check fails.
 
 Opening a history first requires the exact #504 session triple to be `ready`,
 then takes the same repository-wide lease used by provisioning and revalidates

@@ -25,6 +25,116 @@ from tests import test_lead_story_commit as commit
 
 
 class LeadRecommendationTests(RecommendationCase):
+    async def test_lead_recommendation_reuses_invocation_artifact_binding(self):
+        invocation_bindings = []
+        request_bindings = []
+        basis_bindings = []
+        fingerprint_bindings = []
+        original_binding = self.runtime._session_artifact_binding
+        original_request = self.runtime._recommendation_request_draft
+        original_basis = self.runtime._recommendation_basis
+        original_fingerprint = self.runtime._recommendation_source_fingerprint
+
+        def capture_binding(session_id):
+            binding = original_binding(session_id)
+            invocation_bindings.append(binding)
+            return binding
+
+        def capture_request(*args, **kwargs):
+            request_bindings.append(kwargs["artifact_binding"])
+            return original_request(*args, **kwargs)
+
+        def capture_basis(*args, **kwargs):
+            basis_bindings.append(kwargs["artifact_binding"])
+            return original_basis(*args, **kwargs)
+
+        def capture_fingerprint(*args, **kwargs):
+            fingerprint_bindings.append(kwargs["artifact_binding"])
+            return original_fingerprint(*args, **kwargs)
+
+        with mock.patch.object(
+            self.runtime,
+            "_session_artifact_binding",
+            side_effect=capture_binding,
+        ), mock.patch.object(
+            self.runtime,
+            "_recommendation_request_draft",
+            side_effect=capture_request,
+        ), mock.patch.object(
+            self.runtime,
+            "_recommendation_basis",
+            side_effect=capture_basis,
+        ), mock.patch.object(
+            self.runtime,
+            "_recommendation_source_fingerprint",
+            side_effect=capture_fingerprint,
+        ):
+            _conversation_id, turn = await self.recommend()
+
+        self.assertIsNotNone(turn.recommendation_request)
+        self.assertGreaterEqual(len(invocation_bindings), 1)
+        self.assertEqual(len(request_bindings), 2)
+        self.assertEqual(len(basis_bindings), 2)
+        self.assertEqual(len(fingerprint_bindings), 4)
+        invocation_binding = request_bindings[0]
+        self.assertTrue(
+            any(binding is invocation_binding for binding in invocation_bindings)
+        )
+        self.assertTrue(
+            all(
+                binding is invocation_binding
+                for binding in (
+                    *request_bindings,
+                    *basis_bindings,
+                    *fingerprint_bindings,
+                )
+            )
+        )
+
+    async def test_lead_recommendation_fails_closed_after_binding_replacement(self):
+        conversation_id = self.conversation("Replace during recommendation")
+        self.backend.enqueue(recommendation())
+        original_request = self.runtime._recommendation_request_draft
+        replacement = self.replace_session_worktree()
+        entered = False
+        calls = 0
+
+        def replace_after_validation(*args, **kwargs):
+            nonlocal entered, calls
+            result = original_request(*args, **kwargs)
+            calls += 1
+            if calls == 1:
+                replacement.__enter__()
+                entered = True
+            return result
+
+        try:
+            with mock.patch.object(
+                self.runtime,
+                "_recommendation_request_draft",
+                side_effect=replace_after_validation,
+            ):
+                turn = await self.runtime.lead_turn(
+                    self.session_id,
+                    conversation_id,
+                    "Recommend preparing this finished outline.\n"
+                    f"Finished candidate:\n{DRAFT}",
+                )
+        finally:
+            if entered:
+                replacement.__exit__(None, None, None)
+
+        self.assertEqual(calls, 1)
+        self.assertIs(turn.state, c.CollaborationStepState.RECOVERY_REQUIRED)
+        self.assertIs(
+            turn.next_action,
+            c.CollaborationNextAction.REPAIR_AUTHORITATIVE_HISTORY,
+        )
+        self.assertIsNone(turn.recommendation_request)
+        self.assertFalse(
+            self.payload_events(conversation_id, c.LeadRecommendationRequestPayload)
+        )
+
     async def test_legacy_unscoped_recommendation_stays_readable_but_decisions_are_stale(self):
         for kind in (c.CollaborationConfirmationDecision.CONFIRM, c.CollaborationConfirmationDecision.REVISE):
             with self.subTest(kind=kind):
@@ -685,6 +795,75 @@ class LeadRecommendationSynthesisTests(RecommendationCase):
                 self.assertIsNone(turn.recommendation_request)
                 self.assertIs(turn.state, c.CollaborationStepState.COMPLETED)
             self.assertEqual(self.snapshots(), before)
+
+    async def test_synthesis_recommendation_reuses_invocation_artifact_binding(self):
+        conversation_id = self.conversation("Synthesis binding")
+        proposed = await self.proposal(
+            conversation_id,
+            text="Review this finished user candidate: " + DRAFT,
+        )
+        self.backend.enqueue_for(PLOT_ARCHITECT, lead._specialist_outcome())
+        self.backend.enqueue_for(
+            LEAD_ORCHESTRATOR,
+            lead._synthesis_outcome(
+                message=DRAFT,
+                recommended_action=action(),
+            ),
+        )
+        request_bindings = []
+        basis_bindings = []
+        fingerprint_bindings = []
+        original_request = self.runtime._recommendation_request_draft
+        original_basis = self.runtime._recommendation_basis
+        original_fingerprint = self.runtime._recommendation_source_fingerprint
+
+        def capture_request(*args, **kwargs):
+            request_bindings.append(kwargs["artifact_binding"])
+            return original_request(*args, **kwargs)
+
+        def capture_basis(*args, **kwargs):
+            basis_bindings.append(kwargs["artifact_binding"])
+            return original_basis(*args, **kwargs)
+
+        def capture_fingerprint(*args, **kwargs):
+            fingerprint_bindings.append(kwargs["artifact_binding"])
+            return original_fingerprint(*args, **kwargs)
+
+        with mock.patch.object(
+            self.runtime,
+            "_recommendation_request_draft",
+            side_effect=capture_request,
+        ), mock.patch.object(
+            self.runtime,
+            "_recommendation_basis",
+            side_effect=capture_basis,
+        ), mock.patch.object(
+            self.runtime,
+            "_recommendation_source_fingerprint",
+            side_effect=capture_fingerprint,
+        ):
+            result = await self.runtime.decide_lead_step(
+                lead._decision(
+                    proposed,
+                    c.CollaborationConfirmationDecision.CONFIRM,
+                )
+            )
+
+        self.assertIsNotNone(result.turn.recommendation_request)
+        self.assertEqual(len(request_bindings), 2)
+        self.assertEqual(len(basis_bindings), 2)
+        self.assertEqual(len(fingerprint_bindings), 4)
+        synthesis_binding = request_bindings[0]
+        self.assertTrue(
+            all(
+                binding is synthesis_binding
+                for binding in (
+                    *request_bindings,
+                    *basis_bindings,
+                    *fingerprint_bindings,
+                )
+            )
+        )
 
     async def test_synthesis_next_intent_and_action_are_exclusive_with_bounded_accounting(self):
         conversation_id, _, mixed = await self.consultation(actionable=True, mixed=True)

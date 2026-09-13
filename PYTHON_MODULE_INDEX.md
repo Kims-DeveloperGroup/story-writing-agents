@@ -2949,8 +2949,10 @@ every intermediate arrow. The current runtime graph is acyclic.
   candidate/commit reads and caller-validated recovery transitions while
   deferring index cleanliness. Every recovery property, read, write, topology,
   and public-close surface normalizes lease-affinity loss to the history-owned
-  content-free unsafe-root failure, while private context teardown and
-  descriptor cleanup remain unconditional.
+  content-free unsafe-root failure. Direct recovery-topology reinspection also
+  normalizes Git session-resource drift to the history-owned content-free
+  recovery-required failure, while private context teardown and descriptor
+  cleanup remain unconditional.
   Opening accepts an optional exact-config worktree allowance for workspace
   composition and otherwise retains strict session-resource validation.
 - **Direct internal dependencies:** `git.contracts`, `git.process`,
@@ -7006,8 +7008,12 @@ every intermediate arrow. The current runtime graph is acyclic.
   existing `LeadTurnResult`; there is no additional public decision-result
   facade. `_recommendation_request_draft` resolves runtime-offered aliases,
   including `current_response` as the exact same-batch whole-message digest,
-  before disclosure. An existing objective may contribute still-offered
-  selected drafts only before Confirm, in the immutable ordered input list.
+  before disclosure. Lead and synthesis validation and persistence reuse the
+  same exact invocation `SessionArtifactBinding` for policy/profile basis and
+  artifact-source fingerprint construction; no request component silently
+  composes a fresher worktree generation. An existing objective may contribute
+  still-offered selected drafts only before Confirm, in the immutable ordered
+  input list.
   Runtime fingerprints effective targets and source metadata/content, selected
   input revisions/ranges, Lead/specialist profiles, route, context/budget
   policy, and inherited physical-call reservation. It revalidates those facts
@@ -7138,9 +7144,18 @@ every intermediate arrow. The current runtime graph is acyclic.
   concurrent runtime cannot reconcile an operation between durable capture and
   registry publication.
   Deferred operations have already released transient bytes and their stale
-  repository binding. Same-identity operations are removed only after fresh
-  guarded access passes its outer postcheck and durable terminalization is
-  known. A retained handle from a replaced physical worktree is instead
+  repository binding. Each referenced operation also owns one private,
+  non-traversed descriptor pin duplicated from its exact guarded worktree;
+  `runtime_references` uses that pin only for identity validation and close,
+  preventing the retained device/inode identity from being recycled while
+  cleanup is pending. No-reference preparation acquires no pin. Successful or
+  durably terminal completion, reconciled completion, replaced-worktree
+  abandonment, registration rejection, and every unretained preparation error
+  close the pin exactly once; ordinary deferred cleanup retains it until
+  same-generation reconciliation or stale abandonment. Same-identity
+  operations are removed only after fresh guarded access passes its outer
+  postcheck and durable terminalization is known. A retained handle from a
+  replaced physical worktree is instead
   locally deferred and removed without accessing the replacement repository or
   marking copied durable evidence terminal; its ID is not excluded from that
   repository's independent restart reconciliation.
@@ -7752,6 +7767,11 @@ every intermediate arrow. The current runtime graph is acyclic.
   leaf is prechecked at 8 MiB and incrementally limited to that content plus one
   detection byte, then required during its read to remain the same unique
   regular file with stable metadata; growth cannot bypass the running bound. A
+  complete agent-state read additionally admits at most 8 MiB of JSONL bytes
+  and 10,000 records across all selected files. The remaining aggregate byte
+  allowance is passed into each descriptor-relative leaf read, and record
+  10,001 fails before parsing or retention, so per-file-valid inputs cannot
+  accumulate beyond the context adapter's established limits. A
   missing nested directory is rechecked immediately
   before an empty result returns and must remain absent across the complete
   operation. Debate result/state session and debate
@@ -8362,8 +8382,8 @@ every intermediate arrow. The current runtime graph is acyclic.
   `reference_operation_session_id` decoder. Package-internal
   `prepare_guarded_runtime_reference_operation(...)`, omitted from every
   facade, injects a repository-access context-manager callback and requires the
-  immutable physical worktree identity used by identity-checked cleanup,
-  without changing the established operation constructor or public preparation
+  immutable physical worktree identity and a narrow descriptor supplier used
+  by identity-checked cleanup, without changing the public preparation
   signature. The
   sibling package-internal
   `prepare_registered_guarded_runtime_reference_operation(...)` publishes a
@@ -8404,10 +8424,15 @@ every intermediate arrow. The current runtime graph is acyclic.
   transient
   results and authorization bytes are closed, pending
   coordinators are discarded, and the stale repository/access callback is
-  detached. A later owner can reconcile the exact operation through a freshly
-  guarded same-identity repository; an identity mismatch fails closed before
-  repository use, while explicit replacement deferral only erases local
-  transient authority. Runtime state becomes finished only after the outer
+  detached. The operation retains its private, non-inheritable worktree
+  directory descriptor across ordinary deferred cleanup, uses it only for
+  `fstat` identity validation and close, and releases it on successful/durable
+  terminalization, reconciled completion, replacement abandonment, or any
+  unregistered preparation failure. A later owner can reconcile the exact
+  operation through a freshly guarded same-identity repository; an identity
+  mismatch fails closed before repository use, while explicit replacement
+  deferral only erases local transient authority. Runtime state becomes
+  finished only after the outer
   postcheck accepts already-terminal durable evidence. Postcheck failure leaves
   the retained handle cleanup-eligible while already-persisted repository
   evidence remains authoritative.
@@ -8767,7 +8792,14 @@ every intermediate arrow. The current runtime graph is acyclic.
   exact. Bounded session-source reads and inventories, session-bound behavior
   policy capture, and physical-identity-aware runtime-reference cleanup change
   no module, import edge, export, facade, persisted schema field, or schema
-  version. Deterministic story-commit operation binding, exact staged-recovery
+  version. Aggregate session-agent-state loading now enforces the existing
+  byte/record ceilings before retaining excess input; retained reference
+  operations pin their exact physical worktree generation without traversal;
+  recommendation construction reuses one exact invocation binding; and direct
+  recovery-topology resource drift maps to the established recovery-required
+  history outcome. These refinements likewise add no module, import edge,
+  export, facade, persisted schema field, or schema version. Deterministic
+  story-commit operation binding, exact staged-recovery
   provenance, and submitted-call preservation across reference-cleanup binding
   loss change no module, import edge, export, schema field, or schema version.
   Pre-change random Commit and confirmation-salted Reject operation identities

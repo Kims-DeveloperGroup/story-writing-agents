@@ -122,8 +122,10 @@ parent descriptor and rechecks the complete inventory: names plus device,
 inode, type, link count, size, nanosecond modification time, and nanosecond
 change time. Exactly 8,192 entries are accepted per inventoried directory; an
 additional entry, parent replacement, or any inventory drift fails closed. A
-missing
-agent-state parent produces an empty result only after absence is checked when
+compound agent-state read additionally accepts at most 8 MiB across all of its
+JSONL files and at most 10,000 records; the exact limits are accepted and the
+first excess byte or record fails closed. A missing agent-state parent produces
+an empty result only after absence is checked when
 the open fails and again immediately before return; creation between those
 observations fails closed. A missing, replaced, or unsafe bound root fails
 closed as a content-free `source_unavailable` instead of borrowing control-root
@@ -684,6 +686,14 @@ foreign session decision with `ValueError`. Current-basis drift closes as
 `stale` without preparation. Session/conversation
 serialization prevents two concurrent decisions from consuming one request.
 
+For both a direct Lead recommendation and a collaboration-synthesis
+recommendation, runtime carries the invocation's one exact session-artifact
+binding through response validation and request persistence. The recommendation
+basis and source fingerprint are derived through that same binding object; a
+fresh binding cannot silently substitute another worktree generation between
+provider invocation, validation, and persistence. Its repository guards remain
+short and no Git lease spans the provider await.
+
 Ordinary input is a real new authoring instruction: runtime atomically records
 it and supersedes an unconfirmed recommendation before the new Lead turn. It
 never fabricates a structured Confirm. Known preparation results can finalize
@@ -1073,11 +1083,17 @@ owner before a fallible access exit. Every failure after publication defers
 cleanup. A process-shared `StoryRuntime` registry keys content-free ownership
 by control workspace, session, physical worktree identity, and operation while
 transient bytes/results, authorization, capability authority, and retained
-binding access are closed. The next same-process artifact-sensitive boundary
-reconciles only an owner whose physical identity matches its fresh binding. A
-replacement root receives neither the old cleanup nor its operation ID in the
-replacement's live-owner exclusion set; the stale transient owner is removed
-and the original durable history is unchanged. After restart, the next such
+binding access are closed. The operation retains one private, non-traversed
+duplicated directory descriptor that pins the exact original worktree during
+deferred cleanup. This descriptor is never read, serialized, exposed to a
+provider, or treated as repository authority. It closes exactly once on a
+terminal success or failure, reconciled completion, stale-owner abandonment,
+or an unretained preparation path. The next same-process artifact-sensitive
+boundary reconciles
+only an owner whose physical identity matches its fresh binding. A replacement
+root receives neither the old cleanup nor its operation ID in the replacement's
+live-owner exclusion set; the stale transient owner and its pin are closed and
+the original durable history is unchanged. After restart, the next such
 boundary reconciles durable nonterminal orphans instead. Reconciliation is
 invocation-first, operation-second, idempotent, non-replaying, and fail-closed
 on corrupt evidence. See

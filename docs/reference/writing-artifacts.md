@@ -1360,16 +1360,23 @@ Every failure after registered guarded creation has published the operation
 defers cleanup, not only guard or workspace-security failures. Deferral
 immediately closes every retained selected-byte result and content-bearing
 authorization, makes one-use capabilities unusable, clears pending coordinators
-and repository access, and leaves only content-free ownership of the unfinished
-operation. The failed invocation and any known provider work are not replayed.
+and repository access, and leaves content-free ownership plus one private,
+non-traversed duplicated directory descriptor that pins the exact original
+worktree. The pin is never read, serialized, provider-visible, or usable as
+repository authority. The failed invocation and any known provider work are
+not replayed.
 At the next same-process artifact-sensitive boundary, runtime reconciles a
 retained owner only when the fresh binding has the same physical worktree
-identity. If the session name now resolves to a replacement root, it strips and
-unregisters the stale transient owner without running its cleanup against the
-replacement and without adding the old operation ID to the replacement's
-live-owner exclusion set; the original root's durable history is unchanged. A
-candidate-only consensus call enters this boundary only when the registry
-reports pending cleanup; otherwise it remains worktree-free.
+identity. Same-generation terminal or reconciled completion closes the pin. If
+the session name now resolves to a replacement root, runtime closes the pin,
+strips and unregisters the stale transient owner without running its cleanup
+against the replacement, and does not add the old operation ID to the
+replacement's live-owner exclusion set; the original root's durable history is
+unchanged. Terminal success or failure, reconciled completion, stale-owner
+abandonment, and every unretained preparation path each close the pin exactly
+once. A candidate-only consensus call enters this boundary only when the
+registry reports pending cleanup; otherwise it
+remains worktree-free.
 
 After process restart, no transient registry owner survives. The next
 artifact-sensitive boundary inventories validated reference history and

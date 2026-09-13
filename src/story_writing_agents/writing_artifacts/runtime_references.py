@@ -8,7 +8,9 @@ ownership; the backend retains provider-action enforcement.
 from __future__ import annotations
 
 import asyncio
+import os
 import re
+import stat
 import threading
 import uuid
 from collections.abc import Callable, Iterator
@@ -210,6 +212,7 @@ class RuntimeReferenceOperation:
         "_next_ordinal",
         "_pending",
         "_physical_workspace_identity",
+        "_physical_workspace_pin",
         "_repository",
         "_repository_access",
         "_provider_text",
@@ -230,6 +233,7 @@ class RuntimeReferenceOperation:
         operation_id: str | None,
         authorization: ReferenceAuthorization | None,
         physical_workspace_identity: tuple[int, int] | None = None,
+        physical_workspace_pin: int | None = None,
     ) -> None:
         if type(repository) is not WritingArtifactRepository:
             raise TypeError("repository must be a WritingArtifactRepository")
@@ -254,6 +258,24 @@ class RuntimeReferenceOperation:
             )
         ):
             raise TypeError("physical workspace identity is invalid")
+        if (physical_workspace_identity is None) != (physical_workspace_pin is None):
+            raise ValueError("physical workspace identity and pin differ")
+        if physical_workspace_pin is not None:
+            if type(physical_workspace_pin) is not int or physical_workspace_pin < 0:
+                raise TypeError("physical workspace pin is invalid")
+            try:
+                pinned = os.fstat(physical_workspace_pin)
+            except OSError:
+                raise WorkspaceSecurityError(
+                    "physical workspace pin is unavailable"
+                ) from None
+            if (
+                not stat.S_ISDIR(pinned.st_mode)
+                or (pinned.st_dev, pinned.st_ino) != physical_workspace_identity
+            ):
+                raise WorkspaceSecurityError(
+                    "physical workspace pin identity changed"
+                )
         self._repository: WritingArtifactRepository | None = repository
         self._repository_access: (
             Callable[[], AbstractContextManager[WritingArtifactRepository]] | None
@@ -269,6 +291,7 @@ class RuntimeReferenceOperation:
         self._next_ordinal = 1
         self._pending: dict[str, _TrackedReferenceReadInvocation] = {}
         self._physical_workspace_identity = physical_workspace_identity
+        self._physical_workspace_pin = physical_workspace_pin
         self._cleanup_pending = False
         self._finished = False
         self._guarded = False
@@ -336,6 +359,7 @@ class RuntimeReferenceOperation:
                     ReferenceAuthorizationErrorCode.CORRELATION_MISMATCH,
                 )
             self._defer_cleanup_locked()
+            self._close_physical_workspace_pin_locked()
             return True
 
     def begin_invocation(
@@ -427,6 +451,8 @@ class RuntimeReferenceOperation:
         """Accept this operation once after all provider invocations completed."""
 
         if self.operation_id is None:
+            with self._lock:
+                self._close_physical_workspace_pin_locked()
             return
         with self._lock:
             if self._finished:
@@ -468,14 +494,14 @@ class RuntimeReferenceOperation:
                     ReferenceAuthorizationErrorCode.WORKFLOW_FAILURE,
                 )
                 if self._durably_terminal_locked():
-                    self._finished = True
+                    self._mark_finished_locked()
                 else:
                     self._defer_cleanup_locked()
                 raise ReferenceOperationFailure(
                     self._required_operation_id(),
                     code,
                 ) from action_failure
-            self._finished = True
+            self._mark_finished_locked()
 
     def failure(
         self,
@@ -488,6 +514,8 @@ class RuntimeReferenceOperation:
         """Terminate unfinished state and return one safe structured failure."""
 
         if self.operation_id is None:
+            with self._lock:
+                self._close_physical_workspace_pin_locked()
             return None
         preserve_guard_failure = self._preserves_guard_failure(failure)
         code = _failure_code(failure, default)
@@ -540,7 +568,7 @@ class RuntimeReferenceOperation:
             else:
                 code = _failure_code(exc, code)
         if entered and self._durably_terminal_locked():
-            self._finished = True
+            self._mark_finished_locked()
         else:
             self._defer_cleanup_locked()
         return ReferenceOperationFailure(operation_id, code)
@@ -603,7 +631,7 @@ class RuntimeReferenceOperation:
                     ReferenceAuthorizationErrorCode.INVALID_TRANSITION,
                 )
             self._cleanup_pending = False
-            self._finished = True
+            self._mark_finished_locked()
 
     def _durably_terminal_locked(self) -> bool:
         try:
@@ -640,6 +668,27 @@ class RuntimeReferenceOperation:
         self._repository = None
         self._repository_access = None
         self._cleanup_pending = True
+
+    def _abandon_unretained(self) -> None:
+        """Close content and the root pin when no registry owns this operation."""
+
+        with self._lock:
+            self._defer_cleanup_locked()
+            self._close_physical_workspace_pin_locked()
+
+    def _mark_finished_locked(self) -> None:
+        self._finished = True
+        self._close_physical_workspace_pin_locked()
+
+    def _close_physical_workspace_pin_locked(self) -> None:
+        descriptor = self._physical_workspace_pin
+        if descriptor is None:
+            return
+        self._physical_workspace_pin = None
+        try:
+            os.close(descriptor)
+        except OSError:
+            pass
 
     def _retire_invocation(
         self,
@@ -723,22 +772,35 @@ def prepare_guarded_runtime_reference_operation(
     session_id: str,
     text: str,
     physical_workspace_identity: tuple[int, int],
+    physical_workspace_pin_factory: Callable[[], int],
 ) -> RuntimeReferenceOperation:
     """Prepare a package-internal operation with short guarded repository calls."""
 
     if not callable(repository_access):
         raise TypeError("repository_access must be callable")
-    with repository_access() as repository:
-        if type(repository) is not WritingArtifactRepository:
-            raise TypeError("repository access must yield a WritingArtifactRepository")
-        return _prepare_runtime_reference_operation(
-            repository,
-            session_id=session_id,
-            text=text,
-            repository_access=repository_access,
-            operation_created=None,
-            physical_workspace_identity=physical_workspace_identity,
-        )
+    if not callable(physical_workspace_pin_factory):
+        raise TypeError("physical workspace pin factory must be callable")
+    operation: RuntimeReferenceOperation | None = None
+    try:
+        with repository_access() as repository:
+            if type(repository) is not WritingArtifactRepository:
+                raise TypeError(
+                    "repository access must yield a WritingArtifactRepository"
+                )
+            operation = _prepare_runtime_reference_operation(
+                repository,
+                session_id=session_id,
+                text=text,
+                repository_access=repository_access,
+                operation_created=None,
+                physical_workspace_identity=physical_workspace_identity,
+                physical_workspace_pin_factory=physical_workspace_pin_factory,
+            )
+            return operation
+    except BaseException:
+        if operation is not None:
+            operation._abandon_unretained()
+        raise
 
 
 def prepare_registered_guarded_runtime_reference_operation(
@@ -749,6 +811,7 @@ def prepare_registered_guarded_runtime_reference_operation(
     session_id: str,
     text: str,
     physical_workspace_identity: tuple[int, int],
+    physical_workspace_pin_factory: Callable[[], int],
     register: Callable[[RuntimeReferenceOperation], None],
 ) -> RuntimeReferenceOperation:
     """Publish captured authority to its runtime owner before guard exit."""
@@ -757,12 +820,16 @@ def prepare_registered_guarded_runtime_reference_operation(
         raise TypeError("repository_access must be callable")
     if not callable(register):
         raise TypeError("register must be callable")
+    if not callable(physical_workspace_pin_factory):
+        raise TypeError("physical workspace pin factory must be callable")
     operation: RuntimeReferenceOperation | None = None
+    published = False
 
     def publish(created: RuntimeReferenceOperation) -> None:
-        nonlocal operation
+        nonlocal operation, published
         operation = created
         register(created)
+        published = True
 
     try:
         with repository_access() as repository:
@@ -770,17 +837,29 @@ def prepare_registered_guarded_runtime_reference_operation(
                 raise TypeError(
                     "repository access must yield a WritingArtifactRepository"
                 )
-            return _prepare_runtime_reference_operation(
+            prepared = _prepare_runtime_reference_operation(
                 repository,
                 session_id=session_id,
                 text=text,
                 repository_access=repository_access,
                 operation_created=publish,
                 physical_workspace_identity=physical_workspace_identity,
+                physical_workspace_pin_factory=physical_workspace_pin_factory,
             )
+            if prepared.has_references and (
+                operation is not prepared or not published
+            ):
+                prepared._abandon_unretained()
+                raise ReferenceOperationFailure(
+                    prepared._required_operation_id(),
+                    ReferenceAuthorizationErrorCode.WORKFLOW_FAILURE,
+                )
+            return prepared
     except BaseException:
         if operation is not None:
             operation._defer_cleanup()
+            if not published:
+                operation._abandon_unretained()
         raise
 
 
@@ -794,11 +873,53 @@ def _prepare_runtime_reference_operation(
     ] | None,
     operation_created: Callable[[RuntimeReferenceOperation], None] | None = None,
     physical_workspace_identity: tuple[int, int] | None = None,
+    physical_workspace_pin_factory: Callable[[], int] | None = None,
 ) -> RuntimeReferenceOperation:
     """Implement public and package-internal reference preparation."""
 
     if not isinstance(text, str):
         raise TypeError("reference operation text must be a string")
+    if (physical_workspace_identity is None) != (
+        physical_workspace_pin_factory is None
+    ):
+        raise ValueError("physical workspace identity and pin factory differ")
+
+    def create_operation(
+        *,
+        batch: ArtifactReferenceBatch | None,
+        source_text: str,
+        provider_text: str,
+        operation_id: str | None,
+        authorization: ReferenceAuthorization | None,
+    ) -> RuntimeReferenceOperation:
+        physical_workspace_pin = (
+            None
+            if physical_workspace_pin_factory is None
+            else physical_workspace_pin_factory()
+        )
+        try:
+            return RuntimeReferenceOperation(
+                repository,
+                session_id=session_id,
+                batch=batch,
+                source_text=source_text,
+                provider_text=provider_text,
+                operation_id=operation_id,
+                authorization=authorization,
+                physical_workspace_identity=physical_workspace_identity,
+                physical_workspace_pin=physical_workspace_pin,
+            )
+        except BaseException:
+            if (
+                type(physical_workspace_pin) is int
+                and physical_workspace_pin >= 0
+            ):
+                try:
+                    os.close(physical_workspace_pin)
+                except OSError:
+                    pass
+            raise
+
     if not any(marker in text for marker in ("${", "$$", "\\$")):
         operation = RuntimeReferenceOperation(
             repository,
@@ -808,7 +929,6 @@ def _prepare_runtime_reference_operation(
             provider_text=text,
             operation_id=None,
             authorization=None,
-            physical_workspace_identity=physical_workspace_identity,
         )
         operation._repository_access = repository_access
         operation._guarded = repository_access is not None
@@ -823,7 +943,6 @@ def _prepare_runtime_reference_operation(
             provider_text=batch.provider_text,
             operation_id=None,
             authorization=None,
-            physical_workspace_identity=physical_workspace_identity,
         )
         operation._repository_access = repository_access
         operation._guarded = repository_access is not None
@@ -833,15 +952,12 @@ def _prepare_runtime_reference_operation(
 
     def publish(authorization: ReferenceAuthorization) -> None:
         nonlocal operation
-        operation = RuntimeReferenceOperation(
-            repository,
-            session_id=session_id,
+        operation = create_operation(
             batch=batch,
             source_text=batch.source_text,
             provider_text=batch.provider_text,
             operation_id=operation_id,
             authorization=authorization,
-            physical_workspace_identity=physical_workspace_identity,
         )
         operation._repository_access = repository_access
         operation._guarded = repository_access is not None
@@ -878,15 +994,12 @@ def _prepare_runtime_reference_operation(
             ReferenceAuthorizationErrorCode.WORKFLOW_FAILURE,
         )
     if operation is None:
-        operation = RuntimeReferenceOperation(
-            repository,
-            session_id=session_id,
+        operation = create_operation(
             batch=batch,
             source_text=batch.source_text,
             provider_text=batch.provider_text,
             operation_id=operation_id,
             authorization=authorization,
-            physical_workspace_identity=physical_workspace_identity,
         )
         operation._repository_access = repository_access
         operation._guarded = repository_access is not None

@@ -671,12 +671,17 @@ class GitSessionRecoveryHistory:
         """Repeat exact index-tolerant topology inspection under the live lease."""
 
         self.require_active()
-        confirmed = require_story_commit_recovery_locked_git_session_resources(
-            self._lease,
-            self._manifest,
-            self.session_id,
-            allowed_worktree_changes=self._allowed_worktree_changes,
-        )
+        try:
+            confirmed = require_story_commit_recovery_locked_git_session_resources(
+                self._lease,
+                self._manifest,
+                self.session_id,
+                allowed_worktree_changes=self._allowed_worktree_changes,
+            )
+        except GitSessionResourceError:
+            raise _history_error(
+                GitSessionHistoryFailureCode.RECOVERY_REQUIRED
+            ) from None
         if confirmed != self._topology:
             raise _history_error(GitSessionHistoryFailureCode.RECOVERY_REQUIRED)
         self.require_active()
