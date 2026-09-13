@@ -513,7 +513,7 @@ class Workspace:
         for line_number, line in enumerate(self.read_text(relative).splitlines(), 1):
             try:
                 value = json.loads(line)
-                expected = {
+                base_fields = {
                     "sender",
                     "phase",
                     "round",
@@ -522,9 +522,12 @@ class Workspace:
                     "content",
                     "timestamp",
                 }
-                if not isinstance(value, dict) or set(value) != expected:
+                valid_fields = (base_fields, {*base_fields, "trace"})
+                if not isinstance(value, dict) or set(value) not in valid_fields:
                     raise TypeError("debate log entry has an invalid schema")
-                string_fields = expected.difference({"round"})
+                if "trace" in value and type(value["trace"]) is not dict:
+                    raise TypeError("debate log trace must be an object")
+                string_fields = base_fields.difference({"round"})
                 if any(not isinstance(value[field], str) for field in string_fields):
                     raise TypeError("debate log string field has an invalid type")
                 round_number = value["round"]
