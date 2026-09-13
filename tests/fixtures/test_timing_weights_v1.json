@@ -1,0 +1,25 @@
+{
+  "fallback_test_weight_microseconds": 1000000,
+  "group_weights_microseconds": {
+    "tests.test_antigravity_parity.AntigravityParityTests": 39652226,
+    "tests.test_codex_backend.CodexBackendTestCase": 133144799,
+    "tests.test_git_adapter_integration.GitAdapterIntegrationTests": 17612045,
+    "tests.test_git_session_history.GitSessionHistorySafetyTests": 135088668,
+    "tests.test_git_session_resources.GitSessionResourceCollisionTests": 7647948,
+    "tests.test_git_session_resources.GitSessionResourceLifecycleTests": 81407914,
+    "tests.test_git_session_resources.GitSessionResourceRestartTests": 81683112,
+    "tests.test_git_session_resources.GitSessionResourceSafetyTests": 145861517,
+    "tests.test_interactive_pty.InteractiveCliPtyTests": 733184136,
+    "tests.test_sqlite_collaboration_event_store.SQLiteCollaborationEventStoreFirstSliceTests": 9323627,
+    "tests.test_sqlite_conversation_storage.SQLiteArchiveTests": 1085830,
+    "tests.test_sqlite_database.SQLiteDatabaseProvisioningTests": 1230725,
+    "tests.test_sqlite_database.SQLiteDatabaseVerificationTests": 6552152,
+    "tests.test_workspace_and_config.WorkspaceContractTests": 10276921,
+    "tests.test_workspace_fixtures.WorkspaceFixtureContractTests": 16362374,
+    "tests.test_workspace_session_history.WorkspaceSessionHistoryCompositionTests": 37739181,
+    "tests.test_workspace_session_resources.WorkspaceSessionResourceCompositionTests": 72602425
+  },
+  "policy_version": 1,
+  "provenance": "Issue #683 seed: observed completed-class timings from focused #682 evidence and the pre-shard #683 affected run, with deterministic count-scaled estimates for sampled or interrupted classes; unlisted classes use the one-second-per-test fallback. This is not a fully observed suite baseline.",
+  "schema_version": 1
+}
