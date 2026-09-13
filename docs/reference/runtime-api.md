@@ -155,8 +155,9 @@ The projection states are `awaiting_confirmation`, `confirmed`, `running`,
 `request_decision`, `start_confirmed_phase`, `wait_for_phase`,
 `request_next_phase`, `inspect_failure`, `operator_recovery`,
 `continue_deadlock`, or `none`.
-`publication_allowed` is always false. A terminal deadlock reports
-`next_action=continue_deadlock`.
+`publication_allowed` is always false. A terminal SYNTHESIS deadlock reports
+`next_action=continue_deadlock`; a REPAIR or FINALIZATION fallback deadlock
+reports `next_action=inspect_failure`.
 
 The normal phase graph is DRAFT → AUDIT → SYNTHESIS. Lead synthesis selects
 REPAIR → REAUDIT → SYNTHESIS, FINALIZATION, or deadlock. Every phase is a new
@@ -164,6 +165,14 @@ request and confirmation. Audits invoke all three specialists against the same
 revision; the lead synthesizes and finalizes but does not vote. Finalization is
 a read-only handoff to a separately confirmed artifact Apply, followed later
 by a separately confirmed Git Commit.
+
+Each rejected structured phase result receives one bounded repair. If that
+repair is exhausted, DRAFT records `failed` with no candidate. REPAIR,
+SYNTHESIS, and FINALIZATION record `deadlocked`, retain the trusted input
+candidate, select no next phase, and still forbid publication. Only the
+SYNTHESIS case is a valid continuation source; REPAIR and FINALIZATION direct
+the caller to failure inspection. The returned provider result retains the
+content-free `ReplyTrace` with `origin=runtime_fallback` and `action=none`.
 
 `interrupt_consensus()` acts only on a running request. `resume_consensus()` is
 an inspection operation: it never resumes/replays a provider call or recreates
@@ -383,7 +392,6 @@ Output, but each closed variant contains only semantic fields. A direct answer i
 
 ```json
 {
-  "kind": "answer",
   "message": "Reject records the decision without starting specialist work.",
   "authoring_scope": {
     "activity": "workflow",
@@ -395,10 +403,15 @@ Output, but each closed variant contains only semantic fields. A direct answer i
 ```
 
 The synthetic workflow example assumes `task_demo`/`1` was offered by runtime.
-Every live authoring scope must select an exact offered task/revision. Direct
-workflow/status and clarification are allowed; substantive story work requires
-a proposal covering all affected domains, which the Lead can first recommend
-preparing. See the complete
+Every provider-produced direct Lead result requires `message` and
+`authoring_scope`, and every live scope must select an exact offered
+task/revision. The default direct answer omits `kind`; questions and critiques
+add it. A missing scope receives one bounded structured repair and then a
+runtime-owned visible no-action fallback if repair also fails. Runtime never
+infers a workflow scope, and the fallback is not a variant of the closed
+Structured Output provider schema. Direct workflow/status and clarification
+are allowed; substantive story work requires a proposal covering all affected
+domains, which the Lead can first recommend preparing. See the complete
 [scope and routing contract](../guides/lead-agent.md#how-specialist-routing-works).
 
 For a fresh `kind=recommendation`, `recommended_action` is the one additional
@@ -581,25 +594,26 @@ and [recovery](../operations/recovery-and-limitations.md#recommendation-preparat
 
 ### Contextual authoring objectives
 
-`objective_intent` is required in every front-channel result and is null for
-fresh recommendations. `null` makes no objective transition. The three non-null
-shapes are:
+`objective_intent` appears only when a front-channel result transitions an
+objective. Omission makes no objective transition. The three shapes are:
 
 ```json
-{"action":"start","request":"Prepare the agreed outline.","target_paths":["core_documents/global_outline.md"],"next_step":"clarify","draft_source_event_ids":[]}
+{"action":"start","target_paths":["core_documents/global_outline.md"],"next_step":"clarify"}
 ```
 
 ```json
-{"action":"continue","objective_id":"<offered-open-owner-objective-id>","next_step":"prepare","draft_source_event_ids":["<offered-draft-event-id>"]}
+{"action":"continue","objective_id":"<offered-open-owner-objective-id>","next_step":"prepare"}
 ```
 
 ```json
 {"action":"cancel","objective_id":"<offered-open-owner-objective-id>"}
 ```
 
-`start` requires a nonempty exact canonical target scope and a visible request;
-runtime assigns the objective ID and origin event. If the target is unresolved,
-the Lead asks a question with `objective_intent=null` first. `continue` and
+`start` requires a nonempty exact canonical target scope. Runtime assigns the
+objective ID and freezes the exact originating user event and its complete
+message as the request; the provider cannot supply or paraphrase that fact. If
+the target is unresolved, the Lead asks a question without `objective_intent`
+first. `continue` and
 `cancel` can name only an `OPEN` objective owned by the current conversation.
 They cannot replace its origin request or target paths. Complete same-session
 history exposes these facts across conversation switches without transferring
@@ -646,7 +660,8 @@ makes it `CANCELLED`; Commit is independent of objective completion. See the
 An artifact objective first created by structured recommendation Confirm uses
 `ArtifactObjectiveFactsV2`/`ArtifactObjectivePayloadV2`, preserving the exact
 request and decision event origin. Ordinary authoring retains v1 user-event
-origin. Confirm can continue an existing v1 objective without changing its
+origin and the exact originating user-event content as its request. Confirm can
+continue an existing v1 objective without changing its
 immutable facts or codec. The preparation execution origin is separate from
 objective provenance; there is no synthetic user message.
 
@@ -823,16 +838,19 @@ cancels and joins siblings, persists knowable results, and re-raises.
 For artifact review, runtime derives the canonically ordered reviewers from the
 candidate's mandatory and additional domains. Every reviewer receives the
 same strict serialized candidate and the same disclosed evidence; no reviewer
-can rewrite it. After every reviewer succeeds, the lead synthesis must preserve
-all reply attribution and unresolved non-supporting inputs and must add:
+can rewrite it. After every reviewer succeeds, the provider Lead synthesis
+returns only:
 
 ```text
 decision: propose | revise | reject
-rationale: nonempty visible text
-user_impact: nonempty visible text
-limitations: nonempty visible text
-next_intent: null
+message: nonempty visible text
 ```
+
+Runtime preserves all reply attribution and unresolved non-supporting inputs,
+uses `message` as `rationale`, adds the fixed no-change `user_impact`, and sets
+`limitations` to `No additional limitations were reported.` when there are no
+unresolved IDs. Otherwise it reports `Unresolved reviewer inputs remain: `
+followed by the exact unresolved input IDs.
 
 `propose` produces `ArtifactReviewedProposal` and artifact state `reviewed`.
 `revise` produces `revision_required`; `reject` produces `rejected`. Partial

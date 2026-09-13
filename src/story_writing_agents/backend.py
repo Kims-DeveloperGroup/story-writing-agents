@@ -2796,6 +2796,18 @@ class AgentBackend:
         )
         framed_payload = dict(payload)
         framed_payload["untrusted_writing_artifact_context"] = context
+        used_local_fallback = False
+
+        def reject_fallback_references() -> None:
+            """Retire references when no provider response was accepted."""
+
+            nonlocal used_local_fallback
+            used_local_fallback = True
+            self._terminate_reference_read_without_replacing(
+                reference_read,
+                ReferenceAuthorizationErrorCode.PROVIDER_FAILURE,
+            )
+
         try:
             reply = await self._invoke_provider_structured_resilient(
                 bound_agent,
@@ -2809,6 +2821,7 @@ class AgentBackend:
                 best_effort_taint=True,
                 call_kind=call_kind,
                 trace_role=bound_agent.definition.agent_id,
+                on_fallback=reject_fallback_references,
             )
         except BaseException as exc:
             self._fail_reference_read_without_replacing(
@@ -2819,11 +2832,12 @@ class AgentBackend:
                 provider_failure=True,
             )
             raise
-        self._complete_reference_read(
-            reference_read,
-            session_id=session_id,
-            definition=bound_agent.definition,
-        )
+        if not used_local_fallback:
+            self._complete_reference_read(
+                reference_read,
+                session_id=session_id,
+                definition=bound_agent.definition,
+            )
         return reply
 
     async def _load_authorized_reference_context(
@@ -3127,15 +3141,17 @@ class AgentBackend:
                     content=_SAFE_STRUCTURED_FALLBACK_MESSAGE,
                     verdict=Verdict.CONFLICT,
                 )
-            if request.phase in {Phase.SYNTHESIZE, Phase.FINALIZE}:
+            if request.phase in {
+                Phase.DRAFT,
+                Phase.PROPOSE_REVISION,
+                Phase.SYNTHESIZE,
+                Phase.FINALIZE,
+            }:
                 return AgentReply.deadlock(
                     request.revision_id,
                     _SAFE_STRUCTURED_FALLBACK_MESSAGE,
                 )
-            return AgentReply.candidate(
-                request.revision_id,
-                _SAFE_STRUCTURED_FALLBACK_MESSAGE,
-            )
+            raise BackendProtocolError("agent request phase has no safe fallback")
 
         schema = self._output_schema(request.phase)
         payload = self._request_payload(request)
@@ -3371,15 +3387,40 @@ class AgentBackend:
         reference_provider_failure = False
         trace_sources: list[str] = []
         recovered = False
+        physical_provider_calls = 0
+        used_local_fallback = False
+
+        def count_provider_call() -> None:
+            nonlocal physical_provider_calls
+            physical_provider_calls += 1
+
+        def reject_fallback_references() -> None:
+            """Keep local fallback delivery separate from reference acceptance."""
+
+            nonlocal used_local_fallback
+            used_local_fallback = True
+            if reference_read is not None:
+                self._terminate_reference_read_without_replacing(
+                    reference_read,
+                    ReferenceAuthorizationErrorCode.PROVIDER_FAILURE,
+                )
+
         try:
             for action_index in range(
                 1,
                 CONVERSATION_RETRIEVAL_POLICY.max_provider_calls + 1,
             ):
+                remaining_provider_calls = (
+                    CONVERSATION_RETRIEVAL_POLICY.max_provider_calls
+                    - physical_provider_calls
+                )
+                if remaining_provider_calls < 1:
+                    break
                 allowed_actions = self._conversation_retrieval_allowed_actions(
                     action_index=action_index,
                     has_observation=observation_frame is not None,
                     after_read=after_read,
+                    final_provider_call=remaining_provider_calls == 1,
                 )
                 if observation_frame is None:
                     call_kind = ProviderCallKind.CONVERSATION_RETRIEVAL_INITIAL
@@ -3400,12 +3441,25 @@ class AgentBackend:
                         allowed_actions=allowed_actions,
                         observation=observation_frame,
                     )
+                repair_allowed_actions = (
+                    (ConversationRetrievalActionKind.ANSWER,)
+                    if remaining_provider_calls == 2
+                    else allowed_actions
+                )
+                repair_payload = dict(payload)
+                repair_control = dict(repair_payload["retrieval"])
+                repair_control["allowed_actions"] = [
+                    action.value for action in repair_allowed_actions
+                ]
+                repair_payload["retrieval"] = repair_control
                 reference_provider_failure = True
                 action = await self._invoke_provider_structured_resilient(
                     bound_agent,
                     session_id=request.session_id,
                     conversation_id=request.conversation_id,
-                    schema=self._conversation_retrieval_action_schema(),
+                    schema=self._conversation_retrieval_action_schema(
+                        allowed_actions=allowed_actions,
+                    ),
                     payload=payload,
                     decode=lambda response_text: (
                         self._decode_conversation_retrieval_action(
@@ -3413,6 +3467,7 @@ class AgentBackend:
                             request=request,
                             action_index=action_index,
                             provider_name=_provider_name,
+                            allowed_actions=allowed_actions,
                         )
                     ),
                     fallback=lambda: ConversationRetrievalAnswerAction(
@@ -3427,6 +3482,22 @@ class AgentBackend:
                     best_effort_taint=reference_read is not None,
                     call_kind=call_kind,
                     trace_role=request.agent_id,
+                    allow_repair=remaining_provider_calls > 1,
+                    repair_schema=self._conversation_retrieval_action_schema(
+                        allowed_actions=repair_allowed_actions,
+                    ),
+                    repair_payload=repair_payload,
+                    repair_decode=lambda response_text: (
+                        self._decode_conversation_retrieval_action(
+                            response_text,
+                            request=request,
+                            action_index=action_index,
+                            provider_name=_provider_name,
+                            allowed_actions=repair_allowed_actions,
+                        )
+                    ),
+                    on_provider_attempt=count_provider_call,
+                    on_fallback=reject_fallback_references,
                 )
                 if action.trace is not None:
                     trace_sources.extend(action.trace.context_sources)
@@ -3504,7 +3575,7 @@ class AgentBackend:
                             "conversation retrieval handler reply correlation changed"
                         )
                     pending_observation = False
-                    if reference_read is not None:
+                    if reference_read is not None and not used_local_fallback:
                         self._complete_reference_read(
                             reference_read,
                             session_id=request.session_id,
@@ -4013,6 +4084,12 @@ class AgentBackend:
         best_effort_taint: bool = False,
         call_kind: ProviderCallKind = ProviderCallKind.UNCLASSIFIED,
         trace_role: str | None = None,
+        allow_repair: bool = True,
+        repair_schema: Mapping[str, Any] | None = None,
+        repair_payload: Mapping[str, Any] | None = None,
+        repair_decode: Callable[[str], _StructuredReply] | None = None,
+        on_provider_attempt: Callable[[], None] | None = None,
+        on_fallback: Callable[[], None] | None = None,
     ) -> _StructuredReply:
         """Repair one rejected structured value, then return a safe local reply."""
 
@@ -4026,6 +4103,8 @@ class AgentBackend:
             "call_kind": call_kind,
         }
         try:
+            if on_provider_attempt is not None:
+                on_provider_attempt()
             value = await self._invoke_provider_structured(
                 bound_agent,
                 payload=payload,
@@ -4038,30 +4117,50 @@ class AgentBackend:
                 origin=ReplyTraceOrigin.PROVIDER,
             )
         except _StructuredOutputRejected:
-            repair_payload = dict(payload)
-            repair_payload["structured_response_repair"] = {
+            if not allow_repair:
+                if on_fallback is not None:
+                    on_fallback()
+                return self._attach_reply_trace(
+                    fallback(),
+                    role=trace_role,
+                    payload=payload,
+                    origin=ReplyTraceOrigin.RUNTIME_FALLBACK,
+                )
+            repaired_payload = dict(
+                payload if repair_payload is None else repair_payload
+            )
+            repaired_payload["structured_response_repair"] = {
                 "instruction": (
                     "The prior structured response was rejected. Return the answer "
                     "again with exactly the required schema fields. Do not add metadata."
                 )
             }
+        repair_arguments = dict(arguments)
+        if repair_schema is not None:
+            repair_arguments["schema"] = repair_schema
+        if repair_decode is not None:
+            repair_arguments["decode"] = repair_decode
         try:
+            if on_provider_attempt is not None:
+                on_provider_attempt()
             value = await self._invoke_provider_structured(
                 bound_agent,
-                payload=repair_payload,
-                **arguments,
+                payload=repaired_payload,
+                **repair_arguments,
             )
             return self._attach_reply_trace(
                 value,
                 role=trace_role,
-                payload=repair_payload,
+                payload=repaired_payload,
                 origin=ReplyTraceOrigin.RECOVERED,
             )
         except _StructuredOutputRejected:
+            if on_fallback is not None:
+                on_fallback()
             return self._attach_reply_trace(
                 fallback(),
                 role=trace_role,
-                payload=repair_payload,
+                payload=repaired_payload,
                 origin=ReplyTraceOrigin.RUNTIME_FALLBACK,
             )
 
@@ -5098,10 +5197,14 @@ class AgentBackend:
         action_index: int,
         has_observation: bool,
         after_read: bool,
+        final_provider_call: bool = False,
     ) -> tuple[ConversationRetrievalActionKind, ...]:
         """Return exact legal provider guidance for one fixed call index."""
 
-        if action_index == CONVERSATION_RETRIEVAL_POLICY.max_provider_calls:
+        if (
+            final_provider_call
+            or action_index == CONVERSATION_RETRIEVAL_POLICY.max_provider_calls
+        ):
             return (ConversationRetrievalActionKind.ANSWER,)
         if after_read:
             return (
@@ -5120,8 +5223,22 @@ class AgentBackend:
         )
 
     @staticmethod
-    def _conversation_retrieval_action_schema() -> dict[str, Any]:
+    def _conversation_retrieval_action_schema(
+        *,
+        allowed_actions: tuple[ConversationRetrievalActionKind, ...] | None = None,
+    ) -> dict[str, Any]:
         """Return the strict semantic-only provider envelope for retrieval."""
+
+        selected_actions = (
+            tuple(ConversationRetrievalActionKind)
+            if allowed_actions is None
+            else allowed_actions
+        )
+        if not selected_actions or any(
+            type(action) is not ConversationRetrievalActionKind
+            for action in selected_actions
+        ):
+            raise ValueError("retrieval schema allowed actions are invalid")
 
         def action_schema(
             kind: ConversationRetrievalActionKind,
@@ -5140,37 +5257,44 @@ class AgentBackend:
                 "additionalProperties": False,
             }
 
+        branches = [
+            action_schema(
+                ConversationRetrievalActionKind.SEARCH_CONVERSATIONS,
+                {"query": {"type": "string"}},
+            ),
+            action_schema(
+                ConversationRetrievalActionKind.READ_HISTORY,
+                {
+                    "citation_id": {"type": "string"},
+                    "start_sequence": {"type": "integer", "minimum": 1},
+                    "end_sequence": {"type": "integer", "minimum": 1},
+                },
+            ),
+            action_schema(
+                ConversationRetrievalActionKind.READ_HISTORY,
+                {
+                    "citation_id": {"type": "string"},
+                    "start_sequence": {"type": "integer", "minimum": 1},
+                },
+            ),
+            action_schema(
+                ConversationRetrievalActionKind.ANSWER,
+                {
+                    "message": {"type": "string"},
+                    "citation_ids": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                    },
+                },
+            ),
+        ]
         action = {
             "anyOf": [
-                action_schema(
-                    ConversationRetrievalActionKind.SEARCH_CONVERSATIONS,
-                    {"query": {"type": "string"}},
-                ),
-                action_schema(
-                    ConversationRetrievalActionKind.READ_HISTORY,
-                    {
-                        "citation_id": {"type": "string"},
-                        "start_sequence": {"type": "integer", "minimum": 1},
-                        "end_sequence": {"type": "integer", "minimum": 1},
-                    },
-                ),
-                action_schema(
-                    ConversationRetrievalActionKind.READ_HISTORY,
-                    {
-                        "citation_id": {"type": "string"},
-                        "start_sequence": {"type": "integer", "minimum": 1},
-                    },
-                ),
-                action_schema(
-                    ConversationRetrievalActionKind.ANSWER,
-                    {
-                        "message": {"type": "string"},
-                        "citation_ids": {
-                            "type": "array",
-                            "items": {"type": "string"},
-                        },
-                    },
-                ),
+                branch
+                for branch in branches
+                if ConversationRetrievalActionKind(
+                    branch["properties"]["kind"]["enum"][0]
+                ) in selected_actions
             ]
         }
         return {
@@ -5187,6 +5311,7 @@ class AgentBackend:
         request: ConversationRetrievalRequest,
         action_index: int,
         provider_name: str = "Codex",
+        allowed_actions: tuple[ConversationRetrievalActionKind, ...] | None = None,
     ) -> ConversationRetrievalAction:
         """Decode one exact action envelope while leaving semantics to the handler.
 
@@ -5252,6 +5377,10 @@ class AgentBackend:
             raise BackendProtocolError(
                 f"{provider_name} conversation retrieval action kind is unknown"
             ) from exc
+        if allowed_actions is not None and kind not in allowed_actions:
+            raise BackendProtocolError(
+                f"{provider_name} conversation retrieval action is not allowed"
+            )
 
         common_fields = {"kind"}
         action_fields = {

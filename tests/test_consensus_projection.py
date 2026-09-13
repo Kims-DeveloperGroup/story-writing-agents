@@ -152,6 +152,78 @@ class ConsensusProjectionTests(unittest.TestCase):
             for index, specialist in enumerate(CONSENSUS_AUDITORS)
         )
 
+    def deadlocked_projection(self, phase: ConsensusPhase):
+        events: list[ConsensusEvent] = []
+        previous_result_event_id: str | None = None
+
+        def append_terminal(
+            current_phase: ConsensusPhase,
+            state: ConsensusPhaseState,
+            *,
+            next_phase: ConsensusPhase | None = None,
+        ) -> ConsensusPhaseResult:
+            nonlocal previous_result_event_id
+            request, _ = self.request(
+                phase=current_phase,
+                candidate_material=(
+                    None
+                    if current_phase is ConsensusPhase.DRAFT
+                    else _CANDIDATE_MATERIAL
+                ),
+                tail=len(events),
+                previous=previous_result_event_id,
+                request_id=f"request-{current_phase.value}-{len(events) + 1}",
+            )
+            request_event = ConsensusEvent(
+                f"request-event-{len(events) + 1}", len(events) + 1, request
+            )
+            decision_event = ConsensusEvent(
+                f"decision-event-{len(events) + 2}",
+                len(events) + 2,
+                self.decision(
+                    request,
+                    request_event,
+                    confirmation_id=f"confirmation-{len(events) + 2}",
+                ),
+            )
+            result = self.result(
+                request,
+                decision_event,
+                state,
+                candidate_digest=_CANDIDATE,
+                audits=(
+                    self.audits()
+                    if current_phase is ConsensusPhase.AUDIT
+                    else ()
+                ),
+                next_phase=next_phase,
+            )
+            result_event = ConsensusEvent(
+                result.result_id, len(events) + 3, result
+            )
+            events.extend((request_event, decision_event, result_event))
+            previous_result_event_id = result_event.event_id
+            return result
+
+        append_terminal(
+            ConsensusPhase.DRAFT,
+            ConsensusPhaseState.COMPLETED,
+            next_phase=ConsensusPhase.AUDIT,
+        )
+        append_terminal(
+            ConsensusPhase.AUDIT,
+            ConsensusPhaseState.COMPLETED,
+            next_phase=ConsensusPhase.SYNTHESIS,
+        )
+        if phase is not ConsensusPhase.SYNTHESIS:
+            append_terminal(
+                ConsensusPhase.SYNTHESIS,
+                ConsensusPhaseState.COMPLETED,
+                next_phase=phase,
+            )
+        deadlock = append_terminal(phase, ConsensusPhaseState.DEADLOCKED)
+        return deadlock, project_consensus(tuple(events))
+
     def test_request_digest_revision_tail_and_exact_correlations(self) -> None:
         request, _ = self.request()
         self.assertEqual(request.revision_number, 0)
@@ -301,7 +373,7 @@ class ConsensusProjectionTests(unittest.TestCase):
                 ConsensusDecision.CONFIRM,
                 ConsensusPhaseState.DEADLOCKED,
                 ConsensusPhaseState.DEADLOCKED,
-                ConsensusNextAction.CONTINUE_DEADLOCK,
+                ConsensusNextAction.INSPECT_FAILURE,
             ),
         )
         for index, (choice, result_state, visible, action) in enumerate(cases):
@@ -432,34 +504,33 @@ class ConsensusProjectionTests(unittest.TestCase):
         projection = project_consensus((request_event,))
         self.assertFalse(any("capability" in item.name for item in fields(projection)))
 
-    def test_deadlock_retains_digest_only_lineage_without_publication_or_candidate_copy(
+    def test_deadlock_action_is_phase_sensitive_and_preserves_candidate_lineage(
         self,
     ) -> None:
-        request, _ = self.request()
-        request_event = ConsensusEvent("request-event", 1, request)
-        decision_event = ConsensusEvent(
-            "decision-event", 2, self.decision(request, request_event)
-        )
-        deadlock = self.result(
-            request,
-            decision_event,
-            ConsensusPhaseState.DEADLOCKED,
-            candidate_digest=_CANDIDATE,
-        )
-        projection = project_consensus(
-            (request_event, decision_event, ConsensusEvent("result-event", 3, deadlock))
-        )
-        self.assertEqual(projection.candidate_digest, _CANDIDATE)
-        self.assertEqual(projection.state, ConsensusPhaseState.DEADLOCKED)
-        self.assertEqual(
-            projection.next_action,
-            ConsensusNextAction.CONTINUE_DEADLOCK,
-        )
-        self.assertFalse(deadlock.publication_allowed)
-        self.assertFalse(projection.publication_allowed)
-        self.assertNotIn(
-            "candidate", {item.name for item in fields(deadlock)} - {"candidate_digest"}
-        )
+        continuation_phases = []
+        for phase, expected_action in (
+            (ConsensusPhase.SYNTHESIS, ConsensusNextAction.CONTINUE_DEADLOCK),
+            (ConsensusPhase.REPAIR, ConsensusNextAction.INSPECT_FAILURE),
+            (ConsensusPhase.FINALIZATION, ConsensusNextAction.INSPECT_FAILURE),
+        ):
+            with self.subTest(phase=phase):
+                deadlock, projection = self.deadlocked_projection(phase)
+                self.assertIs(deadlock.phase, phase)
+                self.assertEqual(deadlock.candidate_digest, _CANDIDATE)
+                self.assertEqual(projection.candidate_digest, _CANDIDATE)
+                self.assertIs(projection.state, ConsensusPhaseState.DEADLOCKED)
+                self.assertIs(projection.next_action, expected_action)
+                if projection.next_action is ConsensusNextAction.CONTINUE_DEADLOCK:
+                    continuation_phases.append(phase)
+                self.assertFalse(deadlock.publication_allowed)
+                self.assertFalse(projection.publication_allowed)
+                self.assertNotIn(
+                    "candidate",
+                    {item.name for item in fields(deadlock)} - {"candidate_digest"},
+                )
+
+        # Continuation authority remains exposed only for synthesis deadlocks.
+        self.assertEqual(continuation_phases, [ConsensusPhase.SYNTHESIS])
 
     def test_material_handles_serialize_deterministically_without_authority(
         self,
