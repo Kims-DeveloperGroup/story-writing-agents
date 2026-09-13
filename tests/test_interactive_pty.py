@@ -42,7 +42,7 @@ from story_writing_agents.workspace import (
 )
 
 from tests.collaboration_contract_fixture import contract_batches
-from tests.helpers import initialize_test_workspace
+from tests.helpers import pristine_initialized_workspace
 
 try:
     import fcntl
@@ -280,12 +280,12 @@ def compact_observation_handles(value):
         return None, ()
     if (
         observation[0] == "s"
-        and len(observation) == 3
-        and isinstance(observation[2], list)
+        and len(observation) == 4
+        and isinstance(observation[3], list)
     ):
         return "search", tuple(
             item[5]
-            for item in observation[2]
+            for item in observation[3]
             if isinstance(item, list)
             and len(item) == 7
             and isinstance(item[5], str)
@@ -299,7 +299,7 @@ def compact_observation_handles(value):
             item[4]
             for item in observation[1]
             if isinstance(item, list)
-            and len(item) == 6
+            and len(item) == 7
             and isinstance(item[4], str)
         )
     raise SystemExit(84)
@@ -333,32 +333,23 @@ def lead_scope(value, activity="workflow", domains=()):
 def lead_consultation_answer(value, _agent_id):
     """Return one deterministic proposal, specialist reply, or synthesis."""
 
-    material = nested_mapping_with(value, "answer_contract")
-    if material is not None and "assignment_id" in material["answer_contract"]:
-        contract = material["answer_contract"]
+    contract_id = value["q"][4][1]
+    if contract_id == "specialist-reply-v2":
+        material = nested_mapping_with(value, "assignment")
+        assignment = material["assignment"]
         return {
-            "assessment": "supports",
-            "mode": contract["mode"],
-            "assignment_id": contract["assignment_id"],
-            "input_ids": contract["input_ids"],
+            "assessment": "drafted" if assignment["mode"] == "draft" else "supports",
             "message": "The outline evidence supports the request.",
         }
-    if material is not None and "reply_event_ids" in material["answer_contract"]:
-        contract = material["answer_contract"]
+    if contract_id == "lead-synthesis-v3":
         return {
-            "authoring_scope": contract["authoring_scope"],
-            "evidence_ids": contract["evidence_ids"],
-            "evidence_status": contract["evidence_status"],
             "message": "The specialist confirms the proposed direction.",
-            "next_intent": None,
-            "reply_event_ids": contract["reply_event_ids"],
-            "scope": contract["scope"],
-            "unresolved_input_ids": [],
-            "recommended_action": None,
         }
-    statuses = nested_mapping_with(value, "core_statuses")
-    status_rows = statuses["core_statuses"] if statuses is not None else []
-    evidence_ids = [status_rows[0]["evidence_id"]] if status_rows else []
+    if contract_id == "artifact-review-synthesis-v3":
+        return {
+            "decision": "approve",
+            "message": "The specialist confirms the proposed direction.",
+        }
     domain_by_specialist = {"plot_architect": "plot_structure",
         "character_custodian": "character_world", "execution_specialist": "tone_execution"}
     specialists = [agent for agent in domain_by_specialist
@@ -368,26 +359,12 @@ def lead_consultation_answer(value, _agent_id):
         "kind": "proposal",
         "authoring_scope": authoring_scope,
         "message": "Specialist review would resolve the open question.",
-        "scope": "story_specific",
-        "evidence_status": (
-            statuses["core_statuses"][0]["status"]
-            if statuses is not None
-            else "not_applicable"
-        ),
-        "evidence_ids": evidence_ids,
-        "artifact_intent": None,
-        "objective_intent": None,
-        "recommended_action": None,
         "proposal": {
-            "relation": "new_step",
-            "authoring_scope": authoring_scope,
-            "purpose": "Check outline consistency before answering.",
             "assignments": [{
                 "agent_id": specialist,
                 "instruction": "Check the user request against the outline.",
                 "input_ids": ["user_input"],
                 "mode":"review",
-                "review_basis":{"schema_version":1,"candidate_input_ids":["user_input"],"criteria":"Assess the supplied synthetic candidate."},
             } for specialist in specialists],
         },
     }
@@ -403,63 +380,59 @@ def lead_recommendation_answer(value):
     if execution is None:
         scope = lead_scope(value, "review")
         scope["target_paths"] = ["core_documents/global_outline.md"]
-        return {"kind": "recommendation", "message": draft, "scope": "story_specific",
+        return {"kind": "recommendation", "message": draft,
             "authoring_scope": scope,
-            "evidence_status": "empty", "evidence_ids": [evidence], "proposal": None,
-            "artifact_intent": None, "objective_intent": None,
-            "recommended_action": {"kind": "prepare_artifact", "purpose": "Prepare the offered outline for review.",
+            "recommended_action": {"kind": "prepare_artifact",
                 "instruction": "Prepare the exact offered synthetic outline.",
-                "expected_result": "One outline candidate awaiting separate review.",
-                "source_ids": ["current_response"], "objective_id": None,
-                "target_paths": ["core_documents/global_outline.md"], "specialist_ids": []}}
+                "source_ids": ["current_response"],
+                "target_paths": ["core_documents/global_outline.md"]}}
     request = execution["structured_recommendation_execution"]["request"]
     statuses = nested_mapping_with(value, "core_statuses")["core_statuses"]
     evidence = next(item["evidence_id"] for item in statuses
                     if item["locator"] == "core_documents/global_outline.md")
+    requested_scope = request["authoring_scope"]
+    scope = {
+        "activity": requested_scope["activity"],
+        "target_paths": requested_scope["target_paths"],
+        "domains": requested_scope["domains"],
+        "task": f'{requested_scope["task_id"]}@{requested_scope["task_revision"]}',
+    }
     return {"kind": "proposal", "message": "B642 exact candidate awaits separate specialist review.",
-        "authoring_scope": request["authoring_scope"],
-        "scope": "story_specific", "evidence_status": "empty", "evidence_ids": [evidence],
-        "proposal": None, "recommended_action": None,
-        "artifact_intent": {"additional_review_domains": [], "operations": [
-            {"kind": "replace", "evidence_id": evidence, "new_text": draft}]},
-        "objective_intent": {"action": "start", "request": request["instruction"],
-            "target_paths": request["target_paths"], "next_step": "prepare",
-            "draft_source_event_ids": [item["event_id"] for item in request["draft_sources"]]}}
+        "authoring_scope": scope,
+        "artifact_intent": {"operations": [
+            {"kind": "replace", "evidence_id": evidence, "new_text": draft}],
+            "objective_intent": {"action": "start",
+                "target_paths": request["target_paths"], "next_step": "prepare"}}}
 
 
 def compact_answer(value, used_handles=(), *, after_retrieval=False):
     """Encode one strict natural-result ANSWER for the live phase contract."""
 
     phase = value["q"][0]
+    contract_id = value["q"][4][1]
     current = compact_context_current(value, compact_agent_id(argv))
     command = current["command"] if current is not None else ""
-    if phase == "retrieval":
-        content = (
-            "retrieval-assisted answer"
-            if command.startswith("retrieve ") or after_retrieval
-            else "visible \x1b[31mred\x1b[0m and bell \x07"
-            if command == "show visible controls"
-            else "deterministic advisory reply"
-        )
-        result = [content, list(range(1, len(used_handles) + 1))]
-    elif phase == "conversation":
-        result = (
-            "visible \x1b[31mred\x1b[0m and bell \x07"
-            if command == "show visible controls"
-            else "deterministic advisory reply"
-        )
-    elif phase == "audit":
-        result = "a"
-    elif phase == "finalize":
-        result = [["global_outline.md", "updated outline"]]
+    content = (
+        "retrieval-assisted answer"
+        if phase == "retrieval" and (command.startswith("retrieve ") or after_retrieval)
+        else "visible \x1b[31mred\x1b[0m and bell \x07"
+        if command == "show visible controls"
+        else "deterministic advisory reply"
+    )
+    if contract_id == "lead-outcome-v5":
+        result = {"message": content, "authoring_scope": lead_scope(value)}
+    elif contract_id == "specialist-reply-v2":
+        result = lead_consultation_answer(value, compact_agent_id(argv))
+    elif contract_id == "lead-synthesis-v3":
+        result = {"message": content}
+    elif contract_id == "artifact-review-synthesis-v3":
+        result = {"decision": "approve", "message": content}
     else:
-        result = "deterministic candidate"
+        raise SystemExit(87)
     return {
-        "correlation": value["c"],
         "action": {
             "kind": "answer",
-            "result": result if isinstance(result, dict) else {"value": result},
-            "used_handles": list(used_handles),
+            "result": result,
         },
     }
 
@@ -536,7 +509,6 @@ elif control.get("mode") == "invalid_read":
     output_path.write_text(
         json.dumps(
             {
-                "correlation": payload["c"],
                 "action": {
                     "kind": "read",
                     "handles": ["conflict", "PRIVATE/critique text"],
@@ -572,15 +544,8 @@ elif isinstance(query, list):
             answer = lead_recommendation_answer(payload)
         elif control.get("mode") == "lead_answer":
             answer = {
-                "kind": "answer",
                 "message": "Continued after confirmed review.",
-                "scope": "workflow_meta",
-                "evidence_status": "not_applicable",
-                "evidence_ids": [],
-                "artifact_intent": None,
-                "objective_intent": None,
-                "recommended_action": None,
-                "proposal": None,
+                "authoring_scope": lead_scope(payload),
             }
         elif nested_mapping_with(payload, "response_correction") is None:
             answer = {
@@ -618,10 +583,8 @@ elif isinstance(query, list):
         and "s" in query[1]
     ):
         response = {
-            "correlation": payload["c"],
             "action": {
                 "kind": "search",
-                "path_prefix": None,
                 "queries": [
                     {
                         "text": current["command"].removeprefix("retrieve "),
@@ -636,7 +599,6 @@ elif isinstance(query, list):
         and "r" in query[1]
     ):
         response = {
-            "correlation": payload["c"],
             "action": {"kind": "read", "handles": list(observation_handles)},
         }
     else:
@@ -924,16 +886,14 @@ if "--print" in argv:
             "thinking_tokens": 0, "cache_read_tokens": 0, "total_tokens": 0}}), flush=True)
         raise SystemExit(1)
     if agent == "lead_orchestrator":
-        answer = {"kind": "answer", "message": "AUTH631 exact request recovered.",
-            "scope": "workflow_meta", "evidence_status": "not_applicable",
-            "evidence_ids": [], "artifact_intent": None, "proposal": None,
-            "objective_intent": None, "recommended_action": None, "authoring_scope": lead_scope(payload)}
+        answer = {"message": "AUTH631 exact request recovered.",
+            "authoring_scope": lead_scope(payload)}
     else:
         answer = lead_consultation_answer(payload, agent)
     print(json.dumps({"conversation_id": option("--conversation") or ("auth-thread-" + agent),
         "status": "SUCCESS", "json_schema": json.loads(option("--json-schema")),
-        "structured_output": {"correlation": payload["c"],
-            "action": {"kind": "answer", "result": answer, "used_handles": []}}}), flush=True)
+        "structured_output": {
+            "action": {"kind": "answer", "result": answer}}}), flush=True)
     raise SystemExit(0)
 ''' + _FAKE_AGY
 
@@ -1314,7 +1274,7 @@ class InteractiveCliPtyTests(unittest.TestCase):
         temporary = tempfile.TemporaryDirectory()
         self.addCleanup(temporary.cleanup)
         self.temporary_root = Path(temporary.name)
-        self.workspace = initialize_test_workspace(self.temporary_root / "workspace")
+        self.workspace = pristine_initialized_workspace(self)
         self._set_existing_default()
         self.fake_directory = self.temporary_root / "provider-bin"
         self.fake_directory.mkdir()
@@ -1364,6 +1324,12 @@ class InteractiveCliPtyTests(unittest.TestCase):
 
         for process in reversed(self._processes):
             process.close()
+
+    def _replace_with_pristine_workspace(self) -> None:
+        """Use a fresh ready root while preserving process-first cleanup order."""
+
+        self.workspace = pristine_initialized_workspace(self)
+        self.addCleanup(self._close_processes)
 
     def _environment(self) -> dict[str, str]:
         """Return a provider-free child environment with explicit source imports."""
@@ -3027,9 +2993,7 @@ print(
             ansi.original_terminal_attributes,
         )
 
-        self.workspace = initialize_test_workspace(
-            self.temporary_root / "workspace-no-color"
-        )
+        self._replace_with_pristine_workspace()
         self._set_existing_default()
         no_color = self._spawn_cli(
             (),
@@ -3053,9 +3017,7 @@ print(
             no_color.original_terminal_attributes,
         )
 
-        self.workspace = initialize_test_workspace(
-            self.temporary_root / "workspace-line-profile"
-        )
+        self._replace_with_pristine_workspace()
         self._set_existing_default()
         line = self._spawn_cli(())
         line.wait_for_text("story[lobby]> ")
@@ -3243,9 +3205,7 @@ print(
         expected_languages = ("EN", "JA", "ZH")
         for attempt, expected_language in enumerate(expected_languages):
             with self.subTest(attempt=attempt):
-                self.workspace = initialize_test_workspace(
-                    self.temporary_root / f"workspace-settings-save-{attempt}"
-                )
+                self._replace_with_pristine_workspace()
                 self._set_existing_default()
                 current_language = "KO"
                 process = self._spawn_cli(
@@ -3944,9 +3904,7 @@ print(
         for event_name in ("escape", "interrupt", "eof"):
             for attempt in range(3):
                 with self.subTest(event=event_name, attempt=attempt):
-                    self.workspace = initialize_test_workspace(
-                        self.temporary_root / f"workspace-{event_name}-{attempt}"
-                    )
+                    self._replace_with_pristine_workspace()
                     self._set_existing_default()
                     process = self._spawn_cli(
                         (),
@@ -4816,9 +4774,7 @@ raise SystemExit(cli.main([]))
         )
         for terminal_columns, logo_marker, identity, next_copy in cases:
             with self.subTest(terminal_columns=terminal_columns):
-                self.workspace = initialize_test_workspace(
-                    self.temporary_root / f"workspace-welcome-{terminal_columns}"
-                )
+                self._replace_with_pristine_workspace()
                 self._set_existing_default()
                 process = self._spawn_cli(
                     (),
@@ -5197,9 +5153,8 @@ raise SystemExit(cli.main([]))
             self.assertNotIn(hidden, rendered)
         calls = [record for record in self._provider_records()
                  if record.get("event") == "started"]
-        self.assertEqual(len(calls), 2)
-        self.assertEqual(calls[0]["payload"]["operation"], "writing_artifact_reference_read")
-        self.assertEqual(calls[1]["operation"], "agent_context_v7")
+        self.assertEqual(len(calls), 1)
+        self.assertEqual(calls[0]["operation"], "agent_context_v7")
 
         store = FilesystemCollaborationEventStore(
             self.workspace, catalog=FilesystemConversationCatalog(self.workspace),
@@ -5208,8 +5163,6 @@ raise SystemExit(cli.main([]))
         accounting = tuple(event for event in events
                            if type(event.payload) is CollaborationProviderCallPayload)
         self.assertEqual(tuple(event.payload.state for event in accounting), (
-            CollaborationProviderCallState.PREPARED,
-            CollaborationProviderCallState.SUBMITTED,
             CollaborationProviderCallState.PREPARED,
             CollaborationProviderCallState.SUBMITTED,
         ))
@@ -5227,7 +5180,7 @@ raise SystemExit(cli.main([]))
         projection = project_collaboration_history(events)
         self.assertIsNone(projection.current_state)
         self.assertIs(projection.next_safe_action, CollaborationNextAction.RETRY_LEAD_TURN)
-        self.assertEqual(projection.physical_calls_spent, 2)
+        self.assertEqual(projection.physical_calls_spent, 1)
         process.send_line("/quit")
         self.assertEqual(process.wait_for_exit(), 0, process.normalized_text)
 
@@ -5258,7 +5211,7 @@ raise SystemExit(cli.main([]))
                               if type(event.payload) is CollaborationLeadOutcomeFailurePayload), failures)
         calls = [record for record in self._provider_records()
                  if record.get("event") == "started"]
-        self.assertEqual(len(calls), 3)
+        self.assertEqual(len(calls), 2)
         self.assertEqual(calls[-1]["operation"], "agent_context_v7")
         before_management = len(self._provider_records())
         create_mark = reopened.output_mark()
