@@ -12,7 +12,7 @@ import unicodedata
 from datetime import UTC, datetime
 from pathlib import Path, PurePosixPath
 from types import TracebackType
-from typing import Any, Callable, Mapping
+from typing import Any, Callable, Iterator, Mapping
 
 from ..agents import (
     AGENT_STATE_DIRECTORIES,
@@ -58,6 +58,9 @@ _SESSION_SOURCE_MAX_FILE_BYTES = 8 * 1024 * 1024
 _SESSION_SOURCE_MAX_DIRECTORY_ENTRIES = 8192
 _SESSION_SOURCE_MAX_AGENT_STATE_BYTES = 8 * 1024 * 1024
 _SESSION_SOURCE_MAX_AGENT_STATE_RECORDS = 10_000
+_PYTHON_SPLITLINE_BOUNDARIES = frozenset(
+    "\n\r\v\f\x1c\x1d\x1e\x85\u2028\u2029"
+)
 _DEBATE_CONTEXT_EVENT_FIELDS = frozenset(
     {
         "schema_version",
@@ -1274,18 +1277,24 @@ class SessionSourceWorkspace(Workspace):
         return parts
 
     @classmethod
-    def _open_directory_at(cls, root: int, relative: str) -> int:
-        parts = cls._safe_relative_parts(relative)
+    def _capture_directory_chain_state(
+        cls,
+        root: int,
+        parts: tuple[str, ...],
+    ) -> tuple[tuple[int, ...], int | None]:
         flags = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW
-        descriptor = os.dup(root)
+        descriptors = [os.dup(root)]
         try:
-            for part in parts:
-                child = os.open(part, flags, dir_fd=descriptor)
+            for index, part in enumerate(parts):
+                try:
+                    child = os.open(part, flags, dir_fd=descriptors[-1])
+                except FileNotFoundError:
+                    return tuple(descriptors), index
                 try:
                     opened = os.fstat(child)
                     named = os.stat(
                         part,
-                        dir_fd=descriptor,
+                        dir_fd=descriptors[-1],
                         follow_symlinks=False,
                     )
                     if (
@@ -1299,12 +1308,62 @@ class SessionSourceWorkspace(Workspace):
                 except BaseException:
                     os.close(child)
                     raise
-                os.close(descriptor)
-                descriptor = child
-            return descriptor
+                descriptors.append(child)
+            return tuple(descriptors), None
+        except OSError:
+            cls._close_directory_chain(descriptors)
+            raise WorkspaceSecurityError(
+                "session source directory inventory is unavailable"
+            ) from None
         except BaseException:
-            os.close(descriptor)
+            cls._close_directory_chain(descriptors)
             raise
+
+    @staticmethod
+    def _close_directory_chain(descriptors: tuple[int, ...] | list[int]) -> None:
+        for descriptor in reversed(descriptors):
+            try:
+                os.close(descriptor)
+            except OSError:
+                pass
+
+    @classmethod
+    def _open_directory_chain_at(
+        cls,
+        root: int,
+        relative: str,
+    ) -> tuple[int, ...]:
+        parts = cls._safe_relative_parts(relative)
+        descriptors, missing_index = cls._capture_directory_chain_state(root, parts)
+        if missing_index is None:
+            return descriptors
+        cls._close_directory_chain(descriptors)
+        raise FileNotFoundError(relative)
+
+    @classmethod
+    def _verify_directory_chain_at(
+        cls,
+        root: int,
+        relative: str,
+        descriptors: tuple[int, ...],
+    ) -> None:
+        parts = () if not relative else cls._safe_relative_parts(relative)
+        rebound, missing_index = cls._capture_directory_chain_state(root, parts)
+        try:
+            if missing_index is not None or len(rebound) != len(descriptors):
+                raise WorkspaceSecurityError(
+                    "session source directory identity changed"
+                )
+            if any(
+                (os.fstat(original).st_dev, os.fstat(original).st_ino)
+                != (os.fstat(current).st_dev, os.fstat(current).st_ino)
+                for original, current in zip(descriptors, rebound, strict=True)
+            ):
+                raise WorkspaceSecurityError(
+                    "session source directory identity changed"
+                )
+        finally:
+            cls._close_directory_chain(rebound)
 
     @classmethod
     def _read_bytes_at(
@@ -1323,23 +1382,51 @@ class SessionSourceWorkspace(Workspace):
             raise ValueError("session source read limit is invalid")
         parts = cls._safe_relative_parts(relative)
         try:
-            directory = (
-                os.dup(root)
+            directory_chain = (
+                (os.dup(root),)
                 if len(parts) == 1
-                else cls._open_directory_at(root, "/".join(parts[:-1]))
+                else cls._open_directory_chain_at(
+                    root,
+                    "/".join(parts[:-1]),
+                )
             )
         except FileNotFoundError:
             if missing_ok:
+                if len(parts) > 1:
+                    cls._require_directory_absent_at(
+                        root,
+                        "/".join(parts[:-1]),
+                    )
                 return None
             raise
+        except OSError:
+            raise WorkspaceSecurityError(
+                "session source directory inventory is unavailable"
+            ) from None
         descriptor = -1
+        directory = directory_chain[-1]
         try:
             flags = os.O_RDONLY | os.O_NOFOLLOW | getattr(os, "O_NONBLOCK", 0)
             try:
                 descriptor = os.open(parts[-1], flags, dir_fd=directory)
             except FileNotFoundError:
                 if missing_ok:
-                    return None
+                    try:
+                        os.stat(
+                            parts[-1],
+                            dir_fd=directory,
+                            follow_symlinks=False,
+                        )
+                    except FileNotFoundError:
+                        cls._verify_directory_chain_at(
+                            root,
+                            "/".join(parts[:-1]),
+                            directory_chain,
+                        )
+                        return None
+                    raise WorkspaceSecurityError(
+                        "session source file identity changed"
+                    )
                 raise
             initial = os.fstat(descriptor)
             named_initial = os.stat(
@@ -1395,41 +1482,49 @@ class SessionSourceWorkspace(Workspace):
                 raise WorkspaceSecurityError(
                     "session source file exceeds read limit"
                 )
-            return b"".join(chunks)
+            content = b"".join(chunks)
+            cls._verify_directory_chain_at(
+                root,
+                "/".join(parts[:-1]),
+                directory_chain,
+            )
+            return content
+        except OSError:
+            raise WorkspaceSecurityError(
+                "session source file is unavailable"
+            ) from None
         finally:
             if descriptor >= 0:
-                os.close(descriptor)
-            os.close(directory)
+                try:
+                    os.close(descriptor)
+                except OSError:
+                    pass
+            cls._close_directory_chain(directory_chain)
 
     @classmethod
     def _verify_directory_at(
         cls,
         root: int,
         relative: str,
-        descriptor: int,
+        descriptors: tuple[int, ...],
         inventory: tuple[tuple[str, tuple[int, int, int, int, int, int, int]], ...],
     ) -> None:
         """Require one retained directory and its exact leaf facts to persist."""
 
         try:
-            rebound = cls._open_directory_at(root, relative)
-        except (FileNotFoundError, OSError):
-            raise WorkspaceSecurityError(
-                "session source directory identity changed"
-            ) from None
-        try:
-            opened = os.fstat(descriptor)
-            named = os.fstat(rebound)
+            opened = os.fstat(descriptors[-1])
             if (
                 not stat.S_ISDIR(opened.st_mode)
-                or (opened.st_dev, opened.st_ino) != (named.st_dev, named.st_ino)
-                or cls._capture_directory_inventory(descriptor) != inventory
+                or cls._capture_directory_inventory(descriptors[-1]) != inventory
             ):
                 raise WorkspaceSecurityError(
                     "session source directory identity changed"
                 )
-        finally:
-            os.close(rebound)
+            cls._verify_directory_chain_at(root, relative, descriptors)
+        except (FileNotFoundError, OSError):
+            raise WorkspaceSecurityError(
+                "session source directory identity changed"
+            ) from None
 
     @staticmethod
     def _capture_directory_inventory(
@@ -1494,16 +1589,40 @@ class SessionSourceWorkspace(Workspace):
 
     @classmethod
     def _require_directory_absent_at(cls, root: int, relative: str) -> None:
+        parts = cls._safe_relative_parts(relative)
         try:
-            descriptor = cls._open_directory_at(root, relative)
-        except FileNotFoundError:
-            return
+            first, first_missing = cls._capture_directory_chain_state(root, parts)
         except OSError:
             raise WorkspaceSecurityError(
                 "session source directory inventory is unavailable"
             ) from None
-        os.close(descriptor)
-        raise WorkspaceSecurityError("session source directory inventory changed")
+        try:
+            if first_missing is None:
+                raise WorkspaceSecurityError(
+                    "session source directory inventory changed"
+                )
+            second, second_missing = cls._capture_directory_chain_state(root, parts)
+            try:
+                if first_missing != second_missing or len(first) != len(second):
+                    raise WorkspaceSecurityError(
+                        "session source directory identity changed"
+                    )
+                if any(
+                    (os.fstat(original).st_dev, os.fstat(original).st_ino)
+                    != (os.fstat(current).st_dev, os.fstat(current).st_ino)
+                    for original, current in zip(first, second, strict=True)
+                ):
+                    raise WorkspaceSecurityError(
+                        "session source directory identity changed"
+                    )
+            finally:
+                cls._close_directory_chain(second)
+        except OSError:
+            raise WorkspaceSecurityError(
+                "session source directory inventory is unavailable"
+            ) from None
+        finally:
+            cls._close_directory_chain(first)
 
     @staticmethod
     def _require_unique_regular_file(
@@ -1551,6 +1670,40 @@ class SessionSourceWorkspace(Workspace):
                 f"file is not valid UTF-8: {relative}"
             ) from exc
 
+    @staticmethod
+    def _iter_bounded_jsonl_lines(
+        text: str,
+        *,
+        max_records: int,
+        limit_message: str,
+    ) -> Iterator[tuple[int, str]]:
+        """Yield bounded JSONL records without materializing a split line list."""
+
+        start = 0
+        line_number = 0
+        while start < len(text):
+            if line_number == max_records:
+                raise WorkspaceSecurityError(limit_message)
+            end = start
+            while (
+                end < len(text)
+                and text[end] not in _PYTHON_SPLITLINE_BOUNDARIES
+            ):
+                end += 1
+            next_start = end
+            if next_start < len(text):
+                next_start += 1
+                if (
+                    text[end] == "\r"
+                    and next_start < len(text)
+                    and text[next_start] == "\n"
+                ):
+                    next_start += 1
+            line = text[start:end]
+            line_number += 1
+            yield line_number, line
+            start = next_start
+
     def read_agent_session_state(
         self,
         agent_id: str,
@@ -1567,18 +1720,19 @@ class SessionSourceWorkspace(Workspace):
         relative_directory = f"agent_states/{state_directory}/debates/{session}"
 
         def read(root: int) -> tuple[AgentStateEntry, ...]:
-            directory: int | None = None
+            directory_chain: tuple[int, ...] | None = None
             try:
                 try:
-                    directory = self._open_directory_at(
+                    directory_chain = self._open_directory_chain_at(
                         root,
                         relative_directory,
                     )
                 except FileNotFoundError:
                     self._require_directory_absent_at(root, relative_directory)
-                if directory is None:
+                if directory_chain is None:
                     self._require_directory_absent_at(root, relative_directory)
                     return ()
+                directory = directory_chain[-1]
                 inventory = self._capture_directory_inventory(directory)
                 ordered: list[tuple[str, str, int, int, AgentStateEntry]] = []
                 state_files = tuple(
@@ -1599,8 +1753,8 @@ class SessionSourceWorkspace(Workspace):
                     debate_id = filename[: -len(".jsonl")]
                     self.validate_identifier(debate_id, label="debate ID")
                     text = self._read_text_at(
-                        directory,
-                        filename,
+                        root,
+                        f"{relative_directory}/{filename}",
                         max_bytes=(
                             _SESSION_SOURCE_MAX_AGENT_STATE_BYTES
                             - retained_bytes
@@ -1608,14 +1762,16 @@ class SessionSourceWorkspace(Workspace):
                     )
                     assert text is not None
                     retained_bytes += len(text.encode("utf-8"))
-                    for line_number, line in enumerate(text.splitlines(), 1):
-                        if (
-                            retained_records
-                            == _SESSION_SOURCE_MAX_AGENT_STATE_RECORDS
-                        ):
-                            raise WorkspaceSecurityError(
-                                "session agent state exceeds record limit"
-                            )
+                    remaining_records = (
+                        _SESSION_SOURCE_MAX_AGENT_STATE_RECORDS - retained_records
+                    )
+                    for line_number, line in self._iter_bounded_jsonl_lines(
+                        text,
+                        max_records=remaining_records,
+                        limit_message=(
+                            "session agent state exceeds record limit"
+                        ),
+                    ):
                         retained_records += 1
                         try:
                             raw = json.loads(line)
@@ -1646,12 +1802,12 @@ class SessionSourceWorkspace(Workspace):
                 ordered.sort(key=lambda item: item[:4])
                 result = tuple(item[4] for item in ordered)
                 self._verify_directory_at(
-                    root, relative_directory, directory, inventory
+                    root, relative_directory, directory_chain, inventory
                 )
                 return result
             finally:
-                if directory is not None:
-                    os.close(directory)
+                if directory_chain is not None:
+                    self._close_directory_chain(directory_chain)
 
         return self._read_bound(read)
 
@@ -1665,7 +1821,7 @@ class SessionSourceWorkspace(Workspace):
 
         def read(root: int) -> dict[str, Any]:
             relative_directory = f"discussion_logs/{session}"
-            directory: int | None = None
+            directory_chain: tuple[int, ...] | None = None
             inventory: (
                 tuple[
                     tuple[str, tuple[int, int, int, int, int, int, int]],
@@ -1675,20 +1831,30 @@ class SessionSourceWorkspace(Workspace):
             ) = None
             try:
                 try:
-                    directory = self._open_directory_at(root, relative_directory)
+                    directory_chain = self._open_directory_chain_at(
+                        root,
+                        relative_directory,
+                    )
                 except FileNotFoundError:
                     self._require_directory_absent_at(root, relative_directory)
                     result_text = state_text = message_text = None
                 else:
+                    directory = directory_chain[-1]
                     inventory = self._capture_directory_inventory(directory)
                     result_text = self._read_text_at(
-                        directory, f"{debate}.result.json", missing_ok=True
+                        root,
+                        f"{relative_directory}/{debate}.result.json",
+                        missing_ok=True,
                     )
                     state_text = self._read_text_at(
-                        directory, f"{debate}.state.json", missing_ok=True
+                        root,
+                        f"{relative_directory}/{debate}.state.json",
+                        missing_ok=True,
                     )
                     message_text = self._read_text_at(
-                        directory, f"{debate}.jsonl", missing_ok=True
+                        root,
+                        f"{relative_directory}/{debate}.jsonl",
+                        missing_ok=True,
                     )
                 try:
                     result = (
@@ -1718,9 +1884,10 @@ class SessionSourceWorkspace(Workspace):
                 except json.JSONDecodeError as exc:
                     raise WorkspaceFormatError("invalid debate JSON state") from exc
                 messages: list[DebateMessage] = []
-                for line_number, line in enumerate(
-                    (() if message_text is None else message_text.splitlines()),
-                    1,
+                for line_number, line in self._iter_bounded_jsonl_lines(
+                    "" if message_text is None else message_text,
+                    max_records=_SESSION_SOURCE_MAX_AGENT_STATE_RECORDS,
+                    limit_message="session debate log exceeds record limit",
                 ):
                     try:
                         value = json.loads(line)
@@ -1787,20 +1954,20 @@ class SessionSourceWorkspace(Workspace):
                     "result": result,
                     "messages": [message.to_dict() for message in messages],
                 }
-                if directory is None:
+                if directory_chain is None:
                     self._require_directory_absent_at(root, relative_directory)
                 else:
                     assert inventory is not None
                     self._verify_directory_at(
                         root,
                         relative_directory,
-                        directory,
+                        directory_chain,
                         inventory,
                     )
                 return inspected
             finally:
-                if directory is not None:
-                    os.close(directory)
+                if directory_chain is not None:
+                    self._close_directory_chain(directory_chain)
 
         return self._read_bound(read)
 

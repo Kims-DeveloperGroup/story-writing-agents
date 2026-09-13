@@ -1348,23 +1348,37 @@ own ordered history:
 | `accepted` | Another full revalidation succeeded after the recorded result. | The exact invocation evidence chain was accepted before the backend returned its reply. The result's optional operation ID lets Python callers inspect the content-free history. |
 | `terminated` | A fixed coded failure ended the invocation. | No accepted reply exists for the attempt. A retry needs a fresh correlation, coordinator, and one-use capability; it cannot reuse this evidence. |
 
-Guarded `StoryRuntime` creation publishes ownership before its fallible access
-exit. As soon as capture or invocation authorization has created durable state,
-the runtime registers the operation or tracks the invocation while its exact
-transient owner still exists. A process-shared registry keyed by control
-workspace, session, exact physical worktree identity, and operation holds a
-strong cleanup owner until that operation is terminal; another `StoryRuntime`
-in the same process therefore does not mistake live work for a restart orphan.
+Guarded runtime preparation parses the indicators first. For a nonempty
+reference batch it then acquires and validates one non-inheritable, duplicated
+session-root descriptor before the repository can create `CAPTURED`
+authorization. Construction transfers that physical-worktree pin exactly once
+to the operation. Supplier, pin-validation, operation-ID, or construction
+failure closes every descriptor that was not transferred. If ordinary
+non-callback operation construction fails after capture, the repository closes
+the authorization and terminalizes that durable operation as
+`workflow_failure`.
 
-Every failure after registered guarded creation has published the operation
-defers cleanup, not only guard or workspace-security failures. Deferral
+Registered `StoryRuntime` creation normally publishes ownership from the
+repository's post-capture callback, before its fallible access exit. The
+process-shared registry is keyed by control workspace, session, exact physical
+worktree identity, and operation and holds a strong cleanup owner until that
+operation is terminal; another `StoryRuntime` in the same process therefore
+does not mistake live work for a restart orphan. If the publication callback
+itself fails after durable `REQUESTED` and `CAPTURED` events, preparation closes
+the content-bearing authorization and unretained pin without recursively
+entering the repository transaction. It re-raises the callback failure
+unchanged and leaves the content-free `CAPTURED` operation as a restart orphan;
+a later artifact-sensitive boundary inventories and terminalizes it through
+the ordinary restart cleanup path.
+
+Once registered guarded creation has published the operation, every later
+failure defers cleanup, not only guard or workspace-security failures. Deferral
 immediately closes every retained selected-byte result and content-bearing
 authorization, makes one-use capabilities unusable, clears pending coordinators
-and repository access, and leaves content-free ownership plus one private,
-non-traversed duplicated directory descriptor that pins the exact original
-worktree. The pin is never read, serialized, provider-visible, or usable as
-repository authority. The failed invocation and any known provider work are
-not replayed.
+and repository access, and leaves content-free ownership plus the operation's
+private, non-traversed worktree descriptor. The pin is never read, serialized,
+provider-visible, or usable as repository authority. The failed invocation and
+any known provider work are not replayed.
 At the next same-process artifact-sensitive boundary, runtime reconciles a
 retained owner only when the fresh binding has the same physical worktree
 identity. Same-generation terminal or reconciled completion closes the pin. If
@@ -1375,8 +1389,7 @@ replacement's live-owner exclusion set; the original root's durable history is
 unchanged. Terminal success or failure, reconciled completion, stale-owner
 abandonment, and every unretained preparation path each close the pin exactly
 once. A candidate-only consensus call enters this boundary only when the
-registry reports pending cleanup; otherwise it
-remains worktree-free.
+registry reports pending cleanup; otherwise it remains worktree-free.
 
 After process restart, no transient registry owner survives. The next
 artifact-sensitive boundary inventories validated reference history and
@@ -1593,11 +1606,15 @@ in-process repository lock
 
 The runtime-composed session variant adds an outer READY gate without changing
 that repository API. One exact repository object belongs to the binding, but
-each transaction requires a live same-thread binding access and semantic READY
-validation before and after. A retained raw repository therefore fails outside
-access. Long-lived runtime reference/source adapters retain an access factory,
-not authority, and reacquire the guard for each operation; same-thread nested
-binding access is reentrant.
+each transaction requires live same-thread binding access. One outer access
+performs the complete semantic READY pre/post pair; same-thread nested binding
+and repository operations reuse that transaction with active lease and named-
+root checks instead of repeating the full scan. A retained raw repository
+therefore fails outside access. Long-lived runtime reference/source adapters
+retain an access factory, not authority, and reacquire an outer guard for each
+operation. Borrowed Story Commit artifact access retains its own complete
+history-owned pre/post validation, and Apply explicitly rechecks READY
+immediately before its repository mutation starts.
 
 Guarded runtime references preserve the package-internal
 `SessionArtifactGuardFailure` classification, including its existing concrete

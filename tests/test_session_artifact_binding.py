@@ -4,11 +4,14 @@ from __future__ import annotations
 
 import asyncio
 import os
+import pickle
+import shutil
 import subprocess
 import tempfile
 import threading
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import contextmanager
+from dataclasses import replace
 from types import SimpleNamespace
 from unittest import mock
 
@@ -36,6 +39,8 @@ from story_writing_agents.conversations import (
 )
 from story_writing_agents.errors import WorkspaceFormatError, WorkspaceSecurityError
 from story_writing_agents.git import repository_lock as lock_module
+from story_writing_agents.git import session_resources as session_resources_module
+from story_writing_agents.git.process import GitProcessRunner
 from story_writing_agents.models import AgentStateEntry, DebateMessage
 from story_writing_agents.workspace import Workspace
 from story_writing_agents.workspace import core as workspace_core
@@ -43,6 +48,7 @@ from story_writing_agents.workspace.core import SessionSourceWorkspace
 from story_writing_agents.workspace import initialization as initialization_module
 from story_writing_agents.workspace.initialization import (
     SessionArtifactBindingError,
+    SessionArtifactGenerationPin,
     compose_session_artifact_binding,
     inspect_session_resources,
     provision_session_resources,
@@ -54,6 +60,13 @@ from tests.test_lead_orchestration import (
 
 
 _OUTLINE = "core_documents/global_outline.md"
+
+
+def _generation_pin_descriptors(
+    pin: SessionArtifactGenerationPin,
+) -> tuple[int, ...]:
+    git_pin = pin._pin
+    return () if git_pin is None else git_pin._descriptors
 
 
 class RuntimeSessionArtifactBindingTests(LeadOrchestrationTestCase):
@@ -114,6 +127,268 @@ class RuntimeSessionArtifactBindingTests(LeadOrchestrationTestCase):
                 self.session_id,
             )
         )
+
+    async def test_generation_pin_is_opaque_noninheritable_and_lease_free(self) -> None:
+        binding = compose_session_artifact_binding(
+            self.control_workspace.root,
+            self.session_id,
+        )
+        leases = []
+        original_lock = session_resources_module.lock_git_repository
+
+        @contextmanager
+        def capture_lock(root):
+            with original_lock(root) as lease:
+                leases.append(lease)
+                yield lease
+
+        with mock.patch.object(
+            initialization_module,
+            "_require_ready_locked_git_session_resources",
+            side_effect=AssertionError("generation pins must not run READY"),
+        ) as require_ready, mock.patch.object(
+            GitProcessRunner,
+            "run",
+            side_effect=AssertionError("generation pins must not run Git"),
+        ) as run_git, mock.patch.object(
+            session_resources_module,
+            "lock_git_repository",
+            new=capture_lock,
+        ):
+            pin = binding.acquire_generation_pin()
+            binding.require_generation_pin(pin)
+        require_ready.assert_not_called()
+        run_git.assert_not_called()
+        self.assertIs(type(pin), SessionArtifactGenerationPin)
+        descriptors = _generation_pin_descriptors(pin)
+        self.assertEqual(len(descriptors), 6)
+        self.assertTrue(
+            all(not os.get_inheritable(descriptor) for descriptor in descriptors)
+        )
+        self.assertEqual(repr(pin), "SessionArtifactGenerationPin(<opaque>)")
+        self.assertEqual(repr(pin._pin), "GitSessionGenerationPin(<opaque>)")
+        with self.assertRaisesRegex(TypeError, "cannot be serialized"):
+            pickle.dumps(pin)
+        with self.assertRaisesRegex(TypeError, "cannot be serialized"):
+            pickle.dumps(pin._pin)
+        self.assertIsNone(binding._current_repository_access())
+        self.assertTrue(leases)
+        self.assertTrue(all(not lease._active for lease in leases))
+
+        await asyncio.sleep(0)
+
+        self.assertIsNone(binding._current_repository_access())
+        with mock.patch.object(
+            initialization_module,
+            "_require_ready_locked_git_session_resources",
+            side_effect=AssertionError("generation pins must not run READY"),
+        ) as require_ready, mock.patch.object(
+            GitProcessRunner,
+            "run",
+            side_effect=AssertionError("generation pins must not run Git"),
+        ) as run_git, mock.patch.object(
+            session_resources_module,
+            "lock_git_repository",
+            new=capture_lock,
+        ):
+            binding.require_generation_pin(pin)
+        require_ready.assert_not_called()
+        run_git.assert_not_called()
+        self.assertTrue(all(not lease._active for lease in leases))
+        pin.close()
+        pin.close()
+        self.assertEqual(_generation_pin_descriptors(pin), ())
+        for descriptor in descriptors:
+            with self.assertRaises(OSError):
+                os.fstat(descriptor)
+        with self.assertRaises(SessionArtifactBindingError):
+            binding.require_generation_pin(pin)
+
+    def test_generation_pin_fails_closed_for_every_named_topology_component(
+        self,
+    ) -> None:
+        identity = compose_session_artifact_binding(
+            self.control_workspace.root,
+            self.session_id,
+        )._generation_identity
+        assert identity is not None
+        control_root = identity.session.main_root
+        common_git = control_root / ".git"
+        administrative_root = identity.administrative_root
+        worktree_root = identity.session.worktree_root
+        git_indirection = worktree_root / ".git"
+        common_indirection = administrative_root / "commondir"
+
+        @contextmanager
+        def replace_directory(path, suffix):
+            moved = path.with_name(f"{path.name}.{suffix}")
+            path.rename(moved)
+            path.mkdir()
+            try:
+                yield
+            finally:
+                shutil.rmtree(path)
+                moved.rename(path)
+
+        @contextmanager
+        def remove_directory(path, suffix):
+            moved = path.with_name(f"{path.name}.{suffix}")
+            path.rename(moved)
+            try:
+                yield
+            finally:
+                moved.rename(path)
+
+        @contextmanager
+        def drift_file(path, _suffix):
+            content = path.read_bytes()
+            path.write_bytes(content + b" ")
+            try:
+                yield
+            finally:
+                path.write_bytes(content)
+
+        cases = (
+            ("control_root", control_root, remove_directory),
+            ("common_git", common_git, replace_directory),
+            ("session_admin", administrative_root, remove_directory),
+            ("worktree", worktree_root, replace_directory),
+            ("git_indirection", git_indirection, drift_file),
+            ("common_indirection", common_indirection, drift_file),
+        )
+        for name, path, mutate in cases:
+            with self.subTest(component=name):
+                binding = compose_session_artifact_binding(
+                    self.control_workspace.root,
+                    self.session_id,
+                )
+                pin = binding.acquire_generation_pin()
+                descriptors = _generation_pin_descriptors(pin)
+                try:
+                    with mutate(path, f"generation-{name}"), self.assertRaises(
+                        SessionArtifactBindingError
+                    ):
+                        binding.require_generation_pin(pin)
+                finally:
+                    pin.close()
+                for descriptor in descriptors:
+                    with self.assertRaises(OSError):
+                        os.fstat(descriptor)
+
+    def test_generation_pin_capture_race_and_wrong_ownership_fail_closed(
+        self,
+    ) -> None:
+        original_capture = (
+            initialization_module.capture_locked_git_session_generation
+        )
+
+        def change_expected_worktree(lease, resources, **kwargs):
+            expected = kwargs["expected_worktree_identity"]
+            return original_capture(
+                lease,
+                resources,
+                expected_worktree_identity=(expected[0], expected[1] + 1),
+            )
+
+        with mock.patch.object(
+            initialization_module,
+            "capture_locked_git_session_generation",
+            side_effect=change_expected_worktree,
+        ), self.assertRaises(SessionArtifactBindingError) as caught:
+            compose_session_artifact_binding(
+                self.control_workspace.root,
+                self.session_id,
+            )
+        self.assertIsNone(caught.exception.__cause__)
+
+        binding = compose_session_artifact_binding(
+            self.control_workspace.root,
+            self.session_id,
+        )
+        equivalent = compose_session_artifact_binding(
+            self.control_workspace.root,
+            self.session_id,
+        )
+        other_id = "other_generation_session"
+        provision_session_resources(self.control_workspace.root, other_id)
+        foreign = compose_session_artifact_binding(
+            self.control_workspace.root,
+            other_id,
+        )
+        pin = binding.acquire_generation_pin()
+        equivalent.require_generation_pin(pin)
+        with self.assertRaises(SessionArtifactBindingError):
+            foreign.require_generation_pin(pin)
+        binding.require_generation_pin(pin)
+        pin.close()
+        with self.assertRaises(SessionArtifactBindingError):
+            binding.require_generation_pin(pin)
+
+    def test_generation_pin_partial_capture_failures_close_local_descriptors(
+        self,
+    ) -> None:
+        binding = compose_session_artifact_binding(
+            self.control_workspace.root,
+            self.session_id,
+        )
+        original_directory = session_resources_module._open_generation_directory
+        original_duplicate = (
+            session_resources_module._duplicate_generation_directory
+        )
+        original_file = session_resources_module._open_generation_file
+
+        def exercise(operation):
+            opened: list[int] = []
+
+            def capture_directory(*args, **kwargs):
+                descriptor = original_directory(*args, **kwargs)
+                opened.append(descriptor)
+                return descriptor
+
+            def capture_duplicate(*args, **kwargs):
+                descriptor = original_duplicate(*args, **kwargs)
+                opened.append(descriptor)
+                return descriptor
+
+            def capture_file(parent, name):
+                if name == "commondir":
+                    raise OSError("injected partial generation capture")
+                result = original_file(parent, name)
+                opened.append(result[0])
+                return result
+
+            with mock.patch.object(
+                session_resources_module,
+                "_open_generation_directory",
+                side_effect=capture_directory,
+            ), mock.patch.object(
+                session_resources_module,
+                "_duplicate_generation_directory",
+                side_effect=capture_duplicate,
+            ), mock.patch.object(
+                session_resources_module,
+                "_open_generation_file",
+                side_effect=capture_file,
+            ), self.assertRaises(SessionArtifactBindingError):
+                operation()
+            self.assertEqual(len(opened), 5)
+            for descriptor in opened:
+                with self.assertRaises(OSError):
+                    os.fstat(descriptor)
+
+        exercise(binding.acquire_generation_pin)
+
+        pin = binding.acquire_generation_pin()
+        retained = _generation_pin_descriptors(pin)
+        try:
+            exercise(lambda: binding.require_generation_pin(pin))
+            for descriptor in retained:
+                os.fstat(descriptor)
+        finally:
+            pin.close()
+        for descriptor in retained:
+            with self.assertRaises(OSError):
+                os.fstat(descriptor)
 
     def test_session_source_workspace_is_internal_and_accepts_safe_posix_paths(
         self,
@@ -311,15 +586,67 @@ class RuntimeSessionArtifactBindingTests(LeadOrchestrationTestCase):
                     WorkspaceSecurityError,
                     "exceeds inventory limit",
                 ):
-                    SessionSourceWorkspace._verify_directory_at(
+                    chain = SessionSourceWorkspace._open_directory_chain_at(
                         root_descriptor,
                         "inventory",
-                        descriptor,
-                        inventory,
                     )
+                    try:
+                        SessionSourceWorkspace._verify_directory_at(
+                            root_descriptor,
+                            "inventory",
+                            chain,
+                            inventory,
+                        )
+                    finally:
+                        SessionSourceWorkspace._close_directory_chain(chain)
             finally:
                 os.close(descriptor)
                 os.close(root_descriptor)
+
+    def test_bounded_jsonl_scanner_matches_python_splitline_boundaries(self) -> None:
+        separators = (
+            "\n",
+            "\r\n",
+            "\r",
+            "\v",
+            "\f",
+            "\x1c",
+            "\x1d",
+            "\x1e",
+            "\x85",
+            "\u2028",
+            "\u2029",
+        )
+
+        class SplitForbidden(str):
+            def splitlines(self, *args, **kwargs):
+                del args, kwargs
+                raise AssertionError("bounded scanner must not call splitlines")
+
+        for separator in separators:
+            text = SplitForbidden(
+                f"first{separator}{separator}third{separator}"
+            )
+            with self.subTest(separator=ascii(separator)):
+                observed = tuple(
+                    SessionSourceWorkspace._iter_bounded_jsonl_lines(
+                        text,
+                        max_records=3,
+                        limit_message="line limit",
+                    )
+                )
+                self.assertEqual(
+                    observed,
+                    tuple(enumerate(str(text).splitlines(), 1)),
+                )
+                with self.assertRaisesRegex(WorkspaceSecurityError, "line limit"):
+                    tuple(
+                        SessionSourceWorkspace._iter_bounded_jsonl_lines(
+                            text,
+                            max_records=2,
+                            limit_message="line limit",
+                        )
+                    )
 
     def test_agent_state_aggregate_byte_limit_is_exact_and_propagated(self) -> None:
         limit = 8 * 1024 * 1024
@@ -448,6 +775,188 @@ class RuntimeSessionArtifactBindingTests(LeadOrchestrationTestCase):
             "record limit",
         ):
             sources.read_agent_session_state(PLOT_ARCHITECT, self.session_id)
+
+    def test_debate_log_record_limit_accepts_ten_thousand_and_rejects_next(
+        self,
+    ) -> None:
+        self.append_source_debate(self.workspace, "bounded debate")
+        path = self.workspace.path(
+            f"discussion_logs/{self.session_id}/source_debate.jsonl"
+        )
+        line = path.read_bytes()
+        path.write_bytes(line * 10_000)
+        sources = self.source_workspace()
+
+        inspected = sources.inspect_debate(self.session_id, "source_debate")
+        self.assertEqual(len(inspected["messages"]), 10_000)
+
+        path.write_bytes(path.read_bytes() + b"not-json\n")
+        with self.assertRaisesRegex(
+            WorkspaceSecurityError,
+            "debate log exceeds record limit",
+        ):
+            sources.inspect_debate(self.session_id, "source_debate")
+
+    def test_ancestor_replacement_with_same_leaf_generation_fails_closed(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory(prefix="session-source-ancestor-") as root:
+            parent = os.path.join(root, "parent")
+            moved = os.path.join(root, "moved")
+            os.mkdir(parent)
+            path = os.path.join(parent, "source.txt")
+            with open(path, "wb") as stream:
+                stream.write(b"original leaf bytes")
+            root_descriptor = os.open(root, os.O_RDONLY)
+            original_read = workspace_core.os.read
+            replaced = False
+
+            def replace_parent(descriptor, size):
+                nonlocal replaced
+                content = original_read(descriptor, size)
+                if not replaced:
+                    replaced = True
+                    os.rename(parent, moved)
+                    os.mkdir(parent)
+                    os.rename(
+                        os.path.join(moved, "source.txt"),
+                        os.path.join(parent, "source.txt"),
+                    )
+                return content
+
+            try:
+                with mock.patch.object(
+                    workspace_core.os,
+                    "read",
+                    side_effect=replace_parent,
+                ), self.assertRaises(WorkspaceSecurityError) as caught:
+                    SessionSourceWorkspace._read_bytes_at(
+                        root_descriptor,
+                        "parent/source.txt",
+                    )
+                self.assertNotIn("original leaf bytes", str(caught.exception))
+            finally:
+                if replaced:
+                    os.rename(
+                        os.path.join(parent, "source.txt"),
+                        os.path.join(moved, "source.txt"),
+                    )
+                    os.rmdir(parent)
+                    os.rename(moved, parent)
+                os.close(root_descriptor)
+
+        with tempfile.TemporaryDirectory(prefix="session-source-missing-") as root:
+            root_descriptor = os.open(root, os.O_RDONLY)
+            closed_chains: list[tuple[int, ...]] = []
+            original_close = SessionSourceWorkspace._close_directory_chain
+
+            def capture_close(descriptors):
+                closed_chains.append(tuple(descriptors))
+                original_close(descriptors)
+
+            try:
+                with mock.patch.object(
+                    SessionSourceWorkspace,
+                    "_close_directory_chain",
+                    side_effect=capture_close,
+                ):
+                    self.assertIsNone(
+                        SessionSourceWorkspace._read_bytes_at(
+                            root_descriptor,
+                            "missing/compound/source.txt",
+                            missing_ok=True,
+                        )
+                    )
+                self.assertTrue(closed_chains)
+                for descriptor in {
+                    item for chain in closed_chains for item in chain
+                }:
+                    with self.assertRaises(OSError):
+                        os.fstat(descriptor)
+            finally:
+                os.close(root_descriptor)
+
+    def test_compound_state_and_debate_ancestor_replacement_fails_closed(
+        self,
+    ) -> None:
+        self.append_source_state(self.workspace, "state generation")
+        self.append_source_debate(self.workspace, "debate generation")
+        state_path = self.workspace.path(
+            self.workspace._agent_state_relative(
+                PLOT_ARCHITECT,
+                self.session_id,
+                "source_debate",
+            )
+        )
+        debate_path = self.workspace.path(
+            f"discussion_logs/{self.session_id}/source_debate.jsonl"
+        )
+        cases = (
+            (
+                state_path,
+                state_path.parents[2],
+                state_path.parent.relative_to(state_path.parents[2]),
+                lambda: self.source_workspace().read_agent_session_state(
+                    PLOT_ARCHITECT,
+                    self.session_id,
+                ),
+            ),
+            (
+                debate_path,
+                debate_path.parents[1],
+                debate_path.parent.relative_to(debate_path.parents[1]),
+                lambda: self.source_workspace().inspect_debate(
+                    self.session_id,
+                    "source_debate",
+                ),
+            ),
+        )
+        original_read = workspace_core.os.read
+
+        for ordinal, (target, ancestor, final_relative, read) in enumerate(cases):
+            moved = ancestor.with_name(f"{ancestor.name}.generation-{ordinal}")
+            replaced = False
+            target_stat = target.stat()
+            target_identity = (target_stat.st_dev, target_stat.st_ino)
+
+            def replace_ancestor(descriptor, size):
+                nonlocal replaced
+                content = original_read(descriptor, size)
+                descriptor_stat = os.fstat(descriptor)
+                descriptor_identity = (
+                    descriptor_stat.st_dev,
+                    descriptor_stat.st_ino,
+                )
+                if not replaced and descriptor_identity == target_identity:
+                    replaced = True
+                    ancestor.rename(moved)
+                    destination = ancestor / final_relative
+                    destination.parent.mkdir(parents=True)
+                    source = moved / final_relative
+                    original_identity = (source.stat().st_dev, source.stat().st_ino)
+                    source.rename(destination)
+                    self.assertEqual(
+                        (destination.stat().st_dev, destination.stat().st_ino),
+                        original_identity,
+                    )
+                return content
+
+            try:
+                with self.subTest(ancestor=ancestor.name), mock.patch.object(
+                    workspace_core.os,
+                    "read",
+                    side_effect=replace_ancestor,
+                ), self.assertRaises(WorkspaceSecurityError) as caught:
+                    read()
+                self.assertNotIn("generation", str(caught.exception))
+            finally:
+                if replaced:
+                    destination = ancestor / final_relative
+                    source = moved / final_relative
+                    source.parent.mkdir(parents=True, exist_ok=True)
+                    destination.rename(source)
+                    shutil.rmtree(ancestor)
+                    moved.rename(ancestor)
 
     def test_session_source_rejects_fifo_and_hardlinked_owned_records(
         self,
@@ -1106,6 +1615,155 @@ class RuntimeSessionArtifactBindingTests(LeadOrchestrationTestCase):
                 SessionArtifactBindingError
             ):
                 operation()
+
+    def test_outer_transaction_performs_only_pre_and_post_ready_inspections(
+        self,
+    ) -> None:
+        self.append_source_state(self.workspace, "transaction state")
+        self.append_source_debate(self.workspace, "transaction debate")
+        binding = compose_session_artifact_binding(
+            self.control_workspace.root,
+            self.session_id,
+        )
+        sources = SessionSourceWorkspace.from_artifact_binding(binding)
+        original_ready = (
+            initialization_module._require_ready_locked_git_session_resources
+        )
+
+        with mock.patch.object(
+            initialization_module,
+            "_require_ready_locked_git_session_resources",
+            wraps=original_ready,
+        ) as require_ready:
+            with binding.open_ready_resources() as outer:
+                repository = outer.repository
+                with binding.open_ready_resources() as nested:
+                    self.assertIs(nested, outer)
+                    self.assertEqual(
+                        repository.read_text(_OUTLINE),
+                        "Outline first line.\nOutline second line.\n",
+                    )
+                    self.assertIn(_OUTLINE, repository.list_paths())
+                    self.assertTrue(repository.capture_complete_state())
+                    self.assertEqual(
+                        len(
+                            sources.read_agent_session_state(
+                                PLOT_ARCHITECT,
+                                self.session_id,
+                            )
+                        ),
+                        1,
+                    )
+                    self.assertEqual(
+                        len(
+                            sources.inspect_debate(
+                                self.session_id,
+                                "source_debate",
+                            )["messages"]
+                        ),
+                        1,
+                    )
+                self.assertEqual(require_ready.call_count, 1)
+            self.assertEqual(require_ready.call_count, 2)
+
+    def test_story_commit_borrow_runs_one_pre_and_post_validation(self) -> None:
+        binding = compose_session_artifact_binding(
+            self.control_workspace.root,
+            self.session_id,
+        )
+        validations = 0
+
+        def validate_ready():
+            nonlocal validations
+            validations += 1
+            return binding.resources
+
+        with binding.open_story_commit_artifact_repository(
+            validate_ready
+        ) as repository:
+            self.assertEqual(validations, 1)
+            self.assertEqual(
+                repository.read_text(_OUTLINE),
+                "Outline first line.\nOutline second line.\n",
+            )
+            self.assertIn(_OUTLINE, repository.list_paths())
+            self.assertTrue(repository.capture_complete_state())
+            self.assertEqual(validations, 1)
+        self.assertEqual(validations, 2)
+
+    def test_outer_transaction_semantic_drift_fails_before_or_after_body(
+        self,
+    ) -> None:
+        binding = compose_session_artifact_binding(
+            self.control_workspace.root,
+            self.session_id,
+        )
+        drifted = replace(
+            binding.resources,
+            current_branch_tip="0" * len(binding.resources.current_branch_tip),
+        )
+        entered = False
+        with mock.patch.object(
+            initialization_module,
+            "_require_ready_locked_git_session_resources",
+            return_value=drifted,
+        ) as require_ready, self.assertRaises(SessionArtifactBindingError):
+            with binding.open_ready_resources():
+                entered = True
+        self.assertFalse(entered)
+        self.assertEqual(require_ready.call_count, 1)
+
+        ready_calls = 0
+        read_completed = False
+
+        def persistent_drift(*args, **kwargs):
+            nonlocal ready_calls
+            del args, kwargs
+            ready_calls += 1
+            return binding.resources if ready_calls == 1 else drifted
+
+        def read_transaction():
+            nonlocal read_completed
+            with binding.open_ready_resources() as access:
+                value = access.repository.read_text(_OUTLINE)
+                read_completed = True
+                return value
+
+        with mock.patch.object(
+            initialization_module,
+            "_require_ready_locked_git_session_resources",
+            side_effect=persistent_drift,
+        ), self.assertRaises(SessionArtifactBindingError):
+            read_transaction()
+        self.assertTrue(read_completed)
+        self.assertEqual(ready_calls, 2)
+
+    def test_repository_operation_checks_named_root_liveness(self) -> None:
+        binding = compose_session_artifact_binding(
+            self.control_workspace.root,
+            self.session_id,
+        )
+        root = self.session_resources.identity.worktree_root
+        moved = root.with_name(f"{root.name}-temporarily-deleted")
+
+        with binding.open_ready_resources() as access:
+            repository = access.repository
+            with self.replace_session_worktree(), self.assertRaises(
+                SessionArtifactBindingError
+            ):
+                repository.read_text(_OUTLINE)
+            self.assertEqual(
+                repository.read_text(_OUTLINE),
+                "Outline first line.\nOutline second line.\n",
+            )
+
+            root.rename(moved)
+            try:
+                with self.assertRaises(SessionArtifactBindingError):
+                    repository.list_paths()
+            finally:
+                moved.rename(root)
+            self.assertIn(_OUTLINE, repository.list_paths())
 
     def test_repository_operations_require_live_same_thread_nested_access(
         self,

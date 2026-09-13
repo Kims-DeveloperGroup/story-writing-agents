@@ -165,18 +165,34 @@ The package-internal session-artifact binding keeps its repository private.
 Only `open_ready_resources()` yields a live access object whose `repository`,
 resources, and descriptor duplication are valid inside that context. The
 exact `WritingArtifactRepository` object is stable for the binding, but every
-transaction on it requires a live access on the calling thread and repeats
-semantic READY before and after the transaction. Retaining that raw repository
-does not retain authority: a later or cross-thread transaction fails outside a
-live access. Same-thread nested `open_ready_resources()` calls are reentrant
-and yield the current access; long-lived reference and source adapters retain
-only an access factory and reacquire a guarded access for each operation. The
-access expires before its outer exit completes. Each nested, outer, and
-borrowed Story Commit access exit repeats semantic READY and physical-root
-validation after a successful body, `RuntimeError`, or cancellation. If that
-check finds binding loss, the content-free binding failure takes precedence; a
-clean postcheck preserves the original exception. Descriptors, access tokens,
-and the cooperating-runtime lease close on every path.
+transaction on it requires a live access on the calling thread. One outer
+`open_ready_resources()` transaction performs exactly one complete semantic
+READY validation before its body and one before any result escapes. Same-thread
+nested access and repository transactions reuse that semantic transaction and
+check only thread/lease liveness plus the named physical root; they do not
+repeat a whole READY scan. Retaining the raw repository does not retain
+authority: a later or cross-thread transaction fails outside live access.
+Long-lived reference and source adapters retain only an access factory and
+reacquire an outer guarded transaction for each operation. Borrowed Story
+Commit access performs one complete history-owned READY validation before and
+after its body. Apply adds an explicit complete check immediately before its
+repository mutation starts. All exit checks run after a successful body,
+`RuntimeError`, or cancellation. If a check finds binding loss, the
+content-free binding failure takes precedence; a clean postcheck preserves the
+original exception. Descriptors, access tokens, and the cooperating-runtime
+lease close on every path.
+
+When composed, the binding also captures the exact physical generation of the
+control root, common Git directory, session administrative directory, session
+worktree, and the worktree `.git` and administrative `commondir` files. Its
+package-internal opaque generation pin owns six non-inheritable descriptors for
+those four directories and two files. Pin acquisition and recheck use a short
+repository identity lock and bounded no-follow relationship validation, not a
+Git subprocess or a semantic READY, manifest, policy, or artifact scan. The pin
+is nonserializable, exposes no descriptor or traversal/content/mutation
+authority, retains no lock between calls, and cannot replace a guarded artifact
+transaction. Lead and synthesis may retain it across provider work solely to
+prove the same physical generation through durable result persistence.
 
 The live access and its underlying Git lease/history are affine to a package-
 internal, process-aware opaque token for the creator's thread state, not a
@@ -193,15 +209,17 @@ adopts that binding's exact session root and physical `(st_dev, st_ino)`
 identity, then provides only descriptor-relative active-debate and invoking-
 agent-state reads needed by context adapters. It accepts only exact relative
 POSIX text: absolute, noncanonical, dot-segment, backslash, NUL, and drive-like
-paths are rejected. Every allowed read opens the no-follow root, traverses
-directories relative to descriptors, and accepts a leaf only when its opened
-and named views are the same unique regular file with link count one. FIFOs,
-devices, symlinks, hard-linked leaves, and identity/mode/size/time drift before
-or after the read fail closed. A leaf is limited to 8 MiB: the exact boundary
-is accepted, while one additional byte fails with `WorkspaceSecurityError`.
-Compound agent-state and debate reads also pin
-the intermediate parent-directory descriptor. They accept a result only while
-the complete directory inventory is unchanged: every name and its device,
+paths are rejected. Every allowed read retains the complete no-follow
+descriptor chain from the session root through all leaf ancestors and accepts a
+leaf only when its opened and named views are the same unique regular file with
+link count one. After the final leaf observation, every original parent-child
+edge is reopened and required to name the retained directory identity before
+the result returns. FIFOs, devices, symlinks, hard-linked leaves, and
+identity/mode/size/time or ancestor drift fail closed. A leaf is limited to 8
+MiB: the exact boundary is accepted, while one additional byte fails with
+`WorkspaceSecurityError`. Compound agent-state and debate reads retain their
+complete directory chain. They accept a result only while the complete leaf-
+directory inventory is unchanged: every name and its device,
 inode, file type, link count, size, nanosecond modification time, and
 nanosecond change time must match. A parent-directory swap, added or removed
 entry, metadata drift, or more than 8,192 entries in one inventoried directory
@@ -209,14 +227,17 @@ therefore fails closed; exactly 8,192 entries are accepted. Debate state/results
 must embed the requested session and debate IDs. One compound agent-state read
 also accepts at most 8 MiB across all selected JSONL files and at most 10,000
 records; either exact boundary is accepted, while the first excess byte or
-record fails closed. The remaining aggregate byte allowance is applied to each
-successive file, and the first excess record is rejected before it is parsed or
-retained. Agent-state entries must embed the path's agent, session, and debate
-ownership. If the agent-state parent is
-missing, absence is checked at the failed open and again immediately before an
-empty tuple is returned; creation between those observations fails closed with
-`WorkspaceSecurityError`. The reader verifies the named root again before
-returning and closes its call-local descriptors on success or failure.
+record fails closed. Debate JSONL separately accepts at most 10,000 records.
+Both readers iterate records lazily: record 10,001 is rejected before its line
+is sliced, parsed, or retained. The remaining aggregate byte and record
+allowances are applied to each successive agent-state file. Agent-state entries
+must embed the path's agent, session, and debate ownership. If the agent-state
+parent is missing, the retained existing ancestor prefix and absent edge are
+captured twice and must match before an empty tuple is returned. A missing leaf
+likewise requires full ancestor-chain revalidation; creation or replacement
+between observations fails closed with `WorkspaceSecurityError`. The reader verifies
+the named root again before returning and closes its call-local descriptors on
+success or failure.
 Generic pathname access, writes, Git operations, control-root fallback, and
 sibling-session fallback are rejected. These internal semantics do not change
 any public constructor or method signature.
@@ -326,6 +347,11 @@ snapshot. They are absent
 from `story_writing_agents`, `story_writing_agents.workspace`, and
 `story_writing_agents.git`; direct application code must not treat them as a
 stable public API.
+
+The same direct module privately defines the artifact binding, live access,
+and opaque `SessionArtifactGenerationPin` described above. They are absent from
+every facade and from the module's public `__all__`; application code must not
+use the generation pin as a filesystem handle or readiness capability.
 
 Inspect, list, and require-ready are read-only. Provision alone may create or
 resume, and only from the exact main root. Results contain closed identities,

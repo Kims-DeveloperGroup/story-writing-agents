@@ -57,6 +57,10 @@ from ..git.session_contracts import (
 )
 from ..git.session_history import GitSessionHistorySnapshot, open_git_session_history
 from ..git.session_resources import (
+    GitSessionGenerationIdentity,
+    GitSessionGenerationPin,
+    acquire_git_session_generation_pin,
+    capture_locked_git_session_generation,
     inspect_git_session_resources as _inspect_git_session_resources,
     list_git_session_resources as _list_git_session_resources,
     provision_git_session_resources as _provision_git_session_resources,
@@ -429,6 +433,11 @@ class SessionArtifactBinding:
     worktree_identity: tuple[int, int]
     manifest: GitBaselineManifest = field(repr=False)
     allowed_worktree_changes: tuple[str, ...] = field(repr=False)
+    _generation_identity: GitSessionGenerationIdentity | None = field(
+        default=None,
+        repr=False,
+        compare=False,
+    )
     _repository: WritingArtifactRepository = field(init=False, repr=False)
     _operation_lock: threading.RLock = field(init=False, repr=False, compare=False)
     _operation_tokens: dict[object, list[SessionArtifactAccess]] = field(
@@ -449,6 +458,13 @@ class SessionArtifactBinding:
             for path in self.allowed_worktree_changes
         ):
             raise TypeError("allowed_worktree_changes must be exact paths")
+        if self._generation_identity is not None and (
+            type(self._generation_identity) is not GitSessionGenerationIdentity
+            or self._generation_identity.session != self.resources.identity
+            or self._generation_identity.worktree_identity
+            != self.worktree_identity
+        ):
+            raise TypeError("session artifact generation identity is invalid")
         object.__setattr__(self, "_operation_lock", threading.RLock())
         object.__setattr__(self, "_operation_tokens", {})
         object.__setattr__(
@@ -467,14 +483,14 @@ class SessionArtifactBinding:
 
         nested = self._current_repository_access()
         if nested is not None:
-            nested.require_ready()
+            nested.require_active()
             try:
                 yield nested
             except BaseException:
-                _postvalidate_session_artifact_access(nested)
+                nested.require_active()
                 raise
             else:
-                _postvalidate_session_artifact_access(nested)
+                nested.require_active()
             return
 
         access: SessionArtifactAccess | None = None
@@ -539,6 +555,48 @@ class SessionArtifactBinding:
                 [],
             ).append(access)
 
+    def acquire_generation_pin(self) -> SessionArtifactGenerationPin:
+        """Acquire one opaque pin under a short physical-generation lock."""
+
+        identity = self._generation_identity
+        if identity is None:
+            raise SessionArtifactBindingError(
+                "session artifact resources are unavailable"
+            )
+        git_pin: GitSessionGenerationPin | None = None
+        try:
+            git_pin = acquire_git_session_generation_pin(identity)
+            pin = SessionArtifactGenerationPin(
+                identity,
+                git_pin,
+            )
+            git_pin = None
+            return pin
+        except _SESSION_ARTIFACT_BINDING_FAILURES:
+            raise SessionArtifactBindingError(
+                "session artifact resources are unavailable"
+            ) from None
+        finally:
+            if git_pin is not None:
+                git_pin.close()
+
+    def require_generation_pin(self, pin: SessionArtifactGenerationPin) -> None:
+        """Require one opaque pin to match this binding's current generation."""
+
+        if type(pin) is not SessionArtifactGenerationPin:
+            raise TypeError("generation pin must be exact")
+        identity = self._generation_identity
+        if identity is None:
+            raise SessionArtifactBindingError(
+                "session artifact resources are unavailable"
+            )
+        try:
+            pin._require_identity(identity)
+        except _SESSION_ARTIFACT_BINDING_FAILURES:
+            raise SessionArtifactBindingError(
+                "session artifact resources are unavailable"
+            ) from None
+
     def _deactivate_repository_access(self, access: SessionArtifactAccess) -> None:
         with self._operation_lock:
             if current_thread_token() is not access._owner_thread_token:
@@ -575,11 +633,11 @@ class SessionArtifactBinding:
                 raise SessionArtifactBindingError(
                     "session artifact repository access is not active"
                 )
-            access.require_ready()
+            access.require_active()
             try:
                 yield
             finally:
-                access.require_ready()
+                access.require_active()
 
     @contextmanager
     def open_story_commit_artifact_repository(
@@ -768,6 +826,52 @@ class SessionArtifactAccess:
                 pass
 
 
+class SessionArtifactGenerationPin:
+    """Opaque ownership of one non-inheritable physical session generation."""
+
+    __slots__ = ("_identity", "_lock", "_pin")
+
+    def __init__(
+        self,
+        identity: GitSessionGenerationIdentity,
+        pin: GitSessionGenerationPin,
+    ) -> None:
+        if (
+            type(identity) is not GitSessionGenerationIdentity
+            or type(pin) is not GitSessionGenerationPin
+        ):
+            raise TypeError("session artifact generation pin is invalid")
+        self._identity = identity
+        self._pin = pin
+        self._lock = threading.Lock()
+
+    def close(self) -> None:
+        """Release this generation pin exactly once."""
+
+        with self._lock:
+            pin = self._pin
+            if pin is None:
+                return
+            self._pin = None
+        pin.close()
+
+    def _require_identity(self, identity: GitSessionGenerationIdentity) -> None:
+        with self._lock:
+            pin = self._pin
+            if pin is None or self._identity != identity:
+                raise SessionArtifactBindingError(
+                    "session artifact resources are unavailable"
+                )
+        pin.require_current()
+
+    def __repr__(self) -> str:
+        return "SessionArtifactGenerationPin(<opaque>)"
+
+    def __reduce_ex__(self, protocol: int) -> object:
+        del protocol
+        raise TypeError("session artifact generation pins cannot be serialized")
+
+
 def _postvalidate_session_artifact_access(access: SessionArtifactAccess) -> None:
     """Translate only a failed exit check, preserving an original body failure."""
 
@@ -837,6 +941,11 @@ def compose_session_artifact_binding(
                     descriptor,
                     worktree_identity,
                 )
+                generation_identity = capture_locked_git_session_generation(
+                    lease,
+                    confirmed_resources,
+                    expected_worktree_identity=worktree_identity,
+                )
             finally:
                 os.close(descriptor)
     except _SESSION_ARTIFACT_BINDING_FAILURES:
@@ -848,6 +957,7 @@ def compose_session_artifact_binding(
         worktree_identity=worktree_identity,
         manifest=manifest,
         allowed_worktree_changes=allowance,
+        _generation_identity=generation_identity,
     )
 
 

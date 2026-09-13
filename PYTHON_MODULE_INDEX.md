@@ -2996,12 +2996,14 @@ every intermediate arrow. The current runtime graph is acyclic.
 - **Responsibility:** Own the repository-serialized, restart-safe lifecycle of
   exact session branch, internal-ref, sibling-worktree, and provisioning-
   journal resources.
-- **Supported surface:** Exactly six package-internal direct-module operations
-  in `__all__`: the established inspect, list, provision, and require-ready
-  operations plus `inspect_locked_git_session_resources` and
-  `require_ready_locked_git_session_resources` for callers already holding the
-  shared repository lease. They accept only an exact
-  lexical root, canonical baseline manifest, and validated session identifier;
+- **Supported surface:** Exactly ten package-internal direct-module names in
+  `__all__`: the established six inspect, list, provision, and require-ready
+  operations; the immutable content-free `GitSessionGenerationIdentity`;
+  opaque `GitSessionGenerationPin`; existing-lease
+  `capture_locked_git_session_generation`; and short-lock
+  `acquire_git_session_generation_pin`. The four generation names remain absent
+  from the `git` and project-root facades. The established operations accept
+  only an exact lexical root, canonical baseline manifest, and validated session identifier;
   the inspect, list, provision, and require-ready operations additionally
   accept a private optional tuple of exact caller-validated worktree paths and
   tolerate only unstaged modifications of those identities. Their workspace
@@ -3031,6 +3033,19 @@ every intermediate arrow. The current runtime graph is acyclic.
   `--untracked-files=no`, while its identity-bound session-worktree check uses
   `git diff-index --cached --quiet HEAD --`; the independent story-commit and
   checkpoint owners retain their exhaustive untracked-entry safety checks.
+  Generation capture performs no Git subprocess, status, index, tree,
+  manifest, policy, or artifact scan. Under the caller's existing lease it
+  binds the exact control root, common Git directory, per-session
+  administrative directory, linked-worktree root, and the bounded `.git` and
+  `commondir` indirection files, including exact file facts and SHA-256
+  digests. Acquisition and recheck use only a short repository identity lock
+  plus the same bounded no-follow relationship proof. One opaque pin owns six
+  non-inheritable descriptors for those four directories and two indirection
+  files, preventing deleted identities from being recycled; construction
+  transfers that tuple once, and close, mismatch, and every partial failure
+  close all owned descriptors. The pin exposes only current-generation
+  validation and idempotent close, retains no repository lock between calls,
+  and grants no traversal, content-read, mutation, or semantic-READY authority.
   Partial, moved, aliased, malformed, uncertain, or colliding
   facts are preserved and classified without deleting any named ref, branch,
   worktree, administration record, journal-backed fact, or object. It owns no
@@ -7159,6 +7174,19 @@ every intermediate arrow. The current runtime graph is acyclic.
   locally deferred and removed without accessing the replacement repository or
   marking copied durable evidence terminal; its ID is not excluded from that
   repository's independent restart reconciliation.
+  Lead-front-channel invocations acquire a separate opaque session-generation
+  pin before any session-derived definition, source, or provider work and hold
+  it through durable result publication without retaining a Git lease across
+  an await. Lead synthesis transfers that pin with its private invocation
+  result to the persistence owner, which revalidates and closes it after the
+  exact terminal batch is appended; direct Lead calls retain and close their
+  pin around their own complete publication path. Failure, cancellation,
+  malformed synthesis, binding loss, and every non-transferred exit close the
+  same pin exactly once. The pin is neither provider-visible nor a source of
+  traversal, artifact bytes, persisted state, or restored capability. Its
+  acquisition and final recheck use only the Git owner's bounded physical-
+  generation proof; semantic READY authorization remains with each separate
+  guarded repository or artifact access.
   Every artifact-sensitive top-level operation freshly binds the exact READY
   session resource and physical worktree identity. Direct reads use one short
   synchronous guarded access; lazy provider reference and writing-artifact
@@ -7757,21 +7785,26 @@ every intermediate arrow. The current runtime graph is acyclic.
   binding without rerunning full workspace readiness or re-admitting mutable
   artifact scaffold. Each allowed debate or owner-state operation borrows one
   short semantic-READY/physical-root access from that binding, traverses the
-  pinned descriptor with strict lexical and no-follow checks, pins the nested
-  agent-state session or discussion-log session directory for the complete
-  logical read, and streams at most 8192 directory entries before sorting and
+  pinned descriptor with strict lexical and no-follow checks, retains the full
+  descriptor chain from the session root through every nested agent-state or
+  discussion-log ancestor for the complete logical read, and streams at most
+  8192 directory entries before sorting and
   capturing device, inode, type, link count, size, mtime, and ctime facts. Entry
   8193 fails before excess name or stat retention. Every selected leaf is read
-  relative to that retained directory; before return, the directory must still
-  be its named identity and its complete metadata inventory must match. Each
+  through its own retained no-follow ancestor chain; after the final leaf or
+  inventory/absence observation and before return, every original parent-child
+  edge must still name the retained directory identity and the leaf directory's
+  complete metadata inventory must match. Each
   leaf is prechecked at 8 MiB and incrementally limited to that content plus one
   detection byte, then required during its read to remain the same unique
   regular file with stable metadata; growth cannot bypass the running bound. A
   complete agent-state read additionally admits at most 8 MiB of JSONL bytes
   and 10,000 records across all selected files. The remaining aggregate byte
-  allowance is passed into each descriptor-relative leaf read, and record
-  10,001 fails before parsing or retention, so per-file-valid inputs cannot
-  accumulate beyond the context adapter's established limits. A
+  allowance is passed into each descriptor-relative leaf read, and a lazy
+  JSONL iterator makes record 10,001 fail before line slicing, parsing, or
+  retention, so per-file-valid inputs cannot accumulate beyond the context
+  adapter's established limits. Debate JSONL uses the same lazy 10,000-record
+  bound instead of materializing all split lines. A
   missing nested directory is rechecked immediately
   before an empty result returns and must remain absent across the complete
   operation. Debate result/state session and debate
@@ -7810,6 +7843,7 @@ every intermediate arrow. The current runtime graph is acyclic.
 - **Supported surface:** Internal-only `WorkspaceRootState`,
   `WorkspaceRootRole`, `WorkspaceRootInspection`, `WorkspaceRootDiscovery`,
   `SessionArtifactBinding`, `SessionArtifactAccess`,
+  `SessionArtifactGenerationPin`,
   `SessionArtifactBindingError`,
   `compose_session_artifact_binding`,
   the inspect/initialize/require-ready and typed nearest-discovery operations,
@@ -7881,12 +7915,27 @@ every intermediate arrow. The current runtime graph is acyclic.
   reusable binding that privately retains the identity-pinned repository; only
   a live `SessionArtifactAccess` exposes it to package-internal consumers. A
   binding-owned reentrant, non-recyclable thread-tokened operation gate
-  surrounds every repository transaction, requires the current access to
-  remain semantic-READY before and after that transaction, and rejects retained
-  repository use after access exit. Same-thread nested binding access first
-  repeats READY validation, then reuses the exact active lease and descriptor;
-  deactivation serializes with
+  surrounds every repository transaction, requires the current access, live
+  Git lease, and named physical root before and after that transaction, and
+  rejects retained repository use after access exit. The outermost binding
+  access performs one complete semantic-READY validation before its synchronous
+  body and one complete validation before any result escapes. Same-thread
+  nested binding access reuses that semantic transaction and exact active lease
+  and descriptor, applying the same cheap liveness and physical-root checks
+  without repeating a whole-tree READY scan; deactivation serializes with
   synchronous repository work.
+  Binding composition captures one exact Git-owned physical-generation
+  identity under its already-held READY lease and requires it to match the
+  previously pinned worktree root. A binding may then mint one opaque
+  `SessionArtifactGenerationPin` through the Git owner's short identity-only
+  lock without entering `open_ready_resources()` or repeating full Git,
+  manifest, policy, or artifact validation. The pin wraps six non-inheritable
+  Git-owned descriptors and supports only idempotent close and physical
+  generation revalidation through another short identity lock; it is
+  nonserializable, exposes no descriptor or traversal authority, and is absent
+  from every facade and the module's empty `__all__`. This continuity check
+  never substitutes for the outer full semantic-READY access required around
+  repository or artifact I/O, and no Git lease spans provider work.
   The access holds one call-local Git lease and pinned root descriptor, keys
   nested access by the repository-lock owner's process-aware opaque thread
   token, and requires that creator thread state for every getter, READY check,
@@ -7894,10 +7943,11 @@ every intermediate arrow. The current runtime graph is acyclic.
   access; foreign-thread exit still revokes the retained token entry and closes
   resources.
   Borrowed story-commit artifact access uses the live history validator instead
-  of acquiring a second Git lease and remains synchronous. The nested, outer,
-  and borrowed story-commit access exits each require the current locked READY
-  inspection to equal the binding after body I/O on successful, exceptional,
-  and cancellation paths, and close their owned resources on every exit. An
+  of acquiring a second Git lease and remains synchronous. Outer and borrowed
+  story-commit access exits require the current locked READY inspection to
+  equal the binding after body I/O on successful, exceptional, and cancellation
+  paths; nested exits repeat active lease and named-root checks within that
+  outer semantic transaction. Every exit closes its owned resources. An
   original body failure is preserved when postvalidation succeeds, while
   binding loss on any of those exits becomes the authoritative typed binding
   error. Later
@@ -8419,7 +8469,15 @@ every intermediate arrow. The current runtime graph is acyclic.
   preparation, repository actions, failure handling, terminalization, and
   cleanup so binding loss reaches the binding owner's typed recovery boundary;
   guarded capture also retains its established workspace-security propagation.
-  Every exception escaping registered preparation after publication moves the
+  Guarded referenced preparation parses first, then acquires and validates its
+  non-inheritable physical-worktree pin before the repository can create any
+  CAPTURED authorization. Construction transfers that descriptor exactly once
+  to the operation. Supplier, validation, or construction failure closes any
+  untransferred descriptor; publication-callback failure closes content-bearing
+  authorization while still inside the repository callback, and the outer
+  preparation owner then abandons any unretained operation without recursively
+  entering the repository transaction. Every exception escaping registered
+  preparation after publication moves the
   operation to content-free cleanup-pending state and is re-raised unchanged:
   transient
   results and authorization bytes are closed, pending
@@ -8793,12 +8851,26 @@ every intermediate arrow. The current runtime graph is acyclic.
   policy capture, and physical-identity-aware runtime-reference cleanup change
   no module, import edge, export, facade, persisted schema field, or schema
   version. Aggregate session-agent-state loading now enforces the existing
-  byte/record ceilings before retaining excess input; retained reference
-  operations pin their exact physical worktree generation without traversal;
-  recommendation construction reuses one exact invocation binding; and direct
+  byte/record ceilings before retaining excess input; agent-state and debate
+  JSONL record iteration is lazy, and full retained ancestor chains are
+  revalidated after final leaf/inventory/absence observation. Retained
+  reference operations acquire and validate their exact physical-worktree pin
+  before CAPTURED authorization, transfer it exactly once, and close
+  content-bearing callback state without nested repository cleanup. Lead and
+  synthesis invocations separately pin their exact session generation through
+  durable publication without retaining a Git lease across provider awaits;
+  their acquisition and recheck now use the Git owner's bounded six-descriptor
+  physical-generation seam instead of repeating full semantic READY scans.
+  Recommendation construction reuses one exact invocation binding, and direct
   recovery-topology resource drift maps to the established recovery-required
-  history outcome. These refinements likewise add no module, import edge,
-  export, facade, persisted schema field, or schema version. Deterministic
+  history outcome. The identity-only seam adds four supported package-internal
+  direct-module names in `git.session_resources`, but no module, import edge,
+  facade export, persisted schema field, or schema version. Binding access now
+  amortizes complete semantic READY validation across one outer synchronous
+  transaction: nested binding and repository operations repeat thread, lease,
+  and named-root liveness checks, while outer and borrowed Story Commit
+  boundaries retain complete READY pre/post validation. This changes no module,
+  import edge, export, facade, state owner, or schema. Deterministic
   story-commit operation binding, exact staged-recovery
   provenance, and submitted-call preservation across reference-cleanup binding
   loss change no module, import edge, export, schema field, or schema version.

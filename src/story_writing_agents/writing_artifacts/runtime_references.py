@@ -103,6 +103,37 @@ def _failure_code(
     return default
 
 
+def _close_descriptor(descriptor: int | None) -> None:
+    if type(descriptor) is not int or descriptor < 0:
+        return
+    try:
+        os.close(descriptor)
+    except OSError:
+        pass
+
+
+def _validate_physical_workspace_pin(
+    descriptor: int,
+    identity: tuple[int, int],
+) -> None:
+    if type(descriptor) is not int or descriptor < 0:
+        raise TypeError("physical workspace pin is invalid")
+    try:
+        os.set_inheritable(descriptor, False)
+        observed = os.fstat(descriptor)
+        inheritable = os.get_inheritable(descriptor)
+    except OSError:
+        raise WorkspaceSecurityError(
+            "physical workspace pin is unavailable"
+        ) from None
+    if (
+        not stat.S_ISDIR(observed.st_mode)
+        or (observed.st_dev, observed.st_ino) != identity
+        or inheritable
+    ):
+        raise WorkspaceSecurityError("physical workspace pin identity changed")
+
+
 class _TrackedReferenceReadInvocation:
     """Notify one operation when its repository coordinator is terminal."""
 
@@ -797,9 +828,17 @@ def prepare_guarded_runtime_reference_operation(
                 physical_workspace_pin_factory=physical_workspace_pin_factory,
             )
             return operation
-    except BaseException:
+    except BaseException as failure:
         if operation is not None:
-            operation._abandon_unretained()
+            try:
+                operation.failure(failure)
+            except BaseException as cleanup_failure:
+                failure.add_note(
+                    "reference authorization cleanup failed: "
+                    f"{type(cleanup_failure).__name__}"
+                )
+            finally:
+                operation._abandon_unretained()
         raise
 
 
@@ -884,6 +923,8 @@ def _prepare_runtime_reference_operation(
     ):
         raise ValueError("physical workspace identity and pin factory differ")
 
+    physical_workspace_pin: int | None = None
+
     def create_operation(
         *,
         batch: ArtifactReferenceBatch | None,
@@ -892,13 +933,9 @@ def _prepare_runtime_reference_operation(
         operation_id: str | None,
         authorization: ReferenceAuthorization | None,
     ) -> RuntimeReferenceOperation:
-        physical_workspace_pin = (
-            None
-            if physical_workspace_pin_factory is None
-            else physical_workspace_pin_factory()
-        )
+        nonlocal physical_workspace_pin
         try:
-            return RuntimeReferenceOperation(
+            operation = RuntimeReferenceOperation(
                 repository,
                 session_id=session_id,
                 batch=batch,
@@ -910,15 +947,9 @@ def _prepare_runtime_reference_operation(
                 physical_workspace_pin=physical_workspace_pin,
             )
         except BaseException:
-            if (
-                type(physical_workspace_pin) is int
-                and physical_workspace_pin >= 0
-            ):
-                try:
-                    os.close(physical_workspace_pin)
-                except OSError:
-                    pass
             raise
+        physical_workspace_pin = None
+        return operation
 
     if not any(marker in text for marker in ("${", "$$", "\\$")):
         operation = RuntimeReferenceOperation(
@@ -947,60 +978,118 @@ def _prepare_runtime_reference_operation(
         operation._repository_access = repository_access
         operation._guarded = repository_access is not None
         return operation
-    operation_id = _operation_id(session_id)
+    if physical_workspace_pin_factory is not None:
+        assert physical_workspace_identity is not None
+        try:
+            physical_workspace_pin = physical_workspace_pin_factory()
+            _validate_physical_workspace_pin(
+                physical_workspace_pin,
+                physical_workspace_identity,
+            )
+        except BaseException:
+            _close_descriptor(physical_workspace_pin)
+            raise
+    try:
+        operation_id = _operation_id(session_id)
+    except BaseException:
+        _close_descriptor(physical_workspace_pin)
+        raise
     operation: RuntimeReferenceOperation | None = None
+    post_capture_failure: BaseException | None = None
+    publication_failure_signal = RuntimeError(
+        "runtime reference publication failed"
+    )
+
+    def terminalize_unadopted(
+        authorization: ReferenceAuthorization,
+        failure: BaseException,
+    ) -> None:
+        try:
+            repository.finish_reference_operation(
+                authorization,
+                outcome=ReferenceAuthorizationErrorCode.WORKFLOW_FAILURE,
+            )
+        except BaseException as cleanup_failure:
+            failure.add_note(
+                "reference authorization cleanup failed: "
+                f"{type(cleanup_failure).__name__}"
+            )
+        finally:
+            authorization.close()
 
     def publish(authorization: ReferenceAuthorization) -> None:
-        nonlocal operation
-        operation = create_operation(
-            batch=batch,
-            source_text=batch.source_text,
-            provider_text=batch.provider_text,
-            operation_id=operation_id,
-            authorization=authorization,
-        )
+        nonlocal operation, post_capture_failure
+        try:
+            operation = create_operation(
+                batch=batch,
+                source_text=batch.source_text,
+                provider_text=batch.provider_text,
+                operation_id=operation_id,
+                authorization=authorization,
+            )
+        except BaseException as failure:
+            post_capture_failure = failure
+            authorization.close()
+            raise publication_failure_signal from None
         operation._repository_access = repository_access
         operation._guarded = repository_access is not None
         if operation_created is not None:
-            operation_created(operation)
+            try:
+                operation_created(operation)
+            except BaseException as failure:
+                post_capture_failure = failure
+                authorization.close()
+                raise publication_failure_signal from None
 
     try:
-        if operation_created is None:
-            authorization = repository.capture_reference_authorization(
-                operation_id=operation_id,
-                batch=batch,
+        try:
+            if operation_created is None:
+                authorization = repository.capture_reference_authorization(
+                    operation_id=operation_id,
+                    batch=batch,
+                )
+            else:
+                authorization = repository.capture_runtime_reference_authorization(
+                    operation_id=operation_id,
+                    batch=batch,
+                    on_created=publish,
+                )
+        except ReferenceAuthorizationError as exc:
+            raise ReferenceOperationFailure(operation_id, exc.code) from exc
+        except BaseException as exc:
+            if exc is publication_failure_signal:
+                assert post_capture_failure is not None
+                raise post_capture_failure.with_traceback(
+                    post_capture_failure.__traceback__
+                ) from None
+            if repository_access is not None and isinstance(
+                exc,
+                (SessionArtifactGuardFailure, WorkspaceSecurityError),
+            ):
+                raise
+            raise ReferenceOperationFailure(
+                operation_id,
+                ReferenceAuthorizationErrorCode.WORKFLOW_FAILURE,
+            ) from exc
+        if authorization is None:
+            raise ReferenceOperationFailure(
+                operation_id,
+                ReferenceAuthorizationErrorCode.WORKFLOW_FAILURE,
             )
-        else:
-            authorization = repository.capture_runtime_reference_authorization(
-                operation_id=operation_id,
-                batch=batch,
-                on_created=publish,
-            )
-    except ReferenceAuthorizationError as exc:
-        raise ReferenceOperationFailure(operation_id, exc.code) from exc
-    except BaseException as exc:
-        if repository_access is not None and isinstance(
-            exc,
-            (SessionArtifactGuardFailure, WorkspaceSecurityError),
-        ):
-            raise
-        raise ReferenceOperationFailure(
-            operation_id,
-            ReferenceAuthorizationErrorCode.WORKFLOW_FAILURE,
-        ) from exc
-    if authorization is None:
-        raise ReferenceOperationFailure(
-            operation_id,
-            ReferenceAuthorizationErrorCode.WORKFLOW_FAILURE,
-        )
-    if operation is None:
-        operation = create_operation(
-            batch=batch,
-            source_text=batch.source_text,
-            provider_text=batch.provider_text,
-            operation_id=operation_id,
-            authorization=authorization,
-        )
-        operation._repository_access = repository_access
-        operation._guarded = repository_access is not None
-    return operation
+        if operation is None:
+            try:
+                operation = create_operation(
+                    batch=batch,
+                    source_text=batch.source_text,
+                    provider_text=batch.provider_text,
+                    operation_id=operation_id,
+                    authorization=authorization,
+                )
+            except BaseException as failure:
+                terminalize_unadopted(authorization, failure)
+                raise
+            operation._repository_access = repository_access
+            operation._guarded = repository_access is not None
+        return operation
+    finally:
+        _close_descriptor(physical_workspace_pin)

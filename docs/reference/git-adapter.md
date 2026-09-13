@@ -531,8 +531,9 @@ supported surface remains the seven typed methods shown below.
 ## Package-internal session Git resources
 
 The session-resource substrate is deliberately absent from the project, `git`,
-and `workspace` facades. It exposes four direct-module operations for installed
-session lifecycle composition:
+and `workspace` facades. Its four lifecycle behaviors remain inspect, list,
+provision, and require-ready, with locked inspect/require forms for callers
+that already hold the repository lease:
 
 ```text
 inspect one session       read-only
@@ -548,6 +549,27 @@ credentials. Session Create provisions/verifies the correlated resources;
 Reopen requires them ready. Provider-session readiness remains a separate
 lifecycle fact and never substitutes for Git-resource readiness.
 
+The direct `git.session_resources` module additionally exposes the immutable
+content-free `GitSessionGenerationIdentity`, opaque
+`GitSessionGenerationPin`, existing-lease
+`capture_locked_git_session_generation()`, and short-lock
+`acquire_git_session_generation_pin()`. These four names remain absent from the
+`git`, `workspace`, and project-root facades. Generation capture binds four
+directories—the control root, common Git directory, per-session administrative
+directory, and linked session worktree—and two bounded unique regular
+indirection files: the worktree `.git` and administrative `commondir`. It keeps
+their exact identities, file metadata, and SHA-256 digests. One opaque pin owns
+six corresponding non-inheritable descriptors, closes every descriptor on
+mismatch or partial construction, retains them after successful transfer, and
+closes idempotently.
+
+Pin acquisition and current-generation recheck take the repository lock only
+for the bounded no-follow relationship proof and release it before returning.
+They run no Git subprocess, status, index, tree, manifest, policy, or artifact
+scan. A pin grants no descriptor access, traversal, file-content read,
+mutation, or semantic READY authority. Its purpose is physical generation
+continuity and inode-reuse prevention only.
+
 The runtime's package-internal session-artifact binding is a fifth composition
 seam above `require one ready session`. Given the initialized `main` control
 root and a session ID, it freshly requires the exact READY identity, opens the
@@ -555,23 +577,35 @@ worktree without following symlinks, captures a meaningful physical
 `(st_dev, st_ino)` identity, repeats complete READY inspection, and requires
 the named root to retain that identity. Each later repository or session-source
 action takes a short synchronous cooperating-runtime guard: the common-Git
-lease remains held while the exact semantic READY resources and pinned root are
-checked before and after that action, then the guard closes. A provider await
-or concurrent specialist execution never holds this lease; the next
-filesystem action reacquires and rechecks it. The binding supplies a writing-
-artifact repository rooted at and pinned to that session worktree only through
-the guard's live access object. The binding itself has no repository property,
-but it owns one stable exact repository object. Every repository transaction
-requires live access on the calling thread and semantic READY validation before
-and after; retaining the raw object or moving it to another thread grants no
-authority. Same-thread nested guards yield the current access, while long-lived
-reference/source adapters reacquire access per operation. Access to the
-repository, resources, or duplicated root descriptor expires when the outer
-guard exits. Every nested, outer, and borrowed Story Commit access exit
-revalidates after success, `RuntimeError`, or cancellation. Binding loss found
-there dominates the body failure; a clean postcheck preserves the original
-exception. Cleanup still revokes access and closes its descriptors on either
-path.
+lease remains held while one outer transaction performs a complete semantic
+READY and pinned-root check before and after its body, then the guard closes.
+Same-thread nested access and repository operations reuse the active lease and
+descriptor and check only their liveness and the named root; they do not repeat
+the full READY scan. Borrowed Story Commit access retains one complete history-
+owned validation before and after its body, and Apply explicitly repeats
+complete READY validation immediately before its repository mutation starts. A
+provider await or concurrent specialist execution never holds this lease; the
+next filesystem transaction reacquires and rechecks it. The binding supplies a
+writing-artifact repository rooted at and pinned to that session worktree only
+through the guard's live access object. The binding itself has no repository
+property, but it owns one stable exact repository object. Every repository
+transaction requires live access on the calling thread; retaining the raw
+object or moving it to another thread grants no authority. Same-thread nested
+guards yield the current access, while long-lived reference/source adapters
+reacquire an outer transaction per operation. Access to the repository,
+resources, or duplicated root descriptor expires when the outer guard exits.
+Nested liveness checks and outer or borrowed full postvalidation
+run after success, `RuntimeError`, or cancellation. Binding loss found there
+dominates the body failure; a clean postcheck preserves the original exception.
+Cleanup still revokes access and closes its descriptors on either path.
+
+The artifact binding captures the Git-owned generation identity under its
+initial READY lease. Lead and synthesis can then acquire the opaque six-
+descriptor pin under a separate short lock before session-derived source,
+definition, or provider work, retain it through durable result persistence,
+recheck the physical generation, and close it. No lease spans the provider
+await, and this identity-only continuity never replaces the separate semantic
+READY guards around filesystem operations.
 
 `GitRepositoryLease` properties/validation and all `SessionArtifactAccess`
 operations are affine to a package-internal, process-aware opaque token for
@@ -922,8 +956,10 @@ retained through authorization and execution. Identity-bound preparation opens
 session history first, then lends that live history's READY validator to the
 binding's one stable guarded repository generation for canonical artifact
 capture. Repository capture, Git checks, and create-only candidate publication
-therefore share one lease and repeat the same semantic READY authority instead
-of reacquiring or constructing another repository. It proves:
+therefore share one lease and one borrowed semantic READY transaction instead
+of reacquiring or constructing another repository. Nested repository operations
+perform only live-access and named-root checks; the borrowed owner performs the
+complete READY validation before and after the body. It proves:
 
 - symbolic `HEAD` names the exact session branch and equals the ready tip;
 - the real index has no pre-staged entry;

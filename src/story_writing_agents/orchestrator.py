@@ -11,7 +11,7 @@ import threading
 import uuid
 from collections.abc import Callable, Iterator
 from contextlib import AbstractContextManager, asynccontextmanager, contextmanager
-from dataclasses import asdict, dataclass, replace
+from dataclasses import asdict, dataclass, field, replace
 from functools import partial
 from pathlib import Path
 from typing import Any, AsyncContextManager, AsyncIterator, Mapping, cast
@@ -292,6 +292,7 @@ from .workspace.initialization import (
     SessionArtifactAccess,
     SessionArtifactBinding,
     SessionArtifactBindingError,
+    SessionArtifactGenerationPin,
     compose_session_artifact_binding,
     compose_story_commit_service,
 )
@@ -1320,6 +1321,11 @@ class _CollaborationInvocationResult:
     failure: BaseException | None = None
     submission_uncertain: bool = False
     artifact_binding: SessionArtifactBinding | None = None
+    generation_pin: SessionArtifactGenerationPin | None = field(
+        default=None,
+        repr=False,
+        compare=False,
+    )
 
 
 @dataclass(frozen=True, slots=True)
@@ -4800,6 +4806,8 @@ class StoryRuntime:
                     "mandatory consultation synthesis returned no typed payload"
                 ),
                 item.submission_uncertain,
+                item.artifact_binding,
+                item.generation_pin,
             )
         return item
 
@@ -5227,7 +5235,10 @@ class StoryRuntime:
         reference_operation: RuntimeReferenceOperation | None = None
         bound_agent: BoundAgent | None = None
         provider: _AccountingContextProvider | None = None
+        generation_pin: SessionArtifactGenerationPin | None = None
         try:
+            if agent_id == LEAD_ORCHESTRATOR:
+                generation_pin = artifact_binding.acquire_generation_pin()
             repository_access = partial(
                 _open_session_artifact_repository,
                 artifact_binding,
@@ -5367,10 +5378,17 @@ class StoryRuntime:
                 else decoder(result.answer, artifact_binding)
             )
             self._finish_reference_operation(reference_operation)
+            if bound_agent is not None:
+                releasing_agent = bound_agent
+                bound_agent = None
+                await self._release_bound_agent_use(releasing_agent)
+            transferred_pin = generation_pin
+            generation_pin = None
             return _CollaborationInvocationResult(
                 value,
                 provider.submitted_physical_calls,
                 artifact_binding=artifact_binding,
+                generation_pin=transferred_pin,
             )
         except BaseException as failure:
             cleanup_binding_failure: SessionArtifactBindingError | None = None
@@ -5387,15 +5405,41 @@ class StoryRuntime:
             )
             if cleanup_binding_failure is not None:
                 if submitted == 0:
+                    if bound_agent is not None:
+                        releasing_agent = bound_agent
+                        bound_agent = None
+                        try:
+                            await self._release_bound_agent_use(releasing_agent)
+                        except BaseException as release_failure:
+                            cleanup_binding_failure.add_note(
+                                "bound-agent release failed: "
+                                f"{type(release_failure).__name__}"
+                            )
                     raise cleanup_binding_failure
                 failure = cleanup_binding_failure
+            if bound_agent is not None:
+                releasing_agent = bound_agent
+                bound_agent = None
+                try:
+                    await self._release_bound_agent_use(releasing_agent)
+                except BaseException as release_failure:
+                    failure.add_note(
+                        "bound-agent release failed: "
+                        f"{type(release_failure).__name__}"
+                    )
+            transferred_pin = generation_pin
+            generation_pin = None
             return _CollaborationInvocationResult(
                 None,
                 submitted,
                 failure,
                 facts.submission_uncertain,
+                artifact_binding,
+                transferred_pin,
             )
         finally:
+            if generation_pin is not None:
+                generation_pin.close()
             if bound_agent is not None:
                 await self._release_bound_agent_use(bound_agent)
 
@@ -5498,6 +5542,45 @@ class StoryRuntime:
         return value
 
     def _persist_collaboration_results_locked(
+        self,
+        **arguments: Any,
+    ) -> None:
+        """Persist results before releasing transferred synthesis generation."""
+
+        synthesis_result = cast(
+            _CollaborationInvocationResult | None,
+            arguments.get("synthesis_result"),
+        )
+        generation_pin = (
+            None if synthesis_result is None else synthesis_result.generation_pin
+        )
+        artifact_binding = (
+            None if synthesis_result is None else synthesis_result.artifact_binding
+        )
+        try:
+            try:
+                self._persist_collaboration_results_with_generation_pin(**arguments)
+            except BaseException as failure:
+                if generation_pin is not None and artifact_binding is not None:
+                    try:
+                        artifact_binding.require_generation_pin(generation_pin)
+                    except BaseException as check_failure:
+                        failure.add_note(
+                            "session generation recheck failed: "
+                            f"{type(check_failure).__name__}"
+                        )
+                raise
+            if generation_pin is not None:
+                if artifact_binding is None:
+                    raise BackendProtocolError(
+                        "synthesis generation pin lacks its artifact binding"
+                    )
+                artifact_binding.require_generation_pin(generation_pin)
+        finally:
+            if generation_pin is not None:
+                generation_pin.close()
+
+    def _persist_collaboration_results_with_generation_pin(
         self,
         *,
         session_id: str,
@@ -7347,6 +7430,34 @@ class StoryRuntime:
             )
 
     async def _run_lead_provider_guarded(
+        self,
+        **arguments: Any,
+    ) -> LeadTurnResult:
+        """Retain the exact session generation through all Lead side effects."""
+
+        artifact_binding = cast(
+            SessionArtifactBinding,
+            arguments["artifact_binding"],
+        )
+        generation_pin = artifact_binding.acquire_generation_pin()
+        try:
+            try:
+                result = await self._run_lead_provider_guarded_pinned(**arguments)
+            except BaseException as failure:
+                try:
+                    artifact_binding.require_generation_pin(generation_pin)
+                except BaseException as check_failure:
+                    failure.add_note(
+                        "session generation recheck failed: "
+                        f"{type(check_failure).__name__}"
+                    )
+                raise
+            artifact_binding.require_generation_pin(generation_pin)
+            return result
+        finally:
+            generation_pin.close()
+
+    async def _run_lead_provider_guarded_pinned(
         self,
         *,
         artifact_binding: SessionArtifactBinding,

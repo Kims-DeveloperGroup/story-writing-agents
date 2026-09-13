@@ -176,6 +176,27 @@ tips may advance, and generic session readiness does not classify their
 committed contents; story-commit and session-recovery owners validate that
 history.
 
+Session-artifact binding also captures a narrower physical-generation identity
+under an already-held READY lease. It covers the control root, common Git
+directory, per-session administrative directory, linked session worktree, and
+the unique bounded `.git` and `commondir` indirection files, including exact
+metadata and file digests. An opaque pin retains six non-inheritable descriptors
+for those four directories and two files so deletion cannot recycle their
+identities while Lead or synthesis persistence still depends on them. Pin
+acquisition and recheck take only a short repository lock, repeat the bounded
+no-follow relationship proof, and release the lock before returning. They run
+no Git child or semantic READY, manifest, policy, or artifact scan and grant no
+traversal, read, mutation, or repository authority.
+
+Ordinary artifact access retains the stronger semantic boundary: one outer
+synchronous transaction performs a complete READY validation before and after
+its body. Nested access and repository calls reuse that transaction with only
+thread, lease, and named-root liveness checks. Borrowed Story Commit access has
+its own complete history-owned pre/post validation, and Apply adds an explicit
+complete check immediately before its mutation method starts. No Git lease or
+live artifact access is retained across provider work; only the identity-only
+generation pin may span that await.
+
 Every Git child uses fixed arguments, `shell=False`, bounded streams and time,
 disabled prompting, hooks, signing, filters, pagers, and inherited Git control
 variables, followed by root-identity revalidation and complete process/pipe
@@ -322,6 +343,16 @@ check every component and require embedded IDs to match the owning path. This
 protects namespace integrity, not access control: a process with workspace
 access can still name another session.
 
+Descriptor-relative session-source reads retain every directory descriptor
+from the session root through the leaf parent, not only the final directory.
+After the leaf, inventory, or absence observation, they reopen the path and
+require every original parent-child edge to name the retained identity.
+Compound agent state accepts at most 8 MiB and 10,000 JSONL records across its
+selected files; a debate log accepts at most 10,000 records. Both use a lazy
+line iterator, so record 10,001 is rejected before slicing, parsing, or
+retention. Missing nested directories and leaves also revalidate the complete
+retained ancestor prefix before absence is accepted.
+
 The provider-session claim guard is opened without following symlinks when the
 platform supports it, verified as the same regular file, and locked with POSIX
 `flock` or Windows one-byte advisory locking. Suspicious state fails closed.
@@ -338,6 +369,15 @@ capture does not use the application catalog as its path source or require a
 catalog audit. Each unique path is securely read once at initial capture;
 multiple ranges retain request order while sharing that immutable source
 snapshot.
+
+Guarded runtime preparation parses first, then obtains and validates one
+non-inheritable duplicate of the exact session root before the repository can
+publish `captured` authorization. Ownership transfers to the runtime operation
+exactly once. Supplier, validation, construction, and unretained publication
+paths close the descriptor; the pin grants no traversal or repository
+authority. A registry-callback failure after capture closes transient content
+and leaves only a content-free orphan for later restart reconciliation rather
+than recursively entering repository cleanup from the callback.
 
 The complete source must be strict UTF-8 without NUL. Universal CRLF, LF, and
 lone-CR records determine exact one-based range slices, including their line

@@ -30,6 +30,7 @@ from story_writing_agents.writing_artifacts._storage import ArtifactRootSecurity
 from story_writing_agents.writing_artifacts.repository import WritingArtifactRepository
 from story_writing_agents.workspace import initialization as initialization_module
 from story_writing_agents.workspace.initialization import (
+    SessionArtifactAccess,
     SessionArtifactBindingError,
     provision_session_resources,
 )
@@ -594,9 +595,17 @@ class LeadArtifactApplicationTests(LeadOrchestrationTestCase):
             initialization_module._postvalidate_session_artifact_access
         )
         applied = False
+        ready_before_apply = []
+
+        original_require_ready = SessionArtifactAccess.require_ready
+
+        def record_require_ready(access):
+            ready_before_apply.append(not applied)
+            return original_require_ready(access)
 
         def apply_then_reject(repository, request):
             nonlocal applied
+            self.assertEqual(ready_before_apply, [True])
             result = original_apply(repository, request)
             applied = True
             return result
@@ -612,6 +621,11 @@ class LeadArtifactApplicationTests(LeadOrchestrationTestCase):
             autospec=True,
             side_effect=apply_then_reject,
         ), mock.patch.object(
+            SessionArtifactAccess,
+            "require_ready",
+            autospec=True,
+            side_effect=record_require_ready,
+        ), mock.patch.object(
             initialization_module,
             "_postvalidate_session_artifact_access",
             side_effect=reject_after_apply,
@@ -621,6 +635,7 @@ class LeadArtifactApplicationTests(LeadOrchestrationTestCase):
             )
 
         self.assertTrue(applied)
+        self.assertEqual(ready_before_apply, [True])
         self.assertIs(
             result.outcome.outcome,
             ArtifactApplicationOutcomeKind.OUTCOME_UNKNOWN,

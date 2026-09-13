@@ -35,6 +35,9 @@ from story_writing_agents.writing_artifacts.runtime_references import (
     reference_operation_belongs_to_session,
     reference_operation_session_id,
 )
+from story_writing_agents.writing_artifacts import (
+    runtime_references as runtime_references_module,
+)
 from story_writing_agents.writing_artifacts.authorization import (
     ReferenceAuthorizationErrorCode,
     ReferenceAuthorizationError,
@@ -118,6 +121,22 @@ class RuntimeExecutionRetirementTests(unittest.TestCase):
     def _assert_descriptor_closed(self, descriptor: int) -> None:
         with self.assertRaises(OSError):
             os.fstat(descriptor)
+
+    @staticmethod
+    def _reference_snapshot_names(binding):
+        with binding.open_ready_resources() as access:
+            evidence = access.repository._reference_evidence
+            try:
+                return evidence._storage.list_names(
+                    evidence._snapshots_directory
+                )
+            except FileNotFoundError:
+                return ()
+
+    @staticmethod
+    def _reference_history(binding, operation_id):
+        with binding.open_ready_resources() as access:
+            return access.repository._reference_evidence.inspect(operation_id)
 
     def _complete_fresh_cleanup(self, binding, operation) -> None:
         with binding.open_ready_resources() as access:
@@ -462,8 +481,13 @@ class RuntimeExecutionRetirementTests(unittest.TestCase):
             with binding.open_ready_resources() as access:
                 yield access.repository
 
+        before = self._reference_snapshot_names(binding)
         supplier_marker = RuntimeError("pin supplier rejected")
-        with self.assertRaises(RuntimeError) as supplier_failure:
+        with mock.patch.object(
+            WritingArtifactRepository,
+            "capture_reference_authorization",
+            side_effect=AssertionError("capture must follow pin validation"),
+        ) as capture, self.assertRaises(RuntimeError) as supplier_failure:
             prepare_guarded_runtime_reference_operation(
                 repository_access,
                 session_id="novel",
@@ -474,17 +498,26 @@ class RuntimeExecutionRetirementTests(unittest.TestCase):
                 ),
             )
         self.assertIs(supplier_failure.exception, supplier_marker)
+        capture.assert_not_called()
+        self.assertEqual(self._reference_snapshot_names(binding), before)
 
-        mismatched = os.open(workspace.root, os.O_RDONLY)
-        with self.assertRaises(WorkspaceSecurityError):
-            prepare_guarded_runtime_reference_operation(
-                repository_access,
-                session_id="novel",
-                text="Read ${core_documents/global_outline.md}.",
-                physical_workspace_identity=binding.worktree_identity,
-                physical_workspace_pin_factory=lambda: mismatched,
-            )
-        self._assert_descriptor_closed(mismatched)
+        for invalid_pin in (-1, os.open(workspace.root, os.O_RDONLY)):
+            with self.subTest(invalid_pin=invalid_pin), mock.patch.object(
+                WritingArtifactRepository,
+                "capture_reference_authorization",
+                side_effect=AssertionError("capture must follow pin validation"),
+            ) as capture, self.assertRaises((TypeError, WorkspaceSecurityError)):
+                prepare_guarded_runtime_reference_operation(
+                    repository_access,
+                    session_id="novel",
+                    text="Read ${core_documents/global_outline.md}.",
+                    physical_workspace_identity=binding.worktree_identity,
+                    physical_workspace_pin_factory=lambda: invalid_pin,
+                )
+            capture.assert_not_called()
+            if invalid_pin >= 0:
+                self._assert_descriptor_closed(invalid_pin)
+            self.assertEqual(self._reference_snapshot_names(binding), before)
 
         postcheck_marker = RuntimeError("guard postcheck rejected")
         postcheck_pins: list[int] = []
@@ -513,13 +546,16 @@ class RuntimeExecutionRetirementTests(unittest.TestCase):
         self._assert_descriptor_closed(postcheck_pins[0])
 
         registered: list[object] = []
+        authorizations = []
         register_marker = RuntimeError("registry rejected")
 
         def reject_registration(operation) -> None:
             registered.append(operation)
+            authorizations.append(operation._authorization)
             raise register_marker
 
-        with self.assertRaises(ReferenceOperationFailure) as registration_failure:
+        histories_before_callback = self._reference_snapshot_names(binding)
+        with self.assertRaises(RuntimeError) as registration_failure:
             prepare_registered_guarded_runtime_reference_operation(
                 repository_access,
                 session_id="novel",
@@ -528,11 +564,110 @@ class RuntimeExecutionRetirementTests(unittest.TestCase):
                 physical_workspace_pin_factory=self._physical_pin_factory(binding),
                 register=reject_registration,
             )
-        self.assertIs(registration_failure.exception.__cause__, register_marker)
+        self.assertIs(registration_failure.exception, register_marker)
         self.assertEqual(len(registered), 1)
         abandoned = registered[0]
         self._assert_content_free_cleanup_pending(abandoned)
         self.assertIsNone(abandoned._physical_workspace_pin)
+        self.assertEqual(len(authorizations), 1)
+        self.assertTrue(authorizations[0]._closed)
+        self.assertEqual(authorizations[0]._captured, ())
+        callback_names = tuple(
+            item
+            for item in self._reference_snapshot_names(binding)
+            if item not in histories_before_callback
+        )
+        self.assertEqual(callback_names, (abandoned.operation_id,))
+        callback_history = self._reference_history(
+            binding,
+            abandoned.operation_id,
+        )
+        self.assertIsNotNone(callback_history)
+        self.assertEqual(
+            tuple(
+                event.operation_state
+                for event in callback_history.operation_events
+            ),
+            (
+                ReferenceOperationState.REQUESTED,
+                ReferenceOperationState.CAPTURED,
+            ),
+        )
+
+    def test_unregistered_constructor_failure_terminalizes_captured_authority(
+        self,
+    ) -> None:
+        workspace = pristine_initialized_workspace(self)
+        provision_session_resources(workspace.root, "novel")
+        binding = compose_session_artifact_binding(workspace.root, "novel")
+        pins: list[int] = []
+        authorizations = []
+
+        @contextmanager
+        def repository_access():
+            with binding.open_ready_resources() as access:
+                yield access.repository
+
+        def capture_pin() -> int:
+            descriptor = self._physical_pin_factory(binding)()
+            pins.append(descriptor)
+            return descriptor
+
+        original_capture = WritingArtifactRepository.capture_reference_authorization
+
+        def capture_authorization(repository, **kwargs):
+            authorization = original_capture(repository, **kwargs)
+            authorizations.append(authorization)
+            return authorization
+
+        marker = RuntimeError("operation construction rejected")
+        histories_before = self._reference_snapshot_names(binding)
+        with mock.patch.object(
+            WritingArtifactRepository,
+            "capture_reference_authorization",
+            new=capture_authorization,
+        ), mock.patch.object(
+            runtime_references_module,
+            "RuntimeReferenceOperation",
+            side_effect=marker,
+        ), self.assertRaises(RuntimeError) as caught:
+            prepare_guarded_runtime_reference_operation(
+                repository_access,
+                session_id="novel",
+                text="Read ${core_documents/global_outline.md}.",
+                physical_workspace_identity=binding.worktree_identity,
+                physical_workspace_pin_factory=capture_pin,
+            )
+
+        self.assertIs(caught.exception, marker)
+        self.assertEqual(len(pins), 1)
+        self._assert_descriptor_closed(pins[0])
+        self.assertEqual(len(authorizations), 1)
+        self.assertTrue(authorizations[0]._closed)
+        self.assertEqual(authorizations[0]._captured, ())
+        operation_id = authorizations[0].manifest.operation_id
+        history_names = tuple(
+            item
+            for item in self._reference_snapshot_names(binding)
+            if item not in histories_before
+        )
+        self.assertEqual(history_names, (operation_id,))
+        history = self._reference_history(binding, operation_id)
+        self.assertIsNotNone(history)
+        self.assertEqual(
+            tuple(
+                (event.operation_state, event.outcome)
+                for event in history.operation_events
+            ),
+            (
+                (ReferenceOperationState.REQUESTED, None),
+                (ReferenceOperationState.CAPTURED, None),
+                (
+                    ReferenceOperationState.TERMINATED,
+                    ReferenceAuthorizationErrorCode.WORKFLOW_FAILURE,
+                ),
+            ),
+        )
 
     def test_guarded_binding_failure_identity_survives_every_reference_phase(
         self,

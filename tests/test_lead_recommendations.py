@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import os
 from dataclasses import replace
 from unittest import mock
 
@@ -13,6 +14,11 @@ from story_writing_agents import orchestrator as owner
 from story_writing_agents.agents import LEAD_ORCHESTRATOR, PLOT_ARCHITECT, EXECUTION_SPECIALIST
 from story_writing_agents.specialist_routing import AuthoringActivity
 from story_writing_agents.errors import BackendProtocolError
+from story_writing_agents.workspace.initialization import (
+    SessionArtifactBinding,
+    SessionArtifactBindingError,
+    compose_session_artifact_binding,
+)
 from story_writing_agents.writing_artifacts._storage import ArtifactRootSecurityError
 from tests.recommendation_fixture import (
     DRAFT, OUTLINE, RecommendationCase, action, decision, digest,
@@ -24,16 +30,41 @@ from tests import test_lead_artifact_application as application
 from tests import test_lead_story_commit as commit
 
 
+def _generation_pin_descriptors(pin) -> tuple[int, ...]:
+    git_pin = pin._pin
+    return () if git_pin is None else git_pin._descriptors
+
+
 class LeadRecommendationTests(RecommendationCase):
     async def test_lead_recommendation_reuses_invocation_artifact_binding(self):
         invocation_bindings = []
         request_bindings = []
         basis_bindings = []
         fingerprint_bindings = []
+        pins = []
+        guarded_order = []
         original_binding = self.runtime._session_artifact_binding
         original_request = self.runtime._recommendation_request_draft
         original_basis = self.runtime._recommendation_basis
         original_fingerprint = self.runtime._recommendation_source_fingerprint
+        original_acquire_pin = SessionArtifactBinding.acquire_generation_pin
+        original_prepare = self.runtime._prepare_session_reference_operation
+        original_definition = self.runtime._build_guarded_contextual_definition
+        original_context_state = self.runtime._session_context_state
+        original_invoke = self.runtime._invoke_context_with_recovery
+        original_append = self.runtime._append_drafts
+
+        def require_current_pin():
+            self.assertEqual(len(pins), 1)
+            pin_binding, pin = pins[0]
+            self.assertIsNone(pin_binding._current_repository_access())
+            pin_binding.require_generation_pin(pin)
+
+        def capture_pin(binding):
+            pin = original_acquire_pin(binding)
+            pins.append((binding, pin))
+            guarded_order.append("pin")
+            return pin
 
         def capture_binding(session_id):
             binding = original_binding(session_id)
@@ -41,6 +72,7 @@ class LeadRecommendationTests(RecommendationCase):
             return binding
 
         def capture_request(*args, **kwargs):
+            require_current_pin()
             request_bindings.append(kwargs["artifact_binding"])
             return original_request(*args, **kwargs)
 
@@ -51,6 +83,34 @@ class LeadRecommendationTests(RecommendationCase):
         def capture_fingerprint(*args, **kwargs):
             fingerprint_bindings.append(kwargs["artifact_binding"])
             return original_fingerprint(*args, **kwargs)
+
+        def capture_prepare(*args, **kwargs):
+            require_current_pin()
+            guarded_order.append("references")
+            return original_prepare(*args, **kwargs)
+
+        def capture_definition(*args, **kwargs):
+            require_current_pin()
+            guarded_order.append("definition")
+            return original_definition(*args, **kwargs)
+
+        def capture_context_state(*args, **kwargs):
+            require_current_pin()
+            guarded_order.append("context")
+            return original_context_state(*args, **kwargs)
+
+        async def capture_invoke(*args, **kwargs):
+            require_current_pin()
+            guarded_order.append("await")
+            await asyncio.sleep(0)
+            require_current_pin()
+            return await original_invoke(*args, **kwargs)
+
+        def capture_append(*args, **kwargs):
+            if pins:
+                require_current_pin()
+                guarded_order.append("append")
+            return original_append(*args, **kwargs)
 
         with mock.patch.object(
             self.runtime,
@@ -68,6 +128,30 @@ class LeadRecommendationTests(RecommendationCase):
             self.runtime,
             "_recommendation_source_fingerprint",
             side_effect=capture_fingerprint,
+        ), mock.patch.object(
+            SessionArtifactBinding,
+            "acquire_generation_pin",
+            new=capture_pin,
+        ), mock.patch.object(
+            self.runtime,
+            "_prepare_session_reference_operation",
+            side_effect=capture_prepare,
+        ), mock.patch.object(
+            self.runtime,
+            "_build_guarded_contextual_definition",
+            side_effect=capture_definition,
+        ), mock.patch.object(
+            self.runtime,
+            "_session_context_state",
+            side_effect=capture_context_state,
+        ), mock.patch.object(
+            self.runtime,
+            "_invoke_context_with_recovery",
+            side_effect=capture_invoke,
+        ), mock.patch.object(
+            self.runtime,
+            "_append_drafts",
+            side_effect=capture_append,
         ):
             _conversation_id, turn = await self.recommend()
 
@@ -90,11 +174,19 @@ class LeadRecommendationTests(RecommendationCase):
                 )
             )
         )
+        self.assertEqual(guarded_order[0], "pin")
+        self.assertLess(guarded_order.index("pin"), guarded_order.index("references"))
+        self.assertLess(guarded_order.index("pin"), guarded_order.index("context"))
+        self.assertLess(guarded_order.index("pin"), guarded_order.index("definition"))
+        self.assertIn("append", guarded_order)
+        self.assertEqual(_generation_pin_descriptors(pins[0][1]), ())
 
     async def test_lead_recommendation_fails_closed_after_binding_replacement(self):
         conversation_id = self.conversation("Replace during recommendation")
         self.backend.enqueue(recommendation())
         original_request = self.runtime._recommendation_request_draft
+        original_acquire_pin = SessionArtifactBinding.acquire_generation_pin
+        pins = []
         replacement = self.replace_session_worktree()
         entered = False
         calls = 0
@@ -108,11 +200,20 @@ class LeadRecommendationTests(RecommendationCase):
                 entered = True
             return result
 
+        def capture_pin(binding):
+            pin = original_acquire_pin(binding)
+            pins.append(pin)
+            return pin
+
         try:
             with mock.patch.object(
                 self.runtime,
                 "_recommendation_request_draft",
                 side_effect=replace_after_validation,
+            ), mock.patch.object(
+                SessionArtifactBinding,
+                "acquire_generation_pin",
+                new=capture_pin,
             ):
                 turn = await self.runtime.lead_turn(
                     self.session_id,
@@ -134,6 +235,105 @@ class LeadRecommendationTests(RecommendationCase):
         self.assertFalse(
             self.payload_events(conversation_id, c.LeadRecommendationRequestPayload)
         )
+        self.assertEqual(len(pins), 1)
+        self.assertEqual(_generation_pin_descriptors(pins[0]), ())
+
+    async def test_lead_generation_pin_closes_on_provider_cancel_and_append_failure(self):
+        binding = compose_session_artifact_binding(
+            self.control_workspace.root,
+            self.session_id,
+        )
+        original_acquire_pin = SessionArtifactBinding.acquire_generation_pin
+
+        for marker in (RuntimeError("provider failed"), asyncio.CancelledError()):
+            pins = []
+
+            def capture_pin(current):
+                pin = original_acquire_pin(current)
+                pins.append(pin)
+                return pin
+
+            with self.subTest(marker=type(marker).__name__), mock.patch.object(
+                SessionArtifactBinding,
+                "acquire_generation_pin",
+                new=capture_pin,
+            ), mock.patch.object(
+                self.runtime,
+                "_run_lead_provider_guarded_pinned",
+                side_effect=marker,
+            ), self.assertRaises(type(marker)) as caught:
+                await self.runtime._run_lead_provider_guarded(
+                    artifact_binding=binding,
+                )
+            self.assertIs(caught.exception, marker)
+            self.assertEqual(len(pins), 1)
+            self.assertEqual(_generation_pin_descriptors(pins[0]), ())
+
+        pins = []
+        binding_marker = SessionArtifactBindingError("generation changed")
+
+        def capture_pin(current):
+            pin = original_acquire_pin(current)
+            pins.append(pin)
+            return pin
+
+        def reject_generation(current, pin):
+            self.assertIs(current, binding)
+            self.assertIs(pin, pins[0])
+            raise binding_marker
+
+        with mock.patch.object(
+            SessionArtifactBinding,
+            "acquire_generation_pin",
+            new=capture_pin,
+        ), mock.patch.object(
+            SessionArtifactBinding,
+            "require_generation_pin",
+            new=reject_generation,
+        ), mock.patch.object(
+            self.runtime,
+            "_run_lead_provider_guarded_pinned",
+            return_value=object(),
+        ), self.assertRaises(SessionArtifactBindingError) as caught:
+            await self.runtime._run_lead_provider_guarded(
+                artifact_binding=binding,
+            )
+        self.assertIs(caught.exception, binding_marker)
+        self.assertEqual(len(pins), 1)
+        self.assertEqual(_generation_pin_descriptors(pins[0]), ())
+
+        pins = []
+        append_marker = RuntimeError("durable append failed")
+
+        def capture_pin(current):
+            pin = original_acquire_pin(current)
+            pins.append((current, pin))
+            return pin
+
+        async def fail_during_pinned_append(**_kwargs):
+            current, pin = pins[0]
+            current.require_generation_pin(pin)
+            self.runtime._append_drafts(0, ())
+
+        with mock.patch.object(
+            SessionArtifactBinding,
+            "acquire_generation_pin",
+            new=capture_pin,
+        ), mock.patch.object(
+            self.runtime,
+            "_append_drafts",
+            side_effect=append_marker,
+        ), mock.patch.object(
+            self.runtime,
+            "_run_lead_provider_guarded_pinned",
+            side_effect=fail_during_pinned_append,
+        ), self.assertRaises(RuntimeError) as caught:
+            await self.runtime._run_lead_provider_guarded(
+                artifact_binding=binding,
+            )
+        self.assertIs(caught.exception, append_marker)
+        self.assertEqual(len(pins), 1)
+        self.assertEqual(_generation_pin_descriptors(pins[0][1]), ())
 
     async def test_legacy_unscoped_recommendation_stays_readable_but_decisions_are_stale(self):
         for kind in (c.CollaborationConfirmationDecision.CONFIRM, c.CollaborationConfirmationDecision.REVISE):
@@ -813,11 +1013,35 @@ class LeadRecommendationSynthesisTests(RecommendationCase):
         request_bindings = []
         basis_bindings = []
         fingerprint_bindings = []
+        pins = []
+        guarded_order = []
         original_request = self.runtime._recommendation_request_draft
         original_basis = self.runtime._recommendation_basis
         original_fingerprint = self.runtime._recommendation_source_fingerprint
+        original_acquire_pin = SessionArtifactBinding.acquire_generation_pin
+        original_prepare = self.runtime._prepare_session_reference_operation
+        original_definition = self.runtime._build_guarded_contextual_definition
+        original_context_state = self.runtime._session_context_state
+        original_invoke = self.runtime._invoke_context_with_recovery
+        original_persist = (
+            self.runtime._persist_collaboration_results_with_generation_pin
+        )
+        original_append = self.runtime._append_drafts
+
+        def require_current_pin():
+            self.assertEqual(len(pins), 1)
+            pin_binding, pin = pins[0]
+            self.assertIsNone(pin_binding._current_repository_access())
+            pin_binding.require_generation_pin(pin)
+
+        def capture_pin(binding):
+            pin = original_acquire_pin(binding)
+            pins.append((binding, pin))
+            guarded_order.append("pin")
+            return pin
 
         def capture_request(*args, **kwargs):
+            require_current_pin()
             request_bindings.append(kwargs["artifact_binding"])
             return original_request(*args, **kwargs)
 
@@ -828,6 +1052,44 @@ class LeadRecommendationSynthesisTests(RecommendationCase):
         def capture_fingerprint(*args, **kwargs):
             fingerprint_bindings.append(kwargs["artifact_binding"])
             return original_fingerprint(*args, **kwargs)
+
+        def capture_prepare(*args, **kwargs):
+            if pins and kwargs.get("artifact_binding") is pins[0][0]:
+                require_current_pin()
+                guarded_order.append("references")
+            return original_prepare(*args, **kwargs)
+
+        def capture_definition(*args, **kwargs):
+            if pins and kwargs.get("artifact_binding") is pins[0][0]:
+                require_current_pin()
+                guarded_order.append("definition")
+            return original_definition(*args, **kwargs)
+
+        def capture_context_state(*args, **kwargs):
+            if pins and kwargs.get("artifact_binding") is pins[0][0]:
+                require_current_pin()
+                guarded_order.append("context")
+            return original_context_state(*args, **kwargs)
+
+        async def capture_invoke(*args, **kwargs):
+            if pins:
+                require_current_pin()
+                guarded_order.append("await")
+                await asyncio.sleep(0)
+                require_current_pin()
+            return await original_invoke(*args, **kwargs)
+
+        def capture_persist(*args, **kwargs):
+            require_current_pin()
+            self.assertIs(kwargs["synthesis_result"].generation_pin, pins[0][1])
+            guarded_order.append("persist")
+            return original_persist(*args, **kwargs)
+
+        def capture_append(*args, **kwargs):
+            if pins:
+                require_current_pin()
+                guarded_order.append("append")
+            return original_append(*args, **kwargs)
 
         with mock.patch.object(
             self.runtime,
@@ -841,6 +1103,34 @@ class LeadRecommendationSynthesisTests(RecommendationCase):
             self.runtime,
             "_recommendation_source_fingerprint",
             side_effect=capture_fingerprint,
+        ), mock.patch.object(
+            SessionArtifactBinding,
+            "acquire_generation_pin",
+            new=capture_pin,
+        ), mock.patch.object(
+            self.runtime,
+            "_prepare_session_reference_operation",
+            side_effect=capture_prepare,
+        ), mock.patch.object(
+            self.runtime,
+            "_build_guarded_contextual_definition",
+            side_effect=capture_definition,
+        ), mock.patch.object(
+            self.runtime,
+            "_session_context_state",
+            side_effect=capture_context_state,
+        ), mock.patch.object(
+            self.runtime,
+            "_invoke_context_with_recovery",
+            side_effect=capture_invoke,
+        ), mock.patch.object(
+            self.runtime,
+            "_persist_collaboration_results_with_generation_pin",
+            side_effect=capture_persist,
+        ), mock.patch.object(
+            self.runtime,
+            "_append_drafts",
+            side_effect=capture_append,
         ):
             result = await self.runtime.decide_lead_step(
                 lead._decision(
@@ -864,6 +1154,124 @@ class LeadRecommendationSynthesisTests(RecommendationCase):
                 )
             )
         )
+        self.assertEqual(guarded_order[0], "pin")
+        self.assertLess(guarded_order.index("pin"), guarded_order.index("references"))
+        self.assertLess(guarded_order.index("pin"), guarded_order.index("context"))
+        self.assertLess(guarded_order.index("pin"), guarded_order.index("definition"))
+        self.assertLess(guarded_order.index("pin"), guarded_order.index("persist"))
+        self.assertEqual(_generation_pin_descriptors(pins[0][1]), ())
+
+    def test_synthesis_result_pin_is_opaque_nonsemantic_and_closes_on_normalization(
+        self,
+    ) -> None:
+        binding = compose_session_artifact_binding(
+            self.control_workspace.root,
+            self.session_id,
+        )
+        first_pin = binding.acquire_generation_pin()
+        second_pin = binding.acquire_generation_pin()
+        first_descriptors = _generation_pin_descriptors(first_pin)
+        second_descriptors = _generation_pin_descriptors(second_pin)
+        left = owner._CollaborationInvocationResult(
+            object(),
+            1,
+            artifact_binding=binding,
+            generation_pin=first_pin,
+        )
+        right = owner._CollaborationInvocationResult(
+            left.value,
+            1,
+            artifact_binding=binding,
+            generation_pin=second_pin,
+        )
+        self.assertEqual(left, right)
+        self.assertNotIn("GenerationPin", repr(left))
+        self.assertNotIn("generation_pin", repr(left))
+        self.assertEqual(repr(left), repr(right))
+
+        malformed = self.runtime._required_synthesis_result(left)
+        self.assertIs(malformed.artifact_binding, binding)
+        self.assertIs(malformed.generation_pin, first_pin)
+        self.assertIsInstance(malformed.failure, BackendProtocolError)
+        marker = RuntimeError("malformed result append rejected")
+        with mock.patch.object(
+            self.runtime,
+            "_persist_collaboration_results_with_generation_pin",
+            side_effect=marker,
+        ), self.assertRaises(RuntimeError) as caught:
+            self.runtime._persist_collaboration_results_locked(
+                synthesis_result=malformed,
+            )
+        self.assertIs(caught.exception, marker)
+        self.assertEqual(_generation_pin_descriptors(first_pin), ())
+        for descriptor in first_descriptors:
+            with self.assertRaises(OSError):
+                os.fstat(descriptor)
+
+        with mock.patch.object(
+            self.runtime,
+            "_persist_collaboration_results_with_generation_pin",
+            side_effect=marker,
+        ), self.assertRaises(RuntimeError):
+            self.runtime._persist_collaboration_results_locked(
+                synthesis_result=malformed,
+            )
+        second_pin.close()
+        second_pin.close()
+        for descriptor in second_descriptors:
+            with self.assertRaises(OSError):
+                os.fstat(descriptor)
+
+    async def test_synthesis_failure_transfers_pin_once_until_persistence(self):
+        binding = compose_session_artifact_binding(
+            self.control_workspace.root,
+            self.session_id,
+        )
+        for marker in (RuntimeError("provider failed"), asyncio.CancelledError()):
+            with self.subTest(marker=type(marker).__name__), mock.patch.object(
+                self.runtime,
+                "_prepare_session_reference_operation",
+                side_effect=marker,
+            ):
+                result = await self.runtime._run_collaboration_invocation_guarded(
+                    artifact_binding=binding,
+                    session_id=self.session_id,
+                    conversation_id="conversation",
+                    turn_id="turn",
+                    step_id="step",
+                    agent_id=LEAD_ORCHESTRATOR,
+                    operation_id="operation",
+                    result_correlation_id="result",
+                    inputs=(),
+                    material_value={},
+                    invocation_kind=owner.CollaborationInvocationKind.LEAD_SYNTHESIS,
+                    context_invocation_kind=owner.ContextInvocationKind.LEAD_SYNTHESIS,
+                    result_contract=object(),
+                    physical_call_limit=1,
+                    round_number=None,
+                    decoder=lambda answer, artifact_binding: answer,
+                    action_progress_sink=None,
+                )
+            self.assertIs(result.failure, marker)
+            self.assertIs(result.artifact_binding, binding)
+            self.assertIsNotNone(result.generation_pin)
+            descriptors = _generation_pin_descriptors(result.generation_pin)
+            binding.require_generation_pin(result.generation_pin)
+            with mock.patch.object(
+                self.runtime,
+                "_persist_collaboration_results_with_generation_pin",
+                return_value=None,
+            ):
+                self.runtime._persist_collaboration_results_locked(
+                    synthesis_result=result,
+                )
+            self.assertEqual(
+                _generation_pin_descriptors(result.generation_pin),
+                (),
+            )
+            for descriptor in descriptors:
+                with self.assertRaises(OSError):
+                    os.fstat(descriptor)
 
     async def test_synthesis_next_intent_and_action_are_exclusive_with_bounded_accounting(self):
         conversation_id, _, mixed = await self.consultation(actionable=True, mixed=True)

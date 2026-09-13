@@ -283,10 +283,15 @@ it is not the story-artifact root for an active session. Every
 artifact-sensitive session operation freshly validates the session's exact branch/ref/
 sibling-worktree identity and pins the worktree's physical `(st_dev, st_ino)`
 identity. Each repository or session-source step uses a short synchronous
-guard: it holds the cooperating-runtime Git lease, verifies the exact semantic
-READY resources and named physical root before and after the step, then
-releases the guard. A guard never spans a provider await or specialist
-concurrency; the next filesystem step reacquires and revalidates it. The
+outer guard: it holds the cooperating-runtime Git lease and verifies the exact
+semantic READY resources and named physical root once before and once after the
+transaction. Nested repository work reuses that transaction with liveness and
+named-root checks instead of repeating the full READY scan. A guard never spans
+a provider await or specialist concurrency; the next filesystem transaction
+reacquires and revalidates it. Direct Lead and Lead-synthesis paths instead
+retain one opaque six-descriptor physical-generation pin through durable
+result publication. That pin carries no semantic READY, traversal, or
+repository authority, and no Git lease spans the provider wait. The
 binding does not expose its repository directly: only live guarded access does,
 and that access expires on exit. Exit revalidation runs after success, error,
 or cancellation; detected binding loss takes precedence over the body result.
@@ -296,7 +301,11 @@ control-plane storage. Replacing the named worktree does not transfer authority
 to the replacement.
 The runtime never falls back to `main`, the current directory, or a previously
 used session, and it does not provision missing session resources as a side
-effect. Create or reopen the session through the lifecycle first.
+effect. This artifact binding does not set or confine the provider working
+directory or project root; that separate story-runtime boundary remains
+tracked by
+[Issue #670](https://github.com/Kims-DeveloperGroup/story-writing-agents/issues/670).
+Create or reopen the session through the lifecycle first.
 
 ```python
 from story_writing_agents import StoryRuntime, Workspace

@@ -187,20 +187,29 @@ Each call freshly requires the exact READY identity and then uses only that
 session worktree for artifact source reads, references, proposals,
 application-ledger access, Apply, and recovery. The binding pins the physical
 `(st_dev, st_ino)` identity and the exact semantic branch/ref/worktree READY
-inspection. Each repository or session-state action holds the cooperating-
-runtime Git lease only for its short synchronous body, checking semantic READY
-and the named root before and after it. No such guard spans a provider await or
-concurrent specialist execution; a later action reacquires it. The binding
+inspection. Each outer repository or session-state transaction holds the
+cooperating-runtime Git lease only for its short synchronous body, performing
+one complete READY and named-root check before and after it. Nested binding and
+repository actions reuse the transaction with liveness/root checks rather than
+repeating the complete READY scan. No such guard spans a provider await or
+concurrent specialist execution; a later transaction reacquires it. The binding
 keeps one stable exact repository private and exposes it only through live
-same-thread access. Every transaction requires that access and its own
-before/after READY checks, so a retained raw repository or cross-thread use
-fails. Access, Git leases, and Commit authority use opaque process-aware thread-
+same-thread access, so a retained raw repository or cross-thread use fails.
+Access, Git leases, and Commit authority use opaque process-aware thread-
 state tokens rather than numeric identifiers, so identifier reuse grants no
 authority. Same-thread nested access is reentrant; long-lived reference/source
-adapters reacquire a guard for each operation. Nested, outer, and borrowed
-Commit exits revalidate on success, `RuntimeError`, and cancellation. When both
-the body and exit fail, binding loss takes precedence; a clean postcheck
-preserves the original exception, and cleanup remains guaranteed.
+adapters reacquire an outer guard for each operation. Borrowed Commit access
+retains complete history-owned validation before and after its body. Nested
+liveness and outer/borrowed postchecks run on success, `RuntimeError`, and
+cancellation. When both the body and exit fail, binding loss takes precedence;
+a clean postcheck preserves the original exception, and cleanup remains
+guaranteed.
+
+Direct Lead and Lead-synthesis owners acquire a separate opaque six-descriptor
+physical-generation pin before session-derived sources, definitions, or
+provider work and retain it through durable persistence. Its short-lock
+acquisition/recheck grants no semantic READY or artifact authority and retains
+no Git lease across the provider await.
 Conversation history remains in its separately
 configured control-plane store. Absent
 resources are not provisioned; moved, mismatched, staged, or otherwise
@@ -213,13 +222,15 @@ must remain one singly linked regular file throughout the read. Symlinks,
 FIFOs, devices, hard links, replacement or metadata drift, and embedded
 session/debate/agent ownership that disagrees with the requested path all fail
 closed without exposing the replacement as evidence. Compound agent-state and
-debate reads additionally pin the intermediate parent descriptor and compare
-the exact whole inventory—names plus device, inode, type, link count, size,
-nanosecond modification time, and nanosecond change time—before returning.
-Parent swaps and added, removed, or changed entries therefore fail closed.
-An absent agent-state parent is accepted as empty only after absence is checked
-at the failed open and again immediately before return; late creation fails
-closed.
+debate reads retain the complete root-to-leaf-parent descriptor chain and
+compare the exact whole inventory—names plus device, inode, type, link count,
+size, nanosecond modification time, and nanosecond change time—before returning.
+Every parent-child edge is reopened and revalidated after the final leaf,
+inventory, or absence observation. Agent-state JSONL accepts at most 8 MiB and
+10,000 records across all selected files; debate JSONL accepts 10,000 records.
+Both reject record 10,001 before line slicing, parsing, or retention. An absent
+agent-state parent or leaf is accepted only after the retained existing
+ancestor prefix remains exact; late creation fails closed.
 
 The common-Git lease coordinates this runtime's cooperating operations only.
 Persistent external Git drift is rejected by the before/after or next-action
@@ -237,7 +248,11 @@ security, or format failure remains `outcome_unknown` with
 `inspect_and_resolve_outcome`, including when the method returned before its
 outer binding postcheck rejected completion. Runtime publishes no optimistic
 application result or Commit request in that state. A repository-classified
-terminal recovery condition remains `recovery_required`. Preserve the session resources and
+terminal recovery condition remains `recovery_required`. After deriving the
+complete current artifact state and relationship result, Apply explicitly
+repeats complete READY validation immediately before marking repository
+execution started and calling the mutation method; its outer transaction still
+postvalidates before a result escapes. Preserve the session resources and
 authoritative history and inspect any uncertain application before another
 write. Commit remains a separate decision. Its runtime-composed service carries
 the Apply worktree's physical identity through request preparation,
@@ -1510,6 +1525,18 @@ non-traversed duplicated directory descriptor that pins the exact original
 worktree; the pin is never read, serialized, provider-visible, or used as
 repository authority.
 Neither the failed invocation nor known provider work is replayed.
+
+For a nonempty guarded reference batch, runtime acquires and validates the
+non-inheritable session-root pin before `CAPTURED` authorization can become
+durable. Supplier, validation, operation-ID, construction, and other
+pre-transfer failures close the pin. A failure in the post-capture registry
+callback is the exceptional unowned case: the content-bearing authorization
+and pin close immediately, the callback error escapes unchanged, and the
+durable history remains at `REQUESTED` → `CAPTURED`. Cleanup does not recursively
+re-enter the repository from that callback. Because no transient owner survives
+as cleanup authority, a later artifact-sensitive boundary discovers this
+content-free operation as a restart orphan and terminalizes it through the
+normal inventory path without replaying provider work.
 
 The next same-process artifact-sensitive boundary drains a retained owner only
 through a fresh binding with the same physical worktree identity. A replacement

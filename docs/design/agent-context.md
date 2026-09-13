@@ -225,13 +225,16 @@ artifact-sensitive invocation, runtime derives a package-internal
 as the artifact repository and lends it only to the active-debate and invoking-
 agent-state adapters. Its reads are descriptor-relative and pinned to the
 session worktree's physical `(st_dev, st_ino)` identity. The binding also pins
-the exact semantic READY branch/ref/worktree inspection. Every repository or
-session-source action enters a short synchronous cooperating-runtime guard,
-checks READY and the named physical root before and after its action, and then
-releases the Git lease and descriptors. The guard never spans the provider
-`await`; a later SEARCH, READ, ANSWER revalidation, reference-ledger action, or
-closure step reacquires it. A replaced or persistently non-ready root is
-therefore rejected before content returns or at the next checkpoint; neither
+the exact semantic READY branch/ref/worktree inspection. Every outer repository
+or session-source transaction enters a short synchronous cooperating-runtime
+guard, checks READY and the named physical root once before and once after its
+body, and then releases the Git lease and descriptors. Nested binding and
+repository operations reuse that transaction with thread/lease liveness and
+named-root checks rather than repeating the complete READY scan. The guard
+never spans the provider `await`; a later SEARCH, READ, ANSWER revalidation,
+reference-ledger action, or closure step reacquires it. A replaced or
+persistently non-ready root is therefore rejected before content returns or at
+the next checkpoint; neither
 adapter can fall back to the control root, another session, or a previous
 binding. The repository is private to the binding and is available only
 through the live access yielded by that guard; the access expires when the
@@ -242,12 +245,28 @@ original error or cancellation is preserved. The lease does not continuously
 exclude arbitrary external Git that does not cooperate with the runtime. The
 view supplies no generic path, write, provider-filesystem, or Git authority.
 
+Direct Lead and Lead-synthesis invocation owners additionally acquire an
+opaque six-descriptor physical-generation pin before session-derived
+definitions, sources, or provider work. It retains the exact control-root,
+common-Git, worktree-administration, session-worktree, `.git`, and `commondir`
+relationship through durable result publication, then rechecks and closes.
+This pin can span the provider await because it retains no Git lease and grants
+no traversal, content, mutation, or semantic READY authority. It does not set
+or confine the provider's working directory or project root; that separate
+story-runtime boundary remains tracked by
+[Issue #670](https://github.com/Kims-DeveloperGroup/story-writing-agents/issues/670).
+
 The session-source reader accepts only canonical relative POSIX paths. It
-traverses without following symlinks and accepts only a stable, singly linked
-regular-file leaf whose named and opened identity, mode, size, and timestamps
-agree before and after reading. FIFOs, devices, hard links, replacements, and
-foreign embedded session/debate/agent ownership fail as source unavailability
-before evidence is accepted.
+traverses without following symlinks, retains the complete root-to-parent
+descriptor chain, and accepts only a stable, singly linked regular-file leaf
+whose named and opened identity, mode, size, and timestamps agree before and
+after reading. After the final leaf, inventory, or absence observation, every
+original parent-child edge is reopened and revalidated. Agent-state JSONL is
+limited to 8 MiB and 10,000 records across the selected files; debate JSONL is
+limited to 10,000 records. Both iterate lazily and reject record 10,001 before
+slicing, parsing, or retaining it. FIFOs, devices, hard links, replacements,
+ancestor drift, and foreign embedded session/debate/agent ownership fail as
+source unavailability before evidence is accepted.
 
 The guarded reference-operation variant deliberately preserves a root-security
 failure for orchestration instead of converting it to a generic reference

@@ -53,32 +53,58 @@ Every artifact-sensitive runtime call instead derives the session ID already
 present in its public arguments or durable identity, freshly requires that
 session's exact READY branch/ref/sibling-worktree resources, and creates a
 call-local binding pinned to the validated worktree's physical
-`(st_dev, st_ino)` identity. Each synchronous repository step opens a short
-cooperating-runtime guard: it holds the common-Git lease, repeats the complete
-semantic READY inspection, opens the no-follow named root at the pinned
-identity, and repeats READY plus physical-root checks before releasing the
-guard. No such guard is held across a provider `await`, concurrent specialist
-execution, or other asynchronous wait; a later repository step reacquires a
-new guard and revalidates the same binding. The binding keeps one stable exact
-repository object private. It can be obtained only from a live guarded access,
-and every transaction on it requires live same-thread access and READY checks
-before and after; retaining the raw object grants no later or cross-thread
-authority. Same-thread nested guards repeat READY validation before entering
-their body, then reuse the current access. Long-lived
-reference and source adapters instead retain an access factory and reacquire a
-guard for each operation. Nested, outer, and borrowed Commit access exits
-revalidate after success, `RuntimeError`, or cancellation. If the body and exit
-check both fail, binding loss is authoritative; a clean postcheck preserves the
-original exception, and cleanup completes in either case. The underlying Git
-lease, session history, artifact access, and Commit authority are affine to a
+`(st_dev, st_ino)` identity. Each outer synchronous artifact transaction opens
+a short cooperating-runtime guard: it holds the common-Git lease, performs one
+complete semantic READY inspection before the body, opens the no-follow named
+root at the pinned identity, and performs one complete READY plus physical-root
+check before a result escapes. Same-thread nested guards and repository
+operations reuse that lease and descriptor and check only live thread/lease
+authority plus the named physical root; they do not repeat the whole READY
+scan. Long-lived reference and source adapters instead retain an access
+factory and acquire a new outer transaction for each operation. Borrowed Story
+Commit access performs one complete validation before and after its body
+through the live history owner. Apply performs an additional explicit complete
+READY check immediately before `apply_artifact_changes()` starts. All of these
+exit checks run after success, `RuntimeError`, or cancellation. If the body and
+exit check both fail, binding loss is authoritative; a clean postcheck
+preserves the original exception, and cleanup completes in either case. The
+binding keeps one stable exact repository object private. Retaining it grants
+no later or cross-thread authority. The underlying Git lease, session history,
+artifact access, and Commit authority are affine to a
 package-internal, process-aware opaque token for the creator's thread state,
 not its numeric identifier. A later thread state cannot inherit authority after
 numeric identifier reuse. Foreign-thread surface calls, including explicit
 close, fail; context-manager teardown instead privately revokes tokens and
 closes descriptors/leases without granting foreign authority.
 
-This covers explicit
-and contextual references, source status and fingerprints, proposal and review
+Binding composition also captures one physical session-generation identity
+under its initial READY lease: the control root, common Git directory,
+per-worktree administrative directory, session worktree, and the bounded
+`.git` and `commondir` indirection files with exact metadata and digests. An
+opaque generation pin retains six non-inheritable descriptors for those four
+directories and two files. Acquisition and recheck take only a short repository
+identity lock, repeat that bounded no-follow relationship proof, and release
+the lock before returning; they run no Git subprocess or semantic READY,
+manifest, policy, or artifact scan. The pin exposes no descriptor, traversal,
+content-read, mutation, or repository authority and is not a substitute for a
+guarded READY transaction.
+
+Direct Lead and Lead-synthesis invocations acquire this pin before any
+session-derived definition, source, or provider work and retain it through the
+durable result append. Synthesis transfers the same opaque pin to its
+persistence owner; direct Lead work retains it around its own publication.
+Both recheck the physical generation and close the pin after persistence, and
+failure, cancellation, malformed output, binding loss, or a non-transferred
+exit closes it exactly once. The identity pin may span a provider `await`, but
+no Git lease or artifact access does.
+
+This continuity mechanism does not set or confine a story-runtime provider's
+working directory or project root. That separate execution boundary remains
+tracked by
+[Issue #670](https://github.com/Kims-DeveloperGroup/story-writing-agents/issues/670).
+
+This covers explicit and contextual references, source status and
+fingerprints, proposal and review
 revalidation, Apply and application-ledger access, recovery reads, consensus
 artifact material, and the interactive attachment picker. A
 `RuntimeSession` forwards the same session ID; switching between two ready
@@ -113,21 +139,25 @@ in the configured conversation store. Active-debate and invoking-agent-state
 reads use a package-internal, descriptor-relative `SessionSourceWorkspace`
 derived from the same call-local binding; it exposes no generic path, write, or
 Git authority. Source paths must be canonical relative POSIX text. Each allowed
-read reopens and rechecks the exact physical session root, accepts only one
-unique regular-file leaf, rejects FIFOs/devices/symlinks/hard links and
+read retains the complete no-follow descriptor chain from the session root
+through every leaf ancestor, accepts only one unique regular-file leaf, and
+revalidates every original parent-child edge after the leaf observation and
+before returning. It rejects FIFOs/devices/symlinks/hard links and
 identity/metadata drift, caps each file at 8 MiB, and checks embedded debate or
-agent-state ownership before returning. A compound agent-state or debate read
-pins its intermediate
-parent descriptor and rechecks the complete inventory: names plus device,
-inode, type, link count, size, nanosecond modification time, and nanosecond
-change time. Exactly 8,192 entries are accepted per inventoried directory; an
-additional entry, parent replacement, or any inventory drift fails closed. A
-compound agent-state read additionally accepts at most 8 MiB across all of its
-JSONL files and at most 10,000 records; the exact limits are accepted and the
+agent-state ownership. A compound agent-state or debate read retains its full
+directory chain and rechecks the complete leaf-directory inventory: names plus
+device, inode, type, link count, size, nanosecond modification time, and
+nanosecond change time. Exactly 8,192 entries are accepted per inventoried
+directory; an additional entry, parent replacement, or any inventory drift
+fails closed. A compound agent-state read additionally accepts at most 8 MiB
+across all of its JSONL files and at most 10,000 records. Debate JSONL likewise
+accepts at most 10,000 records. Both readers scan records lazily; record 10,001 fails before
+line slicing, JSON parsing, or retention. The exact limits are accepted and the
 first excess byte or record fails closed. A missing agent-state parent produces
-an empty result only after absence is checked when
-the open fails and again immediately before return; creation between those
-observations fails closed. A missing, replaced, or unsafe bound root fails
+an empty result only after the retained existing ancestor prefix and the absent
+edge are observed twice and remain exact. A missing leaf is likewise accepted
+only after its full ancestor chain is revalidated. Creation between the failed
+open and return fails closed. A missing, replaced, or unsafe bound root fails
 closed as a content-free `source_unavailable` instead of borrowing control-root
 or sibling-session state.
 
@@ -691,8 +721,9 @@ recommendation, runtime carries the invocation's one exact session-artifact
 binding through response validation and request persistence. The recommendation
 basis and source fingerprint are derived through that same binding object; a
 fresh binding cannot silently substitute another worktree generation between
-provider invocation, validation, and persistence. Its repository guards remain
-short and no Git lease spans the provider await.
+provider invocation, validation, and persistence. The physical generation pin
+described above covers that whole interval; its repository guards remain short
+and no Git lease spans the provider await.
 
 Ordinary input is a real new authoring instruction: runtime atomically records
 it and supersedes an unconfirmed recommendation before the new Lead turn. It
@@ -1079,8 +1110,11 @@ planning/review, while loss of the exact bound resources requires recovery.
 Repair authoritative session resources/history before continuing.
 
 For those guarded references, creation publishes the operation or invocation
-owner before a fallible access exit. Every failure after publication defers
-cleanup. A process-shared `StoryRuntime` registry keys content-free ownership
+owner before a fallible access exit. A nonempty parsed batch acquires and
+validates its non-inheritable physical-worktree descriptor before the
+repository can publish `CAPTURED`; successful construction transfers that pin
+to the operation exactly once. Every failure after publication defers cleanup.
+A process-shared `StoryRuntime` registry keys content-free ownership
 by control workspace, session, physical worktree identity, and operation while
 transient bytes/results, authorization, capability authority, and retained
 binding access are closed. The operation retains one private, non-traversed
@@ -1089,8 +1123,8 @@ deferred cleanup. This descriptor is never read, serialized, exposed to a
 provider, or treated as repository authority. It closes exactly once on a
 terminal success or failure, reconciled completion, stale-owner abandonment,
 or an unretained preparation path. The next same-process artifact-sensitive
-boundary reconciles
-only an owner whose physical identity matches its fresh binding. A replacement
+boundary reconciles only an owner whose physical identity matches its fresh
+binding. A replacement
 root receives neither the old cleanup nor its operation ID in the replacement's
 live-owner exclusion set; the stale transient owner and its pin are closed and
 the original durable history is unchanged. After restart, the next such
@@ -1098,6 +1132,13 @@ boundary reconciles durable nonterminal orphans instead. Reconciliation is
 invocation-first, operation-second, idempotent, non-replaying, and fail-closed
 on corrupt evidence. See
 [Explicit-reference evidence recovery](../operations/recovery-and-limitations.md#explicit-reference-evidence-recovery).
+
+If the post-capture registry callback fails, transient authorization and the
+unretained descriptor close without nested repository cleanup, while the
+durable operation remains at `REQUESTED` → `CAPTURED`. The callback failure is
+re-raised unchanged. A later artifact-sensitive boundary discovers that
+content-free operation as a restart orphan and terminalizes it without provider
+replay.
 
 Guarded reference preparation preserves `WorkspaceSecurityError` and binding
 failures for runtime recovery mapping instead of flattening them into an
