@@ -38,7 +38,7 @@ from tests.git_contract_fixture import DisposableGitTestCase
 
 _FIXTURES = Path(__file__).parent / "fixtures/workspace_policy_baselines"
 _PUBLISHED_COMMIT = "68a07827924598571ff8e3f6e4a602ad1a52b771"
-_CURRENT_MANIFEST = "fb059eef03a6ac9b53f1dc6abd82820a5258da592412817ac3ae9d7b16cfbb09"
+_CURRENT_MANIFEST = "828f4dbd5ed1da875177976788fb24c9eb2feba467e68a7b462e022afa5cf83d"
 _LEGACY_MANIFEST = "c42681a04c910fd3632dc4987148c0664e1e30b77c0bc1e564b40da52745642f"
 
 
