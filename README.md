@@ -387,11 +387,72 @@ The Python package is under `src/story_writing_agents/`; tests are under
 `tests/`; role prompts are under `config/agents/`; and
 [PYTHON_MODULE_INDEX.md](PYTHON_MODULE_INDEX.md) is the production-module map.
 
-Run the complete standard-library suite with:
+Run tests from the repository root in the same Python 3.11+ development
+environment used to install the project. The canonical runner uses only the
+standard library and records the exact selected IDs, results, timings, policy,
+and environment in JSON. Tests are expected to use local fakes and subprocesses,
+not live provider calls; do not supply provider credentials or treat live
+provider behavior as suite evidence.
+
+For fast feedback, run the exact policy-owned fast lane:
 
 ```bash
-python -m unittest discover -s tests -v
+python -m tests.runner run --tier fast --json /tmp/story-tests-fast.json
 ```
+
+Run one or more affected groups by repeating `--group`. Available groups are
+`runner`, `git-storage`, `workspace-session`, `database`, `workspace-core`,
+`artifact-storage`, `provider-process`, and `interactive-terminal`:
+
+```bash
+python -m tests.runner run \
+  --group workspace-core \
+  --json /tmp/story-tests-affected.json
+```
+
+For complete-suite evidence, run exactly two complementary shards. Start no
+more than these two test processes concurrently, preserve both reports, and
+then reconcile them:
+
+```bash
+python -m tests.runner run --shard 1/2 --json /tmp/story-tests-shard-1.json &
+shard_one_pid=$!
+python -m tests.runner run --shard 2/2 --json /tmp/story-tests-shard-2.json &
+shard_two_pid=$!
+shard_status=0
+wait "$shard_one_pid" || shard_status=1
+wait "$shard_two_pid" || shard_status=1
+test "$shard_status" -eq 0
+python -m tests.runner reconcile \
+  /tmp/story-tests-shard-1.json \
+  /tmp/story-tests-shard-2.json \
+  --json /tmp/story-tests-reconciliation.json
+```
+
+An unknown or empty selector is a visible configuration error and exits
+nonzero instead of silently passing. A failing or interrupted report records
+started results and `unexecuted_ids`; preserve that evidence, correct the
+cause, and rerun only failed, unexecuted, or otherwise invalidated IDs with
+repeated `--id` options while diagnosing. These partial reruns cannot be
+combined into a complete shard report, so final reconciled evidence currently
+requires a fresh complete run of the affected shard. Append-only resumable
+evidence is separate Issue #659 and is not implemented here. Reconciliation
+exits nonzero for failed, incomplete, overlapping, or non-exhaustive shard
+reports.
+
+The versioned timing weights in
+`tests/fixtures/test_timing_weights_v1.json` record their measurement
+provenance. Observed terminal class timings are used where available; unlisted
+classes use the manifest's deterministic fallback, so the weights are a
+partitioning input rather than proof of current performance.
+
+The feedback targets are: fast lane at most 300 seconds; each affected-group
+run at most 600 seconds; complete-suite sequential-equivalent wall time at
+most 5,102.566 seconds; and two-shard concurrent wall time at most 3,300
+seconds. The complete-suite target is a 70% reduction from the 17,008.554-second
+baseline: remove 70% and leave at most 30%, rather than reduce the runtime to
+70% of baseline. These are acceptance targets, not a claim that the current
+shards have passed them.
 
 <a id="contribution-guidelines"></a>
 
