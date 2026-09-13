@@ -6,7 +6,6 @@ import asyncio
 import inspect
 import json
 import pickle
-import tempfile
 import unittest
 from collections.abc import Mapping
 from contextlib import asynccontextmanager
@@ -18,7 +17,6 @@ from story_writing_agents import (
     ReplyTraceOrigin,
     RuntimeSession,
     StoryRuntime,
-    Workspace,
 )
 from story_writing_agents import orchestrator as orchestrator_module
 from story_writing_agents.agent_context.accounting import (
@@ -79,6 +77,7 @@ from story_writing_agents.writing_artifacts.read_actions import (
 )
 
 from tests.collaboration_contract_fixture import contract_batches
+from tests.helpers import pristine_initialized_workspace
 from story_writing_agents.specialist_routing import AuthoringScope, AuthoringActivity, ArtifactReviewDomain, ReviewBasis
 
 
@@ -816,9 +815,7 @@ def _decision(
 
 class LeadOrchestrationTestCase(unittest.IsolatedAsyncioTestCase):
     def setUp(self) -> None:
-        temporary = tempfile.TemporaryDirectory(prefix="lead-orchestration-")
-        self.addCleanup(temporary.cleanup)
-        self.workspace = Workspace(temporary.name).initialize()
+        self.workspace = pristine_initialized_workspace(self)
         self.workspace.path("core_documents/global_outline.md").write_text(
             "Outline first line.\nOutline second line.\n",
             encoding="utf-8",
