@@ -51,6 +51,7 @@ from story_writing_agents import (
     Phase,
     PromptFileReference,
     ROSTER,
+    ReplyTrace,
     ReplyTraceOrigin,
     SessionAccessState,
     SessionDurableState,
@@ -2362,7 +2363,19 @@ class CodexBackendTestCase(unittest.IsolatedAsyncioTestCase):
         self.assertNotEqual(bound.staging_directory, self.workspace.root)
 
         reply = await bound.invoke(self.request())
-        self.assertEqual(reply, AgentReply.candidate("r0", "generated candidate"))
+        self.assertEqual(
+            reply,
+            replace(
+                AgentReply.candidate("r0", "generated candidate"),
+                trace=ReplyTrace(
+                    role=PLOT_ARCHITECT,
+                    action="candidate",
+                    context_sources=("current_input",),
+                    recovered_fields=(),
+                    origin=ReplyTraceOrigin.PROVIDER,
+                ),
+            ),
+        )
         invocation = self.invocations()[0]
         payload_text = json.dumps(invocation["payload"], ensure_ascii=False)
         self.assertNotIn(role, payload_text)
@@ -2567,7 +2580,19 @@ class CodexBackendTestCase(unittest.IsolatedAsyncioTestCase):
         ):
             reply = await bound.invoke(self.request(session_id=session_id))
 
-        self.assertEqual(reply, AgentReply.candidate("r0", "generated candidate"))
+        self.assertEqual(
+            reply,
+            replace(
+                AgentReply.candidate("r0", "generated candidate"),
+                trace=ReplyTrace(
+                    role=PLOT_ARCHITECT,
+                    action="candidate",
+                    context_sources=("current_input",),
+                    recovered_fields=(),
+                    origin=ReplyTraceOrigin.PROVIDER,
+                ),
+            ),
+        )
         self.assertEqual(len(records), 1)
         self.assertIsNone(records[0].usage)
 
@@ -3490,7 +3515,19 @@ class CodexBackendTestCase(unittest.IsolatedAsyncioTestCase):
         )
         after_bound = await backend.bind(after_definition)
         reply = await after_bound.invoke(after_request)
-        self.assertEqual(reply, AgentReply.candidate("r1", "generated candidate"))
+        self.assertEqual(
+            reply,
+            replace(
+                AgentReply.candidate("r1", "generated candidate"),
+                trace=ReplyTrace(
+                    role=PLOT_ARCHITECT,
+                    action="candidate",
+                    context_sources=("current_input", "story_session"),
+                    recovered_fields=(),
+                    origin=ReplyTraceOrigin.PROVIDER,
+                ),
+            ),
+        )
         self.assertEqual(
             backend.execution_profile_confirmation(PLOT_ARCHITECT),
             "confirmed",
@@ -4618,7 +4655,16 @@ class CodexBackendTestCase(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(
             debate_reply,
-            AgentReply.candidate("r0", "generated candidate"),
+            replace(
+                AgentReply.candidate("r0", "generated candidate"),
+                trace=ReplyTrace(
+                    role=PLOT_ARCHITECT,
+                    action="candidate",
+                    context_sources=("current_input",),
+                    recovered_fields=(),
+                    origin=ReplyTraceOrigin.PROVIDER,
+                ),
+            ),
         )
         self.assertEqual(conversation_reply.content, "generated conversation reply")
         invocations = self.provider_invocations()
@@ -7458,7 +7504,19 @@ class CodexBackendTestCase(unittest.IsolatedAsyncioTestCase):
                 self.reference_environment(invocation),
             ):
                 reply = await bound.invoke(request, reference_read=invocation)
-            self.assertEqual(reply, AgentReply.candidate("r0", "generated candidate"))
+            self.assertEqual(
+                reply,
+                replace(
+                    AgentReply.candidate("r0", "generated candidate"),
+                    trace=ReplyTrace(
+                        role=agent_id,
+                        action="candidate",
+                        context_sources=("current_input", "writing_artifacts"),
+                        recovered_fields=(),
+                        origin=ReplyTraceOrigin.PROVIDER,
+                    ),
+                ),
+            )
 
             calls = self.provider_invocations()[before:]
             self.assertEqual(len(calls), 1)
@@ -7969,7 +8027,19 @@ class CodexBackendTestCase(unittest.IsolatedAsyncioTestCase):
             side_effect=AssertionError("no-reference call entered the prelude"),
         ) as prelude:
             reply = await bound.invoke(self.request(session_id=session_id))
-        self.assertEqual(reply, AgentReply.candidate("r0", "generated candidate"))
+        self.assertEqual(
+            reply,
+            replace(
+                AgentReply.candidate("r0", "generated candidate"),
+                trace=ReplyTrace(
+                    role=PLOT_ARCHITECT,
+                    action="candidate",
+                    context_sources=("current_input",),
+                    recovered_fields=(),
+                    origin=ReplyTraceOrigin.PROVIDER,
+                ),
+            ),
+        )
         prelude.assert_not_called()
         self.assertEqual(len(self.provider_invocations()), 1)
 
