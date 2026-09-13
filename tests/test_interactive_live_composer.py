@@ -246,18 +246,23 @@ class RawLiveComposerTests(unittest.IsolatedAsyncioTestCase):
     ) -> None:
         driver, input_stream, _output, _fallback, _termios, _size = _driver("next\n")
         finalized = asyncio.Event()
+        input_observed = asyncio.Event()
         cancel = mock.AsyncMock(side_effect=AssertionError("must not cancel"))
 
         async def operation() -> str:
-            await asyncio.sleep(0.01)
+            await input_observed.wait()
             finalized.set()
             return "published"
 
+        def input_ready(*_args: object) -> tuple[tuple[int, ...], tuple[()], tuple[()]]:
+            if input_stream.characters:
+                input_observed.set()
+                return ((7,), (), ())
+            return ((), (), ())
+
         with mock.patch(
             "story_writing_agents.interactive_terminal._driver._select.select",
-            side_effect=lambda *_args: ((7,), (), ())
-            if input_stream.characters
-            else ((), (), ()),
+            side_effect=input_ready,
         ):
             result = await driver.run_live_composer(
                 operation(),
@@ -273,24 +278,30 @@ class RawLiveComposerTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual((result.text, result.state.cursor), ("next", 4))
 
     async def test_postcommit_failure_and_cancellation_map_to_recovery(self) -> None:
-        async def failed() -> object:
-            await asyncio.sleep(0.001)
-            raise RuntimeError("finalization failed")
-
-        async def cancelled() -> object:
-            await asyncio.sleep(0.001)
-            raise asyncio.CancelledError
-
-        for operation in (failed, cancelled):
+        for outcome in ("failed", "cancelled"):
             driver, input_stream, _output, _fallback, _termios, _size = _driver("x\n")
+            input_observed = asyncio.Event()
             cancel = mock.AsyncMock(side_effect=AssertionError("must not cancel"))
+
+            async def operation() -> object:
+                await input_observed.wait()
+                if outcome == "failed":
+                    raise RuntimeError("finalization failed")
+                raise asyncio.CancelledError
+
+            def input_ready(
+                *_args: object,
+            ) -> tuple[tuple[int, ...], tuple[()], tuple[()]]:
+                if input_stream.characters:
+                    input_observed.set()
+                    return ((7,), (), ())
+                return ((), (), ())
+
             with (
-                self.subTest(operation=operation.__name__),
+                self.subTest(operation=outcome),
                 mock.patch(
                     "story_writing_agents.interactive_terminal._driver._select.select",
-                    side_effect=lambda *_args: ((7,), (), ())
-                    if input_stream.characters
-                    else ((), (), ()),
+                    side_effect=input_ready,
                 ),
             ):
                 result = await driver.run_live_composer(
