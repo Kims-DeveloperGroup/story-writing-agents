@@ -34,16 +34,14 @@ from story_writing_agents.git.story_commit_contracts import (
 )
 from story_writing_agents.workspace.initialization import provision_session_resources
 
+from tests import test_lead_artifact_application as lead_artifact_application_tests
 from tests.test_artifact_proposal_orchestration import (
     _RULES,
     _artifact_outcome,
     _artifact_synthesis_outcome,
     _reference_ids,
 )
-from tests.test_lead_artifact_application import (
-    LeadArtifactApplicationTests,
-    _application_decision,
-)
+from tests.test_lead_artifact_application import _application_decision
 from tests.test_lead_orchestration import (
     LeadOrchestrationTestCase,
     _LeadBackend,
@@ -98,7 +96,7 @@ def _application_replay(applied: object) -> ArtifactApplicationDecision:
 
 
 class LeadStoryCommitTests(LeadOrchestrationTestCase):
-    artifact_snapshot = LeadArtifactApplicationTests.artifact_snapshot
+    artifact_snapshot = lead_artifact_application_tests.LeadArtifactApplicationTests.artifact_snapshot
 
     def setUp(self) -> None:
         temporary = tempfile.TemporaryDirectory(prefix="lead-story-commit-")
