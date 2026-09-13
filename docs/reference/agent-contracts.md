@@ -470,14 +470,17 @@ package-root exports; see [Agent-context design](../design/agent-context.md#type
 
 ```python
 DebateMessage(sender: str, phase: str, round: int, revision: str,
-              kind: str, content: str, timestamp: str)
+              kind: str, content: str, timestamp: str,
+              trace: ReplyTrace | None = None)
 AgentStateEntry(agent_id: str, session_id: str, debate_id: str, phase: str,
                 round: int, revision: str, kind: str, content: str,
                 timestamp: str)
 ```
 
 Both are frozen and provide `to_dict()`; agent-state content is capped at 4096
-characters per entry.
+characters per entry. An untraced debate message omits `trace` from its encoded
+object. A traced message encodes the exact trace object, and `from_dict()`
+restores it as a typed `ReplyTrace`.
 
 ## One advisory conversation turn
 
