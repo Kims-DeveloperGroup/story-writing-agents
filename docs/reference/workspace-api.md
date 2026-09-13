@@ -194,6 +194,10 @@ is nonserializable, exposes no descriptor or traversal/content/mutation
 authority, retains no lock between calls, and cannot replace a guarded artifact
 transaction. Lead and synthesis may retain it across provider work solely to
 prove the same physical generation through durable result persistence.
+Ordinary artifact access exact-compares all six retained components at outer
+entry and exit under its existing Git lease. Borrowed Story Commit access makes
+the same full comparison through its history-owned READY validator under that
+history's existing lease; neither path acquires a nested repository lock.
 
 The live access and its underlying Git lease/history are affine to a package-
 internal, process-aware opaque token for the creator's thread state, not a
@@ -243,6 +247,10 @@ The reader verifies the named root again before returning. Cleanup attempts the
 leaf descriptor and every retained ancestor descriptor in reverse order even
 after a `BaseException`; an active primary failure remains authoritative and
 receives only content-free cleanup exception-type notes.
+Without a primary, close `OSError` is suppressed and the first non-`OSError`
+propagates only after exhaustive cleanup. Cleanup of an expected-missing
+ancestor prefix therefore completes before absence can escape, and a
+non-`OSError` cleanup interruption supersedes that absence.
 Generic pathname access, writes, Git operations, control-root fallback, and
 sibling-session fallback are rejected. These internal semantics do not change
 any public constructor or method signature.

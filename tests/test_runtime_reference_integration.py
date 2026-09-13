@@ -177,6 +177,86 @@ class RuntimeExecutionRetirementTests(unittest.TestCase):
             with self.assertRaises(OSError):
                 os.fstat(descriptor)
 
+        class PoisonCleanup:
+            def __init__(self, failure):
+                self.failure = failure
+                self.calls = 0
+
+            def _close_transient_content(self):
+                self.calls += 1
+                raise self.failure
+
+            def close(self):
+                self.calls += 1
+                raise self.failure
+
+        def cleanup_owner(failures):
+            current = object.__new__(
+                runtime_references_module.RuntimeReferenceOperation
+            )
+            current._finished = False
+            current.operation_id = "cleanup-operation"
+            invocations = [PoisonCleanup(failure) for failure in failures[:2]]
+            authorization = PoisonCleanup(failures[2])
+            current._pending = {
+                str(index): invocation
+                for index, invocation in enumerate(invocations)
+            }
+            current._authorization = authorization
+            current._repository = object()
+            current._repository_access = object()
+            current._cleanup_pending = False
+            return current, invocations, authorization
+
+        guard_failure = WorkspaceSecurityError("guard generation changed")
+        guarded, invocations, authorization = cleanup_owner(
+            (
+                KeyboardInterrupt("first result close failed"),
+                SystemExit("second result close failed"),
+                RuntimeError("authorization close failed"),
+            )
+        )
+        guarded._defer_cleanup_locked(failure=guard_failure)
+        self.assertEqual([item.calls for item in invocations], [1, 1])
+        self.assertEqual(authorization.calls, 1)
+        self.assertEqual(guarded._pending, {})
+        self.assertIsNone(guarded._authorization)
+        self.assertIsNone(guarded._repository)
+        self.assertIsNone(guarded._repository_access)
+        self.assertTrue(guarded._cleanup_pending)
+        self.assertEqual(len(guard_failure.__notes__), 3)
+
+        unguarded, invocations, authorization = cleanup_owner(
+            (
+                KeyboardInterrupt("first cleanup failed"),
+                SystemExit("second cleanup failed"),
+                RuntimeError("third cleanup failed"),
+            )
+        )
+        with self.assertRaises(KeyboardInterrupt) as caught:
+            unguarded._defer_cleanup_locked()
+        self.assertIs(caught.exception, invocations[0].failure)
+        self.assertEqual([item.calls for item in invocations], [1, 1])
+        self.assertEqual(authorization.calls, 1)
+        self.assertEqual(unguarded._pending, {})
+        self.assertIsNone(unguarded._authorization)
+        self.assertIsNone(unguarded._repository)
+        self.assertIsNone(unguarded._repository_access)
+
+        for path in ("constructor", "callback", "unadopted"):
+            with self.subTest(authorization_path=path):
+                primary = RuntimeError(f"{path} failed")
+                poisoned = PoisonCleanup(SystemExit("close failed"))
+                runtime_references_module._close_reference_authorization(
+                    poisoned,
+                    failure=primary,
+                )
+                self.assertEqual(poisoned.calls, 1)
+                self.assertIn(
+                    "runtime reference cleanup failed: SystemExit",
+                    primary.__notes__,
+                )
+
     def _assert_descriptor_closed(self, descriptor: int) -> None:
         with self.assertRaises(OSError):
             os.fstat(descriptor)

@@ -45,9 +45,11 @@ from .session_history_contracts import (
     encode_commit_operation,
 )
 from .session_resources import (
+    GitSessionGenerationIdentity,
     GitSessionGenerationPin,
     GitSessionRecoveryTopology,
     acquire_locked_git_session_generation_pin,
+    capture_locked_git_session_generation,
     require_ready_git_session_resources,
     require_ready_locked_git_session_resources,
     require_story_commit_recovery_locked_git_session_resources,
@@ -231,6 +233,30 @@ class GitSessionHistory:
             raise _history_error(GitSessionHistoryFailureCode.RECOVERY_REQUIRED)
         self.require_active()
         return confirmed
+
+    def require_generation_ready(
+        self,
+        expected_generation: GitSessionGenerationIdentity,
+    ) -> GitSessionResourceInspection:
+        """Require exact READY semantics and one retained physical generation."""
+
+        if type(expected_generation) is not GitSessionGenerationIdentity:
+            raise _history_error(GitSessionHistoryFailureCode.INVALID_REQUEST)
+        resources = self.require_semantic_ready()
+        try:
+            current = capture_locked_git_session_generation(
+                self._lease,
+                resources,
+                expected_worktree_identity=expected_generation.worktree_identity,
+            )
+        except GitSessionResourceError:
+            raise _history_error(
+                GitSessionHistoryFailureCode.RECOVERY_REQUIRED
+            ) from None
+        if current != expected_generation:
+            raise _history_error(GitSessionHistoryFailureCode.RECOVERY_REQUIRED)
+        self.require_active()
+        return resources
 
     def close(self) -> None:
         self.require_active()

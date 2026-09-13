@@ -416,7 +416,10 @@ class RuntimeSessionArtifactBindingTests(LeadOrchestrationTestCase):
                     self.fail("foreign thread entered READY access")
 
             def story_commit_access() -> None:
-                with binding.open_story_commit_artifact_repository(validate_ready):
+                with binding.open_story_commit_artifact_repository(
+                    validate_ready,
+                    expected_generation_identity=binding._generation_identity,
+                ):
                     self.fail("foreign thread entered Commit access")
 
             def direct_access() -> None:
@@ -512,7 +515,8 @@ class RuntimeSessionArtifactBindingTests(LeadOrchestrationTestCase):
             return binding.resources
 
         with binding.open_story_commit_artifact_repository(
-            validate_ready
+            validate_ready,
+            expected_generation_identity=binding._generation_identity,
         ) as repository:
             self.assertEqual(repository.read_text(_OUTLINE).splitlines()[0],
                              "Outline first line.")
@@ -566,7 +570,8 @@ class RuntimeSessionArtifactBindingTests(LeadOrchestrationTestCase):
                 lambda: enter(binding.open_ready_resources),
                 lambda: enter(
                     lambda: binding.open_story_commit_artifact_repository(
-                        validate_ready
+                        validate_ready,
+                        expected_generation_identity=binding._generation_identity,
                     )
                 ),
                 lambda: SessionArtifactAccess(
@@ -725,7 +730,10 @@ class RuntimeSessionArtifactBindingTests(LeadOrchestrationTestCase):
                                     )
                             else:
                                 with binding.open_story_commit_artifact_repository(
-                                    lambda: binding.resources
+                                    lambda: binding.resources,
+                                    expected_generation_identity=(
+                                        binding._generation_identity
+                                    ),
                                 ):
                                     self.fail(
                                         "partially activated Commit access escaped"
@@ -822,6 +830,59 @@ class RuntimeSessionArtifactBindingTests(LeadOrchestrationTestCase):
                 for descriptor in descriptors:
                     with self.assertRaises(OSError):
                         os.fstat(descriptor)
+
+    def test_binding_generation_is_checked_before_yield_and_at_exit(self) -> None:
+        binding = compose_session_artifact_binding(
+            self.control_workspace.root,
+            self.session_id,
+        )
+        expected = binding._generation_identity
+        assert expected is not None
+        resources = binding.resources
+        worktree_identity = binding.worktree_identity
+
+        replacements = (
+            ("control_root_identity", (expected.control_root_identity[0],
+                                        expected.control_root_identity[1] + 1)),
+            ("common_git_identity", (expected.common_git_identity[0],
+                                      expected.common_git_identity[1] + 1)),
+            ("administrative_identity", (expected.administrative_identity[0],
+                                          expected.administrative_identity[1] + 1)),
+            ("worktree_identity", (expected.worktree_identity[0],
+                                    expected.worktree_identity[1] + 1)),
+            ("git_indirection_sha256", "0" * 64),
+            ("common_indirection_sha256", "0" * 64),
+        )
+        for field, value in replacements:
+            with self.subTest(component=field):
+                if value == getattr(expected, field):
+                    value = "1" * 64
+                drifted = replace(expected, **{field: value})
+                with mock.patch.object(
+                    initialization_module,
+                    "capture_locked_git_session_generation",
+                    return_value=drifted,
+                ), self.assertRaises(SessionArtifactBindingError):
+                    with binding.open_ready_resources():
+                        self.fail("generation drift reached the body")
+
+                body_failure = RuntimeError(f"{field} body failed")
+                with mock.patch.object(
+                    initialization_module,
+                    "capture_locked_git_session_generation",
+                    side_effect=(expected, drifted),
+                ), self.assertRaises(SessionArtifactBindingError) as caught:
+                    with binding.open_ready_resources():
+                        raise body_failure
+                self.assertIn(
+                    "yielded body failure superseded by binding loss: RuntimeError",
+                    caught.exception.__notes__,
+                )
+                self.assertIs(binding.resources, resources)
+                self.assertEqual(binding.worktree_identity, worktree_identity)
+
+        with binding.open_ready_resources() as access:
+            access.require_ready()
 
     def test_generation_pin_capture_race_and_wrong_ownership_fail_closed(
         self,
@@ -1219,6 +1280,69 @@ class RuntimeSessionArtifactBindingTests(LeadOrchestrationTestCase):
                         "appeared.txt",
                     )
                 self.assertTrue(missed)
+            finally:
+                os.close(root_descriptor)
+
+        for cleanup_failure in (
+            OSError("ordinary close failure"),
+            KeyboardInterrupt("close interrupted"),
+            SystemExit("close exited"),
+        ):
+            with self.subTest(cleanup=type(cleanup_failure).__name__):
+                descriptor = os.dup(0)
+                chain = (os.dup(0),)
+                attempted = []
+
+                def close_without_primary(current):
+                    attempted.append(current)
+                    original_close(current)
+                    if current == descriptor:
+                        raise cleanup_failure
+
+                with mock.patch.object(
+                    workspace_core.os,
+                    "close",
+                    side_effect=close_without_primary,
+                ):
+                    if isinstance(cleanup_failure, OSError):
+                        SessionSourceWorkspace._close_source_resources(
+                            descriptor,
+                            chain,
+                            failure=None,
+                        )
+                    else:
+                        with self.assertRaises(type(cleanup_failure)) as caught:
+                            SessionSourceWorkspace._close_source_resources(
+                                descriptor,
+                                chain,
+                                failure=None,
+                            )
+                        self.assertIs(caught.exception, cleanup_failure)
+                self.assertEqual(attempted, [descriptor, chain[0]])
+
+        with tempfile.TemporaryDirectory(prefix="source-prefix-cleanup-") as root:
+            root_descriptor = os.open(root, os.O_RDONLY)
+            try:
+                for cleanup_failure, expected in (
+                    (OSError("missing prefix close failed"), FileNotFoundError),
+                    (KeyboardInterrupt("missing prefix close interrupted"), KeyboardInterrupt),
+                ):
+                    with self.subTest(prefix_cleanup=type(cleanup_failure).__name__):
+                        original_close = os.close
+
+                        def close_prefix(current):
+                            original_close(current)
+                            raise cleanup_failure
+
+                        with mock.patch.object(
+                            workspace_core.os,
+                            "close",
+                            side_effect=close_prefix,
+                        ), self.assertRaises(expected):
+                            SessionSourceWorkspace._open_directory_chain_at(
+                                root_descriptor,
+                                "missing/leaf",
+                            )
             finally:
                 os.close(root_descriptor)
 
@@ -2727,7 +2851,8 @@ class RuntimeSessionArtifactBindingTests(LeadOrchestrationTestCase):
             return binding.resources
 
         with binding.open_story_commit_artifact_repository(
-            validate_ready
+            validate_ready,
+            expected_generation_identity=binding._generation_identity,
         ) as repository:
             self.assertEqual(validations, 1)
             self.assertEqual(
@@ -3091,7 +3216,10 @@ class RuntimeSessionArtifactBindingTests(LeadOrchestrationTestCase):
                                 side_effect=record_open,
                             ), self.assertRaises(SessionArtifactBindingError):
                                 with binding.open_story_commit_artifact_repository(
-                                    lambda: binding.resources
+                                    lambda: binding.resources,
+                                    expected_generation_identity=(
+                                        binding._generation_identity
+                                    ),
                                 ) as repository:
                                     replacement.__enter__()
                                     entered = True
@@ -3127,7 +3255,10 @@ class RuntimeSessionArtifactBindingTests(LeadOrchestrationTestCase):
                                     yield
                         else:
                             with binding.open_story_commit_artifact_repository(
-                                lambda: binding.resources
+                                lambda: binding.resources,
+                                expected_generation_identity=(
+                                    binding._generation_identity
+                                ),
                             ):
                                 yield
 

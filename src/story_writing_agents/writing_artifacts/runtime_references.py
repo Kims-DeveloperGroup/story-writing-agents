@@ -126,6 +126,39 @@ def _close_descriptor(
             raise
 
 
+def _run_reference_cleanups(
+    cleanups: tuple[Callable[[], object], ...],
+    *,
+    failure: BaseException | None,
+) -> None:
+    cleanup_failure: BaseException | None = None
+    for cleanup in cleanups:
+        try:
+            cleanup()
+        except BaseException as exc:
+            primary = failure if failure is not None else cleanup_failure
+            if primary is None:
+                cleanup_failure = exc
+            else:
+                try:
+                    primary.add_note(
+                        "runtime reference cleanup failed: "
+                        f"{type(exc).__name__}"
+                    )
+                except BaseException:
+                    pass
+    if cleanup_failure is not None:
+        raise cleanup_failure
+
+
+def _close_reference_authorization(
+    authorization: ReferenceAuthorization,
+    *,
+    failure: BaseException,
+) -> None:
+    _run_reference_cleanups((authorization.close,), failure=failure)
+
+
 def _validate_physical_workspace_pin(
     descriptor: int,
     identity: tuple[int, int],
@@ -185,7 +218,7 @@ class _TrackedReferenceReadInvocation:
                 return result
         except BaseException as exc:
             if self._operation._preserves_guard_failure(exc):
-                self._operation._defer_cleanup()
+                self._operation._defer_cleanup(failure=exc)
             else:
                 self._mark_terminal()
             raise
@@ -197,7 +230,7 @@ class _TrackedReferenceReadInvocation:
                 self._delegate.record_result_received()
         except BaseException as exc:
             if self._operation._preserves_guard_failure(exc):
-                self._operation._defer_cleanup()
+                self._operation._defer_cleanup(failure=exc)
             raise
 
     def accept(self) -> None:
@@ -209,7 +242,7 @@ class _TrackedReferenceReadInvocation:
         except BaseException as exc:
             preserve = self._operation._preserves_guard_failure(exc)
             if preserve:
-                self._operation._defer_cleanup()
+                self._operation._defer_cleanup(failure=exc)
             raise
         finally:
             if not preserve:
@@ -226,7 +259,7 @@ class _TrackedReferenceReadInvocation:
         except BaseException as exc:
             preserve = self._operation._preserves_guard_failure(exc)
             if preserve:
-                self._operation._defer_cleanup()
+                self._operation._defer_cleanup(failure=exc)
             raise
         finally:
             if not preserve:
@@ -239,14 +272,20 @@ class _TrackedReferenceReadInvocation:
         self._terminal = True
         self._operation._retire_invocation(self)
 
-    def _close_transient_content(self) -> None:
+    def _close_transient_content(
+        self,
+        *,
+        failure: BaseException | None = None,
+    ) -> None:
         """Idempotently close every public result retained before guard exit."""
 
         with self._results_lock:
             results = tuple(self._results)
             self._results.clear()
-        for result in results:
-            result.close()
+        _run_reference_cleanups(
+            tuple(result.close for result in results),
+            failure=failure,
+        )
 
 
 class RuntimeReferenceOperation:
@@ -480,7 +519,7 @@ class RuntimeReferenceOperation:
                 )
             except BaseException as exc:
                 if self._preserves_guard_failure(exc):
-                    self._defer_cleanup_locked()
+                    self._defer_cleanup_locked(failure=exc)
                 raise
             if action_failure is not None:
                 code = _failure_code(
@@ -553,7 +592,7 @@ class RuntimeReferenceOperation:
                 )
             except BaseException as exc:
                 if self._preserves_guard_failure(exc):
-                    self._defer_cleanup_locked()
+                    self._defer_cleanup_locked(failure=exc)
                 raise
             if action_failure is not None:
                 code = _failure_code(
@@ -612,7 +651,7 @@ class RuntimeReferenceOperation:
                 invocation.terminate(code)
             except BaseException as exc:
                 if self._preserves_guard_failure(exc):
-                    self._defer_cleanup_locked()
+                    self._defer_cleanup_locked(failure=exc)
                     raise
                 else:
                     code = _failure_code(exc, code)
@@ -631,7 +670,7 @@ class RuntimeReferenceOperation:
                 )
         except BaseException as exc:
             if self._preserves_guard_failure(exc):
-                self._defer_cleanup_locked()
+                self._defer_cleanup_locked(failure=exc)
                 raise
             else:
                 code = _failure_code(exc, code)
@@ -712,7 +751,7 @@ class RuntimeReferenceOperation:
             )
         except BaseException as exc:
             if self._preserves_guard_failure(exc):
-                self._defer_cleanup_locked()
+                self._defer_cleanup_locked(failure=exc)
             raise
         if failure is not None or history is None:
             return False
@@ -721,24 +760,36 @@ class RuntimeReferenceOperation:
             ReferenceOperationState.TERMINATED,
         }
 
-    def _defer_cleanup(self) -> None:
+    def _defer_cleanup(
+        self,
+        *,
+        failure: BaseException | None = None,
+    ) -> None:
         self._require_process_affinity()
         with self._lock:
-            self._defer_cleanup_locked()
+            self._defer_cleanup_locked(failure=failure)
 
-    def _defer_cleanup_locked(self) -> None:
+    def _defer_cleanup_locked(
+        self,
+        *,
+        failure: BaseException | None = None,
+    ) -> None:
         if self._finished or self.operation_id is None:
             return
-        for invocation in tuple(self._pending.values()):
-            invocation._close_transient_content()
+        pending = tuple(self._pending.values())
         self._pending.clear()
         authorization = self._authorization
-        if authorization is not None:
-            authorization.close()
-            self._authorization = None
+        self._authorization = None
         self._repository = None
         self._repository_access = None
         self._cleanup_pending = True
+        cleanups = tuple(
+            lambda invocation=invocation: invocation._close_transient_content()
+            for invocation in pending
+        )
+        if authorization is not None:
+            cleanups += (authorization.close,)
+        _run_reference_cleanups(cleanups, failure=failure)
 
     def _abandon_unretained(self) -> None:
         """Close content and the root pin when no registry owns this operation."""
@@ -1084,12 +1135,14 @@ def _prepare_runtime_reference_operation(
                 outcome=ReferenceAuthorizationErrorCode.WORKFLOW_FAILURE,
             )
         except BaseException as cleanup_failure:
-            failure.add_note(
-                "reference authorization cleanup failed: "
-                f"{type(cleanup_failure).__name__}"
-            )
-        finally:
-            authorization.close()
+            try:
+                failure.add_note(
+                    "reference authorization cleanup failed: "
+                    f"{type(cleanup_failure).__name__}"
+                )
+            except BaseException:
+                pass
+        _close_reference_authorization(authorization, failure=failure)
 
     def publish(authorization: ReferenceAuthorization) -> None:
         nonlocal operation, post_capture_failure
@@ -1103,7 +1156,7 @@ def _prepare_runtime_reference_operation(
             )
         except BaseException as failure:
             post_capture_failure = failure
-            authorization.close()
+            _close_reference_authorization(authorization, failure=failure)
             raise publication_failure_signal from None
         operation._repository_access = repository_access
         operation._guarded = repository_access is not None
@@ -1112,7 +1165,7 @@ def _prepare_runtime_reference_operation(
                 operation_created(operation)
             except BaseException as failure:
                 post_capture_failure = failure
-                authorization.close()
+                _close_reference_authorization(authorization, failure=failure)
                 raise publication_failure_signal from None
 
     escaping_failure: BaseException | None = None

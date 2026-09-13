@@ -546,6 +546,18 @@ class SessionArtifactBinding:
                 raise WorkspaceFormatError(
                     "session artifact resources changed before access"
                 )
+            expected_generation = self._generation_identity
+            if expected_generation is None or (
+                capture_locked_git_session_generation(
+                    lease,
+                    confirmed,
+                    expected_worktree_identity=self.worktree_identity,
+                )
+                != expected_generation
+            ):
+                raise WorkspaceFormatError(
+                    "session artifact generation changed before access"
+                )
             descriptor = _open_existing_root(
                 self.resources.identity.worktree_root,
                 self.worktree_identity,
@@ -730,14 +742,27 @@ class SessionArtifactBinding:
     def open_story_commit_artifact_repository(
         self,
         validate_ready: Callable[[], GitSessionResourceInspection],
+        *,
+        expected_generation_identity: GitSessionGenerationIdentity,
     ) -> Iterator[WritingArtifactRepository]:
         """Borrow one live history validator for exact artifact capture."""
 
         self._require_creator()
+        if (
+            type(expected_generation_identity) is not GitSessionGenerationIdentity
+            or expected_generation_identity != self._generation_identity
+        ):
+            raise SessionArtifactBindingError(
+                "session artifact generation is unavailable"
+            )
+        def validate_generation() -> GitSessionResourceInspection:
+            confirmed = validate_ready()
+            return confirmed
+
         access: SessionArtifactAccess | None = None
         descriptor = -1
         try:
-            confirmed = validate_ready()
+            confirmed = validate_generation()
             if confirmed != self.resources:
                 raise WorkspaceFormatError(
                     "session artifact resources changed before capture"
@@ -750,7 +775,7 @@ class SessionArtifactBinding:
                 self,
                 None,
                 descriptor,
-                ready_validator=validate_ready,
+                ready_validator=validate_generation,
             )
             descriptor = -1
         except BaseException as failure:
@@ -915,6 +940,18 @@ class SessionArtifactAccess:
                         self._binding.allowed_worktree_changes
                     ),
                 )
+                expected_generation = self._binding._generation_identity
+                if expected_generation is None or (
+                    capture_locked_git_session_generation(
+                        self._lease,
+                        confirmed,
+                        expected_worktree_identity=self._binding.worktree_identity,
+                    )
+                    != expected_generation
+                ):
+                    raise WorkspaceFormatError(
+                        "session artifact generation changed during access"
+                    )
             if confirmed != self._binding.resources:
                 raise WorkspaceFormatError(
                     "session artifact resources changed during access"
@@ -1250,6 +1287,7 @@ def compose_story_commit_service(
             manifest,
             session_id,
             access.worktree_identity,
+            artifact_binding._generation_identity,
             allowed_worktree_changes=allowance,
             artifact_repository_access=(
                 artifact_binding.open_story_commit_artifact_repository

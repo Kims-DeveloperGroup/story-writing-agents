@@ -47,6 +47,7 @@ from story_writing_agents.workspace.initialization import (
     SessionArtifactBindingError,
     compose_session_artifact_binding,
 )
+from story_writing_agents.workspace import initialization as initialization_module
 from story_writing_agents.workspace.schema import canonical_initializer_scaffold
 from story_writing_agents.writing_artifacts import (
     ArtifactKind,
@@ -83,6 +84,7 @@ class StoryCommitServiceTests(StoryCommitGitTestCase):
             manifest(),
             "novel",
             (observed.st_dev, observed.st_ino),
+            artifact_binding._generation_identity,
             artifact_repository_access=(
                 artifact_binding.open_story_commit_artifact_repository
             ),
@@ -648,12 +650,14 @@ class StoryCommitServiceTests(StoryCommitGitTestCase):
             manifest(),
             "novel",
             (observed.st_dev, observed.st_ino),
+            artifact_binding._generation_identity,
             artifact_repository_access=(
                 artifact_binding.open_story_commit_artifact_repository
             ),
         )
         captures = []
         original_capture = WritingArtifactRepository.capture_complete_state
+        original_generation_ready = GitSessionHistory.require_generation_ready
 
         def capture(repository):
             value = original_capture(repository)
@@ -669,7 +673,16 @@ class StoryCommitServiceTests(StoryCommitGitTestCase):
             "capture_complete_state",
             autospec=True,
             side_effect=capture,
-        ):
+        ), mock.patch.object(
+            GitSessionHistory,
+            "require_generation_ready",
+            autospec=True,
+            side_effect=original_generation_ready,
+        ) as generation_ready, mock.patch.object(
+            initialization_module,
+            "lock_git_repository",
+            side_effect=AssertionError("borrowed history opened a second Git lease"),
+        ) as second_lock:
             candidate = service.prepare(evidence, "Bound capture", ("impact",))
             authority = service.authorize(
                 candidate,
@@ -681,6 +694,8 @@ class StoryCommitServiceTests(StoryCommitGitTestCase):
         self.assertEqual(len({repository for repository, _value in captures}), 1)
         self.assertEqual(captures[0][1], captures[1][1])
         self.assertEqual(captures[1][1], captures[2][1])
+        self.assertEqual(generation_ready.call_count, 6)
+        second_lock.assert_not_called()
 
     def test_bound_capture_loss_before_and_after_each_phase_prevents_git_entry(
         self,
@@ -695,11 +710,18 @@ class StoryCommitServiceTests(StoryCommitGitTestCase):
                     artifact_binding = compose_session_artifact_binding(root, "novel")
 
                     @contextmanager
-                    def failing_access(validate):
+                    def failing_access(
+                        validate,
+                        *,
+                        expected_generation_identity,
+                    ):
                         if position == "before":
                             raise SessionArtifactBindingError("binding lost")
                         with artifact_binding.open_story_commit_artifact_repository(
-                            validate
+                            validate,
+                            expected_generation_identity=(
+                                expected_generation_identity
+                            ),
                         ) as repository:
                             yield repository
                             raise SessionArtifactBindingError("binding lost")
@@ -712,6 +734,7 @@ class StoryCommitServiceTests(StoryCommitGitTestCase):
                         manifest(),
                         "novel",
                         (observed.st_dev, observed.st_ino),
+                        artifact_binding._generation_identity,
                         artifact_repository_access=(
                             failing_access if phase == "prepare" else normal_access
                         ),

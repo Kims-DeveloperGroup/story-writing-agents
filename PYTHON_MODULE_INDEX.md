@@ -2950,7 +2950,9 @@ every intermediate arrow. The current runtime graph is acyclic.
   checkpoint-index allocation, and conservative completed-index cleanup.
   A live transaction also exposes package-internal semantic READY
   revalidation against optional expected branch and internal-ref tips through
-  its already-held repository lease; this method is not a facade export.
+  its already-held repository lease; a companion method captures and compares
+  the complete retained six-component physical-generation identity under that
+  same lease. Neither method is a facade export.
   A separate package-internal recovery context, also omitted from `__all__`,
   borrows one non-recyclable thread-token-affine lease for bounded story-
   candidate/commit reads and caller-validated recovery transitions while
@@ -3187,14 +3189,18 @@ every intermediate arrow. The current runtime graph is acyclic.
   The named package-internal
   `create_identity_bound_story_commit_service(...)` factory is omitted from
   `__all__`; workspace composition uses it to retain the successful Apply
-  root's physical identity and guarded artifact-access callback without
+  root's physical identity, complete Git generation identity, and guarded
+  artifact-access callback without
   changing the public constructor, methods,
   candidate values, or durable schemas. That bound service captures its
   creator process and non-recyclable thread token when the physical root is
   installed; all seven service methods reject a foreign thread or fork child
   before authority/state locks, retained-map mutation, callbacks, history,
   filesystem, or Git work. Direct construction remains strict by default and
-  does not gain the bound-only creator restriction.
+  does not gain the bound-only creator restriction. Bound artifact entry and
+  exit delegate full generation revalidation to the live history owner under
+  its already-held lease; the adapter neither reaches into the private lease
+  nor acquires a nested Git lock.
 - **Direct internal dependencies:** `git.adapter`, `git.contracts`, `git.process`,
   `git.repository_lock`, `git.session_contracts`, `git.session_history`,
   `git.session_history_contracts`, `git.story_commit_candidates`, and
@@ -7880,7 +7886,9 @@ every intermediate arrow. The current runtime graph is acyclic.
   operation. A missing leaf is likewise re-statted relative to its retained
   parent descriptor after ancestor revalidation and returns absent only when
   that final observation is still missing. Descriptor/chain cleanup exhausts
-  every owned close while preserving an active body `BaseException` as primary.
+  every owned close while preserving an active body `BaseException` as primary;
+  without one, `OSError` is suppressed and the first non-`OSError` is delayed
+  until the owned batch is exhausted.
   Debate result/state session and debate
   identities, and every agent-state agent/session/debate identity, must match
   their requested paths. The guard and every call-local descriptor close on
@@ -8008,7 +8016,11 @@ every intermediate arrow. The current runtime graph is acyclic.
   synchronous repository work.
   Binding composition captures one exact Git-owned physical-generation
   identity under its already-held READY lease and requires it to match the
-  previously pinned worktree root. A binding may then mint one opaque
+  previously pinned worktree root. Every outer normal access captures and
+  compares that complete retained identity under its entry lease and again at
+  authoritative postcheck. Lease-free Story Commit access obtains the same
+  complete comparison through the Git history owner's existing-lease validator
+  at entry and exit, without private lease access or nested locking. A binding may then mint one opaque
   `SessionArtifactGenerationPin` through the Git owner's short identity-only
   lock without entering `open_ready_resources()` or repeating full Git,
   manifest, policy, or artifact validation. The pin wraps six non-inheritable
@@ -8581,7 +8593,9 @@ every intermediate arrow. The current runtime graph is acyclic.
   transient
   results and authorization bytes are closed, pending
   coordinators are discarded, and the stale repository/access callback is
-  detached. The operation retains its private, non-inheritable worktree
+  detached. Deferral first detaches all authority, then exhausts every pending
+  result and authorization close; a triggering failure stays primary, while a
+  no-primary first cleanup failure is raised only after the batch. The operation retains its private, non-inheritable worktree
   directory descriptor across ordinary deferred cleanup, uses it only for
   `fstat` identity validation and close, and releases it on successful/durable
   terminalization, reconciled completion, replacement abandonment, or any
@@ -9031,7 +9045,10 @@ every intermediate arrow. The current runtime graph is acyclic.
   final release on runtime abandonment. Successful focused and unfocused
   archives invoke the runtime-owned exact-conversation retirement seam without
   exposing the pending registry or widening a facade. No Git lease spans the
-  user wait or provider work. These changes add no module, import
+  user wait or provider work. Direct Lead, collaboration-synthesis, and
+  collaboration-result pin finalization preserves the active body or
+  cancellation failure, closes generation ownership once, and still exhausts
+  bound-agent release; only a no-primary cleanup failure escapes. These changes add no module, import
   edge, export, facade API, persisted field, schema version, or #670 runtime-
   agent CWD responsibility.
   Recovery inspection now acquires an opaque generation pin through the
@@ -9048,7 +9065,11 @@ every intermediate arrow. The current runtime graph is acyclic.
   directed runtime cycles. Session-source missing-leaf reads now require a final
   descriptor-relative absence observation; confirmed binding-generation loss is
   authoritative over a simultaneous body failure; and binding/runtime-reference
-  pin cleanup is primary-aware and one-shot. These corrections add no import
+  pin cleanup is primary-aware and one-shot. Normal and Story Commit binding
+  entry/exit also compare the complete retained six-component generation under
+  an existing Git lease, runtime-reference deferral exhausts all detached
+  content cleanup, and orchestration pin cleanup cannot prevent bound-agent
+  release. These corrections add no import
   edge, export, facade surface, persisted field, or schema version.
   Specialist routing adds one pure module and five net inward runtime
   edges over the provider-recovery baseline: artifact proposals replace their

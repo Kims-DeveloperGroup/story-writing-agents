@@ -7,6 +7,7 @@ import hashlib
 import inspect
 import json
 import os
+import sys
 import threading
 import uuid
 from collections.abc import Callable, Iterator
@@ -2717,13 +2718,15 @@ class StoryRuntime:
     @staticmethod
     def _close_story_commit_generation_pin(
         generation_pin: SessionArtifactGenerationPin,
-        failure: BaseException,
+        failure: BaseException | None = None,
     ) -> None:
         """Close untransferred pin ownership without masking a primary failure."""
 
         try:
             generation_pin.close()
         except BaseException as cleanup_failure:
+            if failure is None:
+                raise
             _add_story_commit_cleanup_note(failure, cleanup_failure)
 
     def _build_guarded_contextual_definition(
@@ -5681,10 +5684,32 @@ class StoryRuntime:
                 transferred_pin,
             )
         finally:
+            cleanup_failure: BaseException | None = None
+            primary = sys.exception()
             if generation_pin is not None:
-                generation_pin.close()
+                try:
+                    self._close_story_commit_generation_pin(
+                        generation_pin,
+                        failure=primary,
+                    )
+                except BaseException as failure:
+                    cleanup_failure = failure
             if bound_agent is not None:
-                await self._release_bound_agent_use(bound_agent)
+                try:
+                    await self._release_bound_agent_use(bound_agent)
+                except BaseException as failure:
+                    cleanup_primary = (
+                        primary if primary is not None else cleanup_failure
+                    )
+                    if cleanup_primary is None:
+                        cleanup_failure = failure
+                    else:
+                        _add_story_commit_cleanup_note(
+                            cleanup_primary,
+                            failure,
+                        )
+            if primary is None and cleanup_failure is not None:
+                raise cleanup_failure
 
     @staticmethod
     def _validate_assignment_reference_proofs(
@@ -5815,7 +5840,10 @@ class StoryRuntime:
                 artifact_binding.require_generation_pin(generation_pin)
         finally:
             if generation_pin is not None:
-                generation_pin.close()
+                self._close_story_commit_generation_pin(
+                    generation_pin,
+                    failure=sys.exception(),
+                )
 
     def _persist_collaboration_results_with_generation_pin(
         self,
@@ -7686,7 +7714,10 @@ class StoryRuntime:
             artifact_binding.require_generation_pin(generation_pin)
             return result
         finally:
-            generation_pin.close()
+            self._close_story_commit_generation_pin(
+                generation_pin,
+                failure=sys.exception(),
+            )
 
     async def _run_lead_provider_guarded_pinned(
         self,

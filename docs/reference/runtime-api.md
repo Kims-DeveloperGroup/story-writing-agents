@@ -124,6 +124,8 @@ fails while the physical-generation recheck also detects loss, generation loss
 is authoritative and enters the existing recovery boundary. Any retained
 diagnostic about the displaced body/provider failure is limited to its
 content-free exception type, never its message or payload.
+Lead and collaboration pin finalization is primary-aware: it preserves an
+active failure and cannot skip the remaining bound-agent or sibling cleanup.
 
 This continuity mechanism does not set or confine a story-runtime provider's
 working directory or project root. That separate execution boundary remains
@@ -1196,6 +1198,11 @@ durable operation remains at `REQUESTED` → `CAPTURED`. The callback failure is
 re-raised unchanged. A later artifact-sensitive boundary discovers that
 content-free operation as a restart orphan and terminalizes it without provider
 replay.
+
+Reference deferral first detaches every pending invocation, authorization,
+repository, and repository-access authority. It then attempts every applicable
+content, authorization, and owner-pin cleanup, preserving an active primary
+failure and recording only content-free cleanup exception types.
 
 Guarded reference preparation preserves `WorkspaceSecurityError` and binding
 failures for runtime recovery mapping instead of flattening them into an

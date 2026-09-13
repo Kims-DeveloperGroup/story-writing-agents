@@ -7,7 +7,7 @@ import os
 import re
 import stat
 import threading
-from contextlib import contextmanager
+from contextlib import AbstractContextManager, contextmanager
 from dataclasses import dataclass, replace
 from functools import wraps
 from pathlib import Path
@@ -34,7 +34,6 @@ from .session_history import (
     open_git_session_history,
     open_story_commit_recovery_history,
 )
-from .session_resources import GitSessionGenerationPin
 from .session_contracts import (
     GitSessionResourceInspection,
     GitSessionResourceState,
@@ -46,6 +45,7 @@ from .session_history_contracts import (
     GitSessionHistoryState,
     advance_commit_operation,
 )
+from .session_resources import GitSessionGenerationIdentity, GitSessionGenerationPin
 from .story_commit_candidates import (
     StoryCommitCandidateBinding,
     StoryCommitArtifactRepositoryAccess,
@@ -1694,6 +1694,7 @@ def create_identity_bound_story_commit_service(
     manifest: GitBaselineManifest,
     session_id: str,
     expected_session_root_identity: tuple[int, int],
+    expected_generation_identity: GitSessionGenerationIdentity | None,
     *,
     allowed_worktree_changes: tuple[str, ...] = (),
     artifact_repository_access: StoryCommitArtifactRepositoryAccess,
@@ -1706,9 +1707,31 @@ def create_identity_bound_story_commit_service(
         session_id,
         allowed_worktree_changes=allowed_worktree_changes,
     )
+    if type(expected_generation_identity) is not GitSessionGenerationIdentity:
+        raise _error(StoryCommitFailureCode.INVALID_REQUEST)
     service._bind_session_root_identity(expected_session_root_identity)
-    service._bind_artifact_repository_access(artifact_repository_access)
+    service._bind_artifact_repository_access(
+        lambda validate_ready: _open_generation_bound_artifact_repository(
+            artifact_repository_access,
+            validate_ready,
+            expected_generation_identity,
+        )
+    )
     return service
+
+
+def _open_generation_bound_artifact_repository(
+    artifact_repository_access: StoryCommitArtifactRepositoryAccess,
+    validate_ready: Callable[[], GitSessionResourceInspection],
+    expected_generation: GitSessionGenerationIdentity,
+) -> AbstractContextManager:
+    history = getattr(validate_ready, "__self__", None)
+    if type(history) is not GitSessionHistory:
+        raise _error(StoryCommitFailureCode.RECOVERY_REQUIRED)
+    return artifact_repository_access(
+        lambda: history.require_generation_ready(expected_generation),
+        expected_generation_identity=expected_generation,
+    )
 
 
 def _commit_matches(

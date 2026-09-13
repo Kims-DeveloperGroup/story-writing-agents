@@ -1352,12 +1352,13 @@ class SessionSourceWorkspace(Workspace):
         try:
             os.close(descriptor)
         except BaseException as cleanup_failure:
-            if failure is None:
+            if failure is None and not isinstance(cleanup_failure, OSError):
                 raise
-            SessionSourceWorkspace._add_source_cleanup_note(
-                failure,
-                cleanup_failure,
-            )
+            if failure is not None:
+                SessionSourceWorkspace._add_source_cleanup_note(
+                    failure,
+                    cleanup_failure,
+                )
 
     @staticmethod
     def _add_source_cleanup_note(
@@ -1401,9 +1402,8 @@ class SessionSourceWorkspace(Workspace):
         descriptors, missing_index = cls._capture_directory_chain_state(root, parts)
         if missing_index is None:
             return descriptors
-        failure = FileNotFoundError(relative)
-        cls._close_directory_chain(descriptors, failure=failure)
-        raise failure
+        cls._close_directory_chain(descriptors)
+        raise FileNotFoundError(relative)
 
     @classmethod
     def _verify_directory_chain_at(

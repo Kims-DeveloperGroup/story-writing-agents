@@ -979,6 +979,135 @@ class LeadRecommendationTests(RecommendationCase):
 
 
 class LeadRecommendationSynthesisTests(RecommendationCase):
+    async def test_pin_cleanup_preserves_primary_and_never_skips_agent_release(
+        self,
+    ) -> None:
+        cleanup = SystemExit("generation pin close interrupted")
+        provider_failure = RuntimeError("provider failed")
+        pin = SimpleNamespace(close=mock.Mock(side_effect=cleanup))
+        self.runtime._close_story_commit_generation_pin(
+            pin,
+            failure=provider_failure,
+        )
+        pin.close.assert_called_once_with()
+        self.assertIn(
+            "pending story commit cleanup failed: SystemExit",
+            provider_failure.__notes__,
+        )
+
+        persistence_failure = RuntimeError("result persistence failed")
+        persisted_pin = SimpleNamespace(close=mock.Mock(side_effect=cleanup))
+        binding = SimpleNamespace(require_generation_pin=mock.Mock())
+        result = owner._CollaborationInvocationResult(
+            object(),
+            0,
+            artifact_binding=binding,
+            generation_pin=persisted_pin,
+        )
+        with mock.patch.object(
+            self.runtime,
+            "_persist_collaboration_results_with_generation_pin",
+            side_effect=persistence_failure,
+        ), self.assertRaises(RuntimeError) as caught:
+            self.runtime._persist_collaboration_results_locked(
+                synthesis_result=result,
+            )
+        self.assertIs(caught.exception, persistence_failure)
+        persisted_pin.close.assert_called_once_with()
+        self.assertIn(
+            "pending story commit cleanup failed: SystemExit",
+            persistence_failure.__notes__,
+        )
+
+        binding_failure = SessionArtifactBindingError("generation changed")
+        lead_pin = SimpleNamespace(close=mock.Mock(side_effect=cleanup))
+        lead_binding = SimpleNamespace(
+            acquire_generation_pin=mock.Mock(return_value=lead_pin),
+            require_generation_pin=mock.Mock(side_effect=binding_failure),
+        )
+        with mock.patch.object(
+            self.runtime,
+            "_run_lead_provider_guarded_pinned",
+            side_effect=RuntimeError("lead provider failed"),
+        ), self.assertRaises(SessionArtifactBindingError) as caught:
+            await self.runtime._run_lead_provider_guarded(
+                artifact_binding=lead_binding
+            )
+        self.assertIs(caught.exception, binding_failure)
+        lead_pin.close.assert_called_once_with()
+        self.assertIn(
+            "pending story commit cleanup failed: SystemExit",
+            binding_failure.__notes__,
+        )
+
+        stranded_pin = SimpleNamespace(close=mock.Mock(side_effect=cleanup))
+        stranded_binding = SimpleNamespace(
+            acquire_generation_pin=mock.Mock(return_value=stranded_pin)
+        )
+        bound_agent = object()
+        release = mock.AsyncMock()
+        reference_operation = SimpleNamespace(
+            begin_invocation=mock.Mock(
+                side_effect=RuntimeError("reference invocation failed")
+            )
+        )
+        finalization_failure = KeyboardInterrupt("finalization interrupted")
+        with mock.patch.object(
+            owner.SessionSourceWorkspace,
+            "from_artifact_binding",
+            return_value=object(),
+        ), mock.patch.object(
+            self.runtime,
+            "_prepare_session_reference_operation",
+            return_value=reference_operation,
+        ), mock.patch.object(
+            self.runtime,
+            "_validate_assignment_reference_proofs",
+            return_value=None,
+        ), mock.patch.object(
+            self.runtime,
+            "_build_guarded_contextual_definition",
+            return_value=object(),
+        ), mock.patch.object(
+            self.runtime,
+            "_acquire_bound_agent",
+            new=mock.AsyncMock(return_value=bound_agent),
+        ), mock.patch.object(
+            self.runtime,
+            "_fail_reference_operation",
+            return_value=None,
+        ), mock.patch.object(
+            owner,
+            "context_provider_failure_facts",
+            side_effect=finalization_failure,
+        ), mock.patch.object(
+            self.runtime,
+            "_release_bound_agent_use",
+            new=release,
+        ), self.assertRaises(KeyboardInterrupt) as caught:
+            await self.runtime._run_collaboration_invocation_guarded(
+                artifact_binding=stranded_binding,
+                session_id=self.session_id,
+                conversation_id="conversation",
+                turn_id="turn",
+                step_id="step",
+                agent_id=LEAD_ORCHESTRATOR,
+                operation_id="operation",
+                result_correlation_id="result",
+                inputs=(),
+                material_value={},
+                invocation_kind=owner.CollaborationInvocationKind.LEAD_SYNTHESIS,
+                context_invocation_kind=owner.ContextInvocationKind.LEAD_SYNTHESIS,
+                result_contract=object(),
+                physical_call_limit=1,
+                round_number=1,
+                decoder=lambda answer, artifact_binding: answer,
+                action_progress_sink=None,
+            )
+        self.assertIs(caught.exception, finalization_failure)
+        stranded_pin.close.assert_called_once_with()
+        release.assert_awaited_once_with(bound_agent)
+
     async def consultation(self, *, actionable, pause=False, mixed=False):
         conversation_id = self.conversation("Synthetic synthesis")
         proposed = await self.proposal(conversation_id, text="Review this finished user candidate: " + DRAFT)
