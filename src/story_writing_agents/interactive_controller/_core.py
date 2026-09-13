@@ -163,6 +163,10 @@ from ..session_lifecycle import (
     provider_work_is_ready,
 )
 from ..workspace import Workspace
+from ..workspace.initialization import (
+    SessionArtifactBindingError,
+    compose_session_artifact_binding,
+)
 from ._conversation_policy import (
     ConversationCatalogProtocolFailure,
     classify_conversation_failure,
@@ -1817,8 +1821,22 @@ class InteractiveController:
         """List only current canonical writing sources for the main picker."""
 
         try:
-            return self._runtime.artifacts.list_paths()
-        except (OSError, WorkspaceFormatError, WorkspaceSecurityError):
+            if self._attached_session_id is None:
+                raise ReferenceInputFailure(ReferenceInputFailureKind.UNAVAILABLE)
+            binding = compose_session_artifact_binding(
+                self._workspace.root,
+                self._attached_session_id,
+            )
+            with binding.open_ready_resources() as access:
+                return access.repository.list_paths()
+        except ReferenceInputFailure:
+            raise
+        except (
+            OSError,
+            SessionArtifactBindingError,
+            WorkspaceFormatError,
+            WorkspaceSecurityError,
+        ):
             raise ReferenceInputFailure(
                 ReferenceInputFailureKind.UNAVAILABLE
             ) from None
@@ -1827,14 +1845,23 @@ class InteractiveController:
         """Read one selected canonical source for the independent range viewer."""
 
         try:
-            return self._runtime.artifacts.read_text(path)
+            if self._attached_session_id is None:
+                raise ReferenceInputFailure(ReferenceInputFailureKind.UNAVAILABLE)
+            binding = compose_session_artifact_binding(
+                self._workspace.root,
+                self._attached_session_id,
+            )
+            with binding.open_ready_resources() as access:
+                return access.repository.read_text(path)
+        except ReferenceInputFailure:
+            raise
         except FileNotFoundError:
             raise ReferenceInputFailure(ReferenceInputFailureKind.STALE) from None
         except WorkspaceFormatError:
             raise ReferenceInputFailure(
                 ReferenceInputFailureKind.UNREADABLE
             ) from None
-        except (OSError, WorkspaceSecurityError):
+        except (OSError, SessionArtifactBindingError, WorkspaceSecurityError):
             raise ReferenceInputFailure(
                 ReferenceInputFailureKind.UNAVAILABLE
             ) from None
@@ -6594,6 +6621,14 @@ class InteractiveController:
         )
         is_focused = target.conversation_id == focused_id
         if target.status is ConversationStatus.ARCHIVED:
+            try:
+                self._runtime.retire_archived_conversation(
+                    session_id,
+                    target.conversation_id,
+                )
+            except Exception as exc:
+                self._present_conversation_failure(exc)
+                return False
             if is_focused:
                 self._focused_conversation = None
                 self._write_error(
@@ -6644,6 +6679,10 @@ class InteractiveController:
                 raise ConversationCatalogProtocolFailure(
                     "archived conversation metadata is not archived"
                 )
+            self._runtime.retire_archived_conversation(
+                session_id,
+                target.conversation_id,
+            )
         except Exception as exc:
             self._present_conversation_failure(exc)
             return
@@ -6726,6 +6765,14 @@ class InteractiveController:
             return False
 
         self._focused_conversation = successor
+        try:
+            self._runtime.retire_archived_conversation(
+                session_id,
+                target.conversation_id,
+            )
+        except Exception as exc:
+            self._present_conversation_failure(exc)
+            return False
         status = f"Archived {target_handle} | Subject: {archived.subject}"
         if successor is None:
             status += "; current focus is none."

@@ -36,18 +36,31 @@ from ..git.session_history_contracts import (
     GitSessionHistorySnapshot,
     GitSessionHistoryState,
 )
+from ..git.session_resources import GitSessionGenerationPin
 from ..session_lifecycle import (
     SessionAccessState,
     SessionDurableState,
     SessionLifecycleState,
 )
-from ..workspace.initialization import inspect_session_history, inspect_session_resources
+from ..workspace.initialization import (
+    SessionArtifactBinding,
+    SessionArtifactBindingError,
+    StoryCommitRecoverySnapshot,
+    compose_session_artifact_binding,
+    inspect_session_history,
+    inspect_session_resources,
+    inspect_story_commit_recovery_snapshot,
+)
 from ..writing_artifacts import (
     ArtifactApplicationError,
     ArtifactApplicationErrorCode,
     ArtifactApplicationResult,
+    ArtifactCreateOperation,
+    ArtifactDeleteOperation,
+    ArtifactPatchOperation,
+    ArtifactRenameOperation,
+    ArtifactReplaceOperation,
 )
-from ..writing_artifacts.repository import WritingArtifactRepository
 from .contracts import (
     SessionArtifactApplicationEvidence,
     SessionRecoveryError,
@@ -249,7 +262,43 @@ class SessionRecoveryReconciler:
             tail,
         )
         if resource_blocker is not None:
+            if resources_a.state is GitSessionResourceState.RECOVERY_REQUIRED:
+                try:
+                    recovery = inspect_story_commit_recovery_snapshot(
+                        self._workspace_root,
+                        session_id,
+                    )
+                except Exception:
+                    return resource_blocker
+                return _staged_story_commit_recovery_result(
+                    recovery,
+                    resource_blocker,
+                    session_id,
+                    conversation,
+                    tail,
+                    reviewed,
+                    application,
+                )
             return resource_blocker
+        try:
+            artifact_binding = compose_session_artifact_binding(
+                self._workspace_root,
+                session_id,
+            )
+        except SessionArtifactBindingError:
+            return _owner_recovery(
+                session_id,
+                conversation,
+                tail,
+                SessionRecoveryOwner.SESSION_RESOURCES,
+            )
+        if artifact_binding.resources != resources_a:
+            return _owner_recovery(
+                session_id,
+                conversation,
+                tail,
+                SessionRecoveryOwner.SESSION_RESOURCES,
+            )
 
         snapshot_a = self._read_history(session_id, conversation, tail, False)
         if isinstance(snapshot_a, SessionRecoveryResult):
@@ -286,7 +335,7 @@ class SessionRecoveryReconciler:
 
         if application is not None:
             application_blocker = _inspect_application(
-                resources_a.identity.worktree_root,
+                artifact_binding,
                 application,
                 session_id,
                 conversation,
@@ -297,7 +346,15 @@ class SessionRecoveryReconciler:
 
         try:
             adapter = GitRepositoryAdapter(resources_a.identity.worktree_root)
-            external_a = adapter.inspect_external_operation()
+            with artifact_binding.open_ready_resources():
+                external_a = adapter.inspect_external_operation()
+        except SessionArtifactBindingError:
+            return _owner_recovery(
+                session_id,
+                conversation,
+                tail,
+                SessionRecoveryOwner.SESSION_RESOURCES,
+            )
         except GitOperationError:
             return _blocked(
                 session_id,
@@ -324,7 +381,15 @@ class SessionRecoveryReconciler:
                 SessionRecoveryOwner.EXTERNAL_GIT,
             )
         try:
-            status_a = adapter.status()
+            with artifact_binding.open_ready_resources():
+                status_a = adapter.status()
+        except SessionArtifactBindingError:
+            return _owner_recovery(
+                session_id,
+                conversation,
+                tail,
+                SessionRecoveryOwner.SESSION_RESOURCES,
+            )
         except GitOperationError:
             return _owner_recovery(
                 session_id,
@@ -370,7 +435,15 @@ class SessionRecoveryReconciler:
         log_metadata: GitLogMetadata | None = None
         if commit_a is not None and commit_a.state is GitSessionHistoryState.COMMITTED:
             try:
-                log_metadata = adapter.log_metadata()
+                with artifact_binding.open_ready_resources():
+                    log_metadata = adapter.log_metadata()
+            except SessionArtifactBindingError:
+                return _owner_recovery(
+                    session_id,
+                    conversation,
+                    tail,
+                    SessionRecoveryOwner.SESSION_RESOURCES,
+                )
             except GitOperationError:
                 return _owner_recovery(
                     session_id,
@@ -403,12 +476,25 @@ class SessionRecoveryReconciler:
             return history_b
         resources_b = self._read_resources(session_id, conversation, tail, True)
         if isinstance(resources_b, SessionRecoveryResult):
-            return resources_b
+            return _owner_recovery(
+                session_id,
+                conversation,
+                tail,
+                SessionRecoveryOwner.SESSION_RESOURCES,
+            )
         snapshot_b = self._read_history(session_id, conversation, tail, True)
         if isinstance(snapshot_b, SessionRecoveryResult):
             return snapshot_b
         try:
-            external_b = adapter.inspect_external_operation()
+            with artifact_binding.open_ready_resources():
+                external_b = adapter.inspect_external_operation()
+        except SessionArtifactBindingError:
+            return _owner_recovery(
+                session_id,
+                conversation,
+                tail,
+                SessionRecoveryOwner.SESSION_RESOURCES,
+            )
         except GitOperationError:
             return _owner_outcome(session_id, conversation, tail, SessionRecoveryOwner.EXTERNAL_GIT)
         except Exception:
@@ -416,7 +502,15 @@ class SessionRecoveryReconciler:
         if not _exact_owner_value(external_b, GitExternalOperationInspection):
             return _owner_outcome(session_id, conversation, tail, SessionRecoveryOwner.EXTERNAL_GIT)
         try:
-            status_b = adapter.status()
+            with artifact_binding.open_ready_resources():
+                status_b = adapter.status()
+        except SessionArtifactBindingError:
+            return _owner_recovery(
+                session_id,
+                conversation,
+                tail,
+                SessionRecoveryOwner.SESSION_RESOURCES,
+            )
         except GitOperationError:
             return _owner_outcome(session_id, conversation, tail, SessionRecoveryOwner.REPOSITORY_STATUS)
         except Exception:
@@ -427,7 +521,25 @@ class SessionRecoveryReconciler:
         if history_a != history_b:
             return _owner_outcome(session_id, conversation, tail, SessionRecoveryOwner.COLLABORATION_HISTORY)
         if resources_a != resources_b:
-            return _owner_outcome(session_id, conversation, tail, SessionRecoveryOwner.SESSION_RESOURCES)
+            return _owner_recovery(
+                session_id,
+                conversation,
+                tail,
+                SessionRecoveryOwner.SESSION_RESOURCES,
+            )
+        try:
+            with artifact_binding.open_ready_resources() as access:
+                if access.resources != resources_b:
+                    raise SessionArtifactBindingError(
+                        "recovery session resources changed"
+                    )
+        except SessionArtifactBindingError:
+            return _owner_recovery(
+                session_id,
+                conversation,
+                tail,
+                SessionRecoveryOwner.SESSION_RESOURCES,
+            )
         if (
             snapshot_a.inspection.session_id != snapshot_b.inspection.session_id
             or snapshot_a.candidates != snapshot_b.candidates
@@ -697,6 +809,83 @@ class SessionRecoveryReconciler:
         return value
 
 
+def _staged_story_commit_recovery_result(
+    recovery: object,
+    resource_blocker: SessionRecoveryResult,
+    session_id: str,
+    conversation_id: str,
+    tail: int,
+    reviewed: SessionReviewedProposalEvidence | None,
+    application: SessionArtifactApplicationEvidence | None,
+) -> SessionRecoveryResult:
+    """Validate, recheck, and release one transferred recovery generation pin."""
+
+    if type(recovery) is not StoryCommitRecoverySnapshot:
+        return resource_blocker
+    generation_pin = recovery.generation_pin
+    if type(generation_pin) is not GitSessionGenerationPin:
+        return resource_blocker
+    failure: BaseException | None = None
+    try:
+        if (
+            recovery.resources.identity.session_id != session_id
+            or recovery.candidate.session_id != session_id
+            or recovery.operation.session_id != session_id
+            or recovery.operation.candidate_id != recovery.candidate.candidate_id
+        ):
+            return resource_blocker
+        if application is None:
+            result = _blocked(
+                session_id,
+                conversation_id,
+                tail,
+                SessionRecoveryState.RECOVERY_REQUIRED,
+                SessionRecoveryOwner.STORY_COMMIT,
+                SessionRecoveryFailureCode.MISSING_PREDECESSOR,
+            )
+        elif not _staged_recovery_evidence_matches(
+            recovery,
+            reviewed,
+            application,
+        ):
+            result = _blocked(
+                session_id,
+                conversation_id,
+                tail,
+                SessionRecoveryState.RECOVERY_REQUIRED,
+                SessionRecoveryOwner.STORY_COMMIT,
+                SessionRecoveryFailureCode.CORRELATION_MISMATCH,
+            )
+        else:
+            result = _owner_recovery(
+                session_id,
+                conversation_id,
+                tail,
+                SessionRecoveryOwner.STORY_COMMIT,
+            )
+        try:
+            generation_pin.require_current()
+        except Exception:
+            return resource_blocker
+        return result
+    except BaseException as exc:
+        failure = exc
+        raise
+    finally:
+        try:
+            generation_pin.close()
+        except BaseException as cleanup_failure:
+            if failure is None:
+                raise
+            try:
+                failure.add_note(
+                    "story commit recovery pin cleanup failed: "
+                    f"{type(cleanup_failure).__name__}"
+                )
+            except BaseException:
+                pass
+
+
 def _is_canonical_empty_history(history: CollaborationHistoryProjection) -> bool:
     """Return whether every collaboration-owned field is at its empty value."""
 
@@ -777,16 +966,23 @@ def _history_blocker(
 
 
 def _inspect_application(
-    worktree_root: Path,
+    artifact_binding: SessionArtifactBinding,
     application: SessionArtifactApplicationEvidence,
     session_id: str,
     conversation_id: str,
     tail: int,
 ) -> SessionRecoveryResult | None:
     try:
-        repository = WritingArtifactRepository(worktree_root)
-        stored = repository.inspect_artifact_application(
-            application.application_result.application_id
+        with artifact_binding.open_ready_resources() as access:
+            stored = access.repository.inspect_artifact_application(
+                application.application_result.application_id
+            )
+    except SessionArtifactBindingError:
+        return _owner_recovery(
+            session_id,
+            conversation_id,
+            tail,
+            SessionRecoveryOwner.ARTIFACT_APPLICATION,
         )
     except ArtifactApplicationError as failure:
         failure_code = (
@@ -828,6 +1024,151 @@ def _inspect_application(
             SessionRecoveryFailureCode.CORRELATION_MISMATCH,
         )
     return None
+
+
+def _staged_recovery_evidence_matches(
+    recovery: StoryCommitRecoverySnapshot,
+    reviewed: SessionReviewedProposalEvidence | None,
+    application: SessionArtifactApplicationEvidence,
+) -> bool:
+    """Match staged candidate paths and application truth to reviewed intent."""
+
+    if reviewed is None:
+        return False
+    result = application.application_result
+    provenance = result.provenance
+    if (
+        reviewed.change_set.base_state_digest
+        != reviewed.relationship_validation.base_state_digest
+        or reviewed.change_set.projected_state_digest
+        != reviewed.relationship_validation.projected_state_digest
+        or reviewed.change_set.change_set_digest
+        != reviewed.relationship_validation.change_set_digest
+        or application.proposal_id != reviewed.proposal_id
+        or application.correlation_id != reviewed.correlation_id
+        or recovery.candidate.application_id != result.application_id
+        or recovery.candidate.proposal_id != application.proposal_id
+        or recovery.candidate.correlation_id != application.correlation_id
+        or recovery.operation.correlation_id != application.correlation_id
+        or provenance.candidate_id != reviewed.candidate_id
+        or provenance.candidate_revision != reviewed.candidate_revision
+        or provenance.candidate_digest != reviewed.candidate_digest
+        or provenance.change_set_digest != reviewed.change_set.change_set_digest
+        or provenance.relationship_validation_digest
+        != reviewed.relationship_validation_digest
+    ):
+        return False
+
+    candidate_paths: list[tuple[str, str, str | None, str | None]] = []
+    affected_paths: set[str] = set()
+    final_artifacts: list[tuple[str, object, str]] = []
+    rename_lineage: list[tuple[str, str, str]] = []
+    deletion_provenance: list[tuple[str, str]] = []
+    for operation in reviewed.change_set.operations:
+        if type(operation) is ArtifactCreateOperation:
+            candidate_paths.append(
+                (operation.path, "create", None, operation.projected_digest)
+            )
+            affected_paths.add(operation.path)
+            final_artifacts.append(
+                (operation.path, operation.artifact_kind, operation.projected_digest)
+            )
+        elif type(operation) in {ArtifactPatchOperation, ArtifactReplaceOperation}:
+            candidate_paths.append(
+                (
+                    operation.path,
+                    "update",
+                    operation.base_digest,
+                    operation.projected_digest,
+                )
+            )
+            affected_paths.add(operation.path)
+            final_artifacts.append(
+                (operation.path, operation.artifact_kind, operation.projected_digest)
+            )
+        elif type(operation) is ArtifactDeleteOperation:
+            candidate_paths.append(
+                (operation.path, "delete", operation.base_digest, None)
+            )
+            affected_paths.add(operation.path)
+            deletion_provenance.append((operation.path, operation.base_digest))
+        elif type(operation) is ArtifactRenameOperation:
+            candidate_paths.extend(
+                (
+                    (
+                        operation.source_path,
+                        "delete",
+                        operation.base_digest,
+                        None,
+                    ),
+                    (
+                        operation.destination_path,
+                        "create",
+                        None,
+                        operation.projected_digest,
+                    ),
+                )
+            )
+            affected_paths.update(
+                (operation.source_path, operation.destination_path)
+            )
+            final_artifacts.append(
+                (
+                    operation.destination_path,
+                    operation.artifact_kind,
+                    operation.projected_digest,
+                )
+            )
+            rename_lineage.append(
+                (
+                    operation.source_path,
+                    operation.destination_path,
+                    operation.projected_digest,
+                )
+            )
+        else:
+            return False
+
+    def sort_text(value: str) -> bytes:
+        return value.encode("utf-8")
+
+    expected_candidate_paths = tuple(
+        sorted(candidate_paths, key=lambda item: sort_text(item[0]))
+    )
+    observed_candidate_paths = tuple(
+        (
+            item.path,
+            item.operation.value,
+            item.before_sha256,
+            item.after_sha256,
+        )
+        for item in recovery.candidate.paths
+    )
+    return (
+        observed_candidate_paths == expected_candidate_paths
+        and result.affected_paths
+        == tuple(sorted(affected_paths, key=sort_text))
+        and tuple(
+            (item.path, item.artifact_kind, item.sha256)
+            for item in result.final_artifacts
+        )
+        == tuple(sorted(final_artifacts, key=lambda item: sort_text(item[0])))
+        and tuple(
+            (item.source_path, item.destination_path, item.sha256)
+            for item in result.rename_lineage
+        )
+        == tuple(
+            sorted(
+                rename_lineage,
+                key=lambda item: (sort_text(item[0]), sort_text(item[1])),
+            )
+        )
+        and tuple(
+            (item.path, item.prior_sha256)
+            for item in result.deletion_provenance
+        )
+        == tuple(sorted(deletion_provenance, key=lambda item: sort_text(item[0])))
+    )
 
 
 def _select_history(

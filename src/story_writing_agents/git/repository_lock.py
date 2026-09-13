@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import os
 import stat
+import threading
 from contextlib import contextmanager
 from enum import StrEnum
 from pathlib import Path
@@ -13,6 +14,21 @@ try:
     import fcntl as _fcntl
 except ImportError:  # pragma: no cover - exercised on unsupported platforms
     _fcntl = None  # type: ignore[assignment]
+
+
+_THREAD_STATE = threading.local()
+
+
+def current_thread_token() -> object:
+    """Return one process-bound token for the current Python thread state."""
+
+    pid = os.getpid()
+    token = getattr(_THREAD_STATE, "token", None)
+    if getattr(_THREAD_STATE, "pid", None) != pid or token is None:
+        _THREAD_STATE.pid = pid
+        token = object()
+        _THREAD_STATE.token = token
+    return token
 
 
 class GitRepositoryLockFailureCode(StrEnum):
@@ -43,7 +59,9 @@ class GitRepositoryLease:
         "_common_git",
         "_common_identity",
         "_main_root",
+        "_pid",
         "_root_identity",
+        "_thread_token",
     )
 
     def __init__(
@@ -60,6 +78,8 @@ class GitRepositoryLease:
         self._root_identity = root_identity
         self._common_identity = common_identity
         self._common_descriptor = common_descriptor
+        self._pid = os.getpid()
+        self._thread_token = current_thread_token()
         self._active = True
 
     @property
@@ -90,7 +110,11 @@ class GitRepositoryLease:
     def require_active(self) -> None:
         """Revalidate both named directories and the live leased descriptor."""
 
-        if not self._active:
+        if (
+            self._pid != os.getpid()
+            or not self._active
+            or current_thread_token() is not self._thread_token
+        ):
             raise _failure(GitRepositoryLockFailureCode.LOCK_UNAVAILABLE)
         failure: GitRepositoryLockFailure | None = None
         try:
@@ -132,39 +156,81 @@ def lock_git_repository(main_root: Path) -> Iterator[GitRepositoryLease]:
     common_git = root / ".git"
     common_identity = _bind_directory(common_git)
     common_descriptor = _open_bound_directory(common_git, common_identity)
-    failure: GitRepositoryLockFailure | None = None
+    creator_pid = os.getpid()
     try:
         _fcntl.flock(common_descriptor, _fcntl.LOCK_EX)
     except OSError:
         failure = _failure(GitRepositoryLockFailureCode.LOCK_UNAVAILABLE)
-    if failure is not None:
-        try:
-            os.close(common_descriptor)
-        except OSError:
-            pass
+        _close_failed_repository_lock_descriptor(common_descriptor, failure)
         raise failure
+    except BaseException as failure:
+        _close_failed_repository_lock_descriptor(common_descriptor, failure)
+        raise
 
-    lease = GitRepositoryLease(
-        main_root=root,
-        common_git=common_git,
-        root_identity=root_identity,
-        common_identity=common_identity,
-        common_descriptor=common_descriptor,
-    )
+    lease: GitRepositoryLease | None = None
+    body_failure: BaseException | None = None
     try:
+        lease = GitRepositoryLease(
+            main_root=root,
+            common_git=common_git,
+            root_identity=root_identity,
+            common_identity=common_identity,
+            common_descriptor=common_descriptor,
+        )
         lease.require_active()
         yield lease
         lease.require_active()
+    except BaseException as failure:
+        body_failure = failure
+        raise
     finally:
-        lease._close()
+        if lease is not None:
+            lease._close()
+        _close_repository_lock_descriptor(
+            common_descriptor,
+            failure=body_failure,
+            unlock=creator_pid == os.getpid(),
+        )
+
+
+def _close_failed_repository_lock_descriptor(
+    descriptor: int,
+    failure: BaseException,
+) -> None:
+    """Exhaust failed flock cleanup without replacing its primary failure."""
+
+    _close_repository_lock_descriptor(descriptor, failure=failure, unlock=True)
+
+
+def _close_repository_lock_descriptor(
+    descriptor: int,
+    *,
+    failure: BaseException | None,
+    unlock: bool,
+) -> None:
+    assert _fcntl is not None
+    cleanup_failure: BaseException | None = None
+    cleanups = [lambda: os.close(descriptor)]
+    if unlock:
+        cleanups.insert(0, lambda: _fcntl.flock(descriptor, _fcntl.LOCK_UN))
+    for cleanup in cleanups:
         try:
-            _fcntl.flock(common_descriptor, _fcntl.LOCK_UN)
-        except OSError:
-            pass
-        try:
-            os.close(common_descriptor)
-        except OSError:
-            pass
+            cleanup()
+        except BaseException as exc:
+            primary = failure if failure is not None else cleanup_failure
+            if primary is None:
+                if not isinstance(exc, OSError):
+                    cleanup_failure = exc
+                continue
+            try:
+                primary.add_note(
+                    "Git repository lock cleanup failed: "
+                    f"{type(exc).__name__}"
+                )
+            except BaseException:
+                pass
+    if cleanup_failure is not None:
+        raise cleanup_failure
 
 
 def _lexical_absolute(value: object) -> Path:

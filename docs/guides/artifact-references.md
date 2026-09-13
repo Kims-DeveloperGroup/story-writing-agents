@@ -35,6 +35,13 @@ mandatory context. It revalidates the source before accepting the response.
 Another agent's read, a checkpoint, or SEARCH/READ evidence cannot satisfy this
 obligation.
 
+Construct `StoryRuntime` from the initialized `main` control workspace, then
+create or reopen the session resources before this call. Runtime freshly binds
+each reference operation to that session's exact READY worktree and stores its
+content-free ledger there. It never reads the control root, current directory,
+another session, or an older binding as a fallback, and the Lead call never
+provisions missing resources.
+
 For example:
 
 ```python
@@ -59,6 +66,8 @@ Ordinary focused input is Lead input. `$` opens the canonical-artifact picker;
 inserts an identity-only indicator, and multiple whole/ranged indicators may be
 included in one line.
 Submitting a completed indicator starts the runtime reference operation.
+Picker inventory and viewing are freshly bound to the exact attached session,
+so switching sessions cannot reuse the previous source repository.
 
 For example:
 
@@ -108,7 +117,7 @@ safe next action: capture the intended source again from current files
 That checkpoint is a reference-revalidation label, not a Git or session
 checkpoint. The old bytes are not silently replaced, and the old authorization
 cannot continue. The application itself also does not invoke an agent/provider,
-confirm Apply, or stage/commit Git. #491 will own the no-call Reject/Revise and
+confirm Apply, or stage/commit Git. Runtime owns the no-call Reject/Revise and
 confirmed-Apply workflow; Git remains a separate later confirmed action.
 
 ## Prepare files safely now

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import unittest
+from unittest import mock
 
 from story_writing_agents import StoryRuntime
 from story_writing_agents.agent_context.accounting import ProviderCallKind
@@ -27,6 +28,8 @@ from story_writing_agents.conversations import (
     CollaborationLeadOutcomeFailureCode,
     CollaborationLeadOutcomeFailurePayload,
     CollaborationNextAction,
+    CollaborationStepState,
+    CollaborationStepStatePayload,
     CollaborationSpecialistAssessment,
     LeadOutcomeKind,
     artifact_reviewed_proposal_digest,
@@ -51,6 +54,8 @@ from story_writing_agents.conversation_storage.sqlite import (
     compose_sqlite_conversation_storage,
     provision_sqlite_conversation_storage,
 )
+from story_writing_agents.writing_artifacts.repository import WritingArtifactRepository
+from story_writing_agents.writing_artifacts._storage import ArtifactRootSecurityError
 
 from tests.test_lead_orchestration import (
     LeadOrchestrationTestCase,
@@ -176,7 +181,9 @@ class ArtifactProposalOrchestrationTests(LeadOrchestrationTestCase):
     def artifact_snapshot(self) -> tuple[tuple[str, bytes], ...]:
         return tuple(
             (item.path, item.content)
-            for item in self.runtime.artifacts.capture_complete_state()
+            for item in WritingArtifactRepository(
+                self.workspace.root
+            ).capture_complete_state()
         )
 
     def artifact_events(self, conversation_id: str, payload_type: type) -> tuple:
@@ -320,6 +327,87 @@ class ArtifactProposalOrchestrationTests(LeadOrchestrationTestCase):
             }.issubset(readable_keys)
         )
 
+    async def test_artifact_finalization_root_loss_is_one_durable_recovery_terminal(
+        self,
+    ) -> None:
+        conversation_id = self.conversation("Artifact finalization root loss")
+        self.workspace.path(_RULES).unlink(missing_ok=True)
+        self.backend.enqueue(
+            _artifact_outcome(
+                operations=[
+                    {
+                        "kind": "create",
+                        "new_text": "Use restrained close-third narration.\n",
+                        "suggested_path": _RULES,
+                    }
+                ],
+                evidence_status="missing",
+                evidence_ids=lambda call, _material: [_status_id(call, _RULES)],
+            )
+        )
+        proposed = await self.runtime.lead_turn(
+            self.session_id,
+            conversation_id,
+            "Complete the missing narrative rules.",
+        )
+        self.backend.enqueue_for(
+            EXECUTION_SPECIALIST,
+            _specialist_outcome("supports"),
+        )
+        self.backend.enqueue_for(
+            LEAD_ORCHESTRATOR,
+            _artifact_synthesis_outcome("propose"),
+        )
+        finalize = self.runtime._finalize_artifact_result_locked
+        finalized_inputs = []
+
+        def lose_root_during_finalization(**inputs):
+            finalized_inputs.append(inputs)
+            with mock.patch.object(
+                WritingArtifactRepository,
+                "capture_complete_state",
+                side_effect=ArtifactRootSecurityError(
+                    "workspace root identity changed"
+                ),
+            ):
+                return finalize(**inputs)
+
+        with mock.patch.object(
+            self.runtime,
+            "_finalize_artifact_result_locked",
+            side_effect=lose_root_during_finalization,
+        ):
+            decided = await self.runtime.decide_lead_step(
+                _decision(proposed, CollaborationConfirmationDecision.CONFIRM)
+            )
+            self.assertEqual(len(finalized_inputs), 1)
+            known = finalized_inputs[0]
+            provider_calls = len(self.backend.calls)
+            for _ in range(2):
+                restored = lose_root_during_finalization(**known)
+                self.assertEqual(restored, decided.turn)
+                self.assertEqual(len(self.backend.calls), provider_calls)
+
+        self.assertIs(decided.turn.state, CollaborationStepState.RECOVERY_REQUIRED)
+        self.assertIs(
+            decided.turn.next_action,
+            CollaborationNextAction.REPAIR_AUTHORITATIVE_HISTORY,
+        )
+        self.assertIs(
+            decided.turn.artifact_proposal.state,
+            ArtifactProposalState.RECOVERY_REQUIRED,
+        )
+        self.assertIsNone(decided.turn.artifact_application_request)
+        self.assertEqual(self.runtime._artifact_application_capabilities, {})
+        durable = self.history(conversation_id)
+        recovery_terminals = tuple(
+            event
+            for event in durable
+            if type(event.payload) is CollaborationStepStatePayload
+            and event.payload.state is CollaborationStepState.RECOVERY_REQUIRED
+        )
+        self.assertEqual(len(recovery_terminals), 1)
+
     async def test_core_conflict_revision_and_manuscript_atomic_rename_workflows(
         self,
     ) -> None:
@@ -411,25 +499,29 @@ class ArtifactProposalOrchestrationTests(LeadOrchestrationTestCase):
     async def test_ordinary_discussion_captures_current_state_without_specialists(self) -> None:
         conversation_id = self.conversation("Ordinary discussion")
         calls = 0
-        original = self.runtime.artifacts.capture_complete_state
+        original = WritingArtifactRepository.capture_complete_state
 
-        def counted_snapshot():
+        def counted_snapshot(repository):
             nonlocal calls
             calls += 1
-            return original()
+            return original(repository)
 
-        self.runtime.artifacts.capture_complete_state = counted_snapshot  # type: ignore[method-assign]
-        self.backend.enqueue(
-            _visible_outcome(
-                "answer",
-                "A scene goal should identify the desired change and obstacle.",
+        with mock.patch.object(
+            WritingArtifactRepository,
+            "capture_complete_state",
+            new=counted_snapshot,
+        ):
+            self.backend.enqueue(
+                _visible_outcome(
+                    "answer",
+                    "A scene goal should identify the desired change and obstacle.",
+                )
             )
-        )
-        result = await self.runtime.lead_turn(
-            self.session_id,
-            conversation_id,
-            "What is a scene goal?",
-        )
+            result = await self.runtime.lead_turn(
+                self.session_id,
+                conversation_id,
+                "What is a scene goal?",
+            )
         self.assertIs(result.kind, LeadOutcomeKind.ANSWER)
         self.assertIsNone(result.artifact_proposal)
         self.assertEqual(calls, 1)
@@ -827,7 +919,7 @@ class ArtifactProposalOrchestrationTests(LeadOrchestrationTestCase):
         )
 
         restart_backend = _LeadBackend()
-        restarted = StoryRuntime(self.workspace, restart_backend)  # type: ignore[arg-type]
+        restarted = StoryRuntime(self.control_workspace, restart_backend)  # type: ignore[arg-type]
         projection = project_collaboration_history(
             restarted.conversation_storage_services.event_store.read(
                 self.session_id,
@@ -915,27 +1007,27 @@ class ArtifactProposalOrchestrationTests(LeadOrchestrationTestCase):
         reviewed = decided.turn.artifact_proposal.reviewed_proposal
         filesystem_history = self.history(conversation_id)
 
-        coordinator = WorkspaceConversationStorageMutationCoordinator(self.workspace)
+        coordinator = WorkspaceConversationStorageMutationCoordinator(self.control_workspace)
         with coordinator.borrow(timeout_seconds=2.0) as lease:
             preflight = provision_sqlite_conversation_storage(
-                self.workspace,
+                self.control_workspace,
                 lease=lease,
             )
         self.assertIs(preflight.capability, ConversationStorageCapability.READY)
         transferred = transfer_conversation_storage(
-            self.workspace,
+            self.control_workspace,
             source_backend=ConversationStorageBackend.FILESYSTEM,
             destination_backend=ConversationStorageBackend.SQLITE,
         )
         self.assertIs(transferred.outcome, ConversationStorageTransferOutcome.COMPLETED)
         verified = verify_conversation_storage(
-            self.workspace,
+            self.control_workspace,
             source_backend=ConversationStorageBackend.FILESYSTEM,
             destination_backend=ConversationStorageBackend.SQLITE,
         )
         self.assertIs(verified.outcome, ConversationStorageTransferOutcome.COMPLETED)
 
-        sqlite_services = compose_sqlite_conversation_storage(self.workspace)
+        sqlite_services = compose_sqlite_conversation_storage(self.control_workspace)
         sqlite_history = sqlite_services.event_store.read(
             self.session_id,
             conversation_id,
@@ -1148,7 +1240,10 @@ class ArtifactProposalOrchestrationTests(LeadOrchestrationTestCase):
         receipt = result.evidence.receipts[0]
         self.assertIs(receipt.acquisition, c.CollaborationEvidenceAcquisition.READ)
         scope = self.runtime._agent_context_service.scope(self.session_id, ContextSubjectKind.CONVERSATION, conversation_id, LEAD_ORCHESTRATOR)
-        snapshot = WritingArtifactSourceAdapter(self.runtime.artifacts, scope).capture(_OUTLINE, CONTEXT_SOURCE_POLICY)
+        snapshot = WritingArtifactSourceAdapter(
+            WritingArtifactRepository(self.workspace.root),
+            scope,
+        ).capture(_OUTLINE, CONTEXT_SOURCE_POLICY)
         whole_sha = snapshot.descriptor.content_digest
         self.assertEqual(whole_sha, objectives.digest(text))
         self.assertNotEqual(snapshot.descriptor.revision, whole_sha)

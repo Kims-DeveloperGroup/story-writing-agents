@@ -344,8 +344,8 @@ class RagModuleBoundaryTests(unittest.TestCase):
     ) -> None:
         modules = _module_inventory()
         edges = _internal_edges(modules)
-        self.assertEqual(len(modules), 140)
-        self.assertEqual(len(edges), 555)
+        self.assertEqual(len(modules), 142)
+        self.assertEqual(len(edges), 576)
         self.assertIsNone(_cycle_witness(modules, edges))
         conversation_dependencies = {
             "story_writing_agents.conversations": {
@@ -398,6 +398,7 @@ class RagModuleBoundaryTests(unittest.TestCase):
                 "story_writing_agents.config",
                 "story_writing_agents.errors",
                 "story_writing_agents.git",
+                "story_writing_agents.git.repository_lock",
                 "story_writing_agents.git.session_contracts",
                 "story_writing_agents.git.session_checkpoints",
                 "story_writing_agents.git.session_history",
@@ -406,6 +407,7 @@ class RagModuleBoundaryTests(unittest.TestCase):
                 "story_writing_agents.runtime_state_paths",
                 "story_writing_agents.workspace._policy_baselines",
                 "story_writing_agents.workspace.schema",
+                "story_writing_agents.writing_artifacts.repository",
             },
             "story_writing_agents.workspace.schema": {
                 "story_writing_agents.agents",
@@ -446,6 +448,28 @@ class RagModuleBoundaryTests(unittest.TestCase):
                 "story_writing_agents.git.process",
                 "story_writing_agents.git.repository_lock",
                 "story_writing_agents.git.session_contracts",
+            },
+            "story_writing_agents.git.story_commit_candidates": {
+                "story_writing_agents.git.contracts",
+                "story_writing_agents.git.process",
+                "story_writing_agents.git.session_contracts",
+                "story_writing_agents.git.session_history",
+                "story_writing_agents.git.session_history_contracts",
+                "story_writing_agents.git.session_resources",
+                "story_writing_agents.git.story_commit_contracts",
+                "story_writing_agents.writing_artifacts",
+                "story_writing_agents.writing_artifacts.repository",
+            },
+            "story_writing_agents.git.story_commits": {
+                "story_writing_agents.git.adapter",
+                "story_writing_agents.git.contracts",
+                "story_writing_agents.git.process",
+                "story_writing_agents.git.repository_lock",
+                "story_writing_agents.git.session_contracts",
+                "story_writing_agents.git.session_history",
+                "story_writing_agents.git.session_history_contracts",
+                "story_writing_agents.git.story_commit_candidates",
+                "story_writing_agents.git.story_commit_contracts",
             },
         }
         for source, expected in git_dependencies.items():
@@ -531,6 +555,7 @@ class RagModuleBoundaryTests(unittest.TestCase):
                 "story_writing_agents.conversation_storage.selection",
                 "story_writing_agents.conversation_storage.sqlite",
                 "story_writing_agents.conversation_storage.sqlite_database",
+                "story_writing_agents.orchestrator",
                 "story_writing_agents.workspace",
             },
         )
@@ -694,6 +719,7 @@ class RagModuleBoundaryTests(unittest.TestCase):
                 "story_writing_agents.agent_context.ledger",
                 "story_writing_agents.agent_context.manifest",
                 "story_writing_agents.agent_context.planning",
+                "story_writing_agents.agent_context.progress",
                 "story_writing_agents.agent_context.sources",
                 "story_writing_agents.conversations.session_context",
                 "story_writing_agents.errors",

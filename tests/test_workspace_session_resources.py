@@ -11,19 +11,25 @@ from unittest import mock
 import story_writing_agents
 import story_writing_agents.git as git_facade
 import story_writing_agents.workspace as workspace_facade
+import story_writing_agents.writing_artifacts as artifact_facade
 from story_writing_agents import Workspace
 from story_writing_agents.errors import WorkspaceFormatError
 from story_writing_agents.git.session_contracts import GitSessionResourceState
 from story_writing_agents.workspace import initialization as initialization_module
 from story_writing_agents.workspace.core import discover_workspace
 from story_writing_agents.workspace.initialization import (
+    SessionArtifactBinding,
+    SessionArtifactBindingError,
     WorkspaceRootRole,
+    compose_session_artifact_binding,
     discover_workspace_location,
     inspect_session_resources,
     list_session_resources,
     provision_session_resources,
     require_ready_session_resources,
 )
+from story_writing_agents.writing_artifacts.repository import WritingArtifactRepository
+from story_writing_agents.writing_artifacts import repository as repository_module
 
 from tests.test_git_session_resources import GitSessionResourceGitTestCase
 
@@ -36,6 +42,7 @@ class WorkspaceSessionResourceCompositionTests(GitSessionResourceGitTestCase):
     ) -> None:
         self.assertEqual(initialization_module.__all__, [])
         expected = {
+            compose_session_artifact_binding: "(root: 'Path', session_id: 'str') -> 'SessionArtifactBinding'",
             inspect_session_resources: "(root: 'Path', session_id: 'str') -> 'GitSessionResourceInspection'",
             list_session_resources: "(root: 'Path') -> 'GitSessionResourceInventory'",
             provision_session_resources: "(root: 'Path', session_id: 'str') -> 'GitSessionResourceInspection'",
@@ -49,6 +56,90 @@ class WorkspaceSessionResourceCompositionTests(GitSessionResourceGitTestCase):
         self.assertEqual(len(story_writing_agents.__all__), 104)
         self.assertEqual(len(git_facade.__all__), 24)
         self.assertEqual(len(workspace_facade.__all__), 3)
+        for name in (
+            "SessionArtifactBinding",
+            "SessionArtifactBindingError",
+            "compose_session_artifact_binding",
+        ):
+            self.assertFalse(hasattr(workspace_facade, name))
+            self.assertFalse(hasattr(story_writing_agents, name))
+        guarded_factory = "create_guarded_writing_artifact_repository"
+        self.assertTrue(callable(getattr(repository_module, guarded_factory)))
+        self.assertFalse(hasattr(artifact_facade, guarded_factory))
+        self.assertFalse(hasattr(story_writing_agents, guarded_factory))
+
+    def test_artifact_binding_is_lazy_and_exactly_uses_ready_session_root(self) -> None:
+        root = self.initialize_workspace("artifact-binding")
+        with mock.patch.dict(os.environ, self.session_environment(), clear=True):
+            ready = provision_session_resources(root, "novel")
+        source = ready.identity.worktree_root / "core_documents/global_outline.md"
+        source.write_text("Session-only outline.\n", encoding="utf-8")
+        before = self.repository_snapshot(root)
+
+        with mock.patch.object(
+            WritingArtifactRepository,
+            "list_paths",
+            side_effect=AssertionError("binding construction performed artifact I/O"),
+        ):
+            binding = compose_session_artifact_binding(root, "novel")
+
+        self.assertIs(type(binding), SessionArtifactBinding)
+        self.assertEqual(binding.resources, ready)
+        self.assertFalse(hasattr(binding, "repository"))
+        with binding.open_ready_resources() as access:
+            self.assertEqual(
+                access.repository.read_text("core_documents/global_outline.md"),
+                "Session-only outline.\n",
+            )
+        with self.assertRaises(SessionArtifactBindingError):
+            _ = access.repository
+        self.assertEqual(self.repository_snapshot(root), before)
+        self.assertEqual(
+            (root / "core_documents/global_outline.md").read_bytes(),
+            b"",
+        )
+
+    def test_absent_mismatched_and_nonready_bindings_fail_without_fallback(self) -> None:
+        root = self.initialize_workspace("artifact-binding-failures")
+        before = self.repository_snapshot(root)
+        with mock.patch.object(
+            repository_module,
+            "WritingArtifactRepository",
+            side_effect=AssertionError("repository was constructed for absent resources"),
+        ) as repository:
+            for session_id in ("absent", "foreign"):
+                with self.subTest(session_id=session_id):
+                    with self.assertRaisesRegex(
+                        SessionArtifactBindingError,
+                        "session artifact resources are unavailable",
+                    ):
+                        compose_session_artifact_binding(root, session_id)
+        repository.assert_not_called()
+        self.assertEqual(self.repository_snapshot(root), before)
+
+        with mock.patch.dict(os.environ, self.session_environment(), clear=True):
+            ready = provision_session_resources(root, "novel")
+        self.run_git(root, "update-ref", "-d", ready.identity.internal_ref)
+        after_loss = self.repository_snapshot(root)
+        with self.assertRaises(SessionArtifactBindingError):
+            compose_session_artifact_binding(root, "novel")
+        self.assertEqual(self.repository_snapshot(root), after_loss)
+
+    def test_moved_session_binding_fails_closed_and_preserves_private_bytes(self) -> None:
+        root = self.initialize_workspace("artifact-binding-moved")
+        with mock.patch.dict(os.environ, self.session_environment(), clear=True):
+            ready = provision_session_resources(root, "novel")
+        moved = self.test_root / "moved-artifact-binding"
+        ready.identity.worktree_root.rename(moved)
+        private = moved / "private.txt"
+        private.write_bytes(b"preserve moved private bytes\n")
+        before = self.repository_snapshot(root)
+
+        with self.assertRaises(SessionArtifactBindingError):
+            compose_session_artifact_binding(root, "novel")
+
+        self.assertEqual(self.repository_snapshot(root), before)
+        self.assertEqual(private.read_bytes(), b"preserve moved private bytes\n")
 
     def test_main_and_session_discovery_return_nearest_typed_identity(self) -> None:
         root = self.initialize_workspace("discovery")

@@ -176,6 +176,58 @@ tips may advance, and generic session readiness does not classify their
 committed contents; story-commit and session-recovery owners validate that
 history.
 
+Session-artifact binding also captures a narrower physical-generation identity
+under an already-held READY lease. It covers the control root, common Git
+directory, per-session administrative directory, linked session worktree, and
+the unique bounded `.git` and `commondir` indirection files, including exact
+metadata and file digests. An opaque pin retains six non-inheritable descriptors
+for those four directories and two files so deletion cannot recycle their
+identities while Lead or synthesis persistence still depends on them. Pin
+acquisition and recheck take only a short repository lock, repeat the bounded
+no-follow relationship proof, and release the lock before returning. They run
+no Git child or semantic READY, manifest, policy, or artifact scan and grant no
+traversal, read, mutation, or repository authority.
+
+Generation directory/file opens and duplicates, plus initial binding
+composition, keep each descriptor locally owned until transfer. Every
+`BaseException` closes the locally owned descriptor while preserving the
+primary failure. Batch cleanup continues through every descriptor after a
+`BaseException`, exhausts lock/lease release and required postchecks, and keeps
+an active primary authoritative.
+
+The generation identity, binding, and pin are confined to the creator process
+and opaque thread token. Foreign-thread and forked-child acquisition or recheck
+fails before repository locking, descriptor validation, or other filesystem
+I/O. Close is still idempotent; after a fork, the child-safe close path releases
+only the child's inherited descriptor copies without entering inherited locks
+or granting generation authority.
+
+Ordinary artifact access retains the stronger semantic boundary: one outer
+synchronous transaction performs a complete READY validation before and after
+its body. Nested access and repository calls reuse that transaction with only
+thread, lease, and named-root liveness checks. Borrowed Story Commit access has
+its own complete history-owned pre/post validation, and Apply adds an explicit
+complete check immediately before its mutation method starts. No Git lease or
+live artifact access is retained across provider work; only the identity-only
+generation pin may span that await.
+
+Binding creator affinity applies before every READY, repository-callback,
+session-source, Story Commit service-composition, and borrowed access factory
+can take a binding lock, acquire a Git lease, invoke its READY validator, open a
+worktree
+descriptor, or reach repository/source I/O. Until activation transfers
+ownership to an access object, the factory owns every descriptor and lease it
+has acquired. Any `BaseException` during setup closes the untransferred
+descriptor and unwinds the lease, preserving the primary failure and recording
+only secondary cleanup diagnostics.
+
+Same-process foreign-thread context teardown may privately revoke access and
+release its lease. A fork-child revoke instead avoids the inherited binding
+lock and closes only the child's worktree-descriptor copy. When the forked Git
+lease context exits, it closes the child's common-Git descriptor but does not
+issue `LOCK_UN`; the parent's lock continues to exclude contenders until the
+parent releases it.
+
 Every Git child uses fixed arguments, `shell=False`, bounded streams and time,
 disabled prompting, hooks, signing, filters, pagers, and inherited Git control
 variables, followed by root-identity revalidation and complete process/pipe
@@ -229,7 +281,31 @@ main-root facts, and no unreported canonical change. Canonical symlinks,
 aliases, unsafe paths, content drift, pre-staged entries, and moved identities
 fail closed. Noncanonical untracked files are omitted and preserved.
 
-Commit authority is nonserializable and consumed before I/O. Under the lease,
+Commit authority is nonserializable and consumed before I/O. Its process/thread
+check precedes the internal one-use lock, so a forked child rejects it without
+waiting on a copied lock, consuming parent authority, or reaching filesystem or
+Git work. The runtime-bound service that owns Prepare, Authorize, Reject,
+Revise, Execute, Inspect, Recover, and internal repository-access binding has
+the same creator-process/thread boundary, checked before service state, locks,
+filesystem access, or Git work.
+
+Immediately before entering the Apply guard, runtime acquires one six-
+descriptor physical-generation pin. A successful Apply retains that generation
+continuously through result/request preparation, then transfers the same pin to
+its pending owner before publishing the Commit request. The identity-only pin
+cannot be traversed and does not exclude noncooperating Git; semantic READY
+checks remain authoritative. It closes exactly once after terminal decision/result
+publication, failure, cancellation, exact-owner replacement, or best-effort
+runtime abandonment. Failure before request publication closes the new local
+owner. A mismatched decision or failed decision append preserves the published
+owner; after a durable decision, cleanup retires only the exact owner observed
+at entry and leaves any replacement live. Recovery fallback retains and
+revalidates the pin through its ownership result, then closes it unless
+ownership transferred. A definitive archive, including an already-archived
+command, retires the exact pending Commit owners; a verified compensating
+unarchive of a focused conversation does not.
+
+Under the lease,
 the executor synchronizes `running` evidence before the first mutation, then
 uses only literal `hash-object -w --no-filters --stdin`, `update-index`
 cache-entry/removal, `write-tree`, `commit-tree`, and compare-and-swap
@@ -238,6 +314,12 @@ Candidate paths are supplied after `--` where the Git command accepts a path;
 no glob, directory-wide add, checkout, reset, clean, hook, signing, filter,
 textconv, alias, pager/editor, credential prompt, remote, or provider input can
 widen the set.
+
+Authorize validates the current candidate and clean index before consulting
+revision history. An externally pre-staged index observed before durable
+`running` is therefore stale candidate drift requiring repreparation, not a
+recovery-only staged operation; the foreign index and worktree bytes are
+preserved.
 
 The verified tree must equal the prepared expected tree. The commit has exactly
 one prepared parent, exact message, and captured effective identity, and only
@@ -322,6 +404,16 @@ check every component and require embedded IDs to match the owning path. This
 protects namespace integrity, not access control: a process with workspace
 access can still name another session.
 
+Descriptor-relative session-source reads retain every directory descriptor
+from the session root through the leaf parent, not only the final directory.
+After the leaf, inventory, or absence observation, they reopen the path and
+require every original parent-child edge to name the retained identity.
+Compound agent state accepts at most 8 MiB and 10,000 JSONL records across its
+selected files; a debate log accepts at most 10,000 records. Both use a lazy
+line iterator, so record 10,001 is rejected before slicing, parsing, or
+retention. Missing nested directories and leaves also revalidate the complete
+retained ancestor prefix before absence is accepted.
+
 The provider-session claim guard is opened without following symlinks when the
 platform supports it, verified as the same regular file, and locked with POSIX
 `flock` or Windows one-byte advisory locking. Suspicious state fails closed.
@@ -338,6 +430,25 @@ capture does not use the application catalog as its path source or require a
 catalog audit. Each unique path is securely read once at initial capture;
 multiple ranges retain request order while sharing that immutable source
 snapshot.
+
+Guarded runtime preparation parses first, then obtains and validates one
+non-inheritable duplicate of the exact session root before the repository can
+publish `captured` authorization. Ownership transfers to the runtime operation
+exactly once. Supplier, validation, construction, and unretained publication
+paths close the descriptor; the pin grants no traversal or repository
+authority. A registry-callback failure after capture closes transient content
+and leaves only a content-free orphan for later restart reconciliation rather
+than recursively entering repository cleanup from the callback.
+
+Reference-provider actions and terminal mutation of their operation state use
+the same creator PID/thread affinity and reject a foreign thread or forked
+child before locks or I/O. Pending cleanup and reconciliation deliberately use
+PID-only authority: another thread in the same process may complete them under
+fresh guarded access. Where supported, an `os.register_at_fork` child hook
+eagerly replaces the inherited process-wide registry lock and clears inherited
+handles as the fork returns; a pre-lock PID check remains the defensive lazy
+fallback. The child leaves durable orphan recovery to a later artifact-
+sensitive boundary.
 
 The complete source must be strict UTF-8 without NUL. Universal CRLF, LF, and
 lone-CR records determine exact one-based range slices, including their line

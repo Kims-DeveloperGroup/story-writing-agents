@@ -4,14 +4,27 @@ from __future__ import annotations
 
 import hashlib
 import os
+import threading
 import unittest
 from concurrent.futures import ThreadPoolExecutor
+from dataclasses import replace
 from pathlib import Path
 from unittest import mock
 
 from story_writing_agents.git import GitBaselineManifest, GitManifestEntry
+from story_writing_agents.git import repository_lock as lock_module
 from story_writing_agents.git import session_history as history_module
-from story_writing_agents.git.session_history import open_git_session_history
+from story_writing_agents.git.session_contracts import (
+    GitSessionFailureCode,
+    GitSessionOperationKind,
+    GitSessionRecoveryAction,
+    GitSessionResourceError,
+    GitSessionResourceState,
+)
+from story_writing_agents.git.session_history import (
+    open_git_session_history,
+    open_story_commit_recovery_history,
+)
 from story_writing_agents.git.session_history_contracts import (
     GIT_SESSION_HISTORY_DIRECTORY,
     GitSessionCandidatePath,
@@ -20,6 +33,7 @@ from story_writing_agents.git.session_history_contracts import (
     GitSessionCommitOperationRecord,
     GitSessionHistoryError,
     GitSessionHistoryFailureCode,
+    GitSessionHistoryRecoveryAction,
     GitSessionHistoryState,
     GitSessionHistorySnapshot,
     GitSessionIdentitySource,
@@ -30,6 +44,7 @@ from story_writing_agents.git.session_history_contracts import (
 from story_writing_agents.workspace.initialization import provision_session_resources
 from story_writing_agents.workspace.schema import canonical_initializer_scaffold
 
+from tests.git_contract_fixture import exception_graph
 from tests.test_git_session_resources import GitSessionResourceGitTestCase
 
 
@@ -111,6 +126,254 @@ class GitSessionHistorySafetyTests(GitSessionResourceGitTestCase):
 
     def _tree(self, root: Path) -> str:
         return self.run_git(root, "rev-parse", "HEAD^{tree}").stdout.decode().strip()
+
+    def test_semantic_ready_revalidates_identity_branch_index_and_internal_tip(
+        self,
+    ) -> None:
+        root, tip = self._ready_root("semantic-ready")
+        with open_git_session_history(root, _manifest(), "novel") as history:
+            ready = history.require_semantic_ready()
+            self.assertEqual(ready.current_branch_tip, tip)
+            history.require_semantic_ready(
+                expected_branch_tip=ready.current_branch_tip,
+                expected_internal_tip=ready.current_internal_tip,
+            )
+            variants = (
+                replace(
+                    ready,
+                    state=GitSessionResourceState.RECOVERY_REQUIRED,
+                    recovery_action=(
+                        type(ready.recovery_action).OPERATOR_RECOVERY
+                    ),
+                ),
+                replace(
+                    ready,
+                    identity=type(ready.identity)(
+                        ready.identity.main_root,
+                        "foreign",
+                    ),
+                ),
+                replace(ready, current_branch_tip="0" * len(tip)),
+                replace(ready, current_internal_tip="1" * len(tip)),
+            )
+            for confirmed in variants:
+                with self.subTest(confirmed=confirmed), mock.patch.object(
+                    history_module,
+                    "require_ready_locked_git_session_resources",
+                    return_value=confirmed,
+                ), self.assertRaises(GitSessionHistoryError) as caught:
+                    history.require_semantic_ready(
+                        expected_branch_tip=ready.current_branch_tip,
+                        expected_internal_tip=ready.current_internal_tip,
+                    )
+                self.assertIs(
+                    caught.exception.code,
+                    GitSessionHistoryFailureCode.RECOVERY_REQUIRED,
+                )
+
+    def test_recovery_topology_translates_resource_failure_without_cause(
+        self,
+    ) -> None:
+        root, _tip = self._ready_root("recovery-topology-error")
+        resource_failure = GitSessionResourceError(
+            GitSessionFailureCode.RECOVERY_REQUIRED,
+            operation=GitSessionOperationKind.REQUIRE_READY,
+            state=GitSessionResourceState.RECOVERY_REQUIRED,
+            recovery_action=GitSessionRecoveryAction.OPERATOR_RECOVERY,
+        )
+        with open_story_commit_recovery_history(
+            root,
+            _manifest(),
+            "novel",
+        ) as recovery, mock.patch.object(
+            history_module,
+            "require_story_commit_recovery_locked_git_session_resources",
+            side_effect=resource_failure,
+        ), self.assertRaises(GitSessionHistoryError) as caught:
+            recovery.require_recovery_topology()
+
+        self.assertIs(
+            caught.exception.code,
+            GitSessionHistoryFailureCode.RECOVERY_REQUIRED,
+        )
+        self.assertIs(
+            caught.exception.recovery_action,
+            GitSessionHistoryRecoveryAction.OPERATOR_RECOVERY,
+        )
+        self.assertIsNone(caught.exception.__cause__)
+
+    def test_foreign_thread_history_surface_fails_without_mutation_and_exit_cleans_up(
+        self,
+    ) -> None:
+        root, tip = self._ready_root("history-thread-affinity")
+        manager = open_git_session_history(root, _manifest(), "novel", create=True)
+        history = manager.__enter__()
+        tree = self._tree(root)
+        candidate = history.write_candidate(_candidate(tip, tree))
+        commit = history.write_commit_operation(
+            replace(_running(tip), candidate_id=candidate.candidate_id)
+        )
+        checkpoint = history.write_checkpoint_operation(_checkpoint_running(tip))
+        before = history.snapshot()
+        operations = (
+            lambda: history.session_id,
+            history.require_active,
+            history.require_semantic_ready,
+            history.close,
+            lambda: history.write_candidate(candidate),
+            lambda: history.read_candidate(candidate.candidate_id),
+            lambda: history.write_commit_operation(commit),
+            lambda: history.read_commit_operation(commit.operation_id),
+            lambda: history.write_checkpoint_operation(checkpoint),
+            lambda: history.read_checkpoint_operation(checkpoint.operation_id),
+            history.inspect,
+            history.snapshot,
+            history.capture_story_commit_records,
+        )
+
+        def foreign_calls():
+            failures = []
+            for operation in operations:
+                try:
+                    operation()
+                except GitSessionHistoryError as exc:
+                    failures.append(exc)
+            return tuple(failures)
+
+        with ThreadPoolExecutor(max_workers=1) as executor:
+            failures = executor.submit(foreign_calls).result(timeout=10)
+        self.assertEqual(len(failures), len(operations))
+        self.assertTrue(
+            all(
+                failure.code
+                in {
+                    GitSessionHistoryFailureCode.LOCK_UNAVAILABLE,
+                    GitSessionHistoryFailureCode.UNSAFE_ROOT,
+                }
+                for failure in failures
+            )
+        )
+        self.assertEqual(history.snapshot(), before)
+
+        body_failure = RuntimeError("preserve history caller failure")
+        with ThreadPoolExecutor(max_workers=1) as executor:
+            suppresses = executor.submit(
+                manager.__exit__,
+                RuntimeError,
+                body_failure,
+                None,
+            ).result(timeout=10)
+        self.assertFalse(suppresses)
+        with self.assertRaises(GitSessionHistoryError):
+            history.require_active()
+        with open_git_session_history(root, _manifest(), "novel") as reopened:
+            self.assertEqual(reopened.snapshot(), before)
+
+    def test_recycled_numeric_ident_cannot_reuse_regular_or_recovery_history(
+        self,
+    ) -> None:
+        root, tip = self._ready_root("recycled-history-token")
+        tree = self._tree(root)
+        manager = open_git_session_history(
+            root,
+            _manifest(),
+            "novel",
+            create=True,
+        )
+        history = manager.__enter__()
+        candidate = history.write_candidate(_candidate(tip, tree))
+        operation = history.write_commit_operation(
+            replace(_running(tip), candidate_id=candidate.candidate_id)
+        )
+        checkpoint = history.write_checkpoint_operation(_checkpoint_running(tip))
+        before = history.snapshot()
+        descriptor = history._descriptor
+        assert descriptor is not None
+        creator_token = lock_module.current_thread_token()
+        numeric_ident = threading.get_ident()
+        successor_token = object()
+        lock_module._THREAD_STATE.token = successor_token
+        try:
+            self.assertEqual(threading.get_ident(), numeric_ident)
+            operations = (
+                lambda: history.session_id,
+                history.require_active,
+                history.require_semantic_ready,
+                history.close,
+                lambda: history.write_candidate(candidate),
+                lambda: history.read_candidate(candidate.candidate_id),
+                lambda: history.write_commit_operation(operation),
+                lambda: history.read_commit_operation(operation.operation_id),
+                lambda: history.write_checkpoint_operation(checkpoint),
+                lambda: history.read_checkpoint_operation(checkpoint.operation_id),
+                history.inspect,
+                history.snapshot,
+                history.capture_story_commit_records,
+            )
+            for call in operations:
+                with self.subTest(history="regular", call=call), self.assertRaises(
+                    GitSessionHistoryError
+                ):
+                    call()
+            with self.assertRaises(GitSessionHistoryError):
+                manager.__exit__(None, None, None)
+        finally:
+            lock_module._THREAD_STATE.token = creator_token
+        with self.assertRaises(OSError):
+            os.fstat(descriptor)
+        with open_git_session_history(root, _manifest(), "novel") as reopened:
+            self.assertEqual(reopened.snapshot(), before)
+
+        recovery_manager = open_story_commit_recovery_history(
+            root,
+            _manifest(),
+            "novel",
+        )
+        recovery = recovery_manager.__enter__()
+        recovery_descriptor = recovery._history._descriptor
+        assert recovery_descriptor is not None
+        creator_token = lock_module.current_thread_token()
+        successor_token = object()
+        lock_module._THREAD_STATE.token = successor_token
+        try:
+            self.assertEqual(threading.get_ident(), numeric_ident)
+            operations = (
+                lambda: recovery.session_id,
+                lambda: recovery.topology,
+                recovery.require_active,
+                recovery.require_recovery_topology,
+                lambda: recovery.read_candidate(candidate.candidate_id),
+                lambda: recovery.read_commit_operation(operation.operation_id),
+                recovery.capture_story_commit_records,
+                lambda: recovery.write_commit_operation(operation),
+                recovery.close,
+            )
+            for call in operations:
+                with self.subTest(history="recovery", call=call), self.assertRaises(
+                    GitSessionHistoryError
+                ) as caught:
+                    call()
+                self.assertIs(
+                    caught.exception.code,
+                    GitSessionHistoryFailureCode.UNSAFE_ROOT,
+                )
+                self.assertEqual(exception_graph(caught.exception), (caught.exception,))
+            with self.assertRaises(GitSessionHistoryError) as teardown:
+                recovery_manager.__exit__(None, None, None)
+            self.assertIs(
+                teardown.exception.code,
+                GitSessionHistoryFailureCode.UNSAFE_ROOT,
+            )
+            self.assertEqual(
+                exception_graph(teardown.exception),
+                (teardown.exception,),
+            )
+        finally:
+            lock_module._THREAD_STATE.token = creator_token
+        with self.assertRaises(OSError):
+            os.fstat(recovery_descriptor)
+        with open_git_session_history(root, _manifest(), "novel") as reopened:
+            self.assertEqual(reopened.snapshot(), before)
 
     def test_snapshot_empty_create_false_and_complete_records_are_exact(self) -> None:
         root, tip = self._ready_root("snapshot-positive")

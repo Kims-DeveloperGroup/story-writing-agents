@@ -18,7 +18,7 @@ external-operation inspection work:
   later-commit method. Separate package-internal #504 modules now own exact
   session resources for #455 composition. Package-internal #509 now owns exact
   story commits, and package-internal #510 owns closed-path checkpoints;
-  #491/#492 still own application/confirmation integration.
+  the Lead runtime owns application/confirmation integration.
 
 The adapter is not a general Git client. It accepts no command, argument list,
 revision, ref, commit message, credential, prose, or provider-tool input.
@@ -531,8 +531,9 @@ supported surface remains the seven typed methods shown below.
 ## Package-internal session Git resources
 
 The session-resource substrate is deliberately absent from the project, `git`,
-and `workspace` facades. It exposes four direct-module operations for installed
-session lifecycle composition:
+and `workspace` facades. Its four lifecycle behaviors remain inspect, list,
+provision, and require-ready, with locked inspect/require forms for callers
+that already hold the repository lease:
 
 ```text
 inspect one session       read-only
@@ -547,6 +548,118 @@ provider or lead text, serialized tool instructions, commit messages, or
 credentials. Session Create provisions/verifies the correlated resources;
 Reopen requires them ready. Provider-session readiness remains a separate
 lifecycle fact and never substitutes for Git-resource readiness.
+
+The direct `git.session_resources` module additionally exposes the immutable
+content-free `GitSessionGenerationIdentity`, opaque
+`GitSessionGenerationPin`, existing-lease
+`capture_locked_git_session_generation()`, and short-lock
+`acquire_git_session_generation_pin()`. These four names remain absent from the
+`git`, `workspace`, and project-root facades. Generation capture binds four
+directories—the control root, common Git directory, per-session administrative
+directory, and linked session worktree—and two bounded unique regular
+indirection files: the worktree `.git` and administrative `commondir`. It keeps
+their exact identities, file metadata, and SHA-256 digests. One opaque pin owns
+six corresponding non-inheritable descriptors, closes every descriptor on
+mismatch or partial construction, retains them after successful transfer, and
+closes idempotently. Each directory/file open or duplicate remains locally
+owned until transfer. Any `BaseException` closes that local descriptor while
+preserving the primary failure; batch cleanup still attempts every descriptor
+close, lock/lease release, and required postcheck after a `BaseException` and
+keeps the active primary authoritative.
+
+Pin acquisition and current-generation recheck take the repository lock only
+for the bounded no-follow relationship proof and release it before returning.
+They run no Git subprocess, status, index, tree, manifest, policy, or artifact
+scan. A pin grants no descriptor access, traversal, file-content read,
+mutation, or semantic READY authority. Its purpose is physical generation
+continuity and inode-reuse prevention only.
+
+The captured generation identity, its binding, and each pin are affine to the
+process and opaque thread token that created them. Acquisition and recheck from
+another thread or a forked child fail before taking a repository lock,
+validating descriptors, or performing other filesystem I/O. Closing remains
+idempotent. A forked child may close only its inherited descriptor copies;
+that child-safe path does not enter inherited thread locks or grant authority
+to inspect the generation.
+
+The runtime's package-internal session-artifact binding is a fifth composition
+seam above `require one ready session`. Given the initialized `main` control
+root and a session ID, it freshly requires the exact READY identity, opens the
+worktree without following symlinks, captures a meaningful physical
+`(st_dev, st_ino)` identity, repeats complete READY inspection, and requires
+the named root to retain that identity. Each later repository or session-source
+action takes a short synchronous cooperating-runtime guard: the common-Git
+lease remains held while one outer transaction performs a complete semantic
+READY and pinned-root check before and after its body, then the guard closes.
+Same-thread nested guard entry and exit reuse the active lease and descriptor
+and check their liveness and named root. Every artifact-repository operation
+nevertheless repeats complete READY and generation validation at entry and
+successful exit; its failure exit performs the same authoritative
+postvalidation. Borrowed Story Commit access retains one complete history-owned
+validation before and after its body, and Apply explicitly repeats complete
+READY validation immediately before its repository mutation starts. A
+provider await or concurrent specialist execution never holds this lease; the
+next filesystem transaction reacquires and rechecks it. The binding supplies a
+writing-artifact repository rooted at and pinned to that session worktree only
+through the guard's live access object. The binding itself has no repository
+property, but it owns one stable exact repository object. Every repository
+transaction requires live access on the calling thread; retaining the raw
+object or moving it to another thread grants no authority. Same-thread nested
+guards yield the current access, while long-lived reference/source adapters
+reacquire an outer transaction per operation. Access to the repository,
+resources, or duplicated root descriptor expires when the outer guard exits.
+Nested liveness checks and outer or borrowed full postvalidation
+run after success, `RuntimeError`, or cancellation. Binding loss found there
+dominates the body failure; a clean postcheck preserves the original exception.
+Cleanup still revokes access and closes its descriptors on either path.
+
+The binding's creator process and opaque thread token also gate every READY,
+repository-callback, session-source, Story Commit service-composition, and
+borrowed Story Commit access factory.
+A foreign thread or forked child is rejected before a binding lock, Git lease,
+READY callback, descriptor open, or repository/source I/O. During factory
+setup, each new descriptor and lease remains factory-owned until the access
+object is activated and ownership transfers. Every `BaseException` before
+transfer closes the descriptor and unwinds the lease while preserving the
+primary failure; cleanup failures are retained only as diagnostic notes.
+
+The artifact binding captures the Git-owned generation identity under its
+initial READY lease. Lead and synthesis can then acquire the opaque six-
+descriptor pin under a separate short lock before session-derived source,
+definition, or provider work, retain it through durable result persistence,
+recheck the physical generation, and close it. No lease spans the provider
+await, and this identity-only continuity never replaces the separate semantic
+READY guards around filesystem operations. If provider or persistence work and
+the generation recheck both fail, generation loss is authoritative; the
+runtime reports the resource/recovery failure rather than returning the
+simultaneous body failure.
+
+`GitRepositoryLease` properties/validation and all `SessionArtifactAccess`
+operations are affine to a package-internal, process-aware opaque token for
+their creator's thread state, never a numeric thread identifier. A later thread
+state cannot discover or inherit a lease, access, or Commit authority even if
+the runtime reuses the same numeric identifier. Same-thread nesting still
+reuses the active access. A foreign thread cannot observe lease facts or
+inspect, duplicate, transact through, or explicitly close the access.
+Context-manager cleanup may still run on a foreign thread: it privately revokes
+access, releases the flock, and closes descriptors without granting that thread
+authority. The required postcheck still reports binding loss with the same
+failure precedence described above.
+In a forked child, artifact-access revoke instead skips the inherited binding
+lock and closes only the child's worktree-descriptor copy. A fork-child Git
+lease exit similarly closes the child's common-Git descriptor without issuing
+`LOCK_UN`; the shared open-file-description lock and the parent's exclusion
+remain active until the parent exits its own lease.
+
+Binding itself performs no artifact I/O, provisioning, provider call, or global
+runtime mutation. Known readiness and workspace-validation failures become one
+content-free binding failure; malformed protocol/type defects remain visible.
+There is no fallback to the control root, current directory, another session,
+or a previously returned binding. Repository calls reopen and recheck the
+physical identity and READY semantics, so persistent replacement or Git drift
+is rejected rather than granting it authority. The lease serializes
+cooperating runtime operations only; it does not promise continuous exclusion
+of arbitrary external Git that mutates and restores state between checkpoints.
 
 For session `novel`, the exact identity is:
 
@@ -649,7 +762,8 @@ safe next actions, see
 Issue #508 supplies the common infrastructure now used by #509 story commits
 and #510 internal checkpoints. The history store itself does not stage a file,
 create a commit/checkpoint, update a ref, consume confirmation, or expose a
-CLI/runtime/facade method. #492 owns the later confirmation UI.
+CLI/runtime/facade method. Runtime and the confirmation UI consume it only
+through their separate orchestration boundaries.
 
 `git.session_history_contracts` owns the pure schema-v1 values and codecs;
 `git.session_history` owns descriptor-relative durable storage;
@@ -657,6 +771,24 @@ CLI/runtime/facade method. #492 owns the later confirmation UI.
 `git.process` owns the fixed process profiles. These modules are package-
 internal and add no name to `story_writing_agents`, `story_writing_agents.git`,
 or a workspace facade.
+
+`GitSessionHistory` inherits the creator-thread affinity of its
+`GitRepositoryLease`: reads, writes, READY validation, inspection, snapshots,
+and explicit `close()` fail from a foreign thread. Context-manager teardown is
+a private revocation path, so it can close the history descriptor and release
+the underlying lease after a foreign-thread exit without authorizing any
+history operation or mutating a record.
+
+The recovery-only history wrapper normalizes a direct lease rejection from any
+of its surfaces or teardown to a sanitized
+`GitSessionHistoryError(GitSessionHistoryFailureCode.UNSAFE_ROOT)` without
+exposing a chained repository-lock failure. It remains read-only and grants no
+replacement history authority. Its direct `require_recovery_topology()` method
+also normalizes any delegated `GitSessionResourceError` to
+`GitSessionHistoryError(GitSessionHistoryFailureCode.RECOVERY_REQUIRED)` with
+`operator_recovery`, no chained resource exception, and no mutation. Callers
+therefore remain entirely within the history-owned error contract even when the
+lower session-resource topology check fails.
 
 Opening a history first requires the exact #504 session triple to be `ready`,
 then takes the same repository-wide lease used by provisioning and revalidates
@@ -803,13 +935,12 @@ and [session-history privacy](../operations/privacy-and-provider.md#session-hist
 
 ## Package-internal exact story commits
 
-Issue #509 implements the local Git operation behind a future lead-confirmed
-story commit. It remains a direct-module capability: there is no CLI command,
-provider path, lead binding, or export from `story_writing_agents`,
-`story_writing_agents.git`, or a workspace facade. #491 owns production of
-successful typed application evidence, #492 owns the interactive lead
-projection and confirmation UI. The separate #510 checkpoint service is
-described below.
+Issue #509 implements the local Git operation behind the separately confirmed
+Lead story-commit workflow. The service remains a direct-module capability:
+there is no standalone CLI command, provider path, or export from `story_writing_agents`,
+`story_writing_agents.git`, or a workspace facade. Successful typed application
+evidence, Lead projection, and confirmation reach it only through runtime
+orchestration. The separate #510 checkpoint service is described below.
 
 The three internal owners are:
 
@@ -844,15 +975,73 @@ to that service owner, process, and thread, cannot be copied/pickled, and is
 consumed before the first filesystem or Git action. Reject/Revise/Apply/
 consultation values cannot authorize execution, a confirmation ID cannot be
 reserved twice by the same service, and candidate/proposal/correlation IDs must
-all match. No authority survives restart; the future #492 owner must obtain a
-fresh user decision instead of presenting an old serialized decision again.
+all match. No authority survives restart; the runtime must obtain a fresh user
+decision instead of presenting an old serialized decision again.
+
+When runtime composition binds `StoryCommitService` to the successful Apply
+root and repository-access factory, the retained service is affine to its
+creator process and opaque thread token. Every service operation—Prepare,
+Authorize, Reject, Revise, Execute, Inspect, Recover, and repository-access
+binding—checks that identity before reading process-local service state, taking
+a service or history lock, or reaching filesystem or Git I/O. Direct-module
+services without that runtime binding retain their existing compatibility
+behavior.
+
+That identity-bound service also retains the Apply binding's complete
+six-component Git generation and revalidates it across Prepare, Authorize,
+Reject, Revise, Execute, Inspect, and Recover, before and after their owned
+observations and transitions. During Execute, generation loss before a durable
+`running` operation is `recovery_required`; once `running` is durable or Git
+mutation may have occurred, ambiguity remains `outcome_unknown`. Generation
+loss in Reject, Revise, Inspect, or Recover is `recovery_required`, including
+after a terminal or recovery history write, so replacement-generation work
+cannot report success. Borrowed artifact-repository callbacks apply the same
+full-generation check, and binding loss remains authoritative when callback
+work fails at the same time. Direct-module compatibility services continue to
+use semantic READY validation without acquiring this runtime-only generation
+binding. A bound history `unsafe_root` failure is normalized to
+`recovery_required` rather than exposed as a generic history failure.
+
+Process and thread affinity are checked before the authority's internal one-use
+lock. A forked child therefore returns `authority_invalid` without waiting on
+a copied lock or consuming the parent's authority, and it reaches no history,
+filesystem, or Git operation.
 
 ### Prepare and lead projection
 
 `StoryCommitApplicationEvidence` binds the session, application/proposal/
 correlation IDs, exact `ArtifactChangeSet`, and its projected-state digest.
 Prepare requires that the change set is already applied exactly in the ready
-session worktree. It proves:
+session worktree. Immediately before entering the Apply guard, runtime acquires
+one opaque six-descriptor generation pin. A successful Apply retains that same
+physical generation continuously through result/request preparation and
+transfers the pin to the pending request owner before publication. That pin
+remains live through the terminal decision and result publication, and closes exactly
+once after success, failure, cancellation, replacement by another exact owner,
+or best-effort cleanup when the runtime and owner are abandoned. A failure
+before request publication closes the new owner or untransferred pin. A
+decision mismatch or decision-publication failure leaves the already published
+pending owner intact. Once the decision is durable, runtime retires the exact
+owner it observed at entry, even if it was stale, without retiring a
+replacement installed meanwhile. The pin prevents physical identity recycling
+only; it does not exclude an external Git process or confer repository
+authority.
+Recovery fallback likewise retains and revalidates the opaque pin until its
+ownership result is known, then closes it unless ownership transferred.
+
+A definitive conversation archive, including a command that confirms the
+target was already archived, retires the exact pending Commit owners and
+authority for that conversation. A focused archive that is durably compensated
+by verified unarchive does not retire them.
+
+Identity-bound preparation opens session history first, then lends that live
+history's READY validator to the
+binding's one stable guarded repository generation for canonical artifact
+capture. Repository capture, Git checks, and create-only candidate publication
+therefore share one lease and one borrowed semantic READY transaction instead
+of reacquiring or constructing another repository. Nested repository operations
+perform only live-access and named-root checks; the borrowed owner performs the
+complete READY validation before and after the body. It proves:
 
 - symbolic `HEAD` names the exact session branch and equals the ready tip;
 - the real index has no pre-staged entry;
@@ -890,7 +1079,21 @@ Artifact application operations normalize as follows:
 
 Authorize revalidates the process-local binding before minting one-use
 authority. Execute consumes that authority, takes the common-Git/session-history
-lease, revalidates again, then follows this fixed order:
+lease, independently requires the exact READY session resources, and places
+semantic READY and Apply-root checks around durable observations and
+transitions. Before intentional staging, READY requires the clean index. After
+staging, the live history lease uses a generation-only comparison alongside
+phase-aware checks for the exact candidate index/tree and worktree, branch and
+internal-ref tips, registered session worktree, main HEAD/status, and physical
+roots; it does not reapply clean-index semantic READY to the intentional staged
+state. READY/history resource loss detected before the `RUNNING` record is
+durable maps to `recovery_required`; ambiguity afterward is `outcome_unknown`.
+Candidate/root replacement found before execution remains candidate drift and
+requires repreparation. Candidate and clean-index revalidation runs before
+revision-history inspection, so an externally
+pre-staged index detected before `RUNNING` is published is likewise stale
+candidate drift and `reprepare`; it does not enter staged-operation inspection
+or mutate the index. Execution then follows this fixed order:
 
 ```text
 publish and fsync RUNNING operation evidence
@@ -908,6 +1111,14 @@ publish and fsync RUNNING operation evidence
 -> publish and fsync COMMITTED evidence with the commit ID
 ```
 
+Constructing the `RUNNING` value in memory is not durable start. Error mapping
+stays on the pre-durable path until the create-only history append returns
+success; only then may later uncertainty be preserved as a running operation.
+
+If final COMMITTED publication fails after the branch update, the service
+records `outcome_unknown` for the same operation when it can still prove the
+phase-specific topology. It never reports an unproved commit as completed.
+
 The branch update is compare-and-swap; it cannot silently replace a moved tip.
 The commit has exactly one parent, exact expected tree/message, no hook/signing/
 filter/textconv/alias/editor/pager/credential widening, and the prepared
@@ -923,12 +1134,76 @@ objects, or refs; the candidate remains available. Revise records `rejected`
 under the deterministic revision identity, removes the live binding, and makes
 that candidate ineligible for later authorization. A changed proposal therefore
 requires newly applied evidence, a new candidate, and fresh confirmation.
+Before either decision writes or accepts its terminal record, it loads the
+durable candidate and requires complete candidate equality, not only a matching
+candidate ID.
+
+Commit, Reject, and Revise operation IDs are deterministic action/candidate
+identities: the first 32 lowercase hexadecimal characters of SHA-256 over the
+ASCII bytes `<action>\0<candidate_id>`, where action is `commit`, `reject`, or
+`revise`. Confirmation IDs still enforce one-use decisions but do not salt the
+durable operation identity. Inspection and recovery recompute the compatible
+identity from the loaded candidate: a `rejected` record may match only its
+Reject or Revise identity; every other state must match Commit. Pre-#661 random
+Commit identities and confirmation-salted Reject identities therefore fail
+closed as `recovery_required`. There is no #661 migration or compatibility
+reader for that evidence.
 
 `StoryCommitResult` is content-free: session/candidate/operation/correlation,
 state/recovery action, branch/tip, and optional committed object ID. Inspection
 reads durable evidence only. Recovery performs read-only Git classification
 plus monotonic history updates; it never resets the real index, stages again,
 reuses authority/confirmation, or creates a commit.
+
+Execution, inspection, and recovery keep their semantic checkpoints inside the
+live session-history lease. Inspection and recovery check READY around owner
+reads. Before either path returns or transitions state, it requires the
+operation and candidate to match the exact session, candidate identity,
+correlation, and expected branch tip. Recovery uses the same intentional-staged
+topology while classifying or advancing a staged operation, so ordinary READY's
+clean-index rule does not misclassify the service's own exact staging.
+
+That exception is recovery-only and read-only on admission. It accepts only an
+addressed, exactly correlated `running`, `staged`, or `outcome_unknown` Story
+Commit and its candidate while holding one common-Git/history lease. An
+unaddressed reconciliation snapshot additionally requires exactly one eligible
+operation and matching candidate. The guard
+revalidates branch and internal-ref facts, candidate tree, exact staged index
+and matching worktree, absence of untracked files and external Git operations,
+the bound session-root identity, registered worktree topology, main HEAD, and
+the main-worktree status plus allowed-path content fingerprint before and after
+the recovery body. Only the correlated recovery owner may then make a
+monotonic history transition. Ordinary READY remains strict—an arbitrary
+non-READY topology, including an uncorrelated staged index, is still
+`recovery_required` and receives no such admission.
+
+The higher-level session reconciler attributes that staged recovery to the
+Story Commit owner only when the recovery snapshot also matches exact reviewed
+and application provenance. It requires relationship base/projected/change-set
+digests to agree with the reviewed change set; application candidate identity,
+revision, candidate/change-set/relationship digests to agree with that review;
+and normalized Create, Patch/Replace, Delete, and Rename effects to match the
+candidate paths, before/after digests, affected paths, final artifacts, rename
+lineage, and deletion provenance. This owner correlation does not replace the
+Git proof: the expected tree still comes from the exact staged snapshot
+topology and candidate.
+
+Terminal story-commit inspection and recovery are read-only with respect to
+session history and require the current session to remain READY. A historical
+`committed` record does not require its commit to remain current `HEAD`: the
+recorded commit must exactly match its candidate's tree, sole parent, and
+message, and it must equal or be an ancestor of the current READY branch tip.
+A reset away from that commit, divergent history, a missing commit, or any
+candidate mismatch fails `recovery_required`. Historical `rejected` and
+`recovery_required` records remain immutable inspectable terminal evidence
+under current READY. Neither `inspect()` nor `recover()` writes or advances a
+terminal record.
+
+For a runtime-composed identity-bound service, inspection and recovery require
+the original Apply worktree identity before and between their owner reads and
+before any monotonic history transition. If that root has been replaced, they
+return `recovery_required` and make no transition from the replacement's
+operation, status, index, tree, or commit facts.
 
 - Exact expected staging with the old branch tip is returned as `staged` /
   `operator_recovery`.

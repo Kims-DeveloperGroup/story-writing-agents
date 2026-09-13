@@ -105,8 +105,9 @@ service can create literal blobs/tree/commit objects and update one local
 session branch after receiving typed applied-change evidence and a fresh exact
 Commit decision. The package-internal #510 service can create literal runtime-
 state blobs/tree/commit objects and update only one local session internal ref
-from exact owner-supplied deltas. No installed command or lead UI invokes
-either service; #491 and #492 own story application/confirmation integration.
+from exact owner-supplied deltas. The separately confirmed Lead UI invokes the
+story-commit service through runtime orchestration; there is no standalone Git
+command or provider capability. No ordinary Lead action invokes checkpoints.
 
 Prepare persists only the content-free candidate metadata described above. A
 Commit authority remains process/service/thread-bound, nonserializable, and

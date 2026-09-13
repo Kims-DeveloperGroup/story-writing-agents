@@ -48,6 +48,55 @@ Specialists are isolated. A Plot assignment cannot use a Character reply as if
 it were its own evidence, and a specialist never becomes a second user-facing
 lead.
 
+### Session worktree boundary
+
+The initialized `main` workspace is the runtime's control root: configuration,
+conversation history, and diagnostics stay there. Story artifacts do not.
+Before every artifact-sensitive operation, runtime freshly verifies the exact
+branch, internal ref, and sibling worktree for the selected session and binds
+the operation to that worktree's physical `(st_dev, st_ino)` identity. Each
+outer repository or session-source transaction holds a short synchronous
+runtime guard and checks both the physical root and exact Git READY state once
+before and once after its body. Nested repository operations reuse that
+transaction with liveness and named-root checks instead of repeating the full
+READY scan. Provider waits and concurrent specialist work run without that
+guard; the next filesystem transaction reacquires it and rejects persistent
+drift. Repository access exists only inside that guard and expires on exit. The
+exit check also runs when the action raises or is cancelled; a binding loss
+found there is reported instead of treating the earlier result as authoritative.
+The picker follows the currently attached session, guards its
+path list and selected-file read separately, and never lends repository access
+to the range viewer. Switching or concurrent sessions never reuse another
+session's artifact source, active-debate or own-agent state, or application
+ledger. Conversation history keeps its separate control-root/configured-
+storage ownership. A worktree-path replacement observed before or during a
+guarded action is rejected rather than adopted.
+
+Direct Lead and Lead-synthesis work additionally retain an opaque physical-
+generation pin from before session-derived context and provider work through
+durable result publication. Its six private descriptors keep the exact control,
+Git-administration, worktree, and indirection-file generation from being
+recycled; they are not exposed for traversal or artifact access. The pin is
+rechecked and closed after persistence. It may span the provider wait, but a
+Git lease never does, and the pin is not proof of semantic READY.
+
+There is no fallback to `main`, the shell's current directory, or a previous
+session, and a Lead call does not provision missing resources. If the exact
+session binding is absent or unsafe, runtime reports a content-free failure
+before any provider or artifact I/O. Create or reopen the session resources,
+or follow operator recovery when the identity has drifted. Session-state reads
+also reject unsafe relative paths, symlinks, FIFOs/devices, hard-linked or
+changing leaves, and embedded ownership that names another session, debate, or
+agent. The Git lease coordinates this runtime's cooperating operations; it is
+not continuous protection against arbitrary external Git that mutates and
+restores state between checks. Stop workspace processes before external
+recovery work.
+
+This artifact-source continuity does not assign or confine the story-runtime
+provider's working directory or project root. That separate execution boundary
+is tracked by
+[Issue #670](https://github.com/Kims-DeveloperGroup/story-writing-agents/issues/670).
+
 ## The normal request flow
 
 ```text
@@ -625,17 +674,44 @@ candidate, not an applied file. The next sequence is always separate:
 Lead: Reviewed candidate is ready. Apply it?
 You: structured Apply confirmation
 Runtime: revalidates the candidate and current artifact state, writes the exact
-         disclosed paths atomically, and reports the application result.
+         disclosed paths atomically in this session's worktree, and reports
+         the application result.
 
 Lead: The artifact change applied successfully. Create the local story commit?
 You: structured Commit confirmation
 Runtime: stages only the disclosed changed paths and commits the local session
-         branch. It does not push, merge, or mutate a remote.
+         branch after independently revalidating the same READY worktree and
+         the physical identity used by Apply. It does not push, merge, or
+         mutate a remote.
 ```
 
 Reject or Revise at Apply leaves the reviewed candidate unapplied. A stale
 candidate is not applied; the lead must prepare a new one. Commit confirmation
-is not implied by Apply confirmation.
+is not implied by Apply confirmation. If exact binding or physical-root
+validation fails after Apply confirmation but before the repository's
+`apply_artifact_changes()` method starts, runtime does not start artifact
+application and durably returns `recovery_required` with
+`operator_recovery`. After that method has started, an unclassified root,
+security, or format failure is instead
+`outcome_unknown` with `inspect_and_resolve_outcome`; inspect the exact
+application before any new write.
+
+The guarded Apply transaction validates complete READY state on entry, derives
+the current complete artifact state and relationship result, then performs one
+explicit complete READY check immediately before marking repository execution
+started and calling `apply_artifact_changes()`. Its outer guard still performs
+the complete postvalidation before the result can escape.
+
+Later Commit inspection and recovery remain bound to the same physical root
+used by Apply. If that root was replaced, they return operator recovery without
+advancing the recorded Commit operation from the replacement's Git state.
+
+The follow-on Commit request is prepared only after the Apply result is
+durable. If request preparation or publication then fails, the Apply remains
+durable and the runtime directs you to inspect the session; the current schema
+does not record a dedicated durable Commit-request publication failure. That
+separate state-machine change remains tracked by
+[Issue #662](https://github.com/Kims-DeveloperGroup/story-writing-agents/issues/662).
 
 ## Scenario 6: ordinary discussion
 
@@ -946,7 +1022,9 @@ When collaborating with the lead:
 5. Treat a reviewed candidate as unchanged until Apply is separately confirmed.
 6. Treat an applied candidate as uncommitted until Commit is separately
    confirmed.
-7. Follow the displayed state-specific next action after interruption or
+7. Confirm the currently attached session and its ready worktree before
+   artifact-sensitive work; never use `main` as a story-work fallback.
+8. Follow the displayed state-specific next action after interruption or
    failure.
 
 ## Issue #583 integration evidence

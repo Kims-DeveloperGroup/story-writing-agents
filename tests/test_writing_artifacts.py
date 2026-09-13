@@ -39,6 +39,7 @@ from story_writing_agents.writing_artifacts import (
     manuscript_artifact_path,
 )
 from story_writing_agents.writing_artifacts import _storage as storage_module
+from story_writing_agents.writing_artifacts import repository as repository_module
 from story_writing_agents.writing_artifacts import (
     filesystem_sources as filesystem_sources_module,
 )
@@ -93,6 +94,55 @@ class WritingArtifactTestCase(unittest.TestCase):
                 else candidate_author_agent_id
             ),
         )
+
+
+class RepositoryEntryCleanupTests(unittest.TestCase):
+    def test_both_repository_rlock_acquisitions_preserve_baseexception(self) -> None:
+        for lock_type in (
+            repository_module._RepositoryLock,
+            repository_module._RepositorySourceLock,
+        ):
+            with self.subTest(lock_type=lock_type.__name__):
+                primary = KeyboardInterrupt("RLock acquisition interrupted")
+                events = []
+
+                class Operation:
+                    def __enter__(self):
+                        events.append("operation_enter")
+
+                    def __exit__(self, *args):
+                        del args
+                        events.append("operation_exit")
+                        raise SystemExit("operation cleanup failed")
+
+                class Lock:
+                    def acquire(self):
+                        events.append("rlock_acquire")
+                        raise primary
+
+                    def release(self):
+                        raise AssertionError("unacquired RLock was released")
+
+                repository = SimpleNamespace(
+                    _open_operation_access=Operation,
+                    _lock=Lock(),
+                )
+                guard = (
+                    lock_type(repository)
+                    if lock_type is repository_module._RepositoryLock
+                    else lock_type(repository, evidence=False)
+                )
+                with self.assertRaises(KeyboardInterrupt) as caught:
+                    guard.__enter__()
+                self.assertIs(caught.exception, primary)
+                self.assertEqual(
+                    events,
+                    ["operation_enter", "rlock_acquire", "operation_exit"],
+                )
+                self.assertIn(
+                    "artifact repository entry cleanup failed: SystemExit",
+                    primary.__notes__,
+                )
 
 
 class ArtifactGrammarTests(unittest.TestCase):

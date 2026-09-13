@@ -162,12 +162,52 @@ class PromptAssembler:
             include_context_documents=False,
         )
 
+    def build_contextual_definition_with_policy_snapshot(
+        self,
+        *,
+        session_id: str,
+        agent_id: str,
+        policy_snapshot: tuple[tuple[str, bytes], ...],
+    ) -> AgentDefinition:
+        """Build contextual definition from exact descriptor-captured policy bytes."""
+
+        expected_paths = behavior_policy_files(agent_id)
+        if (
+            type(policy_snapshot) is not tuple
+            or len(policy_snapshot) != len(expected_paths)
+            or any(
+                type(component) is not tuple
+                or len(component) != 2
+                or type(component[0]) is not str
+                or type(component[1]) is not bytes
+                for component in policy_snapshot
+            )
+            or tuple(component[0] for component in policy_snapshot) != expected_paths
+        ):
+            raise WorkspaceFormatError(
+                "behavior policy snapshot does not match canonical composition"
+            )
+        policy_components = tuple(
+            PromptFileReference.from_bytes(
+                self.workspace.root / path,
+                content,
+            )
+            for path, content in policy_snapshot
+        )
+        return self._build_definition(
+            session_id=session_id,
+            agent_id=agent_id,
+            include_context_documents=False,
+            behavior_policy_components=policy_components,
+        )
+
     def _build_definition(
         self,
         *,
         session_id: str,
         agent_id: str,
         include_context_documents: bool,
+        behavior_policy_components: tuple[PromptFileReference, ...] | None = None,
     ) -> AgentDefinition:
         """Build one exact definition under the selected context strategy."""
 
@@ -190,8 +230,10 @@ class PromptAssembler:
             spec = AGENT_SPECS[agent_id]
         except KeyError:
             raise ValueError("agent ID is not canonical") from None
-        policy_components = tuple(
-            self._reference(path) for path in behavior_policy_files(agent_id)
+        policy_components = (
+            tuple(self._reference(path) for path in behavior_policy_files(agent_id))
+            if behavior_policy_components is None
+            else behavior_policy_components
         )
         if any(
             not component.content or b"\x00" in component.content

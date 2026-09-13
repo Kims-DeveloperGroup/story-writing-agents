@@ -5,6 +5,8 @@ from __future__ import annotations
 import hashlib
 import json
 import unicodedata
+from collections.abc import Callable, Iterator
+from contextlib import AbstractContextManager, contextmanager
 from dataclasses import dataclass, field
 from enum import StrEnum
 from pathlib import PurePosixPath
@@ -828,10 +830,20 @@ class WritingArtifactSourceAdapter:
             if validated_paths != allowed_paths:
                 raise _source_error(ContextSourceErrorCode.INVALID_VALUE)
         self._repository = repository
+        self._repository_access: (
+            Callable[[], AbstractContextManager[WritingArtifactRepository]] | None
+        ) = None
         self.scope = scope
         self._allowed_paths = allowed_paths
 
     def inventory(
+        self,
+        policy: ContextSourcePolicy,
+    ) -> tuple[ContextSourceDescriptor, ...]:
+        with self._open_repository_access():
+            return self._inventory(policy)
+
+    def _inventory(
         self,
         policy: ContextSourcePolicy,
     ) -> tuple[ContextSourceDescriptor, ...]:
@@ -843,7 +855,7 @@ class WritingArtifactSourceAdapter:
             retry = False
             for path in paths:
                 try:
-                    descriptor = self.capture(path, policy).descriptor
+                    descriptor = self._capture(path, policy).descriptor
                 except ContextSourceError as error:
                     if attempt == 0 and error.code in {
                         ContextSourceErrorCode.SOURCE_DRIFT,
@@ -868,6 +880,16 @@ class WritingArtifactSourceAdapter:
         policy: ContextSourcePolicy,
     ) -> tuple[ContextSourceStatusReceipt, ...]:
         """Capture the four canonical core statuses under one stable inventory."""
+
+        with self._open_repository_access():
+            return self._canonical_core_statuses(manifest_digest, policy)
+
+    def _canonical_core_statuses(
+        self,
+        manifest_digest: str,
+        policy: ContextSourcePolicy,
+    ) -> tuple[ContextSourceStatusReceipt, ...]:
+        """Implement one already-guarded canonical core-status capture."""
 
         policy = _require_source_policy(policy)
         _safe_digest(manifest_digest)
@@ -896,7 +918,7 @@ class WritingArtifactSourceAdapter:
                         )
                     )
                     continue
-                snapshot = self.capture(locator, policy)
+                snapshot = self._capture(locator, policy)
                 descriptor = snapshot.descriptor
                 receipts.append(
                     ContextSourceStatusReceipt(
@@ -1075,6 +1097,14 @@ class WritingArtifactSourceAdapter:
         locator: str,
         policy: ContextSourcePolicy,
     ) -> ContextSourceSnapshot:
+        with self._open_repository_access():
+            return self._capture(locator, policy)
+
+    def _capture(
+        self,
+        locator: str,
+        policy: ContextSourcePolicy,
+    ) -> ContextSourceSnapshot:
         policy = _require_source_policy(policy)
         locator = self._validate_locator(locator)
         if self._allowed_paths is not None and locator not in self._allowed_paths:
@@ -1085,6 +1115,40 @@ class WritingArtifactSourceAdapter:
             if first == second:
                 return second
         raise _source_error(ContextSourceErrorCode.SOURCE_DRIFT)
+
+    @contextmanager
+    def _open_repository_access(self) -> Iterator[WritingArtifactRepository]:
+        access = self._repository_access
+        if access is None:
+            yield self._repository
+            return
+        with access() as repository:
+            if repository is not self._repository:
+                raise _source_error(
+                    ContextSourceErrorCode.ADAPTER_CONTRACT_VIOLATION
+                )
+            yield repository
+
+
+def create_guarded_writing_artifact_source_adapter(
+    repository_access: Callable[
+        [], AbstractContextManager[WritingArtifactRepository]
+    ],
+    scope: ContextScope,
+    allowed_paths: frozenset[str] | None = None,
+) -> WritingArtifactSourceAdapter:
+    """Create a package-internal adapter with one short guard per operation."""
+
+    if not callable(repository_access):
+        raise _source_error(ContextSourceErrorCode.INVALID_VALUE)
+    with repository_access() as repository:
+        adapter = WritingArtifactSourceAdapter(
+            repository,
+            scope,
+            allowed_paths=allowed_paths,
+        )
+    adapter._repository_access = repository_access
+    return adapter
 
 
 def _readable_record_value(record: CollaborationReadableRecord) -> dict[str, object]:

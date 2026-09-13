@@ -509,7 +509,12 @@ or cancellation. Retiring a binding immediately rejects later calls through
 that handle, but its staging directory remains available until the final active
 call exits. Retirement then releases that exact staging ownership once;
 provisional staging is also discarded when binding validation does not
-complete.
+complete. Runtime release of a retained use runs as one shielded task and is
+joined before the invocation finishes. Cancellation is propagated only after
+that exactly-once release completes, including when repeated cancellation
+arrives while release is waiting. A release failure is reported normally when
+there is no cancellation; when both occur, the original cancellation remains
+primary and carries the release failure as cleanup context.
 
 `close()` is terminal and idempotent. Its first call marks every binding retired
 and rejects backend reuse. If calls are active, per-binding release and cleanup

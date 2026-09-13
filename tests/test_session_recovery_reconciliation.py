@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import ast
-from contextlib import ExitStack
+from contextlib import ExitStack, contextmanager
 from dataclasses import dataclass, replace
 import hashlib
 import inspect
@@ -13,6 +13,7 @@ from unittest import mock
 
 import story_writing_agents
 import story_writing_agents.session_recovery as recovery_facade
+from story_writing_agents.git import story_commit_candidates as candidates_module
 from story_writing_agents.conversations import (
     CollaborationAgentProfile,
     CollaborationAssignment,
@@ -88,19 +89,27 @@ from story_writing_agents.session_recovery.transition_assessment import (
     SessionTransitionAssessor,
     SessionTransitionOperation,
 )
+from story_writing_agents.workspace.initialization import StoryCommitRecoverySnapshot
 from tests.collaboration_contract_fixture import (
     LEAD, USER, make_batch, make_draft, provider_call_drafts, store_batch,
 )
 from story_writing_agents.writing_artifacts import (
     ArtifactApplicationError,
     ArtifactApplicationErrorCode,
+    ArtifactDeletionProvenance,
     ArtifactApplicationFinalArtifact,
     ArtifactApplicationProvenance,
     ArtifactApplicationResult,
     ArtifactApplicationState,
     ArtifactCreateOperation,
+    ArtifactDeleteOperation,
     ArtifactKind,
+    ArtifactPatchOperation,
     ArtifactRelationshipValidation,
+    ArtifactRenameLineage,
+    ArtifactRenameOperation,
+    ArtifactReplaceOperation,
+    ArtifactTextHunk,
     build_artifact_change_set,
 )
 
@@ -109,6 +118,21 @@ _ROOT = Path(__file__).resolve().parents[1]
 _SOURCE = _ROOT / "src" / "story_writing_agents" / "session_recovery" / "reconciliation.py"
 _WORKSPACE = Path("/tmp/recovery-main")
 _SESSION = "novel"
+
+
+class _RecoveryPin:
+    def __init__(self, *, lost: bool = False) -> None:
+        self.lost = lost
+        self.require_calls = 0
+        self.close_calls = 0
+
+    def require_current(self) -> None:
+        self.require_calls += 1
+        if self.lost:
+            raise RuntimeError("recovery generation changed")
+
+    def close(self) -> None:
+        self.close_calls += 1
 _CONVERSATION = "conversation-1"
 _PATH = "manuscript/part-01/opening.md"
 _TIP = "1" * 40
@@ -290,12 +314,26 @@ def _resources(
 
 def _artifact_facts(
     state: ArtifactApplicationState = ArtifactApplicationState.APPLIED,
+    *,
+    base_content: bytes | None = None,
 ) -> tuple[SessionReviewedProposalEvidence, SessionArtifactApplicationEvidence]:
     content = b"opening"
     digest = hashlib.sha256(content).hexdigest()
+    base = {} if base_content is None else {_PATH: base_content}
+    operation = (
+        ArtifactCreateOperation(_PATH, ArtifactKind.MANUSCRIPT, content, digest)
+        if base_content is None
+        else ArtifactReplaceOperation(
+            _PATH,
+            ArtifactKind.MANUSCRIPT,
+            hashlib.sha256(base_content).hexdigest(),
+            content,
+            digest,
+        )
+    )
     change_set = build_artifact_change_set(
-        {},
-        (ArtifactCreateOperation(_PATH, ArtifactKind.MANUSCRIPT, content, digest),),
+        base,
+        (operation,),
     )
     relationship = ArtifactRelationshipValidation(
         1, change_set.base_state_digest, change_set.projected_state_digest,
@@ -347,7 +385,11 @@ def _candidate(
     correlation: str = _CORRELATION,
     application_id: str = "application-1",
     proposal_id: str = "proposal-1",
+    base_content: bytes | None = None,
 ) -> GitSessionCandidateRecord:
+    before_digest = (
+        None if base_content is None else hashlib.sha256(base_content).hexdigest()
+    )
     return GitSessionCandidateRecord(
         session_id=_SESSION,
         branch=f"story/session/{_SESSION}",
@@ -360,8 +402,12 @@ def _candidate(
         paths=(
             GitSessionCandidatePath(
                 _PATH,
-                GitSessionCandidatePathOperation.CREATE,
-                None,
+                (
+                    GitSessionCandidatePathOperation.CREATE
+                    if base_content is None
+                    else GitSessionCandidatePathOperation.UPDATE
+                ),
+                before_digest,
                 hashlib.sha256(b"opening").hexdigest(),
             ),
         ),
@@ -462,6 +508,7 @@ class _Observation:
     trace: list[str]
     adapter_instances: list[object]
     repository_instances: list[object]
+    binding_open_count: int
 
 
 def _observe(
@@ -476,6 +523,10 @@ def _observe(
     reviewed: SessionReviewedProposalEvidence | None = None,
     application: SessionArtifactApplicationEvidence | None = None,
     stored_application: object | None = None,
+    binding_accesses: tuple[object, ...] | None = None,
+    binding_failure: BaseException | None = None,
+    binding_fail_on: int | None = None,
+    recovery_snapshot: object | None = None,
     transition: bool = False,
 ) -> _Observation:
     trace: list[str] = []
@@ -484,8 +535,11 @@ def _observe(
     snapshot_values = list(snapshots or (_snapshot(), _snapshot()))
     external_values = list(externals or (_external(), _external()))
     status_values = list(statuses or (_status(), _status()))
+    initial_resources = resource_values[0]
+    access_values = list(binding_accesses or ())
     adapter_instances: list[object] = []
     repository_instances: list[object] = []
+    binding_open_count = 0
 
     def next_value(values: list[object], label: str):
         trace.append(label)
@@ -531,7 +585,46 @@ def _observe(
             self.apply_called = True
             raise AssertionError("Apply is forbidden during reconciliation")
 
+    class Access:
+        def __init__(self, resources):
+            self.resources = resources
+            self._repository = None
+
+        @property
+        def repository(self):
+            if self._repository is None:
+                self._repository = Repository(
+                    initial_resources.identity.worktree_root
+                )
+            return self._repository
+
+    class Binding:
+        resources = initial_resources
+
+        @contextmanager
+        def open_ready_resources(self):
+            nonlocal binding_open_count
+            binding_open_count += 1
+            if binding_failure is not None and (
+                binding_fail_on is None
+                or binding_open_count == binding_fail_on
+            ):
+                raise binding_failure
+            resources = (
+                next_value(access_values, "binding")
+                if access_values
+                else initial_resources
+            )
+            yield Access(resources)
+
     with ExitStack() as stack:
+        stack.enter_context(
+            mock.patch.object(
+                reconciliation_module,
+                "GitSessionGenerationPin",
+                _RecoveryPin,
+            )
+        )
         stack.enter_context(
             mock.patch.object(
                 reconciliation_module,
@@ -546,8 +639,31 @@ def _observe(
                 side_effect=lambda root, session: next_value(snapshot_values, "history"),
             )
         )
+        if recovery_snapshot is not None:
+            stack.enter_context(
+                mock.patch.object(
+                    reconciliation_module,
+                    "inspect_story_commit_recovery_snapshot",
+                    side_effect=(
+                        recovery_snapshot
+                        if isinstance(recovery_snapshot, BaseException)
+                        else None
+                    ),
+                    return_value=(
+                        None
+                        if isinstance(recovery_snapshot, BaseException)
+                        else recovery_snapshot
+                    ),
+                )
+            )
         stack.enter_context(mock.patch.object(reconciliation_module, "GitRepositoryAdapter", Adapter))
-        stack.enter_context(mock.patch.object(reconciliation_module, "WritingArtifactRepository", Repository))
+        stack.enter_context(
+            mock.patch.object(
+                reconciliation_module,
+                "compose_session_artifact_binding",
+                return_value=Binding(),
+            )
+        )
         owner = (
             SessionTransitionAssessor(_WORKSPACE)
             if transition else SessionRecoveryReconciler(_WORKSPACE, store)
@@ -559,7 +675,14 @@ def _observe(
             artifact_application=application,
             **({"collaboration_store": store} if transition else {}),
         )
-    return _Observation(result, store, trace, adapter_instances, repository_instances)
+    return _Observation(
+        result,
+        store,
+        trace,
+        adapter_instances,
+        repository_instances,
+        binding_open_count,
+    )
 
 
 class SessionRecoveryReconcilerContractTests(unittest.TestCase):
@@ -808,6 +931,446 @@ class SessionRecoveryLifecycleTests(unittest.TestCase):
 
 
 class SessionRecoveryStateTests(unittest.TestCase):
+    def test_staged_recovery_normalizes_every_exact_artifact_operation(self) -> None:
+        before = b"before opening"
+        after = b"after opening"
+        before_digest = hashlib.sha256(before).hexdigest()
+        after_digest = hashlib.sha256(after).hexdigest()
+        renamed_path = "manuscript/part-01/renamed.md"
+        cases = (
+            (
+                "create",
+                {},
+                ArtifactCreateOperation(
+                    _PATH,
+                    ArtifactKind.MANUSCRIPT,
+                    after,
+                    after_digest,
+                ),
+                (
+                    GitSessionCandidatePath(
+                        _PATH,
+                        GitSessionCandidatePathOperation.CREATE,
+                        None,
+                        after_digest,
+                    ),
+                ),
+                (
+                    ArtifactApplicationFinalArtifact(
+                        _PATH,
+                        ArtifactKind.MANUSCRIPT,
+                        after_digest,
+                    ),
+                ),
+                (),
+                (),
+            ),
+            (
+                "patch",
+                {_PATH: before},
+                ArtifactPatchOperation(
+                    _PATH,
+                    ArtifactKind.MANUSCRIPT,
+                    before_digest,
+                    (
+                        ArtifactTextHunk(
+                            before_digest,
+                            0,
+                            len(before),
+                            before,
+                            after,
+                        ),
+                    ),
+                    after_digest,
+                ),
+                (
+                    GitSessionCandidatePath(
+                        _PATH,
+                        GitSessionCandidatePathOperation.UPDATE,
+                        before_digest,
+                        after_digest,
+                    ),
+                ),
+                (
+                    ArtifactApplicationFinalArtifact(
+                        _PATH,
+                        ArtifactKind.MANUSCRIPT,
+                        after_digest,
+                    ),
+                ),
+                (),
+                (),
+            ),
+            (
+                "replace",
+                {_PATH: before},
+                ArtifactReplaceOperation(
+                    _PATH,
+                    ArtifactKind.MANUSCRIPT,
+                    before_digest,
+                    after,
+                    after_digest,
+                ),
+                (
+                    GitSessionCandidatePath(
+                        _PATH,
+                        GitSessionCandidatePathOperation.UPDATE,
+                        before_digest,
+                        after_digest,
+                    ),
+                ),
+                (
+                    ArtifactApplicationFinalArtifact(
+                        _PATH,
+                        ArtifactKind.MANUSCRIPT,
+                        after_digest,
+                    ),
+                ),
+                (),
+                (),
+            ),
+            (
+                "delete",
+                {_PATH: before},
+                ArtifactDeleteOperation(
+                    _PATH,
+                    ArtifactKind.MANUSCRIPT,
+                    before_digest,
+                ),
+                (
+                    GitSessionCandidatePath(
+                        _PATH,
+                        GitSessionCandidatePathOperation.DELETE,
+                        before_digest,
+                        None,
+                    ),
+                ),
+                (),
+                (),
+                (ArtifactDeletionProvenance(_PATH, before_digest),),
+            ),
+            (
+                "rename",
+                {_PATH: before},
+                ArtifactRenameOperation(
+                    _PATH,
+                    renamed_path,
+                    ArtifactKind.MANUSCRIPT,
+                    before_digest,
+                    before_digest,
+                ),
+                (
+                    GitSessionCandidatePath(
+                        _PATH,
+                        GitSessionCandidatePathOperation.DELETE,
+                        before_digest,
+                        None,
+                    ),
+                    GitSessionCandidatePath(
+                        renamed_path,
+                        GitSessionCandidatePathOperation.CREATE,
+                        None,
+                        before_digest,
+                    ),
+                ),
+                (
+                    ArtifactApplicationFinalArtifact(
+                        renamed_path,
+                        ArtifactKind.MANUSCRIPT,
+                        before_digest,
+                    ),
+                ),
+                (ArtifactRenameLineage(_PATH, renamed_path, before_digest),),
+                (),
+            ),
+        )
+        exact_values = {}
+        for label, base, artifact_operation, paths, finals, lineage, deletion in cases:
+            with self.subTest(label=label):
+                change_set = build_artifact_change_set(base, (artifact_operation,))
+                relationship = ArtifactRelationshipValidation(
+                    1,
+                    change_set.base_state_digest,
+                    change_set.projected_state_digest,
+                    change_set.change_set_digest,
+                    (),
+                    (),
+                    (),
+                    (),
+                    (),
+                )
+                reviewed = SessionReviewedProposalEvidence(
+                    session_id=_SESSION,
+                    conversation_id=_CONVERSATION,
+                    collaboration_tail_sequence=4,
+                    proposal_id="proposal-1",
+                    proposal_revision=1,
+                    proposal_digest=_proposal().proposal_digest,
+                    candidate_id="reviewed-candidate",
+                    candidate_revision=1,
+                    candidate_digest=_tagged("6"),
+                    change_set=change_set,
+                    relationship_validation=relationship,
+                    relationship_validation_digest=_tagged("7"),
+                    correlation_id=_CORRELATION,
+                    application_confirmation_request_id=None,
+                    confirmation_choices=(),
+                )
+                result = ArtifactApplicationResult(
+                    1,
+                    ArtifactApplicationProvenance(
+                        "application-1",
+                        reviewed.candidate_id,
+                        reviewed.candidate_revision,
+                        reviewed.candidate_digest,
+                        change_set.change_set_digest,
+                        reviewed.relationship_validation_digest,
+                    ),
+                    ArtifactApplicationState.APPLIED,
+                    tuple(
+                        sorted(
+                            {
+                                item.path
+                                for item in paths
+                            },
+                            key=lambda value: value.encode("utf-8"),
+                        )
+                    ),
+                    finals,
+                    lineage,
+                    deletion,
+                )
+                application = SessionArtifactApplicationEvidence(
+                    session_id=_SESSION,
+                    conversation_id=_CONVERSATION,
+                    collaboration_tail_sequence=4,
+                    proposal_id="proposal-1",
+                    correlation_id=_CORRELATION,
+                    application_result=result,
+                )
+                candidate_record = GitSessionCandidateRecord(
+                    _SESSION,
+                    f"story/session/{_SESSION}",
+                    _TIP,
+                    _TREE,
+                    _WORKTREE_DIGEST,
+                    result.application_id,
+                    application.proposal_id,
+                    application.correlation_id,
+                    paths,
+                    f"Apply exact {label}",
+                    ("plot",),
+                    GitSessionIdentitySource.REPOSITORY,
+                    GitSessionIdentitySource.REPOSITORY,
+                )
+                candidate = candidates_module._candidate_from_record(candidate_record)
+                recovery = StoryCommitRecoverySnapshot(
+                    _resources(GitSessionResourceState.RECOVERY_REQUIRED),
+                    candidate,
+                    GitSessionCommitOperationRecord(
+                        _SESSION,
+                        "a" * 32,
+                        candidate.candidate_id,
+                        _CORRELATION,
+                        GitSessionHistoryState.STAGED,
+                        1,
+                        _TIP,
+                    ),
+                    _RecoveryPin(),
+                )
+                self.assertTrue(
+                    reconciliation_module._staged_recovery_evidence_matches(
+                        recovery,
+                        reviewed,
+                        application,
+                    )
+                )
+                exact_values[label] = (recovery, reviewed, application)
+
+        recovery, reviewed, application = exact_values["replace"]
+        wrong_path = GitSessionCandidatePath(
+            _PATH,
+            GitSessionCandidatePathOperation.DELETE,
+            before_digest,
+            None,
+        )
+        wrong_record = replace(
+            candidates_module._candidate_record(recovery.candidate),
+            paths=(wrong_path,),
+            candidate_id="",
+        )
+        wrong_candidate = candidates_module._candidate_from_record(wrong_record)
+        wrong_recovery = replace(
+            recovery,
+            candidate=wrong_candidate,
+            operation=replace(
+                recovery.operation,
+                candidate_id=wrong_candidate.candidate_id,
+            ),
+        )
+        self.assertFalse(
+            reconciliation_module._staged_recovery_evidence_matches(
+                wrong_recovery,
+                reviewed,
+                application,
+            )
+        )
+
+    def test_exact_staged_recovery_routes_story_commit_and_dirty_fallback_stays_resources(
+        self,
+    ) -> None:
+        reviewed, application = _artifact_facts()
+        resources = _resources(GitSessionResourceState.RECOVERY_REQUIRED)
+        history = _snapshot(GitSessionHistoryState.STAGED)
+        candidate_record = history.candidates[0]
+        operation = history.commit_operations[0]
+        pin = _RecoveryPin()
+        recovery = StoryCommitRecoverySnapshot(
+            resources,
+            candidates_module._candidate_from_record(candidate_record),
+            operation,
+            pin,
+        )
+        observed = _observe(
+            resources=(resources,),
+            reviewed=reviewed,
+            application=application,
+            stored_application=application.application_result,
+            recovery_snapshot=recovery,
+        )
+        self.assertIs(observed.result.state, SessionRecoveryState.RECOVERY_REQUIRED)
+        self.assertIs(observed.result.owner, SessionRecoveryOwner.STORY_COMMIT)
+        self.assertEqual((pin.require_calls, pin.close_calls), (1, 1))
+
+        mismatched = _observe(
+            resources=(resources,),
+            reviewed=reviewed,
+            application=application,
+            stored_application=application.application_result,
+            recovery_snapshot=StoryCommitRecoverySnapshot(
+                resources,
+                replace(recovery.candidate, correlation_id="foreign-correlation"),
+                operation,
+                _RecoveryPin(),
+            ),
+        )
+        self.assertIs(
+            mismatched.result.failure_code,
+            SessionRecoveryFailureCode.CORRELATION_MISMATCH,
+        )
+        self.assertIs(mismatched.result.owner, SessionRecoveryOwner.STORY_COMMIT)
+
+        lost_pin = _RecoveryPin(lost=True)
+        lost = _observe(
+            resources=(resources,),
+            reviewed=reviewed,
+            application=application,
+            stored_application=application.application_result,
+            recovery_snapshot=replace(recovery, generation_pin=lost_pin),
+        )
+        self.assertIs(lost.result.owner, SessionRecoveryOwner.SESSION_RESOURCES)
+        self.assertEqual((lost_pin.require_calls, lost_pin.close_calls), (1, 1))
+
+        fallback = _observe(
+            resources=(resources,),
+            reviewed=reviewed,
+            application=application,
+            stored_application=application.application_result,
+            recovery_snapshot=RuntimeError("arbitrary dirty topology"),
+        )
+        self.assertIs(fallback.result.state, SessionRecoveryState.RECOVERY_REQUIRED)
+        self.assertIs(fallback.result.owner, SessionRecoveryOwner.SESSION_RESOURCES)
+
+    def test_staged_recovery_requires_exact_candidate_digests_and_provenance(
+        self,
+    ) -> None:
+        base_content = b"earlier opening"
+        reviewed, application = _artifact_facts(base_content=base_content)
+        resources = _resources(GitSessionResourceState.RECOVERY_REQUIRED)
+        candidate_record = _candidate(base_content=base_content)
+        candidate_path = candidate_record.paths[0]
+        original_candidate = candidates_module._candidate_from_record(candidate_record)
+
+        def recovery_for(candidate):
+            return StoryCommitRecoverySnapshot(
+                resources,
+                candidate,
+                GitSessionCommitOperationRecord(
+                    _SESSION,
+                    "a" * 32,
+                    candidate.candidate_id,
+                    _CORRELATION,
+                    GitSessionHistoryState.STAGED,
+                    1,
+                    _TIP,
+                ),
+                _RecoveryPin(),
+            )
+
+        wrong_digest = hashlib.sha256(b"different content").hexdigest()
+        mismatched_candidates = (
+            candidates_module._candidate_from_record(
+                replace(
+                    candidate_record,
+                    paths=(
+                        replace(candidate_path, before_sha256=wrong_digest),
+                    ),
+                    candidate_id="",
+                )
+            ),
+            candidates_module._candidate_from_record(
+                replace(
+                    candidate_record,
+                    paths=(
+                        replace(candidate_path, after_sha256=wrong_digest),
+                    ),
+                    candidate_id="",
+                )
+            ),
+        )
+        mismatched_result = replace(
+            application.application_result,
+            provenance=replace(
+                application.application_result.provenance,
+                candidate_digest=_tagged("8"),
+            ),
+        )
+        cases = (
+            (
+                "candidate-before-digest",
+                recovery_for(mismatched_candidates[0]),
+                application,
+            ),
+            (
+                "candidate-after-digest",
+                recovery_for(mismatched_candidates[1]),
+                application,
+            ),
+            (
+                "application-provenance",
+                recovery_for(original_candidate),
+                replace(application, application_result=mismatched_result),
+            ),
+        )
+        for label, recovery, observed_application in cases:
+            with self.subTest(label=label):
+                observed = _observe(
+                    resources=(resources,),
+                    reviewed=reviewed,
+                    application=observed_application,
+                    stored_application=observed_application.application_result,
+                    recovery_snapshot=recovery,
+                )
+                self.assertIs(
+                    observed.result.state,
+                    SessionRecoveryState.RECOVERY_REQUIRED,
+                )
+                self.assertIs(observed.result.owner, SessionRecoveryOwner.STORY_COMMIT)
+                self.assertIs(
+                    observed.result.failure_code,
+                    SessionRecoveryFailureCode.CORRELATION_MISMATCH,
+                )
+
     def test_applied_staged_and_committed_states_use_complete_correlated_predecessors(self) -> None:
         reviewed, application = _artifact_facts()
         cases = (
@@ -1018,7 +1581,97 @@ class SessionRecoveryArtifactTests(unittest.TestCase):
 
 
 class SessionRecoveryDriftTests(unittest.TestCase):
-    def test_each_owner_generation_drift_returns_outcome_unknown_without_mixing_snapshots(self) -> None:
+    def test_each_git_observation_uses_generation_a_binding_and_drift_is_recovery(
+        self,
+    ) -> None:
+        failure = reconciliation_module.SessionArtifactBindingError(
+            "generation A unavailable"
+        )
+        for ordinal, observation in enumerate(
+            ("external_a", "status_a", "external_b", "status_b", "final"),
+            start=1,
+        ):
+            observed = _observe(
+                binding_failure=failure,
+                binding_fail_on=ordinal,
+            )
+            with self.subTest(observation=observation):
+                self.assertIs(
+                    observed.result.state,
+                    SessionRecoveryState.RECOVERY_REQUIRED,
+                )
+                self.assertIs(
+                    observed.result.owner,
+                    SessionRecoveryOwner.SESSION_RESOURCES,
+                )
+                self.assertIs(
+                    observed.result.next_action,
+                    SessionRecoveryNextAction.OPERATOR_RECOVERY,
+                )
+                self.assertEqual(observed.binding_open_count, ordinal)
+
+        reviewed, application = _artifact_facts()
+        snapshot = _snapshot(GitSessionHistoryState.COMMITTED)
+        resources = replace(_resources(), current_branch_tip=_COMMIT)
+        log_blocked = _observe(
+            resources=(resources, resources),
+            snapshots=(snapshot, snapshot),
+            statuses=(_status(head=_COMMIT), _status(head=_COMMIT)),
+            log=GitLogMetadata((_metadata(),)),
+            reviewed=reviewed,
+            application=application,
+            stored_application=application.application_result,
+            binding_failure=failure,
+            binding_fail_on=4,
+        )
+        self.assertIs(
+            log_blocked.result.state,
+            SessionRecoveryState.RECOVERY_REQUIRED,
+        )
+        self.assertIs(
+            log_blocked.result.owner,
+            SessionRecoveryOwner.SESSION_RESOURCES,
+        )
+        self.assertEqual(log_blocked.binding_open_count, 4)
+
+    def test_pinned_generation_rejects_replacement_before_ledger_or_final_check(
+        self,
+    ) -> None:
+        reviewed, application = _artifact_facts()
+        before_ledger = _observe(
+            reviewed=reviewed,
+            application=application,
+            stored_application=application.application_result,
+            binding_failure=reconciliation_module.SessionArtifactBindingError(
+                "generation A unavailable"
+            ),
+        )
+        self.assertIs(
+            before_ledger.result.state,
+            SessionRecoveryState.RECOVERY_REQUIRED,
+        )
+        self.assertIs(
+            before_ledger.result.owner,
+            SessionRecoveryOwner.ARTIFACT_APPLICATION,
+        )
+        self.assertEqual(before_ledger.repository_instances, [])
+        self.assertNotIn("application", before_ledger.trace)
+
+        generation_b = replace(_resources(), current_branch_tip="6" * 40)
+        final_check = _observe(
+            binding_accesses=(_resources(),) * 4 + (generation_b,)
+        )
+        self.assertIs(
+            final_check.result.state,
+            SessionRecoveryState.RECOVERY_REQUIRED,
+        )
+        self.assertIs(
+            final_check.result.owner,
+            SessionRecoveryOwner.SESSION_RESOURCES,
+        )
+        self.assertEqual(final_check.repository_instances, [])
+
+    def test_each_owner_generation_drift_fails_closed_without_mixing_snapshots(self) -> None:
         unrelated = _candidate(suffix="drift", correlation="unrelated")
         drift_snapshot = GitSessionHistorySnapshot(
             GitSessionHistoryInspection(_SESSION, (unrelated.candidate_id,), (), (), ()),
@@ -1064,9 +1717,19 @@ class SessionRecoveryDriftTests(unittest.TestCase):
                 statuses=(_status(), *(statuses_b or (_status(),))),
             )
             with self.subTest(owner=owner.value):
-                self.assertIs(observed.result.state, SessionRecoveryState.OUTCOME_UNKNOWN)
+                expected_state = (
+                    SessionRecoveryState.RECOVERY_REQUIRED
+                    if owner is SessionRecoveryOwner.SESSION_RESOURCES
+                    else SessionRecoveryState.OUTCOME_UNKNOWN
+                )
+                expected_action = (
+                    SessionRecoveryNextAction.OPERATOR_RECOVERY
+                    if owner is SessionRecoveryOwner.SESSION_RESOURCES
+                    else SessionRecoveryNextAction.INSPECT_OWNER_OUTCOME
+                )
+                self.assertIs(observed.result.state, expected_state)
                 self.assertIs(observed.result.owner, owner)
-                self.assertIs(observed.result.next_action, SessionRecoveryNextAction.INSPECT_OWNER_OUTCOME)
+                self.assertIs(observed.result.next_action, expected_action)
 
 
 class SessionRecoveryBoundaryTests(unittest.TestCase):
@@ -1090,7 +1753,6 @@ class SessionRecoveryBoundaryTests(unittest.TestCase):
             "contracts", "conversations", "git", "git.session_contracts",
             "git.session_history_contracts", "session_lifecycle",
             "workspace.initialization", "writing_artifacts",
-            "writing_artifacts.repository",
         })
         forbidden = ("provider", "controller", "apply_artifact_changes")
         for value in forbidden:
@@ -1098,8 +1760,8 @@ class SessionRecoveryBoundaryTests(unittest.TestCase):
         self.assertNotIn("git.process", dependencies)
         self.assertNotIn("git.session_history", dependencies)
         index = (_ROOT / "PYTHON_MODULE_INDEX.md").read_text()
-        self.assertIn("Importable production units indexed: 140.", index)
-        self.assertIn("Direct internal dependency edges indexed: 555.", index)
+        self.assertIn("Importable production units indexed: 142.", index)
+        self.assertIn("Direct internal dependency edges indexed: 576.", index)
         self.assertIn("Directed internal dependency cycles indexed: 0.", index)
         self.assertIn("tests/test_session_recovery_reconciliation.py", index)
 

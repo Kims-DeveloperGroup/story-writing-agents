@@ -13,6 +13,7 @@ import sys
 import tempfile
 import unittest
 from collections.abc import Callable
+from contextlib import contextmanager
 from dataclasses import FrozenInstanceError, fields, replace
 from pathlib import Path
 from types import SimpleNamespace
@@ -125,6 +126,8 @@ from story_writing_agents.interactive_terminal import (
     INTERACTIVE_ERROR_SPECS,
     InteractiveErrorCode,
     InteractiveTerminal,
+    ReferenceInputFailure,
+    ReferenceInputFailureKind,
 )
 from story_writing_agents.provider_auth import (
     AUTH_PROVIDERS,
@@ -161,6 +164,10 @@ from story_writing_agents.session_recovery.transition_assessment import (
 from story_writing_agents.orchestrator import RuntimeSession
 from story_writing_agents.workspace import (
     Workspace,
+)
+from story_writing_agents.workspace.initialization import (
+    SessionArtifactBindingError,
+    require_ready_session_resources,
 )
 
 from tests.collaboration_contract_fixture import STEP_ID, contract_batches, make_proposal
@@ -1615,7 +1622,7 @@ class ControllerContractTests(ControllerTestCase):
         for module_name in graph:
             visit(module_name)
         self.assertEqual(len(modules), 142)
-        self.assertEqual(sum(len(dependencies) for dependencies in graph.values()), 565)
+        self.assertEqual(sum(len(dependencies) for dependencies in graph.values()), 576)
         self.assertTrue(
             {
                 "story_writing_agents.artifact_proposals",
@@ -2230,6 +2237,135 @@ class ControllerConversationStartupTests(ControllerTestCase):
         self.assertEqual(
             load_default_conversation(workspace, "session"),
             metadata.conversation_id,
+        )
+
+    def test_reference_picker_switches_exact_session_and_masks_only_known_failures(
+        self,
+    ) -> None:
+        workspace = self.make_workspace()
+        for session_id, content in (
+            ("source", "Source-only outline.\n"),
+            ("destination", "Destination-only outline.\n"),
+        ):
+            self.seed_session(
+                workspace,
+                session_id,
+                durable_state=SessionDurableState.READY,
+            )
+            ready = require_ready_session_resources(workspace.root, session_id)
+            ready.identity.worktree_root.joinpath(
+                "core_documents/global_outline.md"
+            ).write_text(content, encoding="utf-8")
+
+        controller, _backend, _callbacks = self.make_controller(workspace)
+        for session_id, expected in (
+            ("source", "Source-only outline.\n"),
+            ("destination", "Destination-only outline.\n"),
+            ("source", "Source-only outline.\n"),
+        ):
+            with self.subTest(session_id=session_id):
+                controller._attached_session_id = session_id
+                self.assertIn(
+                    "core_documents/global_outline.md",
+                    controller._lead_reference_paths(),
+                )
+                self.assertEqual(
+                    controller._lead_reference_text(
+                        "core_documents/global_outline.md"
+                    ),
+                    expected,
+                )
+
+        with mock.patch.object(
+            controller_core_module,
+            "compose_session_artifact_binding",
+            side_effect=SessionArtifactBindingError(
+                "session artifact resources are unavailable"
+            ),
+        ):
+            with self.assertRaises(ReferenceInputFailure) as caught:
+                controller._lead_reference_paths()
+        self.assertIs(caught.exception.kind, ReferenceInputFailureKind.UNAVAILABLE)
+
+        unavailable = SessionArtifactBindingError(
+            "session artifact resources are unavailable"
+        )
+        for method, arguments in (
+            (controller._lead_reference_paths, ()),
+            (
+                controller._lead_reference_text,
+                ("core_documents/global_outline.md",),
+            ),
+        ):
+            with self.subTest(method=method.__name__, failure="open"):
+                binding = mock.Mock()
+                binding.open_ready_resources.side_effect = unavailable
+                with mock.patch.object(
+                    controller_core_module,
+                    "compose_session_artifact_binding",
+                    return_value=binding,
+                ), self.assertRaises(ReferenceInputFailure) as caught:
+                    method(*arguments)
+                self.assertIs(
+                    caught.exception.kind,
+                    ReferenceInputFailureKind.UNAVAILABLE,
+                )
+
+            with self.subTest(method=method.__name__, failure="postcheck"):
+                repository = mock.Mock()
+                repository.list_paths.return_value = ()
+                repository.read_text.return_value = "session bytes"
+
+                @contextmanager
+                def postcheck_failure():
+                    yield SimpleNamespace(repository=repository)
+                    raise unavailable
+
+                binding = mock.Mock()
+                binding.open_ready_resources.side_effect = postcheck_failure
+                with mock.patch.object(
+                    controller_core_module,
+                    "compose_session_artifact_binding",
+                    return_value=binding,
+                ), self.assertRaises(ReferenceInputFailure) as caught:
+                    method(*arguments)
+                self.assertIs(
+                    caught.exception.kind,
+                    ReferenceInputFailureKind.UNAVAILABLE,
+                )
+
+        with mock.patch.object(
+            controller_core_module,
+            "compose_session_artifact_binding",
+            side_effect=TypeError("unexpected binding defect"),
+        ):
+            with self.assertRaisesRegex(TypeError, "unexpected binding defect"):
+                controller._lead_reference_text(
+                    "core_documents/global_outline.md"
+                )
+
+        repository = mock.Mock()
+        repository.read_text.side_effect = TypeError("unexpected read defect")
+        access_context = mock.MagicMock()
+        access_context.__enter__.return_value = SimpleNamespace(
+            repository=repository
+        )
+        binding = mock.Mock()
+        binding.open_ready_resources.return_value = access_context
+        with mock.patch.object(
+            controller_core_module,
+            "compose_session_artifact_binding",
+            return_value=binding,
+        ), self.assertRaisesRegex(TypeError, "unexpected read defect"):
+            controller._lead_reference_text("core_documents/global_outline.md")
+        access_context.__exit__.assert_called_once()
+
+        controller._attached_session_id = None
+        with self.assertRaises(ReferenceInputFailure) as detached:
+            controller._lead_reference_paths()
+        self.assertIs(
+            detached.exception.kind,
+            ReferenceInputFailureKind.UNAVAILABLE,
         )
 
     def test_malformed_or_unsafe_initial_selection_aborts_and_detaches(self) -> None:
@@ -11209,7 +11345,16 @@ class ControllerConversationCommandTests(ControllerTestCase):
                         selected_id=selected.conversation_id,
                     )
                 )
-                self.assertEqual(controller.run_session_lobby(), 0)
+                with mock.patch.object(
+                    controller._runtime,
+                    "retire_archived_conversation",
+                    wraps=controller._runtime.retire_archived_conversation,
+                ) as retire:
+                    self.assertEqual(controller.run_session_lobby(), 0)
+                retire.assert_called_once_with(
+                    "session",
+                    selected.conversation_id,
+                )
                 self.assertIs(
                     catalog.entries[0].status,
                     ConversationStatus.ARCHIVED,
@@ -11247,7 +11392,19 @@ class ControllerConversationCommandTests(ControllerTestCase):
             selected_id=selected.conversation_id,
         )
         archived_before = archived.to_dict()
-        self.assertEqual(controller.run_session_lobby(), 0)
+        with mock.patch.object(
+            controller._runtime,
+            "retire_archived_conversation",
+            wraps=controller._runtime.retire_archived_conversation,
+        ) as retire:
+            self.assertEqual(controller.run_session_lobby(), 0)
+        self.assertEqual(
+            retire.call_args_list,
+            [
+                mock.call("session", archived.conversation_id),
+                mock.call("session", other.conversation_id),
+            ],
+        )
         self.assertEqual(catalog.entries[2].to_dict(), archived_before)
         self.assertIs(catalog.entries[1].status, ConversationStatus.ARCHIVED)
         self.assertEqual(
@@ -12027,8 +12184,13 @@ class ControllerConversationCommandTests(ControllerTestCase):
             controller_core_module,
             "save_default_conversation",
             side_effect=OSError("selection-secret"),
-        ):
+        ), mock.patch.object(
+            controller._runtime,
+            "retire_archived_conversation",
+            wraps=controller._runtime.retire_archived_conversation,
+        ) as retire:
             self.assertEqual(controller.run_session_lobby(), 0)
+        retire.assert_not_called()
         self.assertIs(catalog.entries[0].status, ConversationStatus.ACTIVE)
         self.assertEqual(
             load_default_conversation(workspace, "session"),

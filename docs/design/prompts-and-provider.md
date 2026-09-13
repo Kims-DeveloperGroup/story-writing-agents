@@ -197,7 +197,14 @@ differ from the role file alone. `behavior_policy_components` holds the ordered
 captured policies; the Lead component also includes its in-memory v4 contract
 overlay. Trailing `runtime_behavior_policy` holds the appended routing bytes.
 The fingerprint includes both. Valid customized session-worktree policy files
-are preserved; updating the runtime policy invalidates incompatible bindings.
+are preserved. Artifact-sensitive Lead, specialist, and consensus composition
+captures those canonical ordered policy bytes through the exact guarded session
+worktree. Configuration, runtime overrides, backend/route choice, and persona
+remain control-workspace authorities. Candidate-only consensus without pending
+same-process reference cleanup remains worktree-free and uses the control-owned
+definition; an artifact input or pending cleanup establishes a binding and uses
+its session policy. Updating the runtime policy invalidates incompatible
+bindings.
 This does not make modified main-root policies admissible. Journal-free
 workspace readiness recognizes only the complete current policy set or one of
 three exact published v2 sets (pre-routing `68a0782`, contextual-objective

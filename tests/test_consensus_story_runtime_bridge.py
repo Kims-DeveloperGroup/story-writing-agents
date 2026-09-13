@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+from contextlib import contextmanager
 from dataclasses import replace
 import hashlib
 import unittest
@@ -32,12 +33,19 @@ from story_writing_agents.consensus.contracts import (
 )
 from story_writing_agents.consensus.material_store import ConsensusMaterialStore
 from story_writing_agents.models import AgentReplyNextPhase
+from story_writing_agents.workspace.initialization import provision_session_resources
 from story_writing_agents.writing_artifacts.read_actions import (
     ReferenceReadAction,
     ReferenceReadActionKind,
 )
+from story_writing_agents.writing_artifacts.authorization import (
+    ReferenceOperationState,
+)
+from story_writing_agents.writing_artifacts.runtime_references import (
+    prepare_runtime_reference_operation,
+)
 
-from tests.helpers import initialized_workspace
+from tests.helpers import initialized_workspace, pristine_initialized_workspace
 
 
 class _BoundAgent:
@@ -229,8 +237,14 @@ class ConsensusStoryRuntimeBridgeTests(unittest.IsolatedAsyncioTestCase):
     async def test_artifact_input_uses_authorized_reference_read_and_stale_digest_fails(
         self,
     ) -> None:
+        workspace = pristine_initialized_workspace(self)
+        ready = provision_session_resources(workspace.root, "story_session")
+        backend = _Backend()
+        runtime = StoryRuntime(workspace, backend)  # type: ignore[arg-type]
+        materials = ConsensusMaterialStore(workspace.root)
         path = "core_documents/global_outline.md"
-        artifact = self.workspace.path(path)
+        artifact = ready.identity.worktree_root / path
+        artifact.write_text("authorized artifact input\n", encoding="utf-8")
         original = artifact.read_bytes()
         handle = artifact_material_handle(path, hashlib.sha256(original).hexdigest())
         invocation = ConsensusPhaseInvocation(
@@ -248,24 +262,204 @@ class ConsensusStoryRuntimeBridgeTests(unittest.IsolatedAsyncioTestCase):
             ordinal=1,
         )
 
-        result = await self.runtime.invoke_provider(invocation)
-        self.assertEqual(self.backend.reference_contents, [(original,)])
-        self.assertIsNotNone(self.backend.reference_reads[-1])
-        request = self.backend.requests[-1]
+        with mock.patch.object(
+            runtime,
+            "_reconcile_reference_operations_at_boundary",
+            wraps=runtime._reconcile_reference_operations_at_boundary,
+        ) as reconciled:
+            result = await runtime.invoke_provider(invocation)
+        reconciled.assert_called_once()
+        self.assertEqual(backend.reference_contents, [(original,)])
+        self.assertIsNotNone(backend.reference_reads[-1])
+        request = backend.requests[-1]
         self.assertEqual(request.user_payload, f"${{{path}}}")
         self.assertNotIn(original.decode(), request.user_payload)
         self.assertEqual(
-            self.materials.read_text(result.candidate_material),
+            materials.read_text(result.candidate_material),
             f"authored::${{{path}}}",
         )
 
         artifact.write_text("drifted outline\n", encoding="utf-8")
-        calls_before = len(self.backend.requests)
+        calls_before = len(backend.requests)
         with self.assertRaisesRegex(ValueError, "authorization is stale"):
-            await self.runtime.invoke_provider(
+            await runtime.invoke_provider(
                 replace(invocation, phase_request_id="stale")
             )
-        self.assertEqual(len(self.backend.requests), calls_before)
+        self.assertEqual(len(backend.requests), calls_before)
+
+    async def test_candidate_input_without_pending_cleanup_is_worktree_free(
+        self,
+    ) -> None:
+        candidate_input = self.materials.put_text("candidate-backed request")
+        invocation = ConsensusPhaseInvocation(
+            workflow_id="workflow-candidate-compatibility",
+            phase_request_id="request-candidate-compatibility",
+            proposal_id="proposal-candidate-compatibility",
+            execution_identity=ConsensusExecutionIdentity(
+                "story_session",
+                "conversation-candidate-compatibility",
+            ),
+            phase=ConsensusPhase.DRAFT,
+            revision_id="r0",
+            input_material=candidate_input,
+            candidate_material=None,
+            agent_id=EXECUTION_SPECIALIST,
+            ordinal=1,
+        )
+
+        with mock.patch.object(
+            self.runtime,
+            "_session_artifact_binding",
+            side_effect=AssertionError("candidate-only call requested a worktree"),
+        ) as binding, mock.patch.object(
+            self.runtime,
+            "_reconcile_reference_operations_at_boundary",
+            wraps=self.runtime._reconcile_reference_operations_at_boundary,
+        ) as reconciled:
+            await self.runtime.invoke_provider(invocation)
+
+        binding.assert_not_called()
+        reconciled.assert_not_called()
+        self.assertEqual(len(self.backend.requests), 1)
+        self.assertEqual(self.backend.reference_reads, [None])
+
+    async def test_candidate_input_drains_same_process_pending_cleanup_once(
+        self,
+    ) -> None:
+        workspace = pristine_initialized_workspace(self)
+        provision_session_resources(workspace.root, "story_session")
+        backend = _Backend()
+        runtime = StoryRuntime(workspace, backend)  # type: ignore[arg-type]
+        materials = ConsensusMaterialStore(workspace.root)
+        binding = runtime._session_artifact_binding("story_session")
+        @contextmanager
+        def repository_access():
+            with binding.open_ready_resources() as access:
+                yield access.repository
+
+        retained = runtime._prepare_session_reference_operation(
+            repository_access,
+            artifact_binding=binding,
+            session_id="story_session",
+            text="Read ${core_documents/global_outline.md}.",
+        )
+        retained._defer_cleanup()
+        assert retained.operation_id is not None
+        candidate_input = materials.put_text("candidate-backed request")
+        invocation = ConsensusPhaseInvocation(
+            workflow_id="workflow-candidate-boundary",
+            phase_request_id="request-candidate-boundary",
+            proposal_id="proposal-candidate-boundary",
+            execution_identity=ConsensusExecutionIdentity(
+                "story_session",
+                "conversation-candidate-boundary",
+            ),
+            phase=ConsensusPhase.DRAFT,
+            revision_id="r0",
+            input_material=candidate_input,
+            candidate_material=None,
+            agent_id=EXECUTION_SPECIALIST,
+            ordinal=1,
+        )
+
+        with mock.patch.object(
+            runtime,
+            "_reconcile_reference_operations_at_boundary",
+            wraps=runtime._reconcile_reference_operations_at_boundary,
+        ) as reconciled:
+            await runtime.invoke_provider(invocation)
+
+        reconciled.assert_called_once()
+        self.assertTrue(retained.finished)
+        self.assertEqual(len(backend.requests), 1)
+        self.assertEqual(backend.reference_reads, [None])
+        with binding.open_ready_resources() as access:
+            history = access.repository.inspect_reference_operation(
+                retained.operation_id
+            )
+        assert history is not None
+        self.assertIs(
+            history.operation_events[-1].operation_state,
+            ReferenceOperationState.TERMINATED,
+        )
+
+    async def test_restart_orphan_waits_for_next_artifact_sensitive_boundary(
+        self,
+    ) -> None:
+        workspace = pristine_initialized_workspace(self)
+        ready = provision_session_resources(workspace.root, "story_session")
+        backend = _Backend()
+        runtime = StoryRuntime(workspace, backend)  # type: ignore[arg-type]
+        materials = ConsensusMaterialStore(workspace.root)
+        binding = runtime._session_artifact_binding("story_session")
+        with binding.open_ready_resources() as access:
+            orphan = prepare_runtime_reference_operation(
+                access.repository,
+                session_id="story_session",
+                text="Read ${core_documents/global_outline.md}.",
+            )
+        assert orphan.operation_id is not None
+        candidate = materials.put_text("restart candidate")
+        candidate_invocation = ConsensusPhaseInvocation(
+            workflow_id="workflow-restart-boundary",
+            phase_request_id="request-candidate",
+            proposal_id="proposal-restart-boundary",
+            execution_identity=ConsensusExecutionIdentity(
+                "story_session",
+                "conversation-restart-boundary",
+            ),
+            phase=ConsensusPhase.DRAFT,
+            revision_id="r0",
+            input_material=candidate,
+            candidate_material=None,
+            agent_id=EXECUTION_SPECIALIST,
+            ordinal=1,
+        )
+        with mock.patch.object(
+            runtime,
+            "_reconcile_reference_operations_at_boundary",
+            wraps=runtime._reconcile_reference_operations_at_boundary,
+        ) as candidate_reconcile:
+            await runtime.invoke_provider(candidate_invocation)
+        candidate_reconcile.assert_not_called()
+        with binding.open_ready_resources() as access:
+            pending = access.repository.inspect_reference_operation(
+                orphan.operation_id
+            )
+        assert pending is not None
+        self.assertIs(
+            pending.operation_events[-1].operation_state,
+            ReferenceOperationState.CAPTURED,
+        )
+
+        path = "core_documents/global_outline.md"
+        artifact = ready.identity.worktree_root / path
+        handle = artifact_material_handle(
+            path,
+            hashlib.sha256(artifact.read_bytes()).hexdigest(),
+        )
+        artifact_invocation = replace(
+            candidate_invocation,
+            phase_request_id="request-artifact",
+            input_material=handle,
+        )
+        with mock.patch.object(
+            runtime,
+            "_reconcile_reference_operations_at_boundary",
+            wraps=runtime._reconcile_reference_operations_at_boundary,
+        ) as artifact_reconcile:
+            await runtime.invoke_provider(artifact_invocation)
+        artifact_reconcile.assert_called_once()
+        self.assertEqual(len(backend.requests), 2)
+        with binding.open_ready_resources() as access:
+            terminal = access.repository.inspect_reference_operation(
+                orphan.operation_id
+            )
+        assert terminal is not None
+        self.assertIs(
+            terminal.operation_events[-1].operation_state,
+            ReferenceOperationState.TERMINATED,
+        )
 
     async def test_phase_mapping_is_exact_and_finalization_is_read_only(self) -> None:
         input_material = self.materials.put_text("source request")

@@ -265,15 +265,47 @@ The exact grammar is in the [CLI reference](docs/reference/cli.md) and
 orchestration facade. It can bind a `RuntimeSession`; both expose async
 `lead_turn()`, `propose_specialist_advisory()`, `decide_lead_recommendation()`,
 and `decide_lead_step()` methods. Confirmation executes the disclosed read-only consultation through
-`decide_lead_step()`. Both facades also expose a phase-confirmed consensus API:
+`decide_lead_step()`. Separate artifact-application and local story-commit
+decision methods consume only their own exact structured controls. Both
+facades also expose a phase-confirmed consensus API:
 submit prompt/draft input, inspect, decide or confirm the exact phase,
 explicitly request its successor, interrupt, and resume inspection. There is
 also an explicit deadlock-continuation call that binds the source result,
 unresolved critique material, operator ruling, and added repair-round budget;
 it prepares a fresh REPAIR confirmation and never copies candidate text. There
-is no public unconfirmed specialist dispatch, artifact publication, consensus
-shell command, or Git method. The package root no longer exports the broad
+is no public unconfirmed specialist dispatch, direct artifact-publication
+bypass, consensus shell command, or general Git method. The package root no longer exports the broad
 `Runtime` or `Session` aliases.
+
+Construct `StoryRuntime` from the initialized `main` workspace. That root is
+the control plane for configuration, conversation history, and diagnostics;
+it is not the story-artifact root for an active session. Every
+artifact-sensitive session operation freshly validates the session's exact branch/ref/
+sibling-worktree identity and pins the worktree's physical `(st_dev, st_ino)`
+identity. Each repository or session-source step uses a short synchronous
+outer guard: it holds the cooperating-runtime Git lease and verifies the exact
+semantic READY resources and named physical root once before and once after the
+transaction. Nested repository work reuses that transaction with liveness and
+named-root checks instead of repeating the full READY scan. A guard never spans
+a provider await or specialist concurrency; the next filesystem transaction
+reacquires and revalidates it. Direct Lead and Lead-synthesis paths instead
+retain one opaque six-descriptor physical-generation pin through durable
+result publication. That pin carries no semantic READY, traversal, or
+repository authority, and no Git lease spans the provider wait. The
+binding does not expose its repository directly: only live guarded access does,
+and that access expires on exit. Exit revalidation runs after success, error,
+or cancellation; detected binding loss takes precedence over the body result.
+Artifact access and provider-visible active-debate or own-agent state then come
+only from that worktree; conversation history retains its separately configured
+control-plane storage. Replacing the named worktree does not transfer authority
+to the replacement.
+The runtime never falls back to `main`, the current directory, or a previously
+used session, and it does not provision missing session resources as a side
+effect. This artifact binding does not set or confine the provider working
+directory or project root; that separate story-runtime boundary remains
+tracked by
+[Issue #670](https://github.com/Kims-DeveloperGroup/story-writing-agents/issues/670).
+Create or reopen the session through the lifecycle first.
 
 ```python
 from story_writing_agents import StoryRuntime, Workspace
@@ -316,10 +348,14 @@ infrastructure boundaries. Start with the [runtime API](docs/reference/runtime-a
 The canonical reference-source paths are the four exact core-document paths and
 eligible lowercase-`.md` files below `manuscript/`. Python `lead_turn()` accepts
 ordered `${path}` and `${path}#Lx-Ly` content-free indicators. Runtime performs
-a separate mandatory read before the substantive lead call and retains only
+a separate mandatory read from the exact session worktree before the substantive
+lead call and retains only
 the indicator/range/revision facts in the proposal. In focused Lead input, `$`
 opens the canonical-artifact picker and `$$` opens the same picker followed by
-the independent range viewer. Both insert durable identity-only indicators. See
+the independent range viewer. Picker inventory and each selected-file read use
+their own short guarded access, follow the currently attached session, and are
+freshly validated on entry and exit. Both insert durable identity-only
+indicators. See
 [artifact references](docs/guides/artifact-references.md).
 
 ## Important limits
@@ -345,6 +381,33 @@ the independent range viewer. Both insert durable identity-only indicators. See
   refs, content-free session history, exact confirmed story commits, and
   closed-path internal checkpoints are supported internally. These internal
   capabilities do not grant the lead Apply, commit, or checkpoint authority.
+- Missing, moved, mismatched, or otherwise non-ready session Git resources
+  stop artifact-sensitive work before provider or artifact I/O. There is no
+  fallback or automatic provisioning. If binding or physical-root validation
+  fails after Apply was durably confirmed but before the repository's
+  `apply_artifact_changes()` method starts, runtime records
+  `recovery_required` / `operator_recovery` and does not start artifact
+  application. Once that method has started, an unclassified root, security,
+  or format failure is conservatively
+  `outcome_unknown` / `inspect_and_resolve_outcome`.
+- Session-source reads accept only canonical relative POSIX paths and unique
+  regular-file leaves. Symlinks, FIFOs, devices, hard-linked leaves, unstable
+  file identity/metadata, and foreign embedded session/debate/agent ownership
+  fail closed before content is accepted.
+- The cooperating-runtime Git lease is advisory to this runtime. Persistent
+  external Git drift is detected at the next guard checkpoint, but arbitrary
+  noncooperating Git that mutates and restores state between checkpoints is
+  outside the guarantee. Stop workspace processes before external recovery.
+- A Commit request prepared after successful Apply remains pinned to that
+  Apply worktree's physical identity through candidate preparation,
+  authorization, and execution. Replacement before durable Commit execution
+  requires repreparation; uncertainty after execution starts requires
+  inspection. Identity-bound Commit inspection and recovery also require the
+  original Apply root and never advance durable operation state after detecting
+  a replacement. Failure to publish the follow-on Commit request after the
+  Apply result is durable does not yet have its own durable failure-state record;
+  that separate work remains in
+  [Issue #662](https://github.com/Kims-DeveloperGroup/story-writing-agents/issues/662).
 - Smoke is intentionally provider-free and story-free.
 - Workspace configuration, histories, diagnostics, and artifacts are local
   plaintext unless the surrounding environment protects them.

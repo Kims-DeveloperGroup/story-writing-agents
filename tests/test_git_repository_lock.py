@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import multiprocessing
 import os
 import threading
 import unittest
@@ -73,6 +74,68 @@ class GitRepositoryLockSafetyTests(DisposableGitTestCase):
         self.initialize(root)
         return root
 
+    def test_flock_baseexception_closes_descriptor_without_masking_primary(
+        self,
+    ) -> None:
+        root = self._repository("flock-baseexception")
+        primary = KeyboardInterrupt("flock interrupted")
+        flock_calls = []
+        close_calls = []
+        original_flock = lock_module._fcntl.flock
+        original_close = os.close
+
+        def flock(descriptor, operation):
+            flock_calls.append((descriptor, operation))
+            if len(flock_calls) == 1:
+                raise primary
+            raise SystemExit("unlock cleanup failed")
+
+        def close(descriptor):
+            close_calls.append(descriptor)
+            original_close(descriptor)
+            raise RuntimeError("close cleanup failed")
+
+        with mock.patch.object(lock_module._fcntl, "flock", side_effect=flock), \
+                mock.patch.object(lock_module.os, "close", side_effect=close):
+            with self.assertRaises(KeyboardInterrupt) as caught:
+                with lock_git_repository(root):
+                    self.fail("failed flock entered")
+        self.assertIs(caught.exception, primary)
+        self.assertEqual(len(flock_calls), 2)
+        self.assertEqual(close_calls, [flock_calls[0][0]])
+        self.assertIn(
+            "Git repository lock cleanup failed: SystemExit",
+            primary.__notes__,
+        )
+        self.assertIn(
+            "Git repository lock cleanup failed: RuntimeError",
+            primary.__notes__,
+        )
+
+        body_failure = RuntimeError("repository body failed")
+        descriptor = -1
+
+        def teardown_flock(current, operation):
+            if operation == lock_module._fcntl.LOCK_UN:
+                raise KeyboardInterrupt("teardown unlock interrupted")
+            return original_flock(current, operation)
+
+        with mock.patch.object(
+            lock_module._fcntl,
+            "flock",
+            side_effect=teardown_flock,
+        ), self.assertRaises(RuntimeError) as caught:
+            with lock_git_repository(root) as lease:
+                descriptor = lease.common_descriptor
+                raise body_failure
+        self.assertIs(caught.exception, body_failure)
+        self.assertIn(
+            "Git repository lock cleanup failed: KeyboardInterrupt",
+            body_failure.__notes__,
+        )
+        with self.assertRaises(OSError):
+            os.fstat(descriptor)
+
     def test_lease_revalidates_names_and_expires_after_every_exit(self) -> None:
         root = self._repository("lease")
         lease: GitRepositoryLease | None = None
@@ -105,6 +168,194 @@ class GitRepositoryLockSafetyTests(DisposableGitTestCase):
             caught.exception.code,
             GitRepositoryLockFailureCode.UNSAFE_ROOT,
         )
+
+    def test_foreign_thread_cannot_observe_or_close_lease_and_exit_cleans_up(
+        self,
+    ) -> None:
+        root = self._repository("thread-affinity")
+        manager = lock_git_repository(root)
+        lease = manager.__enter__()
+        descriptor = lease.common_descriptor
+
+        operations = (
+            lambda: lease.main_root,
+            lambda: lease.common_git,
+            lambda: lease.root_identity,
+            lambda: lease.common_identity,
+            lambda: lease.common_descriptor,
+            lease.require_active,
+        )
+
+        def foreign_calls():
+            failures = []
+            for operation in operations:
+                try:
+                    operation()
+                except GitRepositoryLockFailure as exc:
+                    failures.append(exc)
+            return tuple(failures)
+
+        with ThreadPoolExecutor(max_workers=1) as executor:
+            failures = executor.submit(foreign_calls).result(timeout=5)
+        self.assertEqual(len(failures), len(operations))
+        self.assertTrue(
+            all(
+                failure.code is GitRepositoryLockFailureCode.LOCK_UNAVAILABLE
+                for failure in failures
+            )
+        )
+        os.fstat(descriptor)
+        lease.require_active()
+
+        body_failure = RuntimeError("preserve caller failure")
+        with ThreadPoolExecutor(max_workers=1) as executor:
+            suppresses = executor.submit(
+                manager.__exit__,
+                RuntimeError,
+                body_failure,
+                None,
+            ).result(timeout=5)
+        self.assertFalse(suppresses)
+        with self.assertRaises(OSError):
+            os.fstat(descriptor)
+        with lock_git_repository(root) as replacement:
+            replacement.require_active()
+
+    def test_forked_context_exit_cannot_unlock_parent_lease(self) -> None:
+        if "fork" not in multiprocessing.get_all_start_methods():
+            self.skipTest("requires POSIX fork semantics")
+        if lock_module._fcntl is None:
+            self.skipTest("requires flock support")
+        root = self._repository("forked-context-exit")
+        manager = lock_git_repository(root)
+        lease = manager.__enter__()
+        descriptor = lease.common_descriptor
+        context = multiprocessing.get_context("fork")
+        child_results = context.Queue()
+
+        def exit_in_child() -> None:
+            failure_code = None
+            try:
+                manager.__exit__(None, None, None)
+            except GitRepositoryLockFailure as failure:
+                failure_code = failure.code.value
+            try:
+                os.fstat(descriptor)
+                descriptor_closed = False
+            except OSError:
+                descriptor_closed = True
+            child_results.put((failure_code, descriptor_closed))
+
+        def contend(result_queue) -> None:
+            contender = os.open(root / ".git", os.O_RDONLY)
+            acquired = False
+            try:
+                try:
+                    lock_module._fcntl.flock(
+                        contender,
+                        lock_module._fcntl.LOCK_EX | lock_module._fcntl.LOCK_NB,
+                    )
+                    acquired = True
+                except OSError:
+                    acquired = False
+                if acquired:
+                    lock_module._fcntl.flock(
+                        contender,
+                        lock_module._fcntl.LOCK_UN,
+                    )
+            finally:
+                os.close(contender)
+            result_queue.put(acquired)
+
+        child = context.Process(target=exit_in_child)
+        blocked = None
+        try:
+            child.start()
+            child.join(timeout=10)
+            self.assertFalse(child.is_alive())
+            self.assertEqual(child.exitcode, 0)
+            self.assertEqual(
+                child_results.get(timeout=3),
+                (GitRepositoryLockFailureCode.LOCK_UNAVAILABLE.value, True),
+            )
+            lease.require_active()
+            os.fstat(descriptor)
+
+            blocked_results = context.Queue()
+            blocked = context.Process(target=contend, args=(blocked_results,))
+            blocked.start()
+            blocked.join(timeout=10)
+            self.assertFalse(blocked.is_alive())
+            self.assertEqual(blocked.exitcode, 0)
+            self.assertFalse(blocked_results.get(timeout=3))
+        finally:
+            if child.is_alive():
+                child.terminate()
+                child.join(timeout=5)
+            if blocked is not None and blocked.is_alive():
+                blocked.terminate()
+                blocked.join(timeout=5)
+            manager.__exit__(None, None, None)
+        with self.assertRaises(OSError):
+            os.fstat(descriptor)
+
+        released_results = context.Queue()
+        released = context.Process(target=contend, args=(released_results,))
+        try:
+            released.start()
+            released.join(timeout=10)
+            self.assertFalse(released.is_alive())
+            self.assertEqual(released.exitcode, 0)
+            self.assertTrue(released_results.get(timeout=3))
+        finally:
+            if released.is_alive():
+                released.terminate()
+                released.join(timeout=5)
+        with lock_git_repository(root) as replacement:
+            replacement.require_active()
+
+    def test_recycled_numeric_ident_cannot_reuse_lease_token_and_teardown_unlocks(
+        self,
+    ) -> None:
+        root = self._repository("recycled-thread-token")
+        manager = lock_git_repository(root)
+        lease = manager.__enter__()
+        descriptor = lease.common_descriptor
+        creator_token = lock_module.current_thread_token()
+        numeric_ident = threading.get_ident()
+        successor_token = object()
+        lock_module._THREAD_STATE.token = successor_token
+        try:
+            self.assertEqual(threading.get_ident(), numeric_ident)
+            self.assertIs(lock_module.current_thread_token(), successor_token)
+            self.assertIsNot(successor_token, creator_token)
+            operations = (
+                lambda: lease.main_root,
+                lambda: lease.common_git,
+                lambda: lease.root_identity,
+                lambda: lease.common_identity,
+                lambda: lease.common_descriptor,
+                lease.require_active,
+            )
+            for operation in operations:
+                with self.subTest(operation=operation), self.assertRaises(
+                    GitRepositoryLockFailure
+                ) as caught:
+                    operation()
+                self.assertIs(
+                    caught.exception.code,
+                    GitRepositoryLockFailureCode.LOCK_UNAVAILABLE,
+                )
+            os.fstat(descriptor)
+            with self.assertRaises(GitRepositoryLockFailure):
+                manager.__exit__(None, None, None)
+        finally:
+            lock_module._THREAD_STATE.token = creator_token
+
+        with self.assertRaises(OSError):
+            os.fstat(descriptor)
+        with lock_git_repository(root) as replacement:
+            replacement.require_active()
 
     def test_symlinked_root_or_common_directory_is_never_followed(self) -> None:
         root = self._repository("real")

@@ -66,6 +66,17 @@ context policy. Pause/reopen and process restart preserve compatible
 continuation; the Lead thread does not rotate after an arbitrary 16 turns.
 Specialists and consensus retain their separate invocation scopes.
 
+Before a direct Lead or Lead-synthesis invocation reads session-derived policy
+or context, runtime acquires an opaque physical-generation pin for the exact
+session worktree relationship. It retains that pin through the provider await
+and durable result publication, rechecks the relationship, and closes the pin.
+The pin carries no artifact bytes, path traversal, repository operation, or
+semantic READY authority; each source read still uses its own short guarded
+READY transaction, and no Git lease spans the provider wait. It also does not
+set or confine the provider process working directory or project root; that
+separate story-runtime execution boundary remains tracked by
+[Issue #670](https://github.com/Kims-DeveloperGroup/story-writing-agents/issues/670).
+
 The initial substantive payload of each Lead invocation includes required
 session context (`h`). Bootstrap supplies all retained active and archived
 conversation histories with exact readable text and visible workflow/review

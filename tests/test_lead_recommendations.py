@@ -4,7 +4,10 @@ from __future__ import annotations
 
 import asyncio
 import json
+import os
+import traceback
 from dataclasses import replace
+from types import SimpleNamespace
 from unittest import mock
 
 from story_writing_agents import StoryRuntime
@@ -13,6 +16,12 @@ from story_writing_agents import orchestrator as owner
 from story_writing_agents.agents import LEAD_ORCHESTRATOR, PLOT_ARCHITECT, EXECUTION_SPECIALIST
 from story_writing_agents.specialist_routing import AuthoringActivity
 from story_writing_agents.errors import BackendProtocolError
+from story_writing_agents.workspace.initialization import (
+    SessionArtifactBinding,
+    SessionArtifactBindingError,
+    compose_session_artifact_binding,
+)
+from story_writing_agents.writing_artifacts._storage import ArtifactRootSecurityError
 from tests.recommendation_fixture import (
     DRAFT, OUTLINE, RecommendationCase, action, decision, digest,
     preparation, recommendation, rewrite_history,
@@ -23,7 +32,351 @@ from tests import test_lead_artifact_application as application
 from tests import test_lead_story_commit as commit
 
 
+def _generation_pin_descriptors(pin) -> tuple[int, ...]:
+    git_pin = pin._pin
+    return () if git_pin is None else git_pin._descriptors
+
+
 class LeadRecommendationTests(RecommendationCase):
+    async def test_lead_recommendation_reuses_invocation_artifact_binding(self):
+        invocation_bindings = []
+        request_bindings = []
+        basis_bindings = []
+        fingerprint_bindings = []
+        pins = []
+        guarded_order = []
+        original_binding = self.runtime._session_artifact_binding
+        original_request = self.runtime._recommendation_request_draft
+        original_basis = self.runtime._recommendation_basis
+        original_fingerprint = self.runtime._recommendation_source_fingerprint
+        original_acquire_pin = SessionArtifactBinding.acquire_generation_pin
+        original_prepare = self.runtime._prepare_session_reference_operation
+        original_definition = self.runtime._build_guarded_contextual_definition
+        original_context_state = self.runtime._session_context_state
+        original_invoke = self.runtime._invoke_context_with_recovery
+        original_append = self.runtime._append_drafts
+
+        def require_current_pin():
+            self.assertEqual(len(pins), 1)
+            pin_binding, pin = pins[0]
+            self.assertIsNone(pin_binding._current_repository_access())
+            pin_binding.require_generation_pin(pin)
+
+        def capture_pin(binding):
+            pin = original_acquire_pin(binding)
+            pins.append((binding, pin))
+            guarded_order.append("pin")
+            return pin
+
+        def capture_binding(session_id):
+            binding = original_binding(session_id)
+            invocation_bindings.append(binding)
+            return binding
+
+        def capture_request(*args, **kwargs):
+            require_current_pin()
+            request_bindings.append(kwargs["artifact_binding"])
+            return original_request(*args, **kwargs)
+
+        def capture_basis(*args, **kwargs):
+            basis_bindings.append(kwargs["artifact_binding"])
+            return original_basis(*args, **kwargs)
+
+        def capture_fingerprint(*args, **kwargs):
+            fingerprint_bindings.append(kwargs["artifact_binding"])
+            return original_fingerprint(*args, **kwargs)
+
+        def capture_prepare(*args, **kwargs):
+            require_current_pin()
+            guarded_order.append("references")
+            return original_prepare(*args, **kwargs)
+
+        def capture_definition(*args, **kwargs):
+            require_current_pin()
+            guarded_order.append("definition")
+            return original_definition(*args, **kwargs)
+
+        def capture_context_state(*args, **kwargs):
+            require_current_pin()
+            guarded_order.append("context")
+            return original_context_state(*args, **kwargs)
+
+        async def capture_invoke(*args, **kwargs):
+            require_current_pin()
+            guarded_order.append("await")
+            await asyncio.sleep(0)
+            require_current_pin()
+            return await original_invoke(*args, **kwargs)
+
+        def capture_append(*args, **kwargs):
+            if pins:
+                require_current_pin()
+                guarded_order.append("append")
+            return original_append(*args, **kwargs)
+
+        with mock.patch.object(
+            self.runtime,
+            "_session_artifact_binding",
+            side_effect=capture_binding,
+        ), mock.patch.object(
+            self.runtime,
+            "_recommendation_request_draft",
+            side_effect=capture_request,
+        ), mock.patch.object(
+            self.runtime,
+            "_recommendation_basis",
+            side_effect=capture_basis,
+        ), mock.patch.object(
+            self.runtime,
+            "_recommendation_source_fingerprint",
+            side_effect=capture_fingerprint,
+        ), mock.patch.object(
+            SessionArtifactBinding,
+            "acquire_generation_pin",
+            new=capture_pin,
+        ), mock.patch.object(
+            self.runtime,
+            "_prepare_session_reference_operation",
+            side_effect=capture_prepare,
+        ), mock.patch.object(
+            self.runtime,
+            "_build_guarded_contextual_definition",
+            side_effect=capture_definition,
+        ), mock.patch.object(
+            self.runtime,
+            "_session_context_state",
+            side_effect=capture_context_state,
+        ), mock.patch.object(
+            self.runtime,
+            "_invoke_context_with_recovery",
+            side_effect=capture_invoke,
+        ), mock.patch.object(
+            self.runtime,
+            "_append_drafts",
+            side_effect=capture_append,
+        ):
+            _conversation_id, turn = await self.recommend()
+
+        self.assertIsNotNone(turn.recommendation_request)
+        self.assertGreaterEqual(len(invocation_bindings), 1)
+        self.assertEqual(len(request_bindings), 2)
+        self.assertEqual(len(basis_bindings), 2)
+        self.assertEqual(len(fingerprint_bindings), 4)
+        invocation_binding = request_bindings[0]
+        self.assertTrue(
+            any(binding is invocation_binding for binding in invocation_bindings)
+        )
+        self.assertTrue(
+            all(
+                binding is invocation_binding
+                for binding in (
+                    *request_bindings,
+                    *basis_bindings,
+                    *fingerprint_bindings,
+                )
+            )
+        )
+        self.assertEqual(guarded_order[0], "pin")
+        self.assertLess(guarded_order.index("pin"), guarded_order.index("references"))
+        self.assertLess(guarded_order.index("pin"), guarded_order.index("context"))
+        self.assertLess(guarded_order.index("pin"), guarded_order.index("definition"))
+        self.assertIn("append", guarded_order)
+        self.assertEqual(_generation_pin_descriptors(pins[0][1]), ())
+
+    async def test_lead_recommendation_fails_closed_after_binding_replacement(self):
+        conversation_id = self.conversation("Replace during recommendation")
+        self.backend.enqueue(recommendation())
+        original_request = self.runtime._recommendation_request_draft
+        original_acquire_pin = SessionArtifactBinding.acquire_generation_pin
+        pins = []
+        replacement = self.replace_session_worktree()
+        entered = False
+        calls = 0
+
+        def replace_after_validation(*args, **kwargs):
+            nonlocal entered, calls
+            result = original_request(*args, **kwargs)
+            calls += 1
+            if calls == 1:
+                replacement.__enter__()
+                entered = True
+            return result
+
+        def capture_pin(binding):
+            pin = original_acquire_pin(binding)
+            pins.append(pin)
+            return pin
+
+        try:
+            with mock.patch.object(
+                self.runtime,
+                "_recommendation_request_draft",
+                side_effect=replace_after_validation,
+            ), mock.patch.object(
+                SessionArtifactBinding,
+                "acquire_generation_pin",
+                new=capture_pin,
+            ):
+                turn = await self.runtime.lead_turn(
+                    self.session_id,
+                    conversation_id,
+                    "Recommend preparing this finished outline.\n"
+                    f"Finished candidate:\n{DRAFT}",
+                )
+        finally:
+            if entered:
+                replacement.__exit__(None, None, None)
+
+        self.assertEqual(calls, 1)
+        self.assertIs(turn.state, c.CollaborationStepState.RECOVERY_REQUIRED)
+        self.assertIs(
+            turn.next_action,
+            c.CollaborationNextAction.REPAIR_AUTHORITATIVE_HISTORY,
+        )
+        self.assertIsNone(turn.recommendation_request)
+        self.assertFalse(
+            self.payload_events(conversation_id, c.LeadRecommendationRequestPayload)
+        )
+        self.assertEqual(len(pins), 1)
+        self.assertEqual(_generation_pin_descriptors(pins[0]), ())
+
+    async def test_lead_generation_pin_closes_on_provider_cancel_and_append_failure(self):
+        binding = compose_session_artifact_binding(
+            self.control_workspace.root,
+            self.session_id,
+        )
+        original_acquire_pin = SessionArtifactBinding.acquire_generation_pin
+
+        for marker in (RuntimeError("provider failed"), asyncio.CancelledError()):
+            pins = []
+
+            def capture_pin(current):
+                pin = original_acquire_pin(current)
+                pins.append(pin)
+                return pin
+
+            with self.subTest(marker=type(marker).__name__), mock.patch.object(
+                SessionArtifactBinding,
+                "acquire_generation_pin",
+                new=capture_pin,
+            ), mock.patch.object(
+                self.runtime,
+                "_run_lead_provider_guarded_pinned",
+                side_effect=marker,
+            ), self.assertRaises(type(marker)) as caught:
+                await self.runtime._run_lead_provider_guarded(
+                    artifact_binding=binding,
+                )
+            self.assertIs(caught.exception, marker)
+            self.assertEqual(len(pins), 1)
+            self.assertEqual(_generation_pin_descriptors(pins[0]), ())
+
+        for marker in (RuntimeError("provider failed"), asyncio.CancelledError()):
+            pins = []
+            replacement = self.replace_session_worktree()
+            entered = False
+
+            def capture_pin(current):
+                pin = original_acquire_pin(current)
+                pins.append(pin)
+                return pin
+
+            async def fail_after_replacement(**_kwargs):
+                nonlocal entered
+                replacement.__enter__()
+                entered = True
+                raise marker
+
+            try:
+                with self.subTest(
+                    replacement_failure=type(marker).__name__
+                ), mock.patch.object(
+                    SessionArtifactBinding,
+                    "acquire_generation_pin",
+                    new=capture_pin,
+                ), mock.patch.object(
+                    self.runtime,
+                    "_run_lead_provider_guarded_pinned",
+                    side_effect=fail_after_replacement,
+                ), self.assertRaises(SessionArtifactBindingError) as caught:
+                    await self.runtime._run_lead_provider_guarded(
+                        artifact_binding=binding,
+                    )
+            finally:
+                if entered:
+                    replacement.__exit__(None, None, None)
+            self.assertIsNone(caught.exception.__cause__)
+            if str(marker):
+                self.assertNotIn(str(marker), str(caught.exception))
+            self.assertEqual(len(pins), 1)
+            self.assertEqual(_generation_pin_descriptors(pins[0]), ())
+
+        pins = []
+        binding_marker = SessionArtifactBindingError("generation changed")
+
+        def capture_pin(current):
+            pin = original_acquire_pin(current)
+            pins.append(pin)
+            return pin
+
+        def reject_generation(current, pin):
+            self.assertIs(current, binding)
+            self.assertIs(pin, pins[0])
+            raise binding_marker
+
+        with mock.patch.object(
+            SessionArtifactBinding,
+            "acquire_generation_pin",
+            new=capture_pin,
+        ), mock.patch.object(
+            SessionArtifactBinding,
+            "require_generation_pin",
+            new=reject_generation,
+        ), mock.patch.object(
+            self.runtime,
+            "_run_lead_provider_guarded_pinned",
+            return_value=object(),
+        ), self.assertRaises(SessionArtifactBindingError) as caught:
+            await self.runtime._run_lead_provider_guarded(
+                artifact_binding=binding,
+            )
+        self.assertIs(caught.exception, binding_marker)
+        self.assertEqual(len(pins), 1)
+        self.assertEqual(_generation_pin_descriptors(pins[0]), ())
+
+        pins = []
+        append_marker = RuntimeError("durable append failed")
+
+        def capture_pin(current):
+            pin = original_acquire_pin(current)
+            pins.append((current, pin))
+            return pin
+
+        async def fail_during_pinned_append(**_kwargs):
+            current, pin = pins[0]
+            current.require_generation_pin(pin)
+            self.runtime._append_drafts(0, ())
+
+        with mock.patch.object(
+            SessionArtifactBinding,
+            "acquire_generation_pin",
+            new=capture_pin,
+        ), mock.patch.object(
+            self.runtime,
+            "_append_drafts",
+            side_effect=append_marker,
+        ), mock.patch.object(
+            self.runtime,
+            "_run_lead_provider_guarded_pinned",
+            side_effect=fail_during_pinned_append,
+        ), self.assertRaises(RuntimeError) as caught:
+            await self.runtime._run_lead_provider_guarded(
+                artifact_binding=binding,
+            )
+        self.assertIs(caught.exception, append_marker)
+        self.assertEqual(len(pins), 1)
+        self.assertEqual(_generation_pin_descriptors(pins[0][1]), ())
+
     async def test_legacy_unscoped_recommendation_stays_readable_but_decisions_are_stale(self):
         for kind in (c.CollaborationConfirmationDecision.CONFIRM, c.CollaborationConfirmationDecision.REVISE):
             with self.subTest(kind=kind):
@@ -608,11 +961,16 @@ class LeadRecommendationTests(RecommendationCase):
         self.assertIsNone(stale.recommendation_request)
         _, offered = await self.recommend(other)
         reviewed = await self.review(await self.confirm(offered))
-        with mock.patch.object(self.runtime.artifacts, "apply_artifact_changes",
-                               side_effect=ArtifactApplicationError(ArtifactApplicationErrorCode.RECOVERY_REQUIRED)):
+        with mock.patch.object(
+            type(self.runtime.artifacts),
+            "apply_artifact_changes",
+            side_effect=ArtifactApplicationError(
+                ArtifactApplicationErrorCode.RECOVERY_REQUIRED
+            ),
+        ):
             await self.apply(reviewed)
         before, calls = self.history(other), len(self.backend.calls)
-        for runtime in (self.runtime, StoryRuntime(self.workspace, self.backend)):
+        for runtime in (self.runtime, StoryRuntime(self.control_workspace, self.backend)):
             blocked = await runtime.decide_lead_recommendation(decision(offered))
             self.assertIs(blocked.next_action, c.CollaborationNextAction.REPAIR_AUTHORITATIVE_HISTORY)
             self.assertIsNone(blocked.recommendation_request)
@@ -621,6 +979,135 @@ class LeadRecommendationTests(RecommendationCase):
 
 
 class LeadRecommendationSynthesisTests(RecommendationCase):
+    async def test_pin_cleanup_preserves_primary_and_never_skips_agent_release(
+        self,
+    ) -> None:
+        cleanup = SystemExit("generation pin close interrupted")
+        provider_failure = RuntimeError("provider failed")
+        pin = SimpleNamespace(close=mock.Mock(side_effect=cleanup))
+        self.runtime._close_story_commit_generation_pin(
+            pin,
+            failure=provider_failure,
+        )
+        pin.close.assert_called_once_with()
+        self.assertIn(
+            "pending story commit cleanup failed: SystemExit",
+            provider_failure.__notes__,
+        )
+
+        persistence_failure = RuntimeError("result persistence failed")
+        persisted_pin = SimpleNamespace(close=mock.Mock(side_effect=cleanup))
+        binding = SimpleNamespace(require_generation_pin=mock.Mock())
+        result = owner._CollaborationInvocationResult(
+            object(),
+            0,
+            artifact_binding=binding,
+            generation_pin=persisted_pin,
+        )
+        with mock.patch.object(
+            self.runtime,
+            "_persist_collaboration_results_with_generation_pin",
+            side_effect=persistence_failure,
+        ), self.assertRaises(RuntimeError) as caught:
+            self.runtime._persist_collaboration_results_locked(
+                synthesis_result=result,
+            )
+        self.assertIs(caught.exception, persistence_failure)
+        persisted_pin.close.assert_called_once_with()
+        self.assertIn(
+            "pending story commit cleanup failed: SystemExit",
+            persistence_failure.__notes__,
+        )
+
+        binding_failure = SessionArtifactBindingError("generation changed")
+        lead_pin = SimpleNamespace(close=mock.Mock(side_effect=cleanup))
+        lead_binding = SimpleNamespace(
+            acquire_generation_pin=mock.Mock(return_value=lead_pin),
+            require_generation_pin=mock.Mock(side_effect=binding_failure),
+        )
+        with mock.patch.object(
+            self.runtime,
+            "_run_lead_provider_guarded_pinned",
+            side_effect=RuntimeError("lead provider failed"),
+        ), self.assertRaises(SessionArtifactBindingError) as caught:
+            await self.runtime._run_lead_provider_guarded(
+                artifact_binding=lead_binding
+            )
+        self.assertIs(caught.exception, binding_failure)
+        lead_pin.close.assert_called_once_with()
+        self.assertIn(
+            "pending story commit cleanup failed: SystemExit",
+            binding_failure.__notes__,
+        )
+
+        stranded_pin = SimpleNamespace(close=mock.Mock(side_effect=cleanup))
+        stranded_binding = SimpleNamespace(
+            acquire_generation_pin=mock.Mock(return_value=stranded_pin)
+        )
+        bound_agent = object()
+        release = mock.AsyncMock()
+        reference_operation = SimpleNamespace(
+            begin_invocation=mock.Mock(
+                side_effect=RuntimeError("reference invocation failed")
+            )
+        )
+        finalization_failure = KeyboardInterrupt("finalization interrupted")
+        with mock.patch.object(
+            owner.SessionSourceWorkspace,
+            "from_artifact_binding",
+            return_value=object(),
+        ), mock.patch.object(
+            self.runtime,
+            "_prepare_session_reference_operation",
+            return_value=reference_operation,
+        ), mock.patch.object(
+            self.runtime,
+            "_validate_assignment_reference_proofs",
+            return_value=None,
+        ), mock.patch.object(
+            self.runtime,
+            "_build_guarded_contextual_definition",
+            return_value=object(),
+        ), mock.patch.object(
+            self.runtime,
+            "_acquire_bound_agent",
+            new=mock.AsyncMock(return_value=bound_agent),
+        ), mock.patch.object(
+            self.runtime,
+            "_fail_reference_operation",
+            return_value=None,
+        ), mock.patch.object(
+            owner,
+            "context_provider_failure_facts",
+            side_effect=finalization_failure,
+        ), mock.patch.object(
+            self.runtime,
+            "_release_bound_agent_use",
+            new=release,
+        ), self.assertRaises(KeyboardInterrupt) as caught:
+            await self.runtime._run_collaboration_invocation_guarded(
+                artifact_binding=stranded_binding,
+                session_id=self.session_id,
+                conversation_id="conversation",
+                turn_id="turn",
+                step_id="step",
+                agent_id=LEAD_ORCHESTRATOR,
+                operation_id="operation",
+                result_correlation_id="result",
+                inputs=(),
+                material_value={},
+                invocation_kind=owner.CollaborationInvocationKind.LEAD_SYNTHESIS,
+                context_invocation_kind=owner.ContextInvocationKind.LEAD_SYNTHESIS,
+                result_contract=object(),
+                physical_call_limit=1,
+                round_number=1,
+                decoder=lambda answer, artifact_binding: answer,
+                action_progress_sink=None,
+            )
+        self.assertIs(caught.exception, finalization_failure)
+        stranded_pin.close.assert_called_once_with()
+        release.assert_awaited_once_with(bound_agent)
+
     async def consultation(self, *, actionable, pause=False, mixed=False):
         conversation_id = self.conversation("Synthetic synthesis")
         proposed = await self.proposal(conversation_id, text="Review this finished user candidate: " + DRAFT)
@@ -680,6 +1167,620 @@ class LeadRecommendationSynthesisTests(RecommendationCase):
                 self.assertIs(turn.state, c.CollaborationStepState.COMPLETED)
             self.assertEqual(self.snapshots(), before)
 
+    async def test_synthesis_recommendation_reuses_invocation_artifact_binding(self):
+        conversation_id = self.conversation("Synthesis binding")
+        proposed = await self.proposal(
+            conversation_id,
+            text="Review this finished user candidate: " + DRAFT,
+        )
+        self.backend.enqueue_for(PLOT_ARCHITECT, lead._specialist_outcome())
+        self.backend.enqueue_for(
+            LEAD_ORCHESTRATOR,
+            lead._synthesis_outcome(
+                message=DRAFT,
+                recommended_action=action(),
+            ),
+        )
+        request_bindings = []
+        basis_bindings = []
+        fingerprint_bindings = []
+        pins = []
+        guarded_order = []
+        original_request = self.runtime._recommendation_request_draft
+        original_basis = self.runtime._recommendation_basis
+        original_fingerprint = self.runtime._recommendation_source_fingerprint
+        original_acquire_pin = SessionArtifactBinding.acquire_generation_pin
+        original_prepare = self.runtime._prepare_session_reference_operation
+        original_definition = self.runtime._build_guarded_contextual_definition
+        original_context_state = self.runtime._session_context_state
+        original_invoke = self.runtime._invoke_context_with_recovery
+        original_persist = (
+            self.runtime._persist_collaboration_results_with_generation_pin
+        )
+        original_append = self.runtime._append_drafts
+
+        def require_current_pin():
+            self.assertEqual(len(pins), 1)
+            pin_binding, pin = pins[0]
+            self.assertIsNone(pin_binding._current_repository_access())
+            pin_binding.require_generation_pin(pin)
+
+        def capture_pin(binding):
+            pin = original_acquire_pin(binding)
+            pins.append((binding, pin))
+            guarded_order.append("pin")
+            return pin
+
+        def capture_request(*args, **kwargs):
+            require_current_pin()
+            request_bindings.append(kwargs["artifact_binding"])
+            return original_request(*args, **kwargs)
+
+        def capture_basis(*args, **kwargs):
+            basis_bindings.append(kwargs["artifact_binding"])
+            return original_basis(*args, **kwargs)
+
+        def capture_fingerprint(*args, **kwargs):
+            fingerprint_bindings.append(kwargs["artifact_binding"])
+            return original_fingerprint(*args, **kwargs)
+
+        def capture_prepare(*args, **kwargs):
+            if pins and kwargs.get("artifact_binding") is pins[0][0]:
+                require_current_pin()
+                guarded_order.append("references")
+            return original_prepare(*args, **kwargs)
+
+        def capture_definition(*args, **kwargs):
+            if pins and kwargs.get("artifact_binding") is pins[0][0]:
+                require_current_pin()
+                guarded_order.append("definition")
+            return original_definition(*args, **kwargs)
+
+        def capture_context_state(*args, **kwargs):
+            if pins and kwargs.get("artifact_binding") is pins[0][0]:
+                require_current_pin()
+                guarded_order.append("context")
+            return original_context_state(*args, **kwargs)
+
+        async def capture_invoke(*args, **kwargs):
+            if pins:
+                require_current_pin()
+                guarded_order.append("await")
+                await asyncio.sleep(0)
+                require_current_pin()
+            return await original_invoke(*args, **kwargs)
+
+        def capture_persist(*args, **kwargs):
+            require_current_pin()
+            self.assertIs(kwargs["synthesis_result"].generation_pin, pins[0][1])
+            guarded_order.append("persist")
+            return original_persist(*args, **kwargs)
+
+        def capture_append(*args, **kwargs):
+            if pins:
+                require_current_pin()
+                guarded_order.append("append")
+            return original_append(*args, **kwargs)
+
+        with mock.patch.object(
+            self.runtime,
+            "_recommendation_request_draft",
+            side_effect=capture_request,
+        ), mock.patch.object(
+            self.runtime,
+            "_recommendation_basis",
+            side_effect=capture_basis,
+        ), mock.patch.object(
+            self.runtime,
+            "_recommendation_source_fingerprint",
+            side_effect=capture_fingerprint,
+        ), mock.patch.object(
+            SessionArtifactBinding,
+            "acquire_generation_pin",
+            new=capture_pin,
+        ), mock.patch.object(
+            self.runtime,
+            "_prepare_session_reference_operation",
+            side_effect=capture_prepare,
+        ), mock.patch.object(
+            self.runtime,
+            "_build_guarded_contextual_definition",
+            side_effect=capture_definition,
+        ), mock.patch.object(
+            self.runtime,
+            "_session_context_state",
+            side_effect=capture_context_state,
+        ), mock.patch.object(
+            self.runtime,
+            "_invoke_context_with_recovery",
+            side_effect=capture_invoke,
+        ), mock.patch.object(
+            self.runtime,
+            "_persist_collaboration_results_with_generation_pin",
+            side_effect=capture_persist,
+        ), mock.patch.object(
+            self.runtime,
+            "_append_drafts",
+            side_effect=capture_append,
+        ):
+            result = await self.runtime.decide_lead_step(
+                lead._decision(
+                    proposed,
+                    c.CollaborationConfirmationDecision.CONFIRM,
+                )
+            )
+
+        self.assertIsNotNone(result.turn.recommendation_request)
+        self.assertEqual(len(request_bindings), 2)
+        self.assertEqual(len(basis_bindings), 2)
+        self.assertEqual(len(fingerprint_bindings), 4)
+        synthesis_binding = request_bindings[0]
+        self.assertTrue(
+            all(
+                binding is synthesis_binding
+                for binding in (
+                    *request_bindings,
+                    *basis_bindings,
+                    *fingerprint_bindings,
+                )
+            )
+        )
+        self.assertEqual(guarded_order[0], "pin")
+        self.assertLess(guarded_order.index("pin"), guarded_order.index("references"))
+        self.assertLess(guarded_order.index("pin"), guarded_order.index("context"))
+        self.assertLess(guarded_order.index("pin"), guarded_order.index("definition"))
+        self.assertLess(guarded_order.index("pin"), guarded_order.index("persist"))
+        self.assertEqual(_generation_pin_descriptors(pins[0][1]), ())
+
+    def test_synthesis_result_pin_is_opaque_nonsemantic_and_closes_on_normalization(
+        self,
+    ) -> None:
+        binding = compose_session_artifact_binding(
+            self.control_workspace.root,
+            self.session_id,
+        )
+        first_pin = binding.acquire_generation_pin()
+        second_pin = binding.acquire_generation_pin()
+        first_descriptors = _generation_pin_descriptors(first_pin)
+        second_descriptors = _generation_pin_descriptors(second_pin)
+        left = owner._CollaborationInvocationResult(
+            object(),
+            1,
+            artifact_binding=binding,
+            generation_pin=first_pin,
+        )
+        right = owner._CollaborationInvocationResult(
+            left.value,
+            1,
+            artifact_binding=binding,
+            generation_pin=second_pin,
+        )
+        self.assertEqual(left, right)
+        self.assertNotIn("GenerationPin", repr(left))
+        self.assertNotIn("generation_pin", repr(left))
+        self.assertEqual(repr(left), repr(right))
+
+        malformed = self.runtime._required_synthesis_result(left)
+        self.assertIs(malformed.artifact_binding, binding)
+        self.assertIs(malformed.generation_pin, first_pin)
+        self.assertIsInstance(malformed.failure, BackendProtocolError)
+        marker = RuntimeError("malformed result append rejected")
+        with mock.patch.object(
+            self.runtime,
+            "_persist_collaboration_results_with_generation_pin",
+            side_effect=marker,
+        ), self.assertRaises(RuntimeError) as caught:
+            self.runtime._persist_collaboration_results_locked(
+                synthesis_result=malformed,
+            )
+        self.assertIs(caught.exception, marker)
+        self.assertEqual(_generation_pin_descriptors(first_pin), ())
+        for descriptor in first_descriptors:
+            with self.assertRaises(OSError):
+                os.fstat(descriptor)
+
+        with mock.patch.object(
+            self.runtime,
+            "_persist_collaboration_results_with_generation_pin",
+            side_effect=marker,
+        ), self.assertRaises(SessionArtifactBindingError):
+            self.runtime._persist_collaboration_results_locked(
+                synthesis_result=malformed,
+            )
+        second_pin.close()
+        second_pin.close()
+        for descriptor in second_descriptors:
+            with self.assertRaises(OSError):
+                os.fstat(descriptor)
+
+    def test_synthesis_generation_loss_overrides_append_failure_and_closes_pin(
+        self,
+    ) -> None:
+        binding = compose_session_artifact_binding(
+            self.control_workspace.root,
+            self.session_id,
+        )
+        pin = binding.acquire_generation_pin()
+        descriptors = _generation_pin_descriptors(pin)
+        result = owner._CollaborationInvocationResult(
+            object(),
+            0,
+            artifact_binding=binding,
+            generation_pin=pin,
+        )
+        marker = RuntimeError("durable append failed after generation loss")
+        replacement = self.replace_session_worktree()
+        replacement.__enter__()
+
+        def fail_persistence(**_kwargs):
+            self.runtime._append_drafts(0, ())
+
+        try:
+            with mock.patch.object(
+                self.runtime,
+                "_append_drafts",
+                side_effect=marker,
+            ) as append, mock.patch.object(
+                self.runtime,
+                "_persist_collaboration_results_with_generation_pin",
+                side_effect=fail_persistence,
+            ), self.assertRaises(SessionArtifactBindingError) as caught:
+                self.runtime._persist_collaboration_results_locked(
+                    synthesis_result=result,
+                )
+        finally:
+            replacement.__exit__(None, None, None)
+        self.assertIsNone(caught.exception.__cause__)
+        self.assertNotIn(str(marker), str(caught.exception))
+        append.assert_called_once_with(0, ())
+        self.assertEqual(_generation_pin_descriptors(pin), ())
+        pin.close()
+        for descriptor in descriptors:
+            with self.assertRaises(OSError):
+                os.fstat(descriptor)
+
+    async def test_bound_agent_release_joins_repeated_cancellation_and_failures(
+        self,
+    ) -> None:
+        for cancellations in (1, 2):
+            with self.subTest(cancellations=cancellations):
+                bound_agent = object()
+                key = (LEAD_ORCHESTRATOR, f"cancel-{cancellations}")
+                self.runtime._bound_agent_uses[id(bound_agent)] = (
+                    bound_agent,
+                    1,
+                )
+                self.runtime._retiring_bound_agents[key] = bound_agent
+                await self.runtime._binding_lock.acquire()
+                released = []
+                try:
+                    with mock.patch.object(
+                        owner,
+                        "release_bound_agent",
+                        side_effect=lambda current: released.append(current),
+                    ):
+                        task = asyncio.create_task(
+                            self.runtime._release_bound_agent_use(bound_agent)
+                        )
+                        await asyncio.sleep(0)
+                        for ordinal in range(cancellations):
+                            task.cancel(f"cancel-{ordinal + 1}")
+                            await asyncio.sleep(0)
+                        self.runtime._binding_lock.release()
+                        with self.assertRaises(asyncio.CancelledError) as caught:
+                            await task
+                finally:
+                    if self.runtime._binding_lock.locked():
+                        self.runtime._binding_lock.release()
+                self.assertEqual(str(caught.exception), "cancel-1")
+                self.assertEqual(released, [bound_agent])
+                self.assertNotIn(id(bound_agent), self.runtime._bound_agent_uses)
+                self.assertNotIn(key, self.runtime._retiring_bound_agents)
+
+        completion_started = asyncio.Event()
+        completion_allowed = asyncio.Event()
+
+        async def complete_in_race(_bound_agent):
+            completion_started.set()
+            await completion_allowed.wait()
+
+        with mock.patch.object(
+            self.runtime,
+            "_release_bound_agent_use_once",
+            side_effect=complete_in_race,
+        ):
+            completion = asyncio.create_task(
+                self.runtime._release_bound_agent_use(object())
+            )
+            await completion_started.wait()
+            completion.cancel("completion-race")
+            completion_allowed.set()
+            with self.assertRaises(asyncio.CancelledError) as raced:
+                await completion
+        self.assertEqual(str(raced.exception), "completion-race")
+
+        cleanup_marker = RuntimeError("physical release failed")
+
+        async def fail_cleanup(_bound_agent):
+            raise cleanup_marker
+
+        with mock.patch.object(
+            self.runtime,
+            "_release_bound_agent_use_once",
+            side_effect=fail_cleanup,
+        ), self.assertRaises(RuntimeError) as cleanup:
+            await self.runtime._release_bound_agent_use(object())
+        self.assertIs(cleanup.exception, cleanup_marker)
+
+        failure_started = asyncio.Event()
+        failure_allowed = asyncio.Event()
+
+        async def fail_after_cancel(_bound_agent):
+            failure_started.set()
+            await failure_allowed.wait()
+            raise cleanup_marker
+
+        with mock.patch.object(
+            self.runtime,
+            "_release_bound_agent_use_once",
+            side_effect=fail_after_cancel,
+        ):
+            cancelled = asyncio.create_task(
+                self.runtime._release_bound_agent_use(object())
+            )
+            await failure_started.wait()
+            cancelled.cancel("cleanup-cancel")
+            failure_allowed.set()
+            with self.assertRaises(asyncio.CancelledError) as caught:
+                await cancelled
+        self.assertEqual(str(caught.exception), "cleanup-cancel")
+        self.assertIn(
+            "bound-agent release failed: RuntimeError",
+            getattr(caught.exception, "__notes__", ()),
+        )
+
+    async def test_collaboration_release_cancellation_cleans_retired_use_and_pin(
+        self,
+    ) -> None:
+        for mode in ("success", "cancelled", "cleanup_failure"):
+            with self.subTest(mode=mode):
+                conversation_id = self.conversation(f"release {mode}")
+                binding = compose_session_artifact_binding(
+                    self.control_workspace.root,
+                    self.session_id,
+                )
+                invocation_started = asyncio.Event()
+                invocation_allowed = asyncio.Event()
+                release_started = asyncio.Event()
+                original_release = self.runtime._release_bound_agent_use
+                physical_releases = []
+                cleanup_marker = RuntimeError("retired binding release failed")
+                binding_key = (LEAD_ORCHESTRATOR, f"release-{mode}")
+                bound_agent = SimpleNamespace()
+                delegate = SimpleNamespace(
+                    provider_id="synthetic-provider",
+                    definition_fingerprint="synthetic-definition",
+                    reference_operation_id=None,
+                )
+
+                async def acquire(_definition):
+                    self.runtime._bound_agents[binding_key] = bound_agent
+                    self.runtime._retain_bound_agent_use_locked(bound_agent)
+                    return bound_agent
+
+                async def invoke(*_args, **_kwargs):
+                    invocation_started.set()
+                    await invocation_allowed.wait()
+                    return SimpleNamespace(answer="synthetic synthesis")
+
+                async def observe_release(bound_agent):
+                    release_started.set()
+                    if not invocation_started.is_set():
+                        return None
+                    return await original_release(bound_agent)
+
+                def release_physical(bound_agent):
+                    physical_releases.append(bound_agent)
+                    if mode == "cleanup_failure":
+                        raise cleanup_marker
+
+                with mock.patch.object(
+                    owner,
+                    "ContextInvocationRequest",
+                    side_effect=lambda **values: SimpleNamespace(**values),
+                ), mock.patch.object(
+                    owner,
+                    "select_bounded_collaboration_context",
+                    return_value=None,
+                ), mock.patch.object(
+                    self.runtime,
+                    "_build_guarded_contextual_definition",
+                    return_value=SimpleNamespace(
+                        agent_id=LEAD_ORCHESTRATOR,
+                        fingerprint=binding_key[1],
+                    ),
+                ), mock.patch.object(
+                    self.runtime,
+                    "_acquire_bound_agent",
+                    side_effect=acquire,
+                ), mock.patch.object(
+                    self.runtime,
+                    "_validated_context_provider_factory",
+                    return_value=lambda _reference_read: delegate,
+                ), mock.patch.object(
+                    self.runtime,
+                    "_session_context_state",
+                    return_value=None,
+                ), mock.patch.object(
+                    self.runtime,
+                    "_lead_continuation_arguments",
+                    return_value={},
+                ), mock.patch.object(
+                    self.runtime,
+                    "_invoke_context_with_recovery",
+                    side_effect=invoke,
+                ), mock.patch.object(
+                    self.runtime,
+                    "_release_bound_agent_use",
+                    side_effect=observe_release,
+                ), mock.patch.object(
+                    owner,
+                    "release_bound_agent",
+                    side_effect=release_physical,
+                ):
+                    task = asyncio.create_task(
+                        self.runtime._run_collaboration_invocation_guarded(
+                            artifact_binding=binding,
+                            session_id=self.session_id,
+                            conversation_id=conversation_id,
+                            turn_id="turn",
+                            step_id="step",
+                            agent_id=LEAD_ORCHESTRATOR,
+                            operation_id="operation",
+                            result_correlation_id="result",
+                            inputs=(),
+                            material_value={},
+                            invocation_kind=owner.CollaborationInvocationKind.LEAD_SYNTHESIS,
+                            context_invocation_kind=owner.ContextInvocationKind.LEAD_SYNTHESIS,
+                            result_contract=object(),
+                            physical_call_limit=1,
+                            round_number=None,
+                            decoder=lambda answer, _binding: answer,
+                            action_progress_sink=None,
+                        )
+                    )
+                    invocation_wait = asyncio.create_task(
+                        invocation_started.wait()
+                    )
+                    done, _pending = await asyncio.wait(
+                        (task, invocation_wait),
+                        timeout=30,
+                        return_when=asyncio.FIRST_COMPLETED,
+                    )
+                    if task in done:
+                        premature = task.result()
+                        self.fail(
+                            "collaboration failed before provider barrier: "
+                            f"{premature.failure!r}\n"
+                            + "".join(
+                                traceback.format_tb(premature.failure.__traceback__)
+                            )
+                        )
+                    self.assertIn(invocation_wait, done)
+                    await invocation_wait
+                    await self.runtime._binding_lock.acquire()
+                    try:
+                        self.assertEqual(len(self.runtime._bound_agent_uses), 1)
+                        retained_agent, uses = next(
+                            iter(self.runtime._bound_agent_uses.values())
+                        )
+                        self.assertIs(retained_agent, bound_agent)
+                        self.assertEqual(uses, 1)
+                        key = next(
+                            key
+                            for key, current in self.runtime._bound_agents.items()
+                            if current is retained_agent
+                        )
+                        self.runtime._bound_agents.pop(key)
+                        self.assertEqual(
+                            self.runtime._mark_binding_retiring_locked(
+                                key,
+                                retained_agent,
+                            ),
+                            [],
+                        )
+                        invocation_allowed.set()
+                        await release_started.wait()
+                        if mode == "cancelled":
+                            task.cancel("release cancelled")
+                            await asyncio.sleep(0)
+                    finally:
+                        self.runtime._binding_lock.release()
+                    result = await task
+
+                if mode == "success":
+                    self.assertIsNone(result.failure)
+                    self.assertEqual(result.value, "synthetic synthesis")
+                elif mode == "cancelled":
+                    self.assertIsInstance(result.failure, asyncio.CancelledError)
+                    self.assertEqual(str(result.failure), "release cancelled")
+                else:
+                    self.assertIs(result.failure, cleanup_marker)
+                self.assertEqual(physical_releases, [bound_agent])
+                self.assertEqual(self.runtime._bound_agent_uses, {})
+                self.assertNotIn(key, self.runtime._retiring_bound_agents)
+                self.assertIs(result.artifact_binding, binding)
+                self.assertIsNotNone(result.generation_pin)
+                descriptors = _generation_pin_descriptors(result.generation_pin)
+                self.assertEqual(len(descriptors), 6)
+                binding.require_generation_pin(result.generation_pin)
+                with mock.patch.object(
+                    self.runtime,
+                    "_persist_collaboration_results_with_generation_pin",
+                    return_value=None,
+                ):
+                    self.runtime._persist_collaboration_results_locked(
+                        synthesis_result=result,
+                    )
+                self.assertEqual(
+                    _generation_pin_descriptors(result.generation_pin),
+                    (),
+                )
+                for descriptor in descriptors:
+                    with self.assertRaises(OSError):
+                        os.fstat(descriptor)
+
+    async def test_synthesis_failure_transfers_pin_once_until_persistence(self):
+        binding = compose_session_artifact_binding(
+            self.control_workspace.root,
+            self.session_id,
+        )
+        for marker in (RuntimeError("provider failed"), asyncio.CancelledError()):
+            with self.subTest(marker=type(marker).__name__), mock.patch.object(
+                self.runtime,
+                "_prepare_session_reference_operation",
+                side_effect=marker,
+            ):
+                result = await self.runtime._run_collaboration_invocation_guarded(
+                    artifact_binding=binding,
+                    session_id=self.session_id,
+                    conversation_id="conversation",
+                    turn_id="turn",
+                    step_id="step",
+                    agent_id=LEAD_ORCHESTRATOR,
+                    operation_id="operation",
+                    result_correlation_id="result",
+                    inputs=(),
+                    material_value={},
+                    invocation_kind=owner.CollaborationInvocationKind.LEAD_SYNTHESIS,
+                    context_invocation_kind=owner.ContextInvocationKind.LEAD_SYNTHESIS,
+                    result_contract=object(),
+                    physical_call_limit=1,
+                    round_number=None,
+                    decoder=lambda answer, artifact_binding: answer,
+                    action_progress_sink=None,
+                )
+            self.assertIs(result.failure, marker)
+            self.assertIs(result.artifact_binding, binding)
+            self.assertIsNotNone(result.generation_pin)
+            descriptors = _generation_pin_descriptors(result.generation_pin)
+            binding.require_generation_pin(result.generation_pin)
+            with mock.patch.object(
+                self.runtime,
+                "_persist_collaboration_results_with_generation_pin",
+                return_value=None,
+            ):
+                self.runtime._persist_collaboration_results_locked(
+                    synthesis_result=result,
+                )
+            self.assertEqual(
+                _generation_pin_descriptors(result.generation_pin),
+                (),
+            )
+            for descriptor in descriptors:
+                with self.assertRaises(OSError):
+                    os.fstat(descriptor)
+
     async def test_synthesis_next_intent_and_action_are_exclusive_with_bounded_accounting(self):
         conversation_id, _, mixed = await self.consultation(actionable=True, mixed=True)
         self.assertIsNone(mixed.turn.recommendation_request)
@@ -708,9 +1809,13 @@ class LeadRecommendationSynthesisTests(RecommendationCase):
         projection = c.project_collaboration_history(known)
         self.assertIs(projection.current_recommendation_state, c.LeadRecommendationState.PENDING)
         backend = lead._LeadBackend()
-        restarted = StoryRuntime(self.workspace, backend)
+        restarted = StoryRuntime(self.control_workspace, backend)
         for _ in range(2):
-            restored = restarted._finalize_known_result_locked(known, projection)
+            restored = restarted._finalize_known_result_locked(
+                self.session_id,
+                known,
+                projection,
+            )
             self.assertEqual(restored.recommendation_request, projection.current_recommendation_request)
             self.assertEqual(self.history(conversation_id), known)
             self.assertEqual(backend.calls, [])
@@ -754,7 +1859,7 @@ class LeadRecommendationRecoveryTests(RecommendationCase):
                 await self.runtime.decide_lead_recommendation(decision(turn))
         known = self.history(conversation_id)
         self.assertIs(self.projection(conversation_id).current_recommendation_state, c.LeadRecommendationState.RUNNING)
-        restarted = StoryRuntime(self.workspace, self.backend)
+        restarted = StoryRuntime(self.control_workspace, self.backend)
         self.assertEqual(self.history(conversation_id), known)
         closed = await restarted.decide_lead_recommendation(decision(turn))
         self.assertIs(closed.next_action, c.CollaborationNextAction.CONTINUE_WITH_LEAD)
@@ -834,7 +1939,7 @@ class LeadRecommendationRecoveryTests(RecommendationCase):
                 self.assertEqual(invocation[-1].correlation.operation_id, reference.manifest.operation_id)
                 self.assertEqual(invocation[-1].correlation.phase, "lead")
             old = self.history(conversation_id)
-            restarted = StoryRuntime(self.workspace, self.backend)
+            restarted = StoryRuntime(self.control_workspace, self.backend)
             with self.assertRaises(BackendProtocolError):
                 await restarted.decide_lead_recommendation(decision(turn))
             self.assertEqual(self.history(conversation_id), old)
@@ -871,7 +1976,7 @@ class LeadRecommendationRecoveryTests(RecommendationCase):
                     await self.runtime.decide_lead_recommendation(decision(turn))
             self.assertFalse(self.payload_events(conversation_id, c.LeadRecommendationResultPayload))
             calls, history = len(self.backend.calls), self.history(conversation_id)
-            restarted = StoryRuntime(self.workspace, self.backend)
+            restarted = StoryRuntime(self.control_workspace, self.backend)
             blocked = await restarted.lead_turn(self.session_id, conversation_id, "Do not replay uncertain work.")
             self.assertIs(blocked.next_action, c.CollaborationNextAction.INSPECT_AND_RESOLVE_OUTCOME if fault == "uncertain"
                           else c.CollaborationNextAction.REPAIR_AUTHORITATIVE_HISTORY)
@@ -918,7 +2023,7 @@ class LeadRecommendationRecoveryTests(RecommendationCase):
                         await self.runtime.decide_lead_recommendation(decision(turn))
             history, calls = self.history(conversation_id), len(self.backend.calls)
             self.assertFalse(self.payload_events(conversation_id, c.LeadRecommendationResultPayload))
-            restarted = StoryRuntime(self.workspace, self.backend)
+            restarted = StoryRuntime(self.control_workspace, self.backend)
             result = await restarted.lead_turn(self.session_id, conversation_id, "Finalize known local failure only.")
             self.assertEqual(len(self.backend.calls), calls)
             self.assertIsNone(result.recommendation_request)
@@ -932,6 +2037,85 @@ class LeadRecommendationRecoveryTests(RecommendationCase):
                 with self.assertRaises(BackendProtocolError):
                     await restarted.decide_lead_recommendation(decision(turn))
                 self.assertEqual(len(self.payload_events(conversation_id, c.LeadRecommendationResultPayload)), 1)
+
+    async def test_reference_recovery_root_loss_preserves_failure_without_replay(self):
+        repository_type = type(self.runtime.artifacts)
+        inspect_operation = repository_type.inspect_reference_operation
+
+        for fail_on_terminal_inspection in (1, 2):
+            with self.subTest(
+                fail_on_terminal_inspection=fail_on_terminal_inspection
+            ):
+                conversation_id, turn = await self.reference_offer()
+                self.backend.enqueue(
+                    lead._SubmittedFailure(
+                        BackendProtocolError("Synthetic native provider failure")
+                    )
+                )
+                terminal_inspections = 0
+
+                def lose_root_after_failure(repository, operation_id):
+                    nonlocal terminal_inspections
+                    history = inspect_operation(repository, operation_id)
+                    if self.payload_events(
+                        conversation_id,
+                        c.CollaborationLeadOutcomeFailurePayload,
+                    ):
+                        terminal_inspections += 1
+                        if terminal_inspections >= fail_on_terminal_inspection:
+                            raise ArtifactRootSecurityError(
+                                "workspace root identity changed"
+                            )
+                    return history
+
+                with mock.patch.object(
+                    repository_type,
+                    "inspect_reference_operation",
+                    new=lose_root_after_failure,
+                ):
+                    blocked = await self.runtime.decide_lead_recommendation(
+                        decision(turn)
+                    )
+                    durable = self.history(conversation_id)
+                    provider_calls = (
+                        len(self.backend.calls),
+                        len(self.backend.reference_calls),
+                    )
+                    restarted = StoryRuntime(self.control_workspace, self.backend)
+                    repeated = await restarted.lead_turn(
+                        self.session_id,
+                        conversation_id,
+                        "Do not replay the failed preparation.",
+                    )
+
+                self.assertGreaterEqual(
+                    terminal_inspections,
+                    fail_on_terminal_inspection,
+                )
+                for result in (blocked, repeated):
+                    self.assertIs(
+                        result.state,
+                        c.CollaborationStepState.RECOVERY_REQUIRED,
+                    )
+                    self.assertIs(
+                        result.next_action,
+                        c.CollaborationNextAction.REPAIR_AUTHORITATIVE_HISTORY,
+                    )
+                    self.assertIsNone(result.recommendation_request)
+                self.assertEqual(
+                    (len(self.backend.calls), len(self.backend.reference_calls)),
+                    provider_calls,
+                )
+                self.assertEqual(self.history(conversation_id), durable)
+                failures = self.payload_events(
+                    conversation_id,
+                    c.CollaborationLeadOutcomeFailurePayload,
+                )
+                self.assertEqual(len(failures), 1)
+                self.assertIs(
+                    failures[0].payload.code,
+                    c.CollaborationLeadOutcomeFailureCode.PROVIDER_FAILED,
+                )
 
 
 class LeadRecommendationAuthRecoveryTests(RecommendationCase):
@@ -1063,7 +2247,7 @@ class LeadRecommendationAuthRecoveryTests(RecommendationCase):
                 self.assertFalse(error.validate_replay())
                 if mode == "timeout": self.assertTrue(context_provider_failure_facts(error).timed_out)
                 old_calls = len(self.backend.calls)
-                restarted = StoryRuntime(self.workspace, self.backend)
+                restarted = StoryRuntime(self.control_workspace, self.backend)
                 self.assertEqual(len(self.backend.calls), old_calls)
                 self.assert_no_downstream(conversation_id)
                 self.workspace.path(OUTLINE).write_bytes(b"")

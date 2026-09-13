@@ -218,6 +218,61 @@ artifact-only paths. Lead synthesis is a separate invocation over all direct
 story-artifact inputs and typed specialist replies; it does not inherit a
 specialist's read authority or receipt.
 
+These adapters do not share one filesystem authority. Focused conversation
+uses the configured conversation store owned by the control plane. For each
+artifact-sensitive invocation, runtime derives a package-internal
+`SessionSourceWorkspace` from the same freshly validated exact-session binding
+as the artifact repository and lends it only to the active-debate and invoking-
+agent-state adapters. Its reads are descriptor-relative and pinned to the
+session worktree's physical `(st_dev, st_ino)` identity. The binding also pins
+the exact semantic READY branch/ref/worktree inspection. Every outer repository
+or session-source transaction enters a short synchronous cooperating-runtime
+guard, checks READY and the named physical root once before and once after its
+body, and then releases the Git lease and descriptors. Nested binding and
+repository operations reuse that transaction with thread/lease liveness and
+named-root checks rather than repeating the complete READY scan. The guard
+never spans the provider `await`; a later SEARCH, READ, ANSWER revalidation,
+reference-ledger action, or closure step reacquires it. A replaced or
+persistently non-ready root is therefore rejected before content returns or at
+the next checkpoint; neither
+adapter can fall back to the control root, another session, or a previous
+binding. The repository is private to the binding and is available only
+through the live access yielded by that guard; the access expires when the
+guard closes. Closing revalidates after a successful action, raised error, or
+cancellation. If closing detects binding loss, that content-free failure
+dominates an otherwise concurrent body failure; with a valid binding, the
+original error or cancellation is preserved. The lease does not continuously
+exclude arbitrary external Git that does not cooperate with the runtime. The
+view supplies no generic path, write, provider-filesystem, or Git authority.
+
+Direct Lead and Lead-synthesis invocation owners additionally acquire an
+opaque six-descriptor physical-generation pin before session-derived
+definitions, sources, or provider work. It retains the exact control-root,
+common-Git, worktree-administration, session-worktree, `.git`, and `commondir`
+relationship through durable result publication, then rechecks and closes.
+This pin can span the provider await because it retains no Git lease and grants
+no traversal, content, mutation, or semantic READY authority. It does not set
+or confine the provider's working directory or project root; that separate
+story-runtime boundary remains tracked by
+[Issue #670](https://github.com/Kims-DeveloperGroup/story-writing-agents/issues/670).
+
+The session-source reader accepts only canonical relative POSIX paths. It
+traverses without following symlinks, retains the complete root-to-parent
+descriptor chain, and accepts only a stable, singly linked regular-file leaf
+whose named and opened identity, mode, size, and timestamps agree before and
+after reading. After the final leaf, inventory, or absence observation, every
+original parent-child edge is reopened and revalidated. Agent-state JSONL is
+limited to 8 MiB and 10,000 records across the selected files; debate JSONL is
+limited to 10,000 records. Both iterate lazily and reject record 10,001 before
+slicing, parsing, or retaining it. FIFOs, devices, hard links, replacements,
+ancestor drift, and foreign embedded session/debate/agent ownership fail as
+source unavailability before evidence is accepted.
+
+The guarded reference-operation variant deliberately preserves a root-security
+failure for orchestration instead of converting it to a generic reference
+workflow failure. Orchestration can therefore close exact binding loss as
+typed recovery without provider replay or repository fallback.
+
 `FocusedConversationSourceAdapter` reads canonical v2 events from the active
 store and applies `select_bounded_collaboration_context()`. Its default mode is
 a content-free bootstrap with no provider-readable record body. The lead

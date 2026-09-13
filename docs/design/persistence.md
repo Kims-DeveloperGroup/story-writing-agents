@@ -961,8 +961,8 @@ catalog, and application operation acquires both and runs recovery before it
 reads current artifact authority. The private store uses existing
 descriptor-safe storage and is not exported. #520 adds the module-supported
 internal `apply_artifact_changes(request)` repository seam; neither repository
-nor store is exported by a package facade. #491 will separately supply lead/user
-Apply-confirmation authority.
+nor store is exported by a package facade. Runtime separately supplies
+lead/user Apply-confirmation authority.
 
 The seam accepts exactly one frozen `ArtifactApplicationRequest`, never prose,
 a mapping, a mutable wrapper, or a subclass. The request owns its exact
@@ -1020,8 +1020,17 @@ completed or verified before the next repository-owned authoritative access.
 
 This seam neither confirms nor rejects a proposal, refreshes prompt context,
 calls a provider or agent, nor stages or commits Git. Reject and Revise mean
-#491 does not invoke it. A later story-commit action must independently inspect
+runtime does not invoke it. A later story-commit action must independently inspect
 the applied state and obtain fresh Git-specific authority.
+
+For a successful runtime Apply, the exact physical/semantic session binding is
+reopened across follow-on `story_commit_request` publication and in-memory
+service registration. Detected binding loss suppresses the returned request
+and removes the in-memory service, while the already published Apply result and
+any already-completed request append remain durable. There is intentionally no
+durable post-Apply handoff-failure state, schema field, or restart projection
+yet; that separate persistence change is deferred to sibling
+[Issue #662](https://github.com/Kims-DeveloperGroup/story-writing-agents/issues/662).
 
 The additive `inspect_artifact_application(application_id)` method shares the
 same repository boundary but never calls the apply path. It validates one exact

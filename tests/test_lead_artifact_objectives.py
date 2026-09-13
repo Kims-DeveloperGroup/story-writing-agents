@@ -121,7 +121,7 @@ class LeadArtifactObjectiveTests(objectives.ObjectiveCase):
         backend = lead._LeadBackend(persist_context_threads=True)
         backend.context_threads.update(self.backend.context_threads)
         self.backend = backend
-        self.runtime = StoryRuntime(self.workspace, backend)
+        self.runtime = StoryRuntime(self.control_workspace, backend)
         self.assertEqual(backend.calls, [])
         self.assertEqual(self.history(conversation_id), prefix)
         before = self.snapshots()
@@ -177,7 +177,7 @@ class LeadArtifactObjectiveTests(objectives.ObjectiveCase):
                 reviewed = await self.review(await self.prepare(conversation_id))
                 decision = application._application_decision(reviewed, c.ArtifactApplicationDecisionKind.REJECT if terminal == "reject" else c.ArtifactApplicationDecisionKind.REVISE if terminal == "revise" else c.ArtifactApplicationDecisionKind.APPLY, revision_request="Refine the ending." if terminal == "revise" else None)
                 if terminal == "stale":
-                    self.runtime = StoryRuntime(self.workspace, self.backend)
+                    self.runtime = StoryRuntime(self.control_workspace, self.backend)
                 result = await self.runtime.decide_artifact_application(decision)
                 expected = {"reject": "rejected", "revise": "superseded", "stale": "stale"}[terminal]
                 self.assertEqual(result.outcome.outcome.value, expected)
@@ -199,7 +199,7 @@ class LeadArtifactObjectiveTests(objectives.ObjectiveCase):
                 applied = await case.apply(await case.review(await case.prepare(conversation_id)))
                 self.assertIsNotNone(applied.commit_request)
                 if terminal == "stale":
-                    case.runtime = StoryRuntime(case.workspace, case.backend)
+                    case.runtime = StoryRuntime(case.control_workspace, case.backend)
                 kind = commit.StoryCommitDecision.COMMIT if terminal == "stale" else commit.StoryCommitDecision(terminal)
                 decision = commit._commit_decision(applied, kind, revision_request="Use a clearer message." if terminal == "revise" else None)
                 result = await case.runtime.decide_story_commit(decision)
@@ -236,10 +236,17 @@ class LeadArtifactObjectiveTests(objectives.ObjectiveCase):
                 conversation_id, _ = await self.start()
                 prepared = await self.prepare(conversation_id)
                 reviewed = await self.review(prepared)
-                with mock.patch.object(self.runtime.artifacts, "apply_artifact_changes", side_effect=ArtifactApplicationError(code)):
+                with mock.patch.object(
+                    type(self.runtime.artifacts),
+                    "apply_artifact_changes",
+                    side_effect=ArtifactApplicationError(code),
+                ):
                     await self.apply(reviewed)
                 history, calls, before = self.history(conversation_id), len(self.backend.calls), self.snapshots()
-                for runtime in (self.runtime, StoryRuntime(self.workspace, self.backend)):
+                for runtime in (
+                    self.runtime,
+                    StoryRuntime(self.control_workspace, self.backend),
+                ):
                     for invoke in (lambda: runtime.lead_turn(self.session_id, conversation_id, "Prepare another one."), lambda: runtime.propose_specialist_advisory(self.session_id, conversation_id, PLOT_ARCHITECT, "Check again.", authoring_scope=prepared.proposal.authoring_scope, review_basis=prepared.proposal.assignments[0].review_basis)):
                         result = await invoke()
                         self.assertIs(result.next_action, expected)
@@ -262,11 +269,16 @@ class LeadArtifactObjectiveTests(objectives.ObjectiveCase):
                 prepared = await case.prepare(conversation_id)
                 applied = await case.apply(await case.review(prepared))
                 reviewed = applied.request.reviewed_proposal
-                service = case.runtime._story_commit_services[(case.session_id, conversation_id, reviewed.step_id)]
+                service = case.runtime._pending_story_commits[
+                    (case.session_id, conversation_id, reviewed.step_id)
+                ].service
                 with mock.patch.object(type(service), "execute", side_effect=StoryCommitError(code)):
                     await case.runtime.decide_story_commit(commit._commit_decision(applied, commit.StoryCommitDecision.COMMIT))
                 history, calls, before = case.history(conversation_id), len(case.backend.calls), case.snapshots()
-                for runtime in (case.runtime, StoryRuntime(case.workspace, case.backend)):
+                for runtime in (
+                    case.runtime,
+                    StoryRuntime(case.control_workspace, case.backend),
+                ):
                     for invoke in (lambda: runtime.lead_turn(case.session_id, conversation_id, "Continue."), lambda: runtime.propose_specialist_advisory(case.session_id, conversation_id, PLOT_ARCHITECT, "Inspect.", authoring_scope=prepared.proposal.authoring_scope, review_basis=prepared.proposal.assignments[0].review_basis)):
                         result = await invoke()
                         self.assertIs(result.next_action, expected)
@@ -330,7 +342,7 @@ class LeadArtifactObjectiveTests(objectives.ObjectiveCase):
         self.assertIs(failed.next_action, c.CollaborationNextAction.RETRY_LEAD_TURN)
         self.assertEqual(self.objective(conversation_id), before)
         prefix, calls = self.history(conversation_id), len(self.backend.calls)
-        self.runtime = StoryRuntime(self.workspace, self.backend)
+        self.runtime = StoryRuntime(self.control_workspace, self.backend)
         self.assertEqual(len(self.backend.calls), calls)
         await self.prepare(conversation_id)
         self.assertEqual(self.history(conversation_id)[:len(prefix)], prefix)

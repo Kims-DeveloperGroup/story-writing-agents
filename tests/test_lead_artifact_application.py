@@ -2,13 +2,17 @@
 
 from __future__ import annotations
 
+import os
 import subprocess
 import unittest
+from contextlib import contextmanager
 from dataclasses import replace
 from unittest import mock
 
 from story_writing_agents import StoryRuntime
+from story_writing_agents import orchestrator as orchestrator_module
 from story_writing_agents.agents import LEAD_ORCHESTRATOR
+from story_writing_agents.git.story_commits import StoryCommitService
 from story_writing_agents.conversations import (
     ArtifactApplicationDecision,
     ArtifactApplicationDecisionKind,
@@ -17,12 +21,26 @@ from story_writing_agents.conversations import (
     CollaborationConfirmationDecision,
     CollaborationNextAction,
     CollaborationSideEffect,
+    StoryCommitDecisionRequest,
+    StoryCommitNextAction,
+    StoryCommitOutcomeKind,
     project_collaboration_history,
 )
+from story_writing_agents.git.story_commit_contracts import StoryCommitDecision
 from story_writing_agents.writing_artifacts import (
     ArtifactApplicationError,
     ArtifactApplicationErrorCode,
     ArtifactApplicationState,
+)
+from story_writing_agents.writing_artifacts._storage import ArtifactRootSecurityError
+from story_writing_agents.writing_artifacts.repository import WritingArtifactRepository
+from story_writing_agents.workspace import initialization as initialization_module
+from story_writing_agents.workspace.initialization import (
+    SessionArtifactAccess,
+    SessionArtifactBinding,
+    SessionArtifactBindingError,
+    SessionArtifactGenerationPin,
+    provision_session_resources,
 )
 
 from tests.test_artifact_proposal_orchestration import (
@@ -40,7 +58,6 @@ from tests.test_lead_orchestration import (
     _LeadBackend,
     _decision,
     _specialist_outcome,
-    _visible_outcome,
 )
 
 
@@ -73,10 +90,26 @@ def _application_decision(
 
 
 class LeadArtifactApplicationTests(LeadOrchestrationTestCase):
+    def commit_session_fixture_state(self) -> None:
+        self.workspace.path(_RULES).unlink(missing_ok=True)
+        subprocess.run(
+            ["git", "add", "-A", "--", "core_documents", "manuscript"],
+            cwd=self.workspace.root,
+            check=True,
+        )
+        subprocess.run(
+            ["git", "commit", "-m", "Seed application test fixtures"],
+            cwd=self.workspace.root,
+            check=True,
+            stdout=subprocess.DEVNULL,
+        )
+
     def artifact_snapshot(self) -> tuple[tuple[str, bytes], ...]:
         return tuple(
             (item.path, item.content)
-            for item in self.runtime.artifacts.capture_complete_state()
+            for item in WritingArtifactRepository(
+                self.workspace.root
+            ).capture_complete_state()
         )
 
     def git_snapshot(self) -> tuple[bytes, bytes]:
@@ -87,6 +120,20 @@ class LeadArtifactApplicationTests(LeadOrchestrationTestCase):
             subprocess.check_output(
                 ["git", "diff", "--cached", "--binary"], cwd=self.workspace.root
             ),
+        )
+
+    def control_git_snapshot(self) -> tuple[bytes, bytes, bytes]:
+        return (
+            subprocess.check_output(
+                ["git", "rev-parse", "HEAD"], cwd=self.control_workspace.root
+            ),
+            subprocess.check_output(
+                ["git", "status", "--porcelain=v1", "-z"],
+                cwd=self.control_workspace.root,
+            ),
+            self.control_workspace.path(
+                "core_documents/global_outline.md"
+            ).read_bytes(),
         )
 
     async def reviewed_create(self, subject: str = "Reviewed application"):
@@ -249,10 +296,21 @@ class LeadArtifactApplicationTests(LeadOrchestrationTestCase):
     async def test_atomic_multi_file_apply_has_exact_provenance_and_no_git_effect(
         self,
     ) -> None:
+        other = provision_session_resources(
+            self.control_workspace.root,
+            "other_session",
+        )
+        other_index = other.identity.worktree_root / _INDEX
+        other_second = other.identity.worktree_root / _SECOND
+        other_index.parent.mkdir(parents=True, exist_ok=True)
+        other_index.write_text("[other](second.md)\n", encoding="utf-8")
+        other_second.write_text("Other session scene.\n", encoding="utf-8")
+        other_before = (other_index.read_bytes(), other_second.read_bytes())
         turn = await self.reviewed_rename()
         request = turn.artifact_application_request
         assert request is not None
         git_before = self.git_snapshot()
+        control_before = self.control_git_snapshot()
         result = await self.runtime.decide_artifact_application(
             _application_decision(turn, ArtifactApplicationDecisionKind.APPLY)
         )
@@ -282,6 +340,12 @@ class LeadArtifactApplicationTests(LeadOrchestrationTestCase):
             self.workspace.path(_THIRD).read_text(encoding="utf-8"), "Second scene.\n"
         )
         self.assertEqual(self.git_snapshot(), git_before)
+        self.assertEqual(self.control_git_snapshot(), control_before)
+        self.assertEqual(
+            (other_index.read_bytes(), other_second.read_bytes()),
+            other_before,
+        )
+        self.assertFalse((other.identity.worktree_root / _THIRD).exists())
         with self.assertRaisesRegex(ValueError, "authoritative request tail"):
             await self.runtime.decide_artifact_application(
                 _application_decision(turn, ArtifactApplicationDecisionKind.APPLY)
@@ -291,7 +355,7 @@ class LeadArtifactApplicationTests(LeadOrchestrationTestCase):
         turn = await self.reviewed_create("Restart authority")
         before = self.artifact_snapshot()
         git_before = self.git_snapshot()
-        restarted = StoryRuntime(self.workspace, _LeadBackend())  # type: ignore[arg-type]
+        restarted = StoryRuntime(self.control_workspace, _LeadBackend())  # type: ignore[arg-type]
         result = await restarted.decide_artifact_application(
             _application_decision(turn, ArtifactApplicationDecisionKind.APPLY)
         )
@@ -348,37 +412,43 @@ class LeadArtifactApplicationTests(LeadOrchestrationTestCase):
         self.assertEqual(self.artifact_snapshot(), relationship_before)
         self.assertEqual(self.git_snapshot(), relationship_git)
 
-    async def test_application_and_result_persistence_failures_map_safely(self) -> None:
-        for code, expected, next_action in (
-            (
-                ArtifactApplicationErrorCode.RECOVERY_REQUIRED,
-                ArtifactApplicationOutcomeKind.RECOVERY_REQUIRED,
-                ArtifactApplicationNextAction.OPERATOR_RECOVERY,
-            ),
-            (
-                ArtifactApplicationErrorCode.INVALID_SCHEMA,
-                ArtifactApplicationOutcomeKind.OUTCOME_UNKNOWN,
-                ArtifactApplicationNextAction.INSPECT_AND_RESOLVE_OUTCOME,
-            ),
+    async def _assert_application_failure_maps_safely(
+        self,
+        code: ArtifactApplicationErrorCode,
+        expected: ArtifactApplicationOutcomeKind,
+        next_action: ArtifactApplicationNextAction,
+    ) -> None:
+        turn = await self.reviewed_create(code.value)
+        before = self.artifact_snapshot()
+        git_before = self.git_snapshot()
+        with mock.patch.object(
+            WritingArtifactRepository,
+            "apply_artifact_changes",
+            side_effect=ArtifactApplicationError(code),
         ):
-            with self.subTest(code=code):
-                turn = await self.reviewed_create(code.value)
-                before = self.artifact_snapshot()
-                git_before = self.git_snapshot()
-                with mock.patch.object(
-                    self.runtime.artifacts,
-                    "apply_artifact_changes",
-                    side_effect=ArtifactApplicationError(code),
-                ):
-                    result = await self.runtime.decide_artifact_application(
-                        _application_decision(
-                            turn, ArtifactApplicationDecisionKind.APPLY
-                        )
-                    )
-                self.assertIs(result.outcome.outcome, expected)
-                self.assertIs(result.outcome.next_action, next_action)
-                self.assertEqual(self.artifact_snapshot(), before)
-                self.assertEqual(self.git_snapshot(), git_before)
+            result = await self.runtime.decide_artifact_application(
+                _application_decision(turn, ArtifactApplicationDecisionKind.APPLY)
+            )
+        self.assertIs(result.outcome.outcome, expected)
+        self.assertIs(result.outcome.next_action, next_action)
+        self.assertEqual(self.artifact_snapshot(), before)
+        self.assertEqual(self.git_snapshot(), git_before)
+
+    async def test_repository_recovery_required_maps_safely(self) -> None:
+        await self._assert_application_failure_maps_safely(
+            ArtifactApplicationErrorCode.RECOVERY_REQUIRED,
+            ArtifactApplicationOutcomeKind.RECOVERY_REQUIRED,
+            ArtifactApplicationNextAction.OPERATOR_RECOVERY,
+        )
+
+    async def test_repository_unclassified_failure_maps_outcome_unknown(self) -> None:
+        await self._assert_application_failure_maps_safely(
+            ArtifactApplicationErrorCode.INVALID_SCHEMA,
+            ArtifactApplicationOutcomeKind.OUTCOME_UNKNOWN,
+            ArtifactApplicationNextAction.INSPECT_AND_RESOLVE_OUTCOME,
+        )
+
+    async def test_result_persistence_failure_maps_safely(self) -> None:
 
         turn = await self.reviewed_create("Result persistence failure")
         original_append = self.runtime._append_drafts
@@ -408,6 +478,481 @@ class LeadArtifactApplicationTests(LeadOrchestrationTestCase):
         self.assertIsNone(uncertain.outcome.result)
         self.assertTrue(self.workspace.path(_RULES).exists())
         self.assertEqual(self.git_snapshot(), git_before)
+
+    async def test_ready_binding_loss_after_confirmation_is_durable_and_single_use(
+        self,
+    ) -> None:
+        turn = await self.reviewed_create("Binding loss")
+        before = self.artifact_snapshot()
+        session_git_before = self.git_snapshot()
+        control_before = self.control_git_snapshot()
+        subprocess.run(
+            [
+                "git",
+                "update-ref",
+                "-d",
+                self.session_resources.identity.internal_ref,
+            ],
+            cwd=self.control_workspace.root,
+            check=True,
+        )
+
+        with mock.patch.object(
+            WritingArtifactRepository,
+            "apply_artifact_changes",
+            side_effect=AssertionError("artifact write was attempted"),
+        ) as apply_changes:
+            result = await self.runtime.decide_artifact_application(
+                _application_decision(turn, ArtifactApplicationDecisionKind.APPLY)
+            )
+
+        self.assertIs(
+            result.outcome.outcome,
+            ArtifactApplicationOutcomeKind.RECOVERY_REQUIRED,
+        )
+        self.assertIs(
+            result.outcome.next_action,
+            ArtifactApplicationNextAction.OPERATOR_RECOVERY,
+        )
+        self.assertIsNone(result.outcome.result)
+        self.assertIsNone(result.commit_request)
+        apply_changes.assert_not_called()
+        self.assertEqual(self.artifact_snapshot(), before)
+        self.assertEqual(self.git_snapshot(), session_git_before)
+        self.assertEqual(self.control_git_snapshot(), control_before)
+        projection = project_collaboration_history(self.history(turn.conversation_id))
+        self.assertEqual(
+            projection.current_artifact_application_result,
+            result.outcome,
+        )
+        with self.assertRaisesRegex(ValueError, "authoritative request tail"):
+            await self.runtime.decide_artifact_application(
+                _application_decision(turn, ArtifactApplicationDecisionKind.APPLY)
+            )
+
+    async def test_physical_root_loss_before_repository_entry_is_durable_zero_write(
+        self,
+    ) -> None:
+        turn = await self.reviewed_create("Physical root loss")
+        sibling = provision_session_resources(
+            self.control_workspace.root,
+            "sibling_session",
+        )
+        sibling_source = sibling.identity.worktree_root / _RULES
+        sibling_source.write_text("Sibling rule.\n", encoding="utf-8")
+        before = self.artifact_snapshot()
+        control_before = self.control_git_snapshot()
+        sibling_before = sibling_source.read_bytes()
+
+        with self.replace_session_worktree() as (moved, replacement):
+            replacement_source = replacement / _RULES
+            replacement_source.parent.mkdir(parents=True)
+            replacement_source.write_text(
+                "Replacement must remain untouched.\n",
+                encoding="utf-8",
+            )
+            result = await self.runtime.decide_artifact_application(
+                _application_decision(turn, ArtifactApplicationDecisionKind.APPLY)
+            )
+
+            self.assertEqual(
+                replacement_source.read_text(encoding="utf-8"),
+                "Replacement must remain untouched.\n",
+            )
+            self.assertFalse((moved / _RULES).exists())
+            self.assertEqual(sibling_source.read_bytes(), sibling_before)
+            self.assertEqual(self.control_git_snapshot(), control_before)
+
+        self.assertIs(
+            result.outcome.outcome,
+            ArtifactApplicationOutcomeKind.RECOVERY_REQUIRED,
+        )
+        self.assertIs(
+            result.outcome.next_action,
+            ArtifactApplicationNextAction.OPERATOR_RECOVERY,
+        )
+        self.assertIsNone(result.outcome.result)
+        self.assertIsNone(result.commit_request)
+        self.assertEqual(self.artifact_snapshot(), before)
+        projection = project_collaboration_history(self.history(turn.conversation_id))
+        self.assertEqual(projection.current_artifact_application_result, result.outcome)
+        with self.assertRaisesRegex(ValueError, "authoritative request tail"):
+            await self.runtime.decide_artifact_application(
+                _application_decision(turn, ArtifactApplicationDecisionKind.APPLY)
+            )
+
+    async def test_root_loss_after_repository_entry_remains_outcome_unknown(self) -> None:
+        turn = await self.reviewed_create("Post-entry root loss")
+        before = self.artifact_snapshot()
+        git_before = self.git_snapshot()
+
+        with mock.patch.object(
+            WritingArtifactRepository,
+            "apply_artifact_changes",
+            side_effect=ArtifactRootSecurityError("workspace root identity changed"),
+        ):
+            result = await self.runtime.decide_artifact_application(
+                _application_decision(turn, ArtifactApplicationDecisionKind.APPLY)
+            )
+
+        self.assertIs(
+            result.outcome.outcome,
+            ArtifactApplicationOutcomeKind.OUTCOME_UNKNOWN,
+        )
+        self.assertIs(
+            result.outcome.next_action,
+            ArtifactApplicationNextAction.INSPECT_AND_RESOLVE_OUTCOME,
+        )
+        self.assertIsNone(result.outcome.result)
+        self.assertIsNone(result.commit_request)
+        self.assertEqual(self.artifact_snapshot(), before)
+        self.assertEqual(self.git_snapshot(), git_before)
+
+    async def test_apply_success_with_rejected_guard_exit_publishes_uncertainty(
+        self,
+    ) -> None:
+        turn = await self.reviewed_create("Apply postcheck loss")
+        original_apply = WritingArtifactRepository.apply_artifact_changes
+        original_postvalidate = (
+            initialization_module._postvalidate_session_artifact_access
+        )
+        applied = False
+        ready_before_apply = []
+
+        original_require_ready = SessionArtifactAccess.require_ready
+
+        def record_require_ready(access):
+            ready_before_apply.append(not applied)
+            return original_require_ready(access)
+
+        def apply_then_reject(repository, request):
+            nonlocal applied
+            self.assertEqual(ready_before_apply, [True])
+            result = original_apply(repository, request)
+            applied = True
+            return result
+
+        def reject_after_apply(access):
+            if applied:
+                raise SessionArtifactBindingError("injected Apply postcheck loss")
+            return original_postvalidate(access)
+
+        with mock.patch.object(
+            WritingArtifactRepository,
+            "apply_artifact_changes",
+            autospec=True,
+            side_effect=apply_then_reject,
+        ), mock.patch.object(
+            SessionArtifactAccess,
+            "require_ready",
+            autospec=True,
+            side_effect=record_require_ready,
+        ), mock.patch.object(
+            initialization_module,
+            "_postvalidate_session_artifact_access",
+            side_effect=reject_after_apply,
+        ):
+            result = await self.runtime.decide_artifact_application(
+                _application_decision(turn, ArtifactApplicationDecisionKind.APPLY)
+            )
+
+        self.assertTrue(applied)
+        self.assertEqual(ready_before_apply, [True])
+        self.assertIs(
+            result.outcome.outcome,
+            ArtifactApplicationOutcomeKind.OUTCOME_UNKNOWN,
+        )
+        self.assertIs(
+            result.outcome.next_action,
+            ArtifactApplicationNextAction.INSPECT_AND_RESOLVE_OUTCOME,
+        )
+        self.assertIsNone(result.outcome.result)
+        self.assertIsNone(result.commit_request)
+        self.assertTrue(self.workspace.path(_RULES).exists())
+        projection = project_collaboration_history(self.history(turn.conversation_id))
+        self.assertEqual(
+            projection.current_artifact_application_result,
+            result.outcome,
+        )
+
+    async def test_commit_request_publication_binding_loss_discards_capability(
+        self,
+    ) -> None:
+        turn = await self.reviewed_create("Commit handoff binding loss")
+        decision = _application_decision(
+            turn,
+            ArtifactApplicationDecisionKind.APPLY,
+        )
+        key = (decision.session_id, decision.conversation_id, decision.step_id)
+        original_prepare = StoryCommitService.prepare
+        replacement = self.replace_session_worktree()
+        entered = False
+
+        def replace_after_prepare(service, *args, **kwargs):
+            nonlocal entered
+            candidate = original_prepare(service, *args, **kwargs)
+            replacement.__enter__()
+            entered = True
+            return candidate
+
+        try:
+            with mock.patch.object(
+                StoryCommitService,
+                "prepare",
+                autospec=True,
+                side_effect=replace_after_prepare,
+            ), mock.patch.object(
+                orchestrator_module,
+                "build_story_commit_request_payload",
+                wraps=orchestrator_module.build_story_commit_request_payload,
+            ) as build_request:
+                result = await self.runtime.decide_artifact_application(decision)
+            build_request.assert_not_called()
+        finally:
+            if entered:
+                replacement.__exit__(None, None, None)
+
+        self.assertIsNotNone(result.outcome.result)
+        self.assertIsNone(result.commit_request)
+        self.assertNotIn(key, self.runtime._pending_story_commits)
+        projection = project_collaboration_history(self.history(turn.conversation_id))
+        self.assertIsNone(projection.current_story_commit_request)
+
+    async def _assert_commit_request_failure_closes_pin_once(
+        self,
+        failure_point: str,
+    ) -> None:
+        self.commit_session_fixture_state()
+        original_acquire = SessionArtifactBinding.acquire_generation_pin
+        original_close = SessionArtifactGenerationPin.close
+        turn = await self.reviewed_create(f"Commit request {failure_point} failure")
+        decision = _application_decision(
+            turn,
+            ArtifactApplicationDecisionKind.APPLY,
+        )
+        key = (
+            decision.session_id,
+            decision.conversation_id,
+            decision.step_id,
+        )
+        pins = []
+        descriptors = []
+        close_calls = []
+        ordering = []
+
+        def acquire(binding):
+            pin = original_acquire(binding)
+            pins.append(pin)
+            descriptors.extend(pin._pin._descriptors)
+            ordering.append("pin")
+            return pin
+
+        def close(pin):
+            if pin in pins:
+                close_calls.append(pin)
+            return original_close(pin)
+
+        original_append = self.runtime._append_drafts
+        append_calls = 0
+
+        def append(*args, **kwargs):
+            nonlocal append_calls
+            append_calls += 1
+            if failure_point == "publish" and append_calls == 3:
+                ordering.append("request_publication")
+                raise OSError("commit request publication failed")
+            return original_append(*args, **kwargs)
+
+        def prepare(*args, **kwargs):
+            del args, kwargs
+            self.assertEqual(ordering, ["pin"])
+            raise RuntimeError("commit request preparation failed")
+
+        patches = [
+            mock.patch.object(
+                SessionArtifactBinding,
+                "acquire_generation_pin",
+                autospec=True,
+                side_effect=acquire,
+            ),
+            mock.patch.object(
+                SessionArtifactGenerationPin,
+                "close",
+                autospec=True,
+                side_effect=close,
+            ),
+            mock.patch.object(
+                self.runtime,
+                "_append_drafts",
+                side_effect=append,
+            ),
+        ]
+        if failure_point == "prepare":
+            patches.append(
+                mock.patch.object(
+                    StoryCommitService,
+                    "prepare",
+                    autospec=True,
+                    side_effect=prepare,
+                )
+            )
+        with patches[0], patches[1], patches[2]:
+            if len(patches) == 4:
+                with patches[3]:
+                    result = await self.runtime.decide_artifact_application(decision)
+            else:
+                result = await self.runtime.decide_artifact_application(decision)
+
+        self.assertEqual(len(pins), 1, result.message)
+        self.assertEqual(len(descriptors), 6)
+        self.assertEqual(close_calls, pins)
+        self.assertIsNone(pins[0]._pin)
+        for descriptor in descriptors:
+            with self.assertRaises(OSError):
+                os.fstat(descriptor)
+        self.assertNotIn(key, self.runtime._pending_story_commits)
+        self.assertIsNone(result.commit_request)
+        self.assertIsNotNone(result.outcome.result)
+        if failure_point == "publish":
+            self.assertEqual(
+                ordering,
+                ["pin", "request_publication"],
+                result.message,
+            )
+
+    async def test_commit_request_preparation_failure_closes_pin_once(self) -> None:
+        await self._assert_commit_request_failure_closes_pin_once("prepare")
+
+    async def test_commit_request_publication_failure_closes_pin_once(self) -> None:
+        await self._assert_commit_request_failure_closes_pin_once("publish")
+
+    async def test_pending_commit_rejects_replaced_generation_and_closes_pin(
+        self,
+    ) -> None:
+        self.commit_session_fixture_state()
+        turn = await self.reviewed_create("Pending commit generation replacement")
+        milestones = []
+        generation_pins = []
+        guard_depth = 0
+        original_prepare = StoryCommitService.prepare
+        original_build = orchestrator_module.build_story_commit_request_payload
+        original_acquire = SessionArtifactBinding.acquire_generation_pin
+        original_open = SessionArtifactBinding.open_ready_resources
+
+        def acquire(binding):
+            self.assertEqual(guard_depth, 0)
+            pin = original_acquire(binding)
+            generation_pins.append(pin)
+            milestones.append("pin")
+            return pin
+
+        @contextmanager
+        def open_ready(binding):
+            nonlocal guard_depth
+            with original_open(binding) as access:
+                guard_depth += 1
+                milestones.append("guard_enter")
+                try:
+                    yield access
+                finally:
+                    guard_depth -= 1
+
+        def prepare(service, *args, **kwargs):
+            milestones.append("prepare_enter")
+            try:
+                candidate = original_prepare(service, *args, **kwargs)
+            except BaseException as failure:
+                milestones.append(
+                    (
+                        "prepare_failure",
+                        type(failure).__name__,
+                        getattr(getattr(failure, "code", None), "value", None),
+                    )
+                )
+                raise
+            milestones.append("prepare_exit")
+            return candidate
+
+        def build(*args, **kwargs):
+            milestones.append("build")
+            return original_build(*args, **kwargs)
+
+        with mock.patch.object(
+            StoryCommitService,
+            "prepare",
+            autospec=True,
+            side_effect=prepare,
+        ), mock.patch.object(
+            orchestrator_module,
+            "build_story_commit_request_payload",
+            side_effect=build,
+        ), mock.patch.object(
+            SessionArtifactBinding,
+            "acquire_generation_pin",
+            autospec=True,
+            side_effect=acquire,
+        ), mock.patch.object(
+            SessionArtifactBinding,
+            "open_ready_resources",
+            autospec=True,
+            side_effect=open_ready,
+        ):
+            applied = await self.runtime.decide_artifact_application(
+                _application_decision(turn, ArtifactApplicationDecisionKind.APPLY)
+            )
+        request = applied.commit_request
+        self.assertIsNotNone(request, (applied.message, milestones))
+        assert request is not None
+        reviewed = applied.request.reviewed_proposal
+        key = (reviewed.session_id, reviewed.conversation_id, reviewed.step_id)
+        pending = self.runtime._pending_story_commits[key]
+        pin = pending._generation_pin
+        assert pin is not None
+        self.assertEqual(generation_pins, [pin])
+        self.assertEqual(milestones[0], "pin")
+        prepare_index = milestones.index("prepare_enter")
+        guard_indexes = [
+            index
+            for index, milestone in enumerate(milestones)
+            if milestone == "guard_enter"
+        ]
+        self.assertTrue(guard_indexes)
+        self.assertLess(guard_indexes[0], prepare_index)
+        descriptors = pin._pin._descriptors
+        close_calls = []
+        original_close = type(pin).close
+
+        def close(current):
+            if current is pin:
+                close_calls.append(current)
+            return original_close(current)
+
+        decision = StoryCommitDecisionRequest(
+            session_id=reviewed.session_id,
+            conversation_id=reviewed.conversation_id,
+            step_id=reviewed.step_id,
+            confirmation_request_id=request.confirmation_request_id,
+            application_result_event_id=request.application_result_event_id,
+            candidate_id=request.candidate.candidate_id,
+            request_digest=request.request_digest,
+            confirmation_id="replacement-confirmation",
+            kind=StoryCommitDecision.COMMIT,
+        )
+        with self.replace_session_worktree(), mock.patch.object(
+            type(pin),
+            "close",
+            new=close,
+        ):
+            result = await self.runtime.decide_story_commit(decision)
+
+        self.assertIs(result.outcome.outcome, StoryCommitOutcomeKind.STALE)
+        self.assertIs(result.outcome.next_action, StoryCommitNextAction.REPREPARE)
+        self.assertEqual(close_calls, [pin])
+        self.assertNotIn(key, self.runtime._pending_story_commits)
+        self.assertIsNone(pin._pin)
+        for descriptor in descriptors:
+            with self.assertRaises(OSError):
+                os.fstat(descriptor)
 
 
 if __name__ == "__main__":
